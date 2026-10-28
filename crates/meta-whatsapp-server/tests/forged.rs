@@ -14,7 +14,7 @@
 //!    token.
 //!
 //! Steps 1 and 2 no longer compile: the handlers, and
-//! `idempotency::run`, which takes a tenant as given, are crate-private
+//! `idempotency::run`, over the service's own records, are crate-private
 //! (`tests/visibility/fail/api_*.rs` and `idempotency_run.rs` pin it, with
 //! the compiler's `E0603`). Step 3 needs step 2's key. What remains is a
 //! forged capability put straight into a request's extensions, in front of

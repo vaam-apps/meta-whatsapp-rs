@@ -1217,10 +1217,16 @@ decisions and the delivery milestones, is
     design §8.1), event
     routing and polling, the idempotency engine, the rate limiter, the
     error model as data (`ServiceError`: a code of `CODES`, its status
-    as a number, `retryable`, `may_have_been_sent`), and, since roadmap
-    S5a, the admin operations as services (`admin::Admin`, opened with
-    an `AdminCaller` its `Authorizer` admits: an API adapter parses,
-    calls and renders; the others follow in S5b–S5e). It depends on the
+    as a number, `retryable`, `may_have_been_sent`), and the operations
+    as services an API adapter parses for, calls and renders: since
+    roadmap S5a the admin ones (`admin::Admin`, opened with an
+    `AdminCaller` its `Authorizer` admits), since S5b the messages
+    (`messages::Messages` on an `OwnedNumber`, over the send request
+    `messages::SendMessage`, which names no API toolkit's type: an
+    adapter converts its own request into it) and running an operation
+    under an idempotency key (`idempotency::run`, for a `Caller` its
+    `Authorizer` admits: a status, a body, and whether it replayed); the
+    others follow in S5c–S5e. It depends on the
     facade without its adapters' features: no axum, no sqlx, no utoipa
     (the `http` crate is in its graph only through the library, whose
     `HttpTransport` port and client speak it; no `http` type crosses the

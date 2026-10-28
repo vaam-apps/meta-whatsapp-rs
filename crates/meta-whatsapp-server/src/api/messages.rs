@@ -22,26 +22,29 @@
 //! number), or `{"group_id"}`.
 //!
 //! Sends take an `Idempotency-Key` ([`crate::idempotency`]).
+//!
+//! Since roadmap S5b the rules are the core's
+//! ([`meta_whatsapp_server_core::messages`]: the message building, the
+//! recipient and E.164 rules, sending and marking read as the `Messages`
+//! service). This module keeps the request's types with their OpenAPI
+//! schema, reads the body into them, converts them into the core's
+//! request (field by field: a field on one side only fails to compile),
+//! calls the service, and renders its answer (`202` with the accepted
+//! message, `204` once marked read).
 
-use meta_whatsapp_rs::client::messages::{
-    Audio, Contact, ContactAddress, ContactEmail, ContactName, ContactOrg, ContactPhone,
-    ContactUrl, CtaUrl, Document, Header, Image, Interactive, ListMessage, ListRow, ListSection,
-    Location, MediaSource, MessageContent, OutboundMessage, Reaction, ReplyButton, ReplyButtons,
-    SendResponse, Sticker, Text, Video,
-};
-use meta_whatsapp_rs::client::templates::TemplateMessage;
-use meta_whatsapp_rs::core::ids::{GroupId, MediaId, MessageId, UserId, WaId};
-use meta_whatsapp_rs::core::recipient::Recipient;
+use meta_whatsapp_rs::client::messages::OutboundMessage;
+use meta_whatsapp_rs::core::ids::{UserId, WaId};
 use meta_whatsapp_rs::webhooks::axum::body::Bytes;
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequest, Path, Request, State};
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode, Uri};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
+use meta_whatsapp_server_core::messages::{self as domain, Messages};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use super::common::{ApiJson, meta_object};
+use super::common::ApiJson;
 use crate::auth::{Caller, OwnedNumber};
 use crate::error::{ApiError, ErrorBody};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
@@ -91,30 +94,6 @@ pub enum MessageType {
     Template,
     /// `interactive` (`button`, `list`, `cta_url`).
     Interactive,
-}
-
-impl MessageType {
-    /// Every type, by its name.
-    pub const ALL: [(&'static str, Self); 11] = [
-        ("text", Self::Text),
-        ("image", Self::Image),
-        ("video", Self::Video),
-        ("audio", Self::Audio),
-        ("document", Self::Document),
-        ("sticker", Self::Sticker),
-        ("location", Self::Location),
-        ("contacts", Self::Contacts),
-        ("reaction", Self::Reaction),
-        ("template", Self::Template),
-        ("interactive", Self::Interactive),
-    ];
-
-    fn name(self) -> &'static str {
-        Self::ALL
-            .iter()
-            .find(|(_, t)| *t == self)
-            .map_or("", |(name, _)| name)
-    }
 }
 
 /// `text` (`messages/text-messages`).
@@ -360,9 +339,6 @@ pub enum InteractiveType {
     CtaUrl,
 }
 
-/// The names of [`InteractiveType`].
-const INTERACTIVE_TYPES: [&str; 3] = ["button", "list", "cta_url"];
-
 /// `{"text": …}`: an interactive message's body or footer.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -585,424 +561,298 @@ pub struct MarkRead {
     pub typing_indicator: bool,
 }
 
-// ─── Building the library's message ──────────────────────────────────────
+// ─── Into the core's request ─────────────────────────────────────────────
 
-/// Top-level keys of Direct Send, which the service does not offer.
-const DIRECT_SEND_FIELDS: [&str; 3] = ["category", "ttl_seconds", "direct_send_config"];
+/// `From` for the types whose fields are the core's, value for value:
+/// every field named, so that a field on one side only fails to compile.
+macro_rules! same_fields {
+    ($($name:ident { $($field:ident),* $(,)? })*) => {$(
+        impl From<$name> for domain::$name {
+            fn from(value: $name) -> Self {
+                let $name { $($field),* } = value;
+                Self { $($field),* }
+            }
+        }
+    )*};
+}
 
-fn unsupported() -> ApiError {
-    ApiError::new("unsupported_message_type")
+same_fields! {
+    RecipientObject { phone, user_id, group_id }
+    TextObject { body, preview_url }
+    ImageObject { id, link, caption }
+    VideoObject { id, link, caption }
+    AudioObject { id, link, voice }
+    DocumentObject { id, link, caption, filename }
+    StickerObject { id, link }
+    ContactNameObject { formatted_name, first_name, last_name, middle_name, suffix, prefix }
+    ContactAddressObject { street, city, state, zip, country, country_code, label }
+    ContactEmailObject { email, label }
+    ContactOrgObject { company, department, title }
+    ContactPhoneObject { phone, label, wa_id }
+    ContactUrlObject { url, label }
+    ReactionObject { message_id, emoji }
+    InteractiveText { text }
+    HeaderMedia { id, link, filename }
+    ReplyObject { id, title }
+    ListRowObject { id, title, description }
+    CtaUrlParameters { display_text, url }
+}
+
+/// Each of `items`, converted.
+fn each<T: Into<U>, U>(items: Vec<T>) -> Vec<U> {
+    items.into_iter().map(Into::into).collect()
+}
+
+impl From<MessageType> for domain::MessageType {
+    fn from(kind: MessageType) -> Self {
+        match kind {
+            MessageType::Text => Self::Text,
+            MessageType::Image => Self::Image,
+            MessageType::Video => Self::Video,
+            MessageType::Audio => Self::Audio,
+            MessageType::Document => Self::Document,
+            MessageType::Sticker => Self::Sticker,
+            MessageType::Location => Self::Location,
+            MessageType::Contacts => Self::Contacts,
+            MessageType::Reaction => Self::Reaction,
+            MessageType::Template => Self::Template,
+            MessageType::Interactive => Self::Interactive,
+        }
+    }
+}
+
+impl From<Coordinate> for domain::Coordinate {
+    fn from(value: Coordinate) -> Self {
+        match value {
+            Coordinate::Number(n) => Self::Number(n),
+            Coordinate::Text(s) => Self::Text(s),
+        }
+    }
+}
+
+impl From<LocationObject> for domain::LocationObject {
+    fn from(value: LocationObject) -> Self {
+        let LocationObject {
+            latitude,
+            longitude,
+            name,
+            address,
+        } = value;
+        Self {
+            latitude: latitude.into(),
+            longitude: longitude.into(),
+            name,
+            address,
+        }
+    }
+}
+
+impl From<ContactCard> for domain::ContactCard {
+    fn from(card: ContactCard) -> Self {
+        let ContactCard {
+            addresses,
+            birthday,
+            emails,
+            name,
+            org,
+            phones,
+            urls,
+        } = card;
+        Self {
+            addresses: each(addresses),
+            birthday,
+            emails: each(emails),
+            name: name.into(),
+            org: org.map(Into::into),
+            phones: each(phones),
+            urls: each(urls),
+        }
+    }
+}
+
+impl From<InteractiveType> for domain::InteractiveType {
+    fn from(kind: InteractiveType) -> Self {
+        match kind {
+            InteractiveType::Button => Self::Button,
+            InteractiveType::List => Self::List,
+            InteractiveType::CtaUrl => Self::CtaUrl,
+        }
+    }
+}
+
+impl From<HeaderType> for domain::HeaderType {
+    fn from(kind: HeaderType) -> Self {
+        match kind {
+            HeaderType::Text => Self::Text,
+            HeaderType::Image => Self::Image,
+            HeaderType::Video => Self::Video,
+            HeaderType::Document => Self::Document,
+        }
+    }
+}
+
+impl From<InteractiveHeader> for domain::InteractiveHeader {
+    fn from(value: InteractiveHeader) -> Self {
+        let InteractiveHeader {
+            kind,
+            text,
+            image,
+            video,
+            document,
+        } = value;
+        Self {
+            kind: kind.into(),
+            text,
+            image: image.map(Into::into),
+            video: video.map(Into::into),
+            document: document.map(Into::into),
+        }
+    }
+}
+
+impl From<ReplyButtonObject> for domain::ReplyButtonObject {
+    fn from(value: ReplyButtonObject) -> Self {
+        let ReplyButtonObject { kind, reply } = value;
+        Self {
+            kind,
+            reply: reply.into(),
+        }
+    }
+}
+
+impl From<ListSectionObject> for domain::ListSectionObject {
+    fn from(value: ListSectionObject) -> Self {
+        let ListSectionObject { title, rows } = value;
+        Self {
+            title,
+            rows: each(rows),
+        }
+    }
+}
+
+impl From<InteractiveAction> for domain::InteractiveAction {
+    fn from(value: InteractiveAction) -> Self {
+        let InteractiveAction {
+            buttons,
+            button,
+            sections,
+            name,
+            parameters,
+        } = value;
+        Self {
+            buttons: buttons.map(each),
+            button,
+            sections: sections.map(each),
+            name,
+            parameters: parameters.map(Into::into),
+        }
+    }
+}
+
+impl From<InteractiveObject> for domain::InteractiveObject {
+    fn from(value: InteractiveObject) -> Self {
+        let InteractiveObject {
+            kind,
+            header,
+            body,
+            footer,
+            action,
+        } = value;
+        Self {
+            kind: kind.into(),
+            header: header.map(Into::into),
+            body: body.into(),
+            footer: footer.map(Into::into),
+            action: action.into(),
+        }
+    }
+}
+
+impl From<SendMessage> for domain::SendMessage {
+    fn from(value: SendMessage) -> Self {
+        let SendMessage {
+            to,
+            kind,
+            text,
+            image,
+            video,
+            audio,
+            document,
+            sticker,
+            location,
+            contacts,
+            reaction,
+            template,
+            interactive,
+            reply_to,
+            callback_data,
+        } = value;
+        Self {
+            to: to.into(),
+            kind: kind.into(),
+            text: text.map(Into::into),
+            image: image.map(Into::into),
+            video: video.map(Into::into),
+            audio: audio.map(Into::into),
+            document: document.map(Into::into),
+            sticker: sticker.map(Into::into),
+            location: location.map(Into::into),
+            contacts: contacts.map(each),
+            reaction: reaction.map(Into::into),
+            template,
+            interactive: interactive.map(Into::into),
+            reply_to,
+            callback_data,
+        }
+    }
+}
+
+impl From<domain::Accepted> for MessageAccepted {
+    fn from(accepted: domain::Accepted) -> Self {
+        Self {
+            message_id: accepted.message_id.as_str().to_owned(),
+            contacts: accepted
+                .contacts
+                .into_iter()
+                .map(|c| AcceptedContact {
+                    input: c.input,
+                    wa_id: c.wa_id.map(WaId::into_inner),
+                    user_id: c.user_id.map(UserId::into_inner),
+                    parent_user_id: c.parent_user_id.map(UserId::into_inner),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// The message a request body asks for, checked against every limit Meta
-/// documents: nothing is sent when this fails.
+/// documents: nothing is sent when this fails. In the core's order: a
+/// type the service does not send ([`domain::refuse_unsupported`]), then
+/// the body read into [`SendMessage`] (`422 invalid_request` on `body`,
+/// unknown fields included), then the core's checks ([`domain::message`]).
 pub(crate) fn parse_message(body: Value) -> Result<OutboundMessage, ApiError> {
-    if let Some(object) = body.as_object() {
-        if DIRECT_SEND_FIELDS.iter().any(|f| object.contains_key(*f)) {
-            return Err(unsupported());
-        }
-        if let Some(kind) = object.get("type").and_then(Value::as_str)
-            && !MessageType::ALL.iter().any(|(name, _)| *name == kind)
-        {
-            return Err(unsupported());
-        }
-        if let Some(kind) = object
-            .get("interactive")
-            .and_then(|i| i.get("type"))
-            .and_then(Value::as_str)
-            && !INTERACTIVE_TYPES.contains(&kind)
-        {
-            return Err(unsupported());
-        }
-    }
+    domain::refuse_unsupported(&body)?;
     let request: SendMessage =
         serde_json::from_value(body).map_err(|_| ApiError::invalid("body"))?;
-    build(request)
-}
-
-/// The recipient, E.164 checked: a phone number without its `+` is
-/// refused here, before any request.
-pub(crate) fn recipient(to: RecipientObject) -> Result<Recipient, ApiError> {
-    let phone = to.phone.map(e164).transpose()?;
-    let user = to
-        .user_id
-        .map(|id| {
-            if id.trim().is_empty() {
-                Err(ApiError::invalid("to.user_id"))
-            } else {
-                Ok(UserId::new(id))
-            }
-        })
-        .transpose()?;
-    match (phone, user, to.group_id) {
-        (None, None, Some(group)) if !group.trim().is_empty() => {
-            Ok(Recipient::Group(GroupId::new(group)))
-        }
-        (None, None, Some(_)) => Err(ApiError::invalid("to.group_id")),
-        (Some(phone), None, None) => Ok(Recipient::Phone(phone)),
-        (None, Some(user), None) => Ok(Recipient::User(user)),
-        (Some(phone), Some(user), None) => Ok(Recipient::PhoneAndUser { phone, user }),
-        // A group with a phone or a BSUID, or nobody.
-        (_, _, Some(_)) | (None, None, None) => Err(ApiError::invalid("to")),
-    }
-}
-
-/// Longest E.164 number, in digits (ITU-T E.164).
-const E164_MAX_DIGITS: usize = 15;
-
-/// `phone` if it is strict E.164 with its `+` (`+`, then 1 to 15 digits,
-/// the first not `0`), else `422` on `to.phone`. Never quotes the value.
-fn e164(phone: String) -> Result<String, ApiError> {
-    let valid = phone.strip_prefix('+').is_some_and(|digits| {
-        (1..=E164_MAX_DIGITS).contains(&digits.len())
-            && digits.bytes().all(|b| b.is_ascii_digit())
-            && !digits.starts_with('0')
-    });
-    if valid {
-        Ok(phone)
-    } else {
-        Err(ApiError::invalid("to.phone"))
-    }
-}
-
-/// An uploaded `id` or an `https://` `link`, exactly one.
-fn media_source(
-    field: &str,
-    id: Option<String>,
-    link: Option<String>,
-) -> Result<MediaSource, ApiError> {
-    match (id, link) {
-        // A body value, not a path segment: sent as given, for Meta to
-        // judge, as before ids were checked (v1's answers unchanged).
-        (Some(id), None) => Ok(MediaSource::id(MediaId::new_unchecked(id))),
-        (None, Some(link))
-            if link
-                .get(..8)
-                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://")) =>
-        {
-            Ok(MediaSource::link(link))
-        }
-        (None, Some(_)) => Err(ApiError::invalid(format!("{field}.link"))),
-        _ => Err(ApiError::invalid(field)),
-    }
-}
-
-/// A decimal-degree coordinate.
-fn coordinate(field: &str, value: Coordinate) -> Result<f64, ApiError> {
-    match value {
-        Coordinate::Number(n) => Ok(n),
-        Coordinate::Text(s) => s
-            .trim()
-            .parse::<f64>()
-            .map_err(|_| ApiError::invalid(field.to_owned())),
-    }
-}
-
-fn required<T>(field: &'static str, value: Option<T>) -> Result<T, ApiError> {
-    value.ok_or_else(|| ApiError::invalid(field))
-}
-
-fn contact(card: ContactCard) -> Contact {
-    Contact {
-        addresses: card
-            .addresses
-            .into_iter()
-            .map(|a| ContactAddress {
-                street: a.street,
-                city: a.city,
-                state: a.state,
-                zip: a.zip,
-                country: a.country,
-                country_code: a.country_code,
-                kind: a.label,
-            })
-            .collect(),
-        birthday: card.birthday,
-        emails: card
-            .emails
-            .into_iter()
-            .map(|e| ContactEmail {
-                email: e.email,
-                kind: e.label,
-            })
-            .collect(),
-        name: ContactName {
-            formatted_name: card.name.formatted_name,
-            first_name: card.name.first_name,
-            last_name: card.name.last_name,
-            middle_name: card.name.middle_name,
-            suffix: card.name.suffix,
-            prefix: card.name.prefix,
-        },
-        org: card.org.map(|o| ContactOrg {
-            company: o.company,
-            department: o.department,
-            title: o.title,
-        }),
-        phones: card
-            .phones
-            .into_iter()
-            .map(|p| ContactPhone {
-                phone: p.phone,
-                kind: p.label,
-                wa_id: p.wa_id.map(WaId::new),
-            })
-            .collect(),
-        urls: card
-            .urls
-            .into_iter()
-            .map(|u| ContactUrl {
-                url: u.url,
-                kind: u.label,
-            })
-            .collect(),
-    }
-}
-
-fn header(value: InteractiveHeader) -> Result<Header, ApiError> {
-    let media = |field: &str, media: Option<HeaderMedia>| {
-        let media =
-            media.ok_or_else(|| ApiError::invalid(format!("interactive.header.{field}")))?;
-        Ok::<_, ApiError>((
-            media_source(&format!("interactive.header.{field}"), media.id, media.link)?,
-            media.filename,
-        ))
-    };
-    Ok(match value.kind {
-        HeaderType::Text => Header::text(required("interactive.header.text", value.text)?),
-        HeaderType::Image => Header::Image(media("image", value.image)?.0),
-        HeaderType::Video => Header::Video(media("video", value.video)?.0),
-        HeaderType::Document => {
-            let (source, filename) = media("document", value.document)?;
-            Header::Document { source, filename }
-        }
-    })
-}
-
-fn interactive(value: InteractiveObject) -> Result<Interactive, ApiError> {
-    let body = value.body.text;
-    let footer = value.footer.map(|f| f.text);
-    let action = value.action;
-    Ok(match value.kind {
-        InteractiveType::Button => {
-            let buttons = required("interactive.action.buttons", action.buttons)?
-                .into_iter()
-                .enumerate()
-                .map(|(i, b)| {
-                    if b.kind == "reply" {
-                        Ok(ReplyButton::new(b.reply.id, b.reply.title))
-                    } else {
-                        Err(ApiError::invalid(format!(
-                            "interactive.action.buttons[{i}].type"
-                        )))
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut message = ReplyButtons::new(body, buttons);
-            message.header = value.header.map(header).transpose()?;
-            message.footer = footer;
-            Interactive::Buttons(message)
-        }
-        InteractiveType::List => {
-            let sections = required("interactive.action.sections", action.sections)?
-                .into_iter()
-                .map(|s| ListSection {
-                    title: s.title,
-                    rows: s
-                        .rows
-                        .into_iter()
-                        .map(|r| ListRow {
-                            id: r.id,
-                            title: r.title,
-                            description: r.description,
-                        })
-                        .collect(),
-                })
-                .collect::<Vec<_>>();
-            let button = required("interactive.action.button", action.button)?;
-            let mut message = ListMessage::new(body, button, sections);
-            message.header = match value.header {
-                None => None,
-                Some(InteractiveHeader {
-                    kind: HeaderType::Text,
-                    text: Some(text),
-                    ..
-                }) => Some(text),
-                // interactive-list-messages: a text header only.
-                Some(_) => return Err(ApiError::invalid("interactive.header")),
-            };
-            message.footer = footer;
-            Interactive::List(message)
-        }
-        InteractiveType::CtaUrl => {
-            if action.name.as_deref() != Some("cta_url") {
-                return Err(ApiError::invalid("interactive.action.name"));
-            }
-            let parameters = required("interactive.action.parameters", action.parameters)?;
-            let mut message = CtaUrl::new(body, parameters.display_text, parameters.url);
-            message.header = value.header.map(header).transpose()?;
-            message.footer = footer;
-            Interactive::CtaUrl(message)
-        }
-    })
-}
-
-/// The one content object `type` names, never another.
-fn only_the_named_object(request: &SendMessage) -> Result<(), ApiError> {
-    let present = [
-        ("text", request.text.is_some()),
-        ("image", request.image.is_some()),
-        ("video", request.video.is_some()),
-        ("audio", request.audio.is_some()),
-        ("document", request.document.is_some()),
-        ("sticker", request.sticker.is_some()),
-        ("location", request.location.is_some()),
-        ("contacts", request.contacts.is_some()),
-        ("reaction", request.reaction.is_some()),
-        ("template", request.template.is_some()),
-        ("interactive", request.interactive.is_some()),
-    ];
-    let named = request.kind.name();
-    for (name, is_present) in present {
-        if is_present && name != named {
-            return Err(ApiError::invalid(name));
-        }
-    }
-    Ok(())
-}
-
-/// The library's message for `request`, validated.
-fn build(request: SendMessage) -> Result<OutboundMessage, ApiError> {
-    only_the_named_object(&request)?;
-    let recipient = recipient(request.to)?;
-    let content: MessageContent = match request.kind {
-        MessageType::Text => {
-            let text = required("text", request.text)?;
-            let mut content = Text::new(text.body);
-            content.preview_url = text.preview_url;
-            content.into()
-        }
-        MessageType::Image => {
-            let image = required("image", request.image)?;
-            let mut content = Image::new(media_source("image", image.id, image.link)?);
-            content.caption = image.caption;
-            content.into()
-        }
-        MessageType::Video => {
-            let video = required("video", request.video)?;
-            let mut content = Video::new(media_source("video", video.id, video.link)?);
-            content.caption = video.caption;
-            content.into()
-        }
-        MessageType::Audio => {
-            let audio = required("audio", request.audio)?;
-            let mut content = Audio::new(media_source("audio", audio.id, audio.link)?);
-            content.voice = audio.voice;
-            content.into()
-        }
-        MessageType::Document => {
-            let document = required("document", request.document)?;
-            let mut content = Document::new(media_source("document", document.id, document.link)?);
-            content.caption = document.caption;
-            content.filename = document.filename;
-            content.into()
-        }
-        MessageType::Sticker => {
-            let sticker = required("sticker", request.sticker)?;
-            Sticker::new(media_source("sticker", sticker.id, sticker.link)?).into()
-        }
-        MessageType::Location => {
-            let location = required("location", request.location)?;
-            let mut content = Location::new(
-                coordinate("location.latitude", location.latitude)?,
-                coordinate("location.longitude", location.longitude)?,
-            );
-            content.name = location.name;
-            content.address = location.address;
-            content.into()
-        }
-        MessageType::Contacts => MessageContent::Contacts(
-            required("contacts", request.contacts)?
-                .into_iter()
-                .map(contact)
-                .collect(),
-        ),
-        MessageType::Reaction => {
-            let reaction = required("reaction", request.reaction)?;
-            Reaction::new(reaction.message_id, reaction.emoji).into()
-        }
-        MessageType::Template => {
-            let template: TemplateMessage =
-                meta_object("template", &required("template", request.template)?)?;
-            template.into()
-        }
-        MessageType::Interactive => {
-            interactive(required("interactive", request.interactive)?)?.into()
-        }
-    };
-    let mut message = OutboundMessage::new(recipient, content);
-    if let Some(id) = request.reply_to {
-        message = message.reply_to(MessageId::new(id));
-    }
-    if let Some(data) = request.callback_data {
-        message = message.callback_data(data);
-    }
-    message
-        .validate()
-        .map_err(|error| ApiError::invalid(request_field(&error.field)))?;
-    Ok(message)
-}
-
-/// The request's name for a field of the library's message.
-fn request_field(library: &str) -> String {
-    match library {
-        "to" | "recipient" | "recipient_type" => "to".to_owned(),
-        "context" | "context.message_id" => "reply_to".to_owned(),
-        "biz_opaque_callback_data" => "callback_data".to_owned(),
-        other => other.to_owned(),
-    }
+    Ok(domain::message(request.into())?)
 }
 
 // ─── The routes ──────────────────────────────────────────────────────────
 
+/// The core's message operations on `owned`, counted in `state`'s metrics.
+fn messages<'a>(state: &'a AppState, owned: &'a OwnedNumber) -> Messages<'a> {
+    Messages::new(state.authz(), owned.capability()).observed_by(state.metrics())
+}
+
 /// Send `message` with the number's token: `202` with its id, or the
-/// error, with Meta's `details`.
+/// error, with Meta's `details` (the core's [`Messages::send`]).
 pub(crate) async fn send(
     state: &AppState,
     owned: &OwnedNumber,
     message: &OutboundMessage,
 ) -> Result<Success, ApiError> {
-    let sent = owned
-        .client()
-        .messages(owned.phone_number_id().clone())
-        .send(message)
-        .await;
-    match sent {
-        Ok(response) => Success::json(StatusCode::ACCEPTED, &accepted(response)?),
-        Err(error) => Err(owned.failed(state, &error).await.with_details(&error)),
-    }
-}
-
-/// The answer to an accepted send. Meta accepting without a message id
-/// (never documented) is `upstream`: the message may have gone out.
-fn accepted(response: SendResponse) -> Result<MessageAccepted, ApiError> {
-    let message_id = response
-        .message_id()
-        .map(|id| id.as_str().to_owned())
-        .ok_or_else(|| ApiError::new("upstream").with_may_have_been_sent(true))?;
-    Ok(MessageAccepted {
-        message_id,
-        contacts: response
-            .contacts
-            .into_iter()
-            .map(|c| AcceptedContact {
-                input: c.input,
-                wa_id: c.wa_id.map(WaId::into_inner),
-                user_id: c.user_id.map(UserId::into_inner),
-                parent_user_id: c.parent_user_id.map(UserId::into_inner),
-            })
-            .collect(),
-    })
+    let accepted = messages(state, owned).send(message).await?;
+    Success::json(StatusCode::ACCEPTED, &MessageAccepted::from(accepted))
 }
 
 /// `POST /v1/numbers/{pn}/messages`: send a message.
@@ -1044,7 +894,7 @@ pub(crate) async fn send_message(
     };
     idempotency::run(
         &state,
-        caller.tenant(),
+        &caller,
         key,
         fingerprint,
         send(&state, &owned, &message),
@@ -1114,20 +964,10 @@ pub(crate) async fn mark_read(
     Path((_, message_id)): Path<(String, String)>,
     OptionalJson(body): OptionalJson<MarkRead>,
 ) -> Result<StatusCode, ApiError> {
-    if message_id.trim().is_empty() {
-        return Err(ApiError::invalid("message_id"));
-    }
-    let messages = owned.client().messages(owned.phone_number_id().clone());
-    let message_id = MessageId::new(message_id);
-    let marked = if body.typing_indicator {
-        messages.mark_read_with_typing_indicator(&message_id).await
-    } else {
-        messages.mark_read(&message_id).await
-    };
-    match marked {
-        Ok(()) => Ok(StatusCode::NO_CONTENT),
-        Err(error) => Err(owned.failed(&state, &error).await.with_details(&error)),
-    }
+    messages(&state, &owned)
+        .mark_read(&message_id, body.typing_indicator)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
@@ -1140,6 +980,24 @@ mod tests {
         parse_message(body)
             .map(|m| serde_json::to_value(&m).unwrap())
             .map_err(|e| format!("{} {}", e.code(), e.field().unwrap_or_default()))
+    }
+
+    /// The names this request reads for `type` and `interactive.type` are
+    /// the core's, each read into the variant the core names so (roadmap
+    /// S5b: the list of supported types is the core's, and this schema's
+    /// enums must not drift from it); a name outside them is not read.
+    #[test]
+    fn the_request_reads_the_cores_type_names() {
+        for (name, kind) in domain::MessageType::ALL {
+            let read: MessageType = serde_json::from_value(json!(name)).unwrap();
+            assert_eq!(domain::MessageType::from(read), kind, "{name}");
+        }
+        for (name, kind) in domain::InteractiveType::ALL {
+            let read: InteractiveType = serde_json::from_value(json!(name)).unwrap();
+            assert_eq!(domain::InteractiveType::from(read), kind, "{name}");
+        }
+        assert!(serde_json::from_value::<MessageType>(json!("pin")).is_err());
+        assert!(serde_json::from_value::<InteractiveType>(json!("flow")).is_err());
     }
 
     /// E.164 with its `+`, strictly. Decisive: the `+` check.

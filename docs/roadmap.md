@@ -470,7 +470,7 @@ and `store-postgres`.
     `tests/capabilities.rs`); a platform key's scopes; a missing
     tenant's key listing, and its attach answered `404` before Meta is
     asked.
-- [ ] **S5b. Idempotency and messages into core**
+- [x] **S5b. Idempotency and messages into core**
   (`meta-whatsapp-server-core`): `idempotency::run` answering a status,
   a body and whether it replayed; sending (the accepted message, not an
   HTTP status), marking read, the recipient and E.164 rules, over a
@@ -479,6 +479,70 @@ and `store-postgres`.
   - **Decisive:** called with no HTTP layer, a scripted timeout reports
     `may_have_been_sent` and the same key replays it with no second
     request (M1.4's case); `openapi/v1.json` byte-identical.
+  - **Landed:** `meta_whatsapp_server_core::idempotency::run(&Keeper,
+    &Authorizer, &Caller, key, &Fingerprint, operation)` runs an
+    operation under a key and answers an `idempotency::Answer` (a
+    status, a body, and `replayed`) or a `ServiceError`: the claim with
+    its lease and expiry, the answer kept byte for byte, a failure kept
+    as the adapter renders it when it may have been sent (the `Keeper`'s
+    `RenderError`) and the key released when it proves nothing was, a
+    repeat's outcome told to the `Observer` (its new method
+    `idempotency`, which the server's `Metrics` counts as
+    `wa_server_idempotency_total`, as before), and the `504 timeout` a
+    cut request keeps (the `Claim`'s drop). It takes the tenant from a
+    `Caller` its `Authorizer` admits (another's is `403 forbidden`,
+    before the key is read), not from a bare `TenantId`. The fingerprint
+    is unchanged (method, path, body: S6 changes it). The messages are
+    `meta_whatsapp_server_core::messages`: the send request as the
+    request carried it, free of utoipa (`messages::SendMessage` and its
+    objects), `refuse_unsupported` (Direct Send and the types the
+    service does not send, on a JSON body), `message` (the library's
+    `OutboundMessage`, checked in the order and on the fields of
+    before), `recipient` and `is_e164` (strict E.164 with its `+`), and
+    the `Messages` service on an `OwnedNumber` (`send`, answering
+    `messages::Accepted`, the accepted message, not a status; and
+    `mark_read`, with or without the typing indicator), its failed Graph
+    calls told to the `Observer` (`wa_server_graph_errors_total`, the
+    same codes). `request::meta_object` (a Meta object read with no key
+    dropped) moved there too; the server's `api::common::meta_object`
+    wraps it for template creation. The server keeps its request types,
+    with their OpenAPI schema, reads the body into them and converts
+    them into the core's field by field (every field named on both
+    sides, so a field on one side only fails to compile; a test reads
+    each of the core's type names into the server's enums); its
+    `idempotency::run` (crate-private still, now taking the `Caller`)
+    hands the core's the service's records, settings, §5.1 error body
+    and metrics, and renders the answer (`Idempotent-Replayed: true` on
+    a replay, a kept error's code tagged for the metrics). Decisive:
+    `conformance::messages` (in `conformance::run`), with a
+    `ScriptedTransport` and no HTTP layer: a digits-only phone number
+    refused on `to.phone` before any request; a scripted timeout `504
+    timeout` with `may_have_been_sent`, sent once with the vault's
+    token, and the same key's repeat its kept answer, `replayed`, byte
+    for byte, with no second request (`remaining() == 0`, one request
+    recorded); a `131047` `409 customer_service_window_closed` that
+    releases its key, the same key then sending and its success
+    replayed; another `Authorizer`'s `Caller` for the same key refused
+    `403` with nothing sent. It runs on the core's own memory backend
+    (`tests/messages.rs`, the admin suite's records moved beside it into
+    `tests/memory`, with idempotency records that lease and expire), on
+    the service's `MemoryBackend` (`tests/store.rs`) and live on
+    Postgres (`tests/live_postgres.rs`). By mutation, on the core's
+    backend: the operation run without claiming the key (no lease), and
+    a failure that may have been sent released instead of kept, each
+    fail it at the replay (a second send, which nothing answers); the
+    caller's admission dropped fails its last step. Every message,
+    idempotency and read-receipt route test passes unchanged, and
+    `openapi/v1.json` is byte-identical (the request types, their
+    documentation and the handlers' annotations untouched). Left: the
+    server's source scan of error codes counts fewer (14, its floor
+    lowered from 16; the core's raised to 32); no log line moved (the
+    messages and idempotency handlers logged nothing of their own; the
+    engine's own lines were already the core's); the server's
+    `api::messages::MessageType::ALL` is gone (the core's
+    `messages::MessageType::ALL` is the list); media and template
+    creation run under the core's `run` too, their operations still the
+    server's until S5c and S5d.
 - [ ] **S5c. Numbers and templates into core**
   (`meta-whatsapp-server-core`): number details, the profile's read and
   update, disconnecting a WABA; the template list, the lookup in a WABA,

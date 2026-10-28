@@ -7,7 +7,9 @@
 //! handlers, which act on the capability they are given without asking
 //! the authorizer again (`api_*.rs`: the security review of 3237040
 //! called two of them with a forged one), and `idempotency::run`, which
-//! takes a tenant as given. The core's own
+//! runs over the service's own idempotency records (since roadmap S5b the
+//! core's `idempotency::run`, which admits the `Caller` it is given). The
+//! core's own
 //! pins are `crates/meta-whatsapp-server-core/tests/visibility.rs`.
 //! `tests/visibility/pass/` is the control: it names every path those
 //! cases use, and compiles.

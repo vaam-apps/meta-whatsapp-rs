@@ -572,7 +572,7 @@ pub(crate) async fn create_template(
     }
     idempotency::run(
         &state,
-        caller.tenant(),
+        &caller,
         key,
         fingerprint,
         create(&state, &owned, &definition),
