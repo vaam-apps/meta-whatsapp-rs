@@ -499,7 +499,9 @@ and `store-postgres`.
     service does not send, on a JSON body), `message` (the library's
     `OutboundMessage`, checked in the order and on the fields of
     before), `recipient` and `is_e164` (strict E.164 with its `+`), and
-    the `Messages` service on an `OwnedNumber` (`send`, answering
+    the `Messages` service on an `OwnedNumber` (opened with
+    `Messages::new`, `403 forbidden` for a number another `Authorizer`
+    made, `Authorizer::admit_number`; `send`, answering
     `messages::Accepted`, the accepted message, not a status; and
     `mark_read`, with or without the typing indicator), its failed Graph
     calls told to the `Observer` (`wa_server_graph_errors_total`, the
@@ -508,8 +510,9 @@ and `store-postgres`.
     wraps it for template creation. The server keeps its request types,
     with their OpenAPI schema, reads the body into them and converts
     them into the core's field by field (every field named on both
-    sides, so a field on one side only fails to compile; a test reads
-    each of the core's type names into the server's enums); its
+    sides, so a field on one side only fails to compile, and one
+    destructured but dropped is `-D warnings`' unused variable; a test
+    reads each of the core's type names into the server's enums); its
     `idempotency::run` (crate-private still, now taking the `Caller`)
     hands the core's the service's records, settings, §5.1 error body
     and metrics, and renders the answer (`Idempotent-Replayed: true` on
@@ -535,7 +538,32 @@ and `store-postgres`.
     included, fails the released key's send; the caller's admission
     dropped fails its last step (the other authorizer's caller gets the
     tenant's kept answer); a phone number accepted without its `+`
-    fails its first. Every message,
+    fails its first. The review (mutation-driven, its own lens) found
+    what moved and nothing pinned: the handlers' and the core's
+    `Observer` calls dropped, `Metrics`' `idempotency` emptied, the
+    replay's code tag dropped, the lease and the TTL swapped, a blank
+    message id let through, the caller admitted only with a key, and an
+    interactive footer, a contact's birthday or an accepted contact's
+    `parent_user_id` dropped in the conversion each passed every test.
+    Each now fails one: the suite tells the `Observer`'s outcomes and
+    codes, sends keyless for another authorizer's caller, and gains a
+    second case,
+    `the_services_open_on_their_own_number_and_mark_read_as_meta_documents`
+    (a blank id refused before any request, the typing indicator,
+    Meta's refusal counted); the service's `tests/messages.rs` gains
+    `repeats_and_metas_failures_are_counted`,
+    `a_kept_answer_expires_after_the_ttl` and the read route's blank id;
+    `api::messages` gains `every_field_a_request_carries_reaches_metas_object`
+    and `every_field_of_the_accepted_message_is_answered`. `Messages::new`
+    admits its number (`Authorizer::admit_number`, as `Admin::new` its
+    admin, `tests/capabilities.rs`:
+    `the_message_services_refuse_another_authorizers_number`), so nothing
+    is sent with a number another `Authorizer` made. The idempotency
+    records stay the `Keeper`'s, not the `Authorizer`'s (as S5a did with
+    its `records`): the port's methods take a tenant as given and whoever
+    holds the `Backend` reaches them (`Backend::idempotency`), so behind
+    the order they would guard nothing, for a new parameter of
+    `Authorizer::new` at its eleven callers. Every message,
     idempotency and read-receipt route test passes unchanged, and
     `openapi/v1.json` is byte-identical (the request types, their
     documentation and the handlers' annotations untouched). Left: the

@@ -1249,7 +1249,9 @@ above:
   both sides), the checks before any request (`refuse_unsupported` for
   a JSON body, `message` for the library's `OutboundMessage`, the
   recipient and its strict E.164 rule, `recipient` and `is_e164`), and
-  the `Messages` service on an `OwnedNumber`: `send` answers the
+  the `Messages` service on an `OwnedNumber` (opened with
+  `Messages::new`, which refuses, `403 forbidden`, a number another
+  `Authorizer` made: `Authorizer::admit_number`): `send` answers the
   accepted message (`messages::Accepted`), not a status, and
   `mark_read` marks a received message read, with the typing indicator
   when asked; a failed Graph call is told to the `Observer` and marks

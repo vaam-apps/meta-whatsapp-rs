@@ -1221,7 +1221,8 @@ decisions and the delivery milestones, is
     as services an API adapter parses for, calls and renders: since
     roadmap S5a the admin ones (`admin::Admin`, opened with an
     `AdminCaller` its `Authorizer` admits), since S5b the messages
-    (`messages::Messages` on an `OwnedNumber`, over the send request
+    (`messages::Messages` on an `OwnedNumber` its `Authorizer` made and
+    admits, over the send request
     `messages::SendMessage`, which names no API toolkit's type: an
     adapter converts its own request into it) and running an operation
     under an idempotency key (`idempotency::run`, for a `Caller` its
