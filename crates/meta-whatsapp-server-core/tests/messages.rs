@@ -28,3 +28,16 @@ async fn a_timeout_may_have_been_sent_and_its_key_replays_it_without_a_second_re
     let backend = memory::Memory::default();
     conformance::messages::a_timeout_may_have_been_sent_and_its_key_replays_it_without_a_second_request(&backend).await;
 }
+
+/// The services open only on a number their own `Authorizer` made, and
+/// mark read as Meta documents it (a blank id refused before any request,
+/// the typing indicator when asked, Meta's refusal told to the
+/// `Observer`).
+#[tokio::test]
+async fn the_services_open_on_their_own_number_and_mark_read_as_meta_documents() {
+    let backend = memory::Memory::default();
+    conformance::messages::the_services_open_on_their_own_number_and_mark_read_as_meta_documents(
+        &backend,
+    )
+    .await;
+}

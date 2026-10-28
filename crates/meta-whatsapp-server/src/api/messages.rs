@@ -809,10 +809,13 @@ impl From<SendMessage> for domain::SendMessage {
 
 impl From<domain::Accepted> for MessageAccepted {
     fn from(accepted: domain::Accepted) -> Self {
+        let domain::Accepted {
+            message_id,
+            contacts,
+        } = accepted;
         Self {
-            message_id: accepted.message_id.as_str().to_owned(),
-            contacts: accepted
-                .contacts
+            message_id: message_id.as_str().to_owned(),
+            contacts: contacts
                 .into_iter()
                 .map(|c| AcceptedContact {
                     input: c.input,
@@ -839,9 +842,11 @@ pub(crate) fn parse_message(body: Value) -> Result<OutboundMessage, ApiError> {
 
 // ─── The routes ──────────────────────────────────────────────────────────
 
-/// The core's message operations on `owned`, counted in `state`'s metrics.
-fn messages<'a>(state: &'a AppState, owned: &'a OwnedNumber) -> Messages<'a> {
-    Messages::new(state.authz(), owned.capability()).observed_by(state.metrics())
+/// The core's message operations on `owned`, counted in `state`'s metrics
+/// (`owned` is the state's own: the extractor made it with
+/// `state.authz()`, which admits it).
+fn messages<'a>(state: &'a AppState, owned: &'a OwnedNumber) -> Result<Messages<'a>, ApiError> {
+    Ok(Messages::new(state.authz(), owned.capability())?.observed_by(state.metrics()))
 }
 
 /// Send `message` with the number's token: `202` with its id, or the
@@ -851,7 +856,7 @@ pub(crate) async fn send(
     owned: &OwnedNumber,
     message: &OutboundMessage,
 ) -> Result<Success, ApiError> {
-    let accepted = messages(state, owned).send(message).await?;
+    let accepted = messages(state, owned)?.send(message).await?;
     Success::json(StatusCode::ACCEPTED, &MessageAccepted::from(accepted))
 }
 
@@ -964,7 +969,7 @@ pub(crate) async fn mark_read(
     Path((_, message_id)): Path<(String, String)>,
     OptionalJson(body): OptionalJson<MarkRead>,
 ) -> Result<StatusCode, ApiError> {
-    messages(&state, &owned)
+    messages(&state, &owned)?
         .mark_read(&message_id, body.typing_indicator)
         .await?;
     Ok(StatusCode::NO_CONTENT)
@@ -1163,6 +1168,106 @@ mod tests {
                        "rows": [{"id": "priority_express", "title": "Priority Mail Express", "description": "Next Day to 2 Days"}]}]}}),
         );
         assert_eq!(list["interactive"]["action"]["button"], "Shipping Options");
+    }
+
+    /// Every field a request's objects carry reaches Meta's object, value
+    /// for value, as the pages write it (`messages/contacts-messages`,
+    /// `interactive-reply-buttons-messages`, `interactive-list-messages`,
+    /// the media pages, `location-messages`): the conversion into the
+    /// core's request drops none. (The compiler refuses a field missing
+    /// from either side, and `-D warnings` one destructured but unused;
+    /// this pins the values.) Decisive: each field of the `From` impls.
+    #[test]
+    fn every_field_a_request_carries_reaches_metas_object() {
+        let to = json!({"phone": "+16505551234"});
+        for (kind, object) in [
+            (
+                "contacts",
+                json!([{
+                    "addresses": [{"street": "1 Lucky Shrub Way", "city": "Menlo Park", "state": "CA",
+                                   "zip": "94025", "country": "United States", "country_code": "US",
+                                   "type": "Office"}],
+                    "birthday": "1999-01-23",
+                    "emails": [{"email": "bjohnson@luckyshrub.com", "type": "Work"}],
+                    "name": {"formatted_name": "Barbara J. Johnson", "first_name": "Barbara",
+                             "last_name": "Johnson", "middle_name": "Joana", "suffix": "Esq.",
+                             "prefix": "Dr."},
+                    "org": {"company": "Lucky Shrub", "department": "Legal", "title": "Lead Counsel"},
+                    "phones": [{"phone": "+1 (940) 555-1234", "type": "Office", "wa_id": "19405551234"}],
+                    "urls": [{"url": "https://www.luckyshrub.com", "type": "Company"}]
+                }]),
+            ),
+            (
+                "interactive",
+                json!({"type": "button",
+                       "header": {"type": "document",
+                                  "document": {"link": "https://www.luckyshrub.com/a.pdf", "filename": "a.pdf"}},
+                       "body": {"text": "Change?"}, "footer": {"text": "Lucky Shrub"},
+                       "action": {"buttons": [{"type": "reply", "reply": {"id": "change", "title": "Change"}}]}}),
+            ),
+            (
+                "interactive",
+                json!({"type": "list", "header": {"type": "text", "text": "Shipping"},
+                       "body": {"text": "Which?"}, "footer": {"text": "Lucky Shrub"},
+                       "action": {"button": "Shipping Options", "sections": [{"title": "I want it ASAP!",
+                           "rows": [{"id": "priority_express", "title": "Priority Mail Express",
+                                     "description": "Next Day to 2 Days"}]}]}}),
+            ),
+            (
+                "interactive",
+                json!({"type": "cta_url", "header": {"type": "image", "image": {"id": "1479537139650973"}},
+                       "body": {"text": "Tap"}, "footer": {"text": "Subject to change"},
+                       "action": {"name": "cta_url",
+                                  "parameters": {"display_text": "See Dates", "url": "https://www.luckyshrub.com"}}}),
+            ),
+            (
+                "video",
+                json!({"link": "https://www.luckyshrub.com/a.mp4", "caption": "A tour"}),
+            ),
+            (
+                "document",
+                json!({"id": "1479537139650973", "caption": "Invoice", "filename": "invoice.pdf"}),
+            ),
+            (
+                "sticker",
+                json!({"link": "https://www.luckyshrub.com/a.webp"}),
+            ),
+            (
+                "location",
+                json!({"latitude": "37.44216251868683", "longitude": "-122.16153582049394",
+                       "name": "Philz Coffee", "address": "101 Forest Ave, Palo Alto, CA 94301"}),
+            ),
+        ] {
+            let mut body = json!({"to": to, "type": kind});
+            body[kind] = object.clone();
+            let sent = built(body).unwrap_or_else(|e| panic!("{kind}: {e}"));
+            assert_eq!(sent[kind], object, "{kind}");
+        }
+    }
+
+    /// The accepted message's every contact field reaches the answer
+    /// (business-scoped-user-ids: a BSUID and its parent). Decisive: each
+    /// field of `From<domain::Accepted>`.
+    #[test]
+    fn every_field_of_the_accepted_message_is_answered() {
+        let response = serde_json::from_value(json!({
+            "messaging_product": "whatsapp",
+            "contacts": [{"input": "US.13491208655302741918", "wa_id": "16505551234",
+                          "user_id": "US.13491208655302741918",
+                          "parent_user_id": "US.ENT.11815799212886844830"}],
+            "messages": [{"id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA"}]
+        }))
+        .unwrap();
+        let accepted = MessageAccepted::from(domain::Accepted::from_response(response).unwrap());
+        assert_eq!(
+            serde_json::to_value(&accepted).unwrap(),
+            json!({
+                "message_id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA",
+                "contacts": [{"input": "US.13491208655302741918", "wa_id": "16505551234",
+                              "user_id": "US.13491208655302741918",
+                              "parent_user_id": "US.ENT.11815799212886844830"}]
+            })
+        );
     }
 
     #[test]

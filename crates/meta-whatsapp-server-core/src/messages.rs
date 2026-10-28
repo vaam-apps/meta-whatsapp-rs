@@ -951,8 +951,8 @@ fn request_field(library: &str) -> String {
 // ─── The operations ──────────────────────────────────────────────────────
 
 /// The message operations on a number the caller's tenant owns: an
-/// [`OwnedNumber`] its [`Authorizer`] made (ownership and the vault
-/// already checked: steps 4 and 5 of [`crate::authz`]), with that
+/// [`OwnedNumber`] its [`Authorizer`] made, and admits (ownership and the
+/// vault already checked: steps 4 and 5 of [`crate::authz`]), with that
 /// number's token. A failed Graph call is told to the [`Observer`] (the
 /// adapter's metrics), and a `190` marks the WABA's numbers
 /// `reconnect_required` ([`OwnedNumber::failed`]). Cheap: a few
@@ -972,17 +972,22 @@ impl std::fmt::Debug for Messages<'_> {
 }
 
 impl<'a> Messages<'a> {
-    /// The operations on `number`, which `authz` made: a failed call
-    /// marks through it ([`OwnedNumber::failed`]; a `number` another
-    /// [`Authorizer`] made answers its failures `403 forbidden`, marking
-    /// nothing). Failed Graph calls are reported to nobody until
-    /// [`Self::observed_by`].
-    pub fn new(authz: &'a Authorizer, number: &'a OwnedNumber) -> Self {
-        Self {
+    /// The operations on `number`, once `authz` admits it
+    /// ([`Authorizer::admit_number`]): a failed call marks through `authz`
+    /// ([`OwnedNumber::failed`]). Failed Graph calls are reported to nobody
+    /// until [`Self::observed_by`].
+    ///
+    /// # Errors
+    ///
+    /// `number` another [`Authorizer`] made: `403 forbidden`, logged at
+    /// `warn`, and nothing is sent.
+    pub fn new(authz: &'a Authorizer, number: &'a OwnedNumber) -> Result<Self, ServiceError> {
+        authz.admit_number(number)?;
+        Ok(Self {
             authz,
             number,
             observer: &(),
-        }
+        })
     }
 
     /// Report failed Graph calls to `observer` (the adapter's metrics).

@@ -415,6 +415,18 @@ impl Authorizer {
         self.check(&admin.issuer, "admit_admin")
     }
 
+    /// [`Self::admit`] for an [`OwnedNumber`]: what a service opened on
+    /// one asks first ([`Messages::new`](crate::messages::Messages::new)),
+    /// so that nothing is sent with a number another [`Authorizer`] made.
+    ///
+    /// # Errors
+    ///
+    /// `number` another [`Authorizer`] made: `403 forbidden`, logged at
+    /// `warn`.
+    pub fn admit_number(&self, number: &OwnedNumber) -> Result<(), ServiceError> {
+        self.check(&number.issuer, "admit_number")
+    }
+
     /// The tokenless Graph client.
     pub fn client(&self) -> &Client {
         &self.client
