@@ -530,8 +530,12 @@ and `store-postgres`.
     Postgres (`tests/live_postgres.rs`). By mutation, on the core's
     backend: the operation run without claiming the key (no lease), and
     a failure that may have been sent released instead of kept, each
-    fail it at the replay (a second send, which nothing answers); the
-    caller's admission dropped fails its last step. Every message,
+    fail it at the replay (a second send, which nothing answers; the
+    latter also live on Postgres); every failure kept, a `131047`
+    included, fails the released key's send; the caller's admission
+    dropped fails its last step (the other authorizer's caller gets the
+    tenant's kept answer); a phone number accepted without its `+`
+    fails its first. Every message,
     idempotency and read-receipt route test passes unchanged, and
     `openapi/v1.json` is byte-identical (the request types, their
     documentation and the handlers' annotations untouched). Left: the
