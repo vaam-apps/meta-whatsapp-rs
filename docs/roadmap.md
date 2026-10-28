@@ -1286,7 +1286,12 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     samples round-trip or are refused, never altered, and those that
     parse as a document fail local validation, all but one (a global
     reference into an array schema, Meta's to check), each outcome
-    pinned per sample. Dropping the catch-all, keeping only its tag, or
+    pinned per sample. The components the Markdown pages give no
+    example of are pinned by
+    `every_documented_property_of_every_component_is_modelled`: each
+    property of each component's table, under its documented name,
+    lands in a typed field (a misspelt wire name fails it). Dropping the
+    catch-all, keeping only its tag, or
     turning any `extra` into `#[serde(skip)]` fails
     `unknown_components_actions_and_properties_are_kept_as_sent`; lifting
     a limit fails its unit test in `flows::flow_json::tests`. Read on
