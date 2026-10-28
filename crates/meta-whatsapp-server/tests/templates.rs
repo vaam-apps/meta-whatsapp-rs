@@ -705,3 +705,59 @@ async fn a_page_cached_for_one_tenant_is_never_answered_to_the_next() {
     assert_eq!(h.graph.last_request().unwrap().bearer(), Some("TOKEN-43"));
     assert_eq!(h.graph.remaining(), 0);
 }
+
+/// Meta's failures on every template route are counted by their codes
+/// (`wa_server_graph_errors_total`), a template id Meta refuses by Meta's
+/// own code although it is answered `404 not_found`. Decisive (roadmap
+/// S5c, the operations being the core's): the handlers'
+/// `observed_by(state.metrics())`, and the core's calls to its observer.
+#[tokio::test]
+async fn metas_failures_on_templates_are_counted() {
+    let (h, key) = connected().await;
+    let graph_errors = |code: &str| -> u64 {
+        let series = format!("wa_server_graph_errors_total{{code=\"{code}\"}}");
+        h.state
+            .metrics()
+            .render()
+            .lines()
+            .find_map(|l| l.strip_prefix(series.as_str())?.strip_prefix(' '))
+            .map_or(0, |n| n.parse().unwrap())
+    };
+    let refusal = |code: i64| {
+        json!({"error": {"message": "(#100) Invalid parameter", "type": "OAuthException",
+                         "code": code, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}})
+    };
+    h.graph.push_json(400, refusal(100));
+    let listed = h.call(list(&key, WABA, "")).await;
+    assert_eq!(listed.code(), "invalid_parameter", "{}", listed.text);
+    assert_eq!(graph_errors("invalid_parameter"), 1);
+    h.graph.push_json(400, refusal(100));
+    let got = h
+        .call(Call::get(format!("/v1/wabas/{WABA}/templates/1304694804498707")).key(&key))
+        .await;
+    assert_eq!(got.status, StatusCode::NOT_FOUND, "{}", got.text);
+    assert_eq!(graph_errors("invalid_parameter"), 2, "the refused id");
+    h.graph.push_json(400, refusal(2388019));
+    let created = h
+        .call(
+            Call::new(Method::POST, format!("/v1/wabas/{WABA}/templates"))
+                .key(&key)
+                .json(&sample_template_definition()),
+        )
+        .await;
+    assert_eq!(created.code(), "template_limit_reached", "{}", created.text);
+    assert_eq!(graph_errors("template_limit_reached"), 1);
+    h.graph.push_json(400, refusal(100));
+    let deleted = h
+        .call(
+            Call::new(
+                Method::DELETE,
+                format!("/v1/wabas/{WABA}/templates?name=order_confirmation"),
+            )
+            .key(&key),
+        )
+        .await;
+    assert_eq!(deleted.code(), "invalid_parameter", "{}", deleted.text);
+    assert_eq!(graph_errors("invalid_parameter"), 3);
+    assert_eq!(h.graph.remaining(), 0);
+}

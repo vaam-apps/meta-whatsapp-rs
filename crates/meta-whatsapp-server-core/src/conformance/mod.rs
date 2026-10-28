@@ -33,6 +33,8 @@
 //! | [`races`] | the atomic contracts raced on two tasks: an insert against its binding moving, a binding against its tenant's deletion, each conditioned write against a re-attach |
 //! | [`admin`] | the core's admin services over the bundle, with no HTTP layer (roadmap S5a): attaching a WABA another tenant holds is refused with nothing stored, subscribed or shared, whether its holder is seen before Meta is asked or only by the binding's own check |
 //! | [`messages`] | the core's message services under its idempotency engine, over the bundle's records, vault and [`IdempotencyRecords`], with no HTTP layer (roadmap S5b, M1.4): a digits-only phone number refused before any request; a timeout `may_have_been_sent`, its key replaying it with no second request; a `131047` releasing its key; another authorizer's caller refused before the key is read |
+//! | [`templates`] | the core's template services over the bundle's records and vault, with no HTTP layer (roadmap S5c): tenant B's caller on tenant A's template id is not found with zero vault reads (A's WABA not B's, A's capability refused to B, A's id not in B's WABA, nothing deleted); another authorizer's caller or capability refused; Meta's documented requests, the cache and its invalidation (by a creation or deletion Meta refuses too); a template id past the lookup's 5 pages not found, nothing deleted |
+//! | [`numbers`] | the core's number services over the bundle's records and vault, with no HTTP layer (roadmap S5c): only the order's own capabilities; a number's details and profile, a change of it (an empty one only reads, a refused one sends nothing); a disconnection deleting nothing until Meta unsubscribed the app, and nothing for a WABA that moved |
 //!
 //! Every case panics on a broken contract, with what broke: this is test
 //! code.
@@ -53,9 +55,11 @@ pub mod admin;
 pub mod capabilities;
 pub mod invariants;
 pub mod messages;
+pub mod numbers;
 pub mod outbox;
 pub mod races;
 pub mod records;
+pub mod templates;
 
 use std::sync::Arc;
 
@@ -93,6 +97,14 @@ where
 
     let backend = fresh().await;
     messages::run(backend.as_ref()).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    templates::run(backend.as_ref()).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    numbers::run(backend.as_ref()).await;
     backend.close().await;
     report
 }

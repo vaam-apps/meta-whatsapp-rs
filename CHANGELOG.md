@@ -1537,6 +1537,62 @@ stored data, the owner's).
   `observe::Observer`): add `fn idempotency(&self, outcome: &'static
   str)`, an empty body to count nothing (as `()` does), or your metrics'
   counter of repeats by outcome.
+- **The numbers and the templates are the service core's** (roadmap
+  S5c; `meta-whatsapp-server-core` and `meta-whatsapp-server`, both
+  `publish = false`). `meta_whatsapp_server_core::numbers` holds
+  `Numbers` on an `OwnedNumber`, opened with `Numbers::new(&authorizer,
+  &owned_number)` (refused, `403 forbidden`, for a number another
+  `Authorizer` made), with `details` (`numbers::NumberDetails`, the
+  fields `NUMBER_FIELDS`), `profile` and `update_profile` (a
+  `numbers::ProfileChange`, answering `numbers::BusinessProfile`; the
+  fields `PROFILE_FIELDS`), and `Waba` on an `OwnedWaba`, opened with
+  `Waba::new(&authorizer, &owned_waba)` (refused likewise, through the
+  new `Authorizer::admit_waba`, beside `admit_number`), with
+  `disconnect`. `meta_whatsapp_server_core::templates` holds the cache
+  (`TemplateCache`, `TEMPLATE_CACHE_ENTRIES`, `TEMPLATE_CACHE_PER_WABA`),
+  `TEMPLATE_FIELDS`, `definition` (a creation's body read with no key
+  dropped and checked against every documented limit), the answers
+  (`Template`, `TemplatePage` with Meta's raw cursor as `next_after`,
+  `TemplateCreated`) and the filter (`TemplateFilter`), and `Templates`,
+  opened with `Templates::new(&authorizer, &caller, &owned_waba, &cache)`:
+  it admits both the `Caller` and the WABA (`403 forbidden` for another
+  `Authorizer`'s) and opens only on a WABA of that caller's own tenant
+  (`404 not_found` otherwise), with `list`, `get`, `create` and
+  `delete`. `request::graph_id` and `request::typed_graph_id` (a Meta
+  object id checked before it reaches a Graph path) moved from the
+  server's `api::common`, which wraps the typed one for the media
+  routes; the server's `api::common::meta_object` wrapper is gone (the
+  core's `templates::definition` reads the body). The conformance suite
+  gains `templates` and `numbers` (in `conformance::run`): with no HTTP
+  layer, tenant B's caller on tenant A's template id is not found with
+  zero vault reads (A's WABA refused at step 4, A's capability refused
+  by `Templates::new`, A's id looked for in B's own WABA and not found,
+  nothing deleted, A's vault record never read), another `Authorizer`'s
+  caller or capability is refused, and the number and template services
+  send Meta's documented requests (the cache and its invalidation, by a
+  creation or deletion Meta refuses too; the lookup's 5-page cap; the
+  empty profile change that only reads; Meta's `details` on the number
+  services' errors; the disconnection that deletes nothing until Meta
+  unsubscribed the app). In the server,
+  `api::templates::TemplateCache`, `TEMPLATE_FIELDS`,
+  `TEMPLATE_CACHE_ENTRIES`, `TEMPLATE_CACHE_PER_WABA` and
+  `api::numbers::NUMBER_FIELDS`, `PROFILE_FIELDS` are re-exports of the
+  core's; `auth::OwnedWaba` gains a crate-private `capability()`, as
+  `OwnedNumber` has; `GET /v1/wabas/{waba_id}/templates/{id}`'s handler
+  takes the `Caller` too (the extractor it already ran). No change to
+  the HTTP API: every status, body, field, `retryable`, header
+  (`Idempotent-Replayed` on a creation) and metric is as before, the
+  template cache's TTL (`Settings::template_cache_ttl`, 60 seconds) and
+  invalidation too, and `openapi/v1.json` is byte-identical. The one log
+  line that moved (a template id not found in the first pages of its
+  name's templates) keeps its target, `meta_whatsapp_server::api::templates`;
+  the template deletions' audit events keep `audit`. New: tests that
+  pin what the handlers hand the core, Meta's failures on every number
+  and template route counted by code (`wa_server_graph_errors_total`).
+  No new trait method: nothing to upgrade for an `Observer` or a
+  backend of your own (its `RecordStore` now also meets the new suites
+  through `conformance::run`: `unbind_waba_if` and `set_waba_status_if`
+  as their contracts already said).
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

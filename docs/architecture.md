@@ -1252,8 +1252,15 @@ decisions and the delivery milestones, is
     `messages::SendMessage`, which names no API toolkit's type: an
     adapter converts its own request into it) and running an operation
     under an idempotency key (`idempotency::run`, for a `Caller` its
-    `Authorizer` admits: a status, a body, and whether it replayed); the
-    others follow in S5c–S5e. It depends on the
+    `Authorizer` admits: a status, a body, and whether it replayed),
+    since S5c the numbers (`numbers::Numbers` on an admitted
+    `OwnedNumber`: details, the business profile read and changed;
+    `numbers::Waba` on an `OwnedWaba` its `Authorizer` admits,
+    `admit_waba`: disconnecting) and the templates
+    (`templates::Templates` on an admitted `OwnedWaba` of the admitted
+    `Caller`'s own tenant, over the adapter's `templates::TemplateCache`:
+    the list, the lookup of an id in its WABA, create, delete); the
+    others follow in S5d–S5e. It depends on the
     facade without its adapters' features: no axum, no sqlx, no utoipa
     (the `http` crate is in its graph only through the library, whose
     `HttpTransport` port and client speak it; no `http` type crosses the

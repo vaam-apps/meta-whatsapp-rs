@@ -403,3 +403,47 @@ async fn the_internal_router_cuts_a_request_at_its_deadline() {
     assert_eq!(started.elapsed(), REQUEST_DEADLINE);
     assert!(h.graph.requests().is_empty());
 }
+
+/// Meta's failures on the number routes and the disconnection are
+/// counted by their codes (`wa_server_graph_errors_total`), and a refused
+/// disconnection deletes nothing. Decisive (roadmap S5c, the operations
+/// being the core's): the handlers' `observed_by(state.metrics())`, and
+/// the core's calls to its observer.
+#[tokio::test]
+async fn metas_failures_on_numbers_are_counted() {
+    let (h, key) = connected().await;
+    let graph_errors = |code: &str| -> u64 {
+        let series = format!("wa_server_graph_errors_total{{code=\"{code}\"}}");
+        h.state
+            .metrics()
+            .render()
+            .lines()
+            .find_map(|l| l.strip_prefix(series.as_str())?.strip_prefix(' '))
+            .map_or(0, |n| n.parse().unwrap())
+    };
+    let refusal = json!({"error": {"message": "(#100) Invalid parameter", "type": "OAuthException",
+                                   "code": 100, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}});
+    let calls = [
+        Call::get(format!("/v1/numbers/{PN}")).key(&key),
+        Call::get(format!("/v1/numbers/{PN}/profile")).key(&key),
+        Call::new(Method::PATCH, format!("/v1/numbers/{PN}/profile"))
+            .key(&key)
+            .json(&json!({"about": "Succulent specialists!"})),
+        Call::new(Method::DELETE, format!("/v1/wabas/{WABA}")).key(&key),
+    ];
+    for (n, call) in (1..).zip(calls) {
+        h.graph.push_json(400, refusal.clone());
+        let reply = h.call(call).await;
+        assert_eq!(reply.code(), "invalid_parameter", "{}", reply.text);
+        assert_eq!(graph_errors("invalid_parameter"), n);
+    }
+    assert!(
+        h.vault
+            .get(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_some(),
+        "a refused disconnection deleted the token"
+    );
+    assert_eq!(h.graph.remaining(), 0);
+}

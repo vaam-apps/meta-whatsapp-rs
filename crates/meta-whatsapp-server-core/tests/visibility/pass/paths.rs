@@ -33,6 +33,7 @@ async fn public(
     let _: ServiceError = number.failed(authz, error).await;
     let _: &Client = number.client();
     let waba: OwnedWaba = authz.owned_waba(caller, waba_id.clone()).await?;
+    authz.admit_waba(&waba)?;
     let _: ServiceError = waba.failed(authz, error).await;
     authz.store_token(admin, caller.tenant(), token).await?;
     authz.rotate_vault(admin).await?;
