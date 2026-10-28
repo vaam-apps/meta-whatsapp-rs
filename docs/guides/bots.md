@@ -18,11 +18,12 @@ Each event goes through these steps, in this order:
 ```text
 WebhookHandler ─► DedupGuard ─► Bot (an EventSink<WebhookEvent>)
   1. ban:    a received message from a banned sender stops here; nothing below runs
-  2. match:  `/name args` (or an image or video caption), or a tapped button /
+  2. match:  `/name [sub] args` (or an image or video caption), or a tapped button /
              list row whose id is a payload → ctx.invocation();
              a `/name` no command has → ctx.unknown_command()
   3. middleware, in registration order (any may stop the event; they see the match)
-  4. the command's guards: scope → owner → cooldown → its handler;
+  4. the command's guards: scope → owner → flags → cooldown → its handler
+     (a subcommand: its parent's scope and owner first);
      else the unknown-command handler, if any; else the listeners
 ```
 
@@ -108,6 +109,79 @@ registrar.command(
 - **Metadata.** `Command::metadata(key, value)` keeps your own data with
   the command (`CommandInfo::metadata`); the bot never reads it.
 
+### Subcommands and flags
+
+A command can have subcommands, and a command or a subcommand can take
+flags (from the skill's example):
+
+```rust
+pub fn order_command() -> Command {
+    Command::new("order", |ctx: Ctx| async move {
+        ctx.reply("Try /order status <order number>").await?;
+        Ok(())
+    })
+    .description("Your orders")
+    .subcommand(
+        Command::new("status", |ctx: Ctx| async move {
+            let order = ctx.args().get(0).unwrap_or("?"); // the arguments after `status`
+            let refreshed = if ctx.args().has_flag("refresh") {
+                " (refreshed)"
+            } else {
+                ""
+            };
+            ctx.reply(format!("Order {order} has shipped{refreshed}."))
+                .await?;
+            Ok(())
+        })
+        .usage("<order number> [--refresh]")
+        .flag("refresh") // a mistyped `--refesh` is refused, with the usage
+        .cooldown(Duration::from_secs(10)), // its own, apart from `/order`'s
+    )
+}
+```
+
+- **Subcommands.** `/order status 42` runs `status` with `42` as its only
+  argument (`ctx.invocation()` names `order` and, in `subcommand`,
+  `status`). The subcommand is the first word after the name, typed
+  outside quotes, compared like names (case-insensitive by default);
+  `/order` alone, `/order 42`, `/order "status"` or `/order 42 status`
+  run the parent with every argument, so the parent is where an unknown
+  subcommand gets its answer. A subcommand has its own aliases, usage,
+  description, payloads, flags, guards and cooldown. The parent's scope
+  and owner-only apply to it too (an owner-only `/admin` keeps
+  `/admin ban` for owners); its cooldown does not, and a subcommand's
+  cooldown is kept under its own key (`order status`, beside `order`'s,
+  which is unchanged). One level only: a subcommand with subcommands
+  fails `build`. Meta's command menu lists commands, not subcommands.
+- **Flags.** A command that declares a flag (`Command::flag`) reads
+  flags: `--name` and `--name=value` are then flags, read with
+  `ctx.args().has_flag(name)` and `ctx.args().flag(name)` (the last value
+  given; `--limit=` is the empty value) or all of them in order with
+  `ctx.args().flags()`; `ctx.args().get(i)` counts the positional
+  arguments only, and `ctx.args().raw()` is the text as typed. Kept small
+  on purpose: no short `-n` (a negative number stays an argument), no
+  `--limit 5` (that is the flag `limit` and the argument `5`), names
+  compared as typed. A quoted `"--limit=5"` is an argument, and `--`
+  alone ends the flags. The value may be quoted (`--note="two words"`).
+  An em dash (`—limit=5`) reads as `--`: iPhone keyboards type one for two
+  hyphens; an em dash alone is punctuation, an argument.
+- **A command without flags reads none.** One that declares no flag
+  (and does not take any, below) reads every word as a positional
+  argument, as typed: `/say --hi there` runs `say` with `--hi` and
+  `there`, so free text keeps its `--` words and is never refused. Each
+  command and subcommand has its own set: `/order` declaring `--all`
+  does not make `/order cancel` read flags, nor the reverse. To unit-test
+  a handler, build its arguments as the command reads them:
+  `Args::parse` (no flags) or `Args::parse_with_flags`.
+- **Unknown flags are refused.** A command that declares flags and is
+  typed with one it does not declare does not run, and `ReplyRefusals`
+  answers `Unknown option --x.` with the usage hint and the flags it
+  takes (`Refusal::UnknownFlag`): a typo such as `--dryrun` must not run
+  the real thing. `Command::pass_unknown_flags` turns that off for one
+  command (the flags are handed over in `ctx.args().flags()`; alone, it
+  makes a command read flags without declaring any). Write the flags in
+  `Command::usage` for the help to show them.
+
 ## 2. Guards
 
 The ban is checked first, before the match and the middleware; the
@@ -119,7 +193,12 @@ goes to the bot's `Refusals` (by default, `ReplyRefusals`):
 | banned sender | `AccessList::ban` (BSUID) or `AccessList::ban_phone` | silent; nothing runs, so no read receipt, typing indicator, command or listener either |
 | wrong chat | `Command::group_only`, `Command::private_only` | a short reply |
 | not an owner | `Command::owner_only` + `AccessList::owner` | silent |
+| a flag it does not declare, on a command that declares flags | `Command::flag` (`Command::pass_unknown_flags` turns it off; a command with no flag reads none, so this never refuses it) | "Unknown option --x.", the usage hint and the flags it takes |
 | cooldown running | `Command::cooldown` | "Please wait N s …", once per cooldown |
+
+For a subcommand, the parent's scope and owner-only are checked first,
+then the subcommand's own guards. The flag check comes after the owner
+check, so a non-owner never learns an owner command's usage.
 
 List owners and bans **by BSUID**: a username adopter arrives without a
 phone number, so a ban by phone number alone can be walked around. A
@@ -314,8 +393,9 @@ own `Inbox::mark_read` is its unread count, not Meta's receipt.
 
 `.help_command()` adds `/help` ("Show the commands"), generated from the
 commands that are not hidden, grouped by category, in the `CategoryHelp`
-format (`/name, /alias <usage> — description`). The pieces are yours to
-change:
+format (`/name, /alias <usage> — description`), each followed by a line
+per subcommand that is not hidden (`/name sub, /name alias <usage> —
+description`). The pieces are yours to change:
 
 - `BotBuilder::help_command_with(name, description, formatter)`: another
   name and description (the menu shows the description) and a
@@ -597,12 +677,14 @@ with a pacer on a `ManualClock` never waits for real.
 A handler is a function of its context, so it can be tested without a
 bot: `Ctx::new(event, outbound, renderer)`, then
 `.with_invocation(Invocation::new(name, trigger, args))` for a command
-(and `.with_pacer(pacer)` for one that uses `Ctx::pacer`), and call it.
+(`args` from `Args::parse`, or `Args::parse_with_flags` for a command that
+reads flags; `.with_subcommand(sub)` for a subcommand), and
+`.with_pacer(pacer)` for one that uses `Ctx::pacer`, and call it.
 
 ## Not here yet
 
 Scheduling and broadcasts that survive a restart ([roadmap](../roadmap.md)
-B3), subcommands and `--flag` arguments (B1b), images, suggestions and
-product cards in replies as media, buttons, lists and carousels (B1c),
-and auto-delete (B4). Conversation state and multi-step forms are
+B3), images, suggestions and product cards in replies as media, buttons,
+lists and carousels (B1c), and auto-delete (B4). Subcommands nest one
+level, and flags have no short or space-separated form (section 1). Conversation state and multi-step forms are
 yours: keep them in your store, keyed by `BotSender::key`.

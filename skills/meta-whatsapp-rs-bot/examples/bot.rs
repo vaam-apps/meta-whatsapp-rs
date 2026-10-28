@@ -1,6 +1,6 @@
 //! Reference code for the `meta-whatsapp-rs-bot` skill: a WhatsApp bot on
 //! Cloud API webhooks — commands with prefixes, aliases, guards and
-//! cooldowns, a plugin per feature, middleware, Markdown replies, the
+//! cooldowns, a subcommand with a flag, a plugin per feature, middleware, Markdown replies, the
 //! generated help and Meta's command menu, replies recorded in the CMS
 //! inbox, and a paced broadcast sharing the bot's pacer.
 //!
@@ -52,6 +52,32 @@ impl Plugin for Orders {
         );
         Ok(())
     }
+}
+
+/// `/order status 42 --refresh`: a subcommand with a cooldown of its own
+/// and a declared flag; `/order` alone runs the parent.
+pub fn order_command() -> Command {
+    Command::new("order", |ctx: Ctx| async move {
+        ctx.reply("Try /order status <order number>").await?;
+        Ok(())
+    })
+    .description("Your orders")
+    .subcommand(
+        Command::new("status", |ctx: Ctx| async move {
+            let order = ctx.args().get(0).unwrap_or("?"); // the arguments after `status`
+            let refreshed = if ctx.args().has_flag("refresh") {
+                " (refreshed)"
+            } else {
+                ""
+            };
+            ctx.reply(format!("Order {order} has shipped{refreshed}."))
+                .await?;
+            Ok(())
+        })
+        .usage("<order number> [--refresh]")
+        .flag("refresh") // a mistyped `--refesh` is refused, with the usage
+        .cooldown(Duration::from_secs(10)), // its own, apart from `/order`'s
+    )
 }
 
 /// Commands for the shop's owners only, left out of the help and the menu.
@@ -376,6 +402,61 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].json().unwrap()["status"], "read");
         assert_eq!(t.remaining(), 0);
+    }
+
+    /// `/order status 1234 --refresh` runs the subcommand with `1234` and
+    /// the flag; a mistyped flag is refused with the usage, and runs
+    /// nothing; `/order`, which declares no flag, reads `--x` as an
+    /// argument and runs.
+    #[tokio::test]
+    async fn a_subcommand_reads_its_arguments_and_flags() {
+        let t = ScriptedTransport::new();
+        t.push_json(200, sent());
+        t.push_json(200, sent());
+        t.push_json(200, sent());
+        let bot = Bot::builder()
+            .client(client(&t))
+            .cooldown_store(Arc::new(MemoryKvStore::new()), Arc::new(SystemClock))
+            .command(order_command())
+            .build()
+            .await
+            .unwrap();
+
+        bot.deliver(text("/order status 1234 --refresh"))
+            .await
+            .unwrap();
+        bot.deliver(text("/order status 1234 --refesh"))
+            .await
+            .unwrap();
+        bot.deliver(text("/order --x")).await.unwrap();
+
+        let requests = t.requests();
+        assert_eq!(
+            requests[0].json(),
+            Some(json!({
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "recipient": USER,
+                "context": {"message_id": "wamid.TEST"},
+                "type": "text",
+                "text": {"body": "Order 1234 has shipped (refreshed)."}
+            }))
+        );
+        assert_eq!(
+            requests[1].json().unwrap()["text"]["body"],
+            "Unknown option --refesh.\nUsage: /order status <order number> [--refresh]\n\
+             Options: --refresh"
+        );
+        assert_eq!(
+            requests[2].json().unwrap()["text"]["body"],
+            "Try /order status <order number>"
+        );
+        assert_eq!(t.remaining(), 0);
+        assert_eq!(
+            bot.help(),
+            "*General*\n/order — Your orders\n\
+             /order status <order number> [--refresh]"
+        );
     }
 
     /// The customer's command and the bot's reply are both in the inbox's

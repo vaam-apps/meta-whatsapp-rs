@@ -867,9 +867,10 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     two messages at a paragraph boundary; a sender with no `wa_id`
     (BSUID only) is served.
   - **Landed:** rows 86–88 done in the library; row 85 partial
-    (subcommands and flags: B1b) and row 17 partial (rich replies
-    beyond text: B1c). Folder loading and hot reload stay out (D28).
-- [ ] **B1b. Subcommands and flags** (`meta-whatsapp-bot`; row 85): a
+    (subcommands and flags: B1b, since done) and row 17 partial (rich
+    replies beyond text: B1c). Folder loading and hot reload stay out
+    (D28).
+- [x] **B1b. Subcommands and flags** (`meta-whatsapp-bot`; row 85): a
   command's subcommands (`/order status 42` runs `status` under
   `order`, each with its own guards, usage and help line) and flags in
   its arguments (`--dry-run`, `--limit=5`), read from `Args` next to
@@ -881,6 +882,37 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     subcommand's own cooldown refuses a second run (removing its guard
     check fails the test); a quoted `"--limit=5"` stays a positional
     argument (removing the quote check fails the test).
+  - **Landed:** row 85 done in the library. `Command::subcommand` (one
+    level), `Command::flag`, `Command::pass_unknown_flags`,
+    `Invocation::subcommand`, `Args::flags`, `Args::has_flag`,
+    `Args::flag`, `Args::parse_with_flags`, `Flag`,
+    `Refusal::UnknownFlag`, and the subcommands in `CommandInfo` and
+    `CategoryHelp`. The decisive tests, in
+    `crates/meta-whatsapp-bot/tests/subcommands.rs`:
+    `order_status_runs_the_subcommand_and_order_alone_the_parent`
+    (fails when the match runs the parent instead) and
+    `a_subcommands_own_cooldown_refuses_a_second_run` (fails when the
+    cooldown is read from the parent); in `src/command.rs`,
+    `a_quoted_flag_stays_a_positional_argument` (fails without the
+    quote check). The parent's scope and owner-only guard its
+    subcommands; a subcommand's cooldown key is the same digest over
+    its path (`order status`), so no stored key changes. Flags: the
+    long form only, `=` for a value, `--` ends them, an em dash reads
+    as `--`. Decided by the coordinator (AGENTS.md § Decisions; the
+    draft refused undeclared flags on every command): only a command
+    that declares a flag, or takes any (`Command::pass_unknown_flags`),
+    reads flags, each command and subcommand by its own set, and one
+    such command typed with a flag it does not declare is refused with
+    its usage. The reason: a mistyped flag on a command that has flags
+    (`--dryrun` for `--dry-run`) must not run the real thing, while
+    free text on a flag-less command (`/say --hi there`) must reach it
+    untouched, as before B1b, so no existing command changes. Swappable
+    per command (`Command::pass_unknown_flags`), and for the whole bot
+    `Refusals` decides what the user is told; the tests are
+    `a_command_without_flags_keeps_dashes_as_arguments` and
+    `an_unknown_flag_is_refused_with_the_usage`. Not in it: nested
+    subcommands, short or space-separated flags, and typed flag values
+    (a handler parses `Args::flag` itself).
 - [ ] **B1c. Rich replies beyond text** (`meta-whatsapp-bot`; row 17):
   a reply built from Markdown and a few typed parts, sent as the
   messages Meta documents for them: an image as an image message (by
