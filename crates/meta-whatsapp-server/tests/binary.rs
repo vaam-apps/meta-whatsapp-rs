@@ -7,9 +7,12 @@
 mod common;
 
 use std::fmt::Write as _;
-use std::io::{Read, Write};
+use std::io::{BufRead as _, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const BIN: &str = env!("CARGO_BIN_EXE_meta-whatsapp-server");
@@ -47,11 +50,168 @@ fn spawn(command: &mut Command) -> Served {
     Served(command.spawn().unwrap())
 }
 
-/// Two free local ports.
-fn two_ports() -> (SocketAddr, SocketAddr) {
+/// The ports of this file's tests. [`two_ports`] frees the two it finds
+/// for the server it is about to start, and until that server binds them
+/// they are free for any bind on port 0: another test's `two_ports`, run
+/// at once, could be handed one, and of the two servers given it, the
+/// one that lost the race exited while its test, having read its
+/// development admin key (printed before binding), went on to talk to
+/// the winner (CI on PR #47: `/v1/admin/tenants` answered 404, on the
+/// other server's public listener). So `two_ports` holds this lock until
+/// the server on its ports says it listens on both ([`serve`]), and a
+/// test that checks its stopped server's ports refuse holds it from the
+/// stop to the check. Every bind on port 0 here is under it.
+static PORTS: Mutex<()> = Mutex::new(());
+
+/// [`PORTS`], held. A test failing while holding it poisons it, which
+/// says nothing about the ports.
+fn hold_ports() -> MutexGuard<'static, ()> {
+    PORTS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Two free local ports, and [`PORTS`] held until the server given them
+/// listens ([`serve`] releases it) or, for a command that does not serve,
+/// until this is dropped.
+struct Ports {
+    public: SocketAddr,
+    internal: SocketAddr,
+    held: MutexGuard<'static, ()>,
+}
+
+/// Two free local ports, [`PORTS`] held.
+fn two_ports() -> Ports {
+    let held = hold_ports();
     let a = TcpListener::bind("127.0.0.1:0").unwrap();
     let b = TcpListener::bind("127.0.0.1:0").unwrap();
-    (a.local_addr().unwrap(), b.local_addr().unwrap())
+    Ports {
+        public: a.local_addr().unwrap(),
+        internal: b.local_addr().unwrap(),
+        held,
+    }
+}
+
+/// A `meta-whatsapp-server serve` that said it listens on its two ports:
+/// they are its own until it stops. Its standard error is read to its end
+/// (so it never blocks on it), and shown when the test fails.
+struct Server {
+    child: Served,
+    /// The development admin key it printed on a plain line of standard
+    /// error (memory storage), if any.
+    admin_key: Option<String>,
+    stderr: Arc<Mutex<Vec<String>>>,
+    reader: Option<JoinHandle<()>>,
+}
+
+/// Start `command` (a `serve` on `ports`, from [`base`]) and wait until it
+/// says it listens on both ports (its `listening` line, logged once both
+/// are bound), then release [`PORTS`]. A server that exits first (one of
+/// its ports taken, say) or never says it fails the test with its
+/// standard error, rather than leaving the test to talk to whatever holds
+/// the port.
+fn serve(command: &mut Command, ports: Ports) -> Server {
+    let mut child = spawn(command);
+    let stderr = child.stderr.take().expect("serve's standard error piped");
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let (seen, next) = mpsc::channel();
+    let reader = {
+        let lines = lines.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                lines.lock().unwrap().push(line.clone());
+                let _ = seen.send(line);
+            }
+        })
+    };
+    let (public, internal) = (ports.public.to_string(), ports.internal.to_string());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut admin_key = None;
+    loop {
+        match next.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(line) => {
+                // The key's own line, never a JSON log event.
+                if serde_json::from_str::<serde_json::Value>(&line).is_err()
+                    && let Some((_, key)) = line.split_once("shown once: ")
+                {
+                    admin_key = Some(key.trim().to_owned());
+                }
+                if line.contains("listening") && line.contains(&public) && line.contains(&internal)
+                {
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                reader.join().unwrap();
+                let status = child.wait().unwrap();
+                panic!(
+                    "the service exited ({status}) before listening on {public} and {internal}:\n{}",
+                    lines.lock().unwrap().join("\n")
+                );
+            }
+            Err(RecvTimeoutError::Timeout) => panic!(
+                "the service never said it listens on {public} and {internal}:\n{}",
+                lines.lock().unwrap().join("\n")
+            ),
+        }
+    }
+    drop(ports.held);
+    Server {
+        child,
+        admin_key,
+        stderr: lines,
+        reader: Some(reader),
+    }
+}
+
+impl Server {
+    /// Its standard error so far.
+    fn stderr(&self) -> String {
+        // Also read while the test panics (`Drop`): never panic here.
+        self.stderr
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .join("\n")
+    }
+
+    /// Fail the test, with its standard error, if it has exited.
+    fn assert_running(&mut self) {
+        if let Some(status) = self.child.try_wait().unwrap() {
+            panic!("the service exited ({status}):\n{}", self.stderr());
+        }
+    }
+
+    /// Wait until `GET /livez` answers 200 on `addr`, from this server.
+    fn wait_live(&mut self, addr: SocketAddr) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            self.assert_running();
+            if http(addr, "GET", "/livez", &[], "").is_some_and(|(s, _)| s == 200) {
+                // Not another process on a port this one let go of.
+                self.assert_running();
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("{addr} never answered /livez:\n{}", self.stderr());
+    }
+
+    /// Stop it with `SIGTERM`, check it exits cleanly, and return its whole
+    /// standard error.
+    fn terminate(&mut self) -> Vec<String> {
+        self.assert_running();
+        terminate(&mut self.child);
+        if let Some(reader) = self.reader.take() {
+            reader.join().unwrap();
+        }
+        self.stderr.lock().unwrap().clone()
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            eprintln!("the service's standard error:\n{}", self.stderr());
+        }
+    }
 }
 
 /// `method path` over plain HTTP/1.1: the status and the body.
@@ -86,28 +246,6 @@ fn http(
     Some((status, body))
 }
 
-/// Wait until `GET /livez` answers 200.
-fn wait_live(addr: SocketAddr, child: &mut Child) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while Instant::now() < deadline {
-        if let Some(status) = child.try_wait().unwrap() {
-            let mut stderr = String::new();
-            child
-                .stderr
-                .take()
-                .unwrap()
-                .read_to_string(&mut stderr)
-                .unwrap();
-            panic!("the service exited ({status}): {stderr}");
-        }
-        if http(addr, "GET", "/livez", &[], "").is_some_and(|(s, _)| s == 200) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    panic!("{addr} never answered /livez");
-}
-
 fn terminate(child: &mut Child) {
     let status = Command::new("kill")
         .args(["-TERM", &child.id().to_string()])
@@ -137,21 +275,24 @@ fn base(command: &mut Command, public: SocketAddr, internal: SocketAddr) -> &mut
         .env("WA_SERVER_PUBLIC_BIND", public.to_string())
         .env("WA_SERVER_INTERNAL_BIND", internal.to_string())
         .env("WA_SERVER_LOG_FORMAT", "text")
-        .env("RUST_LOG", "warn")
+        // `serve`'s `listening` line is info: [`serve`] waits for it.
+        .env("RUST_LOG", "warn,meta_whatsapp_server::serve=info")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
 }
 
 #[test]
 fn serve_answers_on_both_listeners_and_stops_on_sigterm() {
-    let (public, internal) = two_ports();
-    let mut child = spawn(
+    let ports = two_ports();
+    let (public, internal) = (ports.public, ports.internal);
+    let mut server = serve(
         base(&mut Command::new(BIN), public, internal)
             .env("WA_SERVER_ENV", "development")
             .arg("serve"),
+        ports,
     );
-    wait_live(internal, &mut child);
-    wait_live(public, &mut child);
+    server.wait_live(internal);
+    server.wait_live(public);
     let (status, spec) = http(internal, "GET", "/v1/openapi.json", &[], "").unwrap();
     assert_eq!(status, 200);
     assert_eq!(spec, include_str!("../openapi/v1.json"));
@@ -176,7 +317,9 @@ fn serve_answers_on_both_listeners_and_stops_on_sigterm() {
         .status()
         .unwrap();
     assert!(health.success(), "healthcheck against a live service");
-    terminate(&mut child);
+    // Until the check below, no other test's server is given the port.
+    let _held = hold_ports();
+    server.terminate();
     let down = Command::new(BIN)
         .env_clear()
         .env("WA_SERVER_INTERNAL_BIND", internal.to_string())
@@ -192,20 +335,65 @@ fn serve_answers_on_both_listeners_and_stops_on_sigterm() {
 /// Decisive: `Served`'s `Drop`.
 #[test]
 fn a_failing_test_leaves_no_server_running() {
-    let (public, internal) = two_ports();
-    let failed = std::panic::catch_unwind(|| {
-        let mut child = spawn(
+    let ports = two_ports();
+    let (public, internal) = (ports.public, ports.internal);
+    // Taken before the server is killed, kept past the check: no other
+    // test's server is given its port meanwhile.
+    let mut held = None;
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut server = serve(
             base(&mut Command::new(BIN), public, internal)
                 .env("WA_SERVER_ENV", "development")
                 .arg("serve"),
+            ports,
         );
-        wait_live(internal, &mut child);
+        server.wait_live(internal);
+        held = Some(hold_ports());
         panic!("deliberate: a test failing while its server is up");
-    });
+    }));
     assert!(failed.is_err(), "the scope did fail");
+    assert!(held.is_some(), "failed while its server was up");
     assert!(
         http(internal, "GET", "/livez", &[], "").is_none(),
         "the server still answers after its test failed"
+    );
+}
+
+/// A server whose port is taken when it starts fails its test, with why
+/// in its standard error, rather than leaving the test to talk to what
+/// holds the port: here a listener of this test's on the internal port
+/// (on PR #47's CI, a neighbouring test's server on its public one). The
+/// server prints its development admin key before binding, so the key
+/// alone proves nothing. Decisive: [`serve`] waiting for the `listening`
+/// line naming both ports (going on once the key is out, as the
+/// rate-limit test did, serves on the taken port).
+#[test]
+fn a_server_that_cannot_listen_fails_its_test_with_its_standard_error() {
+    let ports = two_ports();
+    let (public, internal) = (ports.public, ports.internal);
+    let taken = TcpListener::bind(internal).unwrap();
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        serve(
+            base(&mut Command::new(BIN), public, internal)
+                .env("WA_SERVER_ENV", "development")
+                .arg("serve"),
+            ports,
+        )
+    }));
+    drop(taken);
+    let Err(failed) = failed else {
+        panic!("served on a port that was taken");
+    };
+    let message = failed
+        .downcast_ref::<String>()
+        .expect("a formatted panic message");
+    assert!(
+        message.contains("the service exited")
+            && message.contains("shown once: wak_")
+            && message.contains(&format!(
+                "cannot listen on WA_SERVER_INTERNAL_BIND {internal}"
+            )),
+        "{message}"
     );
 }
 
@@ -217,61 +405,37 @@ fn a_failing_test_leaves_no_server_running() {
 /// Decisive: minting it at start, and `eprintln!` rather than `tracing`.
 #[test]
 fn development_on_memory_prints_a_one_time_admin_key() {
-    use std::io::BufRead as _;
-    let (public, internal) = two_ports();
-    let mut child = spawn(
+    let ports = two_ports();
+    let (public, internal) = (ports.public, ports.internal);
+    let mut server = serve(
         base(&mut Command::new(BIN), public, internal)
             .env("WA_SERVER_ENV", "development")
             .env("WA_SERVER_LOG_FORMAT", "json")
             .arg("serve"),
+        ports,
     );
-    let stderr = child.stderr.take().unwrap();
-    let (found, key) = std::sync::mpsc::channel();
-    let reader = std::thread::spawn(move || {
-        let mut lines = Vec::new();
-        for line in std::io::BufReader::new(stderr)
-            .lines()
-            .map_while(Result::ok)
-        {
-            // The key's own line, not a JSON log event.
-            if serde_json::from_str::<serde_json::Value>(&line).is_err()
-                && let Some((_, key)) = line.split_once("shown once: ")
-            {
-                let _ = found.send(key.trim().to_owned());
-            }
-            lines.push(line);
-        }
-        lines
-    });
-    let key = key
-        .recv_timeout(Duration::from_secs(30))
+    let key = server
+        .admin_key
+        .clone()
         .expect("no admin key on a plain line of standard error");
     assert!(
         key.starts_with("wak_") && !key.contains(char::is_whitespace),
         "{key}"
     );
-    let deadline = Instant::now() + Duration::from_secs(30);
     let bearer = format!("Bearer {key}");
-    let (status, body) = loop {
-        let answer = http(
-            internal,
-            "POST",
-            "/v1/admin/tenants",
-            &[
-                ("Authorization", &bearer),
-                ("Content-Type", "application/json"),
-            ],
-            r#"{"id": "merchant-42"}"#,
-        );
-        if let Some(answer) = answer {
-            break answer;
-        }
-        assert!(Instant::now() < deadline, "the service never answered");
-        std::thread::sleep(Duration::from_millis(100));
-    };
+    let (status, body) = http(
+        internal,
+        "POST",
+        "/v1/admin/tenants",
+        &[
+            ("Authorization", &bearer),
+            ("Content-Type", "application/json"),
+        ],
+        r#"{"id": "merchant-42"}"#,
+    )
+    .expect("the service never answered");
     assert_eq!(status, 201, "{body}");
-    terminate(&mut child);
-    let lines = reader.join().unwrap();
+    let lines = server.terminate();
     let secret = key.rsplit('_').next().unwrap();
     let (logs, plain): (Vec<&String>, Vec<&String>) = lines
         .iter()
@@ -302,14 +466,16 @@ fn development_on_memory_prints_a_one_time_admin_key() {
 /// s). Decisive: `serve` passing the listeners their limits.
 #[test]
 fn serve_cuts_off_a_slow_request_head_on_both_listeners() {
-    let (public, internal) = two_ports();
-    let mut child = spawn(
+    let ports = two_ports();
+    let (public, internal) = (ports.public, ports.internal);
+    let mut server = serve(
         base(&mut Command::new(BIN), public, internal)
             .env("WA_SERVER_ENV", "development")
             .arg("serve"),
+        ports,
     );
-    wait_live(internal, &mut child);
-    wait_live(public, &mut child);
+    server.wait_live(internal);
+    server.wait_live(public);
     let slow = |addr: SocketAddr| {
         std::thread::spawn(move || {
             let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).unwrap();
@@ -339,7 +505,7 @@ fn serve_cuts_off_a_slow_request_head_on_both_listeners() {
             String::from_utf8_lossy(&answer)
         );
     }
-    terminate(&mut child);
+    server.terminate();
 }
 
 /// `vault rotate` refuses memory storage: that store is per process, so
@@ -348,7 +514,11 @@ fn serve_cuts_off_a_slow_request_head_on_both_listeners() {
 /// operator drop a key still in use. Decisive: the refusal.
 #[test]
 fn vault_rotate_refuses_memory_storage() {
-    let (public, internal) = two_ports();
+    let Ports {
+        public,
+        internal,
+        held: _held,
+    } = two_ports();
     let output = base(&mut Command::new(BIN), public, internal)
         .env("WA_SERVER_ENV", "development")
         .stdout(Stdio::piped())
@@ -374,8 +544,9 @@ fn serve_receives_signed_deliveries() {
     use meta_whatsapp_rs::core::secret::AppSecret;
     use meta_whatsapp_rs::webhooks::sign;
 
-    let (public, internal) = two_ports();
-    let mut child = spawn(
+    let ports = two_ports();
+    let (public, internal) = (ports.public, ports.internal);
+    let mut server = serve(
         base(&mut Command::new(BIN), public, internal)
             .env("WA_SERVER_ENV", "development")
             .env(
@@ -383,9 +554,10 @@ fn serve_receives_signed_deliveries() {
                 "previous-app-secret-for-the-binary-test",
             )
             .arg("serve"),
+        ports,
     );
-    wait_live(internal, &mut child);
-    wait_live(public, &mut child);
+    server.wait_live(internal);
+    server.wait_live(public);
     let body = r#"{"object": "whatsapp_business_account", "entry": [{"id": "102290129340398",
         "changes": [{"field": "a_field_meta_adds_later", "value": {"note": "anything"}}]}]}"#;
     let post = |signature: Option<String>| {
@@ -434,7 +606,7 @@ fn serve_receives_signed_deliveries() {
         metrics.contains("wa_server_webhook_deliveries_total{outcome=\"unauthenticated\"} 2"),
         "{metrics}"
     );
-    terminate(&mut child);
+    server.terminate();
 }
 
 /// `serve` gives the service the settings it read (M1b's `WA_SERVER_*`
@@ -445,32 +617,21 @@ fn serve_receives_signed_deliveries() {
 /// settings, not the defaults, to the service's state.
 #[test]
 fn serve_applies_the_configured_rate_limits() {
-    use std::io::BufRead as _;
-    let (public, internal) = two_ports();
-    let mut child = spawn(
+    let ports = two_ports();
+    let (public, internal) = (ports.public, ports.internal);
+    let mut server = serve(
         base(&mut Command::new(BIN), public, internal)
             .env("WA_SERVER_ENV", "development")
             .env("WA_SERVER_RATE_READ", "1")
             .env("WA_SERVER_RATE_READ_BURST", "1")
             .arg("serve"),
+        ports,
     );
-    let stderr = child.stderr.take().unwrap();
-    let (found, admin) = std::sync::mpsc::channel();
-    // Reads standard error to its end, so the service never blocks on it.
-    let reader = std::thread::spawn(move || {
-        for line in std::io::BufReader::new(stderr)
-            .lines()
-            .map_while(Result::ok)
-        {
-            if let Some((_, key)) = line.split_once("shown once: ") {
-                let _ = found.send(key.trim().to_owned());
-            }
-        }
-    });
-    let admin = admin
-        .recv_timeout(Duration::from_secs(30))
+    let admin = server
+        .admin_key
+        .clone()
         .expect("no development admin key on standard error");
-    wait_live(internal, &mut child);
+    server.wait_live(internal);
     let bearer = format!("Bearer {admin}");
     let json = [
         ("Authorization", bearer.as_str()),
@@ -515,13 +676,16 @@ fn serve_applies_the_configured_rate_limits() {
             .any(|(status, body)| *status == 429 && body.contains("\"too_many_requests\"")),
         "{polls:?}"
     );
-    terminate(&mut child);
-    reader.join().unwrap();
+    server.terminate();
 }
 
 #[test]
 fn a_refused_configuration_exits_naming_the_variable_not_the_value() {
-    let (public, internal) = two_ports();
+    let Ports {
+        public,
+        internal,
+        held: _held,
+    } = two_ports();
     let output = base(&mut Command::new(BIN), public, internal)
         .env("WA_SERVER_ENV", "development")
         .env("WA_APP_SECRET", "  ")
@@ -571,7 +735,8 @@ fn live_postgres_cli_bootstrap_key_works_against_the_served_api() {
     // The schema through the URL, as an operator would (libpq `options`).
     let separator = if url.contains('?') { '&' } else { '?' };
     let url = format!("{url}{separator}options=-c%20search_path%3D{}", db.schema);
-    let (public, internal) = two_ports();
+    let ports = two_ports();
+    let (public, internal) = (ports.public, ports.internal);
     let with_db = |command: &mut Command| {
         base(command, public, internal)
             .env("DATABASE_URL", &url)
@@ -622,10 +787,10 @@ fn live_postgres_cli_bootstrap_key_works_against_the_served_api() {
     let stderr = String::from_utf8_lossy(&minted.stderr);
     assert!(!stderr.contains(&key), "the key goes to stdout only");
 
-    let mut serve = Command::new(BIN);
-    with_db(&mut serve);
-    let mut child = spawn(serve.arg("serve"));
-    wait_live(internal, &mut child);
+    let mut serving = Command::new(BIN);
+    with_db(&mut serving);
+    let mut server = serve(serving.arg("serve"), ports);
+    server.wait_live(internal);
     let bearer = format!("Bearer {key}");
     let (status, body) = http(
         internal,
@@ -702,16 +867,9 @@ fn live_postgres_cli_bootstrap_key_works_against_the_served_api() {
         String::from_utf8_lossy(&rotated.stderr)
     );
     assert!(String::from_utf8_lossy(&rotated.stdout).starts_with("0 WABAs walked"));
-    terminate(&mut child);
+    let stderr = server.terminate().join("\n");
     // On Postgres the CLI mints admin keys: `serve` prints none (DP9 is
     // memory storage's alone).
-    let mut stderr = String::new();
-    child
-        .stderr
-        .take()
-        .unwrap()
-        .read_to_string(&mut stderr)
-        .unwrap();
     assert!(
         !stderr.contains("wak_") && !stderr.contains("shown once"),
         "serve on Postgres printed an admin key: {stderr}"
@@ -724,8 +882,6 @@ fn live_postgres_cli_bootstrap_key_works_against_the_served_api() {
 /// Decisive: the command's exit status on a failed record.
 #[test]
 fn live_postgres_cli_vault_rotate_fails_when_a_record_does() {
-    use std::sync::Arc;
-
     use meta_whatsapp_rs::adapters::store::PostgresKvStore;
     use meta_whatsapp_rs::client::embedded_signup::{
         StoredBusinessToken, TokenVault, VaultKey, VaultKeys,
@@ -775,7 +931,11 @@ fn live_postgres_cli_vault_rotate_fails_when_a_record_does() {
     });
     let separator = if url.contains('?') { '&' } else { '?' };
     let url = format!("{url}{separator}options=-c%20search_path%3D{}", db.schema);
-    let (public, internal) = two_ports();
+    let Ports {
+        public,
+        internal,
+        held: _held,
+    } = two_ports();
     let rotated = base(&mut Command::new(BIN), public, internal)
         .env("DATABASE_URL", &url)
         .env("WA_VAULT_KEY", ACTIVE)
