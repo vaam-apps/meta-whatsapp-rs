@@ -308,10 +308,15 @@ impl Metrics {
     }
 }
 
-/// What the core's operations report: a failed Graph call is counted
-/// (`wa_server_graph_errors_total`).
+/// What the core's operations report: a failed Graph call
+/// (`wa_server_graph_errors_total`), and a repeat that met an idempotency
+/// key's record (`wa_server_idempotency_total`), are counted.
 impl meta_whatsapp_server_core::observe::Observer for Metrics {
     fn graph_error(&self, code: &'static str) {
         Metrics::graph_error(self, code);
+    }
+
+    fn idempotency(&self, outcome: &'static str) {
+        Metrics::idempotency(self, outcome);
     }
 }

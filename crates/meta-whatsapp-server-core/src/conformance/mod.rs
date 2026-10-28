@@ -32,6 +32,7 @@
 //! | [`capabilities`] | through the core's [`Authorizer`]: a capability acts only on the binding and the vault record it was made from (roadmap S2, SR-L2, the `failed` race, M1) |
 //! | [`races`] | the atomic contracts raced on two tasks: an insert against its binding moving, a binding against its tenant's deletion, each conditioned write against a re-attach |
 //! | [`admin`] | the core's admin services over the bundle, with no HTTP layer (roadmap S5a): attaching a WABA another tenant holds is refused with nothing stored, subscribed or shared, whether its holder is seen before Meta is asked or only by the binding's own check |
+//! | [`messages`] | the core's message services under its idempotency engine, over the bundle's records, vault and [`IdempotencyRecords`], with no HTTP layer (roadmap S5b, M1.4): a digits-only phone number refused before any request; a timeout `may_have_been_sent`, its key replaying it with no second request; a `131047` releasing its key; another authorizer's caller refused before the key is read |
 //!
 //! Every case panics on a broken contract, with what broke: this is test
 //! code.
@@ -51,6 +52,7 @@
 pub mod admin;
 pub mod capabilities;
 pub mod invariants;
+pub mod messages;
 pub mod outbox;
 pub mod races;
 pub mod records;
@@ -87,6 +89,10 @@ where
 
     let backend = fresh().await;
     admin::run(backend.as_ref()).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    messages::run(backend.as_ref()).await;
     backend.close().await;
     report
 }

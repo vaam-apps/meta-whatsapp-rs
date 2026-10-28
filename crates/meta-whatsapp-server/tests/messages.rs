@@ -438,6 +438,12 @@ async fn a_running_key_is_in_progress_and_a_lapsed_lease_is_unknown() {
     assert_eq!(body["may_have_been_sent"], true);
     assert_eq!(body["retryable"], false);
     assert!(h.graph.requests().is_empty(), "never a new send");
+    // Counted by outcome (`wa_server_idempotency_total`).
+    let metrics = h.state.metrics().render();
+    for outcome in ["in_progress", "outcome_unknown"] {
+        let series = format!("wa_server_idempotency_total{{outcome=\"{outcome}\"}} 1");
+        assert!(metrics.lines().any(|l| l == series), "{series}\n{metrics}");
+    }
 }
 
 #[tokio::test]
@@ -525,6 +531,136 @@ async fn read_receipts_and_typing_indicators_are_metas_requests() {
     }
     let bad = h.call(read(Some(json!({"typing_indicator": "yes"})))).await;
     assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(h.graph.remaining(), 0);
+    // A blank message id (`%20`): refused on `message_id`, never sent.
+    let sent = h.graph.requests().len();
+    let blank = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{PN}/messages/%20/read"))
+                .key(&key)
+                .json(&json!({"typing_indicator": true})),
+        )
+        .await;
+    assert_eq!(
+        (blank.status, error(&blank)["field"].as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some("message_id")),
+        "{}",
+        blank.text
+    );
+    assert_eq!(h.graph.requests().len(), sent, "a blank id was sent");
+}
+
+/// What the metrics count is what they counted before the sends and the
+/// idempotency engine moved into the core (roadmap S5b, through its
+/// `observe::Observer`): a repeat by its outcome
+/// (`wa_server_idempotency_total`: `replayed`, `reused`), a failed Graph
+/// call by its code (`wa_server_graph_errors_total`, a send's and a read
+/// receipt's; a timeout is no Graph error), and a replayed error by the
+/// code it kept (`wa_server_http_requests_total`'s `code`). Decisive: the
+/// handlers' `observed_by(state.metrics())` (the send's, the read's and
+/// `idempotency::run`'s), `Metrics`' `Observer` impl, the core's calls to
+/// it, and the replay's `ErrorCodeTag`.
+#[tokio::test]
+async fn repeats_and_metas_failures_are_counted() {
+    let (h, key) = connected().await;
+    let count = |series: &str| -> u64 {
+        h.state
+            .metrics()
+            .render()
+            .lines()
+            .find_map(|l| l.strip_prefix(series)?.strip_prefix(' '))
+            .map_or(0, |n| n.parse().unwrap())
+    };
+    let idempotency = |outcome: &str| {
+        count(&format!(
+            "wa_server_idempotency_total{{outcome=\"{outcome}\"}}"
+        ))
+    };
+    let graph_errors =
+        |code: &str| count(&format!("wa_server_graph_errors_total{{code=\"{code}\"}}"));
+
+    // A timeout, and its replay: the repeat counted, the kept code too.
+    h.graph.push_error(|| TransportError::Timeout);
+    let first = h.call(with_key(send(&key, &text()), "k-counted")).await;
+    assert_eq!(first.status, StatusCode::GATEWAY_TIMEOUT, "{}", first.text);
+    let again = h.call(with_key(send(&key, &text()), "k-counted")).await;
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+    assert_eq!(idempotency("replayed"), 1);
+    assert_eq!(graph_errors("timeout"), 0, "a timeout is no Graph error");
+    let timeouts: Vec<String> = h
+        .state
+        .metrics()
+        .render()
+        .lines()
+        .filter(|l| l.starts_with("wa_server_http_requests_total{") && l.contains("status=\"504\""))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(timeouts.len(), 1, "{timeouts:?}");
+    assert!(timeouts[0].contains("code=\"timeout\""), "{timeouts:?}");
+    assert!(timeouts[0].ends_with(" 2"), "{timeouts:?}");
+
+    // Another body under the key: reused.
+    let mut other = text();
+    other["text"]["body"] = json!("Another message");
+    let reused = h.call(with_key(send(&key, &other), "k-counted")).await;
+    assert_eq!(error(&reused)["code"], "idempotency_key_reused");
+    assert_eq!(idempotency("reused"), 1);
+
+    // Meta refusing a send, and a read receipt: counted by their codes.
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": "(#131047) Re-engagement message", "type": "OAuthException",
+                         "code": 131047, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let closed = h.call(send(&key, &text())).await;
+    assert_eq!(error(&closed)["code"], "customer_service_window_closed");
+    assert_eq!(graph_errors("customer_service_window_closed"), 1);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": "(#100) Invalid parameter", "type": "OAuthException",
+                         "code": 100, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let unread = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("/v1/numbers/{PN}/messages/{RECEIVED}/read"),
+            )
+            .key(&key),
+        )
+        .await;
+    let code = error(&unread)["code"].as_str().unwrap().to_owned();
+    assert_eq!(error(&unread)["graph"]["code"], 100, "{}", unread.text);
+    assert_eq!(graph_errors(&code), 1, "{code}");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// A kept answer lasts the TTL (`WA_SERVER_IDEMPOTENCY_TTL`), not the
+/// lease: past it, the same key and body send again. Decisive: the
+/// expiry and the lease handed to the core's `Keeper` in their places
+/// (swapped, the answer is kept for the lease's minute and replayed).
+#[tokio::test]
+async fn a_kept_answer_expires_after_the_ttl() {
+    let (h, key) = connected_with(Settings {
+        idempotency_ttl: Duration::from_millis(200),
+        idempotency_lease: Duration::from_secs(60),
+        ..common::test_settings()
+    })
+    .await;
+    h.graph.push_json(200, accepted());
+    let first = h.call(with_key(send(&key, &text()), "k-ttl")).await;
+    assert_eq!(first.status, StatusCode::ACCEPTED, "{}", first.text);
+    let again = h.call(with_key(send(&key, &text()), "k-ttl")).await;
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    h.graph.push_json(200, accepted());
+    let expired = h.call(with_key(send(&key, &text()), "k-ttl")).await;
+    assert_eq!(expired.status, StatusCode::ACCEPTED, "{}", expired.text);
+    assert!(
+        expired.headers.get("idempotent-replayed").is_none(),
+        "replayed past its TTL"
+    );
+    assert_eq!(h.graph.requests().len(), 2);
     assert_eq!(h.graph.remaining(), 0);
 }
 

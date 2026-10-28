@@ -1072,14 +1072,15 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
-**As built (roadmap S1, S2, S3, S4, S5a).** `crates/meta-whatsapp-server-core`
+**As built (roadmap S1, S2, S3, S4, S5a, S5b).** `crates/meta-whatsapp-server-core`
 exists, with the model, the keys, event routing and polling, the
 idempotency engine, the rate limiter, the error model, authorization,
-housekeeping (over a `Backend`, since S4) and the admin operations
-(since S5a); the other operations (messages, media, templates,
-numbers, the webhook pipeline) are still the axum crate's handlers
-(roadmap S5b–S5e). What it holds today, where it differs from the
-target above:
+housekeeping (over a `Backend`, since S4), the admin operations
+(since S5a), and the message operations and the idempotency engine's
+run (since S5b); the other operations (media, templates, numbers, the
+webhook pipeline) are still the axum crate's handlers (roadmap
+S5c–S5e). What it holds today, where it differs from the target
+above:
 
 - **The ports** are `RecordStore`, `IdempotencyRecords`, `Outbox`,
   `LeaderLock`, `Janitor` and `SchemaMigrator`, and their contracts carry
@@ -1228,6 +1229,42 @@ target above:
   suite `admin` holds the services to D4 over a backend's bundle, with
   no HTTP layer (a WABA another tenant holds is refused with nothing
   stored, subscribed or shared), on memory and, live, on Postgres.
+- **Idempotent operations run under the core's engine, and the messages
+  are services** (S5b). `idempotency::run(&Keeper, &Authorizer,
+  &Caller, key, &Fingerprint, operation)` claims the key for the
+  `Caller`'s tenant (a `Caller` its `Authorizer` admits: another's is
+  `403 forbidden`, before the key is read), runs the operation, and
+  answers an `idempotency::Answer` (a status, a body and whether it was
+  replayed) or a `ServiceError`, settling the key as §5.4 says: the
+  answer kept byte for byte, a failure kept as the adapter renders it
+  (the `Keeper`'s `RenderError`, the axum one's §5.1 body) when it may
+  have been sent, the key released when it proves nothing was, a repeat
+  answered from the record (its outcome told to the `Observer`, whose
+  new `idempotency` method the server's `Metrics` counts), a cut request
+  kept as a `504 timeout`. The `Keeper` holds the records, the lease and
+  the expiry; the fingerprint is §5.4's (method, path, body) until S6.
+  `messages` holds the send request as the request carried it, free of
+  utoipa (`SendMessage` and its objects: the axum adapter keeps its own
+  types for the OpenAPI document and converts them, every field named on
+  both sides), the checks before any request (`refuse_unsupported` for
+  a JSON body, `message` for the library's `OutboundMessage`, the
+  recipient and its strict E.164 rule, `recipient` and `is_e164`), and
+  the `Messages` service on an `OwnedNumber` (opened with
+  `Messages::new`, which refuses, `403 forbidden`, a number another
+  `Authorizer` made: `Authorizer::admit_number`): `send` answers the
+  accepted message (`messages::Accepted`), not a status, and
+  `mark_read` marks a received message read, with the typing indicator
+  when asked; a failed Graph call is told to the `Observer` and marks
+  the numbers after a `190` as every route does. Meta objects a request
+  carries are read with no key dropped by `request::meta_object`. The
+  axum handlers parse, convert, call and render (`202`, `204`,
+  `Idempotent-Replayed: true` on a replay); their `idempotency::run`
+  stays crate-private, over the service's records. The conformance
+  suite `messages` runs M1.4's case with no HTTP layer, over a backend's
+  records, vault and idempotency records: a digits-only phone refused
+  before any request, a scripted timeout `may_have_been_sent` and its
+  key replaying it with no second request, a `131047` releasing its key,
+  another `Authorizer`'s caller refused.
 - **`ServiceError`** is the §5 error model as data: a code of `CODES`
   (§5.2), its status as a number, `retryable`, `may_have_been_sent`, the
   field for `invalid`, the step and `resumable` of a multi-step call, and
@@ -1314,10 +1351,13 @@ target above:
   (what crosses ports: every accessor hands out the same data, deleting
   a tenant purges its stream, the `RouteGuard` cases, each tenant's
   inserts commit in sequence order), `capabilities` (SR-L2, the
-  `failed` race, M1), `races` (S2's races) and `admin` (S5a: the admin
+  `failed` race, M1), `races` (S2's races), `admin` (S5a: the admin
   services' D4 refusal, with nothing stored, subscribed or shared; the
   core's own `tests/admin.rs` runs it on a memory backend of its own,
-  with no server crate). The memory backend runs
+  with no server crate) and `messages` (S5b: M1.4's case through the
+  message services and the idempotency engine; the core's own
+  `tests/messages.rs` runs it on that memory backend, with idempotency
+  records of its own). The memory backend runs
   it in the service's `tests/store.rs`, the Postgres one live in
   `tests/live_postgres.rs`; the service's tests also show what it
   refuses: a backend whose `kv()` is a new store on each call, an

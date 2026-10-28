@@ -800,6 +800,8 @@ mod tests {
             include_str!("error.rs"),
             include_str!("events.rs"),
             include_str!("idempotency.rs"),
+            include_str!("messages.rs"),
+            include_str!("request.rs"),
         ];
         let mut named = 0;
         for source in sources {
@@ -816,7 +818,7 @@ mod tests {
                 }
             }
         }
-        assert!(named >= 30, "{named}");
+        assert!(named >= 32, "{named}");
     }
 
     /// The fallback for a code missing from the table is the table's own

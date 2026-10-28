@@ -517,7 +517,7 @@ pub(crate) async fn upload_media(
     );
     let response = idempotency::run(
         &state,
-        caller.tenant(),
+        &caller,
         key,
         fingerprint,
         upload(&state, &owned, &form),

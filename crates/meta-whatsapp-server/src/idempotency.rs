@@ -1,7 +1,10 @@
 //! Idempotency keys over HTTP (docs/design/server.md, section 5.4): the
 //! `Idempotency-Key` header, and the answers of the core's engine
 //! ([`meta_whatsapp_server_core::idempotency`]: claim, settle, replay,
-//! whose rules its module documents).
+//! and running an operation under a key, `run`, whose rules its module
+//! documents). This module reads the header, hands the core's `run` the
+//! service's records, lease, expiry, error body and metrics, and renders
+//! what it answers.
 //!
 //! Sends, media uploads and template creation take an optional
 //! `Idempotency-Key` header (inbox replies and OTP issue will, with their
@@ -25,11 +28,12 @@ use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
 use meta_whatsapp_rs::webhooks::axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 pub use meta_whatsapp_server_core::idempotency::Fingerprint;
-use meta_whatsapp_server_core::idempotency::{self as engine, Admission, Outcome, Repeat};
+use meta_whatsapp_server_core::idempotency::{self as engine, Answer, Keeper};
 use serde::Serialize;
 
+use crate::auth::Caller;
 use crate::error::{ApiError, CODES, ErrorCodeTag, error_body_bytes};
-use crate::model::{IdempotencyKey, TenantId};
+use crate::model::IdempotencyKey;
 use crate::state::AppState;
 
 /// `Idempotency-Key`.
@@ -93,6 +97,11 @@ impl Success {
             .map(|body| Self { status, body })
             .map_err(|_| ApiError::internal())
     }
+
+    /// The core's answer, for its `run`.
+    fn into_answer(self) -> Answer {
+        Answer::new(self.status.as_u16(), self.body)
+    }
 }
 
 impl IntoResponse for Success {
@@ -113,66 +122,54 @@ fn json_response(status: StatusCode, body: Vec<u8>) -> Response {
         .into_response()
 }
 
-/// Run `operation` for `tenant` under `key` (see the module docs), or
-/// plainly without one. `operation` must do nothing before it is polled:
-/// a repeat of a kept or running request never polls it.
+/// Run `operation` for `caller`'s tenant under `key` (see the module
+/// docs), or plainly without one: the core's
+/// [`engine::run`](meta_whatsapp_server_core::idempotency::run), over the
+/// service's idempotency records, its lease and expiry (`Settings`), the
+/// section 5.1 error body (what a failure that may have been sent keeps)
+/// and its metrics (`wa_server_idempotency_total`). `operation` must do
+/// nothing before it is polled: a repeat of a kept or running request
+/// never polls it.
 ///
-/// Crate-private: `tenant` is taken as given, so only this crate's
-/// handlers, which have it from an admitted [`crate::auth::Caller`], call
-/// it. Another crate could otherwise claim a tenant's keys, or replay its
-/// kept answers, by naming it.
+/// A kept answer comes back with `Idempotent-Replayed: true`, a kept
+/// error's metrics label its code; anything else is answered as the
+/// operation or the engine answered it.
+///
+/// Crate-private, as the handlers are: they have `caller` from the
+/// [`Caller`] extractor, which admitted it (the core's `run` admits it
+/// again). The state's records are the service's own.
 pub(crate) async fn run(
     state: &AppState,
-    tenant: &TenantId,
+    caller: &Caller,
     key: Option<IdempotencyKey>,
     fingerprint: Fingerprint,
     operation: impl Future<Output = Result<Success, ApiError>>,
 ) -> Response {
-    let Some(key) = key else {
-        return match operation.await {
-            Ok(success) => success.into_response(),
-            Err(error) => error.into_response(),
-        };
-    };
     let settings = state.settings();
-    let admission = engine::claim(
+    let keeper = Keeper::new(
         state.idempotency_records(),
-        tenant,
-        key,
-        &fingerprint,
         settings.idempotency_lease,
         settings.idempotency_ttl,
         error_body_bytes,
     )
+    .observed_by(state.metrics());
+    let ran = engine::run(&keeper, state.authz(), caller, key, &fingerprint, async {
+        operation
+            .await
+            .map(Success::into_answer)
+            .map_err(ApiError::into_service_error)
+    })
     .await;
-    match admission {
-        Err(error) => ApiError::from(error).into_response(),
-        Ok(Admission::Repeat(repeat)) => existing(state, repeat),
-        Ok(Admission::Claimed(claim)) => match operation.await {
-            Ok(success) => {
-                claim
-                    .settle(Outcome::Answered {
-                        status: success.status.as_u16(),
-                        body: &success.body,
-                    })
-                    .await;
-                success.into_response()
-            }
-            Err(error) => {
-                claim
-                    .settle(Outcome::Failed(error.as_service_error()))
-                    .await;
-                error.into_response()
-            }
-        },
-    }
-}
-
-/// The answer to a repeat that met another request's record.
-fn existing(state: &AppState, repeat: Repeat) -> Response {
-    state.metrics().idempotency(repeat.outcome());
-    match repeat.into_answer() {
-        Ok((status, body)) => replay(status, body),
+    match ran {
+        Ok(answer) if answer.replayed() => {
+            let status = answer.status();
+            replay(status, answer.into_body())
+        }
+        Ok(answer) => {
+            let status =
+                StatusCode::from_u16(answer.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            json_response(status, answer.into_body())
+        }
         Err(error) => ApiError::from(error).into_response(),
     }
 }
@@ -273,16 +270,37 @@ mod tests {
     async fn a_request_cut_before_settling_keeps_a_timeout() {
         use std::time::Duration;
 
-        use crate::model::{IdempotencyClaim, IdempotencyState};
+        use crate::model::{IdempotencyClaim, IdempotencyState, KeyOwner, Scope, TenantId};
 
         let state = AppState::for_tests();
         let tenant = TenantId::parse("merchant-42").unwrap();
+        // The tenant's caller, as the guard makes it (run takes a Caller
+        // since roadmap S5b, not a tenant).
+        state.store().create_tenant(&tenant, "").await.unwrap();
+        let (minted, _) = crate::api::admin::mint(
+            state.store(),
+            KeyOwner::Tenant(tenant.clone()),
+            vec![Scope::Send],
+            String::new(),
+            None,
+        )
+        .await
+        .unwrap();
+        let caller = state
+            .authz()
+            .tenant_caller(
+                Some(&format!("Bearer {}", minted.expose_key())),
+                None,
+                Scope::Send,
+            )
+            .await
+            .unwrap();
         let key = IdempotencyKey::parse("k-cut").unwrap();
         let fingerprint = Fingerprint::json(&Method::POST, "/v1/numbers/1/messages", &json!({}));
         let never = std::future::pending::<Result<Success, ApiError>>();
         let cut = tokio::time::timeout(
             Duration::from_millis(20),
-            run(&state, &tenant, Some(key.clone()), fingerprint, never),
+            run(&state, &caller, Some(key.clone()), fingerprint, never),
         )
         .await;
         assert!(cut.is_err(), "the request was cut");

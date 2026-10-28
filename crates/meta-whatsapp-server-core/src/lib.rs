@@ -12,12 +12,14 @@
 //! | --- | --- |
 //! | [`model`] | tenants, API keys, bindings, idempotency records: the validated domain types |
 //! | [`admin`] | the admin operations as services: tenants, keys, platform keys, attaching a WABA (decision D4), reading and unbinding a binding, the vault's rotation |
+//! | [`messages`] | the message operations as services: the send request (free of any API toolkit), the recipient and E.164 rules, sending (the accepted message) and marking read |
+//! | [`request`] | what the requests share: a Meta object read into the library's type, no key dropped |
 //! | [`keys`] | the API key format, digests, constant-time comparison |
 //! | [`error`] | the error model as data: codes, statuses as numbers, `retryable`, `may_have_been_sent`, Meta's `details` |
 //! | [`authz`] | the authorization order: key, tenant, scope, ownership, vault |
 //! | [`audit`], [`observe`] | the audit events (target `audit`); what an operation reports to the adapter's metrics |
 //! | [`events`] | routing Meta's webhook events to tenants, their outbox keys and ids, polling |
-//! | [`idempotency`] | `Idempotency-Key`: claim, settle, replay |
+//! | [`idempotency`] | `Idempotency-Key`: claim, settle, replay; running an operation under a key (`run`: a status, a body, and whether it replayed) |
 //! | [`ratelimit`] | per-tenant token buckets by route class, transfer slots |
 //! | [`store`], [`outbox`], [`backend`] | the ports, and the bundle a backend gives |
 //! | [`housekeeping`] | the periodic purges, over a [`backend::Backend`], one replica at a time |
@@ -56,10 +58,12 @@ pub mod events;
 pub mod housekeeping;
 pub mod idempotency;
 pub mod keys;
+pub mod messages;
 pub mod model;
 pub mod observe;
 pub mod outbox;
 pub mod ratelimit;
+pub mod request;
 pub mod store;
 
 pub use error::ServiceError;
