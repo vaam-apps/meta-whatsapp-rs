@@ -1,6 +1,6 @@
 ---
 name: meta-whatsapp-rs-bot
-description: "A WhatsApp bot on Cloud API webhooks with meta-whatsapp-rs (feature bot) - commands with prefixes, aliases, usage hints and quoted arguments, image and video captions, reply buttons and list rows as commands, an unknown-command hook, private-only, group-only and owner-only guards, a banned list, per-user cooldowns on the KvStore, middleware such as logging and read receipts with a typing indicator, one plugin per feature compiled in (no hot reload), a generated help grouped by category, Meta's slash-command menu, reactions, Markdown replies converted to WhatsApp formatting and split at 4096 characters, replies recorded in the CMS inbox, and paced broadcasts (a per-number rate under Meta's throughput, progress and cancel, retries only when nothing may have gone out, the pair and per-user marketing limits). Load when building a chatbot, command handlers, an auto-responder, a help menu or a campaign send to many users on WhatsApp in Rust, or when replying with Markdown or LLM output."
+description: "A WhatsApp bot on Cloud API webhooks with meta-whatsapp-rs (feature bot) - commands with prefixes, aliases, subcommands, --flags, usage hints and quoted arguments, image and video captions, reply buttons and list rows as commands, an unknown-command hook, private-only, group-only and owner-only guards, a banned list, per-user cooldowns on the KvStore, middleware such as logging and read receipts with a typing indicator, one plugin per feature compiled in (no hot reload), a generated help grouped by category, Meta's slash-command menu, reactions, Markdown replies converted to WhatsApp formatting and split at 4096 characters, replies recorded in the CMS inbox, and paced broadcasts (a per-number rate under Meta's throughput, progress and cancel, retries only when nothing may have gone out, the pair and per-user marketing limits). Load when building a chatbot, command handlers, an auto-responder, a help menu or a campaign send to many users on WhatsApp in Rust, or when replying with Markdown or LLM output."
 ---
 
 # meta-whatsapp-rs-bot
@@ -16,7 +16,7 @@ For a number that answers commands, taps and free text, and sends to many. Per e
 banned sender's message stops, nothing below runs; (2) the match, a `/name args` (or image or
 video caption; off: `BotBuilder::commands_from_captions(false)`) or a tapped button or list row
 whose id is a payload, sets `Ctx::invocation` (unknown: `Ctx::unknown_command`); (3) middleware,
-which see the match; (4) the command's guards (scope, owner, cooldown) and handler, else
+which see the match; (4) the command's guards (scope, owner, flags, cooldown) and handler, else
 `BotBuilder::unknown_command`'s handler, else the listeners. (Zaileys: middleware after guards.)
 
 ## A plugin per feature
@@ -46,6 +46,8 @@ async fn setup(&self, registrar: &mut Registrar) -> meta_whatsapp_rs::Result<()>
 
 - `Plugin` needs `Debug`; `Plugin::category`: `Some("Orders")` (`None`: `BotBuilder::default_category`).
   `PrefixParser` ignores case (`PrefixParser::ignore_case`); `Args` keeps `"quoted strings"` whole.
+- `Command::subcommand` (one level, example `order_command`): `/order status 42` runs `status` with `42`; the parent's scope and owner guards apply, not its cooldown.
+  `Command::flag` declares `--refresh` or `--limit=5` (`Args::has_flag`, `Args::flag`); an undeclared one then refuses the command with its usage (`Command::pass_unknown_flags` takes any). A command with no flag reads `--x` as an argument; `"--x"` and words after `--` stay arguments too.
 - `BotSender::key` is the BSUID first: list owners and bans by BSUID (`AccessList::owner`,
   `AccessList::ban`); a phone-only ban misses users without a number.
 
@@ -141,16 +143,14 @@ cut between blocks. Text is left as written (`NoEscape`); `WordJoinerEscape` is 
 
 ## Pitfalls
 
-- **Plugins are compiled in** (ship one as a crate); `Bot::unload` runs every
-  `on_unload`, then events fail with `SinkError::Closed`. A menu tap sends `/name`.
+- **Plugins are compiled in** (ship one as a crate); `Bot::unload` runs every `on_unload`, then events fail with `SinkError::Closed`. A menu tap sends `/name`.
 - `MarkRead::with_typing_indicator` shows "typing…" for every message; replies are free-form, refused
   outside the 24-hour window and, through `Inbox::send`, while another app owns the thread (`ErrorKind::ThreadOwnedElsewhere`).
   Test a handler alone: `Ctx::new` plus `Ctx::with_invocation` (`Invocation::new`), with an `Outbound` that records.
 
 ## What meta-whatsapp-rs does not do
 
-- No scheduling or restart-proof broadcast (planned), subcommands, `--flags` or
-  conversation state: keep state in your store, keyed by `BotSender::key`.
+- No scheduling or restart-proof broadcast (planned), or conversation state: keep it in your store, keyed by `BotSender::key`.
 - Per-tenant tokens: implement `Outbound` (`meta-whatsapp-rs-token-vault`).
 - Guide: [docs/guides/bots.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/bots.md).
 

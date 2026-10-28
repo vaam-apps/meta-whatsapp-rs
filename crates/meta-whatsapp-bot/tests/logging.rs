@@ -105,3 +105,41 @@ fn the_logs_carry_no_content_and_no_identity() {
         assert!(!lines.contains(private), "{private:?} was logged:\n{lines}");
     }
 }
+
+/// A failed subcommand is logged by its registered name, beside its
+/// command's; its arguments are not.
+#[test]
+fn a_failed_subcommand_is_logged_by_name() {
+    let capture = Capture::default();
+    let _guard = tracing::subscriber::set_default(capture.clone());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let bot = Bot::builder()
+            .outbound(Recording::default())
+            .command(
+                Command::new("order", |_ctx: Ctx| async move { Ok(()) }).subcommand(Command::new(
+                    "cancel",
+                    |_ctx: Ctx| async move {
+                        Err(Error::Other(anyhow::anyhow!("a handler's own failure")))
+                    },
+                )),
+            )
+            .build()
+            .await
+            .unwrap();
+        bot.handle(text_event(
+            "messages/text.json",
+            "/order CANCEL top secret order",
+        ))
+        .await
+        .unwrap();
+    });
+    let lines = capture.0.lock().unwrap().join("\n");
+    assert!(lines.contains("command=\"order\""), "{lines}");
+    assert!(lines.contains("subcommand=\"cancel\""), "{lines}");
+    for private in PRIVATE {
+        assert!(!lines.contains(private), "{private:?} was logged:\n{lines}");
+    }
+}

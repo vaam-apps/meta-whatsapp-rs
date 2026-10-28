@@ -139,7 +139,7 @@ rewrite them along with the code.
 | `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `lock_key`, `meta-whatsapp-server/src/store/postgres.rs` | Postgres advisory lock keys (the first 8 bytes of their SHA-256; `lock_key` derives the leader lock's the same way, so its `housekeeping` turn is `HOUSEKEEPING_LOCK`): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented`, `the_leader_locks_keys_are_the_services_locks` |
 | the service's migration files, `wa_server_sqlx_migrations` | `meta-whatsapp-server/migrations/*.sql`, `MIGRATIONS_TABLE` | the service's `wa_server_*` tables (the operator-only event stream `''` included) and its migration history; an edited file makes `migrate` refuse every database migrated before | `the_migrations_and_their_checksums_are_pinned` |
 | `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server-core/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
-| `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed` |
+| `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key; for a subcommand, the command part is its path, `order status`). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed`, `a_subcommands_cooldown_key_is_over_its_path` |
 
 Library store namespaces are `wa.<module>[.<purpose>]` (`wa.token`,
 `wa.otp.rate`, `wa.webhook.dedup`, `wa.bot.cooldown`): a new typed store
@@ -1092,10 +1092,15 @@ order:
    `Ctx::unknown_command`.
 3. **Middleware**, in registration order; each gets the context (the
    match included) and `Next`, and not calling it stops the event.
-4. **The command's guards**, in order (scope, owner, cooldown last so a
-   refusal starts none), then its handler; else the unknown-command
-   handler, if one is registered; else the listeners, which get every
-   other event too.
+4. **The command's guards**, in order (scope, owner, undeclared flags
+   on a command that declares any, cooldown last so a refusal starts
+   none; for a subcommand, its parent's scope and owner first; a command
+   that declares no flag reads none), then its handler; else the
+   unknown-command handler, if one is registered; else the listeners,
+   which get every other event too. A subcommand's cooldown is kept
+   under the key of its path (`order status`), the same digest over
+   `wa.bot.cooldown`, so a command's key does not change when it gains
+   subcommands.
 
 Standby copies, echoes and synchronized history are other events: they
 never run a command. Zaileys, whose framework features this mirrors,

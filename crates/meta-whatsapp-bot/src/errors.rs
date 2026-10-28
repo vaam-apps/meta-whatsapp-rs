@@ -43,7 +43,7 @@ impl<T: ErrorHandler + ?Sized> ErrorHandler for Arc<T> {
 }
 
 /// The default [`ErrorHandler`]: logs at `error` the event kind, the
-/// command, the error kind, whether a send may have gone out and the Graph
+/// command and subcommand (registered names), the error kind, whether a send may have gone out and the Graph
 /// error code, never the error's text (an integrator's error may quote
 /// the message), then acknowledges the event (see the
 /// [module docs](self) for the trade-off).
@@ -56,6 +56,7 @@ impl ErrorHandler for LogErrors {
         tracing::error!(
             event = ctx.event().kind(),
             command = ctx.invocation().map(|i| i.command.as_str()),
+            subcommand = ctx.invocation().and_then(|i| i.subcommand.as_deref()),
             error_kind = ?error.kind(),
             may_have_been_sent = error.may_have_been_sent(),
             graph_code = error.graph().map(|g| g.code),
