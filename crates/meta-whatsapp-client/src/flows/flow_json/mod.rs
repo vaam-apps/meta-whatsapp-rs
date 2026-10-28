@@ -13,7 +13,11 @@
 //! properties it does not model in a flattened `extra` map, and a component
 //! or action it cannot type is kept whole (`Unknown { raw }`), so parsing a
 //! Flow JSON and serializing it gives back the same JSON value (key order
-//! aside).
+//! aside). One exception, in the document around them: an explicit `null`
+//! on an optional property of [`FlowJson`], [`Screen`] or [`DataField`]
+//! (`"title": null`) reads as absent and is not written back. Flows do not
+//! accept `null`, so what Meta receives is unchanged; a component's or an
+//! action's `null` is kept (it makes them `Unknown`, below).
 //!
 //! # What parses, and what fails
 //!
