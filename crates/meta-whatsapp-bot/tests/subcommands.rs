@@ -683,8 +683,10 @@ async fn bot_with_owner_parent(runs: &Runs, seen: &Seen) -> Bot {
 /// that declares none.
 #[tokio::test]
 async fn the_middleware_sees_the_commands_own_reading_of_its_arguments() {
+    /// The positional arguments and the flags' names one event showed.
+    type Shown = (Vec<String>, Vec<String>);
     #[derive(Debug, Clone, Default)]
-    struct Peek(Arc<Mutex<Vec<(Vec<String>, Vec<String>)>>>);
+    struct Peek(Arc<Mutex<Vec<Shown>>>);
     #[async_trait]
     impl Middleware for Peek {
         async fn handle(&self, ctx: Ctx, next: Next<'_>) -> meta_whatsapp_core::Result<()> {
