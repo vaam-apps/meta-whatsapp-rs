@@ -513,12 +513,12 @@ async fn an_unknown_flag_is_refused_with_the_usage() {
     bot.handle(text_event(TEXT, "/ping --x=1 --y"))
         .await
         .unwrap();
-    // A name of 32 characters is repeated; one of 33 is not.
-    let short = "y".repeat(32);
+    // A name of 32 characters (not bytes) is repeated; one of 33 is not.
+    let short = "é".repeat(32);
     bot.handle(text_event(TEXT, &format!("/ping --{short}")))
         .await
         .unwrap();
-    let long = "é".repeat(33);
+    let long = "y".repeat(33);
     bot.handle(text_event(TEXT, &format!("/ping --{long}")))
         .await
         .unwrap();
