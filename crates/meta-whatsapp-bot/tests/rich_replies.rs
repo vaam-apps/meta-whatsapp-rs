@@ -9,6 +9,7 @@
 mod common;
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use meta_whatsapp_bot::markdown::Renderer;
 use meta_whatsapp_bot::rich::{
@@ -17,6 +18,7 @@ use meta_whatsapp_bot::rich::{
 };
 use meta_whatsapp_bot::{AccessList, Bot, ClientOutbound, Command, Ctx, PropagateErrors};
 use meta_whatsapp_client::messages::{OutboundMessage, ProductCard};
+use meta_whatsapp_client::{Client, RetryPolicy};
 use meta_whatsapp_core::Error;
 use meta_whatsapp_core::error::{TransportError, ValidationError};
 use meta_whatsapp_core::recipient::Recipient;
@@ -685,6 +687,31 @@ async fn idn_port_ipv6_and_long_image_urls_are_sent_as_written() {
     assert_eq!(t.remaining(), 0);
 }
 
+/// An image's caption is the client's to check (`messages/image-messages`:
+/// "Maximum 1024 characters"): 1025 is refused before anything is sent,
+/// 1024 two-byte characters are sent.
+#[tokio::test]
+async fn an_image_caption_over_1024_characters_is_refused() {
+    let t = ScriptedTransport::new();
+    let reply = RichReply::new()
+        .markdown("Look:")
+        .image_with_caption(IMAGE_URL, "é".repeat(1025));
+    let error = ctx(&t).reply_rich(&reply).await.unwrap_err();
+    assert_eq!(validation(&error).field, "image.caption");
+    assert!(t.requests().is_empty());
+
+    script(&t, 1);
+    let caption = "é".repeat(1024);
+    ctx(&t)
+        .reply_rich(&RichReply::new().image_with_caption(IMAGE_URL, caption.clone()))
+        .await
+        .unwrap();
+    let mut expected = image(true, IMAGE_URL);
+    expected["image"]["caption"] = json!(caption);
+    assert_eq!(bodies(&t), [expected]);
+    assert_eq!(t.remaining(), 0);
+}
+
 /// An `http:` URL passes: the renderer's rule writes it, and Meta's image
 /// page does not refuse it.
 #[tokio::test]
@@ -808,6 +835,46 @@ async fn a_timeout_midway_is_not_resent_or_followed() {
     assert!(matches!(&error, Error::Step { step, .. } if *step == STEP_LIST));
     assert!(error.may_have_been_sent());
     assert_eq!(t.requests().len(), 2);
+    assert_eq!(t.remaining(), 0);
+}
+
+/// With a client that retries (three times, no delay), a timed-out send
+/// is still not replayed: sends are not idempotent, so `RetryPolicy`
+/// retries one only when Meta provably refused it. The reply stops there.
+#[tokio::test]
+async fn a_retrying_client_does_not_replay_a_timed_out_part() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, send_response());
+    t.push_error(|| TransportError::Timeout);
+    let retrying = Client::builder()
+        .transport(t.clone())
+        .access_token("TOKEN")
+        .retry(RetryPolicy {
+            max_retries: 3,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+        })
+        .build()
+        .unwrap();
+    let ctx = Ctx::new(
+        event(TEXT),
+        Arc::new(ClientOutbound::new(retrying)),
+        Arc::new(Renderer::default()),
+    );
+    let reply = RichReply::new()
+        .markdown("Your plant:")
+        .image(IMAGE_URL)
+        .markdown("Anything else?")
+        .suggestions(numbered(2));
+
+    let error = ctx.reply_rich(&reply).await.unwrap_err();
+
+    assert!(matches!(&error, Error::Step { step, .. } if *step == STEP_IMAGE));
+    assert!(error.may_have_been_sent());
+    assert_eq!(
+        bodies(&t),
+        [text(true, "Your plant:"), image(false, IMAGE_URL)]
+    );
     assert_eq!(t.remaining(), 0);
 }
 
