@@ -34,8 +34,36 @@ pub fn shared_pacer(upgraded: PhoneNumberId) -> Pacer {
   Meta documents no mapping from a number's reported level to a rate:
   set it yourself (`TokenBucket::rate_for`), and change it while running
   (`TokenBucket::set_rate`, on a bucket kept in an `Arc` and given to
-  `Pacer::shared`), for example when a quality webhook says
-  `PhoneNumberQualityEvent::ThroughputUpgrade`.
+  `Pacer::shared`). A quality webhook saying
+  `PhoneNumberQualityEvent::ThroughputUpgrade` can do it for you, opt-in
+  (below).
+- **Throughput upgrades, followed** (off by default): give the bot
+  `BotBuilder::follow_throughput_upgrades(upgrades)`, or deliver events
+  to the `ThroughputUpgrades` (an `EventSink`) without a bot. Only an
+  upgrade (`ThroughputUpgrade`) changes a rate, to `Rate::HIGHER_THROUGHPUT`
+  (`ThroughputUpgrades::rate` for less); `ONBOARDING`, `FLAGGED`, a new
+  value or an unregistered number change nothing, and an upgrade never
+  lowers a rate. The webhook carries the WABA and the display number,
+  no phone number id: register each number by both in `KnownNumbers`
+  (display numbers compared by digits), or implement `NumberDirectory`.
+  **In memory**: after a restart, or on a replica that did not get the
+  webhook, the number is back at its configured rate, and Meta sends
+  the webhook once. Record the id `ThroughputUpgrades::observe` returns
+  and set it at startup (`TokenBucket::rate_for`).
+
+```rust
+pub fn following_upgrades(
+    waba: WabaId,
+    display_phone_number: &str,
+    number: PhoneNumberId,
+) -> meta_whatsapp_rs::Result<(Pacer, ThroughputUpgrades)> {
+    let bucket = Arc::new(TokenBucket::new(Rate::DEFAULT)); // kept, to raise a rate while running
+    let numbers = KnownNumbers::new().number(waba, display_phone_number, number)?; // digits compared
+    let upgrades = ThroughputUpgrades::new(bucket.clone(), numbers); // in memory: record upgrades yourself
+    Ok((Pacer::shared(bucket), upgrades)) // `BotBuilder::follow_throughput_upgrades(upgrades)`
+}
+```
+
 - **Leave room for inbound messages**: Meta counts them in the same
   throughput, and the pacer only sees your sends. Expecting one reply per
   four messages on a default number: `Rate::per_second(64)`.

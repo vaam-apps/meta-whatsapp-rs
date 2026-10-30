@@ -217,6 +217,29 @@ stored data, the owner's).
 
 ### Added
 
+- **Throughput upgrades, followed** in `meta-whatsapp-bot` (roadmap B2a,
+  parity row 89), from `webhooks/reference/phone_number_quality_update`
+  and `throughput` (read on 2026-10-30). Opt-in, off by default:
+  `ThroughputUpgrades` (module `throughput`), given the `TokenBucket`
+  the pacer shares (`Pacer::shared`) and a `NumberDirectory`, raises a
+  number's rate to `Rate::HIGHER_THROUGHPUT` (`TokenBucket::set_rate`)
+  when its `phone_number_quality_update` says `THROUGHPUT_UPGRADE`, so
+  its sends go 1 ms apart instead of 12.5 ms. Wired in with
+  `BotBuilder::follow_throughput_upgrades` (a listener of
+  `phone_number_quality_updated`), or as an `EventSink<WebhookEvent>`
+  without a bot. The webhook names the number by its WABA and display
+  phone number, not its phone number id: the default directory,
+  `KnownNumbers`, holds the numbers you register by both, comparing
+  display numbers by their digits (`+1 555-078-3881` is `15550783881`).
+  Only `THROUGHPUT_UPGRADE` changes a rate: `ONBOARDING`, `FLAGGED`, a
+  value Meta adds later, or a number the directory does not know change
+  none (Meta documents no downgrade event and no mapping from a level
+  to a rate); an upgrade never lowers a rate, so one heard twice changes
+  nothing. `ThroughputUpgrades::rate` sets another rate (below 1,000,
+  for inbound headroom). In memory only: a restart or another replica is
+  back at the configured rate, and Meta sends the webhook once per
+  upgrade, so record the number `ThroughputUpgrades::observe` returns to
+  set it at startup (`TokenBucket::rate_for`); no store namespace added.
 - **Rich replies** in `meta-whatsapp-bot` (roadmap B1c, parity row 17,
   now done in the library), from `messages/image-messages`,
   `messages/interactive-reply-buttons-messages`,

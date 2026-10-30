@@ -3,7 +3,8 @@
 //! cooldowns, a subcommand with a flag, a plugin per feature, middleware, Markdown replies, a
 //! rich reply (reply buttons that run a command), the
 //! generated help and Meta's command menu, replies recorded in the CMS
-//! inbox, and a paced broadcast sharing the bot's pacer.
+//! inbox, and a paced broadcast sharing the bot's pacer, which follows
+//! Meta's throughput upgrades when asked.
 //!
 //! meta-whatsapp-rs compiles this file and runs its tests in its own gate
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`). It needs the `bot` feature.
@@ -12,9 +13,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use meta_whatsapp_rs::bot::{
-    AccessList, Bot, Broadcast, BroadcastReport, ClientOutbound, Command, Ctx, Logging, MarkRead,
-    Middleware, Next, Outbound, Pacer, Plugin, Rate, Registrar, RichReply, Suggestion, TokenBucket,
-    async_trait,
+    AccessList, Bot, Broadcast, BroadcastReport, ClientOutbound, Command, Ctx, KnownNumbers,
+    Logging, MarkRead, Middleware, Next, Outbound, Pacer, Plugin, Rate, Registrar, RichReply,
+    Suggestion, ThroughputUpgrades, TokenBucket, async_trait,
 };
 use meta_whatsapp_rs::core::clock::SystemClock;
 use meta_whatsapp_rs::core::error::{SinkError, ValidationError};
@@ -138,6 +139,20 @@ impl Middleware for OnlyOurNumber {
 /// default 80 messages a second per number, 1,000 for one Meta upgraded.
 pub fn shared_pacer(upgraded: PhoneNumberId) -> Pacer {
     Pacer::new(TokenBucket::new(Rate::DEFAULT).rate_for(upgraded, Rate::HIGHER_THROUGHPUT))
+}
+
+/// Opt-in: Meta's throughput upgrade of `number` raises its rate in the
+/// pacer's bucket to 1,000 a second. The webhook names the number by its
+/// WABA and display number only, so register both.
+pub fn following_upgrades(
+    waba: WabaId,
+    display_phone_number: &str,
+    number: PhoneNumberId,
+) -> meta_whatsapp_rs::Result<(Pacer, ThroughputUpgrades)> {
+    let bucket = Arc::new(TokenBucket::new(Rate::DEFAULT)); // kept, to raise a rate while running
+    let numbers = KnownNumbers::new().number(waba, display_phone_number, number)?; // digits compared
+    let upgrades = ThroughputUpgrades::new(bucket.clone(), numbers); // in memory: record upgrades yourself
+    Ok((Pacer::shared(bucket), upgrades)) // `BotBuilder::follow_throughput_upgrades(upgrades)`
 }
 
 /// The bot: the defaults, and the parts this shop sets.
@@ -596,6 +611,46 @@ mod tests {
             clock.now() - OffsetDateTime::UNIX_EPOCH,
             time::Duration::microseconds(12_500)
         );
+    }
+
+    /// Meta's documented `THROUGHPUT_UPGRADE` webhook
+    /// (`webhooks/reference/phone_number_quality_update`), delivered to a
+    /// bot that follows upgrades: the number's next slots are 1 ms apart.
+    #[tokio::test]
+    async fn a_throughput_upgrade_raises_the_numbers_rate() {
+        let number = PhoneNumberId::new(NUMBER).unwrap();
+        let (pacer, upgrades) = following_upgrades(
+            WabaId::new("102290129340398").unwrap(),
+            "+1 555-078-3881",
+            number.clone(),
+        )
+        .unwrap();
+        let clock = ManualClock::new(OffsetDateTime::UNIX_EPOCH);
+        let pacer = pacer.with_timer(clock.clone());
+        let bot = Bot::builder()
+            .client(client(&ScriptedTransport::new()))
+            .pacer(pacer.clone())
+            .follow_throughput_upgrades(upgrades) // off unless asked
+            .build()
+            .await
+            .unwrap();
+        let payload = json!({"entry": [{"id": "102290129340398", "time": 1748454394,
+            "changes": [{"value": {"display_phone_number": "15550783881",
+                "event": "THROUGHPUT_UPGRADE", "current_limit": "TIER_UNLIMITED"},
+                "field": "phone_number_quality_update"}]}],
+            "object": "whatsapp_business_account"});
+        let event = WebhookPayload::from_slice(payload.to_string().as_bytes())
+            .unwrap()
+            .into_events()
+            .remove(0);
+
+        bot.deliver(event).await.unwrap();
+
+        let start = clock.now();
+        for _ in 0..3 {
+            pacer.acquire(&number).await.unwrap();
+        }
+        assert_eq!(clock.now() - start, time::Duration::milliseconds(2));
     }
 
     /// A blank verify token stops the boot: `webhook_handler` runs the check.

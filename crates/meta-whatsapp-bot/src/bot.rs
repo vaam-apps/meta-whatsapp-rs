@@ -32,6 +32,7 @@ use crate::outbound::{ClientOutbound, Outbound};
 use crate::pacer::{PacedOutbound, Pacer};
 use crate::parse::{CommandParser, ParsedCommand, PrefixParser};
 use crate::plugin::{DEFAULT_CATEGORY, Listen, Plugin, Registered, Registrar};
+use crate::throughput::{QUALITY_UPDATE_KIND, ThroughputUpgrades};
 
 /// What the match found in a received message.
 enum Found {
@@ -661,6 +662,18 @@ impl BotBuilder {
     pub fn pacer(mut self, pacer: Pacer) -> Self {
         self.pacer = Some(pacer);
         self
+    }
+
+    /// Follow Meta's throughput upgrades with `upgrades`: a
+    /// `phone_number_quality_update` saying `THROUGHPUT_UPGRADE` raises
+    /// that number's rate in the bucket `upgrades` holds (give the bot's
+    /// pacer the same bucket, `Pacer::shared`). Off by default: without
+    /// this, such a webhook changes no rate. Registered as a listener of
+    /// [`QUALITY_UPDATE_KIND`], in the order of the other registrations,
+    /// so a middleware that stops the event stops this too. See
+    /// [`ThroughputUpgrades`].
+    pub fn follow_throughput_upgrades(self, upgrades: ThroughputUpgrades) -> Self {
+        self.listen(Listen::event(QUALITY_UPDATE_KIND), upgrades)
     }
 
     /// Read commands with `parser` ([`CommandParser`]).
