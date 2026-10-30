@@ -117,3 +117,11 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   constant, any use of `snippet`, or a serde parse of a `body` outside
   `decode_json*`; an exception goes in its `ALLOWED` list, pinned to the
   enclosing function, with the reason.
+- An error body is read bounded. `GraphRequest::send_streaming` reads a
+  non-2xx body through `request::read_error_body`, at most
+  `STREAMED_ERROR_BODY_CAP` (64 KiB), drops the stream, and hands what it
+  read to `decode_error`: a cut-off envelope is an `Error::Http`, never a
+  longer read. Never `StreamingResponse::collect()` an error body (it has
+  no bound); `request::streamed_error_tests` fails on a read past the cap.
+  A buffered `send` gets its body whole from the transport: bounding that
+  is the adapter's.

@@ -481,13 +481,23 @@ impl GraphRequest {
     }
 
     /// Send and stream the response body (media download). Not retried.
+    ///
+    /// A 2xx answer is returned with its body unread, for the caller to
+    /// bound (as [`crate::media::Media::download_bytes`] does). Of any other
+    /// answer at most 64 KiB is read, whatever limit the caller has, and
+    /// the rest of the stream is dropped, not drained, which closes the
+    /// connection: what was read decodes as Meta's error envelope into an
+    /// [`Error::Api`] with its `http_status`, as from
+    /// [`send_raw`](Self::send_raw), and anything else (a cut-off envelope,
+    /// a proxy's or CDN's error page) into an [`Error::Http`] carrying the
+    /// first bytes of it, never the whole.
     pub async fn send_streaming(mut self) -> Result<StreamingResponse> {
         let request = self.build_attempt()?;
         let resp = self.client.shared.transport.send_streaming(request).await?;
         if resp.status.is_success() {
             return Ok(resp);
         }
-        let buffered = resp.collect().await?;
+        let buffered = read_error_body(resp).await?;
         Err(decode_error(&buffered))
     }
 
@@ -830,6 +840,49 @@ fn retry_after(headers: &HeaderMap) -> Option<Duration> {
         .parse()
         .ok()?;
     Some(Duration::from_secs(secs))
+}
+
+/// How much of a streamed non-2xx body [`GraphRequest::send_streaming`]
+/// reads before it stops: 64 KiB.
+///
+/// Graph's error envelope (`support/error-codes`: `message`, `type`,
+/// `code`, `error_data.details`, `error_subcode`, `fbtrace_id`) is a few
+/// hundred bytes, a long `details` text a few KiB, so 64 KiB is room to
+/// spare for any envelope Meta documents, and for most error pages a
+/// proxy or CDN serves; of anything else only the first 512 bytes reach
+/// the [`Error::Http`] anyway. And it is a bound a download slot can
+/// afford: a small fraction of the 16 MiB a whole file may take, where an
+/// unbounded read would let a hostile or broken answer (a media URL, a
+/// cross-origin redirect target) make the client buffer any size.
+pub(crate) const STREAMED_ERROR_BODY_CAP: usize = 64 * 1024;
+
+/// The first [`STREAMED_ERROR_BODY_CAP`] bytes of a non-2xx streamed body,
+/// buffered: no chunk is pulled once that many are read, and the stream is
+/// dropped (the connection closed, not drained to its end). A transport
+/// error while reading is that error, as before the cap.
+async fn read_error_body(resp: StreamingResponse) -> Result<HttpResponse> {
+    use futures::StreamExt;
+
+    let StreamingResponse {
+        status,
+        headers,
+        body: mut stream,
+    } = resp;
+    let mut read = Vec::new();
+    while read.len() < STREAMED_ERROR_BODY_CAP {
+        let Some(chunk) = stream.next().await else {
+            break;
+        };
+        let chunk = chunk?;
+        let room = STREAMED_ERROR_BODY_CAP - read.len();
+        read.extend_from_slice(&chunk[..chunk.len().min(room)]);
+    }
+    drop(stream);
+    Ok(HttpResponse {
+        status,
+        headers,
+        body: Bytes::from(read),
+    })
 }
 
 /// Turn a non-2xx response into an [`Error`].
@@ -1430,6 +1483,9 @@ mod tests {
         assert!(client(&t).post("x").send_success().await.is_err());
     }
 }
+
+#[cfg(test)]
+mod streamed_error_tests;
 
 /// The credential rules beyond the media host: the Parent BSUID Accounts
 /// API's one URL on `api.facebook.com` (roadmap L10a). The allow list's

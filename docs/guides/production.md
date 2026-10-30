@@ -185,6 +185,17 @@ let client = meta_whatsapp_rs::client_builder()?
     .build()?;
 ```
 
+Response bodies: a media download's body streams, and what bounds it is
+yours (`Media::download_bytes`'s `max_bytes`, or the reads you make of
+`Media::download`'s stream). An error answer to a download (an expired
+URL, a proxy's or CDN's error page) is read to at most 64 KiB, then the
+connection is dropped; Meta's error envelope is far smaller, so its
+`Error::Api` is unchanged, and a longer body is an `Error::Http` with its
+first bytes. Every other request's answer is read whole by the transport
+(`ReqwestTransport` sets no size limit): those come from the configured
+Graph endpoint, so give a proxy you put there a response size limit of its
+own if it could answer with more than you want to buffer.
+
 Sends are never replayed after a timeout or a 5xx. A campaign or
 notification queue on top must be idempotent itself: tag each message with
 `callback_data`, and before resending look for its status webhook (see

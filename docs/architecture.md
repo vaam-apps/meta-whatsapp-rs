@@ -505,7 +505,11 @@ checked first), `url(media_id)` → `{url, mime_type, sha256, file_size, id}`,
 `download(media_id)` → streaming body with a `verified()` adaptor that
 hashes while streaming (a mismatch is `TransportError::Integrity`,
 retryable), `download_bytes` with a size cap (pre-allocation never trusts
-Meta's reported size beyond 16 MiB), `delete`. Resumable Upload API
+Meta's reported size beyond 16 MiB), `delete`. A download that answers
+non-2xx is read to at most 64 KiB (`request::STREAMED_ERROR_BODY_CAP`),
+then the stream is dropped and what was read decoded as any error body
+(`GraphRequest::send_streaming`); the 2xx body is the caller's to bound.
+Resumable Upload API
 (`/{app_id}/uploads` → `upload:<id>` sessions, `file_offset`, `Authorization:
 OAuth` on every step so the token never sits in a URL) returning a
 `meta_whatsapp_core::ids::UploadHandle` for template `header_handle`s.

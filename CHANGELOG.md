@@ -2762,3 +2762,22 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   port spelled out, IPv6 literals, IDNs), and by
   `a_redirect_to_the_same_origin_spelled_another_way_is_not_followed` and
   `a_redirect_that_turns_a_post_into_a_get_keeps_the_rule`.
+- **A streamed request's error body is read to 64 KiB, not whole**
+  (`meta-whatsapp-client`; found by the security review of PR #60).
+  `GraphRequest::send_streaming`, the media download's request, buffered a
+  non-2xx body to its end before decoding it, so a hostile or broken
+  answer (a media URL, a cross-origin redirect target) could make the
+  client buffer any size, past the caller's `max_bytes` and the 16 MiB a
+  whole file may take, while the service held a download slot. It now
+  reads at most 64 KiB, pulls no chunk past them and drops the stream
+  (closing the connection rather than draining it). Graph's error
+  envelope is a few hundred bytes, so it still decodes to the same
+  `Error::Api` with its `http_status`; what does not decode (an envelope
+  cut at the cap, a proxy's error page) is an `Error::Http` with its first
+  512 bytes, withheld as before when they may carry the token. A 2xx
+  stream is unchanged. Buffered requests (`send`) still get the whole body
+  from the transport, which the stock `ReqwestTransport` reads without a
+  limit: their answers come from the configured Graph endpoint. Tests:
+  `request::streamed_error_tests` (an endless body is read for four 16 KiB
+  chunks and no fifth; an envelope of exactly 64 KiB decodes and one byte
+  more does not; a 2xx body of 128 KiB is read whole).
