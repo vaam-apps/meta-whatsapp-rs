@@ -109,7 +109,8 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   quotes values) for any body naming `paging` or `access_token`, because
   Meta's paging links can embed the token. A response that names people
   uses `send_private`; one with other secrets (key material, a Flow
-  preview link) uses `send_withheld(placeholder)`. `request::body_guard_tests`
+  preview link, a Flow assets page's signed links) uses
+  `send_withheld(placeholder)`. `request::body_guard_tests`
   scans the crate's sources (comments, literals and `#[cfg(test)]` code
   aside) and fails on a `…::decode(` whose body argument is not a literal
   or a placeholder constant, a `body_snippet` not from `safe_snippet` or a

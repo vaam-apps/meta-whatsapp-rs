@@ -354,6 +354,36 @@ async fn a_preview_that_does_not_decode_keeps_its_link_out_of_the_error() {
 }
 
 #[tokio::test]
+async fn an_assets_page_that_does_not_decode_keeps_its_links_out_of_the_error() {
+    // A signed download link opens the Flow JSON to anyone. Without
+    // `paging` in the body, `send`'s own rule would keep the snippet.
+    let link = "https://scontent.xx.fbcdn.net/m1/v/t0.57323-24/An?oh=00_S1GN3D&oe=6550E8A3";
+    for body in [
+        json!({"data": [{"name": null, "asset_type": "FLOW_JSON", "download_url": link}]}),
+        json!({"data": [{"name": "flow.json", "asset_type": "FLOW_JSON", "download_url": 7}], "x": link}),
+        json!({"data": link}),
+    ] {
+        let t = ScriptedTransport::new();
+        t.push_json(200, body.clone());
+        let err = client(&t)
+            .flow("FLOW-ID")
+            .assets(&ListFlowAssets::new())
+            .await
+            .unwrap_err();
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("S1GN3D"), "{body}: {shown}");
+        let Error::Decode { body_snippet, .. } = &err else {
+            panic!("{err:?}")
+        };
+        assert_eq!(
+            body_snippet,
+            "(withheld: paging links can carry the access token)"
+        );
+        assert_eq!(t.remaining(), 0);
+    }
+}
+
+#[tokio::test]
 async fn preview_passes_invalidate_and_parses_the_documented_response() {
     let t = ScriptedTransport::new();
     let doc = json!({
@@ -475,6 +505,13 @@ async fn assets_parse_the_documented_page() {
     let page = flow.assets(&ListFlowAssets::new()).await.unwrap();
     assert_eq!(page.data[0].asset_type, FlowAssetType::FlowJson);
     assert_eq!(page.data[0].name, "flow.json");
+    assert_eq!(
+        page.data[0]
+            .download_url
+            .as_ref()
+            .map(SecretUrl::expose_secret),
+        Some("https://scontent.xx.fbcdn.net/m1/v/t0.57323-24/An_Hq0jnfJ...")
+    );
     let req = t.last_request().unwrap();
     assert_eq!(req.method, Method::GET);
     assert_eq!(req.path(), "/v25.0/FLOW-ID/assets");

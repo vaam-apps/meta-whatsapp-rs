@@ -1386,15 +1386,21 @@ stored data, the owner's).
   where the raw JSON did not. No code in this repository read the
   field.
 
-- **Breaking — `FlowPreview::preview_url` is a `PreviewUrl`**
-  (`meta_whatsapp_client::flows`), not a `String`, so its `Debug` hides
-  the link's viewing token (see Security). **Upgrade:** read the link
-  with `preview.preview_url.expose_secret()` (a `&str`, token included)
-  where you read the `String`, and build one with `PreviewUrl::new(…)`.
-  `Serialize` and `Deserialize` are unchanged: the field is still the
-  whole link as a JSON string, so stored previews read back as before.
-  `PreviewUrl` has no `Display`, `Deref` or `AsRef<str>` on purpose. No
-  code in this repository read the field outside the client's tests.
+- **Breaking — the Flows API's capability links are `SecretUrl`s**
+  (`meta_whatsapp_client::common::SecretUrl`, re-exported as
+  `flows::SecretUrl`), not `String`s, so their `Debug` hides what opens
+  them (see Security): `FlowPreview::preview_url` (and so
+  `FlowDetails::preview`), whose `token` opens the Flow's preview, and
+  `FlowAsset::download_url`, now an `Option<SecretUrl>`, a signed CDN
+  link that gives the Flow JSON to anyone holding it. **Upgrade:** read
+  a link with `preview.preview_url.expose_secret()` (a `&str`, credential
+  included) where you read the `String`, and
+  `asset.download_url.as_ref().map(SecretUrl::expose_secret)` where you
+  read the `Option<String>`; build one with `SecretUrl::new(…)`.
+  `Serialize` and `Deserialize` are unchanged: each field is still the
+  whole link as a JSON string, so stored values read back as before.
+  `SecretUrl` has no `Display`, `Deref` or `AsRef<str>` on purpose. No
+  code in this repository read either field outside the client's tests.
 
 - **The Graph API's Business Use Case rate limits are `RateLimited`**
   (`meta_whatsapp_core::ErrorKind::from_code`). The error code table of
@@ -2411,17 +2417,28 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
     quotes the item; it is withheld as the page is. `Flow::preview`'s
     answer is withheld too: its link's `token` lets anyone view the
     Flow.
-  - **A preview that decoded still showed its token.** A follow-up of
-    that review: `FlowPreview`'s derived `Debug` printed `preview_url`
-    whole, `token` included, so logging a `FlowPreview` (or a
-    `FlowDetails` that asked for `preview`) shared the Flow with whoever
-    read the log, for up to 30 days. `preview_url` is now a
-    `PreviewUrl` whose `Debug` keeps the link up to its query and
-    replaces every query value and any fragment with `<redacted>`
-    (`…/preview/?token=<redacted>`); `expose_secret()` returns the whole
-    link, and `Serialize` still writes it whole (breaking, see Changed).
-    Tests: `preview_debug_never_shows_the_viewing_token`,
-    `preview_link_is_kept_whole_for_the_caller_and_in_json`.
+  - **A preview that decoded still showed its token, and an asset its
+    signature.** A follow-up of that review: `FlowPreview`'s derived
+    `Debug` printed `preview_url` whole, `token` included, so logging a
+    `FlowPreview` (or a `FlowDetails` that asked for `preview`) shared
+    the Flow with whoever read the log, for up to 30 days; `FlowAsset`'s
+    printed `download_url`, a signed CDN link that needs no token, whole,
+    giving away the Flow JSON. Both are now a `SecretUrl` (breaking, see
+    Changed), whose `Debug` is built from the parsed link: scheme, host,
+    port and path, each query parameter's name with `<redacted>` as its
+    value (`…/preview/?token=<redacted>`), user info as `<redacted>@`,
+    a fragment as `#<redacted>`, and a link that does not parse as an
+    absolute URL as `SecretUrl(<redacted: not a URL>)`, never as itself.
+    `expose_secret()` returns the whole link, and `Serialize` still
+    writes it whole. A page of assets that does not decode is now
+    withheld even without `paging` in its body (`Flow::assets`; only a
+    body naming `paging` or `access_token` was before), as the preview's
+    answer and the assets stream's pages are. Tests:
+    `preview_debug_never_shows_the_viewing_token`,
+    `asset_debug_never_shows_the_download_signature`,
+    `an_assets_page_that_does_not_decode_keeps_its_links_out_of_the_error`
+    and `common::secret_url`'s tests (encoded names, `;` inside a value,
+    user info, unparseable links).
   - A test scans the client crate's sources (outside comments, string
     literals and test code) so that no module builds an error from a
     body itself: a decode error with a body that is not a constant (an

@@ -7,12 +7,12 @@
 //! `…_typed` calls serialize. Meta validates it server-side either way,
 //! returning [`FlowValidationError`]s.
 
-use std::fmt;
-
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::FlowId;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+
+use crate::common::SecretUrl;
 use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
 
@@ -490,106 +490,22 @@ pub struct FlowDetails {
 
 /// Shareable, login-free web preview of a Flow.
 ///
-/// `Debug` never shows the link's viewing token: see [`PreviewUrl`].
+/// `Debug` never shows the link's viewing token: see [`SecretUrl`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FlowPreview {
-    /// Preview page; can be embedded in an `<iframe>`. Valid for 30 days or
-    /// until invalidated. Read it with [`PreviewUrl::expose_secret`].
-    pub preview_url: PreviewUrl,
+    /// Preview page
+    /// (`https://business.facebook.com/wa/manage/flows/<id>/preview/?token=…`);
+    /// can be embedded in an `<iframe>`. Meta's page says it "does not
+    /// require login and can be shared with stakeholders": its `token`
+    /// opens the Flow for 30 days or until invalidated
+    /// ([`Flow::preview`](super::Flow::preview) with `invalidate = true`).
+    /// Read it with [`SecretUrl::expose_secret`].
+    pub preview_url: SecretUrl,
     /// Expiry as Meta returns it, e.g. `2023-05-21T11:18:09+0000`. Parsed by
     /// [`FlowPreview::expires_at`] rather than at decode time so an
     /// unexpected format never fails the whole response.
     #[serde(rename = "expires_at")]
     pub expires_at_raw: String,
-}
-
-/// A Flow's web preview link, `preview_url` in `flows/guides/flowsapi`
-/// (`https://business.facebook.com/wa/manage/flows/<id>/preview/?token=…`).
-///
-/// Meta's page says the link "does not require login and can be shared
-/// with stakeholders": its `token` query parameter lets anyone holding it
-/// open the Flow until it expires (30 days) or is invalidated
-/// ([`Flow::preview`](super::Flow::preview) with `invalidate = true`). The
-/// link is kept whole, for the caller to open, embed or share, and treated
-/// as a secret:
-///
-/// - `Debug` prints the link up to its query, then each query parameter's
-///   name with its value replaced by `<redacted>` (a fragment becomes
-///   `#<redacted>`):
-///   `PreviewUrl("https://business.facebook.com/wa/manage/flows/550/preview/?token=<redacted>")`.
-///   Every value is hidden, not only `token`'s, so a parameter Meta adds
-///   later is hidden too.
-/// - There is no `Display`, `Deref` or `AsRef<str>`: reading the link
-///   takes an explicit [`expose_secret`](Self::expose_secret).
-/// - `Serialize` writes the whole link as a JSON string, and `Deserialize`
-///   reads one: serializing is how a caller stores the link or hands it
-///   to the page that embeds it, and a link without its token opens
-///   nothing. Do not log a serialized [`FlowPreview`].
-///
-/// ```
-/// use meta_whatsapp_client::flows::PreviewUrl;
-///
-/// let url = PreviewUrl::new("https://business.facebook.com/wa/manage/flows/550/preview/?token=SENTINEL");
-/// assert!(!format!("{url:?}").contains("SENTINEL"));
-/// assert!(url.expose_secret().ends_with("?token=SENTINEL"));
-/// ```
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct PreviewUrl(String);
-
-impl PreviewUrl {
-    /// Wrap a preview link (in a test, or one read back from storage).
-    pub fn new(url: impl Into<String>) -> Self {
-        Self(url.into())
-    }
-
-    /// The whole link, token included. Keep it out of logs.
-    pub fn expose_secret(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Debug for PreviewUrl {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("PreviewUrl")
-            .field(&without_query_values(&self.0))
-            .finish()
-    }
-}
-
-/// `link` with every query value, and its fragment, replaced by
-/// `<redacted>`. A string scan rather than a URL parse, so a link that is
-/// not an absolute URL is redacted too.
-fn without_query_values(link: &str) -> String {
-    const REDACTED: &str = "<redacted>";
-    let (rest, fragment) = match link.split_once('#') {
-        Some((rest, _)) => (rest, true),
-        None => (link, false),
-    };
-    let mut out = String::with_capacity(rest.len());
-    match rest.split_once('?') {
-        Some((base, query)) => {
-            out.push_str(base);
-            out.push('?');
-            for (i, pair) in query.split('&').enumerate() {
-                if i > 0 {
-                    out.push('&');
-                }
-                // A pair without `=` is all value, for all we know.
-                if let Some((name, _)) = pair.split_once('=') {
-                    out.push_str(name);
-                    out.push('=');
-                }
-                out.push_str(REDACTED);
-            }
-        }
-        None => out.push_str(rest),
-    }
-    if fragment {
-        out.push('#');
-        out.push_str(REDACTED);
-    }
-    out
 }
 
 /// Graph's ISO 8601 flavour: numeric offset without a colon.
@@ -612,12 +528,14 @@ pub struct FlowAsset {
     /// Asset kind.
     pub asset_type: FlowAssetType,
     /// Short-lived CDN link to the asset's content (`*.fbcdn.net` in the
-    /// docs' example). It needs no token, and it is not a host
-    /// [`Client::request_url`](crate::Client::request_url) will send one to:
-    /// a client that has a token refuses the request. Fetch it with a plain
-    /// HTTP GET instead.
+    /// docs' example). It needs no token, so it gives the Flow JSON to
+    /// anyone holding it: a [`SecretUrl`], whose `Debug` hides its query
+    /// (the CDN's signature); read it with [`SecretUrl::expose_secret`].
+    /// It is not a host [`Client::request_url`](crate::Client::request_url)
+    /// will send a token to: a client that has a token refuses the
+    /// request. Fetch it with a plain HTTP GET instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub download_url: Option<String>,
+    pub download_url: Option<SecretUrl>,
 }
 
 /// Response of a Flow JSON upload (`POST /{FLOW_ID}/assets`).
@@ -681,7 +599,7 @@ mod tests {
         .unwrap();
         assert_eq!(p.expires_at().unwrap().unix_timestamp(), 1_684_667_889);
         let odd = FlowPreview {
-            preview_url: PreviewUrl::new(""),
+            preview_url: SecretUrl::new(""),
             expires_at_raw: "tomorrow".into(),
         };
         assert_eq!(odd.expires_at(), None);
@@ -705,7 +623,7 @@ mod tests {
         assert!(!shown.contains(SENTINEL), "{shown}");
         assert_eq!(
             format!("{:?}", preview.preview_url),
-            r#"PreviewUrl("https://business.facebook.com/wa/manage/flows/550/preview/?token=<redacted>")"#
+            r#"SecretUrl("https://business.facebook.com/wa/manage/flows/550/preview/?token=<redacted>")"#
         );
         // `FlowDetails` holds one too, when `preview` is asked for.
         let details: FlowDetails = serde_json::from_value(json!({
@@ -718,25 +636,45 @@ mod tests {
         assert!(!format!("{details:?}").contains(SENTINEL));
     }
 
+    /// The asset's download link as `flows/guides/flowsapi` shows it, with
+    /// the query a signed CDN link carries (the signature is the sentinel).
+    fn sentinel_asset_link() -> String {
+        format!(
+            "https://scontent.xx.fbcdn.net/m1/v/t0.57323-24/An_Hq0jnfJ?ccb=10-5&oh=00_{SENTINEL}&oe=6550E8A3&_nc_sid=471a72"
+        )
+    }
+
     #[test]
-    fn preview_debug_hides_every_query_value_and_the_fragment() {
-        for (link, shown) in [
-            (
-                format!("https://h/p/?a=1&token={SENTINEL}&{SENTINEL}#{SENTINEL}"),
-                "https://h/p/?a=<redacted>&token=<redacted>&<redacted>#<redacted>",
+    fn asset_debug_never_shows_the_download_signature() {
+        let asset: FlowAsset = serde_json::from_value(json!({
+            "name": "flow.json",
+            "asset_type": "FLOW_JSON",
+            "download_url": sentinel_asset_link()
+        }))
+        .unwrap();
+        let shown = format!("{asset:?} {asset:#?}");
+        assert!(!shown.contains(SENTINEL), "{shown}");
+        assert!(
+            shown.contains(
+                "https://scontent.xx.fbcdn.net/m1/v/t0.57323-24/An_Hq0jnfJ?ccb=<redacted>&oh=<redacted>&oe=<redacted>&_nc_sid=<redacted>"
             ),
-            (
-                format!("https://h/p/#{SENTINEL}"),
-                "https://h/p/#<redacted>",
-            ),
-            ("https://h/p/".to_owned(), "https://h/p/"),
-            (format!("?token={SENTINEL}"), "?token=<redacted>"),
-        ] {
-            assert_eq!(
-                format!("{:?}", PreviewUrl::new(link)),
-                format!("PreviewUrl({shown:?})")
-            );
-        }
+            "{shown}"
+        );
+        // The link is the caller's whole, to fetch, and in JSON.
+        let link = sentinel_asset_link();
+        assert_eq!(
+            asset.download_url.as_ref().map(SecretUrl::expose_secret),
+            Some(link.as_str())
+        );
+        assert_eq!(
+            serde_json::to_value(&asset).unwrap()["download_url"],
+            json!(link)
+        );
+        // A page of assets hides it too.
+        let page: meta_whatsapp_core::paging::Page<FlowAsset> =
+            serde_json::from_value(json!({"data": [serde_json::to_value(&asset).unwrap()]}))
+                .unwrap();
+        assert!(!format!("{page:?}").contains(SENTINEL));
     }
 
     #[test]

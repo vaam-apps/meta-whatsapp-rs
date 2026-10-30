@@ -122,11 +122,12 @@ pub mod endpoint;
 #[cfg(test)]
 mod tests;
 
+pub use crate::common::SecretUrl;
 pub use encryption::{BusinessEncryption, BusinessPublicKey, PublicKeySignatureStatus};
 pub use flow_json::FlowJson;
 pub use management::{Flow, Flows};
 pub use types::{
     CreateFlow, CreatedFlow, FlowAsset, FlowAssetType, FlowCategory, FlowDetails, FlowJsonUpload,
     FlowPreview, FlowStatus, FlowValidationError, FlowValidationPointer, ListFlowAssets, ListFlows,
-    MAX_FLOW_JSON_BYTES, PreviewUrl, UpdateFlow,
+    MAX_FLOW_JSON_BYTES, UpdateFlow,
 };

@@ -91,7 +91,12 @@ runs it against real Postgres and Redis.
 `AccessToken`, `AppSecret`, `VerifyToken`, `SecretBytes`, `SignupCode`,
 `TwoStepPin`, `OtpPepper` and `VaultKey` print `[REDACTED]` (or only an id)
 in `Debug`; the value comes out only through `expose_secret()`. Call it at
-the boundary that needs it and nowhere near a log line.
+the boundary that needs it and nowhere near a log line. A link Meta
+answers with that opens something for whoever holds it (a Flow's preview
+link, a Flow asset's signed download link) is a `SecretUrl`: its `Debug`
+keeps the host and path and prints `<redacted>` for every query value,
+user info and fragment; `expose_secret()` gives the whole link, and so
+does serializing it, so do not log a serialized response that holds one.
 
 The client attaches a token to the configured Graph endpoint (scheme, host
 and port), to `https://lookaside.fbsbx.com`, Meta's media download host,
