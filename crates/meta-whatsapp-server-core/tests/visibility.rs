@@ -2,7 +2,10 @@
 //! error code and text (`tests/visibility/fail/*.stderr`): the vault's
 //! methods, the vault itself, and a capability of one's own
 //! (`src/authz.rs`, [`Tokens`]'s docs); a media upload, or a download's
-//! limits, not made by their checks (`src/media.rs`). `tests/visibility/pass/` is the
+//! limits, not made by their checks (`src/media.rs`); the webhook
+//! pipeline's sink, so that an event reaches the stores only through
+//! `Pipeline::deliver`, after its signature (`src/inbound.rs`, roadmap
+//! S5e). `tests/visibility/pass/` is the
 //! control: it names every path those cases use, and compiles.
 //!
 //! The expected errors are the pinned toolchain's (`rust-toolchain.toml`).

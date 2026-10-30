@@ -22,6 +22,7 @@
 //! | [`authz`] | the authorization order: key, tenant, scope, ownership, vault |
 //! | [`audit`], [`observe`] | the audit events (target `audit`); what an operation reports to the adapter's metrics |
 //! | [`events`] | routing Meta's webhook events to tenants, their outbox keys and ids, polling |
+//! | [`inbound`] | the webhook pipeline: a signed body verified before anything is stored, parsed, each event under its dedup lease, routed by the records and recorded (inbox, then outbox), and what to answer Meta |
 //! | [`idempotency`] | `Idempotency-Key`: claim, settle, replay; running an operation under a key (`run`: a status, a body, and whether it replayed) |
 //! | [`ratelimit`] | per-tenant token buckets by route class, transfer slots |
 //! | [`store`], [`outbox`], [`backend`] | the ports, and the bundle a backend gives |
@@ -60,6 +61,7 @@ pub mod error;
 pub mod events;
 pub mod housekeeping;
 pub mod idempotency;
+pub mod inbound;
 pub mod keys;
 pub mod media;
 pub mod messages;

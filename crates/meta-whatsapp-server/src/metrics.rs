@@ -309,8 +309,11 @@ impl Metrics {
 }
 
 /// What the core's operations report: a failed Graph call
-/// (`wa_server_graph_errors_total`), and a repeat that met an idempotency
-/// key's record (`wa_server_idempotency_total`), are counted.
+/// (`wa_server_graph_errors_total`), a repeat that met an idempotency
+/// key's record (`wa_server_idempotency_total`), and what the webhook
+/// pipeline recorded (`wa_server_webhook_events_total`), met again
+/// (`wa_server_webhook_duplicate_events_total`) or failed to record
+/// (`wa_server_webhook_sink_failures_total`), are counted.
 impl meta_whatsapp_server_core::observe::Observer for Metrics {
     fn graph_error(&self, code: &'static str) {
         Metrics::graph_error(self, code);
@@ -318,5 +321,17 @@ impl meta_whatsapp_server_core::observe::Observer for Metrics {
 
     fn idempotency(&self, outcome: &'static str) {
         Metrics::idempotency(self, outcome);
+    }
+
+    fn webhook_event(&self, event_type: &'static str, audience: &'static str) {
+        Metrics::webhook_event(self, event_type, audience);
+    }
+
+    fn webhook_duplicates(&self, stage: &'static str, count: u64) {
+        Metrics::webhook_duplicates(self, stage, count);
+    }
+
+    fn webhook_failure(&self, stage: &'static str) {
+        Metrics::webhook_failure(self, stage);
     }
 }

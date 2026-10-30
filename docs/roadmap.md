@@ -736,13 +736,102 @@ and `store-postgres`.
     (public, now unused by the handlers, as S5c left `OwnedWaba`'s); the
     multipart reader stays the server's (its framing budget is
     multer's, an HTTP body's concern).
-- [ ] **S5e. The webhook pipeline into core** (`meta-whatsapp-server-core`,
+- [x] **S5e. The webhook pipeline into core** (`meta-whatsapp-server-core`,
   or `meta-whatsapp-server-http` for what needs a listener): routing and
   recording, framework-free.
   - **After:** S4.
   - **Decisive:** M1.2's routing cases run against the core pipeline
     with no listener; routing an unowned number's event to a tenant
     fails them.
+  - **Landed:** `meta_whatsapp_server_core::inbound`: `Inbound` (the app
+    secrets, the verify token, the clock; moved from the server, which
+    re-exports it) and `Pipeline`, built on a `Backend` alone
+    (`Pipeline::new(Inbound, &dyn Backend, Arc<dyn Observer>)`, the
+    stores the server's `Events` took before). `Pipeline::deliver(signature,
+    body)` takes the body as read and its `X-Hub-Signature-256` value
+    (bytes, no HTTP type), checks the signature against every app secret
+    first (`Refused::Unauthenticated`: no turn waited for, no store
+    touched, nothing logged), takes one of `MAX_DELIVERIES_RECORDING`
+    turns within `RECORDING_WAIT` (`Busy`), runs the library's
+    `WebhookHandler` (3 MiB, `TooLarge`; a signed body that is not a
+    webhook one `unparsed` event; each event under its dedup lease,
+    `InFlight` while another request holds one) into a sink private to
+    the core (routed by the records, `events::route`; the inbox when
+    owned; the outbox row; `Busy` for a busy outbox, `Failed` for a
+    failed store, the lease released), and answers `Delivered` only once
+    every event is recorded or was already. `Refused::status` and
+    `outcome` are the answer and the metric label as data (`DELIVERED`
+    for a recorded one); the sink's counts go to the `Observer`'s three
+    new required methods (`webhook_event`, `webhook_duplicates`,
+    `webhook_failure`, the server's `Metrics` counting them as before),
+    and its log lines keep the target `meta_whatsapp_server::events`
+    (`inbound::LOG_TARGET`) and their fields. The split: no
+    `meta-whatsapp-server-http` crate (S7 makes it); what needs a
+    listener stays the server's (`api::webhooks`: the signature header's
+    shape before the body, `MAX_DELIVERIES_IN_FLIGHT` places,
+    `BODY_READ_TIMEOUT`, the 3 MiB read, the rejection log at most once a
+    minute per reason, the outcome's count, the subscription handshake),
+    its handler matching the core's `Refused` exhaustively. Decisive:
+    `conformance::webhooks::routing_is_an_allow_list_with_no_listener`
+    (in `conformance::run`), over a view of the backend that records
+    what reaches its key/value store and its outbox, with no listener:
+    twelve signed payloads from Meta's examples; an unbound number
+    (under the tenant's WABA or not), the tenant's number under another
+    WABA than the records say or under an unbound one, an unbound
+    number's message whose payload names a tenant, a replay dated before
+    the dedup lease's memory and an unbound WABA's template update are
+    operator-only rows, the others their holder's, each guarded by the
+    binding it was routed by; each tenant polls exactly its own, the
+    inbox holds only an owned number's message, and each row is told to
+    the `Observer` by audience. It runs on the core's memory backend
+    (`tests/webhooks.rs`, its records joined by an outbox that checks the
+    routing again under their lock and the library's memory inbox), on
+    the service's `MemoryBackend` (`tests/store.rs`) and live on Postgres
+    (`tests/live_postgres.rs`). By mutation, each fails the core suite:
+    the WABA the event names not compared with the number's (route by
+    the payload's id without the ownership check), the event's WABA
+    looked up before its number, and an unbound number falling back to
+    its WABA's binding (an unowned number's event recorded under a
+    tenant) each fail the decisive case (and the service's
+    `routing_is_an_allow_list`); the dedup lease dropped fails
+    `an_event_is_recorded_once_under_its_dedup_lease`; the answer given
+    before the recording (spawned) or whatever it did fails
+    `the_answer_comes_only_once_every_event_is_recorded` (and most of
+    the suite); the core's signature check moved after the handler fails
+    `a_delivery_is_verified_before_anything_is_stored` (a forged delivery
+    waits for a turn) and, in the service, only `log_rate.rs` (the
+    library logs each forged delivery); an unowned event recorded in the
+    inbox, the observer's counts dropped, a busy outbox answered `500`
+    and a moved log line's target each fail a case too (the last only
+    the core's `tests/webhooks_logs.rs`: no service test names that
+    target). The review (sabotage, security lens) closed what survived
+    the core suite: dropping the turn to record, or giving one more,
+    failed only the service's paused-clock
+    `a_delivery_with_no_turn_to_record_is_503_after_the_wait`; now
+    `a_delivery_waits_for_a_turn_to_record` (in `conformance::run`: with
+    every turn held, a fifth delivery claims no lease and asks for no
+    row) and `a_delivery_with_no_turn_is_busy_after_the_wait` (the core's
+    `tests/webhooks.rs`, on a paused clock: `503 busy` after
+    `RECORDING_WAIT`, nothing touched) fail too. Dropping the replay
+    window's check, or the binding's date's, passed the core suite (the
+    decisive case's replay is dated before its binding, so each check
+    hid the other's absence; the service's tests caught both):
+    `an_event_is_routed_only_after_its_binding_and_within_the_replay_window`
+    (a pipeline whose clock is past the window) fails for each. The inbox
+    written after the outbox failed only the service's tests (now the
+    answer case asserts the inbox holds the message while its row is on
+    its way), the failure line's target no test (now
+    `tests/webhooks_logs.rs`), and
+    `a_number_moved_while_its_event_records_reaches_neither_tenant` runs
+    the outbox's re-check of the routing through the pipeline: a number's
+    event guarded by its WABA's binding alone passed every test of the
+    core and the service, and fails its second round (the number moving
+    alone, to another tenant's WABA). Every
+    webhook test of the service passes unchanged, the event-data
+    snapshots are unchanged, and `openapi/v1.json` is byte-identical. The
+    server's public but unusable `events::ServiceSink` is gone (the sink
+    is private to the core, pinned by the UI case `inbound_sink`), and
+    `Inbound::clock` is public.
 - [ ] **S6. Adapter-neutral pieces** (`meta-whatsapp-server-core`; D27):
   a rate class per operation id, not per HTTP method; the idempotency
   fingerprint over the operation id and the canonical input, not the

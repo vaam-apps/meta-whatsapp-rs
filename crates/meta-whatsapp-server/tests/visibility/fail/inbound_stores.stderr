@@ -17,7 +17,7 @@ note: expected `VerifyToken`, found `Arc<dyn KvStore>`
    = note: expected struct `VerifyToken`
               found struct `Arc<(dyn KvStore + 'static)>`
 note: associated function defined here
-  --> src/events.rs
+  --> $WORKSPACE/crates/meta-whatsapp-server-core/src/inbound.rs
    |
    |     pub fn new(
    |            ^^^

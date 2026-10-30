@@ -94,14 +94,15 @@ Two crates, as built through M1 and roadmap S1, both `publish = false`
 and workspace members (so `just ci` covers them) but not default ones:
 
 - `crates/meta-whatsapp-server-core`, a library: the domain, the
-  authorization order, event routing and polling, the idempotency
-  engine, the rate limiter, the §5 error model as data, and the ports a
-  backend implements ([§8.1](#81-a-framework-free-core-with-ports)). It
-  turns on none of the facade's adapter features: no axum, no sqlx, no
-  utoipa.
+  authorization order, event routing and polling, the webhook pipeline
+  (since roadmap S5e), the idempotency engine, the rate limiter, the §5
+  error model as data, and the ports a backend implements
+  ([§8.1](#81-a-framework-free-core-with-ports)). It turns on none of
+  the facade's adapter features: no axum, no sqlx, no utoipa.
 - `crates/meta-whatsapp-server`, binary `meta-whatsapp-server`: the axum
-  API and the OpenAPI document, the webhook pipeline, configuration, the
-  command line, and the memory and Postgres backends. It turns on the
+  API and the OpenAPI document, the webhook listener (what an HTTP body
+  needs before the core's pipeline), configuration, the command line,
+  and the memory and Postgres backends. It turns on the
   facade's `reqwest`, `memory`, `postgres` and `axum` (axum and sqlx
   through its re-exports, OQ #29).
 
@@ -1072,15 +1073,14 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
-**As built (roadmap S1, S2, S3, S4, S5a, S5b, S5c, S5d).** `crates/meta-whatsapp-server-core`
+**As built (roadmap S1, S2, S3, S4, S5a, S5b, S5c, S5d, S5e).** `crates/meta-whatsapp-server-core`
 exists, with the model, the keys, event routing and polling, the
 idempotency engine, the rate limiter, the error model, authorization,
 housekeeping (over a `Backend`, since S4), the admin operations
 (since S5a), the message operations and the idempotency engine's
-run (since S5b), the number and template operations (since S5c), and
-the media operations (since S5d); the webhook pipeline is still the
-axum crate's (roadmap S5e). What it holds today, where it differs from
-the target above:
+run (since S5b), the number and template operations (since S5c), the
+media operations (since S5d), and the webhook pipeline (since S5e).
+What it holds today, where it differs from the target above:
 
 - **The ports** are `RecordStore`, `IdempotencyRecords`, `Outbox`,
   `LeaderLock`, `Janitor` and `SchemaMigrator`, and their contracts carry
@@ -1344,6 +1344,59 @@ the target above:
   or odd chunking (empty chunks, a connection cut mid-file, one chunk,
   none) yields the last chunk unverified, and every failure gives its
   slot back.
+- **The webhook pipeline is the core's** (S5e). `inbound` holds
+  `Inbound` (the app secrets, the verify token and the service's clock,
+  no store: the server re-exports it) and `Pipeline`, built on a
+  `Backend` alone (`Pipeline::new(Inbound, &dyn Backend, Arc<dyn
+  Observer>)`: the dedup leases in its `KvStore`, the inbox in its
+  `ConversationStore`, the events in its `Outbox`, routed by its
+  `RecordStore`). `Pipeline::deliver(signature, body)` takes the body as
+  read and its `X-Hub-Signature-256` value, checks the signature against
+  every app secret before anything else (`Refused::Unauthenticated`,
+  `401`: no turn waited for, no store touched, no line logged), takes a
+  turn to record (`MAX_DELIVERIES_RECORDING`, 4, within `RECORDING_WAIT`,
+  10 s, else `Refused::Busy`, `503`), runs the library's
+  `WebhookHandler` (3 MiB, `Refused::TooLarge`; the parse, a signed
+  body that is not a webhook becoming one `unparsed` event, acknowledged;
+  each event under its dedup lease, `Refused::InFlight` while another
+  request holds one), and hands each event to its sink: routed by the
+  records (`events::route`, the allow-list above: never by what the
+  payload says of a tenant), the inbox when a tenant owns it, then the
+  outbox row (a busy outbox `Refused::Busy`, a failed store
+  `Refused::Failed`, `500`, the event's lease released). It answers
+  `Delivered` (the library's report: `200`) only once every event is
+  recorded or was already. `Refused::status` and `outcome` are the
+  answer and its metric label as data; what the pipeline counts is told
+  to the `Observer`, whose new methods `webhook_event`,
+  `webhook_duplicates` and `webhook_failure` the server's `Metrics`
+  counts as before (`wa_server_webhook_events_total`,
+  `_duplicate_events_total`, `_sink_failures_total`), and its log lines
+  keep the target `meta_whatsapp_server::events` (`inbound::LOG_TARGET`)
+  and their fields. The sink is private to the core (a UI case pins it):
+  an event reaches the stores only through `deliver`, after its
+  signature. The axum adapter keeps what an HTTP body needs: the
+  signature header's shape before a byte is read (`401`), its 64 places
+  (`503`), the body read (3 MiB, `413`; 15 s, `408`), the refusals'
+  log, at most one line a minute per reason, the outcome's count
+  (`wa_server_webhook_deliveries_total`) and the subscription handshake
+  (`GET`, the library's `verify_subscription` with the pipeline's verify
+  token). No `meta-whatsapp-server-http` crate was made: what needs a
+  listener stays in the server until S7 splits it out. The conformance
+  suite `webhooks` holds the pipeline with no listener, over a view of
+  the backend that records what reaches its key/value store and its
+  outbox: M1.2's routing cases (an unowned number's event, a number
+  under another WABA than Meta says, a payload naming a tenant, a replay,
+  an unbound WABA: operator-only; each tenant polls exactly its own, the
+  inbox only an owned number's message), an event dated before its
+  binding or seen past the replay window operator-only (each check on
+  its own), a number moved while its event records giving it to neither
+  tenant, the signature before any store or turn, at most
+  `MAX_DELIVERIES_RECORDING` deliveries recording (another waits, with
+  no lease claimed; its `503 busy` after `RECORDING_WAIT` is a case on a
+  paused clock, outside `run`), each event once under its dedup lease,
+  the answer only once every event is recorded (the inbox written
+  first), and `unknown` and `unparsed` acknowledged as operator-only
+  rows.
 - **`ServiceError`** is the §5 error model as data: a code of `CODES`
   (§5.2), its status as a number, `retryable`, `may_have_been_sent`, the
   field for `invalid`, the step and `resumable` of a multi-step call, and
@@ -1443,7 +1496,14 @@ the target above:
   a download through the core's stream ends before its last chunk on a
   digest mismatch, M1b's rule without axum; Meta's documented upload
   and deletion; the core's `tests/media.rs` runs it on that memory
-  backend, `tests/media_logs.rs` pins its log lines' target). The memory backend runs
+  backend, `tests/media_logs.rs` pins its log lines' target), and
+  `webhooks` (S5e: M1.2's routing cases through the core's webhook
+  pipeline with no listener, an unowned number's event operator-only,
+  a stale binding's or a replay's too, a move while recording; the
+  signature before any store; the turns to record; dedup, the answer
+  after the recording; the core's `tests/webhooks.rs` runs it on that memory
+  backend, which gains an outbox and an inbox, and
+  `tests/webhooks_logs.rs` pins its log lines' target). The memory backend runs
   it in the service's `tests/store.rs`, the Postgres one live in
   `tests/live_postgres.rs`; the service's tests also show what it
   refuses: a backend whose `kv()` is a new store on each call, an

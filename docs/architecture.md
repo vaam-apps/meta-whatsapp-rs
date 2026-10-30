@@ -1271,7 +1271,13 @@ decisions and the delivery milestones, is
     `media::MediaStream`, a `futures::Stream` of the library's `Bytes`
     held one chunk behind, which ends with a `StreamStopped` instead of
     its last chunk on a mismatch, and a deletion of the number's own
-    media only); the webhook pipeline follows in S5e. It depends on the
+    media only), and since S5e the webhook pipeline (`inbound::Pipeline`,
+    built on a `Backend` alone: a delivery's signature checked against
+    every app secret before any store is touched, then the library's
+    `WebhookHandler`, each event under its dedup lease, routed by the
+    records, never by the payload, into the inbox and the outbox; the
+    answer, `Delivered` or a `Refused` with its status, only once every
+    event is recorded). It depends on the
     facade without its adapters' features: no axum, no sqlx, no utoipa
     (the `http` crate is in its graph only through the library, whose
     `HttpTransport` port and client speak it; no `http` type crosses the
@@ -1280,7 +1286,9 @@ decisions and the delivery milestones, is
     HTTP API (axum and the OpenAPI document, through the facade's
     re-exports `meta_whatsapp_rs::webhooks::axum` and
     `meta_whatsapp_rs::adapters::store::postgres::sqlx`), which renders
-    the core's errors, the webhook pipeline, configuration, and the
+    the core's errors, the webhook listener (the signature header's shape
+    before the body, the places, the body's size and read time, the
+    refusals' log, over the core's pipeline), configuration, and the
     backends.
 - **Ports, and a backend as the unit of swapping.** The core stores
   through ports: `RecordStore` (tenants, keys, bindings),

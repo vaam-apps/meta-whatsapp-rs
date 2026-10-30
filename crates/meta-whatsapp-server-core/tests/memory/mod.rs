@@ -1,12 +1,16 @@
 //! A memory backend of the core's own tests, with no server crate: the
-//! ports the admin, messages, templates and numbers suites
-//! (`conformance::admin`, `conformance::messages`,
-//! `conformance::templates`, `conformance::numbers`) reach. Its records
-//! keep decision D4 (`bind_waba` refuses a WABA another tenant holds) and
-//! condition an unbind and a status change on the binding's epoch, its
-//! idempotency records lease and expire keys on the process's monotonic
-//! clock, and its vault's key/value store is `support::Kv`. The ports no
-//! suite reaches are not there.
+//! ports the admin, messages, templates, numbers, media and webhooks
+//! suites (`conformance::admin`, `conformance::messages`,
+//! `conformance::templates`, `conformance::numbers`, `conformance::media`,
+//! `conformance::webhooks`) reach. Its records keep decision D4
+//! (`bind_waba` refuses a WABA another tenant holds) and condition an
+//! unbind and a status change on the binding's epoch, its idempotency
+//! records lease and expire keys on the process's monotonic clock, its
+//! key/value store (the vault's, the webhook dedup leases') is
+//! `support::Kv`, its outbox keeps a row's tenant only while the binding
+//! it was routed by holds (checked under the records' lock), and its inbox
+//! is the library's `MemoryConversationStore`. The ports no suite reaches
+//! are not there.
 #![allow(dead_code)] // each test binary uses a different subset
 
 use std::collections::BTreeMap;
@@ -14,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use meta_whatsapp_rs::adapters::store::MemoryConversationStore;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
@@ -22,7 +27,9 @@ use meta_whatsapp_server_core::model::{
     IdempotencyRecord, IdempotencyState, KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus,
     PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
 };
-use meta_whatsapp_server_core::outbox::Outbox;
+use meta_whatsapp_server_core::outbox::{
+    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent, began_by,
+};
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult, listing,
 };
@@ -158,6 +165,11 @@ impl RecordStore for Records {
                 attached_at,
             },
         );
+        // Exactly `numbers`: those the WABA had and the list lacks are
+        // unbound (the port's contract).
+        state
+            .numbers
+            .retain(|pn, n| &n.waba_id != waba_id || numbers.iter().any(|p| p.as_str() == pn));
         for pn in numbers {
             state.numbers.insert(
                 pn.as_str().to_owned(),
@@ -377,13 +389,169 @@ impl IdempotencyRecords for Idempotency {
     }
 }
 
-/// A backend of the records and idempotency records above and a memory
-/// key/value store (the vault's).
+/// A row as the outbox below stores it, with the dedup key it holds and
+/// until when.
+struct Row {
+    dedup_key: Option<String>,
+    dedup_until: Option<OffsetDateTime>,
+    event: StoredEvent,
+}
+
+/// The rows of every stream (by tenant, `""` the operator-only one) and
+/// each stream's last sequence.
 #[derive(Default)]
+struct Streams {
+    rows: Vec<Row>,
+    last: BTreeMap<String, i64>,
+}
+
+/// An outbox in memory, as far as the webhooks suite reaches it: inserts
+/// once per dedup key (a keyless event's within its window), the routing
+/// checked again under the records' lock, and pages of a tenant's stream.
+pub struct Events {
+    records: Arc<Records>,
+    streams: Mutex<Streams>,
+}
+
+impl Events {
+    fn of(records: Arc<Records>) -> Self {
+        Self {
+            records,
+            streams: Mutex::new(Streams::default()),
+        }
+    }
+}
+
+/// Whether `guard` still names `tenant` in `records`, and its WABA's
+/// binding began in a second before the event's.
+fn holds(records: &State, tenant: &TenantId, guard: &RouteGuard) -> bool {
+    let waba = guard.binding.waba_id();
+    let number_holds = match &guard.binding {
+        GuardedBinding::Number {
+            phone_number_id,
+            waba_id,
+        } => records
+            .numbers
+            .get(phone_number_id.as_str())
+            .is_some_and(|n| &n.tenant_id == tenant && &n.waba_id == waba_id),
+        GuardedBinding::Waba(_) => true,
+    };
+    number_holds
+        && records
+            .wabas
+            .get(waba.as_str())
+            .is_some_and(|w| &w.tenant_id == tenant && began_by(w.attached_at, guard.not_after))
+}
+
+#[async_trait]
+impl Outbox for Events {
+    async fn insert(&self, event: &NewEvent) -> StoreResult<Option<i64>> {
+        let records = self.records.state();
+        let mut streams = self.streams.lock().unwrap();
+        if let Some(key) = &event.dedup_key
+            && let Some(held) = streams
+                .rows
+                .iter_mut()
+                .find(|row| row.dedup_key.as_ref() == Some(key))
+        {
+            match event.dedup_window {
+                Some(window) if held.dedup_until.is_some_and(|until| until <= window.now) => {
+                    held.dedup_key = None;
+                }
+                _ => return Ok(None),
+            }
+        }
+        let tenant = event.tenant.as_ref().filter(|tenant| {
+            event
+                .route_guard
+                .as_ref()
+                .is_some_and(|guard| holds(&records, tenant, guard))
+        });
+        let stream = tenant.map(|t| t.as_str().to_owned()).unwrap_or_default();
+        let last = streams.last.entry(stream).or_default();
+        *last += 1;
+        let sequence = *last;
+        streams.rows.push(Row {
+            dedup_key: event.dedup_key.clone(),
+            dedup_until: event.dedup_window.map(|window| window.until),
+            event: StoredEvent {
+                sequence,
+                id: event.id.clone(),
+                tenant: tenant.cloned(),
+                phone_number_id: event.phone_number_id.clone(),
+                waba_id: event.waba_id.clone(),
+                event_type: event.event_type.clone(),
+                data: event.data.clone(),
+                created_at: OffsetDateTime::now_utc(),
+            },
+        });
+        Ok(Some(sequence))
+    }
+
+    async fn page(&self, query: &EventQuery) -> StoreResult<EventPage> {
+        let streams = self.streams.lock().unwrap();
+        let after = query.after.unwrap_or(0);
+        let mut events: Vec<StoredEvent> = streams
+            .rows
+            .iter()
+            .map(|row| &row.event)
+            .filter(|event| event.tenant.as_ref() == Some(&query.tenant))
+            .filter(|event| event.sequence > after)
+            .filter(|event| {
+                query
+                    .types
+                    .as_ref()
+                    .is_none_or(|types| types.contains(&event.event_type))
+            })
+            .filter(|event| {
+                query
+                    .phone_number_id
+                    .as_ref()
+                    .is_none_or(|pn| event.phone_number_id.as_ref() == Some(pn))
+            })
+            .cloned()
+            .collect();
+        let more = events.len() > query.limit;
+        events.truncate(query.limit);
+        Ok(EventPage {
+            events,
+            more,
+            purged_through: 0,
+            high_water: streams
+                .last
+                .get(query.tenant.as_str())
+                .copied()
+                .unwrap_or_default(),
+        })
+    }
+
+    async fn purge(&self, _: Duration) -> StoreResult<u64> {
+        unimplemented!("not used by the suites this backend runs")
+    }
+}
+
+/// A backend of the records, idempotency records and outbox above, a
+/// memory key/value store (the vault's, the dedup leases') and the
+/// library's memory conversation store (the inbox).
 pub struct Memory {
     pub records: Arc<Records>,
     pub idempotency: Arc<Idempotency>,
     pub kv: Arc<support::Kv>,
+    pub outbox: Arc<Events>,
+    pub conversations: Arc<MemoryConversationStore>,
+}
+
+impl Default for Memory {
+    fn default() -> Self {
+        let records = Arc::new(Records::default());
+        Self {
+            outbox: Arc::new(Events::of(records.clone())),
+            records,
+            idempotency: Arc::default(),
+            kv: Arc::default(),
+            conversations: Arc::new(MemoryConversationStore::new()),
+        }
+    }
 }
 
 #[async_trait]
@@ -398,7 +566,7 @@ impl Backend for Memory {
         self.idempotency.clone()
     }
     fn outbox(&self) -> Arc<dyn Outbox> {
-        unimplemented!("not used by the suites this backend runs")
+        self.outbox.clone()
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         unimplemented!("not used by the suites this backend runs")
@@ -413,7 +581,7 @@ impl Backend for Memory {
         self.kv.clone()
     }
     fn conversations(&self) -> Arc<dyn ConversationStore> {
-        unimplemented!("not used by the suites this backend runs")
+        self.conversations.clone()
     }
     async fn close(&self) {}
 }

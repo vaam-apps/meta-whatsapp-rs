@@ -12,16 +12,19 @@
 //! - `POST`: a delivery. A missing or malformed `X-Hub-Signature-256` is
 //!   `401` before a byte of the body is read; past 64 deliveries in flight
 //!   on the replica, `503` before it is read too; a body over 3 MiB is
-//!   `413`, one that takes over 15 s to arrive `408`; then the library's
-//!   `WebhookHandler` checks the signature against every app secret
-//!   (`401`), parses, and hands each event, under its dedup lease, to the
-//!   service's sink ([`crate::events`]), at most 4 deliveries at a time.
-//!   `200` once every event is recorded (or was already); `503` while
-//!   another request delivers one of them, when no turn to record came
-//!   within 10 s, or when the outbox stayed locked for 2 s (Meta retries);
-//!   `500` when recording failed (Meta redelivers the batch).
+//!   `413`, one that takes over 15 s to arrive `408`; then the core's
+//!   pipeline (`meta_whatsapp_server_core::inbound::Pipeline`) checks the
+//!   signature against every app secret (`401`), and the library's
+//!   `WebhookHandler` parses and hands each event, under its dedup lease,
+//!   to the service's sink, at most 4 deliveries at a time. `200` once
+//!   every event is recorded (or was already); `503` while another request
+//!   delivers one of them, when no turn to record came within 10 s, or
+//!   when the outbox stayed locked for 2 s (Meta retries); `500` when
+//!   recording failed (Meta redelivers the batch). The statuses and their
+//!   metric labels are the core's (`Refused::status`, `outcome`); this
+//!   module reads the body, logs the refusals at most once a minute per
+//!   reason, and answers.
 
-use meta_whatsapp_rs::core::error::WebhookError;
 use meta_whatsapp_rs::webhooks::axum::body::Bytes;
 use meta_whatsapp_rs::webhooks::axum::extract::rejection::QueryRejection;
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequest, Query, Request, State};
@@ -29,7 +32,9 @@ use meta_whatsapp_rs::webhooks::axum::http::{HeaderMap, StatusCode, header};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_rs::webhooks::{SIGNATURE_HEADER, VerificationQuery, verify_subscription};
 
-use crate::events::{BODY_READ_TIMEOUT, Refused, Rejection};
+use meta_whatsapp_server_core::inbound::{DELIVERED, Refused};
+
+use crate::events::{BODY_READ_TIMEOUT, Rejection};
 use crate::state::AppState;
 
 /// `GET /webhooks/meta`: Meta's subscription check. `200` with the
@@ -136,50 +141,40 @@ async fn deliver(state: &AppState, request: Request) -> (StatusCode, &'static st
             return (StatusCode::REQUEST_TIMEOUT, "slow_body");
         }
     };
-    match state.events().deliver(Some(&signature), body).await {
-        Ok(report) => {
-            state.metrics().webhook_duplicates(
-                "dedup",
-                u64::try_from(report.duplicates).unwrap_or(u64::MAX),
-            );
-            (StatusCode::OK, "delivered")
-        }
-        Err(Refused::Busy) => {
+    // The core's pipeline: the signature, a turn, the dedup leases, the
+    // routing and the recording; the answer once every event is recorded.
+    let Err(refused) = state.events().deliver(Some(&signature), body).await else {
+        return (StatusCode::OK, DELIVERED);
+    };
+    match &refused {
+        Refused::Busy => {
             if let Some(suppressed) = rejections.admit(Rejection::Busy) {
                 tracing::warn!(
                     suppressed,
                     "no turn to record a webhook delivery: answering 503, Meta retries"
                 );
             }
-            (StatusCode::SERVICE_UNAVAILABLE, "busy")
         }
-        Err(Refused::Handler(meta_whatsapp_rs::Error::Webhook(
-            WebhookError::MissingSignature
-            | WebhookError::MalformedSignature
-            | WebhookError::SignatureMismatch,
-        ))) => {
+        Refused::Unauthenticated => {
             if let Some(suppressed) = rejections.admit(Rejection::Forged) {
                 tracing::warn!(
                     suppressed,
                     "rejected a webhook delivery: no app secret produced its signature"
                 );
             }
-            (StatusCode::UNAUTHORIZED, "unauthenticated")
         }
-        Err(Refused::Handler(meta_whatsapp_rs::Error::Webhook(
-            WebhookError::PayloadTooLarge { .. },
-        ))) => (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
-        Err(Refused::Handler(meta_whatsapp_rs::Error::Webhook(WebhookError::ClaimInFlight))) => {
-            (StatusCode::SERVICE_UNAVAILABLE, "in_flight")
-        }
-        Err(Refused::Handler(error)) => {
+        Refused::TooLarge | Refused::InFlight => {}
+        Refused::Failed(error) => {
             tracing::warn!(
                 kind = error.kind().as_str(),
                 "a webhook delivery failed: Meta redelivers it"
             );
-            (StatusCode::INTERNAL_SERVER_ERROR, "failed")
         }
     }
+    (
+        StatusCode::from_u16(refused.status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+        refused.outcome(),
+    )
 }
 
 #[cfg(test)]

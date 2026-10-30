@@ -1,0 +1,11 @@
+error[E0603]: struct `ServiceSink` is private
+ --> tests/visibility/fail/inbound_sink.rs:5:41
+  |
+5 | use meta_whatsapp_server_core::inbound::ServiceSink;
+  |                                         ^^^^^^^^^^^ private struct
+  |
+note: the struct `ServiceSink` is defined here
+ --> src/inbound.rs
+  |
+  | struct ServiceSink {
+  | ^^^^^^^^^^^^^^^^^^
