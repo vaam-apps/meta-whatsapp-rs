@@ -37,7 +37,8 @@ if !created.validation_errors.is_empty() {
 client.flow(created.id.clone()).publish().await?; // published Flows cannot be edited
 ```
 
-Also on `Flow`: `get`, `preview(invalidate)`, `update(&UpdateFlow)`,
+Also on `Flow`: `get`, `preview(invalidate)` (`preview_url.expose_secret()`;
+`Debug` hides its token), `update(&UpdateFlow)`,
 `upload_flow_json(bytes)` (≤ 10 MiB, `MAX_FLOW_JSON_BYTES`), `assets`,
 `deprecate`, `delete` (drafts only). Status changes arrive as
 `WebhookEvent::FlowUpdated`.

@@ -128,5 +128,5 @@ pub use management::{Flow, Flows};
 pub use types::{
     CreateFlow, CreatedFlow, FlowAsset, FlowAssetType, FlowCategory, FlowDetails, FlowJsonUpload,
     FlowPreview, FlowStatus, FlowValidationError, FlowValidationPointer, ListFlowAssets, ListFlows,
-    MAX_FLOW_JSON_BYTES, UpdateFlow,
+    MAX_FLOW_JSON_BYTES, PreviewUrl, UpdateFlow,
 };

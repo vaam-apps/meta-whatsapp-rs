@@ -371,11 +371,13 @@ async fn preview_passes_invalidate_and_parses_the_documented_response() {
         t.last_request().unwrap().query("fields").as_deref(),
         Some("preview.invalidate(false)")
     );
-    assert!(
-        preview
-            .preview_url
-            .starts_with("https://business.facebook.com/")
+    assert_eq!(
+        preview.preview_url.expose_secret(),
+        "https://business.facebook.com/wa/manage/flows/550.../preview/?token=b9d6...."
     );
+    let shown = format!("{preview:?}");
+    assert!(!shown.contains("b9d6"), "{shown}");
+    assert!(shown.contains("/preview/?token=<redacted>"), "{shown}");
     assert!(preview.expires_at().is_some());
     flow.preview(true).await.unwrap();
     let req = t.last_request().unwrap();

@@ -7,6 +7,8 @@
 //! `…_typed` calls serialize. Meta validates it server-side either way,
 //! returning [`FlowValidationError`]s.
 
+use std::fmt;
+
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::FlowId;
 use serde::{Deserialize, Serialize};
@@ -487,16 +489,107 @@ pub struct FlowDetails {
 }
 
 /// Shareable, login-free web preview of a Flow.
+///
+/// `Debug` never shows the link's viewing token: see [`PreviewUrl`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FlowPreview {
     /// Preview page; can be embedded in an `<iframe>`. Valid for 30 days or
-    /// until invalidated.
-    pub preview_url: String,
+    /// until invalidated. Read it with [`PreviewUrl::expose_secret`].
+    pub preview_url: PreviewUrl,
     /// Expiry as Meta returns it, e.g. `2023-05-21T11:18:09+0000`. Parsed by
     /// [`FlowPreview::expires_at`] rather than at decode time so an
     /// unexpected format never fails the whole response.
     #[serde(rename = "expires_at")]
     pub expires_at_raw: String,
+}
+
+/// A Flow's web preview link, `preview_url` in `flows/guides/flowsapi`
+/// (`https://business.facebook.com/wa/manage/flows/<id>/preview/?token=…`).
+///
+/// Meta's page says the link "does not require login and can be shared
+/// with stakeholders": its `token` query parameter lets anyone holding it
+/// open the Flow until it expires (30 days) or is invalidated
+/// ([`Flow::preview`](super::Flow::preview) with `invalidate = true`). The
+/// link is kept whole, for the caller to open, embed or share, and treated
+/// as a secret:
+///
+/// - `Debug` prints the link up to its query, then each query parameter's
+///   name with its value replaced by `<redacted>` (a fragment becomes
+///   `#<redacted>`):
+///   `PreviewUrl("https://business.facebook.com/wa/manage/flows/550/preview/?token=<redacted>")`.
+///   Every value is hidden, not only `token`'s, so a parameter Meta adds
+///   later is hidden too.
+/// - There is no `Display`, `Deref` or `AsRef<str>`: reading the link
+///   takes an explicit [`expose_secret`](Self::expose_secret).
+/// - `Serialize` writes the whole link as a JSON string, and `Deserialize`
+///   reads one: serializing is how a caller stores the link or hands it
+///   to the page that embeds it, and a link without its token opens
+///   nothing. Do not log a serialized [`FlowPreview`].
+///
+/// ```
+/// use meta_whatsapp_client::flows::PreviewUrl;
+///
+/// let url = PreviewUrl::new("https://business.facebook.com/wa/manage/flows/550/preview/?token=SENTINEL");
+/// assert!(!format!("{url:?}").contains("SENTINEL"));
+/// assert!(url.expose_secret().ends_with("?token=SENTINEL"));
+/// ```
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PreviewUrl(String);
+
+impl PreviewUrl {
+    /// Wrap a preview link (in a test, or one read back from storage).
+    pub fn new(url: impl Into<String>) -> Self {
+        Self(url.into())
+    }
+
+    /// The whole link, token included. Keep it out of logs.
+    pub fn expose_secret(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for PreviewUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("PreviewUrl")
+            .field(&without_query_values(&self.0))
+            .finish()
+    }
+}
+
+/// `link` with every query value, and its fragment, replaced by
+/// `<redacted>`. A string scan rather than a URL parse, so a link that is
+/// not an absolute URL is redacted too.
+fn without_query_values(link: &str) -> String {
+    const REDACTED: &str = "<redacted>";
+    let (rest, fragment) = match link.split_once('#') {
+        Some((rest, _)) => (rest, true),
+        None => (link, false),
+    };
+    let mut out = String::with_capacity(rest.len());
+    match rest.split_once('?') {
+        Some((base, query)) => {
+            out.push_str(base);
+            out.push('?');
+            for (i, pair) in query.split('&').enumerate() {
+                if i > 0 {
+                    out.push('&');
+                }
+                // A pair without `=` is all value, for all we know.
+                if let Some((name, _)) = pair.split_once('=') {
+                    out.push_str(name);
+                    out.push('=');
+                }
+                out.push_str(REDACTED);
+            }
+        }
+        None => out.push_str(rest),
+    }
+    if fragment {
+        out.push('#');
+        out.push_str(REDACTED);
+    }
+    out
 }
 
 /// Graph's ISO 8601 flavour: numeric offset without a colon.
@@ -588,10 +681,81 @@ mod tests {
         .unwrap();
         assert_eq!(p.expires_at().unwrap().unix_timestamp(), 1_684_667_889);
         let odd = FlowPreview {
-            preview_url: String::new(),
+            preview_url: PreviewUrl::new(""),
             expires_at_raw: "tomorrow".into(),
         };
         assert_eq!(odd.expires_at(), None);
+    }
+
+    /// A viewing token no test link uses otherwise.
+    const SENTINEL: &str = "S3NT1NEL-v13w-t0k3n";
+
+    fn sentinel_preview() -> FlowPreview {
+        serde_json::from_value(json!({
+            "preview_url": format!("https://business.facebook.com/wa/manage/flows/550/preview/?token={SENTINEL}"),
+            "expires_at": "2023-05-21T11:18:09+0000"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn preview_debug_never_shows_the_viewing_token() {
+        let preview = sentinel_preview();
+        let shown = format!("{preview:?} {preview:#?} {:?}", preview.preview_url);
+        assert!(!shown.contains(SENTINEL), "{shown}");
+        assert_eq!(
+            format!("{:?}", preview.preview_url),
+            r#"PreviewUrl("https://business.facebook.com/wa/manage/flows/550/preview/?token=<redacted>")"#
+        );
+        // `FlowDetails` holds one too, when `preview` is asked for.
+        let details: FlowDetails = serde_json::from_value(json!({
+            "id": "550",
+            "name": "f",
+            "preview": serde_json::to_value(&preview).unwrap()
+        }))
+        .unwrap();
+        assert_eq!(details.preview, Some(preview));
+        assert!(!format!("{details:?}").contains(SENTINEL));
+    }
+
+    #[test]
+    fn preview_debug_hides_every_query_value_and_the_fragment() {
+        for (link, shown) in [
+            (
+                format!("https://h/p/?a=1&token={SENTINEL}&{SENTINEL}#{SENTINEL}"),
+                "https://h/p/?a=<redacted>&token=<redacted>&<redacted>#<redacted>",
+            ),
+            (
+                format!("https://h/p/#{SENTINEL}"),
+                "https://h/p/#<redacted>",
+            ),
+            ("https://h/p/".to_owned(), "https://h/p/"),
+            (format!("?token={SENTINEL}"), "?token=<redacted>"),
+        ] {
+            assert_eq!(
+                format!("{:?}", PreviewUrl::new(link)),
+                format!("PreviewUrl({shown:?})")
+            );
+        }
+    }
+
+    #[test]
+    fn preview_link_is_kept_whole_for_the_caller_and_in_json() {
+        let preview = sentinel_preview();
+        let link =
+            format!("https://business.facebook.com/wa/manage/flows/550/preview/?token={SENTINEL}");
+        assert_eq!(preview.preview_url.expose_secret(), link);
+        // Serialize writes the whole link (the caller's own data, to store
+        // or embed), and reads back to the same value.
+        let value = serde_json::to_value(&preview).unwrap();
+        assert_eq!(
+            value,
+            json!({"preview_url": link, "expires_at": "2023-05-21T11:18:09+0000"})
+        );
+        assert_eq!(
+            serde_json::from_value::<FlowPreview>(value).unwrap(),
+            preview
+        );
     }
 
     #[test]

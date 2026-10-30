@@ -1386,6 +1386,16 @@ stored data, the owner's).
   where the raw JSON did not. No code in this repository read the
   field.
 
+- **Breaking — `FlowPreview::preview_url` is a `PreviewUrl`**
+  (`meta_whatsapp_client::flows`), not a `String`, so its `Debug` hides
+  the link's viewing token (see Security). **Upgrade:** read the link
+  with `preview.preview_url.expose_secret()` (a `&str`, token included)
+  where you read the `String`, and build one with `PreviewUrl::new(…)`.
+  `Serialize` and `Deserialize` are unchanged: the field is still the
+  whole link as a JSON string, so stored previews read back as before.
+  `PreviewUrl` has no `Display`, `Deref` or `AsRef<str>` on purpose. No
+  code in this repository read the field outside the client's tests.
+
 - **Breaking (the service's crates) — the service is composed from a
   `Backend` alone** (roadmap S4, parity row 112; `meta-whatsapp-server`
   and `meta-whatsapp-server-core`, both `publish = false`), so a backend
@@ -2377,6 +2387,17 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
     quotes the item; it is withheld as the page is. `Flow::preview`'s
     answer is withheld too: its link's `token` lets anyone view the
     Flow.
+  - **A preview that decoded still showed its token.** A follow-up of
+    that review: `FlowPreview`'s derived `Debug` printed `preview_url`
+    whole, `token` included, so logging a `FlowPreview` (or a
+    `FlowDetails` that asked for `preview`) shared the Flow with whoever
+    read the log, for up to 30 days. `preview_url` is now a
+    `PreviewUrl` whose `Debug` keeps the link up to its query and
+    replaces every query value and any fragment with `<redacted>`
+    (`…/preview/?token=<redacted>`); `expose_secret()` returns the whole
+    link, and `Serialize` still writes it whole (breaking, see Changed).
+    Tests: `preview_debug_never_shows_the_viewing_token`,
+    `preview_link_is_kept_whole_for_the_caller_and_in_json`.
   - A test scans the client crate's sources (outside comments, string
     literals and test code) so that no module builds an error from a
     body itself: a decode error with a body that is not a constant (an
