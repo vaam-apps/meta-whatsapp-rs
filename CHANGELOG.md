@@ -1765,9 +1765,15 @@ stored data, the owner's).
   cases through the pipeline (an unowned number's event, a number under
   another WABA than Meta says, a payload naming a tenant, a replay and
   an unbound WABA's event are operator-only; each tenant polls exactly
-  its own, the inbox holds only an owned number's message), the
-  signature checked before any store is touched or a turn waited for (a
-  forged non-JSON body never becoming an `unparsed` row), each event
+  its own, the inbox holds only an owned number's message), an event
+  dated before its binding or seen past the replay window operator-only
+  (each check on its own), a number moved while its event records
+  reaching neither tenant, the signature checked before any store is
+  touched or a turn waited for (a forged non-JSON body never becoming an
+  `unparsed` row), at most `MAX_DELIVERIES_RECORDING` deliveries
+  recording (another waits with no lease claimed; its `503 busy` after
+  `RECORDING_WAIT` is `webhooks::a_delivery_with_no_turn_is_busy_after_the_wait`,
+  on a paused clock, outside `run`), each event
   recorded once under its dedup lease (a held lease `503 in_flight`
   with nothing recorded), the answer only once every event is recorded
   (a failed outbox `500`, a busy one `503`, each redelivered once), and

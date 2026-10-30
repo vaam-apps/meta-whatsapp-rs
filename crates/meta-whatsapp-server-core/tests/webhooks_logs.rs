@@ -19,13 +19,20 @@ mod memory;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use bytes::Bytes;
+use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::{AppSecret, VerifyToken};
+use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use meta_whatsapp_rs::webhooks::sign;
-use meta_whatsapp_server_core::backend::Backend;
+use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::inbound::{Inbound, LOG_TARGET, Pipeline, Refused};
 use meta_whatsapp_server_core::model::TenantId;
+use meta_whatsapp_server_core::outbox::{EventPage, EventQuery, NewEvent, Outbox};
+use meta_whatsapp_server_core::store::{
+    IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult,
+};
 use serde_json::{Value, json};
 
 /// One logged event: its level, target, message and other fields.
@@ -111,6 +118,59 @@ fn text(waba: &str, pn: &str, wamid: &str) -> Vec<u8> {
     serde_json::to_vec(&payload).unwrap()
 }
 
+/// An outbox whose every insert fails, as a broken database's does.
+struct BrokenOutbox;
+
+#[async_trait]
+impl Outbox for BrokenOutbox {
+    async fn insert(&self, _: &NewEvent) -> StoreResult<Option<i64>> {
+        Err(StorageError::Backend(anyhow::anyhow!(
+            "the log test's outbox failure"
+        )))
+    }
+    async fn page(&self, _: &EventQuery) -> StoreResult<EventPage> {
+        unimplemented!("the pipeline does not poll")
+    }
+    async fn purge(&self, _: std::time::Duration) -> StoreResult<u64> {
+        unimplemented!("the pipeline does not purge")
+    }
+}
+
+/// The memory backend, its outbox [`BrokenOutbox`].
+struct Broken(memory::Memory);
+
+#[async_trait]
+impl Backend for Broken {
+    fn kind(&self) -> BackendKind {
+        BackendKind::Other("core-tests-broken-outbox")
+    }
+    fn records(&self) -> Arc<dyn RecordStore> {
+        self.0.records()
+    }
+    fn idempotency(&self) -> Arc<dyn IdempotencyRecords> {
+        self.0.idempotency()
+    }
+    fn outbox(&self) -> Arc<dyn Outbox> {
+        Arc::new(BrokenOutbox)
+    }
+    fn leader_lock(&self) -> Arc<dyn LeaderLock> {
+        self.0.leader_lock()
+    }
+    fn janitor(&self) -> Arc<dyn Janitor> {
+        self.0.janitor()
+    }
+    fn migrator(&self) -> Arc<dyn SchemaMigrator> {
+        self.0.migrator()
+    }
+    fn kv(&self) -> Arc<dyn KvStore> {
+        self.0.kv()
+    }
+    fn conversations(&self) -> Arc<dyn ConversationStore> {
+        self.0.conversations()
+    }
+    async fn close(&self) {}
+}
+
 async fn deliver(pipeline: &Pipeline, secret: &str, body: &[u8]) -> Result<(), Refused> {
     pipeline
         .deliver(
@@ -121,10 +181,12 @@ async fn deliver(pipeline: &Pipeline, secret: &str, body: &[u8]) -> Result<(), R
         .map(|_| ())
 }
 
-/// Each line the pipeline writes, under the service's old target with its
-/// old fields; none for a forged delivery; nothing of the customer's.
-/// Decisive: each line's `target`, and the signature checked before the
-/// library's handler (which logs each forged delivery it refuses).
+/// Each line the pipeline writes (a recorded event's, an operator-only
+/// one's, an outbox duplicate's, a failed stage's), under the service's
+/// old target with its old fields; none for a forged delivery; nothing of
+/// the customer's. Decisive: each line's `target`, and the signature
+/// checked before the library's handler (which logs each forged delivery
+/// it refuses).
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 async fn the_pipelines_lines_keep_the_services_target_and_fields() {
@@ -232,6 +294,52 @@ async fn the_pipelines_lines_keep_the_services_target_and_fields() {
         (tracing::Level::DEBUG, "the event was already in the outbox")
     );
     assert_eq!(line.fields["event_type"], "unparsed");
+
+    // A store failing: `recording a webhook event failed`, at warn, with
+    // the stage and the type only.
+    let broken = Broken(memory::Memory::default());
+    let broken_records = broken.records();
+    broken_records.create_tenant(&tenant, "").await.unwrap();
+    broken_records
+        .bind_waba(
+            &tenant,
+            &WabaId::new(WABA).unwrap(),
+            &[PhoneNumberId::new(PN).unwrap()],
+        )
+        .await
+        .unwrap();
+    let failing = Pipeline::new(
+        Inbound::new(
+            vec![AppSecret::new(SECRET)],
+            VerifyToken::new("verify-token-of-the-log-test"),
+        )
+        .unwrap(),
+        &broken,
+        Arc::new(()),
+    );
+    logged.take();
+    let refused = deliver(&failing, SECRET, &text(WABA, PN, "wamid.logs.3"))
+        .await
+        .unwrap_err();
+    assert!(matches!(refused, Refused::Failed(_)), "{refused:?}");
+    let lines: Vec<Line> = logged
+        .take()
+        .into_iter()
+        .filter(|l| l.target == LOG_TARGET)
+        .collect();
+    let [line] = lines.as_slice() else {
+        panic!("one line of the pipeline's: {lines:?}");
+    };
+    assert_eq!(
+        (line.level, line.message.as_str()),
+        (tracing::Level::WARN, "recording a webhook event failed")
+    );
+    assert_eq!(
+        line.fields.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["event_type", "stage"]
+    );
+    assert_eq!(line.fields["stage"], "outbox");
+    assert_eq!(line.fields["event_type"], "message_received");
 
     // Nothing logged, by the pipeline or the library, names the customer
     // or what they wrote (the owned message once more: a duplicate).

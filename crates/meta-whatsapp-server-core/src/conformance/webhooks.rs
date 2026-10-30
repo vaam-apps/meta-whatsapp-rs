@@ -6,8 +6,14 @@
 //! (under the WABA it names) or, naming no number, its WABA to, since
 //! before the event; an unowned number's event is operator-only, whatever
 //! the payload says, and so are a stale binding's, a replay's, and the
-//! types no tenant receives. The signature is checked before any store is
-//! touched and before a turn to record is waited for; each event is
+//! types no tenant receives; an event dated before its binding or seen
+//! past the replay window is operator-only, and a number that moves while
+//! its event records gives it to neither tenant. The signature is checked
+//! before any store is touched and before a turn to record is waited for;
+//! at most `MAX_DELIVERIES_RECORDING` deliveries record at once, another
+//! waiting with no lease claimed (and refused `503 busy` after the wait,
+//! on a paused clock: [`a_delivery_with_no_turn_is_busy_after_the_wait`],
+//! not in [`run`]); each event is
 //! recorded once, under its dedup lease; the answer comes only once every
 //! event is recorded; and what the service's metrics count is told to the
 //! [`Observer`](crate::observe::Observer).
@@ -26,6 +32,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use meta_whatsapp_rs::core::clock::Clock;
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::{AppSecret, VerifyToken};
@@ -104,6 +111,28 @@ const OPERATOR: Holder = Holder {
     waba: "102290129340413",
     pn: "106540352242933",
 };
+/// The tenant of the dated case.
+const DATED: Holder = Holder {
+    id: "wh-dated",
+    waba: "102290129340414",
+    pn: "106540352242934",
+};
+/// The tenant of the turns cases.
+const TURNS: Holder = Holder {
+    id: "wh-turns",
+    waba: "102290129340415",
+    pn: "106540352242935",
+};
+/// The tenant of the move case, which holds the number while its event is
+/// routed.
+const MOVED: Holder = Holder {
+    id: "wh-moved-from",
+    waba: "102290129340416",
+    pn: "106540352242936",
+};
+/// The tenant the move case's WABA and number move to while the event
+/// records.
+const MOVED_TO: &str = "wh-moved-to";
 /// The customer of Meta's examples (`wa_id`): the inbox's contact.
 const CONTACT: &str = "16505551234";
 
@@ -120,7 +149,10 @@ type Case = (
 /// Every case, on one backend.
 pub async fn run(backend: &dyn Backend) {
     routing_is_an_allow_list_with_no_listener(backend).await;
+    an_event_is_routed_only_after_its_binding_and_within_the_replay_window(backend).await;
+    a_number_moved_while_its_event_records_reaches_neither_tenant(backend).await;
     a_delivery_is_verified_before_anything_is_stored(backend).await;
+    a_delivery_waits_for_a_turn_to_record(backend).await;
     an_event_is_recorded_once_under_its_dedup_lease(backend).await;
     the_answer_comes_only_once_every_event_is_recorded(backend).await;
     unknown_and_unparsed_bodies_are_acknowledged_as_operator_only_rows(backend).await;
@@ -512,8 +544,10 @@ pub async fn an_event_is_recorded_once_under_its_dedup_lease(backend: &dyn Backe
 /// stored; an outbox that fails is `500 failed` (told as `outbox`), a busy
 /// one `503 busy` (told as `outbox_busy`), each with the event's lease
 /// released, so that Meta's redelivery records it, once, its message in
-/// the inbox once (the inbox is written before the outbox). Decisive: the
-/// answer given before the recording, or whatever it did.
+/// the inbox once (the inbox is written before the outbox, and holds the
+/// message while its row is still being inserted). Decisive: the answer
+/// given before the recording, or whatever it did; the inbox written after
+/// the outbox.
 pub async fn the_answer_comes_only_once_every_event_is_recorded(backend: &dyn Backend) {
     hold(backend.records().as_ref(), RECORDED).await;
     let watched = Watched::of(backend);
@@ -534,6 +568,11 @@ pub async fn the_answer_comes_only_once_every_event_is_recorded(backend: &dyn Ba
         "answered before its row was recorded"
     );
     assert!(polled(backend, RECORDED.id).await.is_empty());
+    assert_eq!(
+        inbox(backend, RECORDED.pn).await,
+        1,
+        "the inbox is written before the outbox: whoever polls the event can read its message"
+    );
     watched.outbox.open_gate();
     let report = delivery.await.unwrap().unwrap();
     assert_eq!(report.delivered, 1);
@@ -645,6 +684,260 @@ pub async fn unknown_and_unparsed_bodies_are_acknowledged_as_operator_only_rows(
     assert!(told.take_webhook_events().is_empty());
 }
 
+/// An event reaches its holder only when Meta dated it after the binding
+/// began (in a later second) and within the dedup lease's memory: the
+/// tenant's own number's message dated a minute before its binding is
+/// operator-only (`before_binding`), and so is one dated after the binding
+/// but before the replay window, as a pipeline whose clock is past that
+/// window sees it (`stale`: a captured body replayed, security review
+/// L3), its binding older than the event; the same message on time is the
+/// tenant's. Decisive: the binding's date not compared with the event's,
+/// and the replay window dropped or widened (the routing case's replay is
+/// dated before its binding too, so either check alone hides the other's
+/// absence there).
+pub async fn an_event_is_routed_only_after_its_binding_and_within_the_replay_window(
+    backend: &dyn Backend,
+) {
+    hold(backend.records().as_ref(), DATED).await;
+    let watched = Watched::of(backend);
+    let told = Arc::new(Told::default());
+    let on_time = pipeline(&watched, &told);
+    // An hour past the replay window: the dedup lease's memory.
+    let window = DedupGuard::new(backend.kv()).ttl();
+    let later = pipeline_at(
+        &watched,
+        &told,
+        Arc::new(Ahead(window + Duration::from_hours(1))),
+    );
+    let cases: [(&str, &Pipeline, Value, Option<&str>); 3] = [
+        (
+            "dated a minute before its binding",
+            &on_time,
+            dated(text(DATED.waba, DATED.pn, "wamid.dated.1"), now() - 60),
+            None,
+        ),
+        (
+            "dated after its binding, seen past the replay window",
+            &later,
+            text(DATED.waba, DATED.pn, "wamid.dated.2"),
+            None,
+        ),
+        (
+            "dated after its binding, on time",
+            &on_time,
+            text(DATED.waba, DATED.pn, "wamid.dated.3"),
+            Some(DATED.id),
+        ),
+    ];
+    for (i, (case, pipeline, payload, owner)) in cases.iter().enumerate() {
+        let report = deliver(pipeline, &body(payload))
+            .await
+            .unwrap_or_else(|refused| panic!("{case}: refused {refused:?}"));
+        assert_eq!((report.delivered, report.duplicates), (1, 0), "{case}");
+        let inserted = watched.outbox.inserted();
+        assert_eq!(inserted.len(), i + 1, "{case}: one row asked for");
+        let (row, sequence) = &inserted[i];
+        assert!(sequence.is_some(), "{case}: recorded");
+        assert_eq!(
+            row.tenant.as_ref().map(TenantId::as_str),
+            *owner,
+            "{case}: the row's tenant"
+        );
+    }
+    assert_eq!(
+        types(&polled(backend, DATED.id).await),
+        ["message_received"],
+        "the tenant polls the message on time only"
+    );
+    assert_eq!(inbox(backend, DATED.pn).await, 1, "the inbox only that one");
+    assert_eq!(
+        told.take_webhook_events(),
+        [
+            ("message_received", "operator"),
+            ("message_received", "operator"),
+            ("message_received", "tenant")
+        ]
+    );
+}
+
+/// A WABA and its number that move to another tenant while their event is
+/// being recorded (routed to the holder, its message in the inbox, its row
+/// on its way to the outbox) give the event to neither: the outbox checks
+/// the binding the event was routed by again, with the insert, and the
+/// row is operator-only. The delivery is acknowledged and recorded once:
+/// Meta's redelivery is a duplicate, which reaches nobody either.
+/// Decisive: the row's route guard not set (or not naming the number),
+/// with the outbox's own re-check (`super::races`, `super::outbox`).
+pub async fn a_number_moved_while_its_event_records_reaches_neither_tenant(backend: &dyn Backend) {
+    let records = backend.records();
+    hold(records.as_ref(), MOVED).await;
+    let watched = Watched::of(backend);
+    let told = Arc::new(Told::default());
+    let pipeline = Arc::new(pipeline(&watched, &told));
+
+    watched.outbox.close_gate();
+    let payload = body(&text(MOVED.waba, MOVED.pn, "wamid.moved.1"));
+    let delivery = {
+        let (pipeline, payload) = (pipeline.clone(), payload.clone());
+        tokio::spawn(async move { deliver(&pipeline, &payload).await })
+    };
+    watched.outbox.parked(1).await;
+    assert_eq!(inbox(backend, MOVED.pn).await, 1, "routed to its holder");
+    // The WABA and its number move, while the row waits.
+    let waba = WabaId::new(MOVED.waba).unwrap();
+    let binding = records.waba(&waba).await.unwrap().unwrap();
+    assert!(records.unbind_waba_if(&binding.epoch()).await.unwrap());
+    let to = TenantId::parse(MOVED_TO).unwrap();
+    records.create_tenant(&to, "").await.unwrap();
+    let outcome = records
+        .bind_waba(&to, &waba, &[PhoneNumberId::new(MOVED.pn).unwrap()])
+        .await
+        .unwrap();
+    assert_eq!(outcome, BindOutcome::Bound);
+    watched.outbox.open_gate();
+    let report = delivery.await.unwrap().unwrap();
+    assert_eq!(
+        (report.delivered, report.duplicates),
+        (1, 0),
+        "acknowledged"
+    );
+    let inserted = watched.outbox.inserted();
+    let [(row, sequence)] = inserted.as_slice() else {
+        panic!("one row asked for: {inserted:?}");
+    };
+    assert!(sequence.is_some(), "recorded");
+    assert_eq!(
+        row.tenant.as_ref().map(TenantId::as_str),
+        Some(MOVED.id),
+        "routed to the holder of when it arrived"
+    );
+    assert!(
+        polled(backend, MOVED.id).await.is_empty(),
+        "the old holder lost the number before its row was stored"
+    );
+    assert!(
+        polled(backend, MOVED_TO).await.is_empty(),
+        "the new holder never polls an event routed to another"
+    );
+    // Meta's redelivery: a duplicate, by the dedup lease.
+    let report = deliver(&pipeline, &payload).await.unwrap();
+    assert_eq!((report.delivered, report.duplicates), (0, 1));
+    assert!(polled(backend, MOVED.id).await.is_empty());
+    assert!(polled(backend, MOVED_TO).await.is_empty());
+    assert!(told.take_webhook_failures().is_empty());
+}
+
+/// At most [`MAX_DELIVERIES_RECORDING`] deliveries record at once: while
+/// that many hold their turns (each parked at the outbox), another signed
+/// delivery waits for one, claiming no dedup lease and asking for no row,
+/// and is recorded once a turn is given back. With no wait of
+/// [`RECORDING_WAIT`] (its end, `503 busy`, is
+/// [`a_delivery_with_no_turn_is_busy_after_the_wait`]'s, on a paused
+/// clock). Decisive: the turns to record dropped, or one more of them.
+pub async fn a_delivery_waits_for_a_turn_to_record(backend: &dyn Backend) {
+    hold(backend.records().as_ref(), TURNS).await;
+    let watched = Watched::of(backend);
+    let told = Arc::new(Told::default());
+    let pipeline = Arc::new(pipeline(&watched, &told));
+    let parked = hold_every_turn(&pipeline, &watched, "wamid.turns.waits").await;
+    let (kv_calls, attempts) = (watched.kv.calls(), watched.outbox.attempts());
+    assert_eq!(attempts, MAX_DELIVERIES_RECORDING);
+    let waiting = {
+        let pipeline = pipeline.clone();
+        let payload = body(&text(TURNS.waba, TURNS.pn, "wamid.turns.waits.waiting"));
+        tokio::spawn(async move { deliver(&pipeline, &payload).await })
+    };
+    // Long enough for a delivery that took no turn to claim its lease and
+    // reach the outbox; far short of RECORDING_WAIT.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!waiting.is_finished(), "answered with every turn held");
+    assert_eq!(
+        (watched.kv.calls(), watched.outbox.attempts()),
+        (kv_calls, attempts),
+        "with every turn held, a delivery claimed a lease or asked for a row"
+    );
+    watched.outbox.open_gate();
+    for delivery in parked {
+        assert_eq!(delivery.await.unwrap().unwrap().delivered, 1);
+    }
+    let report = waiting.await.unwrap().unwrap();
+    assert_eq!(report.delivered, 1, "recorded once a turn came back");
+    assert_eq!(
+        polled(backend, TURNS.id).await.len(),
+        MAX_DELIVERIES_RECORDING + 1
+    );
+    assert!(told.take_webhook_failures().is_empty());
+}
+
+/// Not in [`run`]: it needs a paused clock (`tokio::time::pause`, or a
+/// test's `start_paused`), on which [`RECORDING_WAIT`] passes at once
+/// (real time on a backend whose I/O cannot run on a paused clock would
+/// make it 10 s). While every turn to record is held, a signed delivery
+/// waits [`RECORDING_WAIT`], then is refused `503 busy`, having claimed no
+/// dedup lease and asked for no row (nor told the observer of a failure);
+/// Meta's retry, once a turn is free, is recorded. Decisive: the turns to
+/// record dropped (the delivery waits at the outbox instead, and this case
+/// fails after twice the wait), or the wait's length.
+pub async fn a_delivery_with_no_turn_is_busy_after_the_wait(backend: &dyn Backend) {
+    hold(backend.records().as_ref(), TURNS).await;
+    let watched = Watched::of(backend);
+    let told = Arc::new(Told::default());
+    let pipeline = Arc::new(pipeline(&watched, &told));
+    let parked = hold_every_turn(&pipeline, &watched, "wamid.turns.busy").await;
+    let (kv_calls, attempts) = (watched.kv.calls(), watched.outbox.attempts());
+    let payload = body(&text(TURNS.waba, TURNS.pn, "wamid.turns.busy.waiting"));
+    let started = tokio::time::Instant::now();
+    let refused = tokio::time::timeout(RECORDING_WAIT * 2, deliver(&pipeline, &payload))
+        .await
+        .expect("no answer within twice the wait: no turn limit");
+    let waited = started.elapsed();
+    let Err(refused) = refused else {
+        panic!("recorded with every turn held: {refused:?}");
+    };
+    assert!(matches!(refused, Refused::Busy), "{refused:?}");
+    assert_eq!((refused.status(), refused.outcome()), (503, "busy"));
+    assert!(
+        waited >= RECORDING_WAIT && waited < RECORDING_WAIT + Duration::from_secs(1),
+        "refused after {waited:?}, not RECORDING_WAIT"
+    );
+    assert_eq!(
+        (watched.kv.calls(), watched.outbox.attempts()),
+        (kv_calls, attempts),
+        "refused busy, it claimed a lease or asked for a row"
+    );
+    watched.outbox.open_gate();
+    for delivery in parked {
+        assert_eq!(delivery.await.unwrap().unwrap().delivered, 1);
+    }
+    let report = deliver(&pipeline, &payload).await.unwrap();
+    assert_eq!(report.delivered, 1, "Meta's retry, recorded");
+    assert_eq!(
+        polled(backend, TURNS.id).await.len(),
+        MAX_DELIVERIES_RECORDING + 1
+    );
+    assert!(told.take_webhook_failures().is_empty());
+}
+
+/// Every turn to record held: [`MAX_DELIVERIES_RECORDING`] signed
+/// deliveries of [`TURNS`]'s number, message ids `<wamid>.<i>`, each
+/// parked at the closed outbox gate (which the caller opens).
+async fn hold_every_turn(
+    pipeline: &Arc<Pipeline>,
+    watched: &Watched,
+    wamid: &str,
+) -> Vec<tokio::task::JoinHandle<Result<Delivered, Refused>>> {
+    watched.outbox.close_gate();
+    let parked = (0..MAX_DELIVERIES_RECORDING)
+        .map(|i| {
+            let pipeline = pipeline.clone();
+            let payload = body(&text(TURNS.waba, TURNS.pn, &format!("{wamid}.{i}")));
+            tokio::spawn(async move { deliver(&pipeline, &payload).await })
+        })
+        .collect();
+    watched.outbox.parked(MAX_DELIVERIES_RECORDING).await;
+    parked
+}
+
 /// Create `holder`'s tenant and bind its WABA and number to it.
 async fn hold(records: &dyn RecordStore, holder: Holder) {
     let tenant = TenantId::parse(holder.id).unwrap();
@@ -663,6 +956,11 @@ async fn hold(records: &dyn RecordStore, holder: Holder) {
 /// The pipeline over `watched`, verifying with the app's secret and the
 /// previous one, telling `told`.
 fn pipeline(watched: &Watched, told: &Arc<Told>) -> Pipeline {
+    pipeline_at(watched, told, Arc::new(Ahead(Duration::ZERO)))
+}
+
+/// [`pipeline`], reading "now" from `clock`.
+fn pipeline_at(watched: &Watched, told: &Arc<Told>, clock: Arc<dyn Clock>) -> Pipeline {
     let inbound = Inbound::new(
         vec![
             AppSecret::new(APP_SECRET),
@@ -670,8 +968,19 @@ fn pipeline(watched: &Watched, told: &Arc<Told>) -> Pipeline {
         ],
         VerifyToken::new("verify-token-of-the-webhook-suite"),
     )
-    .unwrap();
+    .unwrap()
+    .with_clock(clock);
     Pipeline::new(inbound, watched, told.clone())
+}
+
+/// The system clock, `.0` ahead.
+#[derive(Debug)]
+struct Ahead(Duration);
+
+impl Clock for Ahead {
+    fn now(&self) -> OffsetDateTime {
+        OffsetDateTime::now_utc() + self.0
+    }
 }
 
 /// `payload` delivered as Meta delivers it: signed with the app's secret.

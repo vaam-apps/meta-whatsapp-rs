@@ -28,6 +28,41 @@ async fn routing_is_an_allow_list_with_no_listener() {
     conformance::webhooks::routing_is_an_allow_list_with_no_listener(&backend).await;
 }
 
+/// An event dated before its binding, or before the replay window, is
+/// operator-only; on time, its holder's.
+#[tokio::test]
+async fn an_event_is_routed_only_after_its_binding_and_within_the_replay_window() {
+    let backend = memory::Memory::default();
+    conformance::webhooks::an_event_is_routed_only_after_its_binding_and_within_the_replay_window(
+        &backend,
+    )
+    .await;
+}
+
+/// A number moving while its event records gives the event to neither
+/// tenant.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_number_moved_while_its_event_records_reaches_neither_tenant() {
+    let backend = memory::Memory::default();
+    conformance::webhooks::a_number_moved_while_its_event_records_reaches_neither_tenant(&backend)
+        .await;
+}
+
+/// With every turn to record held, a delivery waits, touching nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_delivery_waits_for_a_turn_to_record() {
+    let backend = memory::Memory::default();
+    conformance::webhooks::a_delivery_waits_for_a_turn_to_record(&backend).await;
+}
+
+/// With every turn to record held, a delivery is `503 busy` after
+/// `RECORDING_WAIT`, on a paused clock (no 10 s of real time).
+#[tokio::test(start_paused = true)]
+async fn a_delivery_with_no_turn_is_busy_after_the_wait() {
+    let backend = memory::Memory::default();
+    conformance::webhooks::a_delivery_with_no_turn_is_busy_after_the_wait(&backend).await;
+}
+
 /// The signature is checked against every app secret before any store is
 /// touched or a turn to record waited for; 3 MiB is read, one byte more
 /// refused.

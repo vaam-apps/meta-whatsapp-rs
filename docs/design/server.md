@@ -1387,10 +1387,16 @@ What it holds today, where it differs from the target above:
   outbox: M1.2's routing cases (an unowned number's event, a number
   under another WABA than Meta says, a payload naming a tenant, a replay,
   an unbound WABA: operator-only; each tenant polls exactly its own, the
-  inbox only an owned number's message), the signature before any store
-  or turn, each event once under its dedup lease, the answer only once
-  every event is recorded, and `unknown` and `unparsed` acknowledged as
-  operator-only rows.
+  inbox only an owned number's message), an event dated before its
+  binding or seen past the replay window operator-only (each check on
+  its own), a number moved while its event records giving it to neither
+  tenant, the signature before any store or turn, at most
+  `MAX_DELIVERIES_RECORDING` deliveries recording (another waits, with
+  no lease claimed; its `503 busy` after `RECORDING_WAIT` is a case on a
+  paused clock, outside `run`), each event once under its dedup lease,
+  the answer only once every event is recorded (the inbox written
+  first), and `unknown` and `unparsed` acknowledged as operator-only
+  rows.
 - **`ServiceError`** is the §5 error model as data: a code of `CODES`
   (§5.2), its status as a number, `retryable`, `may_have_been_sent`, the
   field for `invalid`, the step and `resumable` of a multi-step call, and
@@ -1492,9 +1498,10 @@ What it holds today, where it differs from the target above:
   and deletion; the core's `tests/media.rs` runs it on that memory
   backend, `tests/media_logs.rs` pins its log lines' target), and
   `webhooks` (S5e: M1.2's routing cases through the core's webhook
-  pipeline with no listener, an unowned number's event operator-only;
-  the signature before any store; dedup, the answer after the
-  recording; the core's `tests/webhooks.rs` runs it on that memory
+  pipeline with no listener, an unowned number's event operator-only,
+  a stale binding's or a replay's too, a move while recording; the
+  signature before any store; the turns to record; dedup, the answer
+  after the recording; the core's `tests/webhooks.rs` runs it on that memory
   backend, which gains an outbox and an inbox, and
   `tests/webhooks_logs.rs` pins its log lines' target). The memory backend runs
   it in the service's `tests/store.rs`, the Postgres one live in

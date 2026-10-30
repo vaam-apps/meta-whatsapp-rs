@@ -804,11 +804,27 @@ and `store-postgres`.
     inbox, the observer's counts dropped, a busy outbox answered `500`
     and a moved log line's target each fail a case too (the last only
     the core's `tests/webhooks_logs.rs`: no service test names that
-    target). Left: dropping the turn to record entirely passes the core
-    suite (a fifth delivery would wait 10 s of real time on Postgres);
-    the service's paused-clock
-    `a_delivery_with_no_turn_to_record_is_503_after_the_wait` catches it.
-    Every webhook test of the service passes unchanged, the event-data
+    target). The review (sabotage, security lens) closed what survived
+    the core suite: dropping the turn to record, or giving one more,
+    failed only the service's paused-clock
+    `a_delivery_with_no_turn_to_record_is_503_after_the_wait`; now
+    `a_delivery_waits_for_a_turn_to_record` (in `conformance::run`: with
+    every turn held, a fifth delivery claims no lease and asks for no
+    row) and `a_delivery_with_no_turn_is_busy_after_the_wait` (the core's
+    `tests/webhooks.rs`, on a paused clock: `503 busy` after
+    `RECORDING_WAIT`, nothing touched) fail too. Dropping the replay
+    window's check, or the binding's date's, passed the core suite (the
+    decisive case's replay is dated before its binding, so each check
+    hid the other's absence; the service's tests caught both):
+    `an_event_is_routed_only_after_its_binding_and_within_the_replay_window`
+    (a pipeline whose clock is past the window) fails for each. The inbox
+    written after the outbox failed only the service's tests (now the
+    answer case asserts the inbox holds the message while its row is on
+    its way), the failure line's target no test (now
+    `tests/webhooks_logs.rs`), and
+    `a_number_moved_while_its_event_records_reaches_neither_tenant` runs
+    the outbox's re-check of the routing through the pipeline. Every
+    webhook test of the service passes unchanged, the event-data
     snapshots are unchanged, and `openapi/v1.json` is byte-identical. The
     server's public but unusable `events::ServiceSink` is gone (the sink
     is private to the core, pinned by the UI case `inbound_sink`), and
