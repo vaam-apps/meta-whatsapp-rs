@@ -823,7 +823,10 @@ and `store-postgres`.
     its way), the failure line's target no test (now
     `tests/webhooks_logs.rs`), and
     `a_number_moved_while_its_event_records_reaches_neither_tenant` runs
-    the outbox's re-check of the routing through the pipeline. Every
+    the outbox's re-check of the routing through the pipeline: a number's
+    event guarded by its WABA's binding alone passed every test of the
+    core and the service, and fails its second round (the number moving
+    alone, to another tenant's WABA). Every
     webhook test of the service passes unchanged, the event-data
     snapshots are unchanged, and `openapi/v1.json` is byte-identical. The
     server's public but unusable `events::ServiceSink` is gone (the sink
