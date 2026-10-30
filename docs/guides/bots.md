@@ -124,13 +124,17 @@ pub fn order_command() -> Command {
     .description("Your orders")
     .subcommand(
         Command::new("status", |ctx: Ctx| async move {
-            let order = ctx.args().get(0).unwrap_or("?"); // the arguments after `status`
+            // The arguments after `status`; a tap on the button carries none.
+            let order = ctx
+                .args()
+                .get(0)
+                .map_or("Your last order".to_owned(), |n| format!("Order {n}"));
             let refreshed = if ctx.args().has_flag("refresh") {
                 " (refreshed)"
             } else {
                 ""
             };
-            ctx.reply(format!("Order {order} has shipped{refreshed}."))
+            ctx.reply(format!("{order} has shipped{refreshed}."))
                 .await?;
             Ok(())
         })
