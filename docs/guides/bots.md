@@ -1,7 +1,8 @@
 # Bots
 
 **Goal:** a WhatsApp number that answers commands (`/status 1234`), taps
-on reply buttons and list rows, and free text, with formatted replies;
+on reply buttons and list rows, and free text, with formatted replies
+(images, reply buttons, lists and product carousels among them);
 built from plugins, one feature each, on the webhook endpoint you already
 run; and that sends one message to many customers at the pace Meta
 allows (section 9).
@@ -123,13 +124,17 @@ pub fn order_command() -> Command {
     .description("Your orders")
     .subcommand(
         Command::new("status", |ctx: Ctx| async move {
-            let order = ctx.args().get(0).unwrap_or("?"); // the arguments after `status`
+            // The arguments after `status`; a tap on the button carries none.
+            let order = ctx
+                .args()
+                .get(0)
+                .map_or("Your last order".to_owned(), |n| format!("Order {n}"));
             let refreshed = if ctx.args().has_flag("refresh") {
                 " (refreshed)"
             } else {
                 ""
             };
-            ctx.reply(format!("Order {order} has shipped{refreshed}."))
+            ctx.reply(format!("{order} has shipped{refreshed}."))
                 .await?;
             Ok(())
         })
@@ -424,7 +429,7 @@ the menu sends `/name`, so keep `/` among the prefixes: a menu the
 bot's parser cannot read that way is an error too. Emoji in names and
 descriptions are left to the client's checks.
 
-## 8. Markdown replies
+## 8. Markdown and rich replies
 
 `ctx.reply_markdown(md)` renders with the bot's `MarkdownRenderer` and
 sends one message per part. The default, `markdown::Renderer`, converts
@@ -473,6 +478,67 @@ is copied along with the text (a copied `john_doe@example.com` or
 Choose with `Renderer::escape`, and set the renderer with
 `.markdown(renderer)` on the builder; for other rules (another heading
 or table style), implement `MarkdownRenderer` and pass that.
+
+### Rich replies
+
+`ctx.reply_rich(&reply)` sends a `RichReply`: Markdown and a few typed
+parts, in the order given, each as the message Meta documents for it
+(from the skill's `order_command`):
+
+```rust
+// Markdown, then reply buttons on its last message (a list from 4 to 10).
+let reply = RichReply::new()
+    .markdown("Try /order status <order number>, or tap:")
+    .suggestions([Suggestion::command("order status", "Last order")]);
+ctx.reply_rich(&reply).await?; // checked whole, then one message per part
+```
+
+| Part | Sent as |
+| --- | --- |
+| `.markdown(md)` | text messages, through the renderer above |
+| `.image(url)`, `.image_with_caption(url, caption)` | an image message by link (`messages/image-messages`) |
+| `.suggestions([..])`, 1 to 3 | reply buttons (`messages/interactive-reply-buttons-messages`) |
+| `.suggestions([..])`, 4 to 10 | a list of one section (`messages/interactive-list-messages`), its button and section titled `Options` unless `.list_button(label)` says otherwise |
+| `.products(cards)` | a product carousel of 2 to 10 `ProductCard`s from one catalog (`catalogs/interactive-product-carousel-messages`) |
+
+- **Bodies.** Buttons, lists and carousels need a body: theirs is the
+  last message of the Markdown part right before them, sent as their
+  body rather than as a text of its own (cut first when it is longer
+  than the body allows: 1024 characters for buttons and carousels, 4096
+  for a list, counted as the renderer counts, in UTF-16 units; cut as
+  `markdown::split` cuts, at blank lines, then lines, then words, the
+  pieces before the last sent as text first). With no Markdown part
+  right before them, the reply is refused; to ask a separate question,
+  make it that part
+  (`.markdown(answer).markdown("Anything else?").suggestions(..)`).
+- **Taps.** `Suggestion::new(id, title)` sends `id` as is.
+  `Suggestion::command("order status", title)` sends that command's
+  first `Command::payload`, so the tap runs it (with no arguments: a
+  tap carries none); a command with no payload is refused when the
+  reply is built. `.description(..)` shows in a list only. A suggestion
+  may name a hidden or owner-only command: the user sees only its title,
+  and the tap passes the command's guards like a typed command.
+- **Images.** The link must pass the renderer's URL rule (no
+  `javascript:`, `data:` or other scheme) and be what Meta can fetch:
+  an absolute `http` or `https` URL with a host, so no relative,
+  `mailto:` or `tel:` link either, and no user name or password
+  (`https://user:pass@…`, which would be sent to Meta). Meta's page
+  does not refuse `http`; prefer `https`. The refusal does not repeat
+  the URL (a signed URL is a secret).
+- **Nothing partial on a bad part.** Every message is built and checked
+  by the client's own validation (`OutboundMessage::validate`) before the
+  first is sent: more than 10 suggestions, a button title over 20
+  characters, a row title over 24, one card or eleven, a refused image
+  URL, and nothing goes out.
+- **A failed send stops the reply.** The parts go out one by one; when
+  one fails, the rest are not sent, and the error is an `Error::Step`
+  naming it (`rich::STEP_TEXT`, `STEP_IMAGE`, `STEP_BUTTONS`,
+  `STEP_LIST`, `STEP_PRODUCTS`). The earlier parts were sent and are
+  never resent (sends are not idempotent; `Error::may_have_been_sent`
+  says whether the failed one may have gone out).
+- Meta's group messaging page lists text, media and template messages
+  only: buttons, lists and carousels sent to a group may be refused.
+  `RichReply::to_messages` builds the messages without sending them.
 
 ## 9. Paced broadcasts
 
@@ -683,8 +749,11 @@ reads flags; `.with_subcommand(sub)` for a subcommand), and
 
 ## Not here yet
 
-Scheduling and broadcasts that survive a restart ([roadmap](../roadmap.md)
-B3), images, suggestions and product cards in replies as media, buttons,
-lists and carousels (B1c), and auto-delete (B4). Subcommands nest one
-level, and flags have no short or space-separated form (section 1). Conversation state and multi-step forms are
-yours: keep them in your store, keyed by `BotSender::key`.
+Scheduling and broadcasts that survive a restart
+([roadmap](../roadmap.md) B3), and auto-delete (B4). A rich reply's
+image goes by link only (an uploaded media id: build the message and use
+`Ctx::send`), and Markdown's own `![alt](url)` stays text (`alt (url)`):
+images are their own part. Subcommands nest one level, and flags have no
+short or space-separated form (section 1). Conversation state and
+multi-step forms are yours: keep them in your store, keyed by
+`BotSender::key`.
