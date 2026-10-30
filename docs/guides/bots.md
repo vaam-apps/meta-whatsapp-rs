@@ -603,8 +603,9 @@ sends a `phone_number_quality_update` webhook whose `event` is
 `THROUGHPUT_UPGRADE` (`throughput`, "Higher throughput"). A
 `ThroughputUpgrades` hears it and raises that number's rate in the
 bucket you give it to `Rate::HIGHER_THROUGHPUT` (`TokenBucket::set_rate`),
-so its next sends go 1 ms apart instead of 12.5 ms (the slot already
-booked keeps its time). Give it to the bot with
+so its next sends go 1 ms apart instead of 12.5 ms (the first of them
+still waits out the 12.5 ms the last send before the upgrade booked).
+Give it to the bot with
 `BotBuilder::follow_throughput_upgrades` (a listener of
 `phone_number_quality_updated`, after the middleware like any listener),
 or, in a process without a bot, deliver events to it: it is an
@@ -630,8 +631,10 @@ pub fn following_upgrades(
   The default, `KnownNumbers`, holds the numbers you register by WABA
   and display number, and compares display numbers by their digits
   (`+1 555-078-3881`, as the phone numbers API may show it, is the
-  webhook's `15550783881`). An upgrade for a number it does not know
-  changes nothing and is logged as a warning. Add numbers while running
+  webhook's `15550783881`); register each with its country code, as
+  the webhook shows it (`555-078-3881` is not `15550783881`). An upgrade
+  for a number it does not know changes nothing and is logged as a
+  warning, naming no number. Add numbers while running
   with `KnownNumbers::insert` on one you share behind an `Arc`
   (`ThroughputUpgrades::shared`), or implement `NumberDirectory` over
   your own store.
@@ -650,6 +653,18 @@ pub fn following_upgrades(
   listener or sink of your own) and set it at startup with
   `TokenBucket::rate_for`. The library keeps no
   record of it: a store namespace would be a stable identifier.
+- **What else loses an upgrade**, which Meta does not send again. As
+  the bot's listener it runs after the middleware: a middleware that
+  stops the event (one ignoring everything outside business hours, or
+  everything but messages) stops the upgrade too, so let events without
+  a message through, or deliver to the `ThroughputUpgrades` as a sink
+  next to the bot. A `NumberDirectory` that fails changes no rate: as a
+  sink that is `SinkError::Delivery` (the webhook answers `500`, Meta
+  redelivers for up to 7 days), as the bot's listener it goes to the
+  `ErrorHandler`, whose default, `LogErrors`, logs and acknowledges it,
+  losing the upgrade (`PropagateErrors` has it redelivered; following an
+  upgrade twice is harmless). A directory answers `Ok(None)`, not an
+  error, for a number that is not its own.
 - **Concurrency.** At 1,000 a second a broadcast's concurrency is what
   caps it (below): raise `BroadcastBuilder::concurrency` for the
   upgraded number.

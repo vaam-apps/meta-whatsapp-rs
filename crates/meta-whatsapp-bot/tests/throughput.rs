@@ -428,13 +428,13 @@ fn bookings_racing_the_upgrade_see_one_rate_then_the_other() {
     let upgrades = ThroughputUpgrades::new(bucket.clone(), ours());
     let fixture = event(FIXTURE);
     let waits = Mutex::new(Vec::new());
-    let upgraded = AtomicBool::new(false);
+    let landed = AtomicBool::new(false);
     std::thread::scope(|scope| {
         for _ in 0..2 {
             scope.spawn(|| {
                 let mut after = 0;
                 while after < AFTER {
-                    let seen = upgraded.load(Ordering::SeqCst);
+                    let seen = landed.load(Ordering::SeqCst);
                     let slot = block_on(bucket.reserve(&SlotRequest::new(id(NUMBER), T0))).unwrap();
                     waits.lock().unwrap().push(slot.wait);
                     if seen {
@@ -447,13 +447,19 @@ fn bookings_racing_the_upgrade_see_one_rate_then_the_other() {
             while waits.lock().unwrap().len() < 20 {
                 std::thread::yield_now();
             }
-            assert_eq!(block_on(upgrades.observe(&fixture)).unwrap(), Some(id(NUMBER)));
-            upgraded.store(true, Ordering::SeqCst);
+            assert_eq!(
+                block_on(upgrades.observe(&fixture)).unwrap(),
+                Some(id(NUMBER))
+            );
+            landed.store(true, Ordering::SeqCst);
         });
     });
     let mut waits = waits.into_inner().unwrap();
     waits.sort();
-    let gaps: Vec<Duration> = waits.windows(2).map(|w| w[1] - w[0]).collect();
+    let gaps: Vec<Duration> = waits
+        .windows(2)
+        .map(|w| w[1].checked_sub(w[0]).unwrap())
+        .collect();
     let old = Duration::from_micros(12_500);
     let new = Duration::from_millis(1);
     assert!(gaps.iter().all(|g| *g == old || *g == new), "{gaps:?}");

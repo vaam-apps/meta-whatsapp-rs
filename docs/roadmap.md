@@ -1083,16 +1083,30 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     sets is a setting (`ThroughputUpgrades::rate`). The decisive test,
     in `crates/meta-whatsapp-bot/tests/throughput.rs`:
     `the_upgrade_fixture_moves_the_numbers_sends_from_12_5_ms_to_1_ms_apart`
-    (fails without the `set_rate` call: the gaps stay 12.5 ms);
+    (fails without the rate raised: the gaps stay 12.5 ms);
     `other_numbers_keep_their_rate` fails when the rate goes to every
-    number or the WABA is not part of the match,
+    number, `an_upgrade_of_an_unknown_number_changes_nothing` when the
+    WABA is not part of the match,
     `only_a_throughput_upgrade_changes_a_rate` when an unknown value
-    counts as an upgrade, and
-    `without_following_upgrades_the_fixture_changes_no_rate` pins off by
-    default. Proposed by the draft, for the coordinator to decide
-    (AGENTS.md § Decisions): the API above; matching by WABA and
-    display number; in memory only; ignoring every other value; never
-    lowering a rate.
+    counts as an upgrade,
+    `an_upgrade_is_idempotent_and_never_lowers_a_rate` without the
+    never-lower check (made with the set under one lock),
+    `a_middleware_that_stops_the_event_stops_the_upgrade` pins the
+    listener's place, `the_logs_and_debug_name_no_number` the logs, and
+    `without_following_upgrades_the_fixture_changes_no_rate` off by
+    default. Decided by the coordinator (AGENTS.md § Decisions, each
+    swappable): the `ThroughputUpgrades` shape above (the directory a
+    trait, `NumberDirectory`; the rate a setting); off by default, by
+    construction (nothing follows an upgrade unless one is set up);
+    matching on the WABA and the display number's digits (`KnownNumbers`,
+    replaceable by any `NumberDirectory`); in memory only, a restart or
+    another replica back at the configured rate (documented; recording
+    upgrades is the integrator's, no `KvStore` namespace, which would be
+    a stable identifier and is the owner's to name); every other `event`
+    value ignored and logged at debug level; never lowering a rate; and,
+    as the bot's listener, running after the middleware, so a middleware
+    that stops the event stops the upgrade (documented; the sink is the
+    way around it).
 - [ ] **B2b. A pacer shared by replicas** (`meta-whatsapp-bot`; for the
   service's broadcasts, M5k): a `RateLimiter` keeping each number's rate
   schedule (the generic cell rate algorithm's state) as a typed store on

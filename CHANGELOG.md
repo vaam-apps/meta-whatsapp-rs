@@ -240,6 +240,12 @@ stored data, the owner's).
   back at the configured rate, and Meta sends the webhook once per
   upgrade, so record the number `ThroughputUpgrades::observe` returns to
   set it at startup (`TokenBucket::rate_for`); no store namespace added.
+  As the bot's listener it runs after the middleware (a middleware that
+  stops the event stops the upgrade), and a failed directory goes to the
+  bot's `ErrorHandler` (the default acknowledges it); as a sink, a failed
+  directory is `SinkError::Delivery`, so Meta redelivers. The rate is
+  checked and raised under the bucket's one lock, so a rate raised
+  higher meanwhile is never lowered.
 - **Rich replies** in `meta-whatsapp-bot` (roadmap B1c, parity row 17,
   now done in the library), from `messages/image-messages`,
   `messages/interactive-reply-buttons-messages`,

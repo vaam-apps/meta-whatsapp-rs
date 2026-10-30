@@ -45,7 +45,11 @@ pub fn shared_pacer(upgraded: PhoneNumberId) -> Pacer {
   value or an unregistered number change nothing, and an upgrade never
   lowers a rate. The webhook carries the WABA and the display number,
   no phone number id: register each number by both in `KnownNumbers`
-  (display numbers compared by digits), or implement `NumberDirectory`.
+  (display numbers compared by digits, country code included), or
+  implement `NumberDirectory`. As the bot's listener it runs after the
+  middleware, so a middleware that stops non-message events stops the
+  upgrade too; and a failed directory goes to the `ErrorHandler`, whose
+  default acknowledges it (`PropagateErrors` to have Meta redeliver).
   **In memory**: after a restart, or on a replica that did not get the
   webhook, the number is back at its configured rate, and Meta sends
   the webhook once. Record the id `ThroughputUpgrades::observe` returns
