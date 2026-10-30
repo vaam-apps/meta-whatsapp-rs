@@ -131,6 +131,29 @@ impl GraphApiError {
     pub fn is_maintenance(&self) -> bool {
         self.code == Self::MAINTENANCE_MODE
     }
+
+    /// The Business Use Case (BUC) rate limits of the Graph API that the
+    /// APIs this library calls answer with, from the error code table of
+    /// `https://developers.facebook.com/docs/graph-api/overview/rate-limiting`:
+    /// `80008` (WhatsApp Business Management API), `80009` (Catalog
+    /// Management) and `80014` (Catalog Batch). They classify as
+    /// [`ErrorKind::RateLimited`], but [`Error::may_resend`](super::Error::may_resend)
+    /// does not resend a request that is not idempotent on them (see
+    /// there). The other BUC codes of that table (`80000`–`80006`, the
+    /// Ads, Instagram, Lead Generation, Messenger and Pages limits) are
+    /// for APIs this library does not call, and stay
+    /// [`ErrorKind::Unknown`].
+    pub const BUSINESS_USE_CASE_LIMITS: [i64; 3] = [80_008, 80_009, 80_014];
+
+    /// Whether the code is one of [`Self::BUSINESS_USE_CASE_LIMITS`]. Meta
+    /// gives the wait in the `X-Business-Use-Case-Usage` response header's
+    /// `estimated_time_to_regain_access` (minutes), which this library does
+    /// not read, and advises making no calls until then: each one adds to
+    /// the count.
+    #[must_use]
+    pub fn is_business_use_case_limit(&self) -> bool {
+        Self::BUSINESS_USE_CASE_LIMITS.contains(&self.code)
+    }
 }
 
 /// What a Graph error code means for the caller.
@@ -153,8 +176,10 @@ pub enum ErrorKind {
     Permission,
 
     // ── Throttling ────────────────────────────────────────────────────────
-    /// `4` (app), `80007` (WABA), `130429` (throughput): back off and
-    /// retry.
+    /// `4` (app), `80007` (WABA), `130429` (throughput), and the Business
+    /// Use Case limits `80008` (WhatsApp Business Management API), `80009`
+    /// (Catalog Management) and `80014` (Catalog Batch,
+    /// [`GraphApiError::BUSINESS_USE_CASE_LIMITS`]): back off and retry.
     RateLimited,
     /// `131048`: sending restricted after too many messages were flagged as
     /// spam. Retrying does not help; improve quality.
@@ -416,7 +441,9 @@ impl ErrorKind {
         match code {
             0 | 190 => Self::Authentication,
             3 | 10 | 200..=299 | 131005 => Self::Permission,
-            4 | 80007 | 130429 => Self::RateLimited,
+            // 80008, 80009, 80014: `GraphApiError::BUSINESS_USE_CASE_LIMITS`
+            // (graph-api/overview/rate-limiting § Error Codes).
+            4 | 80007 | 80008 | 80009 | 80014 | 130429 => Self::RateLimited,
             131048 => Self::SpamRateLimited,
             131056 => Self::PairRateLimited,
             131064 => Self::ClassificationLimitReached,
@@ -503,6 +530,33 @@ impl ErrorKind {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn business_use_case_limits_are_rate_limits_of_their_own() {
+        // The shape of the rate-limiting page's sample error (its sample is
+        // `80001`; message ours).
+        let body = r#"{
+          "error": {
+            "message": "(#80009) There have been too many calls to this Catalog account.",
+            "type": "OAuthException",
+            "code": 80009,
+            "fbtrace_id": "AmFGcW_3hwDB7qFbl_QdebZ"
+          }
+        }"#;
+        let env: GraphErrorEnvelope = serde_json::from_str(body).unwrap();
+        assert_eq!(env.error.kind(), ErrorKind::RateLimited);
+        assert!(env.error.is_business_use_case_limit());
+        assert!(env.error.is_retryable());
+        for code in [80_008, 80_014] {
+            assert!(GraphApiError::new(code, "").is_business_use_case_limit());
+        }
+        for code in [4, 80_007, 130_429, 80_001, 80_004, 131_056] {
+            assert!(
+                !GraphApiError::new(code, "").is_business_use_case_limit(),
+                "{code}"
+            );
+        }
+    }
 
     #[test]
     fn only_131057_is_maintenance() {
@@ -593,6 +647,24 @@ mod tests {
         for (code, kind) in [
             (0, K::Authentication),
             (190, K::Authentication),
+            (4, K::RateLimited),
+            (80007, K::RateLimited),
+            // graph-api/overview/rate-limiting § Error Codes: the WhatsApp
+            // Business Management API, Catalog Management, Catalog Batch.
+            (80008, K::RateLimited),
+            (80009, K::RateLimited),
+            (80014, K::RateLimited),
+            // The same table's limits of APIs this library does not call
+            // (Ads Insights, Pages, Instagram, Custom Audience, Ads
+            // Management, LeadGen, Messenger): deliberately not mapped.
+            (80000, K::Unknown),
+            (80001, K::Unknown),
+            (80002, K::Unknown),
+            (80003, K::Unknown),
+            (80004, K::Unknown),
+            (80005, K::Unknown),
+            (80006, K::Unknown),
+            (130429, K::RateLimited),
             (250, K::Permission),
             (131005, K::Permission),
             (131048, K::SpamRateLimited),

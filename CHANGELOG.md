@@ -1396,6 +1396,30 @@ stored data, the owner's).
   `PreviewUrl` has no `Display`, `Deref` or `AsRef<str>` on purpose. No
   code in this repository read the field outside the client's tests.
 
+- **The Graph API's Business Use Case rate limits are `RateLimited`**
+  (`meta_whatsapp_core::ErrorKind::from_code`). The error code table of
+  `graph-api/overview/rate-limiting` gives `80008` for the WhatsApp
+  Business Management API, `80009` for Catalog Management and `80014` for
+  Catalog Batch; they were `Unknown`, so a throttled catalog read (the
+  commerce module's, PR #48) or WABA read failed at once and was not
+  classified as throttling. They are now `RateLimited`
+  (`is_retryable()`), so `RetryPolicy` retries an idempotent request
+  (a GET) on them, as on `4` and `80007`, and the service answers them
+  with its `rate_limited` code. A request that is not idempotent is
+  still not resent on them: `Error::may_resend` excepts them
+  (`GraphApiError::BUSINESS_USE_CASE_LIMITS`,
+  `GraphApiError::is_business_use_case_limit`, both new), since Meta's
+  wait is in minutes (the `X-Business-Use-Case-Usage` header's
+  `estimated_time_to_regain_access`, which the library does not read)
+  and its advice is to stop calling until then. The table's other codes
+  (`80000`–`80006`: Ads, Pages, Instagram, Custom Audience, LeadGen,
+  Messenger) are for APIs the library does not call and stay `Unknown`;
+  none of the three is a WhatsApp error code (`support/error-codes`).
+  Tests: `business_use_case_throttles_are_rate_limited`,
+  `a_throttled_catalog_read_is_retried`, `a_throttled_post_is_not_resent`
+  (`meta-whatsapp-client`), `classification_table_spot_checks`,
+  `may_resend_only_what_meta_provably_refused` (`meta-whatsapp-core`).
+
 - **Breaking (the service's crates) — the service is composed from a
   `Backend` alone** (roadmap S4, parity row 112; `meta-whatsapp-server`
   and `meta-whatsapp-server-core`, both `publish = false`), so a backend

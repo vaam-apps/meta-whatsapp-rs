@@ -42,7 +42,12 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
 - `is_retryable()` = could succeed later. **Safe to resend automatically**
   is separate, and there is one rule for it: `Error::may_resend()` —
   a throttling kind (`ErrorKind::is_rejected_before_processing()`) on any
-  status, an HTTP 429, or `131057` (account in maintenance) on a 4xx;
+  status, except the Graph API's Business Use Case limits
+  (`GraphApiError::BUSINESS_USE_CASE_LIMITS`: `80008` WhatsApp Business
+  Management API, `80009` Catalog Management, `80014` Catalog Batch, from
+  `graph-api/overview/rate-limiting` § Error Codes; `RateLimited`, so a
+  GET retries, but Meta's wait is minutes and a send is not resent), an
+  HTTP 429, or `131057` (account in maintenance) on a 4xx;
   it implies `!may_have_been_sent()`. The client's `RetryPolicy` (for a
   request that is not idempotent) and the bot's broadcast both call it,
   and a policy may only be stricter. Conservative on purpose: a `131000`

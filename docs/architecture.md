@@ -186,7 +186,8 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   first). `Error::may_resend` is the one rule for resending it
   *automatically*, with no person or reconciliation in between, and it
   is conservative: only an error that proves Meta refused the request
-  before doing anything (a throttling code on any status, an HTTP 429,
+  before doing anything (a throttling code on any status, the Business
+  Use Case limits `80008`, `80009` and `80014` excepted, an HTTP 429,
   `131057` on a 4xx). The client's `RetryPolicy` (for a request that is
   not idempotent) and the bot's broadcast both follow it, and a policy of
   theirs can only be stricter. A `131000` on a 400 is not resent
