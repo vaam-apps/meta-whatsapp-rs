@@ -9,14 +9,18 @@
 
 mod common;
 
-use std::sync::Arc;
+use std::fmt::Write as _;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use common::{NUMBER, Recording, event, events_of, fixture_json};
+use futures::executor::block_on;
 use meta_whatsapp_bot::throughput::QUALITY_UPDATE_KIND;
 use meta_whatsapp_bot::{
-    Bot, KnownNumbers, NumberDirectory, Pacer, Rate, ThroughputUpgrades, TokenBucket,
+    Bot, Ctx, KnownNumbers, Middleware, Next, NumberDirectory, Pacer, PropagateErrors, Rate,
+    RateLimiter, SlotRequest, ThroughputUpgrades, TokenBucket,
 };
 use meta_whatsapp_core::clock::{Clock, ManualClock};
 use meta_whatsapp_core::error::{SinkError, StorageError};
@@ -29,6 +33,9 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use time::OffsetDateTime;
 use time::macros::datetime;
+use tracing::field::{Field, Visit};
+use tracing::span::{Attributes, Id, Record};
+use tracing::{Event, Metadata, Subscriber};
 
 const T0: OffsetDateTime = datetime!(2026-09-26 12:00 UTC);
 /// Meta's example: the WABA (`entry.id`) and the display number of
@@ -323,13 +330,15 @@ async fn known_numbers_compare_display_numbers_by_their_digits() {
             "{shape}"
         );
     }
-    assert_eq!(
-        numbers
-            .phone_number_id(&waba(WABA), "15550783882")
-            .await
-            .unwrap(),
-        None
-    );
+    // Another number, and the same one without its country code (digits
+    // are compared whole, never as a suffix).
+    for other in ["15550783882", "555-078-3881", "5550783881"] {
+        assert_eq!(
+            numbers.phone_number_id(&waba(WABA), other).await.unwrap(),
+            None,
+            "{other}"
+        );
+    }
 
     let bucket = Arc::new(TokenBucket::default());
     let upgrades = ThroughputUpgrades::shared(bucket.clone(), numbers);
@@ -337,4 +346,189 @@ async fn known_numbers_compare_display_numbers_by_their_digits() {
         upgrades.observe(&event(FIXTURE)).await.unwrap(),
         Some(id(NUMBER))
     );
+}
+
+/// Stops every event that is not a received message, as a middleware
+/// ignoring "everything but messages" would.
+#[derive(Debug)]
+struct MessagesOnly;
+
+#[async_trait]
+impl Middleware for MessagesOnly {
+    async fn handle(&self, ctx: Ctx, next: Next<'_>) -> Result<()> {
+        if ctx.message().is_some() {
+            next.run(ctx).await
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// The listener runs after the middleware (decided, AGENTS.md
+/// § Decisions): one that stops the event stops the upgrade, and the
+/// documented way around it, the upgrades delivered to as a sink next to
+/// the bot, raises the rate.
+#[tokio::test]
+async fn a_middleware_that_stops_the_event_stops_the_upgrade() {
+    let clock = ManualClock::new(T0);
+    let bucket = Arc::new(TokenBucket::default());
+    let upgrades = ThroughputUpgrades::new(bucket.clone(), ours());
+    let pacer = Pacer::shared(bucket.clone()).with_timer(clock.clone());
+    let bot = Bot::builder()
+        .outbound(Recording::default())
+        .pacer(pacer)
+        .middleware(MessagesOnly)
+        .follow_throughput_upgrades(upgrades.clone())
+        .build()
+        .await
+        .unwrap();
+
+    bot.deliver(event(FIXTURE)).await.unwrap();
+    assert_eq!(bucket.rate_of(&id(NUMBER)), Rate::DEFAULT);
+
+    upgrades.deliver(event(FIXTURE)).await.unwrap();
+    assert_eq!(bucket.rate_of(&id(NUMBER)), Rate::HIGHER_THROUGHPUT);
+}
+
+/// Through the bot, a failed directory is the `ErrorHandler`'s: the
+/// default acknowledges it (the upgrade is lost, as documented),
+/// `PropagateErrors` fails the delivery so Meta redelivers.
+#[tokio::test]
+async fn through_the_bot_a_failed_directory_is_the_error_handlers() {
+    let bucket = Arc::new(TokenBucket::default());
+    let acknowledged = Bot::builder()
+        .outbound(Recording::default())
+        .follow_throughput_upgrades(ThroughputUpgrades::new(bucket.clone(), Unreachable))
+        .build()
+        .await
+        .unwrap();
+    acknowledged.deliver(event(FIXTURE)).await.unwrap();
+
+    let propagated = Bot::builder()
+        .outbound(Recording::default())
+        .errors(PropagateErrors)
+        .follow_throughput_upgrades(ThroughputUpgrades::new(bucket.clone(), Unreachable))
+        .build()
+        .await
+        .unwrap();
+    assert!(matches!(
+        propagated.deliver(event(FIXTURE)).await,
+        Err(SinkError::Delivery(_))
+    ));
+    assert_eq!(bucket.rate_of(&id(NUMBER)), Rate::DEFAULT);
+}
+
+/// Two threads book the number's slots while the upgrade lands: each
+/// booking sees the old rate or the new one, never a mix, and once one
+/// is at the new rate every later one is.
+#[test]
+fn bookings_racing_the_upgrade_see_one_rate_then_the_other() {
+    const AFTER: usize = 50;
+    let bucket = Arc::new(TokenBucket::default());
+    let upgrades = ThroughputUpgrades::new(bucket.clone(), ours());
+    let fixture = event(FIXTURE);
+    let waits = Mutex::new(Vec::new());
+    let upgraded = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        for _ in 0..2 {
+            scope.spawn(|| {
+                let mut after = 0;
+                while after < AFTER {
+                    let seen = upgraded.load(Ordering::SeqCst);
+                    let slot = block_on(bucket.reserve(&SlotRequest::new(id(NUMBER), T0))).unwrap();
+                    waits.lock().unwrap().push(slot.wait);
+                    if seen {
+                        after += 1;
+                    }
+                }
+            });
+        }
+        scope.spawn(|| {
+            while waits.lock().unwrap().len() < 20 {
+                std::thread::yield_now();
+            }
+            assert_eq!(block_on(upgrades.observe(&fixture)).unwrap(), Some(id(NUMBER)));
+            upgraded.store(true, Ordering::SeqCst);
+        });
+    });
+    let mut waits = waits.into_inner().unwrap();
+    waits.sort();
+    let gaps: Vec<Duration> = waits.windows(2).map(|w| w[1] - w[0]).collect();
+    let old = Duration::from_micros(12_500);
+    let new = Duration::from_millis(1);
+    assert!(gaps.iter().all(|g| *g == old || *g == new), "{gaps:?}");
+    let first_new = gaps.iter().position(|g| *g == new).unwrap();
+    assert!(first_new >= 19, "{gaps:?}");
+    assert!(gaps[first_new..].iter().all(|g| *g == new), "{gaps:?}");
+    assert!(gaps.len() - first_new >= 2 * AFTER - 1, "{gaps:?}");
+}
+
+/// Every log line as `LEVEL field=value …`.
+#[derive(Clone, Default)]
+struct Capture(Arc<Mutex<Vec<String>>>);
+
+struct Line(String);
+
+impl Visit for Line {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        let _ = write!(self.0, " {}={value:?}", field.name());
+    }
+}
+
+impl Subscriber for Capture {
+    fn enabled(&self, _: &Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &Attributes<'_>) -> Id {
+        Id::from_u64(1)
+    }
+    fn record(&self, _: &Id, _: &Record<'_>) {}
+    fn record_follows_from(&self, _: &Id, _: &Id) {}
+    fn event(&self, event: &Event<'_>) {
+        let mut line = Line(event.metadata().level().to_string());
+        event.record(&mut line);
+        self.0.lock().unwrap().push(line.0);
+    }
+    fn enter(&self, _: &Id) {}
+    fn exit(&self, _: &Id) {}
+}
+
+/// Neither the logs (an upgrade followed, one already followed, a number
+/// not known, another value) nor the `Debug` of a directory or of the
+/// upgrades name the WABA or the display number, in any shape; the logs
+/// name no phone number id.
+#[test]
+fn the_logs_and_debug_name_no_number() {
+    const PRIVATE: [&str; 4] = [WABA, DISPLAY, "555-078-3881", "5550783881"];
+    let capture = Capture::default();
+    let _guard = tracing::subscriber::set_default(capture.clone());
+    let upgrades = ThroughputUpgrades::new(Arc::new(TokenBucket::default()), ours());
+    let unknown = ThroughputUpgrades::new(Arc::new(TokenBucket::default()), KnownNumbers::new());
+    block_on(async {
+        assert!(upgrades.observe(&event(FIXTURE)).await.unwrap().is_some());
+        assert!(upgrades.observe(&event(FIXTURE)).await.unwrap().is_none());
+        assert!(unknown.observe(&event(FIXTURE)).await.unwrap().is_none());
+        assert!(
+            upgrades
+                .observe(&quality_update("ONBOARDING"))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    });
+    let lines = capture.0.lock().unwrap().clone();
+    for level in ["INFO", "WARN", "DEBUG"] {
+        assert!(lines.iter().any(|l| l.starts_with(level)), "{lines:?}");
+    }
+    // The logs carry no phone number id either (the bucket's `Debug`,
+    // inside the upgrades', lists its numbers' rates by id).
+    for line in &lines {
+        assert!(!line.contains(NUMBER), "{line}");
+    }
+    let debug = format!("{:?} {:?}", ours(), upgrades);
+    for text in lines.iter().chain([&debug]) {
+        for private in PRIVATE {
+            assert!(!text.contains(private), "{private} in {text}");
+        }
+    }
 }

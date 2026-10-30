@@ -670,8 +670,11 @@ impl BotBuilder {
     /// pacer the same bucket, `Pacer::shared`). Off by default: without
     /// this, such a webhook changes no rate. Registered as a listener of
     /// [`QUALITY_UPDATE_KIND`], in the order of the other registrations,
-    /// so a middleware that stops the event stops this too. See
-    /// [`ThroughputUpgrades`].
+    /// so a middleware that stops the event stops this too, and Meta does
+    /// not send the upgrade again. A failed `NumberDirectory` goes to the
+    /// [`ErrorHandler`] (the default logs and acknowledges it, losing the
+    /// upgrade; [`PropagateErrors`](crate::PropagateErrors) has it
+    /// redelivered). See [`ThroughputUpgrades`].
     pub fn follow_throughput_upgrades(self, upgrades: ThroughputUpgrades) -> Self {
         self.listen(Listen::event(QUALITY_UPDATE_KIND), upgrades)
     }

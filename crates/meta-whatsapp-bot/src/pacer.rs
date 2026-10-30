@@ -434,6 +434,19 @@ impl TokenBucket {
         self.state().rates.insert(number.into(), rate);
     }
 
+    /// [`Self::set_rate`] only if `number`'s configured rate is below
+    /// `rate`, checked and set under one lock, so a rate set higher
+    /// meanwhile (by hand, or by another upgrade) is never lowered.
+    /// Whether it changed.
+    pub(crate) fn raise_rate(&self, number: &PhoneNumberId, rate: Rate) -> bool {
+        let mut state = self.state();
+        if Self::rate_in(&state, number, self.rate).get() >= rate.get() {
+            return false;
+        }
+        state.rates.insert(number.clone(), rate);
+        true
+    }
+
     /// How many sends may start at once after a quiet spell (default 1).
     /// Above one, a one-second window can hold up to `sends - 1` more than
     /// the rate. Zero is a `ConfigError`.

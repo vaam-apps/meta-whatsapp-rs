@@ -39,6 +39,23 @@
 //! ([`TokenBucket::rate_for`]); a store namespace of this crate's for it
 //! would be a stable identifier, not added here.
 //!
+//! **What else loses an upgrade**, since Meta does not send it again:
+//!
+//! - As a bot's listener it runs after the middleware, like any listener:
+//!   a middleware that stops the event (one ignoring everything outside
+//!   business hours, or everything but messages) stops the upgrade with
+//!   it. Let events without a message through (`ctx.message()` is
+//!   `None`), or deliver to a `ThroughputUpgrades` as a sink next to the
+//!   bot instead.
+//! - A [`NumberDirectory`] that fails changes no rate. As a sink, that is
+//!   `SinkError::Delivery`: the webhook answers `500` and Meta redelivers,
+//!   for up to 7 days (`throughput`, "Webhooks"). As a bot's listener the
+//!   error goes to the bot's `ErrorHandler`, and the default, `LogErrors`,
+//!   logs and acknowledges it: the upgrade is lost. `PropagateErrors` has
+//!   it redelivered ([`ThroughputUpgrades::observe`] is safe to repeat).
+//!   A directory answers `Ok(None)`, not an error, for a number that is
+//!   not yours, or Meta redelivers it all that time.
+//!
 //! [`TokenBucket::set_rate`]: crate::TokenBucket::set_rate
 //! [`TokenBucket::rate_for`]: crate::TokenBucket::rate_for
 
@@ -74,7 +91,9 @@ pub const QUALITY_UPDATE_KIND: &str = "phone_number_quality_updated";
 #[async_trait]
 pub trait NumberDirectory: Send + Sync + fmt::Debug + 'static {
     /// The phone number id of `waba_id`'s number displayed as
-    /// `display_phone_number`, or `None` when it is not one of yours.
+    /// `display_phone_number`, or `None` when it is not one of yours. An
+    /// error is for a lookup that could not be made (a store down): the
+    /// event fails, see the [module docs](self).
     async fn phone_number_id(
         &self,
         waba_id: &WabaId,
@@ -98,8 +117,10 @@ impl<T: NumberDirectory + ?Sized> NumberDirectory for Arc<T> {
 /// The default [`NumberDirectory`]: the numbers you register, each by its
 /// WABA and its display phone number, compared by their ASCII digits only
 /// (`+1 555-078-3881`, `1 (555) 078-3881` and `15550783881` are one
-/// number). A display number is matched only under the WABA it was
-/// registered with.
+/// number). Register it with its country code, as Meta's webhook shows
+/// it: digits are compared whole, so `555-078-3881` is not `15550783881`.
+/// A display number is matched only under the WABA it was registered
+/// with. Its `Debug` shows how many numbers it holds, not which.
 ///
 /// Share it behind an `Arc` to add a number while running
 /// ([`KnownNumbers::insert`], a merchant onboarded meanwhile).
@@ -257,11 +278,12 @@ impl ThroughputUpgrades {
             );
             return Ok(None);
         };
-        if self.bucket.rate_of(&number).get() >= self.rate.get() {
+        // Checked and set in one step: a rate raised higher between a
+        // separate check and set would be lowered.
+        if !self.bucket.raise_rate(&number, self.rate) {
             tracing::debug!("throughput upgrade of a number already at its rate");
             return Ok(None);
         }
-        self.bucket.set_rate(number.clone(), self.rate);
         tracing::info!(rate = self.rate.get(), "pacer follows a throughput upgrade");
         Ok(Some(number))
     }
