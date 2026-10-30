@@ -27,6 +27,7 @@ use crate::templates::macros::string_enum;
 
 mod secret_url;
 
+pub(crate) use secret_url::RedactedUrl;
 pub use secret_url::SecretUrl;
 
 /// Where a media asset comes from: an uploaded media id or a public link.
