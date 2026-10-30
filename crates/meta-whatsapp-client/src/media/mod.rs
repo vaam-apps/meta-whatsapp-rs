@@ -75,6 +75,8 @@ mod tests;
 pub use kinds::{MediaKind, validate_upload};
 pub use verify::{DownloadedMedia, MediaDownload, VerifiedBody, VerifiedDownload};
 
+use std::fmt;
+
 use bytes::Bytes;
 use http::Method;
 use meta_whatsapp_core::Result;
@@ -85,6 +87,7 @@ use serde::{Deserialize, Deserializer};
 use url::Url;
 
 use crate::Client;
+use crate::common::RedactedUrl;
 
 /// Entry point, see [`Client::media`].
 #[derive(Debug, Clone)]
@@ -106,12 +109,19 @@ impl Client {
 }
 
 /// `GET /{media-id}` response.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+///
+/// `Debug` shows [`url`](Self::url) as [`SecretUrl`](crate::common::SecretUrl)
+/// shows a link: scheme, host and path, every query value `<redacted>`.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct MediaInfo {
     /// Always `whatsapp`.
     #[serde(default)]
     pub messaging_product: String,
     /// Download URL; valid for 5 minutes and only with the access token.
+    ///
+    /// Meta signs it in its query, so `Debug` hides every query value: the
+    /// link alone opens nothing, but logs outlive its five minutes. Read it
+    /// here, and keep it out of logs.
     pub url: String,
     /// MIME type.
     #[serde(default)]
@@ -124,6 +134,19 @@ pub struct MediaInfo {
     pub file_size: Option<u64>,
     /// The media id.
     pub id: MediaId,
+}
+
+impl fmt::Debug for MediaInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MediaInfo")
+            .field("messaging_product", &self.messaging_product)
+            .field("url", &RedactedUrl(&self.url))
+            .field("mime_type", &self.mime_type)
+            .field("sha256", &self.sha256)
+            .field("file_size", &self.file_size)
+            .field("id", &self.id)
+            .finish()
+    }
 }
 
 impl Media {

@@ -2781,3 +2781,15 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   `request::streamed_error_tests` (an endless body is read for four 16 KiB
   chunks and no fifth; an envelope of exactly 64 KiB decodes and one byte
   more does not; a 2xx body of 128 KiB is read whole).
+- **`MediaInfo`'s `Debug` no longer prints the signed media URL**
+  (`meta-whatsapp-client`; found by the security review of PR #60).
+  `media::MediaInfo` derived `Debug`, so its `url`, a
+  `lookaside.fbsbx.com` link signed in its query, reached any log line
+  that printed a `MediaInfo`, `MediaDownload`, `VerifiedDownload` or
+  `DownloadedMedia`. The link opens nothing without the access token and
+  expires after five minutes, so it stays a `String` (no type change),
+  but logs outlive it: `Debug` is now written by hand and shows the URL as
+  `SecretUrl` shows a link (scheme, host and path, `<redacted>` for every
+  query value; `<redacted: not a URL>` for one that does not parse).
+  Every other field prints as before. Test:
+  `media_info_debug_hides_the_url_signature_the_download_uses_it_whole`.

@@ -97,6 +97,11 @@ link, a Flow asset's signed download link) is a `SecretUrl`: its `Debug`
 keeps the host and path and prints `<redacted>` for every query value,
 user info and fragment; `expose_secret()` gives the whole link, and so
 does serializing it, so do not log a serialized response that holds one.
+A media download URL (`MediaInfo::url`) stays a `String`, since it opens
+nothing without the token and expires after five minutes, but
+`MediaInfo`'s `Debug` (and so `MediaDownload`'s, `VerifiedDownload`'s and
+`DownloadedMedia`'s) shows it the same way: its signature is
+credential-shaped and logs outlive it.
 
 The client attaches a token to the configured Graph endpoint (scheme, host
 and port), to `https://lookaside.fbsbx.com`, Meta's media download host,

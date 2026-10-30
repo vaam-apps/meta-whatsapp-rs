@@ -393,6 +393,63 @@ async fn a_verified_stream_stays_finished_and_tolerates_padded_digests() {
     assert!(verified.next().await.is_none());
 }
 
+/// `MediaInfo`'s `Debug` (and so the download types', which print it)
+/// hides the media URL's signature, while the download still sends the URL
+/// whole.
+#[tokio::test]
+async fn media_info_debug_hides_the_url_signature_the_download_uses_it_whole() {
+    const SIGNED: &str = "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1037543291543636&ext=1722348383&hash=H4SH-S3NT1NEL&oh=0H-S3NT1NEL";
+    let body = b"\xff\xd8jpeg bytes";
+    let t = ScriptedTransport::new();
+    t.push_json(200, info_json(SIGNED, &sha_hex(body), &json!("13")));
+    t.push_bytes(200, "image/jpeg", Bytes::from_static(body));
+    let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());
+    let fetched = media.url(&media_id()).await.unwrap();
+    assert_eq!(fetched.url, SIGNED, "the field keeps the whole URL");
+
+    let shown = format!("{fetched:?} {fetched:#?}");
+    for secret in ["S3NT1NEL", "1722348383", "1037543291543636&"] {
+        assert!(!shown.contains(secret), "{secret} shown: {shown}");
+    }
+    assert!(
+        shown.contains(
+            r#"url: "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=<redacted>&ext=<redacted>&hash=<redacted>&oh=<redacted>""#
+        ),
+        "{shown}"
+    );
+    assert!(
+        shown.contains(r#"mime_type: "image/jpeg""#) && shown.contains("file_size: Some(13)"),
+        "the rest is shown: {shown}"
+    );
+
+    let download = media.download_with_info(fetched).await.unwrap();
+    let verified = download.verified().unwrap();
+    let shown = format!("{verified:?}");
+    assert!(!shown.contains("S3NT1NEL"), "{shown}");
+    let downloaded = verified.collect(64).await.unwrap();
+    assert_eq!(&downloaded.data[..], body);
+    let shown = format!(
+        "{downloaded:?} {:?}",
+        MediaDownload {
+            info: downloaded.info.clone(),
+            body: stream(&[]),
+        }
+    );
+    assert!(!shown.contains("S3NT1NEL"), "{shown}");
+
+    let reqs = t.requests();
+    assert_eq!(reqs[1].method, Method::GET);
+    assert_eq!(reqs[1].url.as_str(), SIGNED, "sent with its signature");
+    assert_eq!(reqs[1].bearer(), Some("TOKEN"));
+    assert_eq!(t.remaining(), 0);
+
+    let mut odd = info(&sha_hex(body));
+    odd.url = "not a URL, hash=S3NT1NEL".into();
+    let shown = format!("{odd:?}");
+    assert!(shown.contains("url: <redacted: not a URL>"), "{shown}");
+    assert!(!shown.contains("S3NT1NEL"), "{shown}");
+}
+
 #[test]
 fn media_info_tolerates_missing_optional_fields() {
     // Only `url` and `id` are needed to download; nothing else may be
