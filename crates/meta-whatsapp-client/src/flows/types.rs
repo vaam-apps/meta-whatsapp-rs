@@ -11,6 +11,8 @@ use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::FlowId;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+
+use crate::common::SecretUrl;
 use time::format_description::BorrowedFormatItem;
 use time::macros::format_description;
 
@@ -487,11 +489,18 @@ pub struct FlowDetails {
 }
 
 /// Shareable, login-free web preview of a Flow.
+///
+/// `Debug` never shows the link's viewing token: see [`SecretUrl`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FlowPreview {
-    /// Preview page; can be embedded in an `<iframe>`. Valid for 30 days or
-    /// until invalidated.
-    pub preview_url: String,
+    /// Preview page
+    /// (`https://business.facebook.com/wa/manage/flows/<id>/preview/?token=…`);
+    /// can be embedded in an `<iframe>`. Meta's page says it "does not
+    /// require login and can be shared with stakeholders": its `token`
+    /// opens the Flow for 30 days or until invalidated
+    /// ([`Flow::preview`](super::Flow::preview) with `invalidate = true`).
+    /// Read it with [`SecretUrl::expose_secret`].
+    pub preview_url: SecretUrl,
     /// Expiry as Meta returns it, e.g. `2023-05-21T11:18:09+0000`. Parsed by
     /// [`FlowPreview::expires_at`] rather than at decode time so an
     /// unexpected format never fails the whole response.
@@ -519,12 +528,14 @@ pub struct FlowAsset {
     /// Asset kind.
     pub asset_type: FlowAssetType,
     /// Short-lived CDN link to the asset's content (`*.fbcdn.net` in the
-    /// docs' example). It needs no token, and it is not a host
-    /// [`Client::request_url`](crate::Client::request_url) will send one to:
-    /// a client that has a token refuses the request. Fetch it with a plain
-    /// HTTP GET instead.
+    /// docs' example). It needs no token, so it gives the Flow JSON to
+    /// anyone holding it: a [`SecretUrl`], whose `Debug` hides its query
+    /// (the CDN's signature); read it with [`SecretUrl::expose_secret`].
+    /// It is not a host [`Client::request_url`](crate::Client::request_url)
+    /// will send a token to: a client that has a token refuses the
+    /// request. Fetch it with a plain HTTP GET instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub download_url: Option<String>,
+    pub download_url: Option<SecretUrl>,
 }
 
 /// Response of a Flow JSON upload (`POST /{FLOW_ID}/assets`).
@@ -588,10 +599,101 @@ mod tests {
         .unwrap();
         assert_eq!(p.expires_at().unwrap().unix_timestamp(), 1_684_667_889);
         let odd = FlowPreview {
-            preview_url: String::new(),
+            preview_url: SecretUrl::new(""),
             expires_at_raw: "tomorrow".into(),
         };
         assert_eq!(odd.expires_at(), None);
+    }
+
+    /// A viewing token no test link uses otherwise.
+    const SENTINEL: &str = "S3NT1NEL-v13w-t0k3n";
+
+    fn sentinel_preview() -> FlowPreview {
+        serde_json::from_value(json!({
+            "preview_url": format!("https://business.facebook.com/wa/manage/flows/550/preview/?token={SENTINEL}"),
+            "expires_at": "2023-05-21T11:18:09+0000"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn preview_debug_never_shows_the_viewing_token() {
+        let preview = sentinel_preview();
+        let shown = format!("{preview:?} {preview:#?} {:?}", preview.preview_url);
+        assert!(!shown.contains(SENTINEL), "{shown}");
+        assert_eq!(
+            format!("{:?}", preview.preview_url),
+            r#"SecretUrl("https://business.facebook.com/wa/manage/flows/550/preview/?token=<redacted>")"#
+        );
+        // `FlowDetails` holds one too, when `preview` is asked for.
+        let details: FlowDetails = serde_json::from_value(json!({
+            "id": "550",
+            "name": "f",
+            "preview": serde_json::to_value(&preview).unwrap()
+        }))
+        .unwrap();
+        assert_eq!(details.preview, Some(preview));
+        assert!(!format!("{details:?}").contains(SENTINEL));
+    }
+
+    /// The asset's download link as `flows/guides/flowsapi` shows it, with
+    /// the query a signed CDN link carries (the signature is the sentinel).
+    fn sentinel_asset_link() -> String {
+        format!(
+            "https://scontent.xx.fbcdn.net/m1/v/t0.57323-24/An_Hq0jnfJ?ccb=10-5&oh=00_{SENTINEL}&oe=6550E8A3&_nc_sid=471a72"
+        )
+    }
+
+    #[test]
+    fn asset_debug_never_shows_the_download_signature() {
+        let asset: FlowAsset = serde_json::from_value(json!({
+            "name": "flow.json",
+            "asset_type": "FLOW_JSON",
+            "download_url": sentinel_asset_link()
+        }))
+        .unwrap();
+        let shown = format!("{asset:?} {asset:#?}");
+        assert!(!shown.contains(SENTINEL), "{shown}");
+        assert!(
+            shown.contains(
+                "https://scontent.xx.fbcdn.net/m1/v/t0.57323-24/An_Hq0jnfJ?ccb=<redacted>&oh=<redacted>&oe=<redacted>&_nc_sid=<redacted>"
+            ),
+            "{shown}"
+        );
+        // The link is the caller's whole, to fetch, and in JSON.
+        let link = sentinel_asset_link();
+        assert_eq!(
+            asset.download_url.as_ref().map(SecretUrl::expose_secret),
+            Some(link.as_str())
+        );
+        assert_eq!(
+            serde_json::to_value(&asset).unwrap()["download_url"],
+            json!(link)
+        );
+        // A page of assets hides it too.
+        let page: meta_whatsapp_core::paging::Page<FlowAsset> =
+            serde_json::from_value(json!({"data": [serde_json::to_value(&asset).unwrap()]}))
+                .unwrap();
+        assert!(!format!("{page:?}").contains(SENTINEL));
+    }
+
+    #[test]
+    fn preview_link_is_kept_whole_for_the_caller_and_in_json() {
+        let preview = sentinel_preview();
+        let link =
+            format!("https://business.facebook.com/wa/manage/flows/550/preview/?token={SENTINEL}");
+        assert_eq!(preview.preview_url.expose_secret(), link);
+        // Serialize writes the whole link (the caller's own data, to store
+        // or embed), and reads back to the same value.
+        let value = serde_json::to_value(&preview).unwrap();
+        assert_eq!(
+            value,
+            json!({"preview_url": link, "expires_at": "2023-05-21T11:18:09+0000"})
+        );
+        assert_eq!(
+            serde_json::from_value::<FlowPreview>(value).unwrap(),
+            preview
+        );
     }
 
     #[test]

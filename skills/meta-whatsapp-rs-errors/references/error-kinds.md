@@ -27,13 +27,15 @@ lists the kinds below in this order, `Unknown` last.
 "Auto-retry" = `ErrorKind::is_retryable()`. "Replay a send" =
 `Error::may_resend()`: `is_rejected_before_processing()` (on any status), plus
 `131057` on a 4xx or without a status; the only errors for which the client (and the bot's paced
-broadcast) replays a non-idempotent request.
+broadcast) replays a non-idempotent request. The Business Use Case limits
+(80008, 80009, 80014, `GraphApiError::is_business_use_case_limit`) are
+`RateLimited` but never replay a send: Meta's wait for them is minutes.
 
 | Kind | Codes | Auto-retry | Replay a send | What to do |
 | --- | --- | --- | --- | --- |
 | `Authentication` | 0, 190 | no | no | Token expired/revoked: re-onboard the merchant (Embedded Signup) or rotate your system user token |
 | `Permission` | 3, 10, 200–299, 131005 | no | no | Permission not granted or removed; check the token's scopes/assets |
-| `RateLimited` | 4, 80007, 130429 | yes | yes | Back off; the client already retried |
+| `RateLimited` | 4, 80007, 130429; 80008, 80009, 80014 (Business Use Case limits: WhatsApp Business Management API, Catalog Management, Catalog Batch) | yes | yes; no for 80008, 80009, 80014 | Back off; the client already retried. For 80008/80009/80014 the wait is minutes (the estimated time to regain access in Meta's `X-Business-Use-Case-Usage` header, which the library does not read): stop calling until then |
 | `SpamRateLimited` | 131048 | **no** | no | Sending restricted for the number (quality): Meta's advice is to check its quality status in WhatsApp Manager |
 | `PairRateLimited` | 131056 | yes | yes | Too many messages to the same user; slow down for that user |
 | `ClassificationLimitReached` | 131064 | no | no | Template classification violations; fix categories |

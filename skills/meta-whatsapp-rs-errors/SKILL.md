@@ -87,7 +87,8 @@ on a 1xx–3xx is `false`~~: until 8238853 (2026-09-24).
   (`RetryPolicy::default()`; `RetryPolicy::NONE` turns it off).
 - A **send** (`Messages::send`, `Marketing::send`, uploads) is replayed
   only when `Error::may_resend()` holds: the error proves Meta did
-  nothing (`RateLimited` or `PairRateLimited` on any status, an HTTP 429,
+  nothing (`RateLimited` or `PairRateLimited` on any status, the
+  Business Use Case limits 80008, 80009 and 80014 excepted, an HTTP 429,
   or `131057`, the account in maintenance, on a 4xx). It is the
   library's one rule for a resend no one checks: the bot's paced
   broadcast follows it too. **A timeout or a 5xx on a send is returned,

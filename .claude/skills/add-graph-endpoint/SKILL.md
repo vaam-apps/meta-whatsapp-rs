@@ -30,6 +30,9 @@ metadata:
    newtypes that validate on construction and redact `Debug`
    (`phone_numbers::TwoStepPin`, `embedded_signup::SignupCode`); take them
    by reference and call `expose_secret()` only to fill the request body.
+   A response link that is its own credential (a token in its query, a
+   signed CDN link) is a `common::SecretUrl` (re-export it from the
+   family's module), never a `String`: the derived `Debug` would print it.
    - **Enums Meta may extend** need a catch-all variant so a new value
      never fails parsing. Which name and shape every enum should share
      (today there are five, see `OPEN_QUESTIONS.md` #27) and the

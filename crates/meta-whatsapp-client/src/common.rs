@@ -10,6 +10,7 @@
 //! | [`FlowAction`] | [`messages`](crate::messages), [`templates`](crate::templates) |
 //! | [`QualityRating`] | [`phone_numbers`](crate::phone_numbers), [`templates`](crate::templates) |
 //! | [`HealthStatus`] (and [`HealthEntity`], [`HealthError`], [`HealthState`], [`HealthEntityType`]) | [`phone_numbers`](crate::phone_numbers), [`templates`](crate::templates), [`waba`](crate::waba) |
+//! | [`SecretUrl`] (a link that is its own credential; `Debug` redacts it) | [`flows`](crate::flows) |
 //!
 //! Doc paths: `messages/send-messages` ("Media caching"),
 //! `templates/template-media`, `flows/guides/sendingaflow`,
@@ -23,6 +24,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::messages::validate::{self, Check};
 use crate::templates::macros::string_enum;
+
+mod secret_url;
+
+pub use secret_url::SecretUrl;
 
 /// Where a media asset comes from: an uploaded media id or a public link.
 /// Serializes to `{"id": …}` or `{"link": …}`, in messages and in template

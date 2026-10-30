@@ -38,7 +38,8 @@ client.flow(created.id.clone()).publish().await?; // published Flows cannot be e
 ```
 
 Also on `Flow`: `get`, `preview(invalidate)`, `update(&UpdateFlow)`,
-`upload_flow_json(bytes)` (≤ 10 MiB, `MAX_FLOW_JSON_BYTES`), `assets`,
+`upload_flow_json(bytes)` (≤ 10 MiB, `MAX_FLOW_JSON_BYTES`), `assets`
+(`preview_url`, `download_url` are `SecretUrl`s: `expose_secret()`),
 `deprecate`, `delete` (drafts only). Status changes arrive as
 `WebhookEvent::FlowUpdated`.
 
