@@ -1,0 +1,9 @@
+error[E0451]: fields `max_bytes` and `stream` of struct `DownloadLimits` are private
+ --> tests/visibility/fail/download_limits.rs:8:9
+  |
+7 |     DownloadLimits {
+  |     -------------- in this type
+8 |         max_bytes: u64::MAX,
+  |         ^^^^^^^^^ private field
+9 |         stream: false,
+  |         ^^^^^^ private field

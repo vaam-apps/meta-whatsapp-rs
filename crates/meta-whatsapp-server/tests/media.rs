@@ -287,6 +287,37 @@ async fn an_upload_key_replays_the_media_id() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// An upload's key covers what Meta receives: the same key with the file
+/// under another name, or as another type, is `422
+/// idempotency_key_reused`, not a replay of the first upload's media id.
+/// Decisive: each part of the fingerprint (`type`, the inert `filename`).
+#[tokio::test]
+async fn an_upload_key_covers_the_type_and_the_file_name() {
+    let (h, key) = connected().await;
+    h.graph.push_json(200, json!({"id": MEDIA_ID}));
+    let call = |kind: &'static [u8], name: &'static str| {
+        upload(
+            &key,
+            &[
+                ("type", None, kind),
+                ("file", Some(name), common::SAMPLE_PNG),
+            ],
+        )
+        .header("idempotency-key", "voucher-43")
+    };
+    let first = h.call(call(b"image/png", "a.png")).await;
+    assert_eq!(first.status, StatusCode::CREATED, "{}", first.text);
+    for (kind, name, which) in [
+        (&b"image/png"[..], "b.png", "another file name"),
+        (&b"image/jpeg"[..], "a.png", "another type"),
+    ] {
+        let reply = h.call(call(kind, name)).await;
+        assert_eq!(reply.code(), "idempotency_key_reused", "{which}");
+    }
+    assert_eq!(h.graph.requests().len(), 1);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// A whole download: the URL from `GET /{media-id}`, then the file from
 /// Meta's host, both with the merchant's token; answered once verified,
 /// with `X-WA-SHA256` in hex (Meta's digest may be hex or base64).

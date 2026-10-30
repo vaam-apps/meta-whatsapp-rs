@@ -9,7 +9,9 @@ use meta_whatsapp_server_core::ServiceError;
 use meta_whatsapp_server_core::authz::{
     AdminCaller, Authorizer, Caller, OwnedNumber, OwnedWaba, Tokens, rotate_vault,
 };
+use meta_whatsapp_server_core::media::{DownloadLimits, Media, MediaSlots, Upload};
 use meta_whatsapp_server_core::model::TenantId;
+use meta_whatsapp_server_core::ratelimit::Slots;
 use meta_whatsapp_server_core::store::RecordStore;
 
 #[allow(dead_code, clippy::too_many_arguments)]
@@ -32,6 +34,21 @@ async fn public(
     let number: OwnedNumber = authz.owned_number(caller, pn).await?;
     let _: ServiceError = number.failed(authz, error).await;
     let _: &Client = number.client();
+    // The media services, on the number, with limits and an upload made
+    // only by their checks.
+    let slots = Slots::new(2);
+    let media = Media::new(
+        authz,
+        &number,
+        MediaSlots {
+            transfers: &slots,
+            streams: &slots,
+        },
+    )?;
+    let limits = DownloadLimits::parse(Some("true"), None, 1024)?;
+    let _ = media.download("1", limits).await?;
+    let upload = Upload::new("image/png", None, Vec::new().into())?;
+    let _ = media.upload(&upload).await?;
     let waba: OwnedWaba = authz.owned_waba(caller, waba_id.clone()).await?;
     authz.admit_waba(&waba)?;
     let _: ServiceError = waba.failed(authz, error).await;

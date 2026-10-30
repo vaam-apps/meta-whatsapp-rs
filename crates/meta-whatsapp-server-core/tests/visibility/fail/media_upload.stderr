@@ -1,0 +1,11 @@
+error[E0451]: fields `mime_type`, `filename` and `data` of struct `Upload` are private
+ --> tests/visibility/fail/media_upload.rs:7:9
+  |
+6 |     Upload {
+  |     ------ in this type
+7 |         mime_type,
+  |         ^^^^^^^^^ private field
+8 |         filename,
+  |         ^^^^^^^^ private field
+9 |         data: Vec::new().into(),
+  |         ^^^^ private field

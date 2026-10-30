@@ -800,6 +800,7 @@ mod tests {
             include_str!("error.rs"),
             include_str!("events.rs"),
             include_str!("idempotency.rs"),
+            include_str!("media.rs"),
             include_str!("messages.rs"),
             include_str!("numbers.rs"),
             include_str!("request.rs"),
@@ -820,7 +821,8 @@ mod tests {
                 }
             }
         }
-        assert!(named >= 32, "{named}");
+        // The media operations name theirs here since roadmap S5d.
+        assert!(named >= 38, "{named}");
     }
 
     /// The fallback for a code missing from the table is the table's own

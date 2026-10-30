@@ -59,13 +59,20 @@
 //! told apart from a missing one. Meta's pages describe the check for
 //! media "uploaded on" the number; that it holds for media received by
 //! webhook on it is not documented (docs/guides/server.md, "Media").
+//!
+//! Since roadmap S5d the rules are the core's
+//! ([`meta_whatsapp_server_core::media`]: the type and size checks, the
+//! file name, the download's limits, its verification as a framework-free
+//! byte stream held one chunk behind, the lookup before a deletion, the
+//! transfer slots taken, as the `Media` service). This module keeps the
+//! routes, the multipart reading of an upload's body (its framing budget,
+//! its per-kind cap applied as the file streams in), the answer and form
+//! types with their OpenAPI schema, converts them to and from the core's
+//! (every field named on both sides), and renders the answers: the
+//! headers, and the core's stream as the body, whose error aborts the
+//! connection.
 
-use base64::Engine as _;
 use futures::StreamExt;
-use meta_whatsapp_rs::Error;
-use meta_whatsapp_rs::client::media::{MediaInfo, MediaKind, validate_upload};
-use meta_whatsapp_rs::core::error::TransportError;
-use meta_whatsapp_rs::core::ids::MediaId;
 use meta_whatsapp_rs::webhooks::axum::body::{Body, Bytes};
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Path, Query, Request, State};
 use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
@@ -73,25 +80,22 @@ use meta_whatsapp_rs::webhooks::axum::http::{
     HeaderName, HeaderValue, Method, StatusCode, Uri, header,
 };
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
+pub use meta_whatsapp_server_core::media::MAX_WHOLE_DOWNLOAD;
+use meta_whatsapp_server_core::media::{
+    self as domain, DownloadBody, DownloadLimits, Media, MediaSlots, Upload, checked_type,
+    upload_cap,
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
-use super::common::typed_graph_id;
 use crate::auth::{Caller, OwnedNumber};
 use crate::error::{ApiError, ErrorBody};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
-use crate::model::TenantId;
-use crate::ratelimit::Slot;
 use crate::state::AppState;
 
 /// `X-WA-SHA256`: the downloaded file's SHA-256, hex.
 pub static X_WA_SHA256: HeaderName = HeaderName::from_static("x-wa-sha256");
-
-/// Largest file a download answers whole (and the default `max_bytes`):
-/// 16 MiB (docs/design/server.md, section 4.2). Larger ones need
-/// `?stream=true`.
-pub const MAX_WHOLE_DOWNLOAD: u64 = 16 * 1024 * 1024;
 
 /// Room for the multipart framing and the `type` field around the file:
 /// an upload's body may be this much larger than
@@ -100,9 +104,6 @@ pub const FORM_OVERHEAD: u64 = 64 * 1024;
 
 /// Longest `type` field.
 const MAX_TYPE_LEN: u64 = 255;
-
-/// Longest file name sent to Meta.
-const MAX_FILENAME_CHARS: usize = 128;
 
 /// The answer to an upload.
 #[derive(Debug, Serialize, ToSchema)]
@@ -131,84 +132,13 @@ pub struct MediaBytes(pub Vec<u8>);
 
 // ─── Upload ──────────────────────────────────────────────────────────────
 
-/// A checked upload.
-struct Upload {
-    mime_type: String,
-    filename: String,
-    data: Bytes,
-}
-
-/// The extension of each supported MIME type, from the table of
-/// `business-phone-numbers/media`, for a file sent without a name (Meta
-/// reads the extension).
-const EXTENSIONS: &[(&str, &str)] = &[
-    ("audio/aac", "aac"),
-    ("audio/amr", "amr"),
-    ("audio/mpeg", "mp3"),
-    ("audio/mp4", "m4a"),
-    ("audio/ogg", "ogg"),
-    ("text/plain", "txt"),
-    ("application/vnd.ms-excel", "xls"),
-    (
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "xlsx",
-    ),
-    ("application/msword", "doc"),
-    (
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "docx",
-    ),
-    ("application/vnd.ms-powerpoint", "ppt"),
-    (
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "pptx",
-    ),
-    ("application/pdf", "pdf"),
-    ("image/jpeg", "jpeg"),
-    ("image/png", "png"),
-    ("image/webp", "webp"),
-    ("video/3gpp", "3gp"),
-    ("video/mp4", "mp4"),
-];
-
-/// The file name sent to Meta: the caller's, reduced to `A-Z a-z 0-9 . _
-/// -` (anything else is `_`: the name goes into a multipart header) and
-/// 128 characters; `upload.<extension>` when there is none.
-fn filename(given: Option<&str>, mime_type: &str) -> String {
-    let cleaned: String = given
-        .unwrap_or_default()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .take(MAX_FILENAME_CHARS)
-        .collect();
-    if cleaned.trim_matches(['.', '_']).is_empty() {
-        let essence = mime_type.split(';').next().unwrap_or_default().trim();
-        let extension = EXTENSIONS
-            .iter()
-            .find(|(m, _)| m.eq_ignore_ascii_case(essence))
-            .map_or("bin", |(_, e)| e);
-        format!("upload.{extension}")
-    } else {
-        cleaned
+impl From<domain::Uploaded> for MediaUploaded {
+    fn from(uploaded: domain::Uploaded) -> Self {
+        let domain::Uploaded { media_id } = uploaded;
+        Self {
+            media_id: media_id.into_inner(),
+        }
     }
-}
-
-/// A `type` field: one of Meta's supported MIME types, without a control
-/// character (it becomes a header of the part Meta receives).
-fn checked_type(value: &str) -> Result<String, ApiError> {
-    let value = value.trim();
-    if !value.bytes().all(|b| b == b' ' || b.is_ascii_graphic()) {
-        return Err(ApiError::invalid("type"));
-    }
-    MediaKind::for_mime_type(value)
-        .map(|_| value.to_owned())
-        .ok_or_else(|| ApiError::invalid("type"))
 }
 
 fn form_error(error: &multer::Error) -> ApiError {
@@ -389,16 +319,13 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
         match field.name() {
             Some("type") if mime_type.is_none() => {
                 let value = field.text().await.map_err(|e| form_error(&e))?;
-                mime_type = Some(checked_type(&value)?);
+                mime_type = Some(checked_type(&value).map_err(ApiError::from)?);
             }
             Some("file") if file.is_none() => {
                 let given = field.file_name().map(str::to_owned);
                 // A known type caps the file at its kind's size as it
                 // streams in: no more of the body is read.
-                let cap = mime_type
-                    .as_deref()
-                    .and_then(MediaKind::for_mime_type)
-                    .map_or(max_bytes, |kind| kind.max_bytes().min(max_bytes));
+                let cap = upload_cap(mime_type.as_deref(), max_bytes);
                 let mut data = Vec::new();
                 while let Some(chunk) = field.chunk().await.map_err(|e| form_error(&e))? {
                     if u64::try_from(data.len() + chunk.len()).unwrap_or(u64::MAX) > cap {
@@ -415,51 +342,35 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
     }
     let mime_type = mime_type.ok_or_else(|| ApiError::invalid("type"))?;
     let (given, data) = file.ok_or_else(|| ApiError::invalid("file"))?;
-    // The library's own check, the one `upload` repeats: Meta's table.
-    if let Err(refused) = validate_upload(&mime_type, u64::try_from(data.len()).unwrap_or(u64::MAX))
-    {
-        return Err(if refused.field == "type" {
-            ApiError::invalid("type")
-        } else {
-            ApiError::new("media_too_large")
-        });
-    }
-    Ok(Upload {
-        filename: filename(given.as_deref(), &mime_type),
-        mime_type,
-        data: Bytes::from(data),
-    })
+    // The core's checks: Meta's table (the library's own, which `upload`
+    // repeats), and the file name sent.
+    Ok(Upload::new(
+        &mime_type,
+        given.as_deref(),
+        Bytes::from(data),
+    )?)
 }
 
-/// Upload with the number's token: `201` with the media id.
-async fn upload(
-    state: &AppState,
-    owned: &OwnedNumber,
-    upload: &Upload,
-) -> Result<Success, ApiError> {
-    let uploaded = owned
-        .client()
-        .media(owned.phone_number_id().clone())
-        .upload(upload.data.clone(), &upload.mime_type, &upload.filename)
-        .await;
-    match uploaded {
-        Ok(id) => Success::json(
-            StatusCode::CREATED,
-            &MediaUploaded {
-                media_id: id.into_inner(),
-            },
-        ),
-        Err(error) => Err(owned.failed(state, &error).await.with_details(&error)),
-    }
+/// The core's media operations on `owned`, with `state`'s slots, counted
+/// in its metrics (`owned` is the state's own: the extractor made it with
+/// `state.authz()`, which admits it).
+fn media<'a>(state: &'a AppState, owned: &'a OwnedNumber) -> Result<Media<'a>, ApiError> {
+    Ok(Media::new(
+        state.authz(),
+        owned.capability(),
+        MediaSlots {
+            transfers: state.media_slots(),
+            streams: state.stream_slots(),
+        },
+    )?
+    .observed_by(state.metrics()))
 }
 
-/// A slot for a transfer held in memory, or `429 too_many_requests` when
-/// the tenant's share or the replica's slots are taken.
-fn media_slot(state: &AppState, tenant: &TenantId) -> Result<Slot, ApiError> {
-    state
-        .media_slots()
-        .try_acquire(tenant)
-        .ok_or_else(|| ApiError::too_many_requests(1))
+/// Upload with the number's token: `201` with the media id (the core's
+/// [`Media::upload`]).
+async fn upload(media: &Media<'_>, upload: &Upload) -> Result<Success, ApiError> {
+    let uploaded = media.upload(upload).await?;
+    Success::json(StatusCode::CREATED, &MediaUploaded::from(uploaded))
 }
 
 /// `POST /v1/numbers/{pn}/media`: upload a file.
@@ -495,34 +406,31 @@ pub(crate) async fn upload_media(
     uri: Uri,
     request: Request,
 ) -> Response {
+    let media = match media(&state, &owned) {
+        Ok(media) => media,
+        Err(error) => return error.into_response(),
+    };
     // The slot is taken before the body is read: a body that trickles in
     // holds one of its tenant's slots, never another tenant's.
-    let permit = match media_slot(&state, caller.tenant()) {
+    let permit = match media.transfer_slot() {
         Ok(permit) => permit,
-        Err(error) => return error.into_response(),
+        Err(error) => return ApiError::from(error).into_response(),
     };
     let form = match read_upload(state.settings().media_max_bytes, request).await {
         Ok(form) => form,
         Err(error) => return error.into_response(),
     };
-    let digest = Sha256::digest(&form.data);
+    let digest = Sha256::digest(form.data());
     let fingerprint = Fingerprint::parts(
         &Method::POST,
         uri.path(),
         &[
-            ("type", form.mime_type.as_bytes()),
-            ("filename", form.filename.as_bytes()),
+            ("type", form.mime_type().as_bytes()),
+            ("filename", form.filename().as_bytes()),
             ("file", digest.as_slice()),
         ],
     );
-    let response = idempotency::run(
-        &state,
-        &caller,
-        key,
-        fingerprint,
-        upload(&state, &owned, &form),
-    )
-    .await;
+    let response = idempotency::run(&state, &caller, key, fingerprint, upload(&media, &form)).await;
     drop(permit);
     response
 }
@@ -560,64 +468,27 @@ impl FromRequestParts<AppState> for DownloadQuery {
             Query::<std::collections::HashMap<String, String>>::from_request_parts(parts, state)
                 .await
                 .map_err(|_| ApiError::invalid("query"))?;
-        let stream = match query.get("stream").map(String::as_str) {
-            None | Some("false") => false,
-            Some("true") => true,
-            Some(_) => return Err(ApiError::invalid("stream")),
-        };
-        let cap = if stream {
-            state.settings().media_max_bytes
-        } else {
-            MAX_WHOLE_DOWNLOAD
-        };
-        let max_bytes = match query.get("max_bytes") {
-            None => cap,
-            Some(value) => value
-                .parse::<u64>()
-                .ok()
-                .filter(|n| (1..=cap).contains(n))
-                .ok_or_else(|| ApiError::invalid("max_bytes"))?,
-        };
-        Ok(Self { max_bytes, stream })
+        // The core's reading of them: `stream`, then `max_bytes` within
+        // its cap.
+        let limits = DownloadLimits::parse(
+            query.get("stream").map(String::as_str),
+            query.get("max_bytes").map(String::as_str),
+            state.settings().media_max_bytes,
+        )?;
+        Ok(Self {
+            max_bytes: limits.max_bytes(),
+            stream: limits.stream(),
+        })
     }
 }
 
-/// A SHA-256 as Meta reports it, hex (64 characters) or base64, as the
-/// library reads it.
-fn reported_sha256(value: &str) -> Option<[u8; 32]> {
-    let value = value.trim();
-    let bytes = if value.len() == 64 {
-        hex::decode(value).ok()?
-    } else {
-        base64::engine::general_purpose::STANDARD
-            .decode(value)
-            .ok()?
-    };
-    bytes.try_into().ok()
-}
-
-/// The content type to answer: Meta's, when it is a plain MIME type.
-fn content_type(info: &MediaInfo) -> HeaderValue {
-    let valid = info.mime_type.contains('/')
-        && info
-            .mime_type
-            .bytes()
-            .all(|b| b.is_ascii_graphic() || b == b' ');
-    valid
-        .then(|| HeaderValue::from_str(&info.mime_type).ok())
-        .flatten()
-        .unwrap_or_else(|| HeaderValue::from_static("application/octet-stream"))
-}
-
-/// A failed download step: the lookaside URL Meta gave being refused by
-/// the library's host allow-list is Meta's answer gone wrong (`upstream`),
-/// not the caller's input.
-async fn download_failed(state: &AppState, owned: &OwnedNumber, error: &Error) -> ApiError {
-    if matches!(error, Error::Validation(_)) {
-        tracing::warn!("Meta's media URL was refused by the library's host allow-list");
-        return ApiError::new("upstream");
+impl DownloadQuery {
+    /// The core's limits, checked again against the caps
+    /// (`media_max_bytes` for a stream).
+    fn limits(self, media_max_bytes: u64) -> Result<DownloadLimits, ApiError> {
+        let Self { max_bytes, stream } = self;
+        Ok(DownloadLimits::new(max_bytes, stream, media_max_bytes)?)
     }
-    owned.failed(state, error).await.with_details(error)
 }
 
 /// `GET /v1/numbers/{pn}/media/{media_id}`: download a file, verified
@@ -649,54 +520,27 @@ async fn download_failed(state: &AppState, owned: &OwnedNumber, error: &Error) -
 )]
 pub(crate) async fn download_media(
     State(state): State<AppState>,
-    caller: Caller,
     owned: OwnedNumber,
     Path((_, media_id)): Path<(String, String)>,
     query: DownloadQuery,
 ) -> Result<Response, ApiError> {
-    let id: MediaId = typed_graph_id("media_id", &media_id)?;
-    // A whole file is held in memory, a stream holds two connections:
-    // take a slot of the tenant's share first.
-    let permit = if query.stream {
-        state
-            .stream_slots()
-            .try_acquire(caller.tenant())
-            .ok_or_else(|| ApiError::too_many_requests(1))?
-    } else {
-        media_slot(&state, caller.tenant())?
-    };
-    let media = owned
-        .client()
-        .media(owned.phone_number_id().clone())
-        .restrict_to_phone_number();
-    let info = match media.url(&id).await {
-        // A media node, the one asked for.
-        Ok(info) if info.id.as_str() == media_id => info,
-        Ok(_) => return Err(ApiError::not_found()),
-        Err(error) => return Err(owned.failed_on_object(&state, &error).await),
-    };
-    // Meta's reported size, before a byte is downloaded (checked again
-    // while reading: the report may be wrong).
-    if info.file_size.is_some_and(|size| size > query.max_bytes) {
-        return Err(ApiError::new("media_too_large"));
-    }
-    let Some(digest) = reported_sha256(&info.sha256) else {
-        tracing::warn!("Meta reported no usable SHA-256 for a media file");
-        return Err(ApiError::new("integrity"));
-    };
-    let content_type = content_type(&info);
-    let download = match media.download_with_info(info).await {
-        Ok(download) => download,
-        Err(error) => return Err(download_failed(&state, &owned, &error).await),
-    };
-    let verified = download
-        .verified()
-        .map_err(|_| ApiError::new("integrity"))?;
+    let limits = query.limits(state.settings().media_max_bytes)?;
+    let downloaded = media(&state, &owned)?.download(&media_id, limits).await?;
+    let sha256 = downloaded.sha256_hex();
+    let domain::Downloaded {
+        content_type,
+        sha256: _,
+        body,
+    } = downloaded;
     let headers = [
-        (header::CONTENT_TYPE, content_type),
+        (
+            header::CONTENT_TYPE,
+            HeaderValue::from_str(&content_type)
+                .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+        ),
         (
             X_WA_SHA256.clone(),
-            HeaderValue::from_str(&hex::encode(digest)).map_err(|_| ApiError::internal())?,
+            HeaderValue::from_str(&sha256).map_err(|_| ApiError::internal())?,
         ),
         (
             header::X_CONTENT_TYPE_OPTIONS,
@@ -713,108 +557,17 @@ pub(crate) async fn download_media(
             HeaderValue::from_static("sandbox; default-src 'none'"),
         ),
     ];
-    if query.stream {
-        let body = Body::from_stream(HeldBack {
-            inner: verified.body,
-            held: None,
-            read: 0,
-            max_bytes: query.max_bytes,
-            done: false,
-            _slot: permit,
-        });
-        return Ok((StatusCode::OK, headers, body).into_response());
-    }
-    let mut body = verified.body;
-    let mut data = Vec::new();
-    while let Some(chunk) = body.next().await {
-        let chunk = chunk.map_err(|error| ApiError::from_library(&error))?;
-        if u64::try_from(data.len() + chunk.len()).unwrap_or(u64::MAX) > query.max_bytes {
-            return Err(ApiError::new("media_too_large"));
+    match body {
+        // The core's stream, one chunk behind: its error (a mismatch, a
+        // file past `max_bytes`, a failure) aborts the connection, and the
+        // chunk it held is never sent. It holds its slot until the body is
+        // dropped.
+        DownloadBody::Stream(stream) => {
+            Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response())
         }
-        data.extend_from_slice(&chunk);
-    }
-    // Verified: the stream ended without the library's integrity error.
-    drop(permit);
-    Ok((StatusCode::OK, headers, data).into_response())
-}
-
-/// Why a streamed download stopped: the connection is aborted, so the
-/// caller never sees a complete body.
-#[derive(Debug, thiserror::Error)]
-enum StreamStopped {
-    #[error("the media failed its integrity check")]
-    Integrity,
-    #[error("the media grew past max_bytes")]
-    TooLarge,
-    #[error("the media download failed")]
-    Failed,
-}
-
-/// The verified body of a streamed download, forwarded **one chunk
-/// behind**: the last chunk goes out only once the stream ended with the
-/// digest matching, so even a client that ignores the aborted connection
-/// never holds the whole of a tampered file. Past `max_bytes`, or on a
-/// mismatch or a failure, it errs (the connection aborts), the held chunk
-/// is dropped, and nothing follows. It holds the download's stream slot
-/// until it ends.
-struct HeldBack {
-    inner: meta_whatsapp_rs::client::media::VerifiedBody,
-    held: Option<Bytes>,
-    read: u64,
-    max_bytes: u64,
-    done: bool,
-    _slot: Slot,
-}
-
-impl HeldBack {
-    fn stop(&mut self, why: StreamStopped) -> Result<Bytes, StreamStopped> {
-        self.done = true;
-        self.held = None;
-        tracing::warn!(reason = %why, "a streamed media download stopped: connection aborted");
-        Err(why)
-    }
-}
-
-impl futures::Stream for HeldBack {
-    type Item = Result<Bytes, StreamStopped>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        use std::task::Poll;
-        loop {
-            if self.done {
-                return Poll::Ready(None);
-            }
-            let chunk = match self.inner.poll_next_unpin(cx) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(None) => {
-                    // Verified: the digest matched.
-                    self.done = true;
-                    return Poll::Ready(self.held.take().map(Ok));
-                }
-                Poll::Ready(Some(Err(Error::Transport(TransportError::Integrity(_))))) => {
-                    return Poll::Ready(Some(self.stop(StreamStopped::Integrity)));
-                }
-                Poll::Ready(Some(Err(_))) => {
-                    return Poll::Ready(Some(self.stop(StreamStopped::Failed)));
-                }
-                Poll::Ready(Some(Ok(chunk))) => chunk,
-            };
-            self.read = self
-                .read
-                .saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
-            if self.read > self.max_bytes {
-                return Poll::Ready(Some(self.stop(StreamStopped::TooLarge)));
-            }
-            if chunk.is_empty() {
-                continue;
-            }
-            if let Some(previous) = self.held.replace(chunk) {
-                return Poll::Ready(Some(Ok(previous)));
-            }
-        }
+        // Verified: the core read it whole without the library's integrity
+        // error.
+        DownloadBody::Whole(data) => Ok((StatusCode::OK, headers, data).into_response()),
     }
 }
 
@@ -848,47 +601,15 @@ pub(crate) async fn delete_media(
     owned: OwnedNumber,
     Path((_, media_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let id: MediaId = typed_graph_id("media_id", &media_id)?;
-    let media = owned
-        .client()
-        .media(owned.phone_number_id().clone())
-        .restrict_to_phone_number();
-    // `DELETE /{id}` deletes whatever node the id names (a flow, a QR
-    // code) that the token reaches: look it up first, as this number's
-    // media, and delete only that.
-    match media.url(&id).await {
-        Ok(info) if info.id == id => {}
-        Ok(_) => return Err(ApiError::not_found()),
-        Err(error) => return Err(owned.failed_on_object(&state, &error).await),
-    }
-    let deleted = media.delete(&id).await;
-    match deleted {
-        Ok(()) => Ok(StatusCode::NO_CONTENT),
-        Err(error) => Err(owned.failed_on_object(&state, &error).await),
-    }
+    // Looked up first, as this number's media, and only that deleted (the
+    // core's `Media::delete`).
+    media(&state, &owned)?.delete(&media_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn file_names_are_inert_and_have_an_extension() {
-        assert_eq!(filename(Some("voucher.png"), "image/png"), "voucher.png");
-        assert_eq!(
-            filename(Some("a;b\r\nContent-Type: x.png"), "image/png"),
-            "a_b__Content-Type__x.png"
-        );
-        // A quote would end the multipart header's `filename="…"`.
-        assert_eq!(
-            filename(Some("a\"b\r\nContent-Type: x.png"), "image/png"),
-            "a_b__Content-Type__x.png"
-        );
-        assert_eq!(filename(None, "image/png"), "upload.png");
-        assert_eq!(filename(Some(""), "audio/ogg; codecs=opus"), "upload.ogg");
-        assert_eq!(filename(Some("é"), "application/pdf"), "upload.pdf");
-        assert_eq!(filename(Some(&"x".repeat(300)), "image/png").len(), 128);
-    }
 
     /// Frames already there reach multer merged, up to [`FORM_CHUNK`]
     /// bytes: a body of one-byte frames is not parsed a byte at a time.
@@ -906,23 +627,5 @@ mod tests {
         };
         let chunks: Vec<usize> = body.map(|chunk| chunk.unwrap().len()).collect().await;
         assert_eq!(chunks, [FORM_CHUNK, 10]);
-    }
-
-    #[test]
-    fn meta_digests_are_read_in_hex_or_base64() {
-        let hex = "3f9d94d399fa61c191bc1d4ca71375a035cd9b9f5b1128e1f0963a415c16b0cc";
-        let raw = reported_sha256(hex).unwrap();
-        let b64 = base64::engine::general_purpose::STANDARD.encode(raw);
-        assert_eq!(reported_sha256(&b64), Some(raw));
-        assert_eq!(reported_sha256("PHOTO_HASH"), None);
-        assert_eq!(reported_sha256(""), None);
-    }
-
-    #[test]
-    fn the_extension_table_is_metas_supported_types() {
-        for (mime, _) in EXTENSIONS {
-            assert!(MediaKind::for_mime_type(mime).is_some(), "{mime}");
-        }
-        assert_eq!(EXTENSIONS.len(), 18);
     }
 }

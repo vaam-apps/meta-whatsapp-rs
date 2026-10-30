@@ -1684,6 +1684,57 @@ stored data, the owner's).
   backend of your own (its `RecordStore` now also meets the new suites
   through `conformance::run`: `unbind_waba_if` and `set_waba_status_if`
   as their contracts already said).
+- **The media are the service core's** (roadmap S5d;
+  `meta-whatsapp-server-core` and `meta-whatsapp-server`, both
+  `publish = false`). `meta_whatsapp_server_core::media` holds `Media` on
+  an `OwnedNumber`, opened with `Media::new(&authorizer, &owned_number,
+  MediaSlots { transfers, streams })` (refused, `403 forbidden`, for a
+  number another `Authorizer` made), with `transfer_slot` (an upload's
+  slot of the number's tenant's share, taken before its body is read),
+  `upload` (an `Upload`, made only by `Upload::new`: the type, the size
+  and the inert file name checked before any request; answering
+  `Uploaded`), `download` (within `DownloadLimits`, made only by
+  `DownloadLimits::parse` or `::new`, within the caps; answering
+  `Downloaded`: the content type, Meta's SHA-256, and a `DownloadBody`,
+  the whole verified file or a `MediaStream`) and `delete` (looked up
+  first, as the number's media). `MediaStream` is a `futures::Stream` of
+  the library's `Bytes`, with no HTTP framework: one chunk held back, it
+  yields `StreamStopped::Integrity` instead of the last chunk on a digest
+  mismatch (`TooLarge` past `max_bytes`, `Failed` on a failure), and
+  holds its slot until dropped. `checked_type`, `filename`,
+  `upload_cap` and `MAX_WHOLE_DOWNLOAD` moved from the server, whose
+  `api::media::MAX_WHOLE_DOWNLOAD` is a re-export; the server keeps the
+  multipart reading (its framing budget, the per-kind cap applied as the
+  file streams in), the OpenAPI types, `X-WA-SHA256` and the headers, and
+  renders the core's stream as the body (its error aborts the
+  connection). The server's crate-private `api::common::typed_graph_id`
+  wrapper is gone (the core checks the media id). The core gains `bytes`
+  and `base64` as direct dependencies (both already in the library's
+  graph: no new crate in `Cargo.lock`); the server's `base64` is a
+  dev-dependency now. The conformance suite gains `media` (in
+  `conformance::run`): with no HTTP layer, a download through the core's
+  stream ends before its last chunk on a digest mismatch, passes the file
+  on while it arrives (one chunk held), stops past `max_bytes`; a whole
+  download answers no byte of a tampered file; the reported size, the
+  digest and Meta's URL are checked before the download (a URL off
+  `lookaside.fbsbx.com` is `502 upstream`, the token never sent there);
+  another node's or a refused media id is `404` with nothing deleted;
+  the upload and deletion send Meta's documented requests; another
+  `Authorizer`'s number is refused; a slot of the tenant's share comes
+  first; no failure or odd chunking (empty chunks, a connection cut
+  mid-file, one chunk, none) yields the last chunk unverified, every
+  failure gives its slot back, and a `190` from Meta's media URL marks
+  the number. No change to the HTTP API: every status, body, field, header
+  (`Content-Type`, `Content-Disposition: attachment`, `X-WA-SHA256`,
+  `nosniff`, the sandboxing `Content-Security-Policy`,
+  `Idempotent-Replayed` on an upload's replay), slot and metric is as
+  before, and `openapi/v1.json` is byte-identical; the download's
+  handler no longer names the `Caller` (its `OwnedNumber` extractor runs
+  the same one first). The three log lines that moved (a stream stopped,
+  with its reason; Meta's digest unusable; Meta's URL refused by the
+  library's host allow-list) keep their target,
+  `meta_whatsapp_server::api::media`. No new trait method: nothing to
+  upgrade for an `Observer` or a backend of your own.
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

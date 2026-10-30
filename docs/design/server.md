@@ -1072,15 +1072,15 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
-**As built (roadmap S1, S2, S3, S4, S5a, S5b, S5c).** `crates/meta-whatsapp-server-core`
+**As built (roadmap S1, S2, S3, S4, S5a, S5b, S5c, S5d).** `crates/meta-whatsapp-server-core`
 exists, with the model, the keys, event routing and polling, the
 idempotency engine, the rate limiter, the error model, authorization,
 housekeeping (over a `Backend`, since S4), the admin operations
 (since S5a), the message operations and the idempotency engine's
-run (since S5b), and the number and template operations (since S5c);
-the other operations (media, the webhook pipeline) are still the axum
-crate's handlers (roadmap S5d, S5e). What it holds today, where it
-differs from the target above:
+run (since S5b), the number and template operations (since S5c), and
+the media operations (since S5d); the webhook pipeline is still the
+axum crate's (roadmap S5e). What it holds today, where it differs from
+the target above:
 
 - **The ports** are `RecordStore`, `IdempotencyRecords`, `Outbox`,
   `LeaderLock`, `Janitor` and `SchemaMigrator`, and their contracts carry
@@ -1297,6 +1297,53 @@ differs from the target above:
   B's WABA, nothing deleted), and the services send Meta's documented
   requests. The tenant's listings (`GET /v1/wabas`, `GET /v1/numbers`)
   stay the axum handlers' reads of the records for the admitted caller.
+- **The media are services** (S5d). `media` holds `Media` on an
+  `OwnedNumber` (`Media::new`, which admits it:
+  `Authorizer::admit_number`), over the adapter's transfer slots
+  (`media::MediaSlots`: the core's `ratelimit::Slots` for uploads and
+  whole downloads, and for streams, each taken from the number's
+  tenant's share, `429` otherwise): `transfer_slot` (an upload's, taken
+  before its body is read), `upload` (a `media::Upload`, which only
+  `Upload::new` makes: a type of Meta's table, without a control
+  character, `checked_type`; a file within its kind's size; the file
+  name made inert, `filename`), `download` and `delete`. A download runs
+  within `media::DownloadLimits` (only `parse` and `new` make them: 1 to
+  16 MiB whole, `MAX_WHOLE_DOWNLOAD`, or to the adapter's cap streamed):
+  the media id checked (`request::graph_id`), a slot, the lookup with
+  `phone_number_id={pn}` (another node or a refused id `404`, without
+  Meta's code), the reported size (`413` before the download), Meta's
+  digest (`502 integrity` when unusable), the library's download (its
+  host allow-list keeps the token to `lookaside.fbsbx.com`: another
+  URL is `502 upstream`, nothing sent), then the body verified by the
+  library's `VerifiedBody`: whole (`DownloadBody::Whole`, read to
+  `max_bytes`, a mismatch `502 integrity` with no byte answered), or as
+  `media::MediaStream` (`DownloadBody::Stream`), a `futures::Stream` of
+  the library's `Bytes` and no HTTP framework's type, holding one chunk
+  back: on a mismatch it yields `StreamStopped::Integrity` instead of
+  the last chunk (`TooLarge` past `max_bytes`, `Failed` on a failure),
+  logged at `warn`, and it holds its slot until dropped. M1b's rule is
+  therefore the core's: the axum adapter renders the stream as the
+  body, whose error aborts the connection, so the last chunk never
+  goes out and the body never completes. The answer (`media::Downloaded`)
+  carries the content type to answer (Meta's when it is a plain MIME
+  type) and Meta's digest; the adapter adds `X-WA-SHA256`, `nosniff`,
+  `Content-Disposition: attachment` and the sandboxing CSP. A deletion
+  looks the id up first, as the number's media, and deletes only that.
+  Failed Graph calls are told to the `Observer`, a `190` marks the
+  WABA's numbers, Meta's `details` are kept; the module's three log
+  lines keep the target `meta_whatsapp_server::api::media`. The axum
+  adapter keeps the multipart reading of an upload (the framing budget,
+  the per-kind cap, `media::upload_cap`, applied as the file streams
+  in), the upload's `Idempotency-Key` under `idempotency::run`
+  (`Idempotent-Replayed` on a replay), the OpenAPI types, and the
+  conversion of its query into `DownloadLimits`. The conformance suite
+  `media` holds it with no HTTP layer, over a transport whose downloads
+  arrive in the chunks the case gives: a tampered file streamed yields
+  its first two chunks of three, then the error; a file still arriving
+  is passed on with one chunk held; past `max_bytes`, nothing; no failure
+  or odd chunking (empty chunks, a connection cut mid-file, one chunk,
+  none) yields the last chunk unverified, and every failure gives its
+  slot back.
 - **`ServiceError`** is the §5 error model as data: a code of `CODES`
   (§5.2), its status as a number, `retryable`, `may_have_been_sent`, the
   field for `invalid`, the step and `resumable` of a multi-step call, and
@@ -1392,7 +1439,11 @@ differs from the target above:
   records of its own), and `templates` and `numbers` (S5c: another
   tenant's template id not found with zero vault reads, and Meta's
   documented requests; the core's `tests/templates.rs` and
-  `tests/numbers.rs` run them on that memory backend). The memory backend runs
+  `tests/numbers.rs` run them on that memory backend), and `media` (S5d:
+  a download through the core's stream ends before its last chunk on a
+  digest mismatch, M1b's rule without axum; Meta's documented upload
+  and deletion; the core's `tests/media.rs` runs it on that memory
+  backend, `tests/media_logs.rs` pins its log lines' target). The memory backend runs
   it in the service's `tests/store.rs`, the Postgres one live in
   `tests/live_postgres.rs`; the service's tests also show what it
   refuses: a backend whose `kv()` is a new store on each call, an

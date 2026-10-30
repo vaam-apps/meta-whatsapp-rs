@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 
-use meta_whatsapp_rs::core::error::ValidationError;
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequest, Query, Request};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
@@ -37,22 +36,6 @@ where
             Err(_) => Err(ApiError::invalid("body")),
         }
     }
-}
-
-/// A Meta object id from a path, a query or a body (a media id), as the
-/// typed id it names (`MediaId`, …): 1 to 64 ASCII digits, not starting
-/// with `0`, else `422 invalid_request` on `field`, checked before any
-/// request. The core's
-/// [`meta_whatsapp_server_core::request::typed_graph_id`], whose rules its
-/// documentation gives (since roadmap S5c, with
-/// [`meta_whatsapp_server_core::request::graph_id`]; a template id is
-/// checked there by the core's template services, and a template
-/// definition read there, `meta_whatsapp_server_core::templates::definition`).
-pub(crate) fn typed_graph_id<T>(field: &'static str, id: &str) -> Result<T, ApiError>
-where
-    T: for<'a> TryFrom<&'a str, Error = ValidationError>,
-{
-    meta_whatsapp_server_core::request::typed_graph_id(field, id).map_err(ApiError::from)
 }
 
 /// Default page size.
@@ -133,12 +116,16 @@ mod tests {
     use super::*;
 
     /// A Meta id is 1 to 64 digits, not starting with `0` (the core's
-    /// rule, `meta_whatsapp_server_core::request::graph_id`'s tests), and
-    /// its refusal names the caller's field. Decisive: each clause, the
+    /// rule, `meta_whatsapp_server_core::request::graph_id`'s tests, which
+    /// the core's media services check a media id with since roadmap S5d),
+    /// and its refusal names the caller's field. Decisive: each clause, the
     /// length cap included.
     #[test]
     fn a_graph_id_is_up_to_64_digits() {
-        let id = |id: &str| typed_graph_id::<MediaId>("media_id", id);
+        let id = |id: &str| {
+            meta_whatsapp_server_core::request::typed_graph_id::<MediaId>("media_id", id)
+                .map_err(ApiError::from)
+        };
         assert!(id("1").is_ok());
         assert!(id(&"9".repeat(64)).is_ok());
         for bad in [

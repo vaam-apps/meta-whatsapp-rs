@@ -1,7 +1,8 @@
 //! What must not compile outside this crate, each with the compiler's
 //! error code and text (`tests/visibility/fail/*.stderr`): the vault's
 //! methods, the vault itself, and a capability of one's own
-//! (`src/authz.rs`, [`Tokens`]'s docs). `tests/visibility/pass/` is the
+//! (`src/authz.rs`, [`Tokens`]'s docs); a media upload, or a download's
+//! limits, not made by their checks (`src/media.rs`). `tests/visibility/pass/` is the
 //! control: it names every path those cases use, and compiles.
 //!
 //! The expected errors are the pinned toolchain's (`rust-toolchain.toml`).
