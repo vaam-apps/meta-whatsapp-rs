@@ -70,6 +70,22 @@ impl fmt::Debug for SecretUrl {
     }
 }
 
+/// A link that stays a `String` in a public type but must not print whole
+/// (`MediaInfo::url`, whose signature is credential-shaped), shown in
+/// `Debug` as [`SecretUrl`] shows its own, without the type's name:
+/// `"https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=<redacted>&hash=<redacted>"`,
+/// or `<redacted: not a URL>`.
+pub(crate) struct RedactedUrl<'a>(pub(crate) &'a str);
+
+impl fmt::Debug for RedactedUrl<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match redacted(self.0) {
+            Some(shown) => fmt::Debug::fmt(&shown, f),
+            None => f.write_str("<redacted: not a URL>"),
+        }
+    }
+}
+
 const REDACTED: &str = "<redacted>";
 
 /// `link` as `Debug` shows it, or `None` when it does not parse as an
