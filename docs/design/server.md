@@ -1340,7 +1340,10 @@ the target above:
   `media` holds it with no HTTP layer, over a transport whose downloads
   arrive in the chunks the case gives: a tampered file streamed yields
   its first two chunks of three, then the error; a file still arriving
-  is passed on with one chunk held; past `max_bytes`, nothing.
+  is passed on with one chunk held; past `max_bytes`, nothing; no failure
+  or odd chunking (empty chunks, a connection cut mid-file, one chunk,
+  none) yields the last chunk unverified, and every failure gives its
+  slot back.
 - **`ServiceError`** is the §5 error model as data: a code of `CODES`
   (§5.2), its status as a number, `retryable`, `may_have_been_sent`, the
   field for `invalid`, the step and `resumable` of a multi-step call, and

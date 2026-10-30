@@ -1632,7 +1632,10 @@ stored data, the owner's).
   another node's or a refused media id is `404` with nothing deleted;
   the upload and deletion send Meta's documented requests; another
   `Authorizer`'s number is refused; a slot of the tenant's share comes
-  first. No change to the HTTP API: every status, body, field, header
+  first; no failure or odd chunking (empty chunks, a connection cut
+  mid-file, one chunk, none) yields the last chunk unverified, every
+  failure gives its slot back, and a `190` from Meta's media URL marks
+  the number. No change to the HTTP API: every status, body, field, header
   (`Content-Type`, `Content-Disposition: attachment`, `X-WA-SHA256`,
   `nosniff`, the sandboxing `Content-Security-Policy`,
   `Idempotent-Replayed` on an upload's replay), slot and metric is as

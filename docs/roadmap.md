@@ -707,17 +707,29 @@ and `store-postgres`.
     the service's `MemoryBackend` (`tests/store.rs`) and live on
     Postgres (`tests/live_postgres.rs`); a second case,
     `the_media_services_upload_and_delete_as_meta_documents`, pins the
-    upload's multipart request and the deletion's lookup, and
-    `tests/media_logs.rs` the three moved log lines' target
-    (`meta_whatsapp_server::api::media`) and that none names Meta's URL.
+    upload's multipart request and the deletion's lookup, a third,
+    `a_failed_download_yields_no_unverified_end_and_frees_its_slot` (from
+    the sabotage review), that no failure or odd chunking (empty chunks,
+    a connection cut mid-file, one chunk, none, exactly `max_bytes`)
+    yields the last chunk unverified, that every failure gives its slot
+    back, the refusals' order (the id before the slot, the reported size
+    before the digest), that a URL off `https://lookaside.fbsbx.com` is
+    `502 upstream` with nothing sent to it, and that a `190` from Meta's
+    URL marks the number, and `tests/media_logs.rs` the three moved log
+    lines' target (`meta_whatsapp_server::api::media`) and that none
+    names Meta's URL.
     By mutation, each fails the core suite: the digest check dropped
     (a mismatch taken for the end, in the stream or the whole read);
     the digest checked only once the last chunk was yielded (nothing
     held back); `Media::new`'s admission dropped; each size cap dropped
     (the stream's, the whole read's, the reported size's, the limits'
     in `parse` and in `new`, an upload's kind limit in `Upload::new` and
-    in `upload_cap`). The service's `tests/media.rs` passes unchanged
-    and fails on each mutation but the admission (no forged capability
+    in `upload_cap`), and, since the review, a failure taken for the
+    verified end, an empty chunk held as the last one, a slot kept past
+    a failure, the download's own `190` not marking, and either order
+    swapped. The service's `tests/media.rs` passes with its tests
+    unchanged (the review added one: an upload's key covers its type and
+    file name) and fails on each mutation but the admission (no forged capability
     reaches a handler) and the limits' caps (`parse` and `new` each
     hold the other's). `openapi/v1.json` is byte-identical. Left: the
     server's `auth::OwnedNumber` keeps `failed` and `failed_on_object`

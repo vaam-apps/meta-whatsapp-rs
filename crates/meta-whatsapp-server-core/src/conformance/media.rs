@@ -755,7 +755,13 @@ pub async fn the_media_services_upload_and_delete_as_meta_documents(backend: &dy
 /// 4. The slot: a stream holds it until dropped, even unfinished (a
 ///    client that went away), and every failure, whole or streamed, before
 ///    or during the download, gives it back.
-/// 5. A `190` from Meta's media URL (the download itself, after the
+/// 5. The media id is checked before a slot is taken, the size Meta
+///    reports before its digest.
+/// 6. Meta's URL off `https://lookaside.fbsbx.com` (a longer host, a
+///    path or user info naming it, a subdomain, a trailing dot, another
+///    port or scheme, an IP literal, a relative URL) is `502 upstream`,
+///    nothing sent to it; the host in capitals is that host.
+/// 7. A `190` from Meta's media URL (the download itself, after the
 ///    lookup): `409 reconnect_required`, Meta's code and `details` kept,
 ///    told to the [`Observer`](crate::observe::Observer), the number marked
 ///    `reconnect_required`.
@@ -764,7 +770,8 @@ pub async fn the_media_services_upload_and_delete_as_meta_documents(backend: &dy
 /// step 2; empty chunks held as the last one (the real last chunk passed
 /// on before the digest is checked) fails step 1; a slot kept past a
 /// failure fails step 4; the download's own failure not marking the
-/// number fails step 5.
+/// number fails step 7; the slot taken before the id is checked, or the
+/// digest before the size, fails step 5.
 pub async fn a_failed_download_yields_no_unverified_end_and_frees_its_slot(backend: &dyn Backend) {
     let meta = Chunked::default();
     let script = meta.script.clone();
@@ -964,7 +971,71 @@ pub async fn a_failed_download_yields_no_unverified_end_and_frees_its_slot(backe
         ["invalid_parameter", "invalid_parameter"]
     );
 
-    // 5. A `190` from Meta's URL: the number marked, Meta's details kept.
+    // 5. The order of the refusals: the media id before the slot, the
+    // reported size before the digest.
+    let held = media.transfer_slot().unwrap();
+    let before = script.requests().len();
+    let refused = media.download("0123", whole).await.unwrap_err();
+    assert_eq!(
+        refusal(&refused),
+        (422, "invalid_request", Some("media_id")),
+        "the slot was asked before the media id was checked"
+    );
+    assert_eq!(script.requests().len(), before);
+    drop(held);
+    script.push_json(200, media_info(URL, "PHOTO_HASH", Some(100_001)));
+    let capped = DownloadLimits::new(100_000, false, STREAM_CAP).unwrap();
+    let refused = media.download(MEDIA, capped).await.unwrap_err();
+    assert_eq!(
+        refusal(&refused),
+        (413, "media_too_large", None),
+        "the digest was checked before the reported size"
+    );
+    free("the order");
+
+    // 6. Meta's URL, wherever it points: the token reaches only
+    // `https://lookaside.fbsbx.com` (the library's host allow-list), any
+    // other URL is `502 upstream` with nothing sent to it.
+    for hostile in [
+        "https://lookaside.fbsbx.com.evil.example/x",
+        "https://evil.example/lookaside.fbsbx.com",
+        "https://lookaside.fbsbx.com@evil.example/x",
+        "https://user:pw@lookaside.fbsbx.com/x",
+        "https://evil.lookaside.fbsbx.com/x",
+        "https://lookaside.fbsbx.com./x",
+        "https://lookaside.fbsbx.com:8443/x",
+        "http://lookaside.fbsbx.com/x",
+        "ftp://lookaside.fbsbx.com/x",
+        "https://157.240.1.1/x",
+        "https://[::1]/x",
+        "/whatsapp_business/attachments/?mid=1",
+    ] {
+        let before = script.requests().len();
+        script.push_json(200, media_info(hostile, &sha256_hex(&file), None));
+        let refused = media.download(MEDIA, stream).await.unwrap_err();
+        assert_eq!(refusal(&refused), (502, "upstream", None), "{hostile}");
+        assert_eq!(script.requests().len(), before + 1, "{hostile}: sent");
+        free(hostile);
+    }
+    // The host as Meta may case it is the same host.
+    script.push_json(
+        200,
+        media_info(
+            "https://LOOKASIDE.FBSBX.COM/whatsapp_business/attachments/?mid=1",
+            &sha256_hex(&file),
+            None,
+        ),
+    );
+    script.push_bytes(200, "image/jpeg", Vec::new());
+    meta.chunks(&chunks);
+    let items = drain(streamed(media.download(MEDIA, stream).await.unwrap())).await;
+    assert_eq!(items.len(), 3);
+    let sent = script.last_request().unwrap();
+    assert_eq!(sent.url.host_str(), Some("lookaside.fbsbx.com"));
+    assert_eq!(sent.bearer(), Some(TOKEN));
+    assert_eq!(script.remaining(), 0);
+
+    // 7. A `190` from Meta's URL: the number marked, Meta's details kept.
     script.push_json(200, media_info(URL, &sha256_hex(&file), None));
     script.push_json(
         401,
