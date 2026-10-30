@@ -597,6 +597,78 @@ pub fn shared_pacer(upgraded: PhoneNumberId) -> Pacer {
 }
 ```
 
+**Throughput upgrades, followed** (opt-in, off by default). Meta
+upgrades an eligible number to 1,000 messages a second by itself, then
+sends a `phone_number_quality_update` webhook whose `event` is
+`THROUGHPUT_UPGRADE` (`throughput`, "Higher throughput"). A
+`ThroughputUpgrades` hears it and raises that number's rate in the
+bucket you give it to `Rate::HIGHER_THROUGHPUT` (`TokenBucket::set_rate`),
+so its next sends go 1 ms apart instead of 12.5 ms (the first of them
+still waits out the 12.5 ms the last send before the upgrade booked).
+Give it to the bot with
+`BotBuilder::follow_throughput_upgrades` (a listener of
+`phone_number_quality_updated`, after the middleware like any listener),
+or, in a process without a bot, deliver events to it: it is an
+`EventSink<WebhookEvent>`, to put next to your sink in a `FanoutSink`.
+Without either, no webhook changes a rate.
+
+```rust
+pub fn following_upgrades(
+    waba: WabaId,
+    display_phone_number: &str,
+    number: PhoneNumberId,
+) -> meta_whatsapp_rs::Result<(Pacer, ThroughputUpgrades)> {
+    let bucket = Arc::new(TokenBucket::new(Rate::DEFAULT)); // kept, to raise a rate while running
+    let numbers = KnownNumbers::new().number(waba, display_phone_number, number)?; // digits compared
+    let upgrades = ThroughputUpgrades::new(bucket.clone(), numbers); // in memory: record upgrades yourself
+    Ok((Pacer::shared(bucket), upgrades)) // `BotBuilder::follow_throughput_upgrades(upgrades)`
+}
+```
+
+- **Which number.** The webhook carries the WABA (the entry's `id`) and
+  the number's `display_phone_number`, never its phone number id, which
+  is what the pacer keys on. A `NumberDirectory` says which id it is.
+  The default, `KnownNumbers`, holds the numbers you register by WABA
+  and display number, and compares display numbers by their digits
+  (`+1 555-078-3881`, as the phone numbers API may show it, is the
+  webhook's `15550783881`); register each with its country code, as
+  the webhook shows it (`555-078-3881` is not `15550783881`). An upgrade
+  for a number it does not know changes nothing and is logged as a
+  warning, naming no number. Add numbers while running
+  with `KnownNumbers::insert` on one you share behind an `Arc`
+  (`ThroughputUpgrades::shared`), or implement `NumberDirectory` over
+  your own store.
+- **Only the upgrade.** `ONBOARDING`, `FLAGGED` and any value Meta adds
+  later change no rate (logged at debug level): Meta documents no
+  downgrade event, and no mapping from a throughput level to a rate. An
+  upgrade never lowers a rate: a number already at or above it keeps its
+  own, and an upgrade heard twice changes nothing.
+- **Headroom.** `ThroughputUpgrades::rate` sets the rate an upgrade
+  gives (`Rate::per_second(800)` leaves a fifth for inbound messages,
+  see below).
+- **In memory only.** The rate lives in the bucket. A restart, or a
+  replica the webhook did not reach, is back at the configured rate, and
+  Meta sends the webhook once per upgrade. To keep it, store the number
+  yourself (`ThroughputUpgrades::observe` returns it, called from a
+  listener or sink of your own) and set it at startup with
+  `TokenBucket::rate_for`. The library keeps no
+  record of it: a store namespace would be a stable identifier.
+- **What else loses an upgrade**, which Meta does not send again. As
+  the bot's listener it runs after the middleware: a middleware that
+  stops the event (one ignoring everything outside business hours, or
+  everything but messages) stops the upgrade too, so let events without
+  a message through, or deliver to the `ThroughputUpgrades` as a sink
+  next to the bot. A `NumberDirectory` that fails changes no rate: as a
+  sink that is `SinkError::Delivery` (the webhook answers `500`, Meta
+  redelivers for up to 7 days), as the bot's listener it goes to the
+  `ErrorHandler`, whose default, `LogErrors`, logs and acknowledges it,
+  losing the upgrade (`PropagateErrors` has it redelivered; following an
+  upgrade twice is harmless). A directory answers `Ok(None)`, not an
+  error, for a number that is not its own.
+- **Concurrency.** At 1,000 a second a broadcast's concurrency is what
+  caps it (below): raise `BroadcastBuilder::concurrency` for the
+  upgraded number.
+
 - **Headroom for inbound messages.** Meta's throughput is "inclusive of
   inbound and outbound messages and all message types", and a pacer
   counts only what this process sends. A campaign that draws replies
