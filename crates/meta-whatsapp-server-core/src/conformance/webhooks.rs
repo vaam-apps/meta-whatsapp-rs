@@ -130,9 +130,17 @@ const MOVED: Holder = Holder {
     waba: "102290129340416",
     pn: "106540352242936",
 };
-/// The tenant the move case's WABA and number move to while the event
-/// records.
+/// The tenant of the move case whose number alone moves, to another
+/// tenant's WABA, while its event records; it keeps its own WABA.
+const MOVED_ALONE: Holder = Holder {
+    id: "wh-moved-alone-from",
+    waba: "102290129340417",
+    pn: "106540352242937",
+};
+/// The tenant the move case's numbers move to while their events record.
 const MOVED_TO: &str = "wh-moved-to";
+/// The WABA of [`MOVED_TO`]'s that [`MOVED_ALONE`]'s number moves under.
+const MOVED_TO_WABA: &str = "102290129340418";
 /// The customer of Meta's examples (`wa_id`): the inbox's contact.
 const CONTACT: &str = "16505551234";
 
@@ -760,70 +768,95 @@ pub async fn an_event_is_routed_only_after_its_binding_and_within_the_replay_win
     );
 }
 
-/// A WABA and its number that move to another tenant while their event is
-/// being recorded (routed to the holder, its message in the inbox, its row
-/// on its way to the outbox) give the event to neither: the outbox checks
-/// the binding the event was routed by again, with the insert, and the
-/// row is operator-only. The delivery is acknowledged and recorded once:
-/// Meta's redelivery is a duplicate, which reaches nobody either.
-/// Decisive: the row's route guard not set (or not naming the number),
-/// with the outbox's own re-check (`super::races`, `super::outbox`).
+/// A number that moves to another tenant while its event is being recorded
+/// (routed to the holder, its message in the inbox, its row on its way to
+/// the outbox) gives the event to neither: with its WABA, or alone, to
+/// another tenant's WABA while the holder keeps its own. The outbox checks
+/// the binding the event was routed by again, with the insert (the
+/// number's, under the WABA it was routed by, for an event naming one),
+/// and the row is operator-only. Each delivery is acknowledged and
+/// recorded once: Meta's redelivery is a duplicate, which reaches nobody
+/// either. Decisive: a number's event guarded by its WABA's binding alone
+/// (the number moving by itself reaches its old holder), and the outbox's
+/// own re-check on the backend (`super::races` races it).
 pub async fn a_number_moved_while_its_event_records_reaches_neither_tenant(backend: &dyn Backend) {
     let records = backend.records();
+    let to = TenantId::parse(MOVED_TO).unwrap();
+    records.create_tenant(&to, "").await.unwrap();
     hold(records.as_ref(), MOVED).await;
+    hold(records.as_ref(), MOVED_ALONE).await;
     let watched = Watched::of(backend);
     let told = Arc::new(Told::default());
     let pipeline = Arc::new(pipeline(&watched, &told));
 
-    watched.outbox.close_gate();
-    let payload = body(&text(MOVED.waba, MOVED.pn, "wamid.moved.1"));
-    let delivery = {
-        let (pipeline, payload) = (pipeline.clone(), payload.clone());
-        tokio::spawn(async move { deliver(&pipeline, &payload).await })
-    };
-    watched.outbox.parked(1).await;
-    assert_eq!(inbox(backend, MOVED.pn).await, 1, "routed to its holder");
-    // The WABA and its number move, while the row waits.
-    let waba = WabaId::new(MOVED.waba).unwrap();
-    let binding = records.waba(&waba).await.unwrap().unwrap();
-    assert!(records.unbind_waba_if(&binding.epoch()).await.unwrap());
-    let to = TenantId::parse(MOVED_TO).unwrap();
-    records.create_tenant(&to, "").await.unwrap();
-    let outcome = records
-        .bind_waba(&to, &waba, &[PhoneNumberId::new(MOVED.pn).unwrap()])
-        .await
-        .unwrap();
-    assert_eq!(outcome, BindOutcome::Bound);
-    watched.outbox.open_gate();
-    let report = delivery.await.unwrap().unwrap();
-    assert_eq!(
-        (report.delivered, report.duplicates),
-        (1, 0),
-        "acknowledged"
-    );
-    let inserted = watched.outbox.inserted();
-    let [(row, sequence)] = inserted.as_slice() else {
-        panic!("one row asked for: {inserted:?}");
-    };
-    assert!(sequence.is_some(), "recorded");
-    assert_eq!(
-        row.tenant.as_ref().map(TenantId::as_str),
-        Some(MOVED.id),
-        "routed to the holder of when it arrived"
-    );
-    assert!(
-        polled(backend, MOVED.id).await.is_empty(),
-        "the old holder lost the number before its row was stored"
-    );
-    assert!(
-        polled(backend, MOVED_TO).await.is_empty(),
-        "the new holder never polls an event routed to another"
-    );
-    // Meta's redelivery: a duplicate, by the dedup lease.
-    let report = deliver(&pipeline, &payload).await.unwrap();
-    assert_eq!((report.delivered, report.duplicates), (0, 1));
-    assert!(polled(backend, MOVED.id).await.is_empty());
-    assert!(polled(backend, MOVED_TO).await.is_empty());
+    for (round, (case, from)) in [
+        ("the WABA and its number", MOVED),
+        ("the number alone, to another tenant's WABA", MOVED_ALONE),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        watched.outbox.close_gate();
+        let payload = body(&text(from.waba, from.pn, &format!("wamid.moved.{round}")));
+        let delivery = {
+            let (pipeline, payload) = (pipeline.clone(), payload.clone());
+            tokio::spawn(async move { deliver(&pipeline, &payload).await })
+        };
+        watched.outbox.parked(1).await;
+        assert_eq!(
+            inbox(backend, from.pn).await,
+            1,
+            "{case}: routed to its holder"
+        );
+        // The move, while the row waits.
+        let waba = WabaId::new(from.waba).unwrap();
+        let pn = PhoneNumberId::new(from.pn).unwrap();
+        let moved = if round == 0 {
+            let binding = records.waba(&waba).await.unwrap().unwrap();
+            assert!(records.unbind_waba_if(&binding.epoch()).await.unwrap());
+            records.bind_waba(&to, &waba, &[pn]).await.unwrap()
+        } else {
+            let holder = TenantId::parse(from.id).unwrap();
+            let kept = records.bind_waba(&holder, &waba, &[]).await.unwrap();
+            assert_eq!(
+                kept,
+                BindOutcome::Bound,
+                "{case}: the holder keeps its WABA"
+            );
+            let other = WabaId::new(MOVED_TO_WABA).unwrap();
+            records.bind_waba(&to, &other, &[pn]).await.unwrap()
+        };
+        assert_eq!(moved, BindOutcome::Bound, "{case}: moved");
+        watched.outbox.open_gate();
+        let report = delivery.await.unwrap().unwrap();
+        assert_eq!(
+            (report.delivered, report.duplicates),
+            (1, 0),
+            "{case}: acknowledged"
+        );
+        let inserted = watched.outbox.inserted();
+        assert_eq!(inserted.len(), round + 1, "{case}: one row asked for");
+        let (row, sequence) = &inserted[round];
+        assert!(sequence.is_some(), "{case}: recorded");
+        assert_eq!(
+            row.tenant.as_ref().map(TenantId::as_str),
+            Some(from.id),
+            "{case}: routed to the holder of when it arrived"
+        );
+        assert!(
+            polled(backend, from.id).await.is_empty(),
+            "{case}: the old holder lost the number before its row was stored"
+        );
+        assert!(
+            polled(backend, MOVED_TO).await.is_empty(),
+            "{case}: the new holder never polls an event routed to another"
+        );
+        // Meta's redelivery: a duplicate, by the dedup lease.
+        let report = deliver(&pipeline, &payload).await.unwrap();
+        assert_eq!((report.delivered, report.duplicates), (0, 1), "{case}");
+        assert!(polled(backend, from.id).await.is_empty(), "{case}");
+        assert!(polled(backend, MOVED_TO).await.is_empty(), "{case}");
+    }
     assert!(told.take_webhook_failures().is_empty());
 }
 

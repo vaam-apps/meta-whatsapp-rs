@@ -165,6 +165,11 @@ impl RecordStore for Records {
                 attached_at,
             },
         );
+        // Exactly `numbers`: those the WABA had and the list lacks are
+        // unbound (the port's contract).
+        state
+            .numbers
+            .retain(|pn, n| &n.waba_id != waba_id || numbers.iter().any(|p| p.as_str() == pn));
         for pn in numbers {
             state.numbers.insert(
                 pn.as_str().to_owned(),
