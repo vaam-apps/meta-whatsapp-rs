@@ -41,7 +41,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 105 | 20 | 6 | 1 |
+| Library | 106 | 19 | 6 | 1 |
 | Service | 39 | 25 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -49,7 +49,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 26 partial or gap rows is cited by a
+- Each of the library's 25 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
@@ -58,8 +58,8 @@ reached.
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
   middleware, plugins, access lists and Markdown replies exist, B1, with
-  subcommands and flags, B1b, and paced broadcast, B2; rich replies
-  beyond text, scheduling and auto-delete do not, B1c, B3, B4).
+  subcommands and flags, B1b, paced broadcast, B2, and rich replies,
+  B1c; scheduling and auto-delete do not, B3, B4).
 
 ## What parity means
 
@@ -205,7 +205,7 @@ The owner's definition (2026-09-26):
 | 14 | Messaging | @-mentions | Yes | No (dropped) | no mention object in `reference/whatsapp-business-phone-number/message-api.md` or in the groups guides (`groups/groups-messaging`) | — | — | n/a — unofficial protocol |
 | 15 | Messaging | Disappearing messages | Yes | No | not supported: `groups` lists them among the types groups do not support, `embedded-signup/onboarding-business-app-users` says coexistence turns them off in one-to-one chats, and `reference/whatsapp-business-phone-number/message-api.md` has no such option | — | — | n/a — unofficial protocol |
 | 16 | Messaging | Rich responses in Meta AI's block format | Yes (sent as a forwarded bot message) | No | undocumented format | — | — | n/a — unofficial protocol |
-| 17 | Messaging | Rich markdown responses rendered as Cloud messages: formatting, long text split, images as media, suggestions as buttons or lists, product cards as carousels | Yes (through row 16) | No | building blocks only: text (at most 4096 characters, `messages/text-messages`), media, interactive (`reference/whatsapp-business-phone-number/message-api.md`) | formatting and the split, in `meta-whatsapp-bot`: `Ctx::reply_markdown` renders with a `MarkdownRenderer` (the default `Renderer`: bold, italic, strike, code, quotes, lists, links, tables as padded columns or `header: value` lines within `Renderer::table_max_width` and `Renderer::table_max_growth`) and sends messages of at most 4096 UTF-16 code units, cut between blocks. Not yet: images go out as their alt text and URL, not as media, and no suggestions become buttons or lists, nor product cards carousels (B1c) | gap (the bot API, M5k) | partial / gap (M5k) |
+| 17 | Messaging | Rich markdown responses rendered as Cloud messages: formatting, long text split, images as media, suggestions as buttons or lists, product cards as carousels | Yes (through row 16) | No | building blocks only: text (at most 4096 characters, `messages/text-messages`), media, interactive (`reference/whatsapp-business-phone-number/message-api.md`) | formatting and the split, in `meta-whatsapp-bot`: `Ctx::reply_markdown` renders with a `MarkdownRenderer` (the default `Renderer`: bold, italic, strike, code, quotes, lists, links, tables as padded columns or `header: value` lines within `Renderer::table_max_width` and `Renderer::table_max_growth`) and sends messages of at most 4096 UTF-16 code units, cut between blocks; and since B1c `Ctx::reply_rich` sends a `RichReply` of Markdown and typed parts, in order, one message each: `RichReply::image` as an image message by link (`messages/image-messages`; the renderer's URL rule, then an absolute `http(s)` URL with a host and no user name or password), `RichReply::suggestions` as reply buttons up to 3 (`messages/interactive-reply-buttons-messages`) and a list from 4 to 10 (`messages/interactive-list-messages`), `RichReply::products` as a product carousel of 2 to 10 cards (`catalogs/interactive-product-carousel-messages`), each the client's own builder checked before the first send, the body of buttons, lists and carousels the text right before them, `Suggestion::command` sending a command's payload so the tap runs it, a failed send stopping the reply as an `Error::Step`. An image goes by link only, and Markdown's `![alt](url)` stays text | gap (the bot API, M5k) | done / gap (M5k) |
 | 18 | Messaging | HTML apps in the chat bubble | Partial (Android only, undocumented) | No | undocumented; the official in-chat UI is Flows (rows 60–63) | — | — | n/a — unofficial protocol |
 | 19 | Messaging | Emoji reactions | Yes | Yes | `messages/reaction-messages` | `client::messages::Messages::react`; `OutboundMessage::reaction`; in a bot, `Ctx::react` (the received message) | type `reaction` | done / done |
 | 20 | Messaging | Edit a sent message | Yes | No | no business-side edit in `reference/whatsapp-business-phone-number/message-api.md`; a user's edit arrives as an unsupported type (`webhooks/reference/messages/edit.md`) | inbound only: `webhooks::fields::MessageContent::Edit` | inbound only, in `message_received` events | n/a — unofficial protocol (sending an edit) |
@@ -399,7 +399,7 @@ item, each naming its crate, what it comes after and its decisive test:
 - **The bot framework**, a new library crate `meta-whatsapp-bot`:
   commands, middleware, compile-time plugins and markdown replies (B1,
   done; rows 17, 85–88), subcommands and flags (B1b, done; row 85), rich
-  replies beyond text (B1c; row 17), paced broadcast (B2, done; rows
+  replies beyond text (B1c, done; row 17), paced broadcast (B2, done; rows
   89, 92; D29), then durable scheduling (B3; row 90; D29), then retention and
   auto-delete after the `ConversationStore` port change (B4, after L5;
   row 91).

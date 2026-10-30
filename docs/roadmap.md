@@ -932,8 +932,8 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     (BSUID only) is served.
   - **Landed:** rows 86–88 done in the library; row 85 partial
     (subcommands and flags: B1b, since done) and row 17 partial (rich
-    replies beyond text: B1c). Folder loading and hot reload stay out
-    (D28).
+    replies beyond text: B1c, since done). Folder loading and hot reload
+    stay out (D28).
 - [x] **B1b. Subcommands and flags** (`meta-whatsapp-bot`; row 85): a
   command's subcommands (`/order status 42` runs `status` under
   `order`, each with its own guards, usage and help line) and flags in
@@ -977,7 +977,7 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     `an_unknown_flag_is_refused_with_the_usage`. Not in it: nested
     subcommands, short or space-separated flags, and typed flag values
     (a handler parses `Args::flag` itself).
-- [ ] **B1c. Rich replies beyond text** (`meta-whatsapp-bot`; row 17):
+- [x] **B1c. Rich replies beyond text** (`meta-whatsapp-bot`; row 17):
   a reply built from Markdown and a few typed parts, sent as the
   messages Meta documents for them: an image as an image message (by
   link, under the renderer's URL rule), suggestions as reply buttons
@@ -991,6 +991,47 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     requests asserted; three suggestions become buttons and four a list
     (removing the count check fails the test); a `javascript:` image
     URL is never sent.
+  - **Landed:** row 17 done in the library. `Ctx::reply_rich` sends a
+    `rich::RichReply` (`markdown`, `image`, `image_with_caption`,
+    `suggestions`, `products`, `list_button`; `to_messages` builds
+    without sending) of `rich::Suggestion`s (`new`, `command`,
+    `description`), each part as the client's own builder
+    (`ReplyButtons`, `ListMessage`, `ProductCarousel`, `Image`), all
+    checked with `OutboundMessage::validate` before the first send. The
+    decisive tests, in `crates/meta-whatsapp-bot/tests/rich_replies.rs`:
+    `a_paragraph_and_an_image_send_a_text_then_an_image` (fails with the
+    parts or the sends reversed),
+    `three_suggestions_become_buttons_and_four_a_list` (fails with the
+    count check forced either way or off by one) and
+    `a_javascript_image_url_is_never_sent` (fails without the URL
+    check); `a_failure_midway_stops_the_reply_and_names_the_step` and
+    `a_timeout_midway_is_not_resent_or_followed` fail when the reply
+    goes on after a failed send. Decided by the coordinator on
+    2026-10-30 (AGENTS.md § Decisions), as the draft proposed: the
+    builder API above; every message built and validated first, then
+    sent in order, a failed send stopping the reply as an `Error::Step`
+    (`rich::STEP_TEXT`, …) with the parts before it never resent;
+    buttons, lists and carousels take as their body the last message of
+    the Markdown part right before them (none: refused), so an answer
+    and its buttons are one bubble and a separate question is one more
+    `markdown` part; `Suggestion::command` sends the command's first
+    payload and is refused when it has none; an image link must pass the
+    renderer's URL rule and be an absolute `http` or `https` URL with a
+    host (Meta fetches it; its page refuses no `http`, so `http:` is
+    allowed), without a user name or password (added in review: it
+    would be sent to Meta); a list's single section is titled with its
+    button's label, `rich::LIST_BUTTON` (`Options`) unless
+    `RichReply::list_button`; a suggestion's description shows in lists
+    only (buttons have none). A suggestion may name a hidden or
+    owner-only command: it shows only the title the bot gives it, and
+    the tap passes the command's guards
+    (`an_owner_only_suggestion_is_still_guarded_when_tapped`). Swappable:
+    `RichReply::to_messages` gives the messages to send another way,
+    and the Markdown goes through the bot's `MarkdownRenderer`. Not in
+    it: an image by uploaded media id, Markdown's own `![alt](url)` as
+    an image (it stays text), headers and footers on buttons and lists,
+    several list sections, and a partial result on failure (the error
+    carries the step, not the responses of the parts already sent).
 - [x] **B2. Paced broadcast** (`meta-whatsapp-bot`; rows 89, 92; D29): a
   per-number rate under Meta's throughput (80 messages a second by
   default), progress, retries only when `Error::may_have_been_sent` is

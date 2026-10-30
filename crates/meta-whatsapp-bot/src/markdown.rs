@@ -552,7 +552,7 @@ const URL_SCHEMES: [&str; 4] = ["http", "https", "mailto", "tel"];
 /// Anything else (`javascript:`, `data:`, `file:`, …) is left out. The
 /// scheme is read the way browsers read it: leading spaces and control
 /// characters skipped, tabs and line breaks ignored, any case.
-fn url_allowed(url: &str) -> bool {
+pub(crate) fn url_allowed(url: &str) -> bool {
     let cleaned: String = url
         .trim_start_matches(|c: char| c == ' ' || c.is_ascii_control())
         .chars()

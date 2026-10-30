@@ -217,6 +217,39 @@ stored data, the owner's).
 
 ### Added
 
+- **Rich replies** in `meta-whatsapp-bot` (roadmap B1c, parity row 17,
+  now done in the library), from `messages/image-messages`,
+  `messages/interactive-reply-buttons-messages`,
+  `messages/interactive-list-messages` and
+  `catalogs/interactive-product-carousel-messages` (read on 2026-10-30).
+  `Ctx::reply_rich` sends a `rich::RichReply` of parts, in order, one
+  message each, the first quoting the received message:
+  `RichReply::markdown` as text messages through the bot's
+  `MarkdownRenderer`; `RichReply::image` and `image_with_caption` as an
+  image message by link, which must pass the renderer's URL rule and be
+  an absolute `http` or `https` URL with a host (a `javascript:`,
+  `data:`, relative, `mailto:` or `tel:` link is refused, as is one with
+  a user name or password, and the refusal does not repeat it);
+  `RichReply::suggestions` as reply buttons
+  up to `rich::BUTTONS_MAX` (3) and as a one-section list from 4 to
+  `rich::SUGGESTIONS_MAX` (10), its button and section titled
+  `rich::LIST_BUTTON` (`Options`) unless `RichReply::list_button`;
+  `RichReply::products` as a product carousel (2 to 10 `ProductCard`s
+  of one catalog). Buttons, lists and carousels take as their body the
+  last message of the Markdown part right before them (cut first past
+  1024 characters for buttons and carousels); without one the reply is
+  refused. `Suggestion::new(id, title)` sends its id;
+  `Suggestion::command(path, title)` sends the first `Command::payload`
+  of that command or subcommand, so a tap runs it, and is refused when
+  it has none; `Suggestion::description` shows in lists. Every message
+  is the client's own builder (`ReplyButtons`, `ListMessage`,
+  `ProductCarousel`, `Image`) and is checked with
+  `OutboundMessage::validate` before the first send, so a part over a
+  limit sends nothing; a failed send stops the reply, as an
+  `Error::Step` naming it (`rich::STEP_TEXT`, `STEP_IMAGE`,
+  `STEP_BUTTONS`, `STEP_LIST`, `STEP_PRODUCTS`), the parts before it
+  sent and never resent. `RichReply::to_messages` builds the messages
+  without sending them.
 - **A typed Flow JSON model and builder**
   (`meta_whatsapp_client::flows::flow_json`, roadmap L18, parity row 63),
   from `flows/guides/flowjson`, `flows/guides/components`,
