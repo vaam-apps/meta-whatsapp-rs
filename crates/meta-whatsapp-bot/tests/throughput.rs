@@ -9,7 +9,6 @@
 
 mod common;
 
-use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -33,9 +32,6 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use time::OffsetDateTime;
 use time::macros::datetime;
-use tracing::field::{Field, Visit};
-use tracing::span::{Attributes, Id, Record};
-use tracing::{Event, Metadata, Subscriber};
 
 const T0: OffsetDateTime = datetime!(2026-09-26 12:00 UTC);
 /// Meta's example: the WABA (`entry.id`) and the display number of
@@ -467,74 +463,4 @@ fn bookings_racing_the_upgrade_see_one_rate_then_the_other() {
     assert!(first_new >= 19, "{gaps:?}");
     assert!(gaps[first_new..].iter().all(|g| *g == new), "{gaps:?}");
     assert!(gaps.len() - first_new >= 2 * AFTER - 1, "{gaps:?}");
-}
-
-/// Every log line as `LEVEL field=value …`.
-#[derive(Clone, Default)]
-struct Capture(Arc<Mutex<Vec<String>>>);
-
-struct Line(String);
-
-impl Visit for Line {
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        let _ = write!(self.0, " {}={value:?}", field.name());
-    }
-}
-
-impl Subscriber for Capture {
-    fn enabled(&self, _: &Metadata<'_>) -> bool {
-        true
-    }
-    fn new_span(&self, _: &Attributes<'_>) -> Id {
-        Id::from_u64(1)
-    }
-    fn record(&self, _: &Id, _: &Record<'_>) {}
-    fn record_follows_from(&self, _: &Id, _: &Id) {}
-    fn event(&self, event: &Event<'_>) {
-        let mut line = Line(event.metadata().level().to_string());
-        event.record(&mut line);
-        self.0.lock().unwrap().push(line.0);
-    }
-    fn enter(&self, _: &Id) {}
-    fn exit(&self, _: &Id) {}
-}
-
-/// Neither the logs (an upgrade followed, one already followed, a number
-/// not known, another value) nor the `Debug` of a directory or of the
-/// upgrades name the WABA or the display number, in any shape; the logs
-/// name no phone number id.
-#[test]
-fn the_logs_and_debug_name_no_number() {
-    const PRIVATE: [&str; 4] = [WABA, DISPLAY, "555-078-3881", "5550783881"];
-    let capture = Capture::default();
-    let _guard = tracing::subscriber::set_default(capture.clone());
-    let upgrades = ThroughputUpgrades::new(Arc::new(TokenBucket::default()), ours());
-    let unknown = ThroughputUpgrades::new(Arc::new(TokenBucket::default()), KnownNumbers::new());
-    block_on(async {
-        assert!(upgrades.observe(&event(FIXTURE)).await.unwrap().is_some());
-        assert!(upgrades.observe(&event(FIXTURE)).await.unwrap().is_none());
-        assert!(unknown.observe(&event(FIXTURE)).await.unwrap().is_none());
-        assert!(
-            upgrades
-                .observe(&quality_update("ONBOARDING"))
-                .await
-                .unwrap()
-                .is_none()
-        );
-    });
-    let lines = capture.0.lock().unwrap().clone();
-    for level in ["INFO", "WARN", "DEBUG"] {
-        assert!(lines.iter().any(|l| l.starts_with(level)), "{lines:?}");
-    }
-    // The logs carry no phone number id either (the bucket's `Debug`,
-    // inside the upgrades', lists its numbers' rates by id).
-    for line in &lines {
-        assert!(!line.contains(NUMBER), "{line}");
-    }
-    let debug = format!("{:?} {:?}", ours(), upgrades);
-    for text in lines.iter().chain([&debug]) {
-        for private in PRIVATE {
-            assert!(!text.contains(private), "{private} in {text}");
-        }
-    }
 }

@@ -1092,7 +1092,9 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     `an_upgrade_is_idempotent_and_never_lowers_a_rate` without the
     never-lower check (made with the set under one lock),
     `a_middleware_that_stops_the_event_stops_the_upgrade` pins the
-    listener's place, `the_logs_and_debug_name_no_number` the logs, and
+    listener's place, `the_logs_and_debug_name_no_number` the logs
+    (alone in `tests/throughput_logs.rs`: its capture is a thread's
+    subscriber, and `tracing` caches call sites across threads), and
     `without_following_upgrades_the_fixture_changes_no_rate` off by
     default. Decided by the coordinator (AGENTS.md § Decisions, each
     swappable): the `ThroughputUpgrades` shape above (the directory a
