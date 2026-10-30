@@ -1259,8 +1259,14 @@ decisions and the delivery milestones, is
     `admit_waba`: disconnecting) and the templates
     (`templates::Templates` on an admitted `OwnedWaba` of the admitted
     `Caller`'s own tenant, over the adapter's `templates::TemplateCache`:
-    the list, the lookup of an id in its WABA, create, delete); the
-    others follow in S5d–S5e. It depends on the
+    the list, the lookup of an id in its WABA, create, delete), and
+    since S5d the media (`media::Media` on an admitted `OwnedNumber`,
+    with the adapter's transfer slots: an `Upload` checked before any
+    request, a download verified against Meta's SHA-256, whole or as
+    `media::MediaStream`, a `futures::Stream` of the library's `Bytes`
+    held one chunk behind, which ends with a `StreamStopped` instead of
+    its last chunk on a mismatch, and a deletion of the number's own
+    media only); the webhook pipeline follows in S5e. It depends on the
     facade without its adapters' features: no axum, no sqlx, no utoipa
     (the `http` crate is in its graph only through the library, whose
     `HttpTransport` port and client speak it; no `http` type crosses the

@@ -31,18 +31,16 @@ async-trait.workspace = true
 futures.workspace = true
 # Request ids (`req_` and 16 random hex digits).
 getrandom.workspace = true
-# Opaque list cursors; `X-WA-SHA256` in hex.
+# Opaque list cursors, request ids, a keyless event's digest in logs.
 hex.workspace = true
-# Meta reports a media file's SHA-256 in hex or base64: a streamed
-# download announces it (`X-WA-SHA256`, hex) before the first byte.
-base64.workspace = true
 # Media uploads: multipart parsing with per-field size limits.
 multer.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # SHA-256: of a keyless event's body (src/events.rs), of an upload in its
-# idempotency fingerprint and of a download, checked against Meta's
-# (src/api/media.rs), and the advisory lock keys (src/store/postgres.rs).
+# idempotency fingerprint (src/api/media.rs), and the advisory lock keys
+# (src/store/postgres.rs). A download's is checked by the core
+# (meta_whatsapp_server_core::media, since roadmap S5d).
 sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
@@ -62,6 +60,9 @@ utoipa-axum.workspace = true
 
 [dev-dependencies]
 meta-whatsapp-rs = { workspace = true, features = ["reqwest", "memory", "postgres", "axum", "testing"] }
+# tests/media.rs: Meta's digest in base64, as its webhooks carry it (the
+# core reads it since roadmap S5d).
+base64.workspace = true
 # tests/store.rs and tests/live_postgres.rs: both backends pass the core's
 # conformance suites (`meta_whatsapp_server_core::conformance`).
 meta-whatsapp-server-core = { workspace = true, features = ["conformance"] }

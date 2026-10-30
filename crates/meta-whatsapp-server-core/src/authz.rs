@@ -416,8 +416,11 @@ impl Authorizer {
     }
 
     /// [`Self::admit`] for an [`OwnedNumber`]: what a service opened on
-    /// one asks first ([`Messages::new`](crate::messages::Messages::new)),
-    /// so that nothing is sent with a number another [`Authorizer`] made.
+    /// one asks first ([`Messages::new`](crate::messages::Messages::new),
+    /// [`Numbers::new`](crate::numbers::Numbers::new),
+    /// [`Media::new`](crate::media::Media::new)), so that nothing is sent,
+    /// read, uploaded, downloaded or deleted with a number another
+    /// [`Authorizer`] made.
     ///
     /// # Errors
     ///
@@ -875,6 +878,15 @@ impl OwnedNumber {
     /// A client acting with the WABA's token.
     pub fn client(&self) -> &Client {
         &self.client
+    }
+
+    /// The tenant whose binding this was made from: the caller's, for a
+    /// number [`Authorizer::owned_number`] opened (whose share of the
+    /// replica's transfer slots the core's media services take:
+    /// [`crate::media`]). Crate-private: a capability's fields are its
+    /// maker's word.
+    pub(crate) fn tenant(&self) -> &TenantId {
+        &self.epoch.tenant_id
     }
 
     /// The error of a failed Graph call made with this number's token

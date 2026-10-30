@@ -14,6 +14,7 @@
 //! | [`admin`] | the admin operations as services: tenants, keys, platform keys, attaching a WABA (decision D4), reading and unbinding a binding, the vault's rotation |
 //! | [`messages`] | the message operations as services: the send request (free of any API toolkit), the recipient and E.164 rules, sending (the accepted message) and marking read |
 //! | [`numbers`] | the number operations as services: a number's live details, its business profile read and changed, disconnecting a WABA |
+//! | [`media`] | the media operations as services: an upload checked (type, size, file name) before any request, a download verified against Meta's SHA-256 (whole, or as a framework-free byte stream that ends before its last chunk on a mismatch), a deletion of the number's own media only |
 //! | [`templates`] | the template operations as services: the list (cached per WABA, [`templates::TemplateCache`]), the lookup of an id in a WABA, creation (the definition checked first), deletion |
 //! | [`request`] | what the requests share: a Meta object read into the library's type, no key dropped; a Meta object id checked before it reaches a Graph path |
 //! | [`keys`] | the API key format, digests, constant-time comparison |
@@ -60,6 +61,7 @@ pub mod events;
 pub mod housekeeping;
 pub mod idempotency;
 pub mod keys;
+pub mod media;
 pub mod messages;
 pub mod model;
 pub mod numbers;

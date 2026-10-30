@@ -32,6 +32,11 @@ conformance = ["meta-whatsapp-rs/testing", "tokio/macros"]
 meta-whatsapp-rs.workspace = true
 
 async-trait.workspace = true
+# Meta reports a media file's SHA-256 in hex or base64 (src/media.rs).
+base64.workspace = true
+# A media download's chunks, the library's own type, passed on as they
+# arrive (src/media.rs: `MediaStream`). Already the library's dependency.
+bytes.workspace = true
 # Attaching a WABA follows Meta's listing of its numbers, a stream.
 futures.workspace = true
 # Random API keys and idempotency claim ids.

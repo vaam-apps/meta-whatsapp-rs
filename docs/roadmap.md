@@ -666,12 +666,64 @@ and `store-postgres`.
     (`meta_whatsapp_server::api::templates`); the server's `auth::OwnedWaba`
     keeps `failed`, `failed_on_object`, `still_bound`, `forget` and
     `forget_or_busy` (public, now unused by the handlers).
-- [ ] **S5d. Media into core** (`meta-whatsapp-server-core`): upload,
+- [x] **S5d. Media into core** (`meta-whatsapp-server-core`): upload,
   download as a framework-free byte stream, delete.
   - **After:** S4.
   - **Decisive:** a download through the core's stream ends before its
     last chunk on a digest mismatch (M1b's rule, without axum); the
     media routes' tests pass unchanged.
+  - **Landed:** `meta_whatsapp_server_core::media`: `Media` on an
+    `OwnedNumber` (`Media::new`, which admits it,
+    `Authorizer::admit_number`), over the adapter's transfer slots
+    (`media::MediaSlots`, the core's `ratelimit::Slots`, each slot of the
+    number's tenant's share): `transfer_slot` (an upload's, before its
+    body is read), `upload` (a `media::Upload`, made only by
+    `Upload::new`: `checked_type`, Meta's sizes, `filename`), `download`
+    (within `media::DownloadLimits`, made only by `parse` or `new`
+    within the caps, `MAX_WHOLE_DOWNLOAD` whole) and `delete` (looked
+    up first, with `phone_number_id`). A download answers
+    `media::Downloaded`: the content type, Meta's SHA-256, and the whole
+    verified file or a `media::MediaStream`, a `futures::Stream` of the
+    library's `Bytes` (no HTTP framework; the core gains `bytes` and
+    `base64`, both already in the library's graph) held one chunk
+    behind, which yields `StreamStopped::Integrity` instead of its last
+    chunk on a mismatch (`TooLarge` past `max_bytes`, `Failed`) and
+    holds its slot until dropped. The handlers keep the multipart
+    reading (framing budget, `media::upload_cap` as the file streams
+    in), the upload's `idempotency::run` (`Idempotent-Replayed`), the
+    OpenAPI types and the headers, and render the stream as the body.
+    Decisive:
+    `conformance::media::a_download_through_the_cores_stream_ends_before_its_last_chunk_on_a_digest_mismatch`
+    (in `conformance::run`), with no HTTP layer and a transport whose
+    downloads arrive in the chunks the case gives: a tampered file of
+    three chunks yields two, then the error; a file still arriving is
+    passed on with one chunk held; past `max_bytes` nothing; a whole
+    tampered file is `502 integrity` with no byte; the reported size,
+    an unusable digest and a URL off `lookaside.fbsbx.com` (`502
+    upstream`, the token not sent) are refused before the download;
+    another node's or a refused media id is `404`; another
+    `Authorizer`'s number is `403`; a slot of the tenant's share comes
+    first. It runs on the core's memory backend (`tests/media.rs`), on
+    the service's `MemoryBackend` (`tests/store.rs`) and live on
+    Postgres (`tests/live_postgres.rs`); a second case,
+    `the_media_services_upload_and_delete_as_meta_documents`, pins the
+    upload's multipart request and the deletion's lookup, and
+    `tests/media_logs.rs` the three moved log lines' target
+    (`meta_whatsapp_server::api::media`) and that none names Meta's URL.
+    By mutation, each fails the core suite: the digest check dropped
+    (a mismatch taken for the end, in the stream or the whole read);
+    the digest checked only once the last chunk was yielded (nothing
+    held back); `Media::new`'s admission dropped; each size cap dropped
+    (the stream's, the whole read's, the reported size's, the limits'
+    in `parse` and in `new`, an upload's kind limit in `Upload::new` and
+    in `upload_cap`). The service's `tests/media.rs` passes unchanged
+    and fails on each mutation but the admission (no forged capability
+    reaches a handler) and the limits' caps (`parse` and `new` each
+    hold the other's). `openapi/v1.json` is byte-identical. Left: the
+    server's `auth::OwnedNumber` keeps `failed` and `failed_on_object`
+    (public, now unused by the handlers, as S5c left `OwnedWaba`'s); the
+    multipart reader stays the server's (its framing budget is
+    multer's, an HTTP body's concern).
 - [ ] **S5e. The webhook pipeline into core** (`meta-whatsapp-server-core`,
   or `meta-whatsapp-server-http` for what needs a listener): routing and
   recording, framework-free.

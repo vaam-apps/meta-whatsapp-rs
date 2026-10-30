@@ -407,9 +407,9 @@ mod tests {
             }
         }
         // The admin operations name theirs in the core since roadmap S5a,
-        // and the message operations since S5b (its own
-        // `every_code_the_source_names_exists` reads them).
-        assert!(named >= 14, "{named}");
+        // the message operations since S5b, and the media operations since
+        // S5d (its own `every_code_the_source_names_exists` reads them).
+        assert!(named >= 8, "{named}");
     }
 
     #[test]
