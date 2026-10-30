@@ -2775,9 +2775,14 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   `Error::Api` with its `http_status`; what does not decode (an envelope
   cut at the cap, a proxy's error page) is an `Error::Http` with its first
   512 bytes, withheld as before when they may carry the token. A 2xx
-  stream is unchanged. Buffered requests (`send`) still get the whole body
-  from the transport, which the stock `ReqwestTransport` reads without a
-  limit: their answers come from the configured Graph endpoint. Tests:
+  stream is unchanged. The bound is on what the transport streams: a
+  transport that keeps the port's default `send_streaming` has buffered
+  the whole body through `send` before the client sees a chunk. Buffered
+  requests (`send`) still get the whole body from the transport, which the
+  stock `ReqwestTransport` reads without a limit: their answers come from
+  the configured Graph endpoint, from `api.facebook.com` (the Parent BSUID
+  Accounts call) and from the targets of the cross-origin redirects it
+  follows (production guide §4; a follow-up). Tests:
   `request::streamed_error_tests` (an endless body is read for four 16 KiB
   chunks and no fifth; an envelope of exactly 64 KiB decodes and one byte
   more does not; a 2xx body of 128 KiB is read whole).
@@ -2793,3 +2798,8 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   query value; `<redacted: not a URL>` for one that does not parse).
   Every other field prints as before. Test:
   `media_info_debug_hides_the_url_signature_the_download_uses_it_whole`.
+  `DownloadedMedia`'s `Debug`, derived until then, printed the whole file
+  as a byte string (a customer's photo or document, in any log line that
+  printed the result of `download_bytes`): it now shows `info` and
+  `data_len`. Test: `downloaded_media_debug_shows_the_length_not_the_file`
+  (found by the sabotage review of this change).

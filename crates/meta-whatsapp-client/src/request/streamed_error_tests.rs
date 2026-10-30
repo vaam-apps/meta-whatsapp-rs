@@ -356,6 +356,42 @@ async fn a_cut_error_body_that_names_the_token_is_withheld() {
     assert_eq!(shown.as_bytes(), super::PAGING_WITHHELD);
 }
 
+/// The token rule reads only what was read, and the snippet shows only
+/// that: a body that names the token past the cap, or across it, shows its
+/// first bytes, and none of them come from past the cap. (Its marker, the
+/// key or query name, comes before the token, so a token inside what was
+/// read is named inside it too, and withheld as the test above shows.)
+#[tokio::test]
+async fn a_token_named_only_past_the_cap_never_reaches_the_snippet() {
+    const PAST: &[u8] = br#"access_token=LEAKED","paging":{"next":"LEAKED"}"#;
+    // At the cap, and straddling it (`acce` read, `ss_token` not).
+    for marker_at in [STREAMED_ERROR_BODY_CAP, STREAMED_ERROR_BODY_CAP - 4] {
+        let mut text = br#"{"error":"#.to_vec();
+        text.resize(marker_at, b'.');
+        text.extend_from_slice(PAST);
+        text.resize(STREAMED_ERROR_BODY_CAP * 2, b'!');
+        let (body, probe) = script(vec![Bytes::from(text.clone())], 1);
+        let (status, shown) = http_error(download(500, body).await);
+        assert_eq!(status, 500);
+        let first: String = String::from_utf8_lossy(&text[..512]).into_owned();
+        assert_eq!(shown, format!("{first}…"), "the first bytes, not withheld");
+        assert!(!shown.contains("LEAKED") && !shown.contains('!'), "{shown}");
+        assert_eq!(probe.pulls(), 1);
+
+        // What was read is exactly the bytes before the cap.
+        let (body, _) = script(vec![Bytes::from(text.clone())], 1);
+        let read = super::read_error_body(StreamingResponse {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            headers: HeaderMap::new(),
+            body: Box::pin(body),
+        })
+        .await
+        .unwrap();
+        assert_eq!(read.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(&read.body[..], &text[..STREAMED_ERROR_BODY_CAP]);
+    }
+}
+
 /// A transport error while reading an error body is that error, as before
 /// the cap.
 #[tokio::test]

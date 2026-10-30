@@ -860,6 +860,12 @@ pub(crate) const STREAMED_ERROR_BODY_CAP: usize = 64 * 1024;
 /// buffered: no chunk is pulled once that many are read, and the stream is
 /// dropped (the connection closed, not drained to its end). A transport
 /// error while reading is that error, as before the cap.
+///
+/// A chunk's size is the transport's: one that crosses the cap was
+/// allocated whole before it is cut here (`ReqwestTransport`'s are at
+/// most its read buffer, a few hundred KiB, on HTTP/1.1, and a 16 KiB
+/// frame on HTTP/2), and a transport on the port's default
+/// `send_streaming` has buffered the whole body before this sees it.
 async fn read_error_body(resp: StreamingResponse) -> Result<HttpResponse> {
     use futures::StreamExt;
 

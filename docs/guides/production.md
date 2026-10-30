@@ -101,7 +101,8 @@ A media download URL (`MediaInfo::url`) stays a `String`, since it opens
 nothing without the token and expires after five minutes, but
 `MediaInfo`'s `Debug` (and so `MediaDownload`'s, `VerifiedDownload`'s and
 `DownloadedMedia`'s) shows it the same way: its signature is
-credential-shaped and logs outlive it.
+credential-shaped and logs outlive it. `DownloadedMedia`'s `Debug` shows
+the file's length (`data_len`), not its bytes.
 
 The client attaches a token to the configured Graph endpoint (scheme, host
 and port), to `https://lookaside.fbsbx.com`, Meta's media download host,
@@ -196,10 +197,19 @@ yours (`Media::download_bytes`'s `max_bytes`, or the reads you make of
 URL, a proxy's or CDN's error page) is read to at most 64 KiB, then the
 connection is dropped; Meta's error envelope is far smaller, so its
 `Error::Api` is unchanged, and a longer body is an `Error::Http` with its
-first bytes. Every other request's answer is read whole by the transport
-(`ReqwestTransport` sets no size limit): those come from the configured
-Graph endpoint, so give a proxy you put there a response size limit of its
-own if it could answer with more than you want to buffer.
+first bytes. That bound is the client's, on what the transport streams:
+`ReqwestTransport` streams, and holds at most what it has received and
+not yet handed over (a read buffer of a few hundred KiB on HTTP/1.1, up
+to the 2 MiB stream window on HTTP/2); a transport of your own that keeps
+the port's default `send_streaming` buffers the whole body through `send`
+first. Every other request's answer is read whole by the transport
+(`ReqwestTransport` sets no size limit). Those answers come from the
+configured Graph endpoint, from `api.facebook.com` for the Parent BSUID
+Accounts call, and from wherever a redirect to another origin leads
+(followed without the token, up to 10 hops). So give a proxy you put
+there a response size limit of its own if it could answer with more than
+you want to buffer, and an egress proxy one if the redirect targets
+worry you.
 
 Sends are never replayed after a timeout or a 5xx. A campaign or
 notification queue on top must be idempotent itself: tag each message with
