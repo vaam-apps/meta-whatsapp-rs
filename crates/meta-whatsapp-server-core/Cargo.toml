@@ -31,6 +31,10 @@ conformance = ["meta-whatsapp-rs/testing", "tokio/macros"]
 # needs beyond it, it brings itself.
 meta-whatsapp-rs.workspace = true
 
+# The library's `SinkError::Delivery` carries an `anyhow::Error`: the webhook
+# pipeline's sink wraps a storage failure in one (src/inbound.rs). Already
+# the library's dependency.
+anyhow.workspace = true
 async-trait.workspace = true
 # Meta reports a media file's SHA-256 in hex or base64 (src/media.rs).
 base64.workspace = true
@@ -63,6 +67,9 @@ tracing.workspace = true
 unicode-properties.workspace = true
 
 [dev-dependencies]
+# tests/memory: the library's memory conversation store, the inbox of the
+# webhook pipeline's suite (`conformance::webhooks`). Test builds only.
+meta-whatsapp-rs = { workspace = true, features = ["memory"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "test-util"] }
 # tests/visibility.rs: what does not compile outside this crate.
 trybuild.workspace = true

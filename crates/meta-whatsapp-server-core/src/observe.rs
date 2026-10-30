@@ -14,6 +14,24 @@ pub trait Observer: Send + Sync {
     /// [`crate::idempotency::Repeat::outcome`]'s (`reused`,
     /// `in_progress`, `outcome_unknown` or `replayed`).
     fn idempotency(&self, outcome: &'static str);
+
+    /// The webhook pipeline ([`crate::inbound::Pipeline`]) recorded a new
+    /// outbox row: `event_type` is the library's `WebhookEvent::kind` (a
+    /// fixed set), `audience` `tenant` (the row's tenant polls it) or
+    /// `operator` (an operator-only row).
+    fn webhook_event(&self, event_type: &'static str, audience: &'static str);
+
+    /// The webhook pipeline met `count` events already recorded (at least
+    /// one), recognised at `stage`: `dedup` (the dedup lease had seen
+    /// them: once per delivery that met any) or `outbox` (the outbox had
+    /// it: once per event).
+    fn webhook_duplicates(&self, stage: &'static str, count: u64);
+
+    /// The webhook pipeline failed to record an event at `stage`
+    /// (`routing`, `serialization`, `inbox`, `outbox`, or `outbox_busy`:
+    /// the outbox reported contention, `StorageError::Busy`); Meta
+    /// redelivers it.
+    fn webhook_failure(&self, stage: &'static str);
 }
 
 /// Observes nothing.
@@ -21,4 +39,10 @@ impl Observer for () {
     fn graph_error(&self, _: &'static str) {}
 
     fn idempotency(&self, _: &'static str) {}
+
+    fn webhook_event(&self, _: &'static str, _: &'static str) {}
+
+    fn webhook_duplicates(&self, _: &'static str, _: u64) {}
+
+    fn webhook_failure(&self, _: &'static str) {}
 }

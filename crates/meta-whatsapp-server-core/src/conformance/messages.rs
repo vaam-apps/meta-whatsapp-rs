@@ -59,11 +59,16 @@ pub async fn run(backend: &dyn Backend) {
 }
 
 /// What the operations told the adapter's metrics, in order: each Graph
-/// error's code, and each repeat's outcome.
+/// error's code, each repeat's outcome, and what the webhook pipeline
+/// counts (`conformance::webhooks`): each new row's type and audience,
+/// each run of duplicates by stage, each failure's stage.
 #[derive(Default)]
 pub(crate) struct Told {
     graph_errors: Mutex<Vec<&'static str>>,
     repeats: Mutex<Vec<&'static str>>,
+    webhook_events: Mutex<Vec<(&'static str, &'static str)>>,
+    webhook_duplicates: Mutex<Vec<(&'static str, u64)>>,
+    webhook_failures: Mutex<Vec<&'static str>>,
 }
 
 impl Observer for Told {
@@ -80,6 +85,27 @@ impl Observer for Told {
             .unwrap_or_else(PoisonError::into_inner)
             .push(outcome);
     }
+
+    fn webhook_event(&self, event_type: &'static str, audience: &'static str) {
+        self.webhook_events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((event_type, audience));
+    }
+
+    fn webhook_duplicates(&self, stage: &'static str, count: u64) {
+        self.webhook_duplicates
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((stage, count));
+    }
+
+    fn webhook_failure(&self, stage: &'static str) {
+        self.webhook_failures
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(stage);
+    }
 }
 
 impl Told {
@@ -95,6 +121,36 @@ impl Told {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Every new row's type and audience, and forgets them.
+    pub(crate) fn take_webhook_events(&self) -> Vec<(&'static str, &'static str)> {
+        std::mem::take(
+            &mut *self
+                .webhook_events
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+    }
+
+    /// Every run of duplicates by stage, and forgets them.
+    pub(crate) fn take_webhook_duplicates(&self) -> Vec<(&'static str, u64)> {
+        std::mem::take(
+            &mut *self
+                .webhook_duplicates
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
+    }
+
+    /// Every failure's stage, and forgets them.
+    pub(crate) fn take_webhook_failures(&self) -> Vec<&'static str> {
+        std::mem::take(
+            &mut *self
+                .webhook_failures
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 }
 

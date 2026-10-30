@@ -2,8 +2,8 @@
 //! (docs/design/server.md, sections 2.3 and 4.2): where an event goes
 //! ([`route`]), the outbox row it becomes ([`outbox_row`]: its key and its
 //! id), and polling the outbox ([`poll`]). Plain functions over the ports:
-//! the webhook pipeline (`meta_whatsapp_server::events`) and the API
-//! adapters only translate.
+//! the webhook pipeline ([`crate::inbound`]) runs them for each event, and
+//! the API adapters only translate.
 //!
 //! **Routing is an allow-list.** An event naming a business phone number
 //! (or, untyped, whose raw `metadata` names one) belongs to the tenant that

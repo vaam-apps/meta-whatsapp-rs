@@ -36,6 +36,7 @@
 //! | [`templates`] | the core's template services over the bundle's records and vault, with no HTTP layer (roadmap S5c): tenant B's caller on tenant A's template id is not found with zero vault reads (A's WABA not B's, A's capability refused to B, A's id not in B's WABA, nothing deleted); another authorizer's caller or capability refused; Meta's documented requests, the cache and its invalidation (by a creation or deletion Meta refuses too); a template id past the lookup's 5 pages not found, nothing deleted |
 //! | [`media`] | the core's media services over the bundle's records and vault, with no HTTP layer (roadmap S5d): a download through the core's stream ends before its last chunk on a digest mismatch (M1b's rule), passes the file on while it arrives (one chunk held), and stops past `max_bytes`; a failed or oddly chunked download (empty chunks, a cut connection, one chunk, none) never yields its last chunk unverified, and gives its slot back on every path; a `190` from Meta's URL marks the number; a whole download answers no byte of a tampered file; the reported size, digest and URL checked before the download; another number's media id not found, nothing deleted; Meta's documented upload and deletion; only the order's own capability; a slot of the tenant's share first |
 //! | [`numbers`] | the core's number services over the bundle's records and vault, with no HTTP layer (roadmap S5c): only the order's own capabilities; a number's details and profile, a change of it (an empty one only reads, a refused one sends nothing); a disconnection deleting nothing until Meta unsubscribed the app, and nothing for a WABA that moved |
+//! | [`webhooks`] | the core's webhook pipeline over the bundle's records, key/value store, inbox and outbox, with no listener (roadmap S5e, M1.2): routing is an allow-list (an unowned number's event, a stale binding's, a replay's are operator-only, whatever the payload says of a tenant); the signature checked before any store is touched or a turn waited for; each event once, under its dedup lease; the answer only once every event is recorded, a failed or busy outbox refused and redelivered once; `unknown` and `unparsed` acknowledged as operator-only rows |
 //!
 //! Every case panics on a broken contract, with what broke: this is test
 //! code.
@@ -62,6 +63,7 @@ pub mod outbox;
 pub mod races;
 pub mod records;
 pub mod templates;
+pub mod webhooks;
 
 use std::sync::Arc;
 
@@ -111,6 +113,10 @@ where
 
     let backend = fresh().await;
     media::run(backend.as_ref()).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    webhooks::run(backend.as_ref()).await;
     backend.close().await;
     report
 }
