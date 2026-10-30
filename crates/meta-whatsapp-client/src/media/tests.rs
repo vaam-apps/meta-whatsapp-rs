@@ -450,6 +450,33 @@ async fn media_info_debug_hides_the_url_signature_the_download_uses_it_whole() {
     assert!(!shown.contains("S3NT1NEL"), "{shown}");
 }
 
+/// `DownloadedMedia`'s `Debug` shows the file's length, never its bytes:
+/// a customer's photo or document is not log material.
+#[tokio::test]
+async fn downloaded_media_debug_shows_the_length_not_the_file() {
+    let body = b"F1LE-S3NT1NEL: a customer's passport scan";
+    let t = ScriptedTransport::new();
+    t.push_json(
+        200,
+        info_json(LOOKASIDE, &sha_hex(body), &json!(body.len())),
+    );
+    t.push_bytes(200, "image/jpeg", Bytes::from_static(body));
+    let downloaded = client(&t)
+        .media(PhoneNumberId::new(PNID).unwrap())
+        .download_bytes(&media_id(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(&downloaded.data[..], body, "the field keeps the file");
+    let shown = format!("{downloaded:?} {downloaded:#?}");
+    assert!(!shown.contains("S3NT1NEL"), "{shown}");
+    assert!(
+        shown.contains(&format!("data_len: {}", body.len())),
+        "{shown}"
+    );
+    assert!(shown.contains("info: MediaInfo {"), "{shown}");
+    assert_eq!(t.remaining(), 0);
+}
+
 #[test]
 fn media_info_tolerates_missing_optional_fields() {
     // Only `url` and `id` are needed to download; nothing else may be

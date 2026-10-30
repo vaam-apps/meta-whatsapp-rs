@@ -69,12 +69,26 @@ pub struct VerifiedDownload {
 
 /// The fully buffered, verified file. Returned by
 /// [`super::Media::download_bytes`].
-#[derive(Debug, Clone)]
+///
+/// `Debug` shows [`info`](Self::info) (its URL redacted, see
+/// [`MediaInfo`]) and the length of [`data`](Self::data), never the file:
+/// what a customer sent is personal data, and a whole file in a log line
+/// helps no one.
+#[derive(Clone)]
 pub struct DownloadedMedia {
     /// What `GET /{media-id}` said about the file.
     pub info: MediaInfo,
     /// The file.
     pub data: Bytes,
+}
+
+impl fmt::Debug for DownloadedMedia {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DownloadedMedia")
+            .field("info", &self.info)
+            .field("data_len", &self.data.len())
+            .finish()
+    }
 }
 
 /// Upper bound on the buffer reserved up front from the *reported*
