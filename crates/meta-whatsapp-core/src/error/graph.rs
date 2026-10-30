@@ -140,7 +140,8 @@ impl GraphApiError {
     /// [`ErrorKind::RateLimited`], but [`Error::may_resend`](super::Error::may_resend)
     /// does not resend a request that is not idempotent on them (see
     /// there). The other BUC codes of that table (`80000`–`80006`, the
-    /// Ads, Instagram, Lead Generation, Messenger and Pages limits) are
+    /// Ads Insights, Ads Management, Custom Audience, Instagram, Lead
+    /// Generation, Messenger and Pages limits) are
     /// for APIs this library does not call, and stay
     /// [`ErrorKind::Unknown`].
     pub const BUSINESS_USE_CASE_LIMITS: [i64; 3] = [80_008, 80_009, 80_014];

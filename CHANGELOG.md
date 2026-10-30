@@ -1410,8 +1410,9 @@ stored data, the owner's).
   commerce module's, PR #48) or WABA read failed at once and was not
   classified as throttling. They are now `RateLimited`
   (`is_retryable()`), so `RetryPolicy` retries an idempotent request
-  (a GET) on them, as on `4` and `80007`, and the service answers them
-  with its `rate_limited` code. A request that is not idempotent is
+  (a GET, or a POST marked idempotent) on them, within its budget, as on
+  `4` and `80007`, and `Error::may_have_been_sent` is now `false` for
+  them on any status (it was `true` on a 5xx). A request that is not idempotent is
   still not resent on them: `Error::may_resend` excepts them
   (`GraphApiError::BUSINESS_USE_CASE_LIMITS`,
   `GraphApiError::is_business_use_case_limit`, both new), since Meta's
@@ -1425,6 +1426,21 @@ stored data, the owner's).
   `a_throttled_catalog_read_is_retried`, `a_throttled_post_is_not_resent`
   (`meta-whatsapp-client`), `classification_table_spot_checks`,
   `may_resend_only_what_meta_provably_refused` (`meta-whatsapp-core`).
+
+- **Behaviour change (the service) — a Graph API Business Use Case limit
+  is answered `429 rate_limited`** (`meta-whatsapp-server`, from the
+  library change above). A route Meta refuses with `80008`, `80009` or
+  `80014` answered `502 unknown` with `retryable: false`; it now answers
+  `429 rate_limited` with `retryable: true` and, on Meta's usual 4xx,
+  `may_have_been_sent: false`, as Meta's other throttling codes do
+  (`docs/design/server.md` §5.2 names the codes). There is no
+  `Retry-After` on it: the library does not read Meta's wait
+  (`X-Business-Use-Case-Usage`, minutes), and the service forwards no
+  `Retry-After` of Meta's for any Graph error; it sets one only for its
+  own limits. A client should back off for minutes, not seconds. The
+  other codes of Meta's table (`80000`–`80006`) still answer
+  `502 unknown`. `openapi/v1.json` is unchanged. Test:
+  `a_business_use_case_limit_is_rate_limited` (`tests/errors.rs`).
 
 - **Breaking (the service's crates) — the service is composed from a
   `Backend` alone** (roadmap S4, parity row 112; `meta-whatsapp-server`

@@ -423,6 +423,10 @@ mod tests {
             (throttled(131_056, 500), false),
             (throttled(131_000, 503), true),
             (throttled(130_429, 302), false),
+            // The Business Use Case limits are throttling too (they were
+            // `Unknown`, so `true` on a 5xx, before they were mapped).
+            (throttled(80_009, 503), false),
+            (throttled(80_008, 500), false),
             (http(400), false),
             (http(404), false),
             (http(499), false),
@@ -502,6 +506,7 @@ mod tests {
             (api(80_009, Some(400)), false),
             (api(80_014, Some(400)), false),
             (api(80_009, None), false),
+            (api(80_014, Some(503)), false),
             // The account in maintenance: only when refused (4xx or no
             // status).
             (api(131_057, Some(400)), true),
