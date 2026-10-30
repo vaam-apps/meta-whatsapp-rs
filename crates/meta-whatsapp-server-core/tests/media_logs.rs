@@ -125,4 +125,38 @@ async fn the_media_lines_warn_under_the_services_target() {
             assert!(!all.contains(secret), "{target}: {all}");
         }
     }
+
+    // The failing downloads' case: each stop warns with its reason (a cut
+    // connection's included), under the same target, and nothing logged
+    // names Meta's URL, the other host or the token, Meta's `190` and its
+    // details among them.
+    let backend = memory::Memory::default();
+    let logged = Logged::default();
+    let guard = tracing::subscriber::set_default(logged.clone());
+    conformance::media::a_failed_download_yields_no_unverified_end_and_frees_its_slot(&backend)
+        .await;
+    drop(guard);
+    let events = logged.0.lock().unwrap().clone();
+    let reasons: Vec<&str> = events
+        .iter()
+        .filter(|(_, target, message, _)| {
+            target == "meta_whatsapp_server::api::media" && message == stopped
+        })
+        .map(|(level, _, _, all)| {
+            assert_eq!(*level, tracing::Level::WARN, "{all}");
+            all.rsplit("reason=").next().unwrap()
+        })
+        .collect();
+    for reason in [
+        "the media failed its integrity check",
+        "the media download failed",
+        "the media grew past max_bytes",
+    ] {
+        assert!(reasons.contains(&reason), "{reason}: {events:?}");
+    }
+    for (_, target, _, all) in &events {
+        for secret in ["lookaside", "hash=abc", "evil.example", "EAAG-"] {
+            assert!(!all.contains(secret), "{target}: {all}");
+        }
+    }
 }

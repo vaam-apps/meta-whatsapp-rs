@@ -36,3 +36,14 @@ async fn the_media_services_upload_and_delete_as_meta_documents() {
     let backend = memory::Memory::default();
     conformance::media::the_media_services_upload_and_delete_as_meta_documents(&backend).await;
 }
+
+/// A failed download never passes on an unverified last chunk (empty
+/// chunks, a cut connection, one chunk, none, exactly `max_bytes`), gives
+/// its slot back on every path, and a `190` from Meta's URL marks the
+/// number.
+#[tokio::test]
+async fn a_failed_download_yields_no_unverified_end_and_frees_its_slot() {
+    let backend = memory::Memory::default();
+    conformance::media::a_failed_download_yields_no_unverified_end_and_frees_its_slot(&backend)
+        .await;
+}

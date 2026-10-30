@@ -44,7 +44,7 @@ use crate::media::{
     DownloadBody, DownloadLimits, Downloaded, MAX_WHOLE_DOWNLOAD, Media, MediaSlots, MediaStream,
     StreamStopped, Upload, Uploaded, upload_cap,
 };
-use crate::model::{BindOutcome, KeyOwner, Scope, TenantId};
+use crate::model::{BindOutcome, KeyOwner, NumberStatus, Scope, TenantId};
 use crate::ratelimit::Slots;
 
 /// The tenant, its WABA, its number and the token in the vault, of the
@@ -53,6 +53,8 @@ const TENANT: &str = "media-owner";
 const WABA: &str = "102290129340398";
 const PN: &str = "106540352242922";
 const UPLOADER: (&str, &str, &str) = ("media-uploader", "102290129340399", "106540352242923");
+/// The failing downloads' tenant, WABA and number (the third case's own).
+const FAILING: (&str, &str, &str) = ("media-failing", "102290129340401", "106540352242924");
 const TOKEN: &str = "EAAG-the-media-owners-token";
 /// A media id, as `business-phone-numbers/media` writes one.
 const MEDIA: &str = "1037543291543636";
@@ -67,6 +69,7 @@ pub async fn run(backend: &dyn Backend) {
     a_download_through_the_cores_stream_ends_before_its_last_chunk_on_a_digest_mismatch(backend)
         .await;
     the_media_services_upload_and_delete_as_meta_documents(backend).await;
+    a_failed_download_yields_no_unverified_end_and_frees_its_slot(backend).await;
 }
 
 /// The script, with each media download's body in the chunks a case
@@ -733,5 +736,279 @@ pub async fn the_media_services_upload_and_delete_as_meta_documents(backend: &dy
         );
     }
     assert_eq!(script.requests().len(), before + 3, "a request was sent");
+    assert_eq!(script.remaining(), 0);
+}
+
+/// A download that fails, or ends oddly, never passes on an unverified
+/// last chunk, and gives its slot back on every path.
+///
+/// 1. Streamed, tampered, with empty chunks after the last: its first two
+///    chunks, then [`StreamStopped::Integrity`]; verified with empty
+///    chunks between and after: its chunks, no empty one.
+/// 2. Streamed, the connection cut mid-file: the chunks before the one
+///    held, then [`StreamStopped::Failed`], the held one never yielded.
+/// 3. Streamed, a one-chunk file: nothing before the end, then the chunk
+///    (verified) or the error (tampered); an empty file: the end
+///    (verified) or the error (tampered); a single chunk of exactly
+///    `max_bytes` passes, one byte more is [`StreamStopped::TooLarge`]
+///    with nothing yielded.
+/// 4. The slot: a stream holds it until dropped, even unfinished (a
+///    client that went away), and every failure, whole or streamed, before
+///    or during the download, gives it back.
+/// 5. A `190` from Meta's media URL (the download itself, after the
+///    lookup): `409 reconnect_required`, Meta's code and `details` kept,
+///    told to the [`Observer`](crate::observe::Observer), the number marked
+///    `reconnect_required`.
+///
+/// Decisive: a failure taken for the end (the held chunk yielded) fails
+/// step 2; empty chunks held as the last one (the real last chunk passed
+/// on before the digest is checked) fails step 1; a slot kept past a
+/// failure fails step 4; the download's own failure not marking the
+/// number fails step 5.
+pub async fn a_failed_download_yields_no_unverified_end_and_frees_its_slot(backend: &dyn Backend) {
+    let meta = Chunked::default();
+    let script = meta.script.clone();
+    let (authz, number, _) = connected(backend, meta.clone(), FAILING).await;
+    let tenant = TenantId::parse(FAILING.0).unwrap();
+    // A share of one slot in each pool: a slot kept is the next one refused.
+    let transfers = Slots::new(2);
+    let streams = Slots::new(2);
+    let told = Told::default();
+    let media = Media::new(
+        &authz,
+        &number,
+        MediaSlots {
+            transfers: &transfers,
+            streams: &streams,
+        },
+    )
+    .unwrap()
+    .observed_by(&told);
+    let whole = DownloadLimits::parse(None, None, STREAM_CAP).unwrap();
+    let stream = DownloadLimits::parse(Some("true"), None, STREAM_CAP).unwrap();
+    let free = |which: &str| {
+        assert!(
+            transfers.try_acquire(&tenant).is_some(),
+            "{which}: a transfer slot kept"
+        );
+        assert!(
+            streams.try_acquire(&tenant).is_some(),
+            "{which}: a stream slot kept"
+        );
+    };
+    let (chunks, file) = three_chunks();
+    let empty = Bytes::new();
+    // The file is downloaded: the lookup, then Meta's URL.
+    let serve = |sha256: &str| {
+        script.push_json(200, media_info(URL, sha256, None));
+        script.push_bytes(200, "image/jpeg", Vec::new());
+    };
+
+    // 1. Empty chunks: never the last one held.
+    serve(&sha256_hex(b"the original"));
+    meta.chunks(&[
+        chunks[0].clone(),
+        chunks[1].clone(),
+        chunks[2].clone(),
+        empty.clone(),
+        empty.clone(),
+    ]);
+    let items = drain(streamed(media.download(MEDIA, stream).await.unwrap())).await;
+    assert_eq!(
+        items,
+        [
+            Ok(chunks[0].clone()),
+            Ok(chunks[1].clone()),
+            Err(StreamStopped::Integrity)
+        ],
+        "an empty chunk passed the last one on before the digest was checked"
+    );
+    free("tampered, empty chunks");
+    serve(&sha256_hex(&file));
+    meta.chunks(&[
+        empty.clone(),
+        chunks[0].clone(),
+        empty.clone(),
+        chunks[1].clone(),
+        chunks[2].clone(),
+        empty.clone(),
+    ]);
+    let items = drain(streamed(media.download(MEDIA, stream).await.unwrap())).await;
+    assert_eq!(items, chunks.iter().cloned().map(Ok).collect::<Vec<_>>());
+    free("verified, empty chunks");
+
+    // 2. The connection cut mid-file: the held chunk is never yielded.
+    serve(&sha256_hex(&file));
+    meta.body(Box::pin(futures::stream::iter([
+        Ok(chunks[0].clone()),
+        Ok(chunks[1].clone()),
+        Err(TransportError::Timeout),
+    ])));
+    let items = drain(streamed(media.download(MEDIA, stream).await.unwrap())).await;
+    assert_eq!(
+        items,
+        [Ok(chunks[0].clone()), Err(StreamStopped::Failed)],
+        "a cut file ended as if verified"
+    );
+    free("streamed, cut");
+
+    // 3. One chunk, no chunk, exactly `max_bytes`.
+    for (body, sha256, expected, which) in [
+        (
+            vec![chunks[0].clone()],
+            sha256_hex(&chunks[0]),
+            vec![Ok(chunks[0].clone())],
+            "one chunk, verified",
+        ),
+        (
+            vec![chunks[0].clone()],
+            sha256_hex(b"the original"),
+            vec![Err(StreamStopped::Integrity)],
+            "one chunk, tampered",
+        ),
+        (Vec::new(), sha256_hex(b""), Vec::new(), "empty, verified"),
+        (
+            Vec::new(),
+            sha256_hex(b"the original"),
+            vec![Err(StreamStopped::Integrity)],
+            "empty, tampered",
+        ),
+    ] {
+        serve(&sha256);
+        meta.chunks(&body);
+        let items = drain(streamed(media.download(MEDIA, stream).await.unwrap())).await;
+        assert_eq!(items, expected, "{which}");
+        free(which);
+    }
+    let one = chunks[0].len();
+    for (max_bytes, expected) in [
+        (one, vec![Ok(chunks[0].clone())]),
+        (one - 1, vec![Err(StreamStopped::TooLarge)]),
+    ] {
+        serve(&sha256_hex(&chunks[0]));
+        meta.chunks(&chunks[..1]);
+        let limits =
+            DownloadLimits::parse(Some("true"), Some(&max_bytes.to_string()), STREAM_CAP).unwrap();
+        let items = drain(streamed(media.download(MEDIA, limits).await.unwrap())).await;
+        assert_eq!(items, expected, "max_bytes {max_bytes}");
+        free("at and past max_bytes");
+    }
+
+    // 4. A stream holds its slot until dropped, even unfinished; every
+    // whole failure gives its slot back.
+    serve(&sha256_hex(&file));
+    meta.chunks(&chunks);
+    let mut open = streamed(media.download(MEDIA, stream).await.unwrap());
+    assert_eq!(open.next().await, Some(Ok(chunks[0].clone())));
+    assert!(streams.try_acquire(&tenant).is_none(), "the stream's slot");
+    drop(open);
+    free("a stream dropped unfinished");
+    serve(&sha256_hex(b"the original"));
+    meta.chunks(&chunks);
+    let tampered = media.download(MEDIA, whole).await.unwrap_err();
+    assert_eq!(refusal(&tampered), (502, "integrity", None));
+    free("whole, tampered");
+    serve(&sha256_hex(&file));
+    meta.chunks(&chunks);
+    let capped = DownloadLimits::parse(None, Some("100000"), STREAM_CAP).unwrap();
+    let large = media.download(MEDIA, capped).await.unwrap_err();
+    assert_eq!(refusal(&large), (413, "media_too_large", None));
+    free("whole, past max_bytes");
+    serve(&sha256_hex(&file));
+    meta.body(Box::pin(futures::stream::iter([
+        Ok(chunks[0].clone()),
+        Err(TransportError::Timeout),
+    ])));
+    let cut = media.download(MEDIA, whole).await.unwrap_err();
+    assert_eq!(refusal(&cut), (504, "timeout", None));
+    free("whole, cut");
+    for (limits, which) in [(whole, "whole"), (stream, "streamed")] {
+        // Refused before the download: the reported size, the digest,
+        // the URL, the id.
+        script.push_json(200, media_info(URL, &sha256_hex(&file), Some(100_001)));
+        let capped = DownloadLimits::new(100_000, limits.stream(), STREAM_CAP).unwrap();
+        assert_eq!(
+            refusal(&media.download(MEDIA, capped).await.unwrap_err()).1,
+            "media_too_large"
+        );
+        free(which);
+        script.push_json(200, media_info(URL, "PHOTO_HASH", None));
+        assert_eq!(
+            refusal(&media.download(MEDIA, limits).await.unwrap_err()).1,
+            "integrity"
+        );
+        free(which);
+        script.push_json(
+            200,
+            media_info("https://evil.example/x", &sha256_hex(&file), None),
+        );
+        assert_eq!(
+            refusal(&media.download(MEDIA, limits).await.unwrap_err()).1,
+            "upstream"
+        );
+        free(which);
+        script.push_json(
+            400,
+            json!({"error": {"message": "(#100) Invalid parameter", "type": "OAuthException",
+                             "code": 100, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+        );
+        assert_eq!(
+            refusal(&media.download(MEDIA, limits).await.unwrap_err()).1,
+            "not_found"
+        );
+        free(which);
+    }
+    assert_eq!(script.remaining(), 0);
+    assert_eq!(
+        told.graph_errors(),
+        ["invalid_parameter", "invalid_parameter"]
+    );
+
+    // 5. A `190` from Meta's URL: the number marked, Meta's details kept.
+    script.push_json(200, media_info(URL, &sha256_hex(&file), None));
+    script.push_json(
+        401,
+        json!({"error": {"message": "Error validating access token: Session has expired",
+                         "type": "OAuthException", "code": 190, "error_subcode": 463,
+                         "error_data": {"details": "DOWNLOAD-DETAILS-SENTINEL"},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let expired = media.download(MEDIA, stream).await.unwrap_err();
+    assert_eq!(
+        (expired.status(), expired.code()),
+        (409, "reconnect_required")
+    );
+    assert_eq!(
+        expired.graph().map(|g| (g.code, g.details.as_deref())),
+        Some((190, Some("DOWNLOAD-DETAILS-SENTINEL"))),
+        "Meta's code and details"
+    );
+    assert_eq!(
+        told.graph_errors(),
+        [
+            "invalid_parameter",
+            "invalid_parameter",
+            "reconnect_required"
+        ]
+    );
+    let marked = backend
+        .records()
+        .number(&PhoneNumberId::new(FAILING.2).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(marked.status, NumberStatus::ReconnectRequired);
+    free("a 190");
+    let requests = script.requests();
+    let [.., lookup, file_request] = &requests[..] else {
+        panic!("{requests:?}")
+    };
+    assert_eq!(
+        (lookup.method.as_str(), lookup.path()),
+        ("GET", format!("/v25.0/{MEDIA}").as_str())
+    );
+    assert_eq!(query(lookup), pairs(&[("phone_number_id", FAILING.2)]));
+    assert_eq!(file_request.url.as_str(), URL);
+    assert_eq!(file_request.bearer(), Some(TOKEN));
     assert_eq!(script.remaining(), 0);
 }
