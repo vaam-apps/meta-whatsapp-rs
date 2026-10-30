@@ -42,6 +42,7 @@
 //! | how fast each business number sends (broadcasts; replies, read receipts and typing indicators with [`BotBuilder::pacer`]; group operations through [`PacedGroups`]) | [`RateLimiter`] | [`TokenBucket`] (80 a second per number, in this process) |
 //! | which errors slow a number's pacer down (a broadcast's sends, a paced bot's replies) | [`SlowDownRule`] | [`ThrottlingErrors`] |
 //! | what "now" is for the pacer, and how it waits | [`Timer`] | `SystemClock` (Tokio's sleep) |
+//! | which number a throughput upgrade names (opt-in: [`ThroughputUpgrades`], [`BotBuilder::follow_throughput_upgrades`]) | [`NumberDirectory`] | [`KnownNumbers`] (the numbers you register, by WABA and display number) |
 //! | what a failed broadcast send becomes | [`BroadcastPolicy`] | [`Backoff`] |
 //! | where a broadcast's lines go when not kept in its report | [`ReportSink`] | none: kept in the [`BroadcastReport`] |
 //!
@@ -60,7 +61,8 @@
 //! Plugins are compiled in: there is no hot reload (see [`plugin`]).
 //! The async extension points ([`Outbound`], [`Middleware`], [`Plugin`],
 //! [`AccessPolicy`], [`Cooldowns`], [`Refusals`], [`ErrorHandler`],
-//! [`CommandHandler`], [`RateLimiter`], [`Timer`], [`ReportSink`]) are `#[async_trait]`
+//! [`CommandHandler`], [`RateLimiter`], [`Timer`], [`ReportSink`],
+//! [`NumberDirectory`]) are `#[async_trait]`
 //! traits; the attribute is
 //! re-exported as [`async_trait`](macro@async_trait), so no second
 //! dependency is needed.
@@ -92,8 +94,9 @@
 //!
 //! A [`Broadcast`] sends one message to many recipients from one number,
 //! paced by a [`Pacer`] shared with the bot, and reports on each (see
-//! [`broadcast`]). Not here (yet): scheduling, and broadcasts that survive
-//! a restart (roadmap B3).
+//! [`broadcast`]). Meta's throughput upgrade of a number can raise its
+//! rate in the pacer, opt-in ([`throughput`]). Not here (yet): scheduling,
+//! and broadcasts that survive a restart (roadmap B3).
 
 pub mod bot;
 pub mod broadcast;
@@ -110,6 +113,7 @@ pub mod pacer;
 pub mod parse;
 pub mod plugin;
 pub mod rich;
+pub mod throughput;
 
 /// The attribute every async extension point's `impl` needs
 /// (`#[async_trait] impl Middleware for …`), re-exported from the
@@ -140,3 +144,4 @@ pub use pacer::{
 pub use parse::{CommandParser, ParsedCommand, PrefixParser};
 pub use plugin::{DEFAULT_CATEGORY, Listen, Plugin, Registrar};
 pub use rich::{RichReply, Suggestion};
+pub use throughput::{KnownNumbers, NumberDirectory, ThroughputUpgrades};
