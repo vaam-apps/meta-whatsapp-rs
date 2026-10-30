@@ -1,7 +1,9 @@
 //! A bot framework over WhatsApp Cloud API webhooks: commands with
 //! prefixes, aliases, subcommands, `--flags`, guards, cooldowns and a
 //! generated help, middleware, compile-time plugins, Markdown replies in
-//! WhatsApp formatting, and paced broadcasts ([`broadcast`], [`pacer`]).
+//! WhatsApp formatting, rich replies (images, suggestions as reply buttons
+//! or a list, product carousels: [`rich`]), and paced broadcasts
+//! ([`broadcast`], [`pacer`]).
 //!
 //! Each event goes through these steps, in this order:
 //!
@@ -107,6 +109,7 @@ pub mod outbound;
 pub mod pacer;
 pub mod parse;
 pub mod plugin;
+pub mod rich;
 
 /// The attribute every async extension point's `impl` needs
 /// (`#[async_trait] impl Middleware for …`), re-exported from the
@@ -136,3 +139,4 @@ pub use pacer::{
 };
 pub use parse::{CommandParser, ParsedCommand, PrefixParser};
 pub use plugin::{DEFAULT_CATEGORY, Listen, Plugin, Registrar};
+pub use rich::{RichReply, Suggestion};

@@ -1,6 +1,7 @@
 //! Reference code for the `meta-whatsapp-rs-bot` skill: a WhatsApp bot on
 //! Cloud API webhooks — commands with prefixes, aliases, guards and
-//! cooldowns, a subcommand with a flag, a plugin per feature, middleware, Markdown replies, the
+//! cooldowns, a subcommand with a flag, a plugin per feature, middleware, Markdown replies, a
+//! rich reply (reply buttons that run a command), the
 //! generated help and Meta's command menu, replies recorded in the CMS
 //! inbox, and a paced broadcast sharing the bot's pacer.
 //!
@@ -12,7 +13,8 @@ use std::time::Duration;
 
 use meta_whatsapp_rs::bot::{
     AccessList, Bot, Broadcast, BroadcastReport, ClientOutbound, Command, Ctx, Logging, MarkRead,
-    Middleware, Next, Outbound, Pacer, Plugin, Rate, Registrar, TokenBucket, async_trait,
+    Middleware, Next, Outbound, Pacer, Plugin, Rate, Registrar, RichReply, Suggestion, TokenBucket,
+    async_trait,
 };
 use meta_whatsapp_rs::core::clock::SystemClock;
 use meta_whatsapp_rs::core::error::{SinkError, ValidationError};
@@ -58,25 +60,34 @@ impl Plugin for Orders {
 /// and a declared flag; `/order` alone runs the parent.
 pub fn order_command() -> Command {
     Command::new("order", |ctx: Ctx| async move {
-        ctx.reply("Try /order status <order number>").await?;
+        // Markdown, then reply buttons on its last message (a list from 4 to 10).
+        let reply = RichReply::new()
+            .markdown("Try /order status <order number>, or tap:")
+            .suggestions([Suggestion::command("order status", "Last order")]);
+        ctx.reply_rich(&reply).await?; // checked whole, then one message per part
         Ok(())
     })
     .description("Your orders")
     .subcommand(
         Command::new("status", |ctx: Ctx| async move {
-            let order = ctx.args().get(0).unwrap_or("?"); // the arguments after `status`
+            // The arguments after `status`; a tap on the button carries none.
+            let order = ctx
+                .args()
+                .get(0)
+                .map_or("Your last order".to_owned(), |n| format!("Order {n}"));
             let refreshed = if ctx.args().has_flag("refresh") {
                 " (refreshed)"
             } else {
                 ""
             };
-            ctx.reply(format!("Order {order} has shipped{refreshed}."))
+            ctx.reply(format!("{order} has shipped{refreshed}."))
                 .await?;
             Ok(())
         })
         .usage("<order number> [--refresh]")
         .flag("refresh") // a mistyped `--refesh` is refused, with the usage
-        .cooldown(Duration::from_secs(10)), // its own, apart from `/order`'s
+        .cooldown(Duration::from_secs(10)) // its own, apart from `/order`'s
+        .payload("last_order"), // the id `Suggestion::command` sends: a tap runs it
     )
 }
 
@@ -325,6 +336,28 @@ mod tests {
             .remove(0)
     }
 
+    /// A tap on reply button `id` by another user (`USER`'s cooldowns do
+    /// not apply), shaped like Meta's documented `button_reply` webhook
+    /// (`messages/interactive-reply-buttons-messages`).
+    fn tap(id: &str, title: &str) -> WebhookEvent {
+        let other = "US.10000000000000000002";
+        let payload = json!({"object": "whatsapp_business_account", "entry": [{
+            "id": "102290129340398", "changes": [{"field": "messages", "value": {
+                "messaging_product": "whatsapp",
+                "metadata": {"display_phone_number": "15550783881", "phone_number_id": NUMBER},
+                "contacts": [{"profile": {"name": "Ana R."}, "wa_id": "16505550002",
+                    "user_id": other}],
+                "messages": [{"context": {"from": "15550783881", "id": "wamid.REPLY"},
+                    "from": "16505550002", "from_user_id": other,
+                    "id": "wamid.TAP", "timestamp": "1750030080", "type": "interactive",
+                    "interactive": {"type": "button_reply",
+                        "button_reply": {"id": id, "title": title}}}]}}]}]});
+        WebhookPayload::from_slice(payload.to_string().as_bytes())
+            .unwrap()
+            .into_events()
+            .remove(0)
+    }
+
     /// The shared pacer on a fake clock: nothing waits for real.
     fn pacer(clock: &ManualClock) -> Pacer {
         shared_pacer(PhoneNumberId::new("999").unwrap()).with_timer(clock.clone())
@@ -407,7 +440,7 @@ mod tests {
     /// `/order status 1234 --refresh` runs the subcommand with `1234` and
     /// the flag; a mistyped flag is refused with the usage, and runs
     /// nothing; `/order`, which declares no flag, reads `--x` as an
-    /// argument and runs.
+    /// argument and runs, replying with a button that runs `status`.
     #[tokio::test]
     async fn a_subcommand_reads_its_arguments_and_flags() {
         let t = ScriptedTransport::new();
@@ -447,9 +480,30 @@ mod tests {
             "Unknown option --refesh.\nUsage: /order status <order number> [--refresh]\n\
              Options: --refresh"
         );
+        // `/order` replies with a button whose id is `status`'s payload.
         assert_eq!(
-            requests[2].json().unwrap()["text"]["body"],
-            "Try /order status <order number>"
+            requests[2].json(),
+            Some(json!({
+                "messaging_product": "whatsapp",
+                "recipient_type": "individual",
+                "recipient": USER,
+                "context": {"message_id": "wamid.TEST"},
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {"text": "Try /order status <order number>, or tap:"},
+                    "action": {"buttons": [
+                        {"type": "reply", "reply": {"id": "last_order", "title": "Last order"}}
+                    ]}
+                }
+            }))
+        );
+        // Tapping it runs `status` (no arguments: a tap carries none).
+        t.push_json(200, sent());
+        bot.deliver(tap("last_order", "Last order")).await.unwrap();
+        assert_eq!(
+            t.last_request().unwrap().json().unwrap()["text"]["body"],
+            "Your last order has shipped."
         );
         assert_eq!(t.remaining(), 0);
         assert_eq!(

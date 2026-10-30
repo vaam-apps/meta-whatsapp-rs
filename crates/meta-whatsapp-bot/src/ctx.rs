@@ -7,7 +7,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use meta_whatsapp_client::messages::{MessageContent, OutboundMessage, SendResponse, Text};
+use meta_whatsapp_client::messages::{
+    Context, MessageContent, OutboundMessage, SendResponse, Text,
+};
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{GroupId, PhoneNumberId, UserId, WaId};
@@ -21,6 +23,7 @@ use crate::markdown::MarkdownRenderer;
 use crate::outbound::Outbound;
 use crate::pacer::Pacer;
 use crate::parse::ParsedCommand;
+use crate::rich::RichReply;
 
 /// Who sent a message (or who an event is about).
 ///
@@ -439,6 +442,44 @@ impl Ctx {
     pub async fn reply_markdown(&self, markdown: &str) -> Result<Vec<SendResponse>> {
         let parts = self.renderer.render(markdown);
         self.reply_parts(parts).await
+    }
+
+    /// Send `reply`'s parts, in order, one message each, the first quoting
+    /// the received message, to [`Self::reply_recipient`]: its Markdown
+    /// through the bot's [`MarkdownRenderer`], an image as an image
+    /// message, suggestions as reply buttons (up to 3) or a list (4 to 10),
+    /// product cards as a carousel (see [`crate::rich`]). An empty reply
+    /// sends nothing.
+    ///
+    /// Every message is built and checked before the first is sent: a part
+    /// over a limit (a refused image URL, more than 10 suggestions, a
+    /// title too long) is this call's [`ValidationError`], and nothing is
+    /// sent. When a send fails, the rest are not sent, and the error is an
+    /// `Error::Step` naming it (`crate::rich::STEP_TEXT`, …); the earlier
+    /// ones were sent and are never resent here (`Error::may_have_been_sent`
+    /// says whether the failed one may have gone out). The 24-hour window
+    /// rules of [`Self::reply`] apply to each message.
+    pub async fn reply_rich(&self, reply: &RichReply) -> Result<Vec<SendResponse>> {
+        let quoted = self
+            .message()
+            .ok_or_else(|| not_replyable("the event is not a received message"))?;
+        let to = self.reply_recipient()?;
+        let mut plan = reply.plan(&to, self.renderer.as_ref(), self.commands())?;
+        if let Some(first) = plan.first_mut() {
+            first.message.context = Some(Context {
+                message_id: quoted.id.clone(),
+            });
+            first.message.validate()?;
+        }
+        let mut sent = Vec::with_capacity(plan.len());
+        for planned in plan {
+            let response = self
+                .send(&planned.message)
+                .await
+                .map_err(|e| e.in_step(planned.step))?;
+            sent.push(response);
+        }
+        Ok(sent)
     }
 
     /// Send already formatted `parts` as text messages, in order, the first
