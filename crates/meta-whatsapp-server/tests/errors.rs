@@ -269,6 +269,42 @@ async fn each_kind_answers_its_code_and_no_meta_text() {
     }
 }
 
+/// The Graph API's Business Use Case limits (`80008` WhatsApp Business
+/// Management API, `80009` Catalog Management, `80014` Catalog Batch) are
+/// Meta's throttling: `429 rate_limited`, retryable, nothing done. Before
+/// the library mapped them they were `502 unknown`, not retryable. The
+/// service does not know Meta's wait (the library does not read
+/// `X-Business-Use-Case-Usage`), so there is no `Retry-After`. The same
+/// table's codes for APIs the library does not call stay `unknown`.
+/// Decisive: a code dropped from `ErrorKind::from_code`.
+#[tokio::test]
+async fn a_business_use_case_limit_is_rate_limited() {
+    for (code, expected, status, retryable) in [
+        (80_008, "rate_limited", 429, true),
+        (80_009, "rate_limited", 429, true),
+        (80_014, "rate_limited", 429, true),
+        (80_004, "unknown", 502, false),
+    ] {
+        let h = Harness::new();
+        h.tenant(TENANT).await;
+        h.connect(TENANT, WABA, &[PN], "TOKEN").await;
+        let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+        h.graph.push_json(400, graph_error(code));
+        let reply = h
+            .call(Call::get(format!("/v1/numbers/{PN}")).key(&key))
+            .await;
+        assert_eq!(reply.code(), expected, "{code}");
+        assert_eq!(reply.status.as_u16(), status, "{code}");
+        let body = reply.json();
+        assert_eq!(body["error"]["retryable"], retryable, "{code}");
+        assert_eq!(body["error"]["may_have_been_sent"], false, "{code}");
+        assert_eq!(body["error"]["graph"]["code"], code);
+        assert!(reply.headers.get("retry-after").is_none(), "{code}");
+        assert!(!reply.text.contains(SENTINEL), "{code}: {}", reply.text);
+        assert_eq!(h.graph.remaining(), 0);
+    }
+}
+
 /// The operations of the committed document that ask Meta something when
 /// called with `common::sample_call`. The test below finds them by calling
 /// every operation, and fails when they differ from this list: a new route

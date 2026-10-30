@@ -261,7 +261,8 @@ impl<T: SlowDownRule + ?Sized> SlowDownRule for Arc<T> {
 }
 
 /// The default [`SlowDownRule`], read from the error's kind or code, never
-/// its text: `RateLimited` (`130429`, `80007`, `4`, an HTTP 429),
+/// its text: `RateLimited` (`130429`, `80007`, `4`, the Business Use Case
+/// limits `80008`, `80009` and `80014`, an HTTP 429),
 /// `SpamRateLimited` (`131048`) and `131057`, the account in maintenance
 /// (Meta's throughput upgrade). Not the pair rate limit (`131056`: one
 /// recipient, not the number) nor another outage.

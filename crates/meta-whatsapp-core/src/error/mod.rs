@@ -272,11 +272,19 @@ impl Error {
     ///
     /// - a Graph throttling error ([`ErrorKind::is_rejected_before_processing`]:
     ///   `130429` and the other `RateLimited` codes, the pair limit
-    ///   `131056`), on any status;
+    ///   `131056`), on any status, except the Business Use Case limits
+    ///   ([`GraphApiError::is_business_use_case_limit`]);
     /// - an HTTP 429 without a Graph error body;
     /// - `131057`, the account in maintenance, on a 4xx (or without a
     ///   status): Meta's throughput upgrade makes the number unusable for
     ///   up to a minute and every request gets it meanwhile (`throughput`).
+    ///
+    /// The Business Use Case limits (`80008`, `80009`, `80014`) are
+    /// `RateLimited`, so an idempotent request (a GET) is retried on them,
+    /// but not resent here: Meta's wait is in minutes
+    /// (`estimated_time_to_regain_access`), longer than any retry's delay,
+    /// and its advice is to stop calling until then. They came into the
+    /// table after this rule, which was kept as it was for them.
     ///
     /// Everything else is `false`, even where
     /// [`Self::may_have_been_sent`] is `false` too: a `131000` ("unknown
@@ -287,7 +295,10 @@ impl Error {
     /// reconciled with the status webhooks), never replayed blindly.
     pub fn may_resend(&self) -> bool {
         let refused = match self {
-            Self::Api(e) => e.kind().is_rejected_before_processing() || e.is_maintenance(),
+            Self::Api(e) => {
+                (e.kind().is_rejected_before_processing() && !e.is_business_use_case_limit())
+                    || e.is_maintenance()
+            }
             Self::Http { status: 429, .. } => true,
             _ => false,
         };
@@ -412,6 +423,10 @@ mod tests {
             (throttled(131_056, 500), false),
             (throttled(131_000, 503), true),
             (throttled(130_429, 302), false),
+            // The Business Use Case limits are throttling too (they were
+            // `Unknown`, so `true` on a 5xx, before they were mapped).
+            (throttled(80_009, 503), false),
+            (throttled(80_008, 500), false),
             (http(400), false),
             (http(404), false),
             (http(499), false),
@@ -485,6 +500,13 @@ mod tests {
             (api(131_056, Some(400)), true),
             (api(131_056, Some(500)), true),
             (http(429), true),
+            // The Business Use Case limits: `RateLimited` (a GET is
+            // retried), never resent: Meta's wait is minutes, not seconds.
+            (api(80_008, Some(400)), false),
+            (api(80_009, Some(400)), false),
+            (api(80_014, Some(400)), false),
+            (api(80_009, None), false),
+            (api(80_014, Some(503)), false),
             // The account in maintenance: only when refused (4xx or no
             // status).
             (api(131_057, Some(400)), true),

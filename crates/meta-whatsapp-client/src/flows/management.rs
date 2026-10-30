@@ -15,7 +15,7 @@ use super::types::{
     ListFlows, UpdateFlow, validate_flow_json_len,
 };
 use crate::Client;
-use crate::request::{paginate_or_error, reject_cursors};
+use crate::request::{PAGING_WITHHELD, paginate_or_error, reject_cursors};
 
 /// The body snippet of a preview answer that does not decode: its link
 /// carries a viewing token.
@@ -150,7 +150,8 @@ impl Flow {
     /// returns a new one — use it when a link was shared too widely. The
     /// link's `token` lets anyone holding it view the Flow, so an answer
     /// that fails to decode is reported without its body or serde's
-    /// message.
+    /// message, and the link that decodes is a
+    /// [`SecretUrl`](super::SecretUrl), whose `Debug` hides the token.
     pub async fn preview(&self, invalidate: bool) -> Result<FlowPreview> {
         #[derive(serde::Deserialize)]
         struct PreviewResponse {
@@ -217,14 +218,19 @@ impl Flow {
 
     /// One page of the Flow's assets (`GET /{FLOW_ID}/assets`). The next
     /// page: `ListFlowAssets::new().after(..)` with this page's
-    /// [`Page::next_cursor`].
+    /// [`Page::next_cursor`]. An asset's `download_url` opens it for anyone
+    /// holding it, so a page that fails to decode is reported without its
+    /// body or serde's message, as [`Self::assets_stream`]'s pages are,
+    /// even when it has no `paging` (the rule `send` applies reads the
+    /// body for `paging`), and the link that decodes is a
+    /// [`SecretUrl`](super::SecretUrl).
     pub async fn assets(&self, query: &ListFlowAssets) -> Result<Page<FlowAsset>> {
         self.client
             .get_at(&[self.flow_id.as_str(), "assets"])
             .query_opt("after", query.after.as_deref())
             .query_opt("before", query.before.as_deref())
             .context("flow assets response")
-            .send()
+            .send_withheld(PAGING_WITHHELD)
             .await
     }
 

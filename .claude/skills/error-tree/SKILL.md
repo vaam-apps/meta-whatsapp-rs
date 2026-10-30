@@ -42,7 +42,12 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
 - `is_retryable()` = could succeed later. **Safe to resend automatically**
   is separate, and there is one rule for it: `Error::may_resend()` —
   a throttling kind (`ErrorKind::is_rejected_before_processing()`) on any
-  status, an HTTP 429, or `131057` (account in maintenance) on a 4xx;
+  status, except the Graph API's Business Use Case limits
+  (`GraphApiError::BUSINESS_USE_CASE_LIMITS`: `80008` WhatsApp Business
+  Management API, `80009` Catalog Management, `80014` Catalog Batch, from
+  `graph-api/overview/rate-limiting` § Error Codes; `RateLimited`, so a
+  GET retries, but Meta's wait is minutes and a send is not resent), an
+  HTTP 429, or `131057` (account in maintenance) on a 4xx;
   it implies `!may_have_been_sent()`. The client's `RetryPolicy` (for a
   request that is not idempotent) and the bot's broadcast both call it,
   and a policy may only be stricter. Conservative on purpose: a `131000`
@@ -104,7 +109,8 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   quotes values) for any body naming `paging` or `access_token`, because
   Meta's paging links can embed the token. A response that names people
   uses `send_private`; one with other secrets (key material, a Flow
-  preview link) uses `send_withheld(placeholder)`. `request::body_guard_tests`
+  preview link, a Flow assets page's signed links) uses
+  `send_withheld(placeholder)`. `request::body_guard_tests`
   scans the crate's sources (comments, literals and `#[cfg(test)]` code
   aside) and fails on a `…::decode(` whose body argument is not a literal
   or a placeholder constant, a `body_snippet` not from `safe_snippet` or a

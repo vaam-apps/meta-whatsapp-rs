@@ -1245,6 +1245,116 @@ mod tests {
         assert_eq!(t.remaining(), 0);
     }
 
+    /// A Business Use Case throttle, in the shape of the sample error of
+    /// `graph-api/overview/rate-limiting` (its sample is `80001`; the
+    /// message is ours).
+    fn throttled(code: i64) -> serde_json::Value {
+        json!({"error": {
+            "message": format!("(#{code}) There have been too many calls. Wait a bit and try again."),
+            "type": "OAuthException",
+            "code": code,
+            "fbtrace_id": "AmFGcW_3hwDB7qFbl_QdebZ"
+        }})
+    }
+
+    #[tokio::test]
+    async fn business_use_case_throttles_are_rate_limited() {
+        // 80009 Catalog Management, 80014 Catalog Batch, 80008 the
+        // WhatsApp Business Management API (`/{WABA_ID}/product_catalogs`
+        // is a WABA edge).
+        for code in [80_009, 80_014, 80_008] {
+            let t = ScriptedTransport::new();
+            t.push_json(400, throttled(code));
+            let err = client(&t).catalog(CATALOG).get(&[]).await.unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::RateLimited, "{code}");
+            assert_eq!(err.graph().map(|g| g.code), Some(code));
+            assert!(err.is_retryable(), "{code}");
+            assert_eq!(t.remaining(), 0);
+        }
+        // A code of the same table for an API this crate does not call
+        // stays as it was.
+        let t = ScriptedTransport::new();
+        t.push_json(400, throttled(80_004));
+        let err = client(&t).catalog(CATALOG).get(&[]).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Unknown);
+        assert!(!err.is_retryable());
+        assert_eq!(t.remaining(), 0);
+    }
+
+    fn retrying_client(t: &ScriptedTransport) -> Client {
+        Client::builder()
+            .transport(t.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy {
+                max_retries: 1,
+                base_delay: std::time::Duration::ZERO,
+                max_delay: std::time::Duration::ZERO,
+            })
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_throttled_catalog_read_is_retried() {
+        for code in [80_009, 80_014, 80_008] {
+            let t = ScriptedTransport::new();
+            t.push_json(400, throttled(code));
+            t.push_json(200, json!({"id": CATALOG, "name": "Shop"}));
+            let info = retrying_client(&t).catalog(CATALOG).get(&[]).await.unwrap();
+            assert_eq!(info.id.as_str(), CATALOG);
+            let requests = t.requests();
+            assert_eq!(requests.len(), 2, "{code}");
+            assert!(requests.iter().all(|r| r.method == Method::GET));
+            assert_eq!(t.remaining(), 0);
+        }
+        // `waba.product_catalogs`, a WABA edge (80008's API).
+        let t = ScriptedTransport::new();
+        t.push_json(400, throttled(80_008));
+        t.push_json(200, json!({"data": [{"id": CATALOG, "name": "Shop"}]}));
+        let page = retrying_client(&t)
+            .waba(WabaId::new(WABA).unwrap())
+            .product_catalogs(&[])
+            .await
+            .unwrap();
+        assert_eq!(page.data.len(), 1);
+        assert_eq!(t.requests().len(), 2);
+        assert_eq!(t.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_throttled_post_is_not_resent() {
+        // A request that is not idempotent was not resent on these codes
+        // before they were mapped, and is not now (`Error::may_resend`).
+        // `POST /{WABA_ID}/message_templates` is one 80008 covers.
+        for code in [80_008, 80_009, 80_014] {
+            let t = ScriptedTransport::new();
+            t.push_json(400, throttled(code));
+            t.push_json(200, json!({"id": "1"}));
+            let err = retrying_client(&t)
+                .post_at(&[WABA, "message_templates"])
+                .json(&json!({"name": "x"}))
+                .send::<serde_json::Value>()
+                .await
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::RateLimited, "{code}");
+            assert_eq!(t.requests().len(), 1, "{code}");
+            assert_eq!(t.remaining(), 1);
+        }
+        // 80007, mapped before, still is resent: the carve-out is the BUC
+        // codes only.
+        let t = ScriptedTransport::new();
+        t.push_json(400, throttled(80_007));
+        t.push_json(200, json!({"id": "1"}));
+        retrying_client(&t)
+            .post_at(&[WABA, "message_templates"])
+            .json(&json!({"name": "x"}))
+            .send::<serde_json::Value>()
+            .await
+            .unwrap();
+        assert_eq!(t.requests().len(), 2);
+        assert_eq!(t.remaining(), 0);
+    }
+
     // ── Product sets ──────────────────────────────────────────────────────
 
     #[tokio::test]
