@@ -1,6 +1,6 @@
 [package]
 name = "meta-whatsapp-bot"
-description = "Bot framework over WhatsApp Cloud API webhooks: commands, guards, cooldowns, middleware, compile-time plugins, Markdown replies and paced broadcasts."
+description = "Bot framework over WhatsApp Cloud API webhooks: commands, guards, cooldowns, middleware, compile-time plugins, Markdown and rich replies (images, buttons, lists, carousels) and paced broadcasts."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
