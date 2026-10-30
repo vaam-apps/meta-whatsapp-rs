@@ -228,8 +228,9 @@ stored data, the owner's).
   `MarkdownRenderer`; `RichReply::image` and `image_with_caption` as an
   image message by link, which must pass the renderer's URL rule and be
   an absolute `http` or `https` URL with a host (a `javascript:`,
-  `data:`, relative, `mailto:` or `tel:` link is refused, and the
-  refusal does not repeat it); `RichReply::suggestions` as reply buttons
+  `data:`, relative, `mailto:` or `tel:` link is refused, as is one with
+  a user name or password, and the refusal does not repeat it);
+  `RichReply::suggestions` as reply buttons
   up to `rich::BUTTONS_MAX` (3) and as a one-section list from 4 to
   `rich::SUGGESTIONS_MAX` (10), its button and section titled
   `rich::LIST_BUTTON` (`Options`) unless `RichReply::list_button`;

@@ -500,20 +500,27 @@ ctx.reply_rich(&reply).await?; // checked whole, then one message per part
 - **Bodies.** Buttons, lists and carousels need a body: theirs is the
   last message of the Markdown part right before them, sent as their
   body rather than as a text of its own (cut first when it is longer
-  than the body allows: 1024 characters for buttons and carousels,
-  4096 for a list). With no Markdown part right before them, the reply
-  is refused; to ask a separate question, make it that part
+  than the body allows: 1024 characters for buttons and carousels, 4096
+  for a list, counted as the renderer counts, in UTF-16 units; cut as
+  `markdown::split` cuts, at blank lines, then lines, then words, the
+  pieces before the last sent as text first). With no Markdown part
+  right before them, the reply is refused; to ask a separate question,
+  make it that part
   (`.markdown(answer).markdown("Anything else?").suggestions(..)`).
 - **Taps.** `Suggestion::new(id, title)` sends `id` as is.
   `Suggestion::command("order status", title)` sends that command's
   first `Command::payload`, so the tap runs it (with no arguments: a
   tap carries none); a command with no payload is refused when the
-  reply is built. `.description(..)` shows in a list only.
+  reply is built. `.description(..)` shows in a list only. A suggestion
+  may name a hidden or owner-only command: the user sees only its title,
+  and the tap passes the command's guards like a typed command.
 - **Images.** The link must pass the renderer's URL rule (no
   `javascript:`, `data:` or other scheme) and be what Meta can fetch:
   an absolute `http` or `https` URL with a host, so no relative,
-  `mailto:` or `tel:` link either. Meta's page does not refuse `http`;
-  prefer `https`.
+  `mailto:` or `tel:` link either, and no user name or password
+  (`https://user:pass@…`, which would be sent to Meta). Meta's page
+  does not refuse `http`; prefer `https`. The refusal does not repeat
+  the URL (a signed URL is a secret).
 - **Nothing partial on a bad part.** Every message is built and checked
   by the client's own validation (`OutboundMessage::validate`) before the
   first is sent: more than 10 suggestions, a button title over 20
@@ -738,9 +745,11 @@ reads flags; `.with_subcommand(sub)` for a subcommand), and
 
 ## Not here yet
 
-Scheduling and broadcasts that survive a restart ([roadmap](../roadmap.md)
-B3), and auto-delete (B4). A rich reply's image goes by link only (an
-uploaded media id: build the message and use `Ctx::send`), and Markdown's
-own `![alt](url)` stays text (`alt (url)`): images are their own part. Subcommands nest one
-level, and flags have no short or space-separated form (section 1). Conversation state and multi-step forms are
-yours: keep them in your store, keyed by `BotSender::key`.
+Scheduling and broadcasts that survive a restart
+([roadmap](../roadmap.md) B3), and auto-delete (B4). A rich reply's
+image goes by link only (an uploaded media id: build the message and use
+`Ctx::send`), and Markdown's own `![alt](url)` stays text (`alt (url)`):
+images are their own part. Subcommands nest one level, and flags have no
+short or space-separated form (section 1). Conversation state and
+multi-step forms are yours: keep them in your store, keyed by
+`BotSender::key`.

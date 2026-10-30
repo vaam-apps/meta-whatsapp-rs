@@ -18,11 +18,13 @@
 //! Buttons, a list and a carousel need a body text. Theirs is the text
 //! right before them: the last message the [`RichReply::markdown`] part
 //! just before them renders to is sent as their body, not as a text
-//! message of its own (cut first when it is longer than the body allows,
-//! 1024 characters for buttons and carousels, 4096 for a list: the pieces
-//! before the last go as text messages). Without a Markdown part right
-//! before them (first in the reply, after an image, after other buttons),
-//! the reply is refused. To ask a separate question, make it that part:
+//! message of its own (cut first when it is longer than the body
+//! allows, 1024 characters for buttons and carousels, 4096 for a list,
+//! counted in UTF-16 code units as the renderer counts and cut as
+//! [`markdown::split`] cuts: the pieces before the last go as text
+//! messages). Without a Markdown part right before them (first in the
+//! reply, after an image, after other buttons), the reply is refused.
+//! To ask a separate question, make it that part:
 //! `.markdown(answer).markdown("Anything else?").suggestions(..)`.
 //!
 //! # Suggestions
@@ -37,18 +39,22 @@
 //! [`LIST_BUTTON`] unless [`RichReply::list_button`] says otherwise, and its
 //! one section is titled the same (the list page marks a section's title
 //! required). A suggestion's description shows in a list only: buttons
-//! have none.
+//! have none. A suggestion may name a hidden or owner-only command: the
+//! user sees only the title given, and the tap passes the command's
+//! guards as typed text would.
 //!
 //! # Images
 //!
 //! An image link must pass the renderer's URL rule (the one it writes
 //! links and images by: no `javascript:`, `data:`, `file:` or other
 //! scheme) and be what Meta can fetch from "your public server"
-//! (`messages/image-messages`): an absolute `http` or `https` URL with a
-//! host, no spaces or control characters. A relative, `mailto:` or `tel:`
-//! URL, which the renderer would write as text, is refused here. Meta's
-//! pages do not say `http` is refused, so it is not; prefer `https`. The
-//! refusal does not repeat the URL (a signed URL is a secret).
+//! (`messages/image-messages`): an absolute `http` or `https` URL with
+//! a host, no spaces or control characters, and no user name or
+//! password (`user:pass@`, which would be sent to Meta). A relative,
+//! `mailto:` or `tel:` URL, which the renderer would write as text, is
+//! refused here. Meta's pages do not say `http` is refused, so it is
+//! not; prefer `https`. The refusal does not repeat the URL (a signed
+//! URL is a secret).
 //!
 //! # Sending
 //!
@@ -487,7 +493,17 @@ fn image_link_allowed(url: &str) -> bool {
         return false;
     };
     let web = scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https");
-    let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    // A user name or password (`user:pass@`) would be sent to Meta in the
+    // message, and Meta fetches from a public server: refused.
+    if authority.contains('@') {
+        return false;
+    }
+    // The host without its port (`[…]` for an IPv6 literal).
+    let host = match authority.strip_prefix('[') {
+        Some(literal) => literal.split_once(']').map_or("", |(host, _)| host),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
     web && !host.is_empty()
 }
 
@@ -501,6 +517,8 @@ mod tests {
             "https://shop.example/a.png",
             "HTTPS://shop.example/a.png?x=1",
             "http://shop.example/a.png",
+            "https://shop.example:8443/a.png",
+            "https://[2001:db8::1]:8443/a.png",
         ] {
             assert!(image_link_allowed(ok), "{ok}");
         }
@@ -516,6 +534,10 @@ mod tests {
             "tel:+15550000",
             "https://",
             "https:///a.png",
+            "https://user:pass@shop.example/a.png",
+            "https://token@/a.png",
+            "https://:443/a.png",
+            "https://[]/a.png",
             "https://shop.example/a b.png",
             "https://shop.example/a.png\n",
             "ftp://shop.example/a.png",

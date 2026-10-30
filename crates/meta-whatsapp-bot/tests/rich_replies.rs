@@ -15,7 +15,7 @@ use meta_whatsapp_bot::rich::{
     LIST_BUTTON, RichReply, STEP_BUTTONS, STEP_IMAGE, STEP_LIST, STEP_PRODUCTS, STEP_TEXT,
     Suggestion,
 };
-use meta_whatsapp_bot::{Bot, ClientOutbound, Command, Ctx, PropagateErrors};
+use meta_whatsapp_bot::{AccessList, Bot, ClientOutbound, Command, Ctx, PropagateErrors};
 use meta_whatsapp_client::messages::{OutboundMessage, ProductCard};
 use meta_whatsapp_core::Error;
 use meta_whatsapp_core::error::{TransportError, ValidationError};
@@ -490,6 +490,115 @@ async fn a_long_body_is_cut_and_its_last_piece_carries_the_buttons() {
     assert_eq!(t.remaining(), 0);
 }
 
+/// The body limit is counted in characters, not bytes: 1024 two-byte
+/// characters are one body; at 1025 the text is cut at a word, never
+/// inside one, the piece before sent first as a text message.
+#[tokio::test]
+async fn a_body_of_1024_characters_is_kept_and_1025_is_cut_at_a_word() {
+    let t = ScriptedTransport::new();
+    script(&t, 3);
+    let exact = "é".repeat(1024);
+    ctx(&t)
+        .reply_rich(
+            &RichReply::new()
+                .markdown(exact.clone())
+                .suggestions(numbered(1)),
+        )
+        .await
+        .unwrap();
+
+    // 102 words of 9 characters and one of 5: 1025 characters, 2050 bytes.
+    let word = "é".repeat(9);
+    let head = vec![word.as_str(); 102].join(" ");
+    let tail = "é".repeat(5);
+    let over = format!("{head} {tail}");
+    assert_eq!(over.chars().count(), 1025);
+    ctx(&t)
+        .reply_rich(&RichReply::new().markdown(over).suggestions(numbered(1)))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        bodies(&t),
+        [
+            buttons(true, &exact, &[("s0", "Option 0")]),
+            text(true, &head),
+            buttons(false, &tail, &[("s0", "Option 0")]),
+        ]
+    );
+    assert_eq!(t.remaining(), 0);
+}
+
+/// A list's body may be four times longer: 4096 characters are one body.
+#[tokio::test]
+async fn a_list_body_of_4096_characters_is_kept() {
+    let t = ScriptedTransport::new();
+    script(&t, 1);
+    let exact = "é".repeat(4096);
+    ctx(&t)
+        .reply_rich(
+            &RichReply::new()
+                .markdown(exact.clone())
+                .suggestions(numbered(4)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        bodies(&t),
+        [list(true, &exact, LIST_BUTTON, &numbered_rows(4))]
+    );
+    assert_eq!(t.remaining(), 0);
+}
+
+/// The Markdown before the body that the renderer already split off (its
+/// messages before the last, at 4096) goes first, then the pieces the body
+/// cut leaves, then the buttons.
+#[tokio::test]
+async fn text_before_a_cut_body_goes_out_first_in_order() {
+    let t = ScriptedTransport::new();
+    script(&t, 4);
+    let a = "a".repeat(4000);
+    let b = "b".repeat(1000);
+    let c = "c".repeat(1000);
+    let markdown = format!("{a}\n\n{b}\n\n{c}");
+    ctx(&t)
+        .reply_rich(&RichReply::new().markdown(markdown).suggestions(numbered(1)))
+        .await
+        .unwrap();
+    assert_eq!(
+        bodies(&t),
+        [
+            text(true, &a),
+            text(false, &b),
+            buttons(false, &c, &[("s0", "Option 0")]),
+        ]
+    );
+    assert_eq!(t.remaining(), 1, "three messages, not four");
+}
+
+/// The body is the last Markdown part's, not an earlier one's: the parts
+/// before it are text messages of their own.
+#[tokio::test]
+async fn the_body_is_the_last_markdown_part_before_the_suggestions() {
+    let t = ScriptedTransport::new();
+    script(&t, 3);
+    let reply = RichReply::new()
+        .markdown("One")
+        .markdown("Two")
+        .markdown("Pick")
+        .suggestions(numbered(4));
+    ctx(&t).reply_rich(&reply).await.unwrap();
+    assert_eq!(
+        bodies(&t),
+        [
+            text(true, "One"),
+            text(false, "Two"),
+            list(false, "Pick", LIST_BUTTON, &numbered_rows(4)),
+        ]
+    );
+    assert_eq!(t.remaining(), 0);
+}
+
 // ─── Images ──────────────────────────────────────────────────────────────
 
 /// Decisive: a `javascript:` image URL is never sent, nor anything of its
@@ -514,6 +623,66 @@ async fn a_javascript_image_url_is_never_sent() {
         assert!(!v.reason.contains(url), "the refusal repeats the URL");
         assert!(t.requests().is_empty(), "{url:?} was sent");
     }
+}
+
+/// More URLs that are refused: other spellings of a scheme, a
+/// scheme-relative or encoded one, leading whitespace or a control
+/// character, a user name or password (sent to Meta in the message; Meta
+/// fetches from "your public server"), or no host once those are read.
+/// The refusal never repeats the URL.
+#[tokio::test]
+async fn other_unfetchable_image_urls_are_refused() {
+    let t = ScriptedTransport::new();
+    for url in [
+        "JaVaScRiPt:alert(1)",
+        " javascript:alert(1)",
+        "\u{0}https://www.luckyshrub.com/a.png",
+        " https://www.luckyshrub.com/a.png",
+        "\thttps://www.luckyshrub.com/a.png",
+        "https://www.luckyshrub.com/a\u{a0}b.png",
+        "javascript%3Aalert(1)",
+        "https%3A//www.luckyshrub.com/a.png",
+        "//www.luckyshrub.com/a.png",
+        "https://user:secret-pass@www.luckyshrub.com/a.png",
+        "https://secret-token@www.luckyshrub.com/a.png",
+        "https://secret-token@/a.png",
+        "https://:443/a.png",
+        "https://?a.png",
+        "https://#a.png",
+    ] {
+        let reply = RichReply::new().markdown("Look:").image(url);
+        let error = ctx(&t).reply_rich(&reply).await.unwrap_err();
+        let v = validation(&error);
+        assert_eq!(v.field, "image.link", "{url:?}");
+        assert!(!v.reason.contains("secret"), "the refusal repeats the URL");
+        assert!(t.requests().is_empty(), "{url:?} was sent");
+    }
+}
+
+/// Hosts Meta can resolve pass, sent as written: an IDN (Unicode or
+/// punycode), a port, an IPv6 literal, and a long URL (Meta documents no
+/// length).
+#[tokio::test]
+async fn idn_port_ipv6_and_long_image_urls_are_sent_as_written() {
+    let long = format!("https://www.luckyshrub.com/{}.png", "a".repeat(4000));
+    let urls = [
+        "https://bücher.example/aloe.png",
+        "https://xn--bcher-kva.example/aloe.png",
+        "https://www.luckyshrub.com:8443/aloe.png",
+        "https://[2001:db8::1]/aloe.png",
+        long.as_str(),
+    ];
+    let t = ScriptedTransport::new();
+    script(&t, urls.len());
+    for url in urls {
+        ctx(&t)
+            .reply_rich(&RichReply::new().image(url))
+            .await
+            .unwrap();
+    }
+    let expected: Vec<Value> = urls.iter().map(|u| image(true, u)).collect();
+    assert_eq!(bodies(&t), expected);
+    assert_eq!(t.remaining(), 0);
 }
 
 /// An `http:` URL passes: the renderer's rule writes it, and Meta's image
@@ -766,6 +935,110 @@ async fn a_suggestion_naming_no_payload_is_refused() {
     bot.handle(text_event(TEXT, "/menu")).await.unwrap();
     assert_eq!(*refused.lock().unwrap(), ["suggestions[0]"; 3]);
     assert!(out.sent().is_empty());
+}
+
+/// A subcommand's suggestion carries the subcommand's payload, and the tap
+/// runs that subcommand; a path longer than a subcommand's is refused.
+#[tokio::test]
+async fn a_subcommand_suggestion_routes_back_to_the_subcommand() {
+    let out = Recording::default();
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let ran_in = Arc::clone(&ran);
+    let refused = Arc::new(Mutex::new(Vec::new()));
+    let refused_in = Arc::clone(&refused);
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .errors(PropagateErrors)
+        .command(Command::new("menu", move |ctx: Ctx| {
+            let refused = Arc::clone(&refused_in);
+            async move {
+                let long = RichReply::new()
+                    .markdown("What now?")
+                    .suggestions([Suggestion::command("order cancel extra", "Cancel")]);
+                let error = ctx.reply_rich(&long).await.unwrap_err();
+                refused
+                    .lock()
+                    .unwrap()
+                    .push(validation(&error).field.clone());
+                let reply = RichReply::new()
+                    .markdown("What now?")
+                    .suggestions([Suggestion::command("order cancel", "Cancel")]);
+                ctx.reply_rich(&reply).await?;
+                Ok(())
+            }
+        }))
+        .command(
+            Command::new("order", |_ctx: Ctx| async move { Ok(()) }).subcommand(
+                Command::new("cancel", move |ctx: Ctx| {
+                    let ran = Arc::clone(&ran_in);
+                    async move {
+                        ran.lock().unwrap().push(ctx.invocation().unwrap().clone());
+                        Ok(())
+                    }
+                })
+                .payload("cancel-button"),
+            ),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    bot.handle(text_event(TEXT, "/menu")).await.unwrap();
+    assert_eq!(*refused.lock().unwrap(), ["suggestions[0]"]);
+    assert_eq!(
+        out.sent(),
+        [buttons(true, "What now?", &[("cancel-button", "Cancel")])]
+    );
+
+    // Meta's documented `button_reply`, id `cancel-button`.
+    bot.handle(event(BUTTON_REPLY)).await.unwrap();
+    let ran = ran.lock().unwrap().clone();
+    assert_eq!(ran.len(), 1);
+    assert_eq!(ran[0].command, "order");
+    assert_eq!(ran[0].subcommand.as_deref(), Some("cancel"));
+}
+
+/// An owner-only command may be offered to anyone (the suggestion shows
+/// only the title the bot gave it), but its tap still passes the owner
+/// guard: a non-owner's runs nothing.
+#[tokio::test]
+async fn an_owner_only_suggestion_is_still_guarded_when_tapped() {
+    let out = Recording::default();
+    let runs = Arc::new(Mutex::new(0));
+    let runs_in = Arc::clone(&runs);
+    let bot = Bot::builder()
+        .outbound(out.clone())
+        .access(AccessList::new().owner("US.10000000000000000001"))
+        .command(Command::new("menu", |ctx: Ctx| async move {
+            let reply = RichReply::new()
+                .markdown("Admin?")
+                .suggestions([Suggestion::command("wipe", "Wipe")]);
+            ctx.reply_rich(&reply).await?;
+            Ok(())
+        }))
+        .command(
+            Command::new("wipe", move |_ctx: Ctx| {
+                let runs = Arc::clone(&runs_in);
+                async move {
+                    *runs.lock().unwrap() += 1;
+                    Ok(())
+                }
+            })
+            .owner_only()
+            .hidden()
+            .payload("cancel-button"),
+        )
+        .build()
+        .await
+        .unwrap();
+
+    bot.handle(text_event(TEXT, "/menu")).await.unwrap();
+    assert_eq!(
+        out.sent(),
+        [buttons(true, "Admin?", &[("cancel-button", "Wipe")])]
+    );
+    bot.handle(event(BUTTON_REPLY)).await.unwrap();
+    assert_eq!(*runs.lock().unwrap(), 0);
 }
 
 // ─── Building without sending ────────────────────────────────────────────

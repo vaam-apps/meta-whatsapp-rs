@@ -868,8 +868,8 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     (BSUID only) is served.
   - **Landed:** rows 86–88 done in the library; row 85 partial
     (subcommands and flags: B1b, since done) and row 17 partial (rich
-    replies beyond text: B1c, since done). Folder loading and hot reload stay out
-    (D28).
+    replies beyond text: B1c, since done). Folder loading and hot reload
+    stay out (D28).
 - [x] **B1b. Subcommands and flags** (`meta-whatsapp-bot`; row 85): a
   command's subcommands (`/order status 42` runs `status` under
   `order`, each with its own guards, usage and help line) and flags in
@@ -942,18 +942,26 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     `a_javascript_image_url_is_never_sent` (fails without the URL
     check); `a_failure_midway_stops_the_reply_and_names_the_step` and
     `a_timeout_midway_is_not_resent_or_followed` fail when the reply
-    goes on after a failed send. Proposed by the draft, for the
-    coordinator to decide (AGENTS.md § Decisions): buttons, lists and
-    carousels take as their body the last message of the Markdown part
-    right before them (none: refused), so an answer and its buttons are
-    one bubble and a separate question is one more `markdown` part; a
-    list's button and only section are titled `rich::LIST_BUTTON`
-    (`Options`) unless `RichReply::list_button`; `Suggestion::command`
-    sends the command's first payload, refused when it has none; an
-    image link must pass the renderer's URL rule and be an absolute
-    `http` or `https` URL (Meta fetches it; its page refuses no `http`);
-    a failed send stops the reply as an `Error::Step`
-    (`rich::STEP_TEXT`, …), the parts before it never resent. Swappable:
+    goes on after a failed send. Decided by the coordinator on
+    2026-10-30 (AGENTS.md § Decisions), as the draft proposed: the
+    builder API above; every message built and validated first, then
+    sent in order, a failed send stopping the reply as an `Error::Step`
+    (`rich::STEP_TEXT`, …) with the parts before it never resent;
+    buttons, lists and carousels take as their body the last message of
+    the Markdown part right before them (none: refused), so an answer
+    and its buttons are one bubble and a separate question is one more
+    `markdown` part; `Suggestion::command` sends the command's first
+    payload and is refused when it has none; an image link must pass the
+    renderer's URL rule and be an absolute `http` or `https` URL with a
+    host (Meta fetches it; its page refuses no `http`, so `http:` is
+    allowed), without a user name or password (added in review: it
+    would be sent to Meta); a list's single section is titled with its
+    button's label, `rich::LIST_BUTTON` (`Options`) unless
+    `RichReply::list_button`; a suggestion's description shows in lists
+    only (buttons have none). A suggestion may name a hidden or
+    owner-only command: it shows only the title the bot gives it, and
+    the tap passes the command's guards
+    (`an_owner_only_suggestion_is_still_guarded_when_tapped`). Swappable:
     `RichReply::to_messages` gives the messages to send another way,
     and the Markdown goes through the bot's `MarkdownRenderer`. Not in
     it: an image by uploaded media id, Markdown's own `![alt](url)` as
