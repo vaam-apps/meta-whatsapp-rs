@@ -10,7 +10,8 @@
 //! number's level (`PhoneNumberInfo::throughput`) and a
 //! `phone_number_quality_update` webhook when it rises
 //! (`PhoneNumberQualityEvent::ThroughputUpgrade`), but documents no mapping
-//! from a level to messages a second.
+//! from a level to messages a second. The webhook can set it for you,
+//! opt-in: [`ThroughputUpgrades`].
 //!
 //! **Leave headroom for inbound messages.** Meta's throughput is
 //! "inclusive of inbound and outbound messages and all message types"
@@ -58,6 +59,7 @@
 //! `Backoff::max_delay`.
 //!
 //! [`Broadcast`]: crate::Broadcast
+//! [`ThroughputUpgrades`]: crate::ThroughputUpgrades
 //! [`PacedGroups`]: crate::PacedGroups
 //! [`PacedGroup`]: crate::PacedGroup
 
@@ -425,10 +427,24 @@ impl TokenBucket {
     /// Set `number`'s rate while the bucket is in use (behind an `Arc`):
     /// the number's next slot is booked at it. For a number Meta upgrades
     /// (a `phone_number_quality_update` with
-    /// `PhoneNumberQualityEvent::ThroughputUpgrade`), or a merchant's
-    /// number onboarded while running.
+    /// `PhoneNumberQualityEvent::ThroughputUpgrade`, which
+    /// [`crate::ThroughputUpgrades`] follows), or a merchant's number
+    /// onboarded while running.
     pub fn set_rate(&self, number: impl Into<PhoneNumberId>, rate: Rate) {
         self.state().rates.insert(number.into(), rate);
+    }
+
+    /// [`Self::set_rate`] only if `number`'s configured rate is below
+    /// `rate`, checked and set under one lock, so a rate set higher
+    /// meanwhile (by hand, or by another upgrade) is never lowered.
+    /// Whether it changed.
+    pub(crate) fn raise_rate(&self, number: &PhoneNumberId, rate: Rate) -> bool {
+        let mut state = self.state();
+        if Self::rate_in(&state, number, self.rate).get() >= rate.get() {
+            return false;
+        }
+        state.rates.insert(number.clone(), rate);
+        true
     }
 
     /// How many sends may start at once after a quiet spell (default 1).

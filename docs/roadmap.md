@@ -1145,7 +1145,7 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     on Meta's throughput upgrade by itself (B2a), a limiter shared by
     replicas (B2b; the trait allows one), Meta's daily messaging limit
     (Meta's to enforce), and runs that survive a restart (B3).
-- [ ] **B2a. Throughput upgrades, followed** (`meta-whatsapp-bot`): an
+- [x] **B2a. Throughput upgrades, followed** (`meta-whatsapp-bot`): an
   opt-in listener that sets a number's rate to `Rate::HIGHER_THROUGHPUT`
   (`TokenBucket::set_rate`) when its `phone_number_quality_update`
   webhook says `THROUGHPUT_UPGRADE`
@@ -1156,6 +1156,48 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
   - **Decisive:** delivering the `THROUGHPUT_UPGRADE` fixture moves that
     number's sends from 12.5 ms to 1 ms apart on a `ManualClock`;
     removing the `set_rate` call fails the test.
+  - **Landed:** `ThroughputUpgrades` (module `throughput`), wired in with
+    `BotBuilder::follow_throughput_upgrades` (a listener of
+    `phone_number_quality_updated`) or delivered to as an `EventSink`
+    without a bot; nothing follows an upgrade unless one is set up. The
+    webhook names the number by its WABA and display phone number only,
+    so a `NumberDirectory` says which phone number id that is (default
+    `KnownNumbers`: registered by WABA and display number, compared by
+    their digits); an unknown number, an `ONBOARDING`, a `FLAGGED` or a
+    value Meta adds later changes no rate, and an upgrade never lowers
+    one (heard twice, it changes nothing). In memory: a restart or
+    another replica is back at the configured rate, and Meta sends the
+    webhook once (`ThroughputUpgrades::observe` returns the number, to
+    record it yourself; no store namespace added). The rate an upgrade
+    sets is a setting (`ThroughputUpgrades::rate`). The decisive test,
+    in `crates/meta-whatsapp-bot/tests/throughput.rs`:
+    `the_upgrade_fixture_moves_the_numbers_sends_from_12_5_ms_to_1_ms_apart`
+    (fails without the rate raised: the gaps stay 12.5 ms);
+    `other_numbers_keep_their_rate` fails when the rate goes to every
+    number, `an_upgrade_of_an_unknown_number_changes_nothing` when the
+    WABA is not part of the match,
+    `only_a_throughput_upgrade_changes_a_rate` when an unknown value
+    counts as an upgrade,
+    `an_upgrade_is_idempotent_and_never_lowers_a_rate` without the
+    never-lower check (made with the set under one lock),
+    `a_middleware_that_stops_the_event_stops_the_upgrade` pins the
+    listener's place, `the_logs_and_debug_name_no_number` the logs
+    (alone in `tests/throughput_logs.rs`: its capture is a thread's
+    subscriber, and `tracing` caches call sites across threads), and
+    `without_following_upgrades_the_fixture_changes_no_rate` off by
+    default. Decided by the coordinator (AGENTS.md § Decisions, each
+    swappable): the `ThroughputUpgrades` shape above (the directory a
+    trait, `NumberDirectory`; the rate a setting); off by default, by
+    construction (nothing follows an upgrade unless one is set up);
+    matching on the WABA and the display number's digits (`KnownNumbers`,
+    replaceable by any `NumberDirectory`); in memory only, a restart or
+    another replica back at the configured rate (documented; recording
+    upgrades is the integrator's, no `KvStore` namespace, which would be
+    a stable identifier and is the owner's to name); every other `event`
+    value ignored and logged at debug level; never lowering a rate; and,
+    as the bot's listener, running after the middleware, so a middleware
+    that stops the event stops the upgrade (documented; the sink is the
+    way around it).
 - [ ] **B2b. A pacer shared by replicas** (`meta-whatsapp-bot`; for the
   service's broadcasts, M5k): a `RateLimiter` keeping each number's rate
   schedule (the generic cell rate algorithm's state) as a typed store on
