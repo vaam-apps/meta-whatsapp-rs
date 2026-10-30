@@ -12,7 +12,7 @@
 //! event is recorded; and what the service's metrics count is told to the
 //! [`Observer`](crate::observe::Observer).
 //!
-//! The pipeline runs on a view of the backend ([`Watched`]) that passes
+//! The pipeline runs on a view of the backend (`Watched`) that passes
 //! everything through to the backend's own stores and records what the
 //! pipeline did with them: every call to the key/value store (the dedup
 //! leases), and every row the pipeline asked the outbox for, with the

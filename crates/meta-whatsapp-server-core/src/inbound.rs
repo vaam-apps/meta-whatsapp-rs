@@ -321,8 +321,10 @@ impl Pipeline {
         // The signature first, here: the library's handler would log each
         // forged delivery (the adapter logs them at most once a minute), and
         // a forged one needs no turn to record.
-        if self.verifier.verify(signature, &body).is_err() {
-            return Err(Refused::Unauthenticated);
+        // Its error is a signature's (`Refused::Unauthenticated`), classified
+        // as the handler's errors are.
+        if let Err(error) = self.verifier.verify(signature, &body) {
+            return Err(Refused::of(error.into()));
         }
         // Its turn to record: at most MAX_DELIVERIES_RECORDING hold the
         // database at once.

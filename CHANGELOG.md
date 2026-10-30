@@ -1735,6 +1735,57 @@ stored data, the owner's).
   library's host allow-list) keep their target,
   `meta_whatsapp_server::api::media`. No new trait method: nothing to
   upgrade for an `Observer` or a backend of your own.
+- **The webhook pipeline is the service core's** (roadmap S5e;
+  `meta-whatsapp-server-core` and `meta-whatsapp-server`, both `publish =
+  false`). `meta_whatsapp_server_core::inbound` holds `Inbound` (the app
+  secrets, the verify token and the clock; moved from the server, whose
+  `events::Inbound` re-exports it with the same `new` and `with_clock`;
+  its `clock()` is public now) and `Pipeline`, built with
+  `Pipeline::new(inbound, &dyn Backend, Arc<dyn Observer>)` on the
+  bundle's `KvStore` (dedup leases), `ConversationStore` (the inbox),
+  `Outbox` and records (routing), as the server built it before.
+  `Pipeline::deliver(signature, body)` checks the signature against every
+  app secret before a turn to record is taken or any store touched, then
+  runs the library's `WebhookHandler` (3 MiB, parse, each event under its
+  dedup lease) into the service's sink (route by the records, the inbox
+  when owned, the outbox row), and answers `inbound::Delivered` (the
+  library's `DeliveryReport`: `200`) or an `inbound::Refused`
+  (`Unauthenticated`, `Busy`, `TooLarge`, `InFlight`, `Failed`) with its
+  status and metric label (`status()`, `outcome()`; `DELIVERED` for a
+  recorded one). `MAX_WEBHOOK_BODY_BYTES`, `MAX_DELIVERIES_RECORDING` and
+  `RECORDING_WAIT` moved with it (the server's `events` re-exports
+  them); `MAX_DELIVERIES_IN_FLIGHT`, `BODY_READ_TIMEOUT`, the rejection
+  log and the handlers stay the server's. The sink is private to the
+  core (a UI case, `tests/visibility/fail/inbound_sink.rs`, pins it): the
+  server's public but unusable `events::ServiceSink` (no constructor, no
+  public method) is gone. The core gains `anyhow` as a direct dependency
+  (already in the library's graph: no new crate in `Cargo.lock`), and its
+  test builds the facade's `memory` feature. The conformance suite gains
+  `webhooks` (in `conformance::run`): with no listener, M1.2's routing
+  cases through the pipeline (an unowned number's event, a number under
+  another WABA than Meta says, a payload naming a tenant, a replay and
+  an unbound WABA's event are operator-only; each tenant polls exactly
+  its own, the inbox holds only an owned number's message), the
+  signature checked before any store is touched or a turn waited for (a
+  forged non-JSON body never becoming an `unparsed` row), each event
+  recorded once under its dedup lease (a held lease `503 in_flight`
+  with nothing recorded), the answer only once every event is recorded
+  (a failed outbox `500`, a busy one `503`, each redelivered once), and
+  `unknown` and `unparsed` bodies acknowledged as operator-only rows,
+  on every backend that runs the suite. No change to the HTTP API or
+  the webhook contract: every status, the order (the signature before
+  any parse or store), the dedup lease, every metric and label, and the
+  recorded event data are as before (the snapshots under
+  `tests/snapshots/event_data/` unchanged), and `openapi/v1.json` is
+  byte-identical. The pipeline's log lines keep their target,
+  `meta_whatsapp_server::events` (`inbound::LOG_TARGET`), and their
+  fields; the handler's keep theirs. **Upgrade** (code implementing the
+  core's `observe::Observer`): add `fn webhook_event(&self, event_type:
+  &'static str, audience: &'static str)`, `fn webhook_duplicates(&self,
+  stage: &'static str, count: u64)` and `fn webhook_failure(&self,
+  stage: &'static str)`, empty bodies to count nothing (as `()` does), or
+  your metrics' counters of recorded rows by type and audience, of
+  duplicates by stage, and of failures by stage.
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

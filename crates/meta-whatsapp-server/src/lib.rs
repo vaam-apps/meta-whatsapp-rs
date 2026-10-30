@@ -17,7 +17,7 @@
 //! | [`model`], [`keys`] | the core's domain types and API key format, re-exported |
 //! | [`auth`] | the core's authorization order as middleware and extractors |
 //! | [`api`] | both routers and the OpenAPI document |
-//! | [`events`] | Meta's webhooks into the inbox and the event outbox (the core's routing and polling, re-exported) |
+//! | [`events`] | Meta's webhooks into the inbox and the event outbox: what the listener needs of a body, over the core's pipeline (its `Inbound`, routing and polling, re-exported) |
 //! | [`idempotency`] | `Idempotency-Key` over HTTP (the core's engine: claim, replay, release) |
 //! | [`ratelimit`] | the core's per-tenant token buckets by route class, re-exported |
 //! | [`error`] | the error body, codes and statuses: the core's error model over HTTP |
