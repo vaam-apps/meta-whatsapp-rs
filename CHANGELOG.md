@@ -1847,12 +1847,18 @@ stored data, the owner's).
     decoded id, so a path spelled otherwise (its digits percent-encoded)
     replays the same key; the same key and body on another number, or
     for another operation, is `422 idempotency_key_reused`. A pre-release
-    change of `/v1`'s semantics: **a key claimed before the upgrade and
-    repeated after it with the same request answers `422
-    idempotency_key_reused`** (it never sends twice) until its record
-    expires, `WA_SERVER_IDEMPOTENCY_TTL` after its claim (24 hours by
-    default), between replicas of both releases during a rolling deploy
-    too ([guide](docs/guides/server.md#idempotency-keys)). No stored
+    change of `/v1`'s semantics, with a window: **a key claimed before
+    the upgrade keeps replaying** the same request (the same path as
+    sent, the same body) for as long as its record lives
+    (`WA_SERVER_IDEMPOTENCY_TTL` after its claim, 24 hours by default),
+    because the HTTP adapter also matches the fingerprint of before
+    (`Fingerprint::legacy_v1_json`, `legacy_v1_upload`, added with
+    `Fingerprint::or_legacy`; a claim stores the new fingerprint). A
+    repeat of an old key under another spelling of its path, and an
+    upgraded replica's key repeated on an old one during a rolling
+    deploy, are `422 idempotency_key_reused`, never a second send
+    ([guide](docs/guides/server.md#idempotency-keys)). The legacy
+    fingerprint goes after the first release (roadmap S7). No stored
     data changes shape and nothing needs migrating: the records expire.
   - **Error codes are constants.** `error::ErrorCode` has one constant
     per code (`ErrorCode::NOT_FOUND`), generated with `CODES` and
@@ -1881,7 +1887,10 @@ stored data, the owner's).
   the fingerprint's semantics. **Upgrade:** build a fingerprint with the
   operation's constructor (`Fingerprint::send_message(owned.phone_number_id(),
   &body)`, …) instead of `Fingerprint::json(&Method::POST, uri.path(),
-  &body)`; charge a budget with `limiter.charge(tenant, operation)`
+  &body)`, and, in an adapter that served `/v1` before (so that its
+  keys replay through the window), add the old one with
+  `.or_legacy(Fingerprint::legacy_v1_json(&Method::POST, uri.path(),
+  &body))` (`legacy_v1_upload` for an upload); charge a budget with `limiter.charge(tenant, operation)`
   instead of `RouteClass::of(scope, method)` and `check`; write
   `ServiceError::new(ErrorCode::NOT_FOUND)` (and `ApiError::new(…)`)
   instead of `ServiceError::new("not_found")`, and `ErrorCode::of(code)`

@@ -1387,7 +1387,10 @@ decisions and the delivery milestones, is
   D27). Fingerprints are stored with their key but are not stable
   identifiers: records last `WA_SERVER_IDEMPOTENCY_TTL`, and a
   fingerprint derived otherwise after an upgrade answers a repeat across
-  it `422 idempotency_key_reused` for that long, never a second send.
+  it `422 idempotency_key_reused` for that long, never a second send,
+  unless the release also matches the fingerprint of before, as S6's
+  does for one TTL (`Fingerprint::or_legacy`, until the first
+  release).
 - **Webhooks in** go through the library's `WebhookHandler` (signature
   before parsing, 3 MiB, the leased `DedupGuard` in the shared
   `KvStore`) into `InboxSink`, then the service's event outbox, one

@@ -912,12 +912,42 @@ and `store-postgres`.
     class fails `an_operations_class_is_the_tables` and
     `v1s_routes_keep_their_class`. `openapi/v1.json` is byte-identical,
     and no status or body changed but the fingerprint's semantics, a
-    pre-release change of `/v1` (D27): a key claimed before the upgrade
-    and repeated after it with the same request answers `422
-    idempotency_key_reused`, never a second send, until its record
-    expires (`WA_SERVER_IDEMPOTENCY_TTL` from its claim, 24 hours by
-    default; between replicas of the two releases during a rolling
-    deploy too), which the guide and the CHANGELOG say.
+    pre-release change of `/v1` (D27). As first built, a key claimed
+    before the upgrade and repeated after it with the same request
+    answered `422 idempotency_key_reused`, never a second send, until its
+    record expired (`WA_SERVER_IDEMPOTENCY_TTL` from its claim, 24 hours
+    by default); the window decided below replays it instead, and the
+    guide and the CHANGELOG say so.
+  - **Decided 2026-10-31** (the coordinator, under the owner's
+    delegation; each swappable, recorded in design D27): the canonical
+    input as proposed (the received JSON, canonicalized); `charge`
+    taking a bare `&TenantId`; the server-crate renames
+    (`ErrorCodeSchema`, `KnownErrorCodeSchema`) and `auth::guard`'s
+    `Operations` argument; `graph_failed_for_admin` among the
+    crate-private admin writes; `authz::rotate_vault` public for the
+    command line; no dependency dropped. **Changed the same day: the
+    422 window.** A deployment exists, so a key claimed before the
+    upgrade keeps replaying: for one TTL a repeat also matches a record
+    under the fingerprint of before (`Fingerprint::legacy_v1_json`,
+    `legacy_v1_upload`, pinned to main's known answers by
+    `the_legacy_fingerprint_is_mains`; the HTTP adapter adds it with
+    `Fingerprint::or_legacy`; a claim stores the new one). Tests: the
+    conformance case
+    `messages::a_key_claimed_before_s6_replays_under_its_legacy_fingerprint`
+    (in `conformance::run`: a record stored by hand under the legacy
+    fingerprint replays with no send, another body or the new
+    fingerprint alone is `422`, a fresh claim stores the new one), the
+    core's `a_record_under_the_legacy_fingerprint_is_the_same_requests`,
+    and per route the service's
+    `a_key_claimed_before_s6_replays_after_the_upgrade`,
+    `a_creation_key_claimed_before_s6_replays_after_the_upgrade` and
+    `an_upload_key_claimed_before_s6_replays_after_the_upgrade`. By
+    mutation: the legacy match dropped fails them all; a legacy match
+    taken for any body fails the `422` steps (and the two-spellings
+    tests); a claim storing the legacy fingerprint fails the conformance
+    case and the two-spellings tests; the send handler without
+    `or_legacy` fails its HTTP test; `uri.path()` in the primary
+    fingerprint still fails `two_spellings_of_one_path_replay_the_same_key`.
 - [ ] **S7. The crate split**: `meta-whatsapp-server-store-memory`,
   `meta-whatsapp-server-store-postgres`, `meta-whatsapp-server-http`
   (listeners, auth before the body, the §5 renderer, `/webhooks/meta`,
@@ -931,6 +961,12 @@ and `store-postgres`.
     migrated by `main`'s binary starts the split binary with no
     migration run again and no checksum error (the migration history
     and its lock are stable identifiers).
+  - **Also, after the first release:** drop the legacy fingerprint
+    (S6's window: `Fingerprint::legacy_v1_json`, `legacy_v1_upload`,
+    `or_legacy`, and the handlers' `Uri`), once every deployment has run
+    a release with S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. If S7 lands
+    before the first release, the next item of the service's to land
+    after it carries this line.
 - [ ] **S8. MongoDB in the dev container and CI** (`.devcontainer/`,
   the `just test-live` Compose file, `.github/workflows/ci.yml`): a
   single-node replica set (transactions need one) beside Postgres and

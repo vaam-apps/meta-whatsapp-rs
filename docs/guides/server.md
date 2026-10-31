@@ -359,11 +359,18 @@ or for another operation, is `422 idempotency_key_reused`.
 
 > **Changed before the first release** (roadmap S6, design D27): before
 > it, a key covered the request's method, its path as sent and its
-> body. A key claimed before the upgrade and repeated after it, with the
-> same request, answers `422 idempotency_key_reused` (it never sends
-> twice) until its record expires: `WA_SERVER_IDEMPOTENCY_TTL` after the
-> first request, 24 hours by default; during a rolling deploy, a repeat
-> served by the other release answers the same. Treat that `422` as "this
+> body. **Keys claimed before the upgrade keep replaying:** a repeat of
+> the same request, spelled as it was then (the same path, the same
+> body), still gets the kept answer, for as long as the record lives
+> (`WA_SERVER_IDEMPOTENCY_TTL` after the first request, 24 hours by
+> default), because the service also matches the fingerprint of then;
+> with another body it is `422 idempotency_key_reused`, as before. Two
+> limits of that window: a repeat of an old key under another spelling of
+> its path (percent-encoded digits) is `422`, as it was before the
+> upgrade; and during a rolling deploy, a key claimed by an upgraded
+> replica and repeated on one not yet upgraded is `422` there (the old
+> release knows only the old fingerprint), never a second send. Treat a
+> `422 idempotency_key_reused` on a key you reused on purpose as "this
 > key was used": reconcile the first request through its status events,
 > and do not resend it under a new key unless you know it never went out.
 
