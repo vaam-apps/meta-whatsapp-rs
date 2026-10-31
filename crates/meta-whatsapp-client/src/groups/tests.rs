@@ -554,6 +554,52 @@ async fn reset_invite_link_is_not_replayed() {
     assert_eq!(t.remaining(), 0);
 }
 
+/// A code no other test link uses.
+const INVITE_SENTINEL: &str = "1nv1t3-S3NT1NEL";
+
+#[tokio::test]
+async fn invite_link_code_never_reaches_debug_or_a_decode_error() {
+    let link = format!("https://chat.whatsapp.com/{INVITE_SENTINEL}");
+    let t = ScriptedTransport::new();
+    t.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "invite_link": link}),
+    );
+    t.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "invite_link": link}),
+    );
+    // Answers that do not decode, the link in them: `messaging_product`
+    // of the wrong type, then `invite_link` itself.
+    t.push_json(200, json!({"messaging_product": 1, "invite_link": link}));
+    t.push_json(200, json!({"invite_link": [link]}));
+    let g = client(&t).group(GROUP);
+    for got in [g.invite_link().await, g.reset_invite_link().await] {
+        let got = got.unwrap();
+        assert_eq!(got.invite_link, link, "the field keeps the link whole");
+        for shown in [format!("{got:?}"), format!("{got:#?}")] {
+            assert!(!shown.contains(INVITE_SENTINEL), "{shown}");
+            assert!(
+                shown.contains(r#""https://chat.whatsapp.com/<redacted>""#),
+                "{shown}"
+            );
+        }
+        assert!(
+            format!("{got:?}").starts_with(r#"InviteLink { messaging_product: Some("whatsapp"), "#)
+        );
+    }
+    for err in [
+        g.invite_link().await.unwrap_err(),
+        g.reset_invite_link().await.unwrap_err(),
+    ] {
+        assert!(matches!(err, Error::Decode { .. }), "{err:?}");
+        for shown in [err.to_string(), format!("{err:?}"), format!("{err:#?}")] {
+            assert!(!shown.contains(INVITE_SENTINEL), "{shown}");
+        }
+    }
+    assert_eq!(t.remaining(), 0);
+}
+
 // ── Join requests ───────────────────────────────────────────────────────
 
 #[tokio::test]

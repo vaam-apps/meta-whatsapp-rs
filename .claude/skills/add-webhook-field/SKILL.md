@@ -13,7 +13,13 @@ metadata:
    of the JSON shape; placeholders filled with plausible values).
 2. Add the typed value struct/enum variant. Optional everything that the
    docs mark conditional; identities follow the BSUID rules (`user_id`
-   always, `wa_id`/`username` optional).
+   always, `wa_id`/`username` optional). A property that holds a signed
+   link (a media `url`, a Meta CDN link) stays a `String`, and the struct's
+   `Debug` is written by hand, destructuring `self`, with that field
+   printed through `meta_whatsapp_core::secret::RedactedUrl`
+   (`fields::MediaContent`, `fields::Referral`), or `RedactedPath` when
+   the credential is in the path (`fields::GroupUpdate::invite_link`); add
+   its key to `tests/redacted_debug.rs` so a fixture proves it.
 3. Map it in the normalizer to a `WebhookEvent` variant carrying `waba_id`,
    `phone_number_id` (if the field has one) and user identity.
 4. Keep the `Unknown { field, raw }` path: an unknown field or type must

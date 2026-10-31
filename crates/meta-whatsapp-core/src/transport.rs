@@ -322,12 +322,23 @@ pub trait HttpTransport: Send + Sync + fmt::Debug + 'static {
     ///
     /// Non-2xx statuses are **not** errors at this layer; return them as a
     /// normal [`HttpResponse`] so the client can decode Graph error bodies.
+    ///
+    /// Bound the body you buffer, 2xx or not: the answer may come from a
+    /// redirect target or a URL the caller chose. A body past the bound is
+    /// a [`TransportError::Backend`] that names the bound, never the body or
+    /// the URL (`ReqwestTransport`: `max_response_bytes`, 256 MiB by
+    /// default).
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError>;
 
     /// Send `request` and stream the response body.
     ///
     /// The default buffers via [`HttpTransport::send`]; adapters that can
-    /// stream should override it.
+    /// stream should override it. Buffering, it inherits whatever bound
+    /// `send` puts on a body (`ReqwestTransport`'s `max_response_bytes`,
+    /// 256 MiB by default, bounds its `send`; it overrides this method and
+    /// streams, unbounded, for the caller to bound), and holds the whole
+    /// body before the caller sees a chunk: a caller's own limit (a media
+    /// download's `max_bytes`) is checked only after that.
     async fn send_streaming(
         &self,
         request: HttpRequest,

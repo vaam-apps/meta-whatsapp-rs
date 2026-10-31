@@ -1,10 +1,10 @@
 //! [`SecretUrl`]: a capability link, one that opens something for whoever
 //! holds it.
 
-use std::fmt::{self, Write as _};
+use std::fmt;
 
+use meta_whatsapp_core::secret::redacted_url as redacted;
 use serde::{Deserialize, Serialize};
-use url::Url;
 
 /// A link Meta answers with that is its own credential: whoever holds it
 /// can open what it points to, without a token or a login. The client
@@ -68,71 +68,6 @@ impl fmt::Debug for SecretUrl {
             None => f.write_str("SecretUrl(<redacted: not a URL>)"),
         }
     }
-}
-
-/// A link that stays a `String` in a public type but must not print whole
-/// (`MediaInfo::url`, whose signature is credential-shaped), shown in
-/// `Debug` as [`SecretUrl`] shows its own, without the type's name:
-/// `"https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=<redacted>&hash=<redacted>"`,
-/// or `<redacted: not a URL>`.
-pub(crate) struct RedactedUrl<'a>(pub(crate) &'a str);
-
-impl fmt::Debug for RedactedUrl<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match redacted(self.0) {
-            Some(shown) => fmt::Debug::fmt(&shown, f),
-            None => f.write_str("<redacted: not a URL>"),
-        }
-    }
-}
-
-const REDACTED: &str = "<redacted>";
-
-/// `link` as `Debug` shows it, or `None` when it does not parse as an
-/// absolute URL (then nothing of it is shown). Built from the parsed
-/// parts, so nothing the parser did not place in the scheme, host, port
-/// or path is shown as it was.
-fn redacted(link: &str) -> Option<String> {
-    let url = Url::parse(link).ok()?;
-    if url.cannot_be_a_base() {
-        // `data:`, `mailto:`…: everything after the scheme is opaque.
-        return Some(format!("{}:{REDACTED}", url.scheme()));
-    }
-    let mut out = format!("{}://", url.scheme());
-    if !url.username().is_empty() || url.password().is_some() {
-        out.push_str(REDACTED);
-        out.push('@');
-    }
-    if let Some(host) = url.host_str() {
-        out.push_str(host);
-    }
-    if let Some(port) = url.port() {
-        let _ = write!(out, ":{port}");
-    }
-    out.push_str(url.path());
-    if let Some(query) = url.query() {
-        out.push('?');
-        for (i, pair) in query.split('&').enumerate() {
-            if i > 0 {
-                out.push('&');
-            }
-            if pair.is_empty() {
-                continue;
-            }
-            // A pair without `=` is all value, for all we know; a `;`
-            // inside a pair stays in its value.
-            if let Some((name, _)) = pair.split_once('=') {
-                out.push_str(name);
-                out.push('=');
-            }
-            out.push_str(REDACTED);
-        }
-    }
-    if url.fragment().is_some() {
-        out.push('#');
-        out.push_str(REDACTED);
-    }
-    Some(out)
 }
 
 #[cfg(test)]

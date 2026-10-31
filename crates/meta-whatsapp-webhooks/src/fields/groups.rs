@@ -19,8 +19,11 @@
 //! - Error `code`s are printed as `"ERROR_CODE"` strings there; they are
 //!   integers everywhere else and parse into [`GraphApiError`].
 
+use std::fmt;
+
 use meta_whatsapp_core::GraphApiError;
 use meta_whatsapp_core::ids::{GroupId, UserId, WaId};
+use meta_whatsapp_core::secret::RedactedPath;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -76,7 +79,12 @@ open_enum! {
 
 /// `groups[]`: one group event. Which properties are set depends on
 /// [`Self::update_type`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// `Debug` shows [`invite_link`](Self::invite_link) as [`RedactedPath`]
+/// does, `https://chat.whatsapp.com/<redacted>`: the code in its path lets
+/// whoever holds it join (or ask to join) the group. The field keeps it
+/// whole, and serializing writes it whole.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct GroupUpdate {
     /// When the event happened.
     #[serde(
@@ -151,6 +159,60 @@ pub struct GroupUpdate {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub errors: Vec<GraphApiError>,
+}
+
+impl fmt::Debug for GroupUpdate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Destructured, so a field added later has to be listed here.
+        let Self {
+            timestamp,
+            group_id,
+            update_type,
+            request_id,
+            subject,
+            description,
+            invite_link,
+            join_approval_mode,
+            reason,
+            initiated_by,
+            join_request_id,
+            wa_id,
+            user_id,
+            parent_user_id,
+            username,
+            added_participants,
+            removed_participants,
+            failed_participants,
+            profile_picture,
+            group_subject,
+            group_description,
+            errors,
+        } = self;
+        f.debug_struct("GroupUpdate")
+            .field("timestamp", timestamp)
+            .field("group_id", group_id)
+            .field("update_type", update_type)
+            .field("request_id", request_id)
+            .field("subject", subject)
+            .field("description", description)
+            .field("invite_link", &invite_link.as_deref().map(RedactedPath))
+            .field("join_approval_mode", join_approval_mode)
+            .field("reason", reason)
+            .field("initiated_by", initiated_by)
+            .field("join_request_id", join_request_id)
+            .field("wa_id", wa_id)
+            .field("user_id", user_id)
+            .field("parent_user_id", parent_user_id)
+            .field("username", username)
+            .field("added_participants", added_participants)
+            .field("removed_participants", removed_participants)
+            .field("failed_participants", failed_participants)
+            .field("profile_picture", profile_picture)
+            .field("group_subject", group_subject)
+            .field("group_description", group_description)
+            .field("errors", errors)
+            .finish()
+    }
 }
 
 /// A participant in `added_participants` / `removed_participants` /
