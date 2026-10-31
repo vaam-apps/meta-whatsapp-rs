@@ -875,8 +875,9 @@ Logs carry sizes, digests and field names only — never payload values.
   multipart, per-request timeout, error mapping (timeout → `Timeout`,
   connect → `Connect`, else `Backend`), a bound on every buffered body
   (`max_response_bytes`, 256 MiB by default, `None` for none; past it a
-  `Backend` error naming only the bound, the connection dropped, not
-  drained). A streamed body is its reader's to bound.
+  `Backend` error naming only the bound, the body never drained: an
+  HTTP/1.1 connection is closed, an HTTP/2 stream reset). A streamed body
+  is its reader's to bound.
 - `store::{MemoryKvStore, MemoryConversationStore}` (feature `memory`).
 - `store::{PostgresKvStore, PostgresConversationStore}` (feature
   `postgres`, sqlx, embedded migrations, `wa_` table prefix configurable).
