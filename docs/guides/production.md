@@ -109,7 +109,10 @@ recording's) and the Meta CDN links of a Click to WhatsApp `Referral`
 that way, so a logged `WebhookEvent` or payload holds no signature;
 serializing one still writes them whole. Both crates use
 `meta_whatsapp_core::secret::RedactedUrl` for it, which you can use for
-your own types.
+your own types. A group invite link (`GroupUpdate::invite_link`) carries
+its code in the path, so its `Debug` keeps only scheme and host
+(`https://chat.whatsapp.com/<redacted>`), through
+`meta_whatsapp_core::secret::RedactedPath`.
 
 The client attaches a token to the configured Graph endpoint (scheme, host
 and port), to `https://lookaside.fbsbx.com`, Meta's media download host,

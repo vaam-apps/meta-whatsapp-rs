@@ -17,8 +17,9 @@ metadata:
    link (a media `url`, a Meta CDN link) stays a `String`, and the struct's
    `Debug` is written by hand, destructuring `self`, with that field
    printed through `meta_whatsapp_core::secret::RedactedUrl`
-   (`fields::MediaContent`, `fields::Referral`); add its key to
-   `tests/redacted_debug.rs` so a fixture proves it.
+   (`fields::MediaContent`, `fields::Referral`), or `RedactedPath` when
+   the credential is in the path (`fields::GroupUpdate::invite_link`); add
+   its key to `tests/redacted_debug.rs` so a fixture proves it.
 3. Map it in the normalizer to a `WebhookEvent` variant carrying `waba_id`,
    `phone_number_id` (if the field has one) and user identity.
 4. Keep the `Unknown { field, raw }` path: an unknown field or type must

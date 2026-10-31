@@ -2943,3 +2943,17 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   `send_streaming` unbounded. `connection_refused_is_connect_and_never_shows_the_url`
   now keeps its port bound (not listening) instead of binding, dropping
   and connecting, which raced a parallel test's listener.
+- **A group invite link no longer reaches `Debug`**
+  (`meta-whatsapp-webhooks`). `fields::GroupUpdate` derived `Debug`, so
+  `invite_link` (`https://chat.whatsapp.com/<code>`, whose code lets
+  whoever holds it join or ask to join the group) reached any log line
+  that printed a group webhook or its event. Its `Debug` is now written by
+  hand and shows the link through the new
+  `meta_whatsapp_core::secret::RedactedPath`, which keeps scheme, host and
+  port and hides the path, query, fragment and user info
+  (`https://chat.whatsapp.com/<redacted>`); `RedactedUrl` would not
+  have hidden it, since it shows the path. The field stays
+  `Option<String>` and serializes whole (the service's event snapshots are
+  unchanged). Tests: `no_group_invite_code_reaches_debug_of_a_payload_or_its_events`
+  (every fixture with an `invite_link`, a sentinel code planted) and
+  `secret::tests::redacted_path_keeps_only_scheme_host_and_port`.

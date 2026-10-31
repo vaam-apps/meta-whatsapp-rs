@@ -180,3 +180,65 @@ fn referral_debug_redacts_the_cdn_links_only() {
     let written = serde_json::to_string(&referral).unwrap();
     assert_eq!(written.matches(SENTINEL).count(), 3);
 }
+
+/// Replace every `invite_link` in `value` with a link whose code is the
+/// sentinel; return how many there were.
+fn plant_invite_codes(value: &mut Value) -> usize {
+    match value {
+        Value::Object(map) => map
+            .iter_mut()
+            .map(|(key, child)| {
+                if key == "invite_link" && child.is_string() {
+                    *child = Value::String(format!("https://chat.whatsapp.com/{SENTINEL}"));
+                    1
+                } else {
+                    plant_invite_codes(child)
+                }
+            })
+            .sum(),
+        Value::Array(items) => items.iter_mut().map(plant_invite_codes).sum(),
+        _ => 0,
+    }
+}
+
+#[test]
+fn no_group_invite_code_reaches_debug_of_a_payload_or_its_events() {
+    // A group invite link carries its capability in the path, not the
+    // query: `GroupUpdate::invite_link` shows only scheme and host.
+    let mut planted_fixtures = 0;
+    for name in common::all_fixtures() {
+        let mut json: Value = serde_json::from_slice(&common::fixture_bytes(&name)).unwrap();
+        let planted = plant_invite_codes(&mut json);
+        if planted == 0 {
+            continue;
+        }
+        planted_fixtures += 1;
+        let payload = WebhookPayload::from_slice(&serde_json::to_vec(&json).unwrap()).unwrap();
+        for shown in [format!("{payload:?}"), format!("{payload:#?}")] {
+            assert!(!shown.contains(SENTINEL), "{name}: {shown}");
+            assert!(
+                shown.contains(r#""https://chat.whatsapp.com/<redacted>""#),
+                "{name}"
+            );
+        }
+        assert!(
+            format!("{payload:?}")
+                .contains(r#"invite_link: Some("https://chat.whatsapp.com/<redacted>")"#),
+            "{name}"
+        );
+        let written = serde_json::to_string(&payload).unwrap();
+        assert_eq!(written.matches(SENTINEL).count(), planted, "{name}");
+        let mut in_events = 0;
+        for event in payload.into_events() {
+            for shown in [format!("{event:?}"), format!("{event:#?}")] {
+                assert!(!shown.contains(SENTINEL), "{name}: {shown}");
+            }
+            in_events += serde_json::to_string(&event)
+                .unwrap()
+                .matches(SENTINEL)
+                .count();
+        }
+        assert!(in_events >= 1, "{name}: no event carries the link");
+    }
+    assert!(planted_fixtures >= 2, "only {planted_fixtures} fixtures");
+}

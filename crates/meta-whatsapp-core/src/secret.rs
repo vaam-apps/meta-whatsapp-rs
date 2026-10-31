@@ -4,7 +4,9 @@
 //! Links whose query is a credential (Meta's signed media and CDN URLs)
 //! stay plain `String`s in the public types that carry them; their `Debug`
 //! prints them through [`RedactedUrl`] (or [`redacted_url`]), which keeps
-//! the scheme, host, port and path and hides every query value.
+//! the scheme, host, port and path and hides every query value; a link
+//! whose path is the credential (a group invite link) prints through
+//! [`RedactedPath`], which hides the path too.
 
 use std::fmt::{self, Write as _};
 
@@ -148,6 +150,70 @@ impl fmt::Debug for RedactedUrl<'_> {
     }
 }
 
+/// A link whose path is its credential, for a `Debug` implementation: a
+/// field that stays a `String` but opens something for whoever holds it
+/// by its path (a WhatsApp group invite link,
+/// `https://chat.whatsapp.com/<code>`).
+///
+/// `Debug` keeps the scheme, host and port and hides the rest: a path
+/// other than `/` becomes `/<redacted>`, a query `?<redacted>`, a fragment
+/// `#<redacted>`, user info `<redacted>@`; a link that cannot be a base
+/// shows its scheme then `:<redacted>`. Quoted as a string's `Debug` is,
+/// or `<redacted: not a URL>` (unquoted) when the link does not parse as
+/// an absolute URL:
+///
+/// ```
+/// use meta_whatsapp_core::secret::RedactedPath;
+///
+/// assert_eq!(
+///     format!("{:?}", RedactedPath("https://chat.whatsapp.com/SENTINEL")),
+///     r#""https://chat.whatsapp.com/<redacted>""#,
+/// );
+/// assert_eq!(format!("{:?}", RedactedPath("SENTINEL")), "<redacted: not a URL>");
+/// ```
+#[derive(Clone, Copy)]
+pub struct RedactedPath<'a>(pub &'a str);
+
+impl fmt::Debug for RedactedPath<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match redacted_path(self.0) {
+            Some(shown) => fmt::Debug::fmt(&shown, f),
+            None => f.write_str("<redacted: not a URL>"),
+        }
+    }
+}
+
+/// [`RedactedPath`]'s rendering, or `None` when `link` does not parse.
+fn redacted_path(link: &str) -> Option<String> {
+    let url = url::Url::parse(link).ok()?;
+    if url.cannot_be_a_base() {
+        return Some(format!("{}:{REDACTED}", url.scheme()));
+    }
+    let mut out = format!("{}://", url.scheme());
+    if !url.username().is_empty() || url.password().is_some() {
+        out.push_str(REDACTED);
+        out.push('@');
+    }
+    if let Some(host) = url.host_str() {
+        out.push_str(host);
+    }
+    if let Some(port) = url.port() {
+        let _ = write!(out, ":{port}");
+    }
+    if url.path() == "/" {
+        out.push('/');
+    } else {
+        let _ = write!(out, "/{REDACTED}");
+    }
+    if url.query().is_some() {
+        let _ = write!(out, "?{REDACTED}");
+    }
+    if url.fragment().is_some() {
+        let _ = write!(out, "#{REDACTED}");
+    }
+    Some(out)
+}
+
 const REDACTED: &str = "<redacted>";
 
 /// `link` as a log may show it, or `None` when it does not parse as an
@@ -249,6 +315,37 @@ mod tests {
             format!("https://exa mple.com/?token={SENTINEL}"),
         ] {
             assert_eq!(redacted_url(&link), None, "{link}");
+        }
+    }
+
+    #[test]
+    fn redacted_path_keeps_only_scheme_host_and_port() {
+        for (link, expected) in [
+            (
+                format!("https://chat.whatsapp.com/{SENTINEL}"),
+                "https://chat.whatsapp.com/<redacted>",
+            ),
+            (
+                format!("https://u:{SENTINEL}@h:8443/a/{SENTINEL}/b?x={SENTINEL}#{SENTINEL}"),
+                "https://<redacted>@h:8443/<redacted>?<redacted>#<redacted>",
+            ),
+            (format!("https://h/?{SENTINEL}"), "https://h/?<redacted>"),
+            ("https://h/".to_owned(), "https://h/"),
+            (format!("mailto:{SENTINEL}@h"), "mailto:<redacted>"),
+        ] {
+            for shown in [
+                format!("{:?}", RedactedPath(&link)),
+                format!("{:#?}", RedactedPath(&link)),
+            ] {
+                assert_eq!(shown, format!("{expected:?}"), "{link}");
+                assert!(!shown.contains(SENTINEL), "{link}");
+            }
+        }
+        for link in [SENTINEL.to_owned(), format!("/{SENTINEL}")] {
+            assert_eq!(
+                format!("{:?}", RedactedPath(&link)),
+                "<redacted: not a URL>"
+            );
         }
     }
 
