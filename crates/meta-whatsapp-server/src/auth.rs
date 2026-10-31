@@ -54,7 +54,6 @@ use crate::error::ApiError;
 use crate::model::{Scope, WabaBinding};
 use crate::state::AppState;
 use crate::store::RecordStore;
-use crate::telemetry::template_matches;
 
 /// `WA-Tenant`: the tenant a platform key acts as.
 pub static WA_TENANT: HeaderName = HeaderName::from_static("wa-tenant");
@@ -164,8 +163,10 @@ fn authorization(request: &Request) -> Option<&str> {
 /// the OpenAPI document that is a core [`Operation`] (its `operationId`
 /// is the operation's id), by its method and route template
 /// ([`crate::api::tenant_operations`]). A request is the operation of its
-/// method and the template its path matches; `HEAD`, which axum answers
-/// on every `GET` route, is that `GET`'s. Cheap to clone.
+/// method and the template its path matches as axum routes it
+/// ([`Self::of`]: a `{name}` matches any one segment, an empty one
+/// included); `HEAD`, which axum answers on every `GET` route, is that
+/// `GET`'s. Cheap to clone.
 #[derive(Debug, Clone, Default)]
 pub struct Operations(Arc<Vec<(String, String, Operation)>>);
 
@@ -176,18 +177,41 @@ impl Operations {
         Self(Arc::new(routes.into_iter().collect()))
     }
 
-    /// The operation a request with `method` on `path` calls, if any.
+    /// The operation a request with `method` on `path` calls, if any: the
+    /// template `path` is routed to, segment by segment, where a `{name}`
+    /// matches any one segment, **an empty one included**, as axum's
+    /// router does (`/v1/numbers//profile` is `get_profile`'s, whose
+    /// extractor then refuses the empty number). A stricter match than the
+    /// router's would leave a routed request with no operation: `500`,
+    /// and charged nothing.
     pub fn of(&self, method: &str, path: &str) -> Option<Operation> {
         let method = if method == "HEAD" { "GET" } else { method };
         self.0
             .iter()
-            .find(|(m, template, _)| m == method && template_matches(template, path))
+            .find(|(m, template, _)| m == method && routed(template, path))
             .map(|(_, _, operation)| *operation)
     }
 
     /// Every `(method, route template, operation)`.
     pub fn routes(&self) -> &[(String, String, Operation)] {
         &self.0
+    }
+}
+
+/// Whether axum routes `path` to `template`: the same segments, a
+/// `{name}` matching any one (empty or not, as the path carries it,
+/// percent-encoded or not), anything else itself. (The metrics' route
+/// label, `crate::telemetry::template_matches`, leaves an empty segment
+/// `unmatched`, as it did before roadmap S6.)
+fn routed(template: &str, path: &str) -> bool {
+    let mut parts = template.split('/');
+    let mut segments = path.split('/');
+    loop {
+        match (parts.next(), segments.next()) {
+            (None, None) => return true,
+            (Some(t), Some(s)) if (t.starts_with('{') && t.ends_with('}')) || t == s => {}
+            _ => return false,
+        }
     }
 }
 

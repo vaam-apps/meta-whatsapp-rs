@@ -562,14 +562,27 @@ mod tests {
         );
     }
 
+    /// Whether some path matches both templates: the same number of
+    /// segments, and wherever both are literal, the same literal.
+    fn templates_overlap(a: &str, b: &str) -> bool {
+        let param = |s: &str| s.starts_with('{') && s.ends_with('}');
+        let (a, b): (Vec<_>, Vec<_>) = (a.split('/').collect(), b.split('/').collect());
+        a.len() == b.len()
+            && a.iter()
+                .zip(&b)
+                .all(|(x, y)| param(x) || param(y) || x == y)
+    }
+
     /// Every tenant route is one core operation (roadmap S6): each
     /// operation of a tenant group's document has an `operationId` that is
     /// a core [`Operation`]'s id, with its group's scope, and the guard's
     /// [`Operations`] resolves a path of its template, with its method (and
-    /// `HEAD` for a `GET`), to it and to no other: two templates a path
-    /// could match would charge one operation's budget for another's.
-    /// Every core operation is served exactly once. Decisive: a tenant
-    /// route the guard cannot resolve, or resolves to another operation.
+    /// `HEAD` for a `GET`), to it, an empty parameter included (axum
+    /// routes one), and no path could match another template of its
+    /// method: two templates a path could match would charge one
+    /// operation's budget for another's. Every core operation is served
+    /// exactly once. Decisive: a tenant route the guard cannot resolve, or
+    /// resolves to another operation.
     #[test]
     fn each_tenant_route_is_one_core_operation_with_its_groups_scope() {
         let grouped = std::cell::RefCell::new(Vec::new());
@@ -602,10 +615,23 @@ mod tests {
                 .unwrap_or_else(|| panic!("{method} {template}: `{id}` is no core operation"));
             assert_eq!(operation.scope(), *scope, "{id}");
             assert!(served.insert(operation), "{id} served twice");
+            // No path of this template is another's of the same method.
+            let others: Vec<_> = operations
+                .routes()
+                .iter()
+                .filter(|(m, t, _)| m == method && t != template)
+                .filter(|(_, t, _)| templates_overlap(t, template))
+                .collect();
+            assert!(
+                others.is_empty(),
+                "{method} {template}: a path could also match {others:?}"
+            );
             // A path of the template, its parameters filled in, spelled
             // plainly or percent-encoded: the guard reads the path as the
             // request carries it.
-            for value in ["106540352242922", "%31%30%36", "wamid.HBgL%3D%3D"] {
+            // And empty: axum routes an empty segment between two others
+            // to its template (`/v1/numbers//profile`), so the guard does.
+            for value in ["106540352242922", "%31%30%36", "wamid.HBgL%3D%3D", ""] {
                 let path = template
                     .split('/')
                     .map(|part| if part.starts_with('{') { value } else { part })
@@ -616,13 +642,6 @@ mod tests {
                     Some(operation),
                     "{method} {path}"
                 );
-                let others: Vec<_> = operations
-                    .routes()
-                    .iter()
-                    .filter(|(m, t, _)| m == method && t != template)
-                    .filter(|(_, t, _)| crate::telemetry::template_matches(t, &path))
-                    .collect();
-                assert!(others.is_empty(), "{method} {path} also matches {others:?}");
                 if *method == "GET" {
                     assert_eq!(operations.of("HEAD", &path), Some(operation), "HEAD {path}");
                 }
@@ -635,10 +654,11 @@ mod tests {
         );
         assert_eq!(operations.routes().len(), Operation::ALL.len());
         // Nothing else resolves: a method the route does not take, an
-        // admin route, a lower-case method, an empty segment.
+        // admin route, a lower-case method, a segment too many.
         assert_eq!(operations.of("POST", "/v1/numbers"), None);
         assert_eq!(operations.of("GET", "/v1/admin/tenants"), None);
         assert_eq!(operations.of("get", "/v1/numbers"), None);
-        assert_eq!(operations.of("GET", "/v1/numbers/"), None);
+        assert_eq!(operations.of("GET", "/v1/numbers/x/y"), None);
+        assert_eq!(operations.of("GET", "/v1/numbers/1/profile/"), None);
     }
 }

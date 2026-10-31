@@ -149,3 +149,91 @@ async fn a_head_is_its_gets_operation() {
     );
     assert!(!metrics.contains("class=\"send\""), "{metrics}");
 }
+
+/// A path axum routes with an empty `{pn}` segment
+/// (`/v1/numbers//profile`) is its route's operation: charged to the read
+/// budget, then `404 not_found` from the number's extractor, as before
+/// roadmap S6. Decisive: the guard matching the path against the
+/// templates again (which refuse an empty segment) instead of taking the
+/// route axum matched: `500 internal`, logged as a bug, and nothing
+/// charged, so a tenant could repeat it without a budget.
+#[tokio::test]
+async fn an_empty_path_segment_is_its_routes_operation() {
+    let h = harness(1, 1);
+    h.tenant(TENANT).await;
+    let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+    let empty = h.call(Call::get("/v1/numbers//profile").key(&key)).await;
+    assert_eq!(
+        (empty.status, empty.code().as_str()),
+        (StatusCode::NOT_FOUND, "not_found"),
+        "{}",
+        empty.text
+    );
+    let refused = h.call(Call::get("/v1/numbers").key(&key)).await;
+    assert_eq!(
+        (refused.status, refused.code().as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
+        "the empty segment spent the read budget"
+    );
+}
+
+/// A route behind the tenant guard that is no tenant operation (one an
+/// adapter added without its operation) is a bug: `500 internal` once the
+/// key is checked, `401` without one (an unauthenticated request learns
+/// nothing), and never served, so never served uncharged; and it spends
+/// no budget. Decisive: the guard's `else` (a request it cannot charge
+/// passed on to the handler answers `200 done`).
+#[tokio::test]
+async fn a_tenant_route_with_no_operation_is_500_and_never_served() {
+    let h = harness(1, 1);
+    h.tenant(TENANT).await;
+    let key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+    // `/rpc/list_numbers` is charged; `/rpc/unlisted` is behind the same
+    // guard with no operation.
+    let charged = Operations::new([(
+        "POST".to_owned(),
+        "/rpc/list_numbers".to_owned(),
+        Operation::ListNumbers,
+    )]);
+    let app = Router::new()
+        .route("/rpc/list_numbers", post(|| async { "done" }))
+        .route("/rpc/unlisted", post(|| async { "done" }))
+        .route_layer(middleware::from_fn_with_state(
+            guard(&h.state, Scope::Numbers, &charged),
+            tenant_guard,
+        ))
+        .with_state(h.state.clone());
+    let anonymous = send(&app, Call::new(Method::POST, "/rpc/unlisted").build()).await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    for _ in 0..3 {
+        let unlisted = send(
+            &app,
+            Call::new(Method::POST, "/rpc/unlisted").key(&key).build(),
+        )
+        .await;
+        assert_eq!(
+            (unlisted.status, unlisted.code().as_str()),
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
+            "{}",
+            unlisted.text
+        );
+    }
+    // The read budget (one token) is whole.
+    let listed = send(
+        &app,
+        Call::new(Method::POST, "/rpc/list_numbers")
+            .key(&key)
+            .build(),
+    )
+    .await;
+    assert_eq!(
+        (listed.status, listed.text.as_str()),
+        (StatusCode::OK, "done")
+    );
+    assert!(
+        !h.state
+            .metrics()
+            .render()
+            .contains("wa_server_rate_limited_total{")
+    );
+}
