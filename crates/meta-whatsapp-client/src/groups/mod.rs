@@ -32,6 +32,8 @@
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
 //! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
 
+use std::fmt;
+
 use bytes::Bytes;
 use futures::{Stream, stream};
 use http::Method;
@@ -39,6 +41,7 @@ use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{GroupId, MessageId, PhoneNumberId, UserId, WaId};
 use meta_whatsapp_core::paging::{Page, Paging};
 use meta_whatsapp_core::recipient::Recipient;
+use meta_whatsapp_core::secret::RedactedPath;
 use meta_whatsapp_core::transport::Multipart;
 use meta_whatsapp_core::{Error, GraphApiError, Result};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -374,22 +377,25 @@ impl Group {
             .await
     }
 
-    /// Current invite link: `GET /{group-id}/invite_link`.
+    /// Current invite link: `GET /{group-id}/invite_link`. An answer that
+    /// does not decode is an [`Error::Decode`] without the body or serde's
+    /// message: they would hold the link.
     pub async fn invite_link(&self) -> Result<InviteLink> {
         self.request(Method::GET, Some("invite_link"))
             .context("get group invite link response")
-            .send()
+            .send_withheld(INVITE_LINK_WITHHELD)
             .await
     }
 
     /// Replace the invite link; every previous link stops working:
     /// `POST /{group-id}/invite_link`. Not idempotent: each call issues a
-    /// new link.
+    /// new link. A decode failure withholds the body, as
+    /// [`invite_link`](Self::invite_link)'s does.
     pub async fn reset_invite_link(&self) -> Result<InviteLink> {
         self.request(Method::POST, Some("invite_link"))
             .json(&ProductOnly::WHATSAPP)
             .context("reset group invite link response")
-            .send()
+            .send_withheld(INVITE_LINK_WITHHELD)
             .await
     }
 
@@ -985,7 +991,12 @@ pub struct GroupParticipant {
 }
 
 /// A group invite link.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+///
+/// `Debug` shows [`invite_link`](Self::invite_link) as [`RedactedPath`]
+/// does, `https://chat.whatsapp.com/<redacted>`: the code in its path lets
+/// whoever holds it join (or ask to join) the group. The field keeps it
+/// whole.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct InviteLink {
     /// Always `whatsapp`.
     #[serde(default)]
@@ -993,6 +1004,23 @@ pub struct InviteLink {
     /// `https://chat.whatsapp.com/<LINK_ID>`.
     pub invite_link: String,
 }
+
+impl fmt::Debug for InviteLink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Destructured, so a field added later has to be listed here.
+        let Self {
+            messaging_product,
+            invite_link,
+        } = self;
+        f.debug_struct("InviteLink")
+            .field("messaging_product", messaging_product)
+            .field("invite_link", &RedactedPath(invite_link))
+            .finish()
+    }
+}
+
+/// The body snippet of a decode error for an invite link answer.
+const INVITE_LINK_WITHHELD: &[u8] = b"(withheld: the answer carries the group invite link)";
 
 /// Query of [`Group::join_requests`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

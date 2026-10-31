@@ -2927,3 +2927,93 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   printed the result of `download_bytes`): it now shows `info` and
   `data_len`. Test: `downloaded_media_debug_shows_the_length_not_the_file`
   (found by the sabotage review of this change).
+- **A webhook's signed media and CDN links no longer reach `Debug`**
+  (`meta-whatsapp-webhooks`; found by the security review of PR #62).
+  `fields::MediaContent` (the `image`, `audio`, `video`, `document` and
+  `sticker` of an inbound message, an echo, a history message or an
+  edit, and a call's recording and transcript) derived `Debug`, so its
+  `url`, a `lookaside.fbsbx.com` link signed in its query, reached any
+  log line that printed a payload, a `WebhookEvent` or a message; so did
+  `fields::Referral`'s `image_url`, `video_url` and `thumbnail_url`,
+  Meta CDN links (`scontent.xx.fbcdn.net`) signed the same way. Both
+  `Debug`s are now written by hand and show those links as
+  `MediaInfo`'s does: scheme, host and path, `<redacted>` for every
+  query value, `<redacted: not a URL>` for one that does not parse.
+  Every other field prints as before; the fields stay `Option<String>`
+  and serialize whole, so event data (and the service's snapshots) is
+  unchanged. The redaction moved to `meta-whatsapp-core`, as
+  `secret::RedactedUrl` (a `Debug` wrapper) and `secret::redacted_url`,
+  so the webhooks crate uses it without depending on the client;
+  `meta-whatsapp-client`'s `MediaInfo` and `SecretUrl` print exactly as
+  before. Tests: `redacted_debug.rs` in `meta-whatsapp-webhooks` (every
+  fixture re-read with a sentinel signature on each signed link: absent
+  from `{:?}` and `{:#?}` of the payload and its events, present in
+  their JSON), and `secret::tests` in `meta-whatsapp-core`.
+- **`ReqwestTransport` bounds the body it buffers: 256 MiB by default**
+  (`meta-whatsapp-adapters`; the follow-up the security reviews of PRs
+  #60 and #62 recorded). `send` read a 2xx or error body with
+  `response.bytes()`, without a bound, from the Graph endpoint or proxy,
+  `api.facebook.com`, a caller's `request_url` and any cross-origin
+  redirect target. It now reads at most
+  `ReqwestTransportBuilder::max_response_bytes` (default
+  `http::DEFAULT_MAX_RESPONSE_BYTES`, 256 MiB; `None` for no bound;
+  `ReqwestTransport::with_max_response_bytes` for a transport from
+  `with_clients`, which gets the same default): a `Content-Length` past
+  it is refused before the body is read, and the body is read chunk by
+  chunk and refused as soon as it passes it, a chunked or
+  close-delimited one included. The error is a `TransportError::Backend`
+  saying `response body exceeds <n> bytes` (not retried; reported as
+  possibly sent, since an answer came back), never the body or the URL,
+  and the connection is dropped, not drained. 256 MiB rather than less
+  because analytics field expansions (`Analytics::pricing`,
+  `conversation`, `calls`) are unpaged: a year of `HALF_HOUR` points by
+  several dimensions can run to a hundred MiB (their rustdoc says to
+  split such a range or raise the bound). `send_streaming` is unchanged
+  (the client bounds media downloads and their error bodies); the port's
+  default `send_streaming` buffers through `send` and so inherits the
+  bound (core rustdoc). Tests in `tests/reqwest_transport.rs`, against a
+  raw HTTP/1.1 server: a body of exactly the bound is read whole, one
+  byte more is refused, for 2xx and errors and with a `Content-Length`,
+  chunked or close-delimited; a declared length past the bound is refused
+  with no body sent; 32 MiB past the bound without a length make the
+  server's writes fail (not drained); `None` reads 4 MiB and refuses no
+  declared length; the default, from the builder and `with_clients`;
+  `send_streaming` unbounded. `connection_refused_is_connect_and_never_shows_the_url`
+  now keeps its port bound (not listening) instead of binding, dropping
+  and connecting, which raced a parallel test's listener.
+- **A group invite link no longer reaches `Debug`**
+  (`meta-whatsapp-webhooks`). `fields::GroupUpdate` derived `Debug`, so
+  `invite_link` (`https://chat.whatsapp.com/<code>`, whose code lets
+  whoever holds it join or ask to join the group) reached any log line
+  that printed a group webhook or its event. Its `Debug` is now written by
+  hand and shows the link through the new
+  `meta_whatsapp_core::secret::RedactedPath`, which keeps scheme, host and
+  port and hides the path, query, fragment and user info
+  (`https://chat.whatsapp.com/<redacted>`); `RedactedUrl` would not
+  have hidden it, since it shows the path. The field stays
+  `Option<String>` and serializes whole (the service's event snapshots are
+  unchanged). Tests: `no_group_invite_code_reaches_debug_of_a_payload_or_its_events`
+  (every fixture with an `invite_link`, a sentinel code planted) and
+  `secret::tests::redacted_path_keeps_only_scheme_host_and_port`.
+- **The client's group invite link answer no longer reaches `Debug` or a
+  decode error** (`meta-whatsapp-client`; found by the security review of
+  this change). `groups::InviteLink`, the answer of `Group::invite_link`
+  and `Group::reset_invite_link`, derived `Debug`, so the code the
+  webhook's `GroupUpdate` now hid was printed whole by the call that
+  fetches it. Its `Debug` is now written by hand, through
+  `RedactedPath` (`https://chat.whatsapp.com/<redacted>`); the field stays
+  a `String`. An answer that does not decode is an `Error::Decode`
+  without the body or serde's message (`send_withheld`), where it used to
+  carry the body's first bytes, link included. Test:
+  `invite_link_code_never_reaches_debug_or_a_decode_error`.
+- **`ReqwestTransport`'s bound no longer refuses an answer without a
+  body** (found by the same review). A `HEAD`'s answer and a 304 may
+  carry the `Content-Length` of the body a `GET` would get; the up-front
+  refusal now skips them (and a 204), the read loop still bounds what
+  arrives. New tests: `an_answer_without_a_body_is_not_refused_for_its_declared_length`,
+  `a_redirect_target_is_bounded_like_the_url_asked_for` (a bodiless
+  302 to another origin whose body is past the bound: refused) and
+  `the_bound_holds_over_http2` (h2c with prior knowledge: a body at the
+  bound is read, one past it is refused with and without a
+  `content-length`, an 8 MiB answer too, and the transport serves the
+  next request after them).
