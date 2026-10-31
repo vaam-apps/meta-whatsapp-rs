@@ -41,3 +41,13 @@ async fn the_services_open_on_their_own_number_and_mark_read_as_meta_documents()
     )
     .await;
 }
+
+/// Roadmap S6's window: a key claimed before S6, under the legacy
+/// fingerprint, replays the same request after it, and is reused for
+/// another body; a fresh key stores the new fingerprint.
+#[tokio::test]
+async fn a_key_claimed_before_s6_replays_under_its_legacy_fingerprint() {
+    let backend = memory::Memory::default();
+    conformance::messages::a_key_claimed_before_s6_replays_under_its_legacy_fingerprint(&backend)
+        .await;
+}

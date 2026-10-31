@@ -623,6 +623,42 @@ impl Harness {
         send(&self.internal, call.build()).await
     }
 
+    /// `key`, claimed and completed for `tenant` as a release before
+    /// roadmap S6 stored it: under `legacy` (that release's fingerprint of
+    /// the request, `Fingerprint::legacy_v1_*`), answered `status` and
+    /// `body`.
+    pub async fn claimed_before_s6(
+        &self,
+        tenant: &str,
+        key: &str,
+        legacy: &meta_whatsapp_server::idempotency::Fingerprint,
+        status: u16,
+        body: &[u8],
+    ) {
+        use meta_whatsapp_server::model::{IdempotencyClaim, IdempotencyKey, TenantId};
+        let tenant = TenantId::parse(tenant).unwrap();
+        let key = IdempotencyKey::parse(key).unwrap();
+        let claimed = self
+            .store
+            .claim_idempotency_key(
+                &tenant,
+                &key,
+                legacy.as_bytes(),
+                "a-claim-before-s6",
+                std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(3600),
+            )
+            .await
+            .unwrap();
+        assert_eq!(claimed, IdempotencyClaim::Claimed);
+        assert!(
+            self.store
+                .complete_idempotency_key(&tenant, &key, "a-claim-before-s6", status, body)
+                .await
+                .unwrap()
+        );
+    }
+
     /// Mint an admin key.
     pub async fn admin_key(&self) -> String {
         let (minted, _) = mint(

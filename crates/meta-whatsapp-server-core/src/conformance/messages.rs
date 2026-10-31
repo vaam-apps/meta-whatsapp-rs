@@ -36,7 +36,7 @@ use crate::backend::Backend;
 use crate::error::ServiceError;
 use crate::idempotency::{self, Answer, Fingerprint, Keeper};
 use crate::messages::{self, MessageType, Messages, RecipientObject, SendMessage, TextObject};
-use crate::model::{BindOutcome, IdempotencyKey, KeyOwner, Scope, TenantId};
+use crate::model::{BindOutcome, IdempotencyClaim, IdempotencyKey, KeyOwner, Scope, TenantId};
 use crate::observe::Observer;
 use crate::store::IdempotencyRecords;
 
@@ -47,6 +47,8 @@ const PN: &str = "106540352242922";
 /// The tenant, WABA and number of the second case (the cases share a
 /// backend: [`run`]).
 const READER: (&str, &str, &str) = ("msg-reader", "102290129340399", "106540352242923");
+/// The tenant, WABA and number of the legacy fingerprint's case.
+const LEGACY: (&str, &str, &str) = ("msg-legacy", "102290129340397", "106540352242921");
 const TOKEN: &str = "EAAG-the-merchants-token";
 const TO: &str = "+16505551234";
 /// messages/mark-message-as-read, the example's message id.
@@ -56,6 +58,7 @@ const RECEIVED: &str = "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBJDQjZCMzlEQUE4OTJBMTE4RT
 pub async fn run(backend: &dyn Backend) {
     a_timeout_may_have_been_sent_and_its_key_replays_it_without_a_second_request(backend).await;
     the_services_open_on_their_own_number_and_mark_read_as_meta_documents(backend).await;
+    a_key_claimed_before_s6_replays_under_its_legacy_fingerprint(backend).await;
 }
 
 /// What the operations told the adapter's metrics, in order: each Graph
@@ -529,6 +532,116 @@ pub async fn a_timeout_may_have_been_sent_and_its_key_replays_it_without_a_secon
         service.told.repeats(),
         ["replayed", "replayed", "reused", "reused", "reused"]
     );
+}
+
+/// Roadmap S6's window: a key a release before S6 claimed, stored under
+/// the fingerprint of then (the request's method, its path as sent and
+/// its body: `Fingerprint::legacy_v1_json`), keeps replaying for as long
+/// as its record lives, through the backend's records.
+///
+/// 1. A key claimed and completed under the legacy fingerprint (by hand,
+///    as that release stored it), repeated with the same request (its new
+///    fingerprint `or_legacy` its legacy one): the kept answer,
+///    `replayed`, with no request to Meta.
+/// 2. The same key with another body (its own legacy fingerprint too):
+///    `422 idempotency_key_reused`, nothing sent; and the same request
+///    without its legacy fingerprint, `422` too.
+/// 3. A fresh key claimed by such a request stores the new fingerprint.
+///
+/// Decisive: the legacy arm of `Fingerprint::matches` (step 1 answers
+/// `422`), a legacy match that ignores the body (step 2 replays), a claim
+/// storing the legacy fingerprint (step 3).
+pub async fn a_key_claimed_before_s6_replays_under_its_legacy_fingerprint(backend: &dyn Backend) {
+    let service = service(backend, LEGACY).await;
+    let script = &service.script;
+    let (tenant, _, pn) = LEGACY;
+    let tenant = TenantId::parse(tenant).unwrap();
+    let number = PhoneNumberId::new(pn).unwrap();
+    let path = format!("/v1/numbers/{pn}/messages");
+    let body = json!({"to": {"phone": TO}, "type": "text", "text": {"body": "hi"}});
+    let request = |body: &Value| {
+        Fingerprint::send_message(&number, body)
+            .or_legacy(Fingerprint::legacy_v1_json("POST", &path, body))
+    };
+    let message = messages::message(text_to(TO)).unwrap();
+
+    // 1. Claimed and completed before the upgrade, under the legacy
+    //    fingerprint.
+    let key = IdempotencyKey::parse("order:before-s6").unwrap();
+    let legacy = Fingerprint::legacy_v1_json("POST", &path, &body);
+    let kept = br#"{"message_id":"wamid.KEPT-BEFORE-S6"}"#;
+    let claimed = service
+        .records
+        .claim_idempotency_key(
+            &tenant,
+            &key,
+            legacy.as_bytes(),
+            "a-claim-before-s6",
+            Duration::from_secs(60),
+            Duration::from_secs(3600),
+        )
+        .await
+        .unwrap();
+    assert_eq!(claimed, IdempotencyClaim::Claimed);
+    assert!(
+        service
+            .records
+            .complete_idempotency_key(&tenant, &key, "a-claim-before-s6", 202, kept)
+            .await
+            .unwrap()
+    );
+    let replayed = service
+        .send("order:before-s6", &message, &request(&body))
+        .await
+        .unwrap_or_else(|error| panic!("the legacy key did not replay: {error:?}"));
+    assert!(replayed.replayed());
+    assert_eq!((replayed.status(), replayed.body()), (202, &kept[..]));
+    assert!(script.requests().is_empty(), "a legacy key sent again");
+
+    // 2. Another body under that key, legacy or not: another request.
+    let other = json!({"to": {"phone": TO}, "type": "text", "text": {"body": "ho"}});
+    for fingerprint in [request(&other), Fingerprint::send_message(&number, &body)] {
+        let reused = service
+            .send("order:before-s6", &message, &fingerprint)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (reused.status(), reused.code()),
+            (422, "idempotency_key_reused")
+        );
+    }
+    assert!(script.requests().is_empty(), "a reused key sent");
+    assert_eq!(service.told.repeats(), ["replayed", "reused", "reused"]);
+
+    // 3. A fresh key stores the new fingerprint.
+    script.push_json(200, accepted());
+    let sent = service
+        .send("order:after-s6", &message, &request(&body))
+        .await
+        .unwrap();
+    assert!(!sent.replayed());
+    assert_eq!(script.requests().len(), 1);
+    let probe = service
+        .records
+        .claim_idempotency_key(
+            &tenant,
+            &IdempotencyKey::parse("order:after-s6").unwrap(),
+            &[0; 32],
+            "a-probe",
+            Duration::from_secs(60),
+            Duration::from_secs(3600),
+        )
+        .await
+        .unwrap();
+    let IdempotencyClaim::Existing(record) = probe else {
+        panic!("the fresh key was not kept: {probe:?}")
+    };
+    assert_eq!(
+        record.fingerprint,
+        *Fingerprint::send_message(&number, &body).as_bytes(),
+        "a claim stores the new fingerprint"
+    );
+    assert_eq!(script.remaining(), 0);
 }
 
 /// The services open on a number only their own [`Authorizer`] made, and

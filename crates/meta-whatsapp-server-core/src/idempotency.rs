@@ -71,12 +71,28 @@ use crate::store::IdempotencyRecords;
 ///
 /// The same request always has the same fingerprint; another operation,
 /// another number or WABA, or another body has another. Fingerprints are
-/// stored with their key (for `WA_SERVER_IDEMPOTENCY_TTL`): one derived
-/// otherwise after an upgrade does not match a key claimed before it,
-/// whose repeat is then `422 idempotency_key_reused` until that record
-/// expires (see `docs/guides/server.md`).
+/// stored with their key (for `WA_SERVER_IDEMPOTENCY_TTL`).
+///
+/// **The fingerprint before roadmap S6, matched for one TTL.** A key
+/// claimed by a release before S6 was stored with the SHA-256 of the
+/// request's method, its path as sent and its body
+/// ([`Self::legacy_v1_json`], [`Self::legacy_v1_upload`]). So that such a
+/// key keeps replaying after the upgrade (a `422` there would invite a
+/// resend under a new key, and a second message to the customer), an HTTP
+/// adapter adds the request's legacy fingerprint ([`Self::or_legacy`]): a
+/// record matches a request when its fingerprint is the request's, or the
+/// request's legacy one. A claim always stores the new one
+/// ([`Self::as_bytes`]). The legacy constructors take an HTTP method and
+/// path, so they are not adapter-neutral: an adapter other than `/v1`'s,
+/// which no record before S6 was made through, has no reason to call
+/// them. They go after the first release, once its records have expired
+/// (roadmap S7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Fingerprint([u8; 32]);
+pub struct Fingerprint {
+    digest: [u8; 32],
+    /// The legacy fingerprint of the same request, also matched.
+    legacy: Option<[u8; 32]>,
+}
 
 impl Fingerprint {
     /// `send_message` on `number`, with the JSON body the request carried.
@@ -114,7 +130,7 @@ impl Fingerprint {
     fn json(operation: Operation, params: &[(&str, &str)], body: &serde_json::Value) -> Self {
         let mut hasher = Self::begin(b"json", operation, params);
         canonical(&mut hasher, body);
-        Self(hasher.finalize().into())
+        Self::of(hasher.finalize().into())
     }
 
     /// `operation` with its named parameters `params` and a body of named
@@ -126,7 +142,7 @@ impl Fingerprint {
             framed(&mut hasher, name.as_bytes());
             framed(&mut hasher, value);
         }
-        Self(hasher.finalize().into())
+        Self::of(hasher.finalize().into())
     }
 
     /// The body's kind, the operation's id and the parameters, sorted by
@@ -145,9 +161,89 @@ impl Fingerprint {
         hasher
     }
 
-    /// The digest.
+    /// The fingerprint `digest`, with no legacy one.
+    fn of(digest: [u8; 32]) -> Self {
+        Self {
+            digest,
+            legacy: None,
+        }
+    }
+
+    /// The fingerprint a release before roadmap S6 stored for a request
+    /// with a JSON body: the SHA-256 of `method` (`POST`), `path` as the
+    /// request carried it, and the canonical body, exactly as it was
+    /// computed then (its known answers are pinned). Only for
+    /// [`Self::or_legacy`]; never stored.
+    pub fn legacy_v1_json<M: AsRef<str> + ?Sized>(
+        method: &M,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Self {
+        let mut hasher = Sha256::new();
+        framed(&mut hasher, b"json");
+        framed(&mut hasher, method.as_ref().as_bytes());
+        framed(&mut hasher, path.as_bytes());
+        canonical(&mut hasher, body);
+        Self::of(hasher.finalize().into())
+    }
+
+    /// The fingerprint a release before roadmap S6 stored for an upload:
+    /// `method`, `path` as the request carried it, and the parts `type`,
+    /// `filename` (the file name sent to Meta) and `file` (its SHA-256),
+    /// exactly as it was computed then. Only for [`Self::or_legacy`].
+    pub fn legacy_v1_upload<M: AsRef<str> + ?Sized>(
+        method: &M,
+        path: &str,
+        upload: &Upload,
+    ) -> Self {
+        let digest = Sha256::digest(upload.data());
+        Self::legacy_v1_parts(
+            method,
+            path,
+            &[
+                ("type", upload.mime_type().as_bytes()),
+                ("filename", upload.filename().as_bytes()),
+                ("file", digest.as_slice()),
+            ],
+        )
+    }
+
+    /// The legacy fingerprint of a request made of named parts, in the
+    /// order given, as it was computed before roadmap S6.
+    fn legacy_v1_parts<M: AsRef<str> + ?Sized>(
+        method: &M,
+        path: &str,
+        parts: &[(&str, &[u8])],
+    ) -> Self {
+        let mut hasher = Sha256::new();
+        framed(&mut hasher, b"parts");
+        framed(&mut hasher, method.as_ref().as_bytes());
+        framed(&mut hasher, path.as_bytes());
+        for (name, value) in parts {
+            framed(&mut hasher, name.as_bytes());
+            framed(&mut hasher, value);
+        }
+        Self::of(hasher.finalize().into())
+    }
+
+    /// This fingerprint, also matching a record stored under `legacy`, the
+    /// same request's fingerprint before roadmap S6 (see the type's
+    /// documentation). What a claim stores is still this one.
+    #[must_use]
+    pub fn or_legacy(mut self, legacy: Fingerprint) -> Self {
+        self.legacy = Some(legacy.digest);
+        self
+    }
+
+    /// Whether a record stored with `stored` is this request's: its
+    /// fingerprint, or its legacy one.
+    pub fn matches(&self, stored: &[u8; 32]) -> bool {
+        self.digest == *stored || self.legacy.as_ref() == Some(stored)
+    }
+
+    /// The digest, what a claim stores.
     pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+        &self.digest
     }
 }
 
@@ -247,7 +343,7 @@ impl std::fmt::Debug for Repeat {
 impl Repeat {
     /// The answer to a request with `fingerprint` meeting `record`.
     pub fn of(record: IdempotencyRecord, fingerprint: &Fingerprint) -> Self {
-        if record.fingerprint != *fingerprint.as_bytes() {
+        if !fingerprint.matches(&record.fingerprint) {
             return Self::Reused;
         }
         match record.state {
@@ -925,6 +1021,113 @@ mod tests {
         );
     }
 
+    /// The legacy fingerprint is exactly the one stored before roadmap S6:
+    /// main's known answers (`fingerprints_are_pinned` before S6, computed
+    /// apart from the code, at f1d125b), for a JSON body and for parts; an
+    /// upload's is its three parts, in main's order. Decisive: any change
+    /// to the legacy algorithm (a record stored before the upgrade would
+    /// stop replaying).
+    #[test]
+    fn the_legacy_fingerprint_is_mains() {
+        let body = serde_json::json!({
+            "to": {"phone": "+15551234567"},
+            "type": "text",
+            "text": {"body": "hi", "preview_url": false},
+            "tags": [null, true, 1, "1"],
+        });
+        let json =
+            Fingerprint::legacy_v1_json("POST", "/v1/numbers/106540352242922/messages", &body);
+        assert_eq!(
+            hex::encode(json.as_bytes()),
+            "e83cc62715cb87890e03ddaa5d57b655ced695738930fc8c2ca164af6139f7d4"
+        );
+        let parts = Fingerprint::legacy_v1_parts(
+            "POST",
+            "/v1/numbers/106540352242922/media",
+            &[("type", b"image/png"), ("file", b"\x89PNG")],
+        );
+        assert_eq!(
+            hex::encode(parts.as_bytes()),
+            "04edb1c222d03832376711c1ba9450a54e08c14793501b90e48af0fc13788db9"
+        );
+        let upload = Upload::new("image/png", Some("a.png"), b"\x89PNG".to_vec().into()).unwrap();
+        let digest = Sha256::digest(b"\x89PNG");
+        assert_eq!(
+            Fingerprint::legacy_v1_upload("POST", "/v1/numbers/1/media", &upload),
+            Fingerprint::legacy_v1_parts(
+                "POST",
+                "/v1/numbers/1/media",
+                &[
+                    ("type", b"image/png"),
+                    ("filename", b"a.png"),
+                    ("file", digest.as_slice()),
+                ],
+            )
+        );
+        // The method's name, whatever type carries it.
+        assert_eq!(
+            Fingerprint::legacy_v1_json("POST", "/p", &body),
+            Fingerprint::legacy_v1_json(&String::from("POST"), "/p", &body)
+        );
+    }
+
+    /// A record stored under the legacy fingerprint (a key claimed before
+    /// the upgrade) is the same request's when the request adds its legacy
+    /// fingerprint: replayed, in progress or unknown as its state says.
+    /// Without it, or with another body's legacy fingerprint, it is another
+    /// request's (`Reused`). What the request stores is its new
+    /// fingerprint. Decisive: the legacy arm of `Fingerprint::matches`, and
+    /// its comparison with the record.
+    #[test]
+    fn a_record_under_the_legacy_fingerprint_is_the_same_requests() {
+        let body = serde_json::json!({"to": {"phone": "+1"}, "type": "text"});
+        let path = "/v1/numbers/1/messages";
+        let new = Fingerprint::send_message(&pn("1"), &body);
+        let legacy = Fingerprint::legacy_v1_json("POST", path, &body);
+        let request = new.or_legacy(legacy);
+        assert_eq!(
+            request.as_bytes(),
+            new.as_bytes(),
+            "a claim stores the new one"
+        );
+        assert_ne!(new.as_bytes(), legacy.as_bytes());
+        let stored = |state| IdempotencyRecord {
+            fingerprint: *legacy.as_bytes(),
+            state,
+        };
+        let done = IdempotencyState::Completed {
+            status: 202,
+            body: b"{}".to_vec(),
+        };
+        assert_eq!(
+            Repeat::of(stored(done.clone()), &request),
+            Repeat::Replay {
+                status: 202,
+                body: b"{}".to_vec()
+            }
+        );
+        assert_eq!(
+            Repeat::of(
+                stored(IdempotencyState::InProgress {
+                    lease_expired: false
+                }),
+                &request
+            ),
+            Repeat::InProgress
+        );
+        assert_eq!(Repeat::of(stored(done.clone()), &new), Repeat::Reused);
+        let other = serde_json::json!({"to": {"phone": "+2"}, "type": "text"});
+        let elsewhere = Fingerprint::send_message(&pn("1"), &other)
+            .or_legacy(Fingerprint::legacy_v1_json("POST", path, &other));
+        assert_eq!(Repeat::of(stored(done.clone()), &elsewhere), Repeat::Reused);
+        // A new record still matches the request, legacy or not.
+        let fresh = IdempotencyRecord {
+            fingerprint: *new.as_bytes(),
+            state: done,
+        };
+        assert!(matches!(Repeat::of(fresh, &request), Repeat::Replay { .. }));
+    }
+
     /// A fingerprint is the operation and its input, whatever spelled
     /// them: key order and whitespace do not change it, nor the order the
     /// parameters are given in; another operation, another number or
@@ -1021,7 +1224,7 @@ mod tests {
             format!("{state:?}"),
             format!("{record:?}"),
             format!("{:?}", IdempotencyClaim::Existing(record.clone())),
-            format!("{:?}", Repeat::of(record, &Fingerprint([7; 32]))),
+            format!("{:?}", Repeat::of(record, &Fingerprint::of([7; 32]))),
             format!(
                 "{:?}",
                 Outcome::Answered {

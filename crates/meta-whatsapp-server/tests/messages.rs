@@ -81,6 +81,39 @@ fn percent_encoded(id: &str) -> String {
         .concat()
 }
 
+/// Roadmap S6's window, over HTTP: a key a release before S6 claimed,
+/// stored under the fingerprint of then (method, path as sent, body),
+/// repeated with the same request after the upgrade, replays the kept
+/// answer with no second send; with another body it is `422
+/// idempotency_key_reused`, nothing sent. Decisive: the handler's legacy
+/// fingerprint (`or_legacy`), and `Fingerprint::matches`' legacy arm.
+#[tokio::test]
+async fn a_key_claimed_before_s6_replays_after_the_upgrade() {
+    let (h, key) = connected().await;
+    let path = format!("/v1/numbers/{PN}/messages");
+    let legacy = Fingerprint::legacy_v1_json(&Method::POST, &path, &text());
+    let kept = br#"{"message_id":"wamid.KEPT-BEFORE-S6"}"#;
+    h.claimed_before_s6(TENANT, "order:before-s6", &legacy, 202, kept)
+        .await;
+    let again = h
+        .call(with_key(send(&key, &text()), "order:before-s6"))
+        .await;
+    assert_eq!(again.status, StatusCode::ACCEPTED, "{}", again.text);
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+    assert_eq!(again.text.as_bytes(), kept);
+    let mut other = text();
+    other["text"]["body"] = json!("Another message");
+    let reused = h
+        .call(with_key(send(&key, &other), "order:before-s6"))
+        .await;
+    assert_eq!(
+        (reused.status, error(&reused)["code"].as_str().unwrap()),
+        (StatusCode::UNPROCESSABLE_ENTITY, "idempotency_key_reused")
+    );
+    assert!(h.graph.requests().is_empty(), "a legacy key sent");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// Roadmap S6's decisive case (design D27): an `Idempotency-Key`'s
 /// fingerprint is the operation and its canonical input, not the request's
 /// path. Two spellings of one send's path, the number plain and

@@ -76,7 +76,7 @@ use futures::StreamExt;
 use meta_whatsapp_rs::webhooks::axum::body::{Body, Bytes};
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Path, Query, Request, State};
 use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
-use meta_whatsapp_rs::webhooks::axum::http::{HeaderName, HeaderValue, StatusCode, header};
+use meta_whatsapp_rs::webhooks::axum::http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 pub use meta_whatsapp_server_core::media::MAX_WHOLE_DOWNLOAD;
 use meta_whatsapp_server_core::media::{
@@ -412,13 +412,20 @@ pub(crate) async fn upload_media(
         Ok(permit) => permit,
         Err(error) => return ApiError::from(error).into_response(),
     };
+    // The path as sent, for the legacy fingerprint only.
+    let path = request.uri().path().to_owned();
     let form = match read_upload(state.settings().media_max_bytes, request).await {
         Ok(form) => form,
         Err(error) => return error.into_response(),
     };
     // The operation and its input (the number, the checked type and file
     // name, the file's digest), never the path's spelling.
-    let fingerprint = Fingerprint::upload_media(owned.phone_number_id(), &form);
+    // A key claimed before roadmap S6 was stored under the request's
+    // method, its path as sent and its body: matched too, for one TTL
+    // after the upgrade (the legacy fingerprint goes after the first
+    // release). A claim stores the new one.
+    let fingerprint = Fingerprint::upload_media(owned.phone_number_id(), &form)
+        .or_legacy(Fingerprint::legacy_v1_upload(&Method::POST, &path, &form));
     let response = idempotency::run(&state, &caller, key, fingerprint, upload(&media, &form)).await;
     drop(permit);
     response
