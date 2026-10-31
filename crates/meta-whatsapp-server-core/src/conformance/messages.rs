@@ -357,7 +357,11 @@ async fn caller_of(backend: &dyn Backend, authz: &Authorizer, tenant: &str) -> C
 /// 4. A `131047` (outside the 24-hour window) proves nothing was sent:
 ///    `409 customer_service_window_closed`, and the key is released, so
 ///    the same key sends once the window is open (the second request
-///    reaches Meta); that success is then replayed, with no third.
+///    reaches Meta); that success is then replayed, with no third. The
+///    same key for another body, the same body on another number, or
+///    for another operation (roadmap S6: the fingerprint is the
+///    operation and its canonical input) is `422
+///    idempotency_key_reused`, with nothing sent.
 /// 5. A [`Caller`] another [`Authorizer`] made (one over the same
 ///    records and vault, for the same key) is refused, `403 forbidden`,
 ///    before the key is read: the tenant's kept answer is not replayed to
@@ -380,8 +384,8 @@ pub async fn a_timeout_may_have_been_sent_and_its_key_replays_it_without_a_secon
 ) {
     let service = service(backend, (TENANT, WABA, PN)).await;
     let script = &service.script;
-    let path = format!("/v1/numbers/{PN}/messages");
-    let fingerprint = Fingerprint::json("POST", &path, &json!({"to": {"phone": TO}}));
+    let number = PhoneNumberId::new(PN).unwrap();
+    let fingerprint = Fingerprint::send_message(&number, &json!({"to": {"phone": TO}}));
 
     // 1. Refused before any request.
     let refused = messages::message(text_to("16505551234")).unwrap_err();
@@ -472,7 +476,7 @@ pub async fn a_timeout_may_have_been_sent_and_its_key_replays_it_without_a_secon
     assert_eq!(script.requests().len(), 3, "a third request was sent");
     assert_eq!(script.remaining(), 0);
     // Another request under that key: reused, and nothing sent.
-    let elsewhere = Fingerprint::json("POST", &path, &json!({"to": {"phone": "+16505550000"}}));
+    let elsewhere = Fingerprint::send_message(&number, &json!({"to": {"phone": "+16505550000"}}));
     let key_reused = service
         .send("k-window", &message, &elsewhere)
         .await
@@ -482,7 +486,28 @@ pub async fn a_timeout_may_have_been_sent_and_its_key_replays_it_without_a_secon
         (422, "idempotency_key_reused")
     );
     assert_eq!(script.requests().len(), 3, "a reused key sent");
-    assert_eq!(service.told.repeats(), ["replayed", "replayed", "reused"]);
+    // The same body on another number, or for another operation, is
+    // another request too: the fingerprint is the operation and its
+    // canonical input (roadmap S6), as the backend's records keep it.
+    let body = json!({"to": {"phone": TO}});
+    for other in [
+        Fingerprint::send_message(&PhoneNumberId::new("106540352242923").unwrap(), &body),
+        Fingerprint::create_template(&WabaId::new(WABA).unwrap(), &body),
+    ] {
+        let key_reused = service
+            .send("k-window", &message, &other)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (key_reused.status(), key_reused.code()),
+            (422, "idempotency_key_reused")
+        );
+    }
+    assert_eq!(script.requests().len(), 3, "a reused key sent");
+    assert_eq!(
+        service.told.repeats(),
+        ["replayed", "replayed", "reused", "reused", "reused"]
+    );
 
     // 5. Another authorizer's caller, for the same key: refused first.
     let (other, other_script) = service.other(backend);
@@ -500,7 +525,10 @@ pub async fn a_timeout_may_have_been_sent_and_its_key_replays_it_without_a_secon
     }
     assert_eq!(script.requests().len(), 3, "a request was sent");
     assert!(other_script.requests().is_empty());
-    assert_eq!(service.told.repeats(), ["replayed", "replayed", "reused"]);
+    assert_eq!(
+        service.told.repeats(),
+        ["replayed", "replayed", "reused", "reused", "reused"]
+    );
 }
 
 /// The services open on a number only their own [`Authorizer`] made, and

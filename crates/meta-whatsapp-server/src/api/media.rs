@@ -76,9 +76,7 @@ use futures::StreamExt;
 use meta_whatsapp_rs::webhooks::axum::body::{Body, Bytes};
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Path, Query, Request, State};
 use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
-use meta_whatsapp_rs::webhooks::axum::http::{
-    HeaderName, HeaderValue, Method, StatusCode, Uri, header,
-};
+use meta_whatsapp_rs::webhooks::axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 pub use meta_whatsapp_server_core::media::MAX_WHOLE_DOWNLOAD;
 use meta_whatsapp_server_core::media::{
@@ -86,7 +84,6 @@ use meta_whatsapp_server_core::media::{
     upload_cap,
 };
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
 use crate::auth::{Caller, OwnedNumber};
@@ -403,7 +400,6 @@ pub(crate) async fn upload_media(
     caller: Caller,
     owned: OwnedNumber,
     KeyHeader(key): KeyHeader,
-    uri: Uri,
     request: Request,
 ) -> Response {
     let media = match media(&state, &owned) {
@@ -420,16 +416,9 @@ pub(crate) async fn upload_media(
         Ok(form) => form,
         Err(error) => return error.into_response(),
     };
-    let digest = Sha256::digest(form.data());
-    let fingerprint = Fingerprint::parts(
-        &Method::POST,
-        uri.path(),
-        &[
-            ("type", form.mime_type().as_bytes()),
-            ("filename", form.filename().as_bytes()),
-            ("file", digest.as_slice()),
-        ],
-    );
+    // The operation and its input (the number, the checked type and file
+    // name, the file's digest), never the path's spelling.
+    let fingerprint = Fingerprint::upload_media(owned.phone_number_id(), &form);
     let response = idempotency::run(&state, &caller, key, fingerprint, upload(&media, &form)).await;
     drop(permit);
     response

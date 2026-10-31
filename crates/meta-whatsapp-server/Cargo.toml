@@ -31,16 +31,16 @@ async-trait.workspace = true
 futures.workspace = true
 # Request ids (`req_` and 16 random hex digits).
 getrandom.workspace = true
-# Opaque list cursors, request ids, a keyless event's digest in logs.
+# Opaque list cursors and request ids (a keyless event's digest is the
+# core's since roadmap S5e).
 hex.workspace = true
 # Media uploads: multipart parsing with per-field size limits.
 multer.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-# SHA-256: of a keyless event's body (src/events.rs), of an upload in its
-# idempotency fingerprint (src/api/media.rs), and the advisory lock keys
-# (src/store/postgres.rs). A download's is checked by the core
-# (meta_whatsapp_server_core::media, since roadmap S5d).
+# SHA-256 of the advisory lock keys (src/store/postgres.rs). A keyless
+# event's body, an upload's idempotency fingerprint and a download's
+# digest are the core's (roadmap S5e, S6, S5d).
 sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true

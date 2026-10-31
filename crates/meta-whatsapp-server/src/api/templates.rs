@@ -51,8 +51,8 @@ use std::collections::HashMap;
 use meta_whatsapp_rs::client::templates::TemplateDefinition;
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Path, Query, State};
+use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
 use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
-use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode, Uri};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::templates::{self as domain, Templates};
 pub use meta_whatsapp_server_core::templates::{
@@ -348,10 +348,11 @@ pub(crate) async fn create_template(
     caller: Caller,
     owned: OwnedWaba,
     KeyHeader(key): KeyHeader,
-    uri: Uri,
     ApiJson(body): ApiJson<Value>,
 ) -> Response {
-    let fingerprint = Fingerprint::json(&Method::POST, uri.path(), &body);
+    // The operation and its input (the WABA and the definition), never
+    // the path's spelling.
+    let fingerprint = Fingerprint::create_template(owned.waba_id(), &body);
     let definition = match domain::definition(&body) {
         Ok(definition) => definition,
         Err(error) => return ApiError::from(error).into_response(),

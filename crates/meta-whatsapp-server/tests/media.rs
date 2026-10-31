@@ -287,6 +287,34 @@ async fn an_upload_key_replays_the_media_id() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// Roadmap S6: an upload's key is the operation and its input (the number,
+/// decoded, the type, the file name and the file's digest), not the path:
+/// the number percent-encoded replays the first upload's media id.
+/// Decisive: the path in the fingerprint.
+#[tokio::test]
+async fn an_upload_key_replays_through_another_spelling_of_its_path() {
+    let (h, key) = connected().await;
+    h.graph.push_json(200, json!({"id": MEDIA_ID}));
+    let call = |pn: &str| {
+        Call::new(Method::POST, format!("/v1/numbers/{pn}/media"))
+            .key(&key)
+            .multipart(&[
+                ("type", None, b"image/png"),
+                ("file", Some("a.png"), common::SAMPLE_PNG),
+            ])
+            .header("idempotency-key", "voucher-44")
+    };
+    let first = h.call(call(PN)).await;
+    assert_eq!(first.status, StatusCode::CREATED, "{}", first.text);
+    let encoded: String = PN.bytes().map(|b| format!("%{b:02X}")).collect();
+    let again = h.call(call(&encoded)).await;
+    assert_eq!(again.status, StatusCode::CREATED, "{}", again.text);
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+    assert_eq!(again.text, first.text);
+    assert_eq!(h.graph.requests().len(), 1);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// An upload's key covers what Meta receives: the same key with the file
 /// under another name, or as another type, is `422
 /// idempotency_key_reused`, not a replay of the first upload's media id.

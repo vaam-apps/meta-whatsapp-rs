@@ -9,8 +9,10 @@
 //! Sends, media uploads and template creation take an optional
 //! `Idempotency-Key` header (inbox replies and OTP issue will, with their
 //! routes). The key is **scoped to the tenant**. A request carrying one
-//! claims it with the SHA-256 of its method, path and body
-//! ([`Fingerprint`]), a lease of twice the Graph timeout and an expiry of
+//! claims it with the SHA-256 of its operation and its canonical input
+//! ([`Fingerprint`]: the number or WABA the path names, decoded, and the
+//! body; never the path's spelling, since roadmap S6), a lease of twice
+//! the Graph timeout and an expiry of
 //! `WA_SERVER_IDEMPOTENCY_TTL` (24 hours by default); it runs, then keeps
 //! its answer (a kept answer comes back with `Idempotent-Replayed: true`,
 //! without a second request to Meta) or, when the answer proves nothing
@@ -203,7 +205,6 @@ fn kept_code(body: &[u8]) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use meta_whatsapp_rs::webhooks::axum::http::Method;
     use serde_json::json;
 
     use super::*;
@@ -218,48 +219,6 @@ mod tests {
         assert!(IdempotencyKey::parse(&"k".repeat(256)).is_none());
         let key = IdempotencyKey::parse("order:1234").unwrap();
         assert_eq!(format!("{key:?}"), "IdempotencyKey(10 bytes)");
-    }
-
-    /// Key order and whitespace do not change a fingerprint; a value, the
-    /// path or the method does.
-    #[test]
-    fn fingerprints_follow_the_request_not_its_spelling() {
-        let post = Method::POST;
-        let path = "/v1/numbers/1/messages";
-        let a: serde_json::Value = serde_json::from_str(
-            r#"{"to": {"phone": "+1"}, "type": "text", "text": {"body": "hi"}}"#,
-        )
-        .unwrap();
-        let b: serde_json::Value =
-            serde_json::from_str(r#"{"text":{"body":"hi"},"type":"text","to":{"phone":"+1"}}"#)
-                .unwrap();
-        assert_eq!(
-            Fingerprint::json(&post, path, &a),
-            Fingerprint::json(&post, path, &b)
-        );
-        let other_body = json!({"to": {"phone": "+1"}, "type": "text", "text": {"body": "ho"}});
-        assert_ne!(
-            Fingerprint::json(&post, path, &a),
-            Fingerprint::json(&post, path, &other_body)
-        );
-        assert_ne!(
-            Fingerprint::json(&post, path, &a),
-            Fingerprint::json(&post, "/v1/numbers/2/messages", &a)
-        );
-        assert_ne!(
-            Fingerprint::json(&post, path, &a),
-            Fingerprint::json(&Method::PUT, path, &a)
-        );
-        // Framing: moving a byte between parts changes the digest.
-        assert_ne!(
-            Fingerprint::parts(&post, path, &[("type", b"ab"), ("file", b"c")]),
-            Fingerprint::parts(&post, path, &[("type", b"a"), ("file", b"bc")])
-        );
-        // Strings and numbers never collide.
-        assert_ne!(
-            Fingerprint::json(&post, path, &json!("1")),
-            Fingerprint::json(&post, path, &json!(1))
-        );
     }
 
     /// A request dropped before it settled its key (the deadline cut it)
@@ -296,7 +255,10 @@ mod tests {
             .await
             .unwrap();
         let key = IdempotencyKey::parse("k-cut").unwrap();
-        let fingerprint = Fingerprint::json(&Method::POST, "/v1/numbers/1/messages", &json!({}));
+        let fingerprint = Fingerprint::send_message(
+            &meta_whatsapp_rs::core::ids::PhoneNumberId::new("1").unwrap(),
+            &json!({}),
+        );
         let never = std::future::pending::<Result<Success, ApiError>>();
         let cut = tokio::time::timeout(
             Duration::from_millis(20),

@@ -36,7 +36,7 @@ use meta_whatsapp_rs::client::messages::OutboundMessage;
 use meta_whatsapp_rs::core::ids::{UserId, WaId};
 use meta_whatsapp_rs::webhooks::axum::body::Bytes;
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequest, Path, Request, State};
-use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode, Uri};
+use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::messages::{self as domain, Messages};
 use serde::de::DeserializeOwned;
@@ -889,10 +889,11 @@ pub(crate) async fn send_message(
     caller: Caller,
     owned: OwnedNumber,
     KeyHeader(key): KeyHeader,
-    uri: Uri,
     ApiJson(body): ApiJson<Value>,
 ) -> Response {
-    let fingerprint = Fingerprint::json(&Method::POST, uri.path(), &body);
+    // The operation and its input (the number, as the path named it
+    // decoded, and the body as it was sent), never the path's spelling.
+    let fingerprint = Fingerprint::send_message(owned.phone_number_id(), &body);
     let message = match parse_message(body) {
         Ok(message) => message,
         Err(error) => return error.into_response(),
