@@ -102,7 +102,14 @@ nothing without the token and expires after five minutes, but
 `MediaInfo`'s `Debug` (and so `MediaDownload`'s, `VerifiedDownload`'s and
 `DownloadedMedia`'s) shows it the same way: its signature is
 credential-shaped and logs outlive it. `DownloadedMedia`'s `Debug` shows
-the file's length (`data_len`), not its bytes.
+the file's length (`data_len`), not its bytes. Inbound webhooks carry the
+same links: `MediaContent::url` (a media message's, an echo's, a call
+recording's) and the Meta CDN links of a Click to WhatsApp `Referral`
+(`image_url`, `video_url`, `thumbnail_url`) stay `String`s too and print
+that way, so a logged `WebhookEvent` or payload holds no signature;
+serializing one still writes them whole. Both crates use
+`meta_whatsapp_core::secret::RedactedUrl` for it, which you can use for
+your own types.
 
 The client attaches a token to the configured Graph endpoint (scheme, host
 and port), to `https://lookaside.fbsbx.com`, Meta's media download host,

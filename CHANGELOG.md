@@ -2889,3 +2889,25 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   printed the result of `download_bytes`): it now shows `info` and
   `data_len`. Test: `downloaded_media_debug_shows_the_length_not_the_file`
   (found by the sabotage review of this change).
+- **A webhook's signed media and CDN links no longer reach `Debug`**
+  (`meta-whatsapp-webhooks`; found by the security review of PR #62).
+  `fields::MediaContent` (the `image`, `audio`, `video`, `document` and
+  `sticker` of an inbound message, an echo, a history message or an
+  edit, and a call's recording and transcript) derived `Debug`, so its
+  `url`, a `lookaside.fbsbx.com` link signed in its query, reached any
+  log line that printed a payload, a `WebhookEvent` or a message; so did
+  `fields::Referral`'s `image_url`, `video_url` and `thumbnail_url`,
+  Meta CDN links (`scontent.xx.fbcdn.net`) signed the same way. Both
+  `Debug`s are now written by hand and show those links as
+  `MediaInfo`'s does: scheme, host and path, `<redacted>` for every
+  query value, `<redacted: not a URL>` for one that does not parse.
+  Every other field prints as before; the fields stay `Option<String>`
+  and serialize whole, so event data (and the service's snapshots) is
+  unchanged. The redaction moved to `meta-whatsapp-core`, as
+  `secret::RedactedUrl` (a `Debug` wrapper) and `secret::redacted_url`,
+  so the webhooks crate uses it without depending on the client;
+  `meta-whatsapp-client`'s `MediaInfo` and `SecretUrl` print exactly as
+  before. Tests: `redacted_debug.rs` in `meta-whatsapp-webhooks` (every
+  fixture re-read with a sentinel signature on each signed link: absent
+  from `{:?}` and `{:#?}` of the payload and its events, present in
+  their JSON), and `secret::tests` in `meta-whatsapp-core`.
