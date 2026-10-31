@@ -32,8 +32,11 @@
 //!   conversation category is `authentication_international`; both map to
 //!   [`PricingCategory::AuthenticationInternational`].
 
+use std::fmt;
+
 use meta_whatsapp_core::GraphApiError;
 use meta_whatsapp_core::ids::{CatalogId, GroupId, MediaId, MessageId, TemplateId, UserId, WaId};
+use meta_whatsapp_core::secret::RedactedUrl;
 use serde::de::Error as _;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -241,7 +244,15 @@ open_enum! {
 
 /// `referral`: the Click to WhatsApp ad the user came from. Every property
 /// is optional; `ctwa_clid` is omitted for WhatsApp Status ad placements.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` shows [`image_url`](Self::image_url),
+/// [`video_url`](Self::video_url) and [`thumbnail_url`](Self::thumbnail_url)
+/// as [`RedactedUrl`] does: scheme, host and path, every query value
+/// `<redacted>`. They are Meta CDN links (`scontent.xx.fbcdn.net`), which
+/// carry their signature in the query; the fields keep them whole.
+/// [`source_url`](Self::source_url), the ad's public short link, is shown
+/// as is.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Referral {
     /// Ad URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -281,6 +292,40 @@ pub struct Referral {
     /// verbatim.
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
+}
+
+impl fmt::Debug for Referral {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Destructured, so a field added later has to be listed here.
+        let Self {
+            source_url,
+            source_id,
+            source_type,
+            body,
+            headline,
+            media_type,
+            image_url,
+            video_url,
+            thumbnail_url,
+            ctwa_clid,
+            welcome_message,
+            reference,
+        } = self;
+        f.debug_struct("Referral")
+            .field("source_url", source_url)
+            .field("source_id", source_id)
+            .field("source_type", source_type)
+            .field("body", body)
+            .field("headline", headline)
+            .field("media_type", media_type)
+            .field("image_url", &image_url.as_deref().map(RedactedUrl))
+            .field("video_url", &video_url.as_deref().map(RedactedUrl))
+            .field("thumbnail_url", &thumbnail_url.as_deref().map(RedactedUrl))
+            .field("ctwa_clid", ctwa_clid)
+            .field("welcome_message", welcome_message)
+            .field("reference", reference)
+            .finish()
+    }
 }
 
 /// `referral.welcome_message`.
@@ -504,7 +549,12 @@ pub struct TextContent {
 /// `sha256`/`url` and each adds at most one or two properties, noted below.
 /// `id` is optional because history webhooks describe media messages whose
 /// asset ids arrive separately (`webhooks/reference/history`).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` shows [`url`](Self::url) as [`RedactedUrl`] does: scheme, host
+/// and path, every query value `<redacted>`. Meta signs the link in its
+/// query (`lookaside.fbsbx.com/…?mid=…&hash=…`), and logs outlive it; the
+/// field keeps it whole, and serializing writes it whole.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MediaContent {
     /// Media asset id; `GET /{id}` returns a download URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -531,6 +581,32 @@ pub struct MediaContent {
     /// Animated sticker (`sticker`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub animated: Option<bool>,
+}
+
+impl fmt::Debug for MediaContent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Destructured, so a field added later has to be listed here.
+        let Self {
+            id,
+            mime_type,
+            sha256,
+            url,
+            caption,
+            filename,
+            voice,
+            animated,
+        } = self;
+        f.debug_struct("MediaContent")
+            .field("id", id)
+            .field("mime_type", mime_type)
+            .field("sha256", sha256)
+            .field("url", &url.as_deref().map(RedactedUrl))
+            .field("caption", caption)
+            .field("filename", filename)
+            .field("voice", voice)
+            .field("animated", animated)
+            .finish()
+    }
 }
 
 /// `location` payload.

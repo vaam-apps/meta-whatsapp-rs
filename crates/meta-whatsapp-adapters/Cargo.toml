@@ -63,7 +63,8 @@ redis = { workspace = true, optional = true, features = ["tokio-comp", "connecti
 
 [dev-dependencies]
 meta-whatsapp-core = { workspace = true, features = ["testing"] }
-axum = { workspace = true, features = ["http1", "tokio", "multipart", "json"] }
+# `http2`: the body bound is tested over h2c (prior knowledge) too.
+axum = { workspace = true, features = ["http1", "http2", "tokio", "multipart", "json"] }
 # tests/reqwest_transport.rs builds requests with them.
 bytes.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "test-util", "net", "io-util", "sync"] }
