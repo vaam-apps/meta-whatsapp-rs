@@ -81,7 +81,7 @@ use meta_whatsapp_rs::core::error::TransportError;
 use meta_whatsapp_rs::core::ids::MediaId;
 
 use crate::authz::{Authorizer, OwnedNumber, object_failed};
-use crate::error::ServiceError;
+use crate::error::{ErrorCode, ServiceError};
 use crate::observe::Observer;
 use crate::ratelimit::{Slot, Slots};
 use crate::request::typed_graph_id;
@@ -224,7 +224,7 @@ impl Upload {
             return Err(if refused.field == "type" {
                 ServiceError::invalid("type")
             } else {
-                ServiceError::new("media_too_large")
+                ServiceError::new(ErrorCode::MEDIA_TOO_LARGE)
             });
         }
         Ok(Self {
@@ -494,7 +494,7 @@ async fn whole(mut body: VerifiedBody, max_bytes: u64) -> Result<Bytes, ServiceE
     while let Some(chunk) = body.next().await {
         let chunk = chunk.map_err(|error| ServiceError::from_library(&error))?;
         if u64::try_from(data.len() + chunk.len()).unwrap_or(u64::MAX) > max_bytes {
-            return Err(ServiceError::new("media_too_large"));
+            return Err(ServiceError::new(ErrorCode::MEDIA_TOO_LARGE));
         }
         data.extend_from_slice(&chunk);
     }
@@ -676,14 +676,14 @@ impl<'a> Media<'a> {
         // Meta's reported size, before a byte is downloaded (checked again
         // while reading: the report may be wrong).
         if info.file_size.is_some_and(|size| size > limits.max_bytes) {
-            return Err(ServiceError::new("media_too_large"));
+            return Err(ServiceError::new(ErrorCode::MEDIA_TOO_LARGE));
         }
         let Some(sha256) = reported_sha256(&info.sha256) else {
             tracing::warn!(
                 target: LOG_TARGET,
                 "Meta reported no usable SHA-256 for a media file"
             );
-            return Err(ServiceError::new("integrity"));
+            return Err(ServiceError::new(ErrorCode::INTEGRITY));
         };
         let content_type = content_type(&info);
         let download = match media.download_with_info(info).await {
@@ -692,7 +692,7 @@ impl<'a> Media<'a> {
         };
         let verified = download
             .verified()
-            .map_err(|_| ServiceError::new("integrity"))?;
+            .map_err(|_| ServiceError::new(ErrorCode::INTEGRITY))?;
         let body = if limits.stream {
             DownloadBody::Stream(MediaStream {
                 inner: Box::new(verified.body),
@@ -723,7 +723,7 @@ impl<'a> Media<'a> {
                 target: LOG_TARGET,
                 "Meta's media URL was refused by the library's host allow-list"
             );
-            return ServiceError::new("upstream");
+            return ServiceError::new(ErrorCode::UPSTREAM);
         }
         self.failed(error).await
     }

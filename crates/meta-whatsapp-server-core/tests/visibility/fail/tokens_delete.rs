@@ -1,4 +1,4 @@
-// Deleting a token takes `Authorizer::forget_for_admin` or `OwnedWaba::forget`.
+// Deleting a token takes the admin services' unbind (`Admin::unbind_waba`) or `OwnedWaba::forget`.
 use meta_whatsapp_rs::core::ids::WabaId;
 use meta_whatsapp_server_core::authz::Tokens;
 

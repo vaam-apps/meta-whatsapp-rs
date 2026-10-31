@@ -10,6 +10,7 @@ use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, TokenVault}
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::{AppSecret, VerifyToken};
 use meta_whatsapp_server_core::ServiceError;
+use meta_whatsapp_server_core::admin::Admin;
 use meta_whatsapp_server_core::authz::{
     AdminCaller, Authorizer, Caller, OwnedNumber, OwnedWaba, Tokens, rotate_vault,
 };
@@ -17,7 +18,8 @@ use meta_whatsapp_server_core::backend::Backend;
 use meta_whatsapp_server_core::inbound::{DELIVERED, Inbound, Pipeline, Refused};
 use meta_whatsapp_server_core::media::{DownloadLimits, Media, MediaSlots, Upload};
 use meta_whatsapp_server_core::model::TenantId;
-use meta_whatsapp_server_core::ratelimit::Slots;
+use meta_whatsapp_server_core::operation::Operation;
+use meta_whatsapp_server_core::ratelimit::{RateLimiter, RateLimits, RouteClass, Slots};
 use meta_whatsapp_server_core::store::RecordStore;
 
 #[allow(dead_code, clippy::too_many_arguments)]
@@ -36,6 +38,9 @@ async fn public(
     let _: &Client = authz.client();
     let _: &str = admin.key_id();
     let _: &TenantId = caller.tenant();
+    // A request charged by its operation (the class is the core's).
+    let limiter = RateLimiter::new(RateLimits::default());
+    let _: Result<RouteClass, _> = limiter.charge(caller.tenant(), Operation::ListNumbers);
     let _ = format!("{tokens:?}");
     let number: OwnedNumber = authz.owned_number(caller, pn).await?;
     let _: ServiceError = number.failed(authz, error).await;
@@ -58,10 +63,13 @@ async fn public(
     let waba: OwnedWaba = authz.owned_waba(caller, waba_id.clone()).await?;
     authz.admit_waba(&waba)?;
     let _: ServiceError = waba.failed(authz, error).await;
-    authz.store_token(admin, caller.tenant(), token).await?;
-    authz.rotate_vault(admin).await?;
-    let _: ServiceError = authz.graph_failed_for_admin(admin, waba_id, error).await;
-    authz.forget_for_admin(admin, waba_id).await?;
+    // The vault's admin writes, through the admin services (roadmap S6).
+    let operations = Admin::new(authz, admin)?;
+    let _ = operations
+        .attach_waba(caller.tenant().as_str(), waba_id.as_str(), token.token.clone())
+        .await?;
+    let _ = operations.rotate_vault().await?;
+    operations.unbind_waba(waba_id.as_str()).await?;
     waba.forget(authz).await?;
     // With the vault itself (the CLI's `vault rotate`), no capability.
     let _ = rotate_vault(records, vault).await;

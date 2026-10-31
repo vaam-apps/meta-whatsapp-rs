@@ -821,8 +821,11 @@ which never sends twice. The service adds no send retries of its own.
 ### 5.4 Idempotency keys
 
 - `Idempotency-Key` on sends, inbox replies, OTP issue, uploads and
-  template creation, scoped to the tenant; stored with a hash of (method,
-  route, body), the state and the final answer.
+  template creation, scoped to the tenant; stored with a hash of the
+  operation and its canonical input (the number or WABA the path names,
+  decoded, and the body: D27, built in roadmap S6; never the method or
+  the path's spelling, so a key means the same through every API
+  adapter), the state and the final answer.
 - A request inserts the key `in_progress` (unique), runs, stores the answer.
   A repeat with the same body gets it back (`Idempotent-Replayed: true`); a
   different body is `422 idempotency_key_reused`; a concurrent one `409
@@ -1073,13 +1076,14 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
-**As built (roadmap S1, S2, S3, S4, S5a, S5b, S5c, S5d, S5e).** `crates/meta-whatsapp-server-core`
+**As built (roadmap S1, S2, S3, S4, S5a, S5b, S5c, S5d, S5e, S6).** `crates/meta-whatsapp-server-core`
 exists, with the model, the keys, event routing and polling, the
 idempotency engine, the rate limiter, the error model, authorization,
 housekeeping (over a `Backend`, since S4), the admin operations
 (since S5a), the message operations and the idempotency engine's
 run (since S5b), the number and template operations (since S5c), the
-media operations (since S5d), and the webhook pipeline (since S5e).
+media operations (since S5d), the webhook pipeline (since S5e), and
+the pieces every API adapter shares made adapter-neutral (since S6).
 What it holds today, where it differs from the target above:
 
 - **The ports** are `RecordStore`, `IdempotencyRecords`, `Outbox`,
@@ -1242,7 +1246,8 @@ What it holds today, where it differs from the target above:
   answered from the record (its outcome told to the `Observer`, whose
   new `idempotency` method the server's `Metrics` counts), a cut request
   kept as a `504 timeout`. The `Keeper` holds the records, the lease and
-  the expiry; the fingerprint is §5.4's (method, path, body) until S6.
+  the expiry; the fingerprint is §5.4's, the operation and its
+  canonical input since S6 (below).
   `messages` holds the send request as the request carried it, free of
   utoipa (`SendMessage` and its objects: the axum adapter keeps its own
   types for the OpenAPI document and converts them, every field named on
@@ -1403,7 +1408,11 @@ What it holds today, where it differs from the target above:
   Meta's code, subcode, trace id and, where a route opts in, bounded
   `details`. An API adapter renders it (the axum one: `ApiError`, the
   §5.1 body), and the error's code table is §5.2's, read by the
-  service's tests.
+  core's and the service's tests. Since S6 a code is an `ErrorCode`
+  constant (`ErrorCode::NOT_FOUND`), generated with `CODES` and
+  `ErrorCode::ALL` from one table (`codes!` in `error.rs`, which those
+  tests hold equal to §5.2), and `ServiceError::new` takes one: a
+  misspelled code does not compile (a `compile_fail` doctest).
 - **Capabilities are branded with their issuer.** `Authorizer::new` is
   public, since an API adapter in another crate builds one, so anyone
   can build an `Authorizer` over records of their own and have it make a
@@ -1475,6 +1484,33 @@ What it holds today, where it differs from the target above:
   Postgres): roadmap S2b. The admin's unbind of a WABA without a usable
   token, and the admin's own `190` right after attaching, are not a
   capability's and stay unconditioned.
+- **Adapter-neutral pieces** (S6). The tenant operations are named by
+  id (`operation::Operation`: the HTTP adapter's `operationId`s, with
+  their scope), and what the core decides about a request follows its
+  operation, not how an adapter spells it. A request's rate class is its
+  operation's (`RouteClass::of(Operation)`), charged with
+  `RateLimiter::charge(tenant, operation)`, the only public way to spend
+  a budget (the axum adapter resolves a request to its operation by its
+  method and route template, from its OpenAPI document; `HEAD` is its
+  `GET`'s). The idempotency fingerprint (D27) is the operation's id and
+  its canonical input, defined once in the core
+  (`idempotency::Fingerprint::send_message`, `upload_media`,
+  `create_template`): the path parameter as a typed id, decoded, and the
+  JSON body canonical (object keys sorted, whitespace ignored) or the
+  checked upload's type, file name and SHA-256; no method and no path,
+  so two spellings of one path (percent-encoded or not) replay one key
+  and every adapter derives the same fingerprint. For one TTL after the
+  upgrade the axum adapter also matches a record stored under the
+  fingerprint of before (`Fingerprint::or_legacy` with `legacy_v1_json`
+  or `legacy_v1_upload`: method, path as sent, body), so a key claimed
+  before S6 keeps replaying (D27); a claim stores the new fingerprint.
+  The `Authorizer`'s
+  admin writes to the vault (`store_token`, `rotate_vault`,
+  `forget_for_admin`, and `graph_failed_for_admin` after an attach's
+  `190`) are private to the core, reached only through `admin::Admin`,
+  opened by `Admin::new`'s admission, and each checks the admin again;
+  UI cases pin that they, and a budget charged by class, do not compile
+  outside the core.
 - **Conformance** is the core's (S3): `meta_whatsapp_server_core::conformance`,
   behind the feature `conformance`, runs over a `Backend`, one empty
   backend per suite from a factory (`conformance::run`). Its suites are
@@ -1483,7 +1519,8 @@ What it holds today, where it differs from the target above:
   (what crosses ports: every accessor hands out the same data, deleting
   a tenant purges its stream, the `RouteGuard` cases, each tenant's
   inserts commit in sequence order), `capabilities` (SR-L2, the
-  `failed` race, M1), `races` (S2's races), `admin` (S5a: the admin
+  `failed` race, M1; since S6 the vault's admin writes, each refusing
+  another `Authorizer`'s admin), `races` (S2's races), `admin` (S5a: the admin
   services' D4 refusal, with nothing stored, subscribed or shared; the
   core's own `tests/admin.rs` runs it on a memory backend of its own,
   with no server crate), `messages` (S5b: M1.4's case through the
@@ -1804,7 +1841,7 @@ choice stays the owner's.
 | D24 | A deleted tenant on platform keys | scrubbed from every key's allowed tenants, a tenant created again needing a new key / kept | **Coordinator's decision 2026-09-25, standing under the owner's delegation of 2026-09-26: scrubbed** (a tenant created again under a recycled id must not inherit access). No route or command edits a key's allowed tenants, so a tenant created again under the id needs a new platform key; a `*` key allows it at once. Reversing it keeps the allowances of tenants deleted afterwards only: the lists already scrubbed are not restored. The owner confirms it before the first release | M1 |
 | D25 | The event types the webhook conformance sweep typed (PR #17: `standby_observed`, `thread_control_changed`, `user_action_reported`, formerly `unknown`) | operator-only / tenant-visible | **Decided 2026-09-26: tenant-visible, in M2** (with the inbox's answer to `OPEN_QUESTIONS.md` #44); M1c ships them operator-only, the rule for a type not yet reviewed | M2 |
 | D26 | The service's architecture | one crate / a framework-free core with ports, API adapters and backend bundles | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the modular service ([§8](#8-modular-architecture-and-client-sdks)).** Defaults: `api-cratestack` and `store-cratestack` (the hybrid), once the owner accepts D20's licence (a). Kept built and conformance-tested: `api-axum` (today's v1 and its OpenAPI document), permanent: the swap target, where every new route lands too, through core services that keep both adapters thin; and `store-postgres` (sqlx); `store-memory` for development; later `store-mongodb`, after the library's MongoDB adapters, with an `Outbox` spike first. Swapping the API adapter swaps the wire contract and the client: procedures with CrateStack's generated client, resource URLs with openapi-typescript. To swap, Cargo features choose which adapters are compiled in and configuration picks one of each; a new backend implements the core ports and passes `meta_whatsapp_server_core::conformance` | [roadmap.md](../roadmap.md) S1–S18 |
-| D27 | The idempotency fingerprint ([§5.4](#54-idempotency-keys)) | method, route and body (as built) / operation id and canonical input | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the operation id plus the canonical input**, so one key means the same through every API adapter. The change is pre-release, so no stored key breaks; to swap, the fingerprint is one function in the core | S6 |
+| D27 | The idempotency fingerprint ([§5.4](#54-idempotency-keys)) | method, route and body (as built until S6) / operation id and canonical input | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the operation id plus the canonical input**, so one key means the same through every API adapter. **Built in S6**: `idempotency::Fingerprint`'s constructors, one per idempotent operation (the path parameter as a decoded id, the canonical JSON body or the upload's type, file name and digest). **Decided 2026-10-31 (coordinator, under the owner's delegation):** "canonical input" is the request's JSON as it came, canonicalized (object keys sorted, whitespace ignored), not the parsed request type re-serialized; a request's rate class is its operation's, charged with `RateLimiter::charge(&TenantId, Operation)` (a bare tenant id, not an admitted `Caller`: a forged one could only spend a tenant's per-replica budget); the vault's admin writes, `graph_failed_for_admin` among them, are crate-private behind `Admin`, and `authz::rotate_vault` stays public for the command line. **The window (decided the same day):** a deployment exists, and a duplicate customer message is real harm, so for one `WA_SERVER_IDEMPOTENCY_TTL` (24 h by default) after the upgrade a repeat also matches a record stored under the fingerprint of before (the request's method, its path as sent and its canonical body, or the upload's parts: `Fingerprint::legacy_v1_json`, `legacy_v1_upload`, pinned to main's known answers, added by the HTTP adapter with `Fingerprint::or_legacy`); a claim always stores the new fingerprint. A repeat of an old key under another spelling of its path, and an upgraded replica's key repeated on an old one during a rolling deploy, are `422 idempotency_key_reused`, never a second send. The legacy fingerprint goes after the first release (roadmap S7). To swap, change those constructors, the one place every adapter's fingerprint comes from | S6 |
 | D28 | The bot framework and its plugins | in the facade / a new library crate / in the service; plugins loaded at run time / registered at compile time | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: a new library crate, `meta-whatsapp-bot`, with plugins registered at compile time.** No hot reload: loading Rust code at run time is neither idiomatic nor safe (no stable ABI, and `unsafe` loading, which the workspace forbids), and parity row 87 says so. To swap, a `Bot` is an `EventSink`, so an integrator can put their own dispatcher in its place; the service exposes the bot over HTTP in M5 | B1 |
 | D29 | Paced broadcast and scheduled messages | a job-queue port / a typed store on `KvStore` / the caller's | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: in `meta-whatsapp-bot`, with jobs as a typed store on `KvStore`** (a bucketed due-time index, claims by compare-and-swap under a lease), not a new port, per architecture.md's rule that typed stores are built on `KvStore`; broadcasts are paced per number under Meta's throughput. To swap, the pacer and the job store are traits with these as their defaults | B2, B3 |
 | D30 | Erasing a person who has several keys on a number (a history thread under their phone number, live messages under their BSUID, an earlier BSUID; the privacy review of L5, M3) | one key per call, the caller finding the others / the store finds a person's keys and erases them in one step, on one number / across numbers | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the port widens in L5** (so adapters change once): `ConversationStore::identities` (the closure over the synced contacts and the identity links, read only), `IdentityLink` (`link_identity`, `identity_links`; the inbox records them in L7), and `erase_all(phone_number_id, ids)`, one step, whose one-key case is `erase`. Never across numbers: a `wa_id` is the same on every number, so an erasure across them would delete other businesses' customers. To swap, a caller passes its own ids to `erase_all` (the closure is a separate read), or an adapter of its own implements the port | L5 |

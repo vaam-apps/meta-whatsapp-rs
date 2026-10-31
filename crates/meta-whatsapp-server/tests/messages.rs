@@ -72,6 +72,100 @@ fn error(reply: &Reply) -> Value {
     reply.json()["error"].clone()
 }
 
+/// `id`, every byte percent-encoded: the same path parameter, spelled
+/// otherwise (axum decodes it before the handler reads it).
+fn percent_encoded(id: &str) -> String {
+    id.bytes()
+        .map(|b| format!("%{b:02X}"))
+        .collect::<Vec<_>>()
+        .concat()
+}
+
+/// Roadmap S6's window, over HTTP: a key a release before S6 claimed,
+/// stored under the fingerprint of then (method, path as sent, body),
+/// repeated with the same request after the upgrade, replays the kept
+/// answer with no second send; with another body it is `422
+/// idempotency_key_reused`, nothing sent. Decisive: the handler's legacy
+/// fingerprint (`or_legacy`), and `Fingerprint::matches`' legacy arm.
+#[tokio::test]
+async fn a_key_claimed_before_s6_replays_after_the_upgrade() {
+    let (h, key) = connected().await;
+    let path = format!("/v1/numbers/{PN}/messages");
+    let legacy = Fingerprint::legacy_v1_json(&Method::POST, &path, &text());
+    let kept = br#"{"message_id":"wamid.KEPT-BEFORE-S6"}"#;
+    h.claimed_before_s6(TENANT, "order:before-s6", &legacy, 202, kept)
+        .await;
+    let again = h
+        .call(with_key(send(&key, &text()), "order:before-s6"))
+        .await;
+    assert_eq!(again.status, StatusCode::ACCEPTED, "{}", again.text);
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+    assert_eq!(again.text.as_bytes(), kept);
+    let mut other = text();
+    other["text"]["body"] = json!("Another message");
+    let reused = h
+        .call(with_key(send(&key, &other), "order:before-s6"))
+        .await;
+    assert_eq!(
+        (reused.status, error(&reused)["code"].as_str().unwrap()),
+        (StatusCode::UNPROCESSABLE_ENTITY, "idempotency_key_reused")
+    );
+    assert!(h.graph.requests().is_empty(), "a legacy key sent");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// Roadmap S6's decisive case (design D27): an `Idempotency-Key`'s
+/// fingerprint is the operation and its canonical input, not the request's
+/// path. Two spellings of one send's path, the number plain and
+/// percent-encoded (wholly or in part), are one request: the same key
+/// replays the kept answer, with no second send. Another number of the
+/// tenant's, with the same key and body, is another request: `422
+/// idempotency_key_reused`. Decisive: `uri.path()` back in the fingerprint
+/// (the encoded repeat is then `422`), and the number out of it (the other
+/// number's send is then a replay).
+#[tokio::test]
+async fn two_spellings_of_one_path_replay_the_same_key() {
+    let (h, key) = connected().await;
+    h.connect(TENANT, "102290129340399", &["106540352242923"], "TOKEN-2")
+        .await;
+    h.graph.push_json(200, accepted());
+    let first = h
+        .call(with_key(send(&key, &text()), "order:1234:shipped"))
+        .await;
+    assert_eq!(first.status, StatusCode::ACCEPTED, "{}", first.text);
+    for spelled in [percent_encoded(PN), format!("%31{}", &PN[1..])] {
+        let path = format!("/v1/numbers/{spelled}/messages");
+        let again = h
+            .call(with_key(
+                Call::new(Method::POST, &path).key(&key).json(&text()),
+                "order:1234:shipped",
+            ))
+            .await;
+        assert_eq!(again.status, StatusCode::ACCEPTED, "{path}: {}", again.text);
+        assert_eq!(again.headers["idempotent-replayed"], "true", "{path}");
+        assert_eq!(again.text, first.text, "{path}: byte for byte");
+    }
+    assert_eq!(h.graph.requests().len(), 1, "no second send");
+    let elsewhere = h
+        .call(with_key(
+            Call::new(Method::POST, "/v1/numbers/106540352242923/messages")
+                .key(&key)
+                .json(&text()),
+            "order:1234:shipped",
+        ))
+        .await;
+    assert_eq!(
+        (
+            elsewhere.status,
+            error(&elsewhere)["code"].as_str().unwrap()
+        ),
+        (StatusCode::UNPROCESSABLE_ENTITY, "idempotency_key_reused"),
+        "another number is another request"
+    );
+    assert_eq!(h.graph.requests().len(), 1);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// messages/mark-message-as-read's example id.
 const RECEIVED: &str = "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBJDQjZCMzlEQUE4OTJBMTE4RTUA";
 
@@ -405,9 +499,8 @@ async fn a_running_key_is_in_progress_and_a_lapsed_lease_is_unknown() {
     })
     .await;
     let tenant = TenantId::parse(TENANT).unwrap();
-    let fingerprint = Fingerprint::json(
-        &Method::POST,
-        &format!("/v1/numbers/{PN}/messages"),
+    let fingerprint = Fingerprint::send_message(
+        &meta_whatsapp_rs::core::ids::PhoneNumberId::new(PN).unwrap(),
         &text(),
     );
     // Another request claimed it and is running (or died).

@@ -10,7 +10,12 @@
 //! `Authorizer` (A) makes is refused by every method of the service's (B)
 //! with `403 forbidden`, and B's vault and records are neither read nor
 //! written. Decisive: `Issuer::is` (the `Arc::ptr_eq` of `authz.rs`), and
-//! each method's own check. `Authorizer::admit` and `admit_admin` ask the
+//! each method's own check. The vault's admin writes (`store_token`,
+//! `rotate_vault`, `forget_for_admin`, `graph_failed_for_admin`) are
+//! crate-private since roadmap S6, reached through `Admin::new`'s
+//! admission (`the_admin_services_refuse_another_authorizers_admin`
+//! below); their own checks are the conformance case
+//! `capabilities::an_admins_vault_writes_take_an_admitted_admin`. `Authorizer::admit` and `admit_admin` ask the
 //! same of a capability an adapter took from outside its own code; the
 //! server's side of it (a forged capability in a request's extensions,
 //! and its crate-private handlers) is `crates/meta-whatsapp-server/tests/forged.rs`.
@@ -40,8 +45,14 @@ async fn each_authorizer_accepts_its_own_capabilities() {
             .await
             .unwrap();
         assert_eq!(opened.client().token().unwrap().expose_secret(), token);
-        // Already under the active key: walked, nothing to re-encrypt.
-        let rotation = side.authz.rotate_vault(&admin).await.unwrap();
+        // Already under the active key: walked, nothing to re-encrypt
+        // (through the admin services: the `Authorizer`'s own rotation is
+        // theirs since roadmap S6).
+        let rotation = Admin::new(&side.authz, &admin)
+            .unwrap()
+            .rotate_vault()
+            .await
+            .unwrap();
         assert_eq!((rotation.wabas, rotation.rotated), (1, 0));
         assert!(rotation.failed.is_empty());
         side.records.take_calls();
@@ -124,57 +135,6 @@ async fn waba_for_admin_refuses_another_authorizers_admin() {
         .unwrap_err();
     assert_forbidden(&error, "waba_for_admin");
     before.unchanged(&service, "waba_for_admin").await;
-}
-
-#[tokio::test]
-async fn store_token_refuses_another_authorizers_admin() {
-    let (service, forger) = service_and_forger().await;
-    let foreign = forger.admin().await;
-    let before = Before::of(&service);
-    let error = service
-        .authz
-        .store_token(&foreign, &victim(), &stored(FORGED_TOKEN))
-        .await
-        .unwrap_err();
-    assert_forbidden(&error, "store_token");
-    before.unchanged(&service, "store_token").await;
-}
-
-#[tokio::test]
-async fn rotate_vault_refuses_another_authorizers_admin() {
-    let (service, forger) = service_and_forger().await;
-    let foreign = forger.admin().await;
-    let before = Before::of(&service);
-    let error = service.authz.rotate_vault(&foreign).await.unwrap_err();
-    assert_forbidden(&error, "rotate_vault");
-    before.unchanged(&service, "rotate_vault").await;
-}
-
-#[tokio::test]
-async fn forget_for_admin_refuses_another_authorizers_admin() {
-    let (service, forger) = service_and_forger().await;
-    let foreign = forger.admin().await;
-    let before = Before::of(&service);
-    let error = service
-        .authz
-        .forget_for_admin(&foreign, &waba())
-        .await
-        .unwrap_err();
-    assert_forbidden(&error, "forget_for_admin");
-    before.unchanged(&service, "forget_for_admin").await;
-}
-
-#[tokio::test]
-async fn graph_failed_for_admin_refuses_another_authorizers_admin_and_marks_nothing() {
-    let (service, forger) = service_and_forger().await;
-    let foreign = forger.admin().await;
-    let before = Before::of(&service);
-    let error = service
-        .authz
-        .graph_failed_for_admin(&foreign, &waba(), &refused_token())
-        .await;
-    assert_forbidden(&error, "graph_failed_for_admin");
-    before.unchanged(&service, "graph_failed_for_admin").await;
 }
 
 #[tokio::test]

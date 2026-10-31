@@ -351,7 +351,15 @@ pub(crate) async fn create_template(
     uri: Uri,
     ApiJson(body): ApiJson<Value>,
 ) -> Response {
-    let fingerprint = Fingerprint::json(&Method::POST, uri.path(), &body);
+    // The operation and its input (the WABA and the definition), never
+    // the path's spelling.
+    // A key claimed before roadmap S6 was stored under the request's
+    // method, its path as sent and its body: matched too, for one TTL
+    // after the upgrade (the legacy fingerprint goes after the first
+    // release). A claim stores the new one.
+    let fingerprint = Fingerprint::create_template(owned.waba_id(), &body).or_legacy(
+        Fingerprint::legacy_v1_json(&Method::POST, uri.path(), &body),
+    );
     let definition = match domain::definition(&body) {
         Ok(definition) => definition,
         Err(error) => return ApiError::from(error).into_response(),

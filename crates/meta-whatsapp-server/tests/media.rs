@@ -249,6 +249,46 @@ async fn the_configured_cap_bounds_every_upload() {
     assert!(h.graph.requests().is_empty());
 }
 
+/// Roadmap S6's window: an upload's key claimed before S6, under the
+/// fingerprint of then (method, path as sent, type, file name, file
+/// digest), replays after the upgrade; another file is `422
+/// idempotency_key_reused`. Decisive: the handler's `or_legacy`.
+#[tokio::test]
+async fn an_upload_key_claimed_before_s6_replays_after_the_upgrade() {
+    let (h, key) = connected().await;
+    let path = format!("/v1/numbers/{PN}/media");
+    let upload = meta_whatsapp_server_core::media::Upload::new(
+        "image/png",
+        Some("a.png"),
+        common::SAMPLE_PNG.to_vec().into(),
+    )
+    .unwrap();
+    let legacy = meta_whatsapp_server::idempotency::Fingerprint::legacy_v1_upload(
+        &Method::POST,
+        &path,
+        &upload,
+    );
+    let kept = br#"{"id":"1037543291543636"}"#;
+    h.claimed_before_s6(TENANT, "voucher-45", &legacy, 201, kept)
+        .await;
+    let call =
+        |file: &'static [u8]| upload_call(&key, file).header("idempotency-key", "voucher-45");
+    let again = h.call(call(common::SAMPLE_PNG)).await;
+    assert_eq!(again.status, StatusCode::CREATED, "{}", again.text);
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+    assert_eq!(again.text.as_bytes(), kept);
+    let reused = h.call(call(b"another file")).await;
+    assert_eq!(code(&reused), "idempotency_key_reused");
+    assert!(h.graph.requests().is_empty(), "a legacy key uploaded again");
+}
+
+fn upload_call(key: &str, file: &'static [u8]) -> Call {
+    upload(
+        key,
+        &[("type", None, b"image/png"), ("file", Some("a.png"), file)],
+    )
+}
+
 /// An upload with an `Idempotency-Key` never uploads twice.
 #[tokio::test]
 async fn an_upload_key_replays_the_media_id() {
@@ -283,6 +323,38 @@ async fn an_upload_key_replays_the_media_id() {
         )
         .await;
     assert_eq!(other.code(), "idempotency_key_reused");
+    assert_eq!(h.graph.requests().len(), 1);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// Roadmap S6: an upload's key is the operation and its input (the number,
+/// decoded, the type, the file name and the file's digest), not the path:
+/// the number percent-encoded replays the first upload's media id.
+/// Decisive: the path in the fingerprint.
+#[tokio::test]
+async fn an_upload_key_replays_through_another_spelling_of_its_path() {
+    let (h, key) = connected().await;
+    h.graph.push_json(200, json!({"id": MEDIA_ID}));
+    let call = |pn: &str| {
+        Call::new(Method::POST, format!("/v1/numbers/{pn}/media"))
+            .key(&key)
+            .multipart(&[
+                ("type", None, b"image/png"),
+                ("file", Some("a.png"), common::SAMPLE_PNG),
+            ])
+            .header("idempotency-key", "voucher-44")
+    };
+    let first = h.call(call(PN)).await;
+    assert_eq!(first.status, StatusCode::CREATED, "{}", first.text);
+    let encoded = PN
+        .bytes()
+        .map(|b| format!("%{b:02X}"))
+        .collect::<Vec<_>>()
+        .concat();
+    let again = h.call(call(&encoded)).await;
+    assert_eq!(again.status, StatusCode::CREATED, "{}", again.text);
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+    assert_eq!(again.text, first.text);
     assert_eq!(h.graph.requests().len(), 1);
     assert_eq!(h.graph.remaining(), 0);
 }

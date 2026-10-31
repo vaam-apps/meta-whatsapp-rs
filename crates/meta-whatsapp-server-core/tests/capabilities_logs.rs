@@ -55,11 +55,11 @@ async fn a_refusal_is_logged_at_warn_without_secrets() {
     let guard = tracing::subscriber::set_default(logged.clone());
     let error = service
         .authz
-        .store_token(&admin, &victim(), &stored(FORGED_TOKEN))
+        .waba_for_admin(&admin, &service.records.waba)
         .await
         .unwrap_err();
     drop(guard);
-    assert_forbidden(&error, "store_token");
+    assert_forbidden(&error, "waba_for_admin");
     let events = logged.0.lock().unwrap().clone();
     let refusals: Vec<_> = events
         .iter()
@@ -68,7 +68,7 @@ async fn a_refusal_is_logged_at_warn_without_secrets() {
     assert_eq!(refusals.len(), 1, "{events:?}");
     let (level, fields) = refusals[0];
     assert_eq!(*level, tracing::Level::WARN);
-    assert!(fields.contains("operation=\"store_token\""), "{fields}");
+    assert!(fields.contains("operation=\"waba_for_admin\""), "{fields}");
     let secret = forger.admin_bearer.trim_start_matches("Bearer ");
     for (_, fields) in &events {
         for text in [VICTIM_TOKEN, FORGED_TOKEN, secret, admin.key_id()] {

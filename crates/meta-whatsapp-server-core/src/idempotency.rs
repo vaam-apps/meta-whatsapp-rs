@@ -11,8 +11,10 @@
 //!
 //! 1. is checked locally first (body, recipient, limits): a request that
 //!    fails there never touches its key;
-//! 2. claims the key, `in_progress`, with the SHA-256 of its method, path
-//!    and body ([`Fingerprint`]), a lease and an expiry ([`claim`]);
+//! 2. claims the key, `in_progress`, with the SHA-256 of its operation
+//!    and its canonical input ([`Fingerprint`]: never the request's
+//!    path, so a key means the same through every API adapter and every
+//!    spelling of a path), a lease and an expiry ([`claim`]);
 //! 3. runs, then settles the key by what the answer proves
 //!    ([`Claim::settle`]):
 //!    - **nothing was sent** (`may_have_been_sent: false`: a 4xx from
@@ -26,7 +28,7 @@
 //!
 //! | Record | Answer |
 //! | --- | --- |
-//! | another request's (another method, path or body) | `422 idempotency_key_reused` |
+//! | another request's (another operation or input) | `422 idempotency_key_reused` |
 //! | `in_progress`, lease running | `409 idempotency_in_progress`, `retryable`, `may_have_been_sent: true` (the other request may be sending) |
 //! | `in_progress`, lease over (the process died, or the request was cut without settling) | `409 outcome_unknown`, `may_have_been_sent: true`: never a new send |
 //! | completed | the kept answer |
@@ -42,38 +44,177 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use meta_whatsapp_rs::core::error::StorageError;
+use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use sha2::{Digest, Sha256};
 
 use crate::authz::{Authorizer, Caller};
-use crate::error::ServiceError;
+use crate::error::{ErrorCode, ServiceError};
+use crate::media::Upload;
 use crate::model::{
     IdempotencyClaim, IdempotencyKey, IdempotencyRecord, IdempotencyState, TenantId,
 };
 use crate::observe::Observer;
+use crate::operation::Operation;
 use crate::store::IdempotencyRecords;
 
-/// SHA-256 of what a request asks: its method, its path and its body.
-/// The same request always has the same fingerprint (a JSON body's object
-/// keys are sorted and its whitespace ignored); a request with another
-/// number, another route or another body has another.
+/// SHA-256 of what a request asks: its operation ([`Operation`], by id)
+/// and its **canonical input**, never the request's method or path
+/// (roadmap S6, design D27). Each idempotent operation's input is defined
+/// here, once, so that every API adapter derives the same fingerprint for
+/// the same request:
+///
+/// | Operation | Canonical input |
+/// | --- | --- |
+/// | `send_message` ([`Self::send_message`]) | the number's id, as a [`PhoneNumberId`] (the path parameter decoded: `%31` and `1` are one number); the JSON body as the request carried it, parsed (an escape is the character it spells; of a key given twice, the last, as the operation reads it), its object keys sorted and its whitespace ignored; nothing else is folded (`1` and `1.0` are two bodies) |
+/// | `upload_media` ([`Self::upload_media`]) | the number's id; the checked [`Upload`]'s MIME type, the file name sent to Meta, and the file's SHA-256 |
+/// | `create_template` ([`Self::create_template`]) | the WABA's id, as a [`WabaId`]; the JSON body, canonical as above |
+///
+/// The same request always has the same fingerprint; another operation,
+/// another number or WABA, or another body has another. Fingerprints are
+/// stored with their key (for `WA_SERVER_IDEMPOTENCY_TTL`).
+///
+/// **The fingerprint before roadmap S6, matched for one TTL.** A key
+/// claimed by a release before S6 was stored with the SHA-256 of the
+/// request's method, its path as sent and its body
+/// ([`Self::legacy_v1_json`], [`Self::legacy_v1_upload`]). So that such a
+/// key keeps replaying after the upgrade (a `422` there would invite a
+/// resend under a new key, and a second message to the customer), an HTTP
+/// adapter adds the request's legacy fingerprint ([`Self::or_legacy`]): a
+/// record matches a request when its fingerprint is the request's, or the
+/// request's legacy one. A claim always stores the new one
+/// ([`Self::as_bytes`]). The legacy constructors take an HTTP method and
+/// path, so they are not adapter-neutral: an adapter other than `/v1`'s,
+/// which no record before S6 was made through, has no reason to call
+/// them. They go after the first release, once its records have expired
+/// (roadmap S7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Fingerprint([u8; 32]);
+pub struct Fingerprint {
+    digest: [u8; 32],
+    /// The legacy fingerprint of the same request, also matched.
+    legacy: Option<[u8; 32]>,
+}
 
 impl Fingerprint {
-    /// Of a request with a JSON body. `method` is the HTTP method's name
-    /// (`POST`): an HTTP adapter's method type, or a string.
-    pub fn json<M: AsRef<str> + ?Sized>(method: &M, path: &str, body: &serde_json::Value) -> Self {
+    /// `send_message` on `number`, with the JSON body the request carried.
+    pub fn send_message(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::SendMessage, &[("pn", number.as_str())], body)
+    }
+
+    /// `upload_media` of `upload` on `number`: its MIME type, its file name
+    /// and its file's SHA-256 (the file itself is not kept).
+    pub fn upload_media(number: &PhoneNumberId, upload: &Upload) -> Self {
+        let digest = Sha256::digest(upload.data());
+        Self::parts(
+            Operation::UploadMedia,
+            &[("pn", number.as_str())],
+            &[
+                ("type", upload.mime_type().as_bytes()),
+                ("filename", upload.filename().as_bytes()),
+                ("file", digest.as_slice()),
+            ],
+        )
+    }
+
+    /// `create_template` in `waba`, with the JSON definition the request
+    /// carried.
+    pub fn create_template(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreateTemplate,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `operation` with its named parameters `params` (in any order: they
+    /// are hashed sorted by name) and a JSON body.
+    fn json(operation: Operation, params: &[(&str, &str)], body: &serde_json::Value) -> Self {
+        let mut hasher = Self::begin(b"json", operation, params);
+        canonical(&mut hasher, body);
+        Self::of(hasher.finalize().into())
+    }
+
+    /// `operation` with its named parameters `params` and a body of named
+    /// parts, in the order given.
+    fn parts(operation: Operation, params: &[(&str, &str)], parts: &[(&str, &[u8])]) -> Self {
+        let mut hasher = Self::begin(b"parts", operation, params);
+        hasher.update((parts.len() as u64).to_be_bytes());
+        for (name, value) in parts {
+            framed(&mut hasher, name.as_bytes());
+            framed(&mut hasher, value);
+        }
+        Self::of(hasher.finalize().into())
+    }
+
+    /// The body's kind, the operation's id and the parameters, sorted by
+    /// name, each framed.
+    fn begin(kind: &[u8], operation: Operation, params: &[(&str, &str)]) -> Sha256 {
+        let mut hasher = Sha256::new();
+        framed(&mut hasher, kind);
+        framed(&mut hasher, operation.id().as_bytes());
+        let mut params = params.to_vec();
+        params.sort_unstable();
+        hasher.update((params.len() as u64).to_be_bytes());
+        for (name, value) in params {
+            framed(&mut hasher, name.as_bytes());
+            framed(&mut hasher, value.as_bytes());
+        }
+        hasher
+    }
+
+    /// The fingerprint `digest`, with no legacy one.
+    fn of(digest: [u8; 32]) -> Self {
+        Self {
+            digest,
+            legacy: None,
+        }
+    }
+
+    /// The fingerprint a release before roadmap S6 stored for a request
+    /// with a JSON body: the SHA-256 of `method` (`POST`), `path` as the
+    /// request carried it, and the canonical body, exactly as it was
+    /// computed then (its known answers are pinned). Only for
+    /// [`Self::or_legacy`]; never stored.
+    pub fn legacy_v1_json<M: AsRef<str> + ?Sized>(
+        method: &M,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Self {
         let mut hasher = Sha256::new();
         framed(&mut hasher, b"json");
         framed(&mut hasher, method.as_ref().as_bytes());
         framed(&mut hasher, path.as_bytes());
         canonical(&mut hasher, body);
-        Self(hasher.finalize().into())
+        Self::of(hasher.finalize().into())
     }
 
-    /// Of a request made of named parts (a multipart form), in the order
-    /// given.
-    pub fn parts<M: AsRef<str> + ?Sized>(method: &M, path: &str, parts: &[(&str, &[u8])]) -> Self {
+    /// The fingerprint a release before roadmap S6 stored for an upload:
+    /// `method`, `path` as the request carried it, and the parts `type`,
+    /// `filename` (the file name sent to Meta) and `file` (its SHA-256),
+    /// exactly as it was computed then. Only for [`Self::or_legacy`].
+    pub fn legacy_v1_upload<M: AsRef<str> + ?Sized>(
+        method: &M,
+        path: &str,
+        upload: &Upload,
+    ) -> Self {
+        let digest = Sha256::digest(upload.data());
+        Self::legacy_v1_parts(
+            method,
+            path,
+            &[
+                ("type", upload.mime_type().as_bytes()),
+                ("filename", upload.filename().as_bytes()),
+                ("file", digest.as_slice()),
+            ],
+        )
+    }
+
+    /// The legacy fingerprint of a request made of named parts, in the
+    /// order given, as it was computed before roadmap S6.
+    fn legacy_v1_parts<M: AsRef<str> + ?Sized>(
+        method: &M,
+        path: &str,
+        parts: &[(&str, &[u8])],
+    ) -> Self {
         let mut hasher = Sha256::new();
         framed(&mut hasher, b"parts");
         framed(&mut hasher, method.as_ref().as_bytes());
@@ -82,12 +223,27 @@ impl Fingerprint {
             framed(&mut hasher, name.as_bytes());
             framed(&mut hasher, value);
         }
-        Self(hasher.finalize().into())
+        Self::of(hasher.finalize().into())
     }
 
-    /// The digest.
+    /// This fingerprint, also matching a record stored under `legacy`, the
+    /// same request's fingerprint before roadmap S6 (see the type's
+    /// documentation). What a claim stores is still this one.
+    #[must_use]
+    pub fn or_legacy(mut self, legacy: Fingerprint) -> Self {
+        self.legacy = Some(legacy.digest);
+        self
+    }
+
+    /// Whether a record stored with `stored` is this request's: its
+    /// fingerprint, or its legacy one.
+    pub fn matches(&self, stored: &[u8; 32]) -> bool {
+        self.digest == *stored || self.legacy.as_ref() == Some(stored)
+    }
+
+    /// The digest, what a claim stores.
     pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+        &self.digest
     }
 }
 
@@ -152,7 +308,7 @@ pub enum Admission {
 /// shows a kept answer's length (`body_len`), never its bytes.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Repeat {
-    /// Another method, path or body: `422 idempotency_key_reused`.
+    /// Another operation or input: `422 idempotency_key_reused`.
     Reused,
     /// Still running: `409 idempotency_in_progress`, `retryable`,
     /// `may_have_been_sent: true`.
@@ -187,7 +343,7 @@ impl std::fmt::Debug for Repeat {
 impl Repeat {
     /// The answer to a request with `fingerprint` meeting `record`.
     pub fn of(record: IdempotencyRecord, fingerprint: &Fingerprint) -> Self {
-        if record.fingerprint != *fingerprint.as_bytes() {
+        if !fingerprint.matches(&record.fingerprint) {
             return Self::Reused;
         }
         match record.state {
@@ -215,12 +371,12 @@ impl Repeat {
     /// The kept answer, `(status, body)`, or the error to answer instead.
     pub fn into_answer(self) -> Result<(u16, Vec<u8>), ServiceError> {
         match self {
-            Self::Reused => Err(ServiceError::new("idempotency_key_reused")),
-            Self::InProgress => Err(ServiceError::new("idempotency_in_progress")
+            Self::Reused => Err(ServiceError::new(ErrorCode::IDEMPOTENCY_KEY_REUSED)),
+            Self::InProgress => Err(ServiceError::new(ErrorCode::IDEMPOTENCY_IN_PROGRESS)
                 .retryable(true)
                 .with_may_have_been_sent(true)),
             Self::OutcomeUnknown => {
-                Err(ServiceError::new("outcome_unknown").with_may_have_been_sent(true))
+                Err(ServiceError::new(ErrorCode::OUTCOME_UNKNOWN).with_may_have_been_sent(true))
             }
             Self::Replay { status, body } => Ok((status, body)),
         }
@@ -379,7 +535,7 @@ impl Drop for Claim {
         }
         // Cut before it settled (the request deadline, or the client
         // leaving): whatever was under way may have been sent.
-        let answer = ServiceError::new("timeout")
+        let answer = ServiceError::new(ErrorCode::TIMEOUT)
             .retryable(true)
             .with_may_have_been_sent(true);
         let status = answer.status();
@@ -514,7 +670,8 @@ impl<'a> Keeper<'a> {
 /// [module](self)), or plainly without one. `caller` must be one `authz`
 /// made ([`Authorizer::admit`]): the key is scoped to its tenant, which a
 /// forged [`Caller`] could name at will. `fingerprint` is what the request
-/// asks ([`Fingerprint`]); `operation` must do nothing before it is
+/// asks ([`Fingerprint`]: its operation and canonical input, the same
+/// through every adapter); `operation` must do nothing before it is
 /// polled: a repeat of a kept or running request never polls it.
 ///
 /// With a key:
@@ -610,9 +767,10 @@ mod tests {
         Release,
     }
 
-    /// Records that claim every key and remember how each was settled.
+    /// Records that claim every key and remember how each was settled,
+    /// and the fingerprint each claim stored.
     #[derive(Debug, Default)]
-    struct Recorded(Mutex<Vec<Call>>);
+    struct Recorded(Mutex<Vec<Call>>, Mutex<Vec<[u8; 32]>>);
 
     #[async_trait]
     impl IdempotencyRecords for Recorded {
@@ -620,11 +778,12 @@ mod tests {
             &self,
             _: &TenantId,
             _: &IdempotencyKey,
-            _: &[u8; 32],
+            fingerprint: &[u8; 32],
             _: &str,
             _: Duration,
             _: Duration,
         ) -> StoreResult<IdempotencyClaim> {
+            self.1.lock().unwrap().push(*fingerprint);
             Ok(IdempotencyClaim::Claimed)
         }
 
@@ -662,13 +821,21 @@ mod tests {
         error.code().as_bytes().to_vec()
     }
 
+    fn pn(id: &str) -> PhoneNumberId {
+        PhoneNumberId::new(id).unwrap()
+    }
+
+    fn waba(id: &str) -> WabaId {
+        WabaId::new(id).unwrap()
+    }
+
     async fn claimed(records: &Arc<Recorded>) -> Claim {
         let records: Arc<dyn IdempotencyRecords> = records.clone();
         let admission = claim(
             &records,
             &TenantId::parse("tenant-a").unwrap(),
             IdempotencyKey::parse("order:1").unwrap(),
-            &Fingerprint::json("POST", "/v1/numbers/1/messages", &serde_json::json!({})),
+            &Fingerprint::send_message(&pn("1"), &serde_json::json!({})),
             Duration::from_secs(60),
             Duration::from_secs(3600),
             render,
@@ -694,9 +861,9 @@ mod tests {
                 body: b"{}",
             })
             .await;
-        let sent = ServiceError::new("timeout").with_may_have_been_sent(true);
+        let sent = ServiceError::new(ErrorCode::TIMEOUT).with_may_have_been_sent(true);
         claimed(&records).await.settle(Outcome::Failed(&sent)).await;
-        let refused = ServiceError::new("customer_service_window_closed");
+        let refused = ServiceError::new(ErrorCode::CUSTOMER_SERVICE_WINDOW_CLOSED);
         claimed(&records)
             .await
             .settle(Outcome::Failed(&refused))
@@ -709,6 +876,43 @@ mod tests {
                 Call::Release,
             ]
         );
+    }
+
+    /// A claim stores the request's own fingerprint, never the legacy one
+    /// it also matches (`or_legacy`): a record claimed after the upgrade
+    /// is the new fingerprint's, and replays through every spelling of its
+    /// path. Decisive: `claim` passing `Fingerprint::as_bytes` (the legacy
+    /// digest stored instead is a key that only its first spelling
+    /// replays).
+    #[tokio::test]
+    async fn a_claim_stores_the_new_fingerprint_never_the_legacy_one() {
+        let records = Arc::new(Recorded::default());
+        let ports: Arc<dyn IdempotencyRecords> = records.clone();
+        let body = serde_json::json!({"to": {"phone": "+1"}, "type": "text"});
+        let new = Fingerprint::send_message(&pn("1"), &body);
+        let legacy = Fingerprint::legacy_v1_json("POST", "/v1/numbers/%31/messages", &body);
+        let admission = claim(
+            &ports,
+            &TenantId::parse("tenant-a").unwrap(),
+            IdempotencyKey::parse("order:1").unwrap(),
+            &new.or_legacy(legacy),
+            Duration::from_secs(60),
+            Duration::from_secs(3600),
+            render,
+        )
+        .await
+        .unwrap();
+        let Admission::Claimed(claim) = admission else {
+            panic!("not claimed")
+        };
+        claim
+            .settle(Outcome::Answered {
+                status: 202,
+                body: b"{}",
+            })
+            .await;
+        assert_eq!(*records.1.lock().unwrap(), [*new.as_bytes()]);
+        assert_ne!(new.as_bytes(), legacy.as_bytes());
     }
 
     /// A claim dropped before it settled keeps a `504 timeout`, from a task
@@ -733,12 +937,12 @@ mod tests {
     /// first, then its state.
     #[test]
     fn a_repeat_is_answered_by_the_record_it_met() {
-        let mine = Fingerprint::json("POST", "/v1/numbers/1/messages", &serde_json::json!({}));
+        let mine = Fingerprint::send_message(&pn("1"), &serde_json::json!({}));
         let record = |fingerprint: &Fingerprint, state| IdempotencyRecord {
             fingerprint: *fingerprint.as_bytes(),
             state,
         };
-        let other = Fingerprint::json("POST", "/v1/numbers/2/messages", &serde_json::json!({}));
+        let other = Fingerprint::send_message(&pn("2"), &serde_json::json!({}));
         let done = IdempotencyState::Completed {
             status: 202,
             body: b"{}".to_vec(),
@@ -789,8 +993,9 @@ mod tests {
     /// Fingerprints are stored with their key (`wa_server_idempotency`,
     /// kept `WA_SERVER_IDEMPOTENCY_TTL`): derived otherwise after an
     /// upgrade, a caller repeating a request across it with the same key
-    /// gets `422 idempotency_key_reused`. Known answers, computed apart
-    /// from this code:
+    /// gets `422 idempotency_key_reused` until the record expires (roadmap
+    /// S6 changed them so: the operation and its canonical input, no
+    /// method and no path). Known answers, computed apart from this code:
     //
     // python3 - <<'EOF'
     // import hashlib, struct
@@ -806,18 +1011,27 @@ mod tests {
     //     else:
     //         h.update(b'{' + struct.pack('>Q', len(v)))
     //         for k in sorted(v, key=str.encode): framed(h, k.encode()); canonical(h, v[k])
-    // h = hashlib.sha256()
-    // for b in (b'json', b'POST', b'/v1/numbers/106540352242922/messages'): framed(h, b)
-    // canonical(h, {"to": {"phone": "+15551234567"}, "type": "text",
-    //     "text": {"body": "hi", "preview_url": False}, "tags": [None, True, 1, "1"]})
-    // print(h.hexdigest())
-    // h = hashlib.sha256()
-    // for b in (b'parts', b'POST', b'/v1/numbers/106540352242922/media',
-    //           b'type', b'image/png', b'file', b'\x89PNG'): framed(h, b)
+    // def begin(kind, operation, params):
+    //     h = hashlib.sha256(); framed(h, kind); framed(h, operation)
+    //     params = sorted(params); h.update(struct.pack('>Q', len(params)))
+    //     for name, value in params: framed(h, name); framed(h, value)
+    //     return h
+    // body = {"to": {"phone": "+15551234567"}, "type": "text",
+    //     "text": {"body": "hi", "preview_url": False}, "tags": [None, True, 1, "1"]}
+    // h = begin(b'json', b'send_message', [(b'pn', b'106540352242922')])
+    // canonical(h, body); print(h.hexdigest())
+    // h = begin(b'json', b'create_template', [(b'waba_id', b'102290129340398')])
+    // canonical(h, body); print(h.hexdigest())
+    // parts = [(b'type', b'image/png'), (b'filename', b'photo.png'),
+    //     (b'file', hashlib.sha256(b'\x89PNG').digest())]
+    // h = begin(b'parts', b'upload_media', [(b'pn', b'106540352242922')])
+    // h.update(struct.pack('>Q', len(parts)))
+    // for name, value in parts: framed(h, name); framed(h, value)
     // print(h.hexdigest())
     // EOF
     //
     // Decisive: each tag (`json`, `parts`, `n`, `t`, `#`, `s`, `[`, `{`),
+    // the operation's id, the parameters' names and values, the counts,
     // the length framing, and the order of an object's keys.
     #[test]
     fn fingerprints_are_pinned() {
@@ -827,12 +1041,46 @@ mod tests {
             "text": {"body": "hi", "preview_url": false},
             "tags": [null, true, 1, "1"],
         });
-        let json = Fingerprint::json("POST", "/v1/numbers/106540352242922/messages", &body);
+        let sent = Fingerprint::send_message(&pn("106540352242922"), &body);
+        assert_eq!(
+            hex::encode(sent.as_bytes()),
+            "e28c48a4f2d9f179aa84d67b123d9909bd2c5600e2c4b2a691eb11ce289827af"
+        );
+        let created = Fingerprint::create_template(&waba("102290129340398"), &body);
+        assert_eq!(
+            hex::encode(created.as_bytes()),
+            "051c1640403757307a991cd1de00f7fbd28f488cb988ea9fad7ff4e62d44258a"
+        );
+        let upload =
+            Upload::new("image/png", Some("photo.png"), b"\x89PNG".to_vec().into()).unwrap();
+        let uploaded = Fingerprint::upload_media(&pn("106540352242922"), &upload);
+        assert_eq!(
+            hex::encode(uploaded.as_bytes()),
+            "05c407ac85b1fd62964b4d98cc2263326cbd8c2aa43a4718f9bec755a68c200d"
+        );
+    }
+
+    /// The legacy fingerprint is exactly the one stored before roadmap S6:
+    /// main's known answers (`fingerprints_are_pinned` before S6, computed
+    /// apart from the code, at f1d125b), for a JSON body and for parts; an
+    /// upload's is its three parts, in main's order. Decisive: any change
+    /// to the legacy algorithm (a record stored before the upgrade would
+    /// stop replaying).
+    #[test]
+    fn the_legacy_fingerprint_is_mains() {
+        let body = serde_json::json!({
+            "to": {"phone": "+15551234567"},
+            "type": "text",
+            "text": {"body": "hi", "preview_url": false},
+            "tags": [null, true, 1, "1"],
+        });
+        let json =
+            Fingerprint::legacy_v1_json("POST", "/v1/numbers/106540352242922/messages", &body);
         assert_eq!(
             hex::encode(json.as_bytes()),
             "e83cc62715cb87890e03ddaa5d57b655ced695738930fc8c2ca164af6139f7d4"
         );
-        let parts = Fingerprint::parts(
+        let parts = Fingerprint::legacy_v1_parts(
             "POST",
             "/v1/numbers/106540352242922/media",
             &[("type", b"image/png"), ("file", b"\x89PNG")],
@@ -841,20 +1089,202 @@ mod tests {
             hex::encode(parts.as_bytes()),
             "04edb1c222d03832376711c1ba9450a54e08c14793501b90e48af0fc13788db9"
         );
+        let upload = Upload::new("image/png", Some("a.png"), b"\x89PNG".to_vec().into()).unwrap();
+        let digest = Sha256::digest(b"\x89PNG");
+        assert_eq!(
+            Fingerprint::legacy_v1_upload("POST", "/v1/numbers/1/media", &upload),
+            Fingerprint::legacy_v1_parts(
+                "POST",
+                "/v1/numbers/1/media",
+                &[
+                    ("type", b"image/png"),
+                    ("filename", b"a.png"),
+                    ("file", digest.as_slice()),
+                ],
+            )
+        );
+        // The method's name, whatever type carries it.
+        assert_eq!(
+            Fingerprint::legacy_v1_json("POST", "/p", &body),
+            Fingerprint::legacy_v1_json(&String::from("POST"), "/p", &body)
+        );
     }
 
-    /// The method's name is hashed, whatever type carries it.
+    /// A record stored under the legacy fingerprint (a key claimed before
+    /// the upgrade) is the same request's when the request adds its legacy
+    /// fingerprint: replayed, in progress or unknown as its state says.
+    /// Without it, or with another body's legacy fingerprint, it is another
+    /// request's (`Reused`). What the request stores is its new
+    /// fingerprint. Decisive: the legacy arm of `Fingerprint::matches`, and
+    /// its comparison with the record.
     #[test]
-    fn a_fingerprint_hashes_the_methods_name() {
-        let body = serde_json::json!({"a": 1});
+    fn a_record_under_the_legacy_fingerprint_is_the_same_requests() {
+        let body = serde_json::json!({"to": {"phone": "+1"}, "type": "text"});
+        let path = "/v1/numbers/1/messages";
+        let new = Fingerprint::send_message(&pn("1"), &body);
+        let legacy = Fingerprint::legacy_v1_json("POST", path, &body);
+        let request = new.or_legacy(legacy);
         assert_eq!(
-            Fingerprint::json("POST", "/p", &body),
-            Fingerprint::json(&String::from("POST"), "/p", &body)
+            request.as_bytes(),
+            new.as_bytes(),
+            "a claim stores the new one"
+        );
+        assert_ne!(new.as_bytes(), legacy.as_bytes());
+        let stored = |state| IdempotencyRecord {
+            fingerprint: *legacy.as_bytes(),
+            state,
+        };
+        let done = IdempotencyState::Completed {
+            status: 202,
+            body: b"{}".to_vec(),
+        };
+        assert_eq!(
+            Repeat::of(stored(done.clone()), &request),
+            Repeat::Replay {
+                status: 202,
+                body: b"{}".to_vec()
+            }
+        );
+        assert_eq!(
+            Repeat::of(
+                stored(IdempotencyState::InProgress {
+                    lease_expired: false
+                }),
+                &request
+            ),
+            Repeat::InProgress
+        );
+        assert_eq!(Repeat::of(stored(done.clone()), &new), Repeat::Reused);
+        let other = serde_json::json!({"to": {"phone": "+2"}, "type": "text"});
+        let elsewhere = Fingerprint::send_message(&pn("1"), &other)
+            .or_legacy(Fingerprint::legacy_v1_json("POST", path, &other));
+        assert_eq!(Repeat::of(stored(done.clone()), &elsewhere), Repeat::Reused);
+        // A new record still matches the request, legacy or not.
+        let fresh = IdempotencyRecord {
+            fingerprint: *new.as_bytes(),
+            state: done,
+        };
+        assert!(matches!(Repeat::of(fresh, &request), Repeat::Replay { .. }));
+    }
+
+    /// A fingerprint is the operation and its input, whatever spelled
+    /// them: key order and whitespace do not change it, nor the order the
+    /// parameters are given in; another operation, another number or
+    /// WABA, another value does. Parts are framed (moving a byte between
+    /// them changes the digest), and a string never collides with a
+    /// number.
+    #[test]
+    fn a_fingerprint_is_the_operation_and_its_input() {
+        let a: serde_json::Value = serde_json::from_str(
+            r#"{"to": {"phone": "+1"}, "type": "text", "text": {"body": "hi"}}"#,
+        )
+        .unwrap();
+        let b: serde_json::Value =
+            serde_json::from_str(r#"{"text":{"body":"hi"},"type":"text","to":{"phone":"+1"}}"#)
+                .unwrap();
+        let one = pn("1");
+        assert_eq!(
+            Fingerprint::send_message(&one, &a),
+            Fingerprint::send_message(&one, &b)
+        );
+        let ho = serde_json::json!({"to": {"phone": "+1"}, "type": "text", "text": {"body": "ho"}});
+        assert_ne!(
+            Fingerprint::send_message(&one, &a),
+            Fingerprint::send_message(&one, &ho)
         );
         assert_ne!(
-            Fingerprint::json("POST", "/p", &body),
-            Fingerprint::json("PUT", "/p", &body)
+            Fingerprint::send_message(&one, &a),
+            Fingerprint::send_message(&pn("2"), &a)
         );
+        // Another operation on the same id and body.
+        assert_ne!(
+            Fingerprint::send_message(&one, &a),
+            Fingerprint::create_template(&waba("1"), &a)
+        );
+        assert_ne!(
+            Fingerprint::json(Operation::SendMessage, &[("pn", "1")], &a),
+            Fingerprint::json(Operation::CreateTemplate, &[("pn", "1")], &a)
+        );
+        // The parameters, by name, in any order.
+        assert_eq!(
+            Fingerprint::json(Operation::SendMessage, &[("a", "1"), ("b", "2")], &a),
+            Fingerprint::json(Operation::SendMessage, &[("b", "2"), ("a", "1")], &a)
+        );
+        assert_ne!(
+            Fingerprint::json(Operation::SendMessage, &[("a", "1"), ("b", "2")], &a),
+            Fingerprint::json(Operation::SendMessage, &[("a", "2"), ("b", "1")], &a)
+        );
+        assert_ne!(
+            Fingerprint::json(Operation::SendMessage, &[("pn", "12")], &a),
+            Fingerprint::json(Operation::SendMessage, &[("pn", "1"), ("n", "2")], &a)
+        );
+        // Framing: moving a byte between parts changes the digest.
+        let op = Operation::UploadMedia;
+        assert_ne!(
+            Fingerprint::parts(op, &[], &[("type", b"ab"), ("file", b"c")]),
+            Fingerprint::parts(op, &[], &[("type", b"a"), ("file", b"bc")])
+        );
+        // Strings and numbers never collide.
+        assert_ne!(
+            Fingerprint::send_message(&one, &serde_json::json!("1")),
+            Fingerprint::send_message(&one, &serde_json::json!(1))
+        );
+        // An upload's type, file name and file each count.
+        let png = |name: &str, data: &[u8]| {
+            let upload = Upload::new("image/png", Some(name), data.to_vec().into()).unwrap();
+            Fingerprint::upload_media(&one, &upload)
+        };
+        assert_eq!(png("a.png", b"x"), png("a.png", b"x"));
+        assert_ne!(png("a.png", b"x"), png("b.png", b"x"));
+        assert_ne!(png("a.png", b"x"), png("a.png", b"y"));
+        let jpeg = Upload::new("image/jpeg", Some("a.png"), b"x".to_vec().into()).unwrap();
+        assert_ne!(png("a.png", b"x"), Fingerprint::upload_media(&one, &jpeg));
+    }
+
+    /// The canonical input is the JSON as parsed (D27: the request's JSON
+    /// as it came, canonicalized), so two bodies share a fingerprint only
+    /// when they parse to one value, which is what the operation then
+    /// sends: an escape and the character it spells are one string, and
+    /// of a key given twice the parser keeps the last, both for the
+    /// fingerprint and for the request. What parses to two values never
+    /// shares one, even when Meta might read them alike: `1` and `1.0`,
+    /// a precomposed `é` and `e` with a combining accent, `0` and `-0`,
+    /// `null` and an absent key. Decisive: `canonical`'s number arm
+    /// reading the value as a float (`1` and `1.0` collide), and its
+    /// string arm normalizing text.
+    #[test]
+    fn two_bodies_share_a_fingerprint_only_when_they_parse_alike() {
+        let one = pn("1");
+        let fp = |json: &str| {
+            let body: serde_json::Value = serde_json::from_str(json).unwrap();
+            Fingerprint::send_message(&one, &body)
+        };
+        // One value, spelled two ways.
+        assert_eq!(fp(r#"{"a":"é"}"#), fp("{\"a\":\"\u{e9}\"}"));
+        assert_eq!(fp(r#"{"a":1}"#), fp(r#"{"a":1}"#));
+        assert_eq!(fp(r#"{"a":1,"a":2}"#), fp(r#"{"a":2}"#));
+        assert_ne!(fp(r#"{"a":1,"a":2}"#), fp(r#"{"a":1}"#));
+        assert_eq!(fp(r#"{ "a" : [ 1 , 2 ] }"#), fp(r#"{"a":[1,2]}"#));
+        // Two values, however close.
+        for (a, b) in [
+            (r#"{"a":1}"#, r#"{"a":1.0}"#),
+            (r#"{"a":0}"#, r#"{"a":-0}"#),
+            (r#"{"a":100}"#, r#"{"a":1e2}"#),
+            ("{\"a\":\"\u{e9}\"}", "{\"a\":\"e\u{301}\"}"),
+            (r#"{"a":"A"}"#, r#"{"a":"a"}"#),
+            (r#"{"a":null}"#, "{}"),
+            (r#"{"a":[]}"#, r#"{"a":{}}"#),
+            (r#"{"a":[1,2]}"#, r#"{"a":[2,1]}"#),
+            (r#"{"a":[[1],2]}"#, r#"{"a":[1,[2]]}"#),
+            (r#"{"a":[[1],2]}"#, r#"{"a":[[1,2]]}"#),
+            (r#"{"a":{"b":1},"c":2}"#, r#"{"a":{"b":1,"c":2}}"#),
+            (r#"{"a":{"b":1}}"#, r#"{"a.b":1}"#),
+            (r#"{"a":"1"}"#, r#"{"a":1}"#),
+            (r#"{"a":true}"#, r#"{"a":"t"}"#),
+            (r#"{"ab":"c"}"#, r#"{"a":"bc"}"#),
+        ] {
+            assert_ne!(fp(a), fp(b), "{a} and {b}");
+        }
     }
 
     /// `Debug` of a kept answer shows its length, never its bytes: the
@@ -879,7 +1309,7 @@ mod tests {
             format!("{state:?}"),
             format!("{record:?}"),
             format!("{:?}", IdempotencyClaim::Existing(record.clone())),
-            format!("{:?}", Repeat::of(record, &Fingerprint([7; 32]))),
+            format!("{:?}", Repeat::of(record, &Fingerprint::of([7; 32]))),
             format!(
                 "{:?}",
                 Outcome::Answered {

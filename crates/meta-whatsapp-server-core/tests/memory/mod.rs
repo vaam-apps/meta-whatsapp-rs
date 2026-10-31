@@ -2,7 +2,8 @@
 //! ports the admin, messages, templates, numbers, media and webhooks
 //! suites (`conformance::admin`, `conformance::messages`,
 //! `conformance::templates`, `conformance::numbers`, `conformance::media`,
-//! `conformance::webhooks`) reach. Its records keep decision D4
+//! `conformance::webhooks`), and the capabilities suite's vault writes
+//! (`conformance::capabilities`), reach. Its records keep decision D4
 //! (`bind_waba` refuses a WABA another tenant holds) and condition an
 //! unbind and a status change on the binding's epoch, its idempotency
 //! records lease and expire keys on the process's monotonic clock, its
@@ -184,8 +185,14 @@ impl RecordStore for Records {
         }
         Ok(BindOutcome::Bound)
     }
-    async fn unbind_waba(&self, _: &WabaId) -> StoreResult<bool> {
-        unimplemented!("not used by the suites this backend runs")
+    async fn unbind_waba(&self, waba_id: &WabaId) -> StoreResult<bool> {
+        // An admin's unbind of a WABA whose token was not opened
+        // (`conformance::capabilities`' vault writes): the binding and its
+        // numbers.
+        let mut state = self.state();
+        let removed = state.wabas.remove(waba_id.as_str()).is_some();
+        state.numbers.retain(|_, n| &n.waba_id != waba_id);
+        Ok(removed)
     }
     async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool> {
         // The numbers suite's disconnection: the binding and its numbers,
@@ -208,8 +215,22 @@ impl RecordStore for Records {
     async fn number(&self, pn: &PhoneNumberId) -> StoreResult<Option<NumberBinding>> {
         Ok(self.state().numbers.get(pn.as_str()).cloned())
     }
-    async fn all_wabas(&self, _: &PageRequest) -> StoreResult<Listing<WabaBinding>> {
-        unimplemented!("not used by the suites this backend runs")
+    async fn all_wabas(&self, page: &PageRequest) -> StoreResult<Listing<WabaBinding>> {
+        // The vault's rotation walks them (`conformance::capabilities`).
+        let items = self
+            .state()
+            .wabas
+            .values()
+            .filter(|w| {
+                page.after
+                    .as_deref()
+                    .is_none_or(|after| w.waba_id.as_str() > after)
+            })
+            .cloned()
+            .collect();
+        Ok(listing(items, page.limit, |w| {
+            w.waba_id.as_str().to_owned()
+        }))
     }
     async fn wabas(
         &self,
@@ -252,8 +273,17 @@ impl RecordStore for Records {
             n.phone_number_id.as_str().to_owned()
         }))
     }
-    async fn set_waba_status(&self, _: &WabaId, _: NumberStatus) -> StoreResult<()> {
-        unimplemented!("not used by the suites this backend runs")
+    async fn set_waba_status(&self, waba_id: &WabaId, status: NumberStatus) -> StoreResult<()> {
+        // An admin's `190` after an attach stored the token
+        // (`conformance::capabilities`' vault writes).
+        let now = OffsetDateTime::now_utc();
+        for number in self.state().numbers.values_mut() {
+            if &number.waba_id == waba_id {
+                number.status = status;
+                number.updated_at = now;
+            }
+        }
+        Ok(())
     }
     async fn set_waba_status_if(
         &self,

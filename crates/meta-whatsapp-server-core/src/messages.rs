@@ -40,7 +40,7 @@ use meta_whatsapp_rs::core::recipient::Recipient;
 use serde_json::Value;
 
 use crate::authz::{Authorizer, OwnedNumber};
-use crate::error::ServiceError;
+use crate::error::{ErrorCode, ServiceError};
 use crate::observe::Observer;
 use crate::request::meta_object;
 
@@ -535,7 +535,7 @@ impl Accepted {
         let message_id = response
             .message_id()
             .cloned()
-            .ok_or_else(|| ServiceError::new("upstream").with_may_have_been_sent(true))?;
+            .ok_or_else(|| ServiceError::new(ErrorCode::UPSTREAM).with_may_have_been_sent(true))?;
         Ok(Self {
             message_id,
             contacts: response.contacts,
@@ -549,7 +549,7 @@ impl Accepted {
 const DIRECT_SEND_FIELDS: [&str; 3] = ["category", "ttl_seconds", "direct_send_config"];
 
 fn unsupported() -> ServiceError {
-    ServiceError::new("unsupported_message_type")
+    ServiceError::new(ErrorCode::UNSUPPORTED_MESSAGE_TYPE)
 }
 
 /// For an adapter whose request is a JSON body, before it reads it into

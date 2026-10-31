@@ -76,9 +76,7 @@ use futures::StreamExt;
 use meta_whatsapp_rs::webhooks::axum::body::{Body, Bytes};
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Path, Query, Request, State};
 use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
-use meta_whatsapp_rs::webhooks::axum::http::{
-    HeaderName, HeaderValue, Method, StatusCode, Uri, header,
-};
+use meta_whatsapp_rs::webhooks::axum::http::{HeaderName, HeaderValue, Method, StatusCode, header};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 pub use meta_whatsapp_server_core::media::MAX_WHOLE_DOWNLOAD;
 use meta_whatsapp_server_core::media::{
@@ -86,11 +84,10 @@ use meta_whatsapp_server_core::media::{
     upload_cap,
 };
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
 use crate::auth::{Caller, OwnedNumber};
-use crate::error::{ApiError, ErrorBody};
+use crate::error::{ApiError, ErrorBody, ErrorCode};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
 use crate::state::AppState;
 
@@ -146,14 +143,14 @@ fn form_error(error: &multer::Error) -> ApiError {
         multer::Error::FieldSizeExceeded { field_name, .. }
             if field_name.as_deref() == Some("file") =>
         {
-            ApiError::new("media_too_large")
+            ApiError::new(ErrorCode::MEDIA_TOO_LARGE)
         }
         multer::Error::FieldSizeExceeded { field_name, .. }
             if field_name.as_deref() == Some("type") =>
         {
             ApiError::invalid("type")
         }
-        multer::Error::StreamSizeExceeded { .. } => ApiError::new("payload_too_large"),
+        multer::Error::StreamSizeExceeded { .. } => ApiError::new(ErrorCode::PAYLOAD_TOO_LARGE),
         _ => ApiError::invalid("body"),
     }
 }
@@ -329,7 +326,7 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
                 let mut data = Vec::new();
                 while let Some(chunk) = field.chunk().await.map_err(|e| form_error(&e))? {
                     if u64::try_from(data.len() + chunk.len()).unwrap_or(u64::MAX) > cap {
-                        return Err(ApiError::new("media_too_large"));
+                        return Err(ApiError::new(ErrorCode::MEDIA_TOO_LARGE));
                     }
                     data.extend_from_slice(&chunk);
                 }
@@ -403,7 +400,6 @@ pub(crate) async fn upload_media(
     caller: Caller,
     owned: OwnedNumber,
     KeyHeader(key): KeyHeader,
-    uri: Uri,
     request: Request,
 ) -> Response {
     let media = match media(&state, &owned) {
@@ -416,20 +412,20 @@ pub(crate) async fn upload_media(
         Ok(permit) => permit,
         Err(error) => return ApiError::from(error).into_response(),
     };
+    // The path as sent, for the legacy fingerprint only.
+    let path = request.uri().path().to_owned();
     let form = match read_upload(state.settings().media_max_bytes, request).await {
         Ok(form) => form,
         Err(error) => return error.into_response(),
     };
-    let digest = Sha256::digest(form.data());
-    let fingerprint = Fingerprint::parts(
-        &Method::POST,
-        uri.path(),
-        &[
-            ("type", form.mime_type().as_bytes()),
-            ("filename", form.filename().as_bytes()),
-            ("file", digest.as_slice()),
-        ],
-    );
+    // The operation and its input (the number, the checked type and file
+    // name, the file's digest), never the path's spelling.
+    // A key claimed before roadmap S6 was stored under the request's
+    // method, its path as sent and its body: matched too, for one TTL
+    // after the upgrade (the legacy fingerprint goes after the first
+    // release). A claim stores the new one.
+    let fingerprint = Fingerprint::upload_media(owned.phone_number_id(), &form)
+        .or_legacy(Fingerprint::legacy_v1_upload(&Method::POST, &path, &form));
     let response = idempotency::run(&state, &caller, key, fingerprint, upload(&media, &form)).await;
     drop(permit);
     response

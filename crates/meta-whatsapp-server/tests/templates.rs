@@ -582,6 +582,38 @@ async fn a_url_buttons_app_deep_link_reaches_meta() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// Roadmap S6's window: a creation's key claimed before S6, under the
+/// fingerprint of then, replays after the upgrade; another definition is
+/// `422 idempotency_key_reused`. Decisive: the handler's `or_legacy`.
+#[tokio::test]
+async fn a_creation_key_claimed_before_s6_replays_after_the_upgrade() {
+    let (h, key) = connected().await;
+    let path = format!("/v1/wabas/{WABA}/templates");
+    let legacy = meta_whatsapp_server::idempotency::Fingerprint::legacy_v1_json(
+        &Method::POST,
+        &path,
+        &sample_template_definition(),
+    );
+    let kept = br#"{"id":"1627019861106475","status":"PENDING","category":"MARKETING"}"#;
+    h.claimed_before_s6(TENANT, "spring-sale-en", &legacy, 201, kept)
+        .await;
+    let create = |definition: &Value| {
+        Call::new(Method::POST, &path)
+            .key(&key)
+            .header("idempotency-key", "spring-sale-en")
+            .json(definition)
+    };
+    let again = h.call(create(&sample_template_definition())).await;
+    assert_eq!(again.status, StatusCode::CREATED, "{}", again.text);
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+    assert_eq!(again.text.as_bytes(), kept);
+    let mut other = sample_template_definition();
+    other["name"] = json!("another_template");
+    let reused = h.call(create(&other)).await;
+    assert_eq!(reused.code(), "idempotency_key_reused");
+    assert!(h.graph.requests().is_empty(), "a legacy key created again");
+}
+
 /// A creation with an `Idempotency-Key` never creates twice.
 #[tokio::test]
 async fn a_creation_key_replays() {
@@ -602,6 +634,41 @@ async fn a_creation_key_replays() {
     assert_eq!(again.headers["idempotent-replayed"], "true");
     assert_eq!(again.text, first.text);
     assert_eq!(h.graph.requests().len(), 1);
+}
+
+/// Roadmap S6: a creation's key is the operation and its input (the WABA,
+/// decoded, and the definition), not the path: the WABA's id
+/// percent-encoded replays it; another WABA of the tenant's with the same
+/// key and definition is `422 idempotency_key_reused`. Decisive: the path
+/// in the fingerprint, or the WABA out of it.
+#[tokio::test]
+async fn a_creation_key_replays_through_another_spelling_of_its_path() {
+    let (h, key) = connected().await;
+    let create = |waba: &str| {
+        Call::new(Method::POST, format!("/v1/wabas/{waba}/templates"))
+            .key(&key)
+            .header("idempotency-key", "spring-sale-en")
+            .json(&sample_template_definition())
+    };
+    h.graph.push_json(
+        200,
+        json!({"id": "1627019861106475", "status": "PENDING", "category": "MARKETING"}),
+    );
+    let first = h.call(create(WABA)).await;
+    assert_eq!(first.status, StatusCode::CREATED, "{}", first.text);
+    let encoded = WABA
+        .bytes()
+        .map(|b| format!("%{b:02X}"))
+        .collect::<Vec<_>>()
+        .concat();
+    let again = h.call(create(&encoded)).await;
+    assert_eq!(again.status, StatusCode::CREATED, "{}", again.text);
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+    assert_eq!(again.text, first.text);
+    let elsewhere = h.call(create(WABA_2)).await;
+    assert_eq!(elsewhere.code(), "idempotency_key_reused");
+    assert_eq!(h.graph.requests().len(), 1);
+    assert_eq!(h.graph.remaining(), 0);
 }
 
 /// Deletion by name, or by name and id, as Meta documents it.

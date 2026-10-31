@@ -40,8 +40,8 @@ use utoipa::{Modify, OpenApi};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use crate::auth::{admin_guard, guard, tenant_guard};
-use crate::error::{ApiError, ErrorBody, ErrorCode, KnownErrorCode};
+use crate::auth::{Operation, Operations, admin_guard, guard, tenant_guard};
+use crate::error::{ApiError, ErrorBody, ErrorCode, ErrorCodeSchema, KnownErrorCodeSchema};
 use crate::events::MAX_WEBHOOK_BODY_BYTES;
 use crate::model::Scope;
 use crate::state::AppState;
@@ -102,7 +102,7 @@ impl Modify for Security {
                        `error.code` (`ErrorCode`), and resend only when `may_have_been_sent` is false."
     ),
     modifiers(&Security),
-    components(schemas(ErrorBody, ErrorCode, KnownErrorCode, events::EventType, events::KnownEventType)),
+    components(schemas(ErrorBody, ErrorCodeSchema, KnownErrorCodeSchema, events::EventType, events::KnownEventType)),
     tags(
         (name = "admin", description = "Tenants, keys, WABA bindings and the vault key (admin key)"),
         (name = "numbers", description = "WABAs, numbers and business profiles (scope `numbers`)"),
@@ -252,6 +252,34 @@ pub fn internal_routes() -> Vec<String> {
     openapi().paths.paths.keys().cloned().collect()
 }
 
+/// The tenant operations of the internal listener, by method and route
+/// template: every operation of the document whose `operationId` is a
+/// core [`Operation`]'s id (the admin and operations routes are none),
+/// what the tenant guard charges ([`Operations`]). The `tenant_operations`
+/// tests check each tenant route has one, with its group's scope.
+pub fn tenant_operations() -> Operations {
+    let document = openapi();
+    let mut routes = Vec::new();
+    for (template, item) in &document.paths.paths {
+        let methods = [
+            ("GET", &item.get),
+            ("PUT", &item.put),
+            ("POST", &item.post),
+            ("DELETE", &item.delete),
+            ("PATCH", &item.patch),
+        ];
+        for (method, operation) in methods {
+            let id = operation
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref());
+            if let Some(operation) = id.and_then(Operation::from_id) {
+                routes.push((method.to_owned(), template.clone(), operation));
+            }
+        }
+    }
+    Operations::new(routes)
+}
+
 /// A panic in a handler answers `500 internal` instead of dropping the
 /// connection.
 async fn catch_panic(request: Request, next: Next) -> Response {
@@ -271,14 +299,14 @@ async fn not_found() -> ApiError {
 /// A path that exists, with a method it does not take: `405
 /// method_not_allowed`, with the error body (axum adds `Allow`).
 async fn method_not_allowed() -> ApiError {
-    ApiError::new("method_not_allowed")
+    ApiError::new(ErrorCode::METHOD_NOT_ALLOWED)
 }
 
 /// Answer `504 timeout` for a request not answered within `limit`.
 async fn deadline(State(limit): State<Duration>, request: Request, next: Next) -> Response {
     let Ok(response) = tokio::time::timeout(limit, next.run(request)).await else {
         tracing::warn!(deadline_s = limit.as_secs(), "request cut at its deadline");
-        return ApiError::new("timeout")
+        return ApiError::new(ErrorCode::TIMEOUT)
             .retryable(true)
             .with_may_have_been_sent(true)
             .into_response();
@@ -297,9 +325,10 @@ pub fn internal_router(state: &AppState) -> Router {
     let admin = |routes: OpenApiRouter<AppState>| {
         routes.route_layer(middleware::from_fn_with_state(state.clone(), admin_guard))
     };
+    let operations = tenant_operations();
     let tenant = |routes: OpenApiRouter<AppState>, scope: Scope| {
         routes.route_layer(middleware::from_fn_with_state(
-            guard(state, scope),
+            guard(state, scope, &operations),
             tenant_guard,
         ))
     };
@@ -531,5 +560,114 @@ mod tests {
                 "mod.rs: .route(\"/livez\", get(ops::livez));",
             ]
         );
+    }
+
+    /// Whether some path matches both templates: the same number of
+    /// segments, and wherever both are literal, the same literal.
+    fn templates_overlap(a: &str, b: &str) -> bool {
+        let param = |s: &str| s.starts_with('{') && s.ends_with('}');
+        let (a, b): (Vec<_>, Vec<_>) = (a.split('/').collect(), b.split('/').collect());
+        a.len() == b.len()
+            && a.iter()
+                .zip(&b)
+                .all(|(x, y)| param(x) || param(y) || x == y)
+    }
+
+    /// Every tenant route is one core operation (roadmap S6): each
+    /// operation of a tenant group's document has an `operationId` that is
+    /// a core [`Operation`]'s id, with its group's scope, and the guard's
+    /// [`Operations`] resolves a path of its template, with its method (and
+    /// `HEAD` for a `GET`), to it, an empty parameter included (axum
+    /// routes one), and no path could match another template of its
+    /// method: two templates a path could match would charge one
+    /// operation's budget for another's. Every core operation is served
+    /// exactly once. Decisive: a tenant route the guard cannot resolve, or
+    /// resolves to another operation.
+    #[test]
+    fn each_tenant_route_is_one_core_operation_with_its_groups_scope() {
+        let grouped = std::cell::RefCell::new(Vec::new());
+        let _ = api_routes(
+            |routes| routes,
+            |routes, scope| {
+                for (template, item) in &routes.get_openapi().paths.paths {
+                    for (method, operation) in [
+                        ("GET", &item.get),
+                        ("PUT", &item.put),
+                        ("POST", &item.post),
+                        ("DELETE", &item.delete),
+                        ("PATCH", &item.patch),
+                    ] {
+                        if let Some(operation) = operation {
+                            let id = operation.operation_id.clone().unwrap();
+                            grouped
+                                .borrow_mut()
+                                .push((method, template.clone(), id, scope));
+                        }
+                    }
+                }
+                routes
+            },
+        );
+        // The overlap check itself: a literal against a parameter, two
+        // parameters crossed, and literals apart.
+        assert!(templates_overlap("/v1/numbers/{pn}", "/v1/numbers/stats"));
+        assert!(templates_overlap("/v1/{a}/x", "/v1/y/{b}"));
+        assert!(!templates_overlap(
+            "/v1/numbers/{pn}/profile",
+            "/v1/wabas/{waba_id}/templates"
+        ));
+        assert!(!templates_overlap("/v1/numbers/{pn}", "/v1/numbers"));
+        let operations = tenant_operations();
+        let mut served = std::collections::HashSet::new();
+        for (method, template, id, scope) in &grouped.into_inner() {
+            let operation = Operation::from_id(id)
+                .unwrap_or_else(|| panic!("{method} {template}: `{id}` is no core operation"));
+            assert_eq!(operation.scope(), *scope, "{id}");
+            assert!(served.insert(operation), "{id} served twice");
+            // No path of this template is another's of the same method.
+            let others: Vec<_> = operations
+                .routes()
+                .iter()
+                .filter(|(m, t, _)| m == method && t != template)
+                .filter(|(_, t, _)| templates_overlap(t, template))
+                .collect();
+            assert!(
+                others.is_empty(),
+                "{method} {template}: a path could also match {others:?}"
+            );
+            // A path of the template, its parameters filled in, spelled
+            // plainly or percent-encoded: the guard reads the path as the
+            // request carries it.
+            // And empty: axum routes an empty segment between two others
+            // to its template (`/v1/numbers//profile`), so the guard does.
+            for value in ["106540352242922", "%31%30%36", "wamid.HBgL%3D%3D", ""] {
+                let path = template
+                    .split('/')
+                    .map(|part| if part.starts_with('{') { value } else { part })
+                    .collect::<Vec<_>>()
+                    .join("/");
+                assert_eq!(
+                    operations.of(method, &path),
+                    Some(operation),
+                    "{method} {path}"
+                );
+                if *method == "GET" {
+                    assert_eq!(operations.of("HEAD", &path), Some(operation), "HEAD {path}");
+                }
+            }
+        }
+        assert_eq!(
+            served.len(),
+            Operation::ALL.len(),
+            "every core operation is served"
+        );
+        assert_eq!(operations.routes().len(), Operation::ALL.len());
+        // Nothing else resolves: a method the route does not take, an
+        // admin route, a lower-case method, a segment too many.
+        assert_eq!(operations.of("POST", "/v1/numbers"), None);
+        assert_eq!(operations.of("GET", "/v1/admin/tenants"), None);
+        assert_eq!(operations.of("get", "/v1/numbers"), None);
+        assert_eq!(operations.of("GET", "/v1/numbers/x/y"), None);
+        assert_eq!(operations.of("GET", "/v1/numbers/1/profile/"), None);
     }
 }

@@ -1,0 +1,13 @@
+error[E0624]: method `rotate_vault` is private
+ --> tests/visibility/fail/authorizer_rotate_vault.rs:7:19
+  |
+7 |       let _ = authz.rotate_vault(admin).await;
+  |                     ^^^^^^^^^^^^ private method
+  |
+ ::: src/authz.rs
+  |
+  | /     pub(crate) async fn rotate_vault(
+  | |         &self,
+  | |         admin: &AdminCaller,
+  | |     ) -> Result<VaultRotation, ServiceError> {
+  | |____________________________________________- private method defined here

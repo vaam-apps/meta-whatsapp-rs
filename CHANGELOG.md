@@ -1859,6 +1859,83 @@ stored data, the owner's).
   stage: &'static str)`, empty bodies to count nothing (as `()` does), or
   your metrics' counters of recorded rows by type and audience, of
   duplicates by stage, and of failures by stage.
+- **Breaking — the service core's pieces are adapter-neutral** (roadmap
+  S6, design D27; `meta-whatsapp-server-core` and `meta-whatsapp-server`,
+  both `publish = false`). `meta_whatsapp_server_core::operation::Operation`
+  names the sixteen tenant operations by id (the OpenAPI document's
+  `operationId`s), and what the core decides about a request follows its
+  operation, not how an API adapter spells it:
+  - **Rate limits by operation.** `RouteClass::of` takes an `Operation`
+    (it took a scope and an HTTP method), and
+    `RateLimiter::charge(tenant, operation)` spends the budget of its
+    class, answering the class or a `ratelimit::Limited` (its class, its
+    wait, and `Limited::error`, the `429 too_many_requests` with
+    `Retry-After`); `RateLimiter::check` is crate-private. The server's
+    tenant guard resolves a request to its operation
+    (`auth::Operations`, from the document: method and route template,
+    `HEAD` as its `GET`; `api::tenant_operations`), and `auth::guard`
+    takes it as a third argument. `/v1`'s budgets do not move: every
+    route keeps its class.
+  - **The idempotency fingerprint is the operation and its canonical
+    input**, not the request's method and path:
+    `idempotency::Fingerprint::send_message(&PhoneNumberId, &body)`,
+    `upload_media(&PhoneNumberId, &Upload)` and
+    `create_template(&WabaId, &body)` replace `Fingerprint::json(method,
+    path, body)` and `Fingerprint::parts`. The number or WABA is the
+    decoded id, so a path spelled otherwise (its digits percent-encoded)
+    replays the same key; the same key and body on another number, or
+    for another operation, is `422 idempotency_key_reused`. A pre-release
+    change of `/v1`'s semantics, with a window: **a key claimed before
+    the upgrade keeps replaying** the same request (the same path as
+    sent, the same body) for as long as its record lives
+    (`WA_SERVER_IDEMPOTENCY_TTL` after its claim, 24 hours by default),
+    because the HTTP adapter also matches the fingerprint of before
+    (`Fingerprint::legacy_v1_json`, `legacy_v1_upload`, added with
+    `Fingerprint::or_legacy`; a claim stores the new fingerprint). A
+    repeat of an old key under another spelling of its path, and an
+    upgraded replica's key repeated on an old one during a rolling
+    deploy, are `422 idempotency_key_reused`, never a second send
+    ([guide](docs/guides/server.md#idempotency-keys)). The legacy
+    fingerprint goes after the first release (roadmap S7). No stored
+    data changes shape and nothing needs migrating: the records expire.
+  - **Error codes are constants.** `error::ErrorCode` has one constant
+    per code (`ErrorCode::NOT_FOUND`), generated with `CODES` and
+    `ErrorCode::ALL` from one table, which the core's tests (and the
+    service's) hold equal to the design's §5.2; `ServiceError::new` and
+    the server's `ApiError::new` take an `ErrorCode` (they took a
+    `&'static str` and answered an unknown one `500 internal`), so a
+    misspelled code no longer compiles. `ErrorCode::of(&str)` still
+    reads a code at run time. The server's utoipa markers are now
+    `error::ErrorCodeSchema` and `KnownErrorCodeSchema` (their schema
+    names, `ErrorCode` and `KnownErrorCode`, unchanged), and
+    `meta_whatsapp_server::error::ErrorCode` is the core's.
+  - **The vault's admin writes go through the admin services.**
+    `Authorizer::store_token`, `rotate_vault`, `forget_for_admin` and
+    `graph_failed_for_admin` are crate-private (each still checks its
+    `AdminCaller`); `admin::Admin`, opened with `Admin::new`'s
+    admission, is the way to them (`attach_waba`, `unbind_waba`,
+    `rotate_vault`). The conformance suite gains
+    `capabilities::an_admins_vault_writes_take_an_admitted_admin` (in
+    `conformance::run`).
+  - `just features` also checks the core's library alone and documents
+    it with `conformance`. No dependency was dropped: none of either
+    crate's was unused.
+
+  `openapi/v1.json` is byte-identical, and no status or body changed but
+  the fingerprint's semantics. **Upgrade:** build a fingerprint with the
+  operation's constructor (`Fingerprint::send_message(owned.phone_number_id(),
+  &body)`, …) instead of `Fingerprint::json(&Method::POST, uri.path(),
+  &body)`, and, in an adapter that served `/v1` before (so that its
+  keys replay through the window), add the old one with
+  `.or_legacy(Fingerprint::legacy_v1_json(&Method::POST, uri.path(),
+  &body))` (`legacy_v1_upload` for an upload); charge a budget with `limiter.charge(tenant, operation)`
+  instead of `RouteClass::of(scope, method)` and `check`; write
+  `ServiceError::new(ErrorCode::NOT_FOUND)` (and `ApiError::new(…)`)
+  instead of `ServiceError::new("not_found")`, and `ErrorCode::of(code)`
+  for a code read at run time; open `Admin::new(&authz, &admin)?` and
+  call its operations instead of the `Authorizer`'s vault writes; pass
+  the guard its `Operations` (`api::tenant_operations()`, or your own
+  router's).
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

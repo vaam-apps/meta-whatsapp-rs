@@ -8,7 +8,7 @@ use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use crate::error::{ApiError, ErrorBody};
+use crate::error::{ApiError, ErrorBody, ErrorCode};
 use crate::state::AppState;
 
 /// The `v1` API's version.
@@ -57,7 +57,7 @@ pub async fn livez() -> Json<Health> {
 )]
 pub async fn readyz(State(state): State<AppState>) -> Result<Json<Health>, ApiError> {
     if state.is_shutting_down() {
-        return Err(ApiError::new("shutting_down").retryable(true));
+        return Err(ApiError::new(ErrorCode::SHUTTING_DOWN).retryable(true));
     }
     state.store().ping().await.map_err(ApiError::from)?;
     Ok(Json(Health {

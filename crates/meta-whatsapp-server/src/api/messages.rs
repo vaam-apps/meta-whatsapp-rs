@@ -46,7 +46,7 @@ use utoipa::ToSchema;
 
 use super::common::ApiJson;
 use crate::auth::{Caller, OwnedNumber};
-use crate::error::{ApiError, ErrorBody};
+use crate::error::{ApiError, ErrorBody, ErrorCode};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
 use crate::state::AppState;
 
@@ -892,7 +892,15 @@ pub(crate) async fn send_message(
     uri: Uri,
     ApiJson(body): ApiJson<Value>,
 ) -> Response {
-    let fingerprint = Fingerprint::json(&Method::POST, uri.path(), &body);
+    // The operation and its input (the number, as the path named it
+    // decoded, and the body as it was sent), never the path's spelling.
+    // A key claimed before roadmap S6 was stored under the request's
+    // method, its path as sent and its body: matched too, for one TTL
+    // after the upgrade (the legacy fingerprint goes after the first
+    // release). A claim stores the new one.
+    let fingerprint = Fingerprint::send_message(owned.phone_number_id(), &body).or_legacy(
+        Fingerprint::legacy_v1_json(&Method::POST, uri.path(), &body),
+    );
     let message = match parse_message(body) {
         Ok(message) => message,
         Err(error) => return error.into_response(),
@@ -923,7 +931,7 @@ where
             .await
             .map_err(|rejection| {
                 if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
-                    ApiError::new("payload_too_large")
+                    ApiError::new(ErrorCode::PAYLOAD_TOO_LARGE)
                 } else {
                     ApiError::invalid("body")
                 }
