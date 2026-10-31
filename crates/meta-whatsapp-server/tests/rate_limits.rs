@@ -47,7 +47,7 @@ fn harness(reads: u32, sends: u32) -> Harness {
 /// `POST /rpc/<operation id>` behind the service's tenant guard, which
 /// charges it by the operation the route stands for.
 fn rpc(h: &Harness, operations: &[Operation]) -> Router {
-    let routes = Operations::new(operations.iter().map(|operation| {
+    let charged = Operations::new(operations.iter().map(|operation| {
         (
             "POST".to_owned(),
             format!("/rpc/{}", operation.id()),
@@ -63,7 +63,7 @@ fn rpc(h: &Harness, operations: &[Operation]) -> Router {
     }
     router
         .route_layer(middleware::from_fn_with_state(
-            guard(&h.state, Scope::Numbers, &routes),
+            guard(&h.state, Scope::Numbers, &charged),
             tenant_guard,
         ))
         .with_state(h.state.clone())

@@ -442,10 +442,10 @@ mod tests {
         }
         for operation in &reads {
             for method in served {
-                let limited = charge(method, operation.id()).unwrap_err();
-                assert_eq!(limited.class, RouteClass::Read, "{method} {operation}");
-                assert_eq!(limited.wait, Duration::from_secs(1));
-                let error = limited.error();
+                let refused = charge(method, operation.id()).unwrap_err();
+                assert_eq!(refused.class, RouteClass::Read, "{method} {operation}");
+                assert_eq!(refused.wait, Duration::from_secs(1));
+                let error = refused.error();
                 assert_eq!((error.status(), error.code()), (429, "too_many_requests"));
                 assert!(error.is_retryable());
                 assert_eq!(error.retry_after(), Some(1));

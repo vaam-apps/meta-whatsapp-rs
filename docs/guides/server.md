@@ -357,8 +357,8 @@ JSON (key order and whitespace do not count), an upload as its type,
 file name and file. The same key and body on another of your numbers,
 or for another operation, is `422 idempotency_key_reused`.
 
-> **Changed before the first release** (roadmap S6, design D27): until
-> then, a key covered the request's method, its path as sent and its
+> **Changed before the first release** (roadmap S6, design D27): before
+> it, a key covered the request's method, its path as sent and its
 > body. A key claimed before the upgrade and repeated after it, with the
 > same request, answers `422 idempotency_key_reused` (it never sends
 > twice) until its record expires: `WA_SERVER_IDEMPOTENCY_TTL` after the

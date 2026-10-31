@@ -75,7 +75,10 @@ fn error(reply: &Reply) -> Value {
 /// `id`, every byte percent-encoded: the same path parameter, spelled
 /// otherwise (axum decodes it before the handler reads it).
 fn percent_encoded(id: &str) -> String {
-    id.bytes().map(|b| format!("%{b:02X}")).collect()
+    id.bytes()
+        .map(|b| format!("%{b:02X}"))
+        .collect::<Vec<_>>()
+        .concat()
 }
 
 /// Roadmap S6's decisive case (design D27): an `Idempotency-Key`'s

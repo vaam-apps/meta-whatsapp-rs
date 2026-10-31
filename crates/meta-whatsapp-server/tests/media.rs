@@ -306,7 +306,11 @@ async fn an_upload_key_replays_through_another_spelling_of_its_path() {
     };
     let first = h.call(call(PN)).await;
     assert_eq!(first.status, StatusCode::CREATED, "{}", first.text);
-    let encoded: String = PN.bytes().map(|b| format!("%{b:02X}")).collect();
+    let encoded = PN
+        .bytes()
+        .map(|b| format!("%{b:02X}"))
+        .collect::<Vec<_>>()
+        .concat();
     let again = h.call(call(&encoded)).await;
     assert_eq!(again.status, StatusCode::CREATED, "{}", again.text);
     assert_eq!(again.headers["idempotent-replayed"], "true");
