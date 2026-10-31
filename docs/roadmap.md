@@ -858,8 +858,9 @@ and `store-postgres`.
     the method and the route template, `HEAD` as its `GET`) and charges
     it, `500 internal` for a tenant route that is no operation (a test
     holds every tenant route to one core operation with its group's
-    scope, a path of each template, plain or percent-encoded, matching
-    no other). The fingerprint is the operation and its canonical input,
+    scope, a path of each template, plain, percent-encoded or with an
+    empty parameter (which axum routes: `/v1/numbers//profile` is
+    `get_profile`'s, charged, then `404`), matching no other). The fingerprint is the operation and its canonical input,
     defined once in the core: `Fingerprint::send_message`, `upload_media`
     and `create_template` hash the operation's id, its path parameter as
     a typed id (the number or the WABA, decoded), and the JSON body
