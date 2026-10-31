@@ -1,0 +1,15 @@
+error[E0624]: method `graph_failed_for_admin` is private
+ --> tests/visibility/fail/authorizer_graph_failed_for_admin.rs:9:19
+  |
+9 |       let _ = authz.graph_failed_for_admin(admin, waba_id, error).await;
+  |                     ^^^^^^^^^^^^^^^^^^^^^^ private method
+  |
+ ::: src/authz.rs
+  |
+  | /     pub(crate) async fn graph_failed_for_admin(
+  | |         &self,
+  | |         admin: &AdminCaller,
+  | |         waba_id: &WabaId,
+  | |         error: &Error,
+  | |     ) -> ServiceError {
+  | |_____________________- private method defined here

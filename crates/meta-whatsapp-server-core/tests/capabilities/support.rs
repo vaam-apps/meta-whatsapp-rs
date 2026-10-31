@@ -346,7 +346,9 @@ pub struct Side {
 
 impl Side {
     /// An `Authorizer` whose vault holds `token` for the WABA and its
-    /// number, stored with its own admin's capability.
+    /// number, stored through the vault itself (the `Authorizer`'s own
+    /// store is the admin services' since roadmap S6), before the
+    /// `Authorizer` holds it.
     pub async fn new(vault_key_id: &str, token: &str) -> Self {
         let (admin_bearer, admin) = key(KeyOwner::Admin);
         let (tenant_bearer, tenant) = key(KeyOwner::Tenant(victim()));
@@ -357,6 +359,7 @@ impl Side {
             VaultKeys::new(VaultKey::generate(vault_key_id).unwrap()),
         )
         .unwrap();
+        vault.store(&stored(token)).await.unwrap();
         let authz = Authorizer::new(records.clone(), vault, tokenless_client()).unwrap();
         let side = Self {
             authz,
@@ -365,11 +368,6 @@ impl Side {
             admin_bearer,
             tenant_bearer,
         };
-        let admin = side.admin().await;
-        side.authz
-            .store_token(&admin, &victim(), &stored(token))
-            .await
-            .unwrap();
         side.records.take_calls();
         side
     }

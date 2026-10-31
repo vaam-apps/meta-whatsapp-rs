@@ -1,0 +1,15 @@
+error[E0624]: method `store_token` is private
+  --> tests/visibility/fail/authorizer_store_token.rs:14:19
+   |
+14 |       let _ = authz.store_token(admin, tenant, token).await;
+   |                     ^^^^^^^^^^^ private method
+   |
+  ::: src/authz.rs
+   |
+   | /     pub(crate) async fn store_token(
+   | |         &self,
+   | |         admin: &AdminCaller,
+   | |         tenant: &TenantId,
+   | |         token: &StoredBusinessToken,
+   | |     ) -> Result<(), ServiceError> {
+   | |_________________________________- private method defined here

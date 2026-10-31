@@ -25,17 +25,23 @@
 //! only [`Authorizer`] makes them, after step 4 (or, for an admin, from an
 //! [`AdminCaller`], which only [`Authorizer::admin_caller`] makes).
 //!
-//! Writing to the vault takes a capability too. Storing a token, rotating
-//! the vault's key, and deleting a token without opening it are
-//! [`Authorizer`]'s methods that take an [`AdminCaller`]
-//! ([`Authorizer::store_token`], [`Authorizer::rotate_vault`],
-//! [`Authorizer::forget_for_admin`]); deleting an opened WABA's token is
-//! [`OwnedWaba::forget`]. Marking a WABA's numbers `reconnect_required`
-//! after Meta refused its token takes the [`OwnedNumber`], the
-//! [`OwnedWaba`] or an [`AdminCaller`] ([`OwnedNumber::failed`],
-//! [`OwnedWaba::failed`], [`Authorizer::graph_failed_for_admin`]). An
-//! [`Authorizer`] handed to an API adapter therefore writes nothing
-//! without one; see [`Tokens`] for what does not compile.
+//! Writing to the vault takes a capability too. An admin's writes
+//! (storing a token, rotating the vault's key, deleting a token without
+//! opening it, marking a WABA's numbers `reconnect_required` after Meta
+//! refused the token an attach stored) are the admin services'
+//! ([`Admin`](crate::admin::Admin): attaching, unbinding a WABA, the
+//! vault's rotation), which open only for an [`AdminCaller`] this
+//! [`Authorizer`] admits ([`Admin::new`](crate::admin::Admin::new), as
+//! S5a's services do): the [`Authorizer`]'s methods that write them are
+//! private to this crate since roadmap S6, and each checks the
+//! [`AdminCaller`] again. Deleting an opened WABA's token is
+//! [`OwnedWaba::forget`]; marking its numbers after a `190` takes the
+//! [`OwnedNumber`] or the [`OwnedWaba`] ([`OwnedNumber::failed`],
+//! [`OwnedWaba::failed`]). An [`Authorizer`] handed to an API adapter
+//! therefore writes nothing without one; see [`Tokens`] for what does not
+//! compile. (The command line's `vault rotate` walks a vault it built
+//! itself, from the keys, with [`rotate_vault`]: not this
+//! [`Authorizer`]'s.)
 //!
 //! **A capability acts only on what it was made from** (roadmap S2, the
 //! core's security review SR-L2). An [`OwnedNumber`] and an [`OwnedWaba`]
@@ -56,8 +62,9 @@
 //! with the token of the next. That rests on the port rule of
 //! [`crate::store`] (the vault is written for a WABA only by its current
 //! holder: an attach binds, stores, then confirms, taking back its own
-//! write when its binding moved meanwhile ([`Authorizer::store_token`]);
-//! an unbind deletes the token before the binding). Before a call that
+//! write when its binding moved meanwhile (the attach's
+//! `Authorizer::store_token`); an unbind deletes the token before the
+//! binding). Before a call that
 //! acts on the WABA as a whole with its token (unsubscribing the app), a
 //! caller asks [`OwnedWaba::still_bound`]: a capability made before a
 //! move never unsubscribes the new holder's app, but in the call's own
@@ -108,31 +115,30 @@ use crate::store::RecordStore;
 /// outside this crate makes one or calls its methods.
 ///
 /// What an API adapter (another crate) can do with an [`Authorizer`] and
-/// an [`AdminCaller`] it made:
+/// an [`AdminCaller`] it made: open the admin services, which write the
+/// vault as their operations need ([`Admin::new`](crate::admin::Admin::new)
+/// refuses an [`AdminCaller`] another [`Authorizer`] made):
 ///
 /// ```no_run
-/// use meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken;
-/// use meta_whatsapp_rs::core::ids::WabaId;
+/// use meta_whatsapp_rs::core::secret::AccessToken;
 /// use meta_whatsapp_server_core::ServiceError;
+/// use meta_whatsapp_server_core::admin::Admin;
 /// use meta_whatsapp_server_core::authz::{AdminCaller, Authorizer};
-/// use meta_whatsapp_server_core::model::TenantId;
 ///
-/// async fn attach(
+/// async fn attach_then_rotate(
 ///     authz: &Authorizer,
 ///     admin: &AdminCaller,
-///     tenant: &TenantId,
-///     token: &StoredBusinessToken,
+///     token: AccessToken,
 /// ) -> Result<(), ServiceError> {
-///     authz.store_token(admin, tenant, token).await?;
-///     authz.rotate_vault(admin).await.map(drop)
+///     let admin = Admin::new(authz, admin)?;
+///     admin
+///         .attach_waba("merchant-42", "102290129340398", token)
+///         .await?;
+///     admin.rotate_vault().await.map(drop)
 /// }
 ///
-/// async fn unbind(
-///     authz: &Authorizer,
-///     admin: &AdminCaller,
-///     waba_id: &WabaId,
-/// ) -> Result<(), ServiceError> {
-///     authz.forget_for_admin(admin, waba_id).await
+/// async fn unbind(authz: &Authorizer, admin: &AdminCaller) -> Result<(), ServiceError> {
+///     Admin::new(authz, admin)?.unbind_waba("102290129340398").await
 /// }
 /// ```
 ///
@@ -142,8 +148,12 @@ use crate::store::RecordStore;
 /// (`Authorizer::tokens`, a method that does not exist, and the private
 /// field of that name), a `Tokens` of one's own (`Tokens::new`), storing,
 /// deleting and rotating through one (`Tokens::store`, `Tokens::delete`,
-/// `Tokens::rotate_all`), marking a WABA's numbers `reconnect_required`
-/// without a capability (`Authorizer::graph_failed`), and a [`Caller`],
+/// `Tokens::rotate_all`), the [`Authorizer`]'s own admin writes, which
+/// only the admin services call (`Authorizer::store_token`,
+/// `Authorizer::rotate_vault`, `Authorizer::forget_for_admin`,
+/// `Authorizer::graph_failed_for_admin`, roadmap S6), marking a WABA's
+/// numbers `reconnect_required` without a capability
+/// (`Authorizer::graph_failed`), and a [`Caller`],
 /// an [`AdminCaller`], an [`OwnedNumber`] or an [`OwnedWaba`] of one's
 /// own. A capability another [`Authorizer`] made compiles, and is refused
 /// when used (see the [module](self)).
@@ -713,7 +723,9 @@ impl Authorizer {
     /// now (another tenant's: `waba_owned_by_another_tenant`). An `admin`
     /// another [`Authorizer`] made is `403 forbidden`, and nothing is read
     /// or stored; the vault's failure is the library's error's code.
-    pub async fn store_token(
+    /// Crate-private: the admin services' attach calls it, once
+    /// `Admin::new` admitted `admin` (roadmap S6).
+    pub(crate) async fn store_token(
         &self,
         admin: &AdminCaller,
         tenant: &TenantId,
@@ -751,7 +763,11 @@ impl Authorizer {
     /// Re-encrypt every bound WABA's token (and its credit ledger) under
     /// the active vault key, for an admin: see [`rotate_vault`]. An
     /// `admin` another [`Authorizer`] made is `403 forbidden`.
-    pub async fn rotate_vault(&self, admin: &AdminCaller) -> Result<VaultRotation, ServiceError> {
+    /// Crate-private: `Admin::rotate_vault` calls it (roadmap S6).
+    pub(crate) async fn rotate_vault(
+        &self,
+        admin: &AdminCaller,
+    ) -> Result<VaultRotation, ServiceError> {
         self.check(&admin.issuer, "rotate_vault")?;
         Ok(self.tokens.rotate_all(self.records.as_ref()).await?)
     }
@@ -760,8 +776,9 @@ impl Authorizer {
     /// opening it: an admin unbinding a WABA whose token is missing,
     /// expired or no longer decrypts (decision D4). [`OwnedWaba::forget`]
     /// does the same for an opened one. An `admin` another [`Authorizer`]
-    /// made is `403 forbidden`, and nothing is deleted.
-    pub async fn forget_for_admin(
+    /// made is `403 forbidden`, and nothing is deleted. Crate-private: the
+    /// admin services' unbind calls it (roadmap S6).
+    pub(crate) async fn forget_for_admin(
         &self,
         admin: &AdminCaller,
         waba_id: &WabaId,
@@ -775,8 +792,9 @@ impl Authorizer {
     /// [`OwnedWaba::failed`] for an admin's call with a token of its own
     /// on `waba_id` (attaching a WABA, once its token is stored). An
     /// `admin` another [`Authorizer`] made is `403 forbidden`, and marks
-    /// nothing.
-    pub async fn graph_failed_for_admin(
+    /// nothing. Crate-private: the admin services' attach calls it
+    /// (roadmap S6).
+    pub(crate) async fn graph_failed_for_admin(
         &self,
         admin: &AdminCaller,
         waba_id: &WabaId,

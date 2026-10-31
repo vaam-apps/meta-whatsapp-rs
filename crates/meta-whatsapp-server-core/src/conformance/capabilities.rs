@@ -3,7 +3,9 @@
 //! WABA's binding and the vault record it was made from, through the
 //! core's [`Authorizer`] over the backend's records and a vault on its
 //! key/value store. Formerly the service's
-//! `tests/common/capability_suite.rs`.
+//! `tests/common/capability_suite.rs`. And roadmap S6: the vault's admin
+//! writes take an admin the [`Authorizer`] admits
+//! ([`an_admins_vault_writes_take_an_admitted_admin`]).
 
 use std::sync::Arc;
 
@@ -17,7 +19,8 @@ use meta_whatsapp_rs::core::secret::AccessToken;
 use meta_whatsapp_rs::core::store::KvStore;
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
 
-use crate::authz::{Authorizer, Caller};
+use crate::admin::Admin;
+use crate::authz::{AdminCaller, Authorizer, Caller};
 use crate::backend::Backend;
 use crate::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
@@ -820,6 +823,112 @@ pub async fn a_vault_failure_while_its_waba_moves_is_answered_as_the_move(backen
     }
 }
 
+/// Roadmap S6: the vault's admin writes (storing a token, rotating the
+/// vault, deleting a token unopened, marking a WABA's numbers after Meta
+/// refused the token an attach stored) take an admin this [`Authorizer`]
+/// admits. They are crate-private, reached only through the admin
+/// services ([`Admin`], whose `new` admits the admin: the UI cases
+/// `authorizer_*` pin that nothing else reaches them), and each checks the
+/// admin again: with an [`AdminCaller`] another [`Authorizer`] made (over
+/// the same records and vault, from the same admin key), each is `403
+/// forbidden`, and the token, the binding and the number's status are as
+/// they were; [`Admin::new`] refuses it too. The control: the
+/// [`Authorizer`]'s own admin rotates, marks, stores and forgets.
+/// Decisive: each write's own check (`Authorizer::check` with the
+/// admin's issuer), which `Admin::new`'s admission hides from every
+/// caller outside this crate.
+pub async fn an_admins_vault_writes_take_an_admitted_admin(backend: &dyn Backend) {
+    let (store, kv) = (backend.records(), backend.kv());
+    let s = Setup::new(store, kv).await;
+    let (waba, pn) = ids("vault-writes");
+    s.attach(A, &waba, &pn, Some("TOKEN-HELD")).await;
+    let (key, _) = mint(
+        s.store.as_ref(),
+        KeyOwner::Admin,
+        Vec::new(),
+        String::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    let bearer = format!("Bearer {}", key.expose_key());
+    let own: AdminCaller = s.authz.admin_caller(Some(&bearer)).await.unwrap();
+    let client = Client::builder()
+        .transport(ScriptedTransport::new())
+        .build()
+        .unwrap();
+    let other = Authorizer::new(s.store.clone(), s.vault.clone(), client).unwrap();
+    let foreign = other.admin_caller(Some(&bearer)).await.unwrap();
+    let tenant = TenantId::parse(A).unwrap();
+    let token = |token: &str| {
+        StoredBusinessToken::new(waba.clone(), AccessToken::new(token))
+            .phone_number_ids([pn.clone()])
+    };
+
+    let refused = [
+        (
+            "store_token",
+            s.authz
+                .store_token(&foreign, &tenant, &token("TOKEN-FORGED"))
+                .await
+                .unwrap_err(),
+        ),
+        (
+            "rotate_vault",
+            s.authz.rotate_vault(&foreign).await.unwrap_err(),
+        ),
+        (
+            "forget_for_admin",
+            s.authz.forget_for_admin(&foreign, &waba).await.unwrap_err(),
+        ),
+        (
+            "graph_failed_for_admin",
+            s.authz
+                .graph_failed_for_admin(&foreign, &waba, &refused_token())
+                .await,
+        ),
+        (
+            "Admin::new",
+            Admin::new(&s.authz, &foreign).map(drop).unwrap_err(),
+        ),
+    ];
+    for (write, error) in &refused {
+        assert_eq!(
+            (error.status(), error.code()),
+            (403, "forbidden"),
+            "{write}"
+        );
+    }
+    assert_eq!(s.token(&waba).await.as_deref(), Some("TOKEN-HELD"));
+    assert_eq!(s.holder(&waba).await.as_deref(), Some(A));
+    assert_eq!(s.status(&pn).await, Some(NumberStatus::Connected));
+
+    // The control: this authorizer's own admin.
+    assert!(Admin::new(&s.authz, &own).is_ok());
+    let rotation = s.authz.rotate_vault(&own).await.unwrap();
+    // Other cases on this backend may leave records under keys of their
+    // own: only this case's WABA must have been walked without a failure.
+    assert!(rotation.wabas >= 1, "{rotation:?}");
+    assert!(
+        !rotation.failed.iter().any(|failed| failed == waba.as_str()),
+        "{rotation:?}"
+    );
+    let marked = s
+        .authz
+        .graph_failed_for_admin(&own, &waba, &refused_token())
+        .await;
+    assert_eq!(marked.code(), "reconnect_required");
+    assert_eq!(s.status(&pn).await, Some(NumberStatus::ReconnectRequired));
+    s.authz
+        .store_token(&own, &tenant, &token("TOKEN-NEW"))
+        .await
+        .unwrap();
+    assert_eq!(s.token(&waba).await.as_deref(), Some("TOKEN-NEW"));
+    s.authz.forget_for_admin(&own, &waba).await.unwrap();
+    assert_eq!(s.token(&waba).await, None);
+    assert_eq!(s.holder(&waba).await, None);
+}
+
 /// Every case above but the race ([`racing_a_reattach`], which
 /// [`super::races::run`] runs), on `backend`.
 pub async fn run(backend: &dyn Backend) {
@@ -828,4 +937,5 @@ pub async fn run(backend: &dyn Backend) {
     a_capability_made_before_the_new_token_is_stored_is_refused(backend).await;
     a_vault_failure_while_its_waba_moves_is_answered_as_the_move(backend).await;
     a_capability_made_while_its_waba_moves_is_refused(backend).await;
+    an_admins_vault_writes_take_an_admitted_admin(backend).await;
 }

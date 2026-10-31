@@ -641,7 +641,7 @@ impl<'a> Admin<'a> {
     ///    waba_owned_by_another_tenant`, nothing stored). Binding before
     ///    storing: a store first would overwrite the holder's token before
     ///    D4 refused.
-    /// 4. Store the token ([`Authorizer::store_token`]: binds, stores,
+    /// 4. Store the token (`Authorizer::store_token`: binds, stores,
     ///    then confirms; moved meanwhile, its own write taken back and
     ///    `503`, retryable). Audited (`waba_attached`) once stored.
     /// 5. Subscribe the app to the WABA's webhooks with the token. Its
@@ -875,7 +875,7 @@ impl<'a> Admin<'a> {
     // ─── Vault ───────────────────────────────────────────────────────────
 
     /// Re-encrypt every bound WABA's token (and its credit ledger) under
-    /// the active vault key ([`Authorizer::rotate_vault`]), audited
+    /// the active vault key (`Authorizer::rotate_vault`), audited
     /// (`vault_rotated`). The old key can go once `failed` is empty.
     ///
     /// # Errors

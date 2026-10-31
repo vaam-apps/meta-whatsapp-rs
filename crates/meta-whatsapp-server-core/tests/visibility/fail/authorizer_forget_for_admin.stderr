@@ -1,0 +1,14 @@
+error[E0624]: method `forget_for_admin` is private
+ --> tests/visibility/fail/authorizer_forget_for_admin.rs:8:19
+  |
+8 |       let _ = authz.forget_for_admin(admin, waba_id).await;
+  |                     ^^^^^^^^^^^^^^^^ private method
+  |
+ ::: src/authz.rs
+  |
+  | /     pub(crate) async fn forget_for_admin(
+  | |         &self,
+  | |         admin: &AdminCaller,
+  | |         waba_id: &WabaId,
+  | |     ) -> Result<(), ServiceError> {
+  | |_________________________________- private method defined here
