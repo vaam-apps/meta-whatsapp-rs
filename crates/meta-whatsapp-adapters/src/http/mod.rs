@@ -21,6 +21,22 @@
 //!   `None` falls back to the builder's [`timeout`](ReqwestTransportBuilder::timeout)
 //!   (unset by default: no deadline). Exceeding either is
 //!   [`TransportError::Timeout`], also when it fires mid-stream.
+//! - **Response size.** [`HttpTransport::send`] buffers a body of at most
+//!   [`max_response_bytes`](ReqwestTransportBuilder::max_response_bytes)
+//!   ([`DEFAULT_MAX_RESPONSE_BYTES`], 256 MiB, unless set; `None` reads
+//!   any size), 2xx and error answers alike. Those answers come from the
+//!   Graph endpoint or proxy, `api.facebook.com`, a caller's own URL and
+//!   any cross-origin redirect target, so the bound is what stops a
+//!   hostile or broken one from making the process buffer without limit.
+//!   A `Content-Length` over the bound is refused before a byte of the
+//!   body is read; the body is still read chunk by chunk and refused as
+//!   soon as it passes the bound, whatever the header said (or without
+//!   one: chunked or close-delimited). Past it, the answer is
+//!   [`TransportError::Backend`] saying `response body exceeds <n> bytes`,
+//!   never the body or the URL, and the connection is dropped, not
+//!   drained. [`send_streaming`] is not bounded here: its caller reads the
+//!   stream and bounds it (`meta-whatsapp-client`'s media download takes a
+//!   `max_bytes`, its error answers are read to 64 KiB).
 //! - **Errors.** Timeout → `Timeout`; DNS/TCP/TLS failure → `Connect`; an
 //!   unusable request (bad header value, bad MIME type) → `Build`; anything
 //!   else → `Backend`. Non-2xx responses are returned, not errors.
@@ -79,7 +95,20 @@ pub struct ReqwestTransport {
     /// settings, and [`credential_redirect_policy`] (the same client as
     /// `client` when it came from [`ReqwestTransport::with_client`]).
     credentialed: reqwest::Client,
+    /// The most bytes [`HttpTransport::send`] buffers; `None`: no bound.
+    max_response_bytes: Option<u64>,
 }
+
+/// The default bound on a body [`ReqwestTransport`] buffers
+/// ([`HttpTransport::send`]): 256 MiB.
+///
+/// Room for the largest JSON answer the Graph client asks for: an analytics
+/// field expansion (`pricing_analytics`, `conversation_analytics`,
+/// `call_analytics`) is one unpaged object, and a year of `HALF_HOUR` data
+/// points broken down by country, number and pricing category can run to
+/// tens or a hundred MiB. Media downloads stream
+/// ([`HttpTransport::send_streaming`]) and are bounded by their caller.
+pub const DEFAULT_MAX_RESPONSE_BYTES: u64 = 256 * 1024 * 1024;
 
 impl fmt::Debug for ReqwestTransport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -141,11 +170,26 @@ impl ReqwestTransport {
     /// let transport = ReqwestTransport::with_clients(plain, credentialed);
     /// # Ok(()) }
     /// ```
+    ///
+    /// A buffered body is bounded at [`DEFAULT_MAX_RESPONSE_BYTES`], as from
+    /// the builder; change it with
+    /// [`with_max_response_bytes`](Self::with_max_response_bytes).
     pub fn with_clients(plain: reqwest::Client, credentialed: reqwest::Client) -> Self {
         Self {
             client: plain,
             credentialed,
+            max_response_bytes: Some(DEFAULT_MAX_RESPONSE_BYTES),
         }
+    }
+
+    /// This transport with another bound on the body [`HttpTransport::send`]
+    /// buffers, as [`ReqwestTransportBuilder::max_response_bytes`] sets it:
+    /// for a transport from [`with_clients`](Self::with_clients). `None`
+    /// reads any size.
+    #[must_use]
+    pub fn with_max_response_bytes(mut self, max: Option<u64>) -> Self {
+        self.max_response_bytes = max;
+        self
     }
 
     /// Use one existing client as is, for every request: prefer
@@ -301,6 +345,7 @@ pub struct ReqwestTransportBuilder {
     pool_idle_timeout: Option<Duration>,
     pool_max_idle_per_host: usize,
     tcp_keepalive: Option<Duration>,
+    max_response_bytes: Option<u64>,
 }
 
 impl Default for ReqwestTransportBuilder {
@@ -313,6 +358,7 @@ impl Default for ReqwestTransportBuilder {
             pool_idle_timeout: Some(Duration::from_secs(90)),
             pool_max_idle_per_host: usize::MAX,
             tcp_keepalive: Some(Duration::from_secs(60)),
+            max_response_bytes: Some(DEFAULT_MAX_RESPONSE_BYTES),
         }
     }
 }
@@ -356,12 +402,34 @@ impl ReqwestTransportBuilder {
         self
     }
 
+    /// The most bytes of a response body [`HttpTransport::send`] buffers,
+    /// 2xx or not; `None` reads any size. Default
+    /// [`DEFAULT_MAX_RESPONSE_BYTES`] (256 MiB).
+    ///
+    /// A `Content-Length` over it is refused before the body is read, and
+    /// the body is read chunk by chunk and refused as soon as it passes it,
+    /// whatever the header said: [`TransportError::Backend`] saying
+    /// `response body exceeds <n> bytes` (never the body or the URL), with
+    /// the connection dropped, not drained. A body of exactly `max` bytes is
+    /// read. [`HttpTransport::send_streaming`] is not bounded by it: the
+    /// stream's reader bounds it.
+    ///
+    /// Raise it (or disable it) for analytics field expansions over long
+    /// `HALF_HOUR` ranges, which Meta answers unpaged; lower it if nothing
+    /// you call answers that much.
+    #[must_use]
+    pub fn max_response_bytes(mut self, max: Option<u64>) -> Self {
+        self.max_response_bytes = max;
+        self
+    }
+
     /// Build the transport. Fails only if the TLS backend cannot be
     /// initialised (e.g. no usable root certificates).
     pub fn build(self) -> Result<ReqwestTransport, ConfigError> {
         Ok(ReqwestTransport {
             client: self.client(reqwest::redirect::Policy::default())?,
             credentialed: self.client(credential_redirect_policy())?,
+            max_response_bytes: self.max_response_bytes,
         })
     }
 
@@ -430,19 +498,57 @@ fn map_error(error: reqwest::Error) -> TransportError {
     }
 }
 
+/// `response` buffered, its body refused past `max` bytes (see
+/// [`ReqwestTransportBuilder::max_response_bytes`]). Returning early drops
+/// `response`, which closes its connection rather than reading the rest.
+async fn read_bounded(
+    mut response: reqwest::Response,
+    max: Option<u64>,
+) -> Result<HttpResponse, TransportError> {
+    let status = response.status();
+    let headers = std::mem::take(response.headers_mut());
+    let Some(max) = max else {
+        let body = response.bytes().await.map_err(map_error)?;
+        return Ok(HttpResponse {
+            status,
+            headers,
+            body,
+        });
+    };
+    // The cheap refusal; the loop below is the bound, the header can lie.
+    let declared = headers
+        .get(CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok());
+    if declared.is_some_and(|len| len > max) {
+        return Err(too_large(max));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(map_error)? {
+        let len = u64::try_from(body.len().saturating_add(chunk.len())).unwrap_or(u64::MAX);
+        if len > max {
+            return Err(too_large(max));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(HttpResponse {
+        status,
+        headers,
+        body: body.into(),
+    })
+}
+
+/// The error for a body past `max`: its size only, never the body or URL.
+fn too_large(max: u64) -> TransportError {
+    TransportError::Backend(anyhow::anyhow!("response body exceeds {max} bytes"))
+}
+
 #[async_trait]
 impl HttpTransport for ReqwestTransport {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
         let (client, request) = self.prepare(request)?;
-        let mut response = client.execute(request).await.map_err(map_error)?;
-        let status = response.status();
-        let headers = std::mem::take(response.headers_mut());
-        let body = response.bytes().await.map_err(map_error)?;
-        Ok(HttpResponse {
-            status,
-            headers,
-            body,
-        })
+        let response = client.execute(request).await.map_err(map_error)?;
+        read_bounded(response, self.max_response_bytes).await
     }
 
     async fn send_streaming(

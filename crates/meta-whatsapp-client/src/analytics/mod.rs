@@ -28,6 +28,19 @@
 //! Doc paths are relative to
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
 //! (append `.md` for Markdown; `just meta-docs` mirrors them locally).
+//!
+//! # Answer size
+//!
+//! A field expansion is answered in one unpaged object, buffered whole by
+//! the transport. With `HALF_HOUR` granularity over a long range and
+//! several `dimensions` (country, number, pricing category and type),
+//! [`Analytics::pricing`], [`Analytics::conversation`] and
+//! [`Analytics::calls`] can answer tens or a hundred MiB: a year of
+//! half-hours is 17,520 slots, each with a data point per combination
+//! of dimension values. The stock `ReqwestTransport` refuses a body past
+//! its `max_response_bytes` (256 MiB by default) with a
+//! `TransportError::Backend`. Split such a range into shorter ones, or
+//! raise or disable that bound.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -118,7 +131,8 @@ impl Analytics {
 
     /// Conversations and their cost: `?fields=conversation_analytics.…`
     /// (`analytics#conversation-analytics`). `None` when Meta returns no
-    /// data for the range.
+    /// data for the range. A long `HALF_HOUR` range can answer a large
+    /// body: see [Answer size](crate::analytics#answer-size).
     pub async fn conversation(
         &self,
         query: &ConversationAnalyticsQuery,
@@ -151,7 +165,9 @@ impl Analytics {
     }
 
     /// Delivered-message volume and cost by pricing category/type:
-    /// `?fields=pricing_analytics.…` (`analytics#pricing-analytics`).
+    /// `?fields=pricing_analytics.…` (`analytics#pricing-analytics`). A
+    /// long `HALF_HOUR` range can answer a large body: see
+    /// [Answer size](crate::analytics#answer-size).
     pub async fn pricing(&self, query: &PricingAnalyticsQuery) -> Result<Option<PricingAnalytics>> {
         #[derive(Deserialize)]
         struct Envelope {
@@ -175,7 +191,8 @@ impl Analytics {
     }
 
     /// Calls made and received: `?fields=call_analytics.…`
-    /// (`analytics#call-analytics`).
+    /// (`analytics#call-analytics`). A long `HALF_HOUR` range can answer a
+    /// large body: see [Answer size](crate::analytics#answer-size).
     pub async fn calls(&self, query: &CallAnalyticsQuery) -> Result<Option<CallAnalytics>> {
         #[derive(Deserialize)]
         struct Envelope {

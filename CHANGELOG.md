@@ -2911,3 +2911,35 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   fixture re-read with a sentinel signature on each signed link: absent
   from `{:?}` and `{:#?}` of the payload and its events, present in
   their JSON), and `secret::tests` in `meta-whatsapp-core`.
+- **`ReqwestTransport` bounds the body it buffers: 256 MiB by default**
+  (`meta-whatsapp-adapters`; the follow-up the security reviews of PRs
+  #60 and #62 recorded). `send` read a 2xx or error body with
+  `response.bytes()`, without a bound, from the Graph endpoint or proxy,
+  `api.facebook.com`, a caller's `request_url` and any cross-origin
+  redirect target. It now reads at most
+  `ReqwestTransportBuilder::max_response_bytes` (default
+  `http::DEFAULT_MAX_RESPONSE_BYTES`, 256 MiB; `None` for no bound;
+  `ReqwestTransport::with_max_response_bytes` for a transport from
+  `with_clients`, which gets the same default): a `Content-Length` past
+  it is refused before the body is read, and the body is read chunk by
+  chunk and refused as soon as it passes it, a chunked or
+  close-delimited one included. The error is a `TransportError::Backend`
+  saying `response body exceeds <n> bytes` (not retried; reported as
+  possibly sent, since an answer came back), never the body or the URL,
+  and the connection is dropped, not drained. 256 MiB rather than less
+  because analytics field expansions (`Analytics::pricing`,
+  `conversation`, `calls`) are unpaged: a year of `HALF_HOUR` points by
+  several dimensions can run to a hundred MiB (their rustdoc says to
+  split such a range or raise the bound). `send_streaming` is unchanged
+  (the client bounds media downloads and their error bodies); the port's
+  default `send_streaming` buffers through `send` and so inherits the
+  bound (core rustdoc). Tests in `tests/reqwest_transport.rs`, against a
+  raw HTTP/1.1 server: a body of exactly the bound is read whole, one
+  byte more is refused, for 2xx and errors and with a `Content-Length`,
+  chunked or close-delimited; a declared length past the bound is refused
+  with no body sent; 32 MiB past the bound without a length make the
+  server's writes fail (not drained); `None` reads 4 MiB and refuses no
+  declared length; the default, from the builder and `with_clients`;
+  `send_streaming` unbounded. `connection_refused_is_connect_and_never_shows_the_url`
+  now keeps its port bound (not listening) instead of binding, dropping
+  and connecting, which raced a parallel test's listener.

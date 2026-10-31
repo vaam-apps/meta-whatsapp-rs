@@ -523,10 +523,12 @@ async fn timeout_while_streaming_the_body_is_timeout() {
 
 #[tokio::test]
 async fn connection_refused_is_connect_and_never_shows_the_url() {
-    // A port that was just free: nothing listens there any more.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    drop(listener);
+    // A port bound and kept, but not listening: a connection to it is
+    // refused, and no other test can take the port meanwhile (binding,
+    // dropping and connecting raced a parallel test's listener).
+    let reserved = tokio::net::TcpSocket::new_v4().unwrap();
+    reserved.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr = reserved.local_addr().unwrap();
     let url = Url::parse(&format!(
         "http://{addr}/v25.0/oauth/access_token?client_id=1&client_secret=s3cr3t-value&code=c0de-value"
     ))
@@ -1262,4 +1264,349 @@ async fn a_hop_that_changes_only_the_scheme_is_followed() {
         result.map(|r| r.status)
     );
     assert!(proxy.shared.recorded().is_empty());
+}
+
+// ── The bound on a buffered body (`max_response_bytes`) ─────────────────
+//
+// Against a raw HTTP/1.1 server, so that each test controls the framing:
+// a `Content-Length` (true or not), chunked, or delimited by closing the
+// connection. Each listener is bound once and kept by the task that
+// answers on it.
+
+/// In every body the raw server sends, so a test can tell it is not echoed.
+const BODY_SENTINEL: &str = "B0DY-S3NT1NEL-";
+
+/// A query secret a test URL carries.
+const QUERY_SECRET: &str = "s3cr3t-in-the-query";
+
+/// The bound most tests set.
+const MAX: u64 = 1024;
+const MAX_LEN: usize = 1024;
+
+/// How the raw server frames its body.
+#[derive(Clone, Copy, Debug)]
+enum Framing {
+    /// `Content-Length: <declared>`.
+    Length(u64),
+    /// `Transfer-Encoding: chunked`, no length.
+    Chunked,
+    /// No length: the body ends when the server closes the connection.
+    Close,
+}
+
+/// What the raw server did: body bytes written, and whether every write
+/// succeeded (`false`: the client closed the connection first).
+type Written = (usize, bool);
+
+/// A JSON body of exactly `len` bytes (`len >= 8`), made of the sentinel.
+fn json_body(len: usize) -> Vec<u8> {
+    let fill: Vec<u8> = BODY_SENTINEL.bytes().cycle().take(len - 8).collect();
+    let mut body = b"{\"p\":\"".to_vec();
+    body.extend_from_slice(&fill);
+    body.extend_from_slice(b"\"}");
+    assert_eq!(body.len(), len);
+    body
+}
+
+/// Answer one request with `status` and `body`, framed as `framing`; with
+/// `stall`, send the head and then nothing, holding the connection open.
+async fn raw_server(
+    status: u16,
+    framing: Framing,
+    body: Vec<u8>,
+    stall: bool,
+) -> (SocketAddr, tokio::task::JoinHandle<Written>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buf = [0u8; 4096];
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = socket.read(&mut buf).await.unwrap();
+            assert!(n > 0, "the client closed before its request ended");
+            request.extend_from_slice(&buf[..n]);
+        }
+        let framing_header = match framing {
+            Framing::Length(declared) => format!("content-length: {declared}\r\n"),
+            Framing::Chunked => "transfer-encoding: chunked\r\n".to_owned(),
+            Framing::Close => "connection: close\r\n".to_owned(),
+        };
+        let head = format!(
+            "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n{framing_header}\r\n"
+        );
+        if socket.write_all(head.as_bytes()).await.is_err() {
+            return (0, false);
+        }
+        if stall {
+            std::future::pending::<()>().await;
+        }
+        let mut written = 0;
+        for chunk in body.chunks(16 * 1024) {
+            let sent = match framing {
+                Framing::Chunked => {
+                    let mut framed = format!("{:x}\r\n", chunk.len()).into_bytes();
+                    framed.extend_from_slice(chunk);
+                    framed.extend_from_slice(b"\r\n");
+                    socket.write_all(&framed).await
+                }
+                Framing::Length(_) | Framing::Close => socket.write_all(chunk).await,
+            };
+            if sent.is_err() {
+                return (written, false);
+            }
+            written += chunk.len();
+        }
+        if matches!(framing, Framing::Chunked) && socket.write_all(b"0\r\n\r\n").await.is_err() {
+            return (written, false);
+        }
+        let _ = socket.shutdown().await;
+        (written, true)
+    });
+    (addr, task)
+}
+
+fn raw_url(addr: SocketAddr) -> Url {
+    Url::parse(&format!(
+        "http://{addr}/v25.0/1/pricing?client_secret={QUERY_SECRET}"
+    ))
+    .unwrap()
+}
+
+fn bounded(max: Option<u64>) -> ReqwestTransport {
+    ReqwestTransport::builder()
+        .max_response_bytes(max)
+        .build()
+        .unwrap()
+}
+
+/// `err` is the bound's: `Backend`, naming the bound, and none of its
+/// renderings shows the body or the URL.
+fn assert_too_large(err: &TransportError, max: u64, what: &str) {
+    assert!(matches!(err, TransportError::Backend(_)), "{what}: {err:?}");
+    assert!(!err.is_retryable(), "{what}");
+    let message = format!("response body exceeds {max} bytes");
+    assert!(err.to_string().contains(&message), "{what}: {err}");
+    for rendered in renderings(err) {
+        assert!(
+            !rendered.contains(BODY_SENTINEL),
+            "{what}: body in {rendered}"
+        );
+        assert!(
+            !rendered.contains(QUERY_SECRET),
+            "{what}: query in {rendered}"
+        );
+        assert!(!rendered.contains("pricing"), "{what}: URL in {rendered}");
+    }
+}
+
+#[tokio::test]
+async fn a_body_at_the_bound_is_read_whole_however_it_is_framed() {
+    for framing in [Framing::Length(MAX), Framing::Chunked, Framing::Close] {
+        for status in [200, 500] {
+            let body = json_body(MAX_LEN);
+            let (addr, server) = raw_server(status, framing, body.clone(), false).await;
+            let response = within(
+                "the answer",
+                bounded(Some(MAX)).send(HttpRequest::new(Method::GET, raw_url(addr))),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{framing:?} {status}: {e:?}"));
+            assert_eq!(response.status.as_u16(), status);
+            assert_eq!(response.body.as_ref(), body.as_slice(), "{framing:?}");
+            let decoded: Value = serde_json::from_slice(&response.body).unwrap();
+            assert!(decoded["p"].as_str().unwrap().starts_with(BODY_SENTINEL));
+            assert_eq!(within("the server", server).await.unwrap(), (MAX_LEN, true));
+        }
+    }
+}
+
+#[tokio::test]
+async fn one_byte_past_the_bound_is_refused_for_2xx_and_errors_alike() {
+    for framing in [Framing::Length(MAX + 1), Framing::Chunked, Framing::Close] {
+        for status in [200, 404, 500] {
+            let (addr, _server) = raw_server(status, framing, json_body(MAX_LEN + 1), false).await;
+            let err = within(
+                "the refusal",
+                bounded(Some(MAX)).send(HttpRequest::new(Method::GET, raw_url(addr))),
+            )
+            .await
+            .unwrap_err();
+            assert_too_large(&err, MAX, &format!("{framing:?} {status}"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_declared_length_past_the_bound_is_refused_before_the_body() {
+    // The server sends the head and then nothing: only the header can
+    // have refused it.
+    let (addr, _server) = raw_server(200, Framing::Length(MAX + 1), Vec::new(), true).await;
+    let err = within(
+        "the refusal",
+        bounded(Some(MAX)).send(HttpRequest::new(Method::GET, raw_url(addr))),
+    )
+    .await
+    .unwrap_err();
+    assert_too_large(&err, MAX, "declared");
+}
+
+#[tokio::test]
+async fn a_body_without_a_length_is_bounded_by_what_arrives_and_not_drained() {
+    // No `Content-Length` to refuse up front (chunked, or until the
+    // connection closes): the read loop stops it. Many MiB past the
+    // bound, so a transport that drained the body would have read it all;
+    // the server's writes must fail instead, the connection closed.
+    for framing in [Framing::Chunked, Framing::Close] {
+        let total = 32 * 1024 * 1024;
+        let (addr, server) = raw_server(200, framing, json_body(total), false).await;
+        let err = within(
+            "the refusal",
+            bounded(Some(MAX)).send(HttpRequest::new(Method::GET, raw_url(addr))),
+        )
+        .await
+        .unwrap_err();
+        assert_too_large(&err, MAX, &format!("{framing:?}"));
+        let (written, completed) = within("the server to stop", server).await.unwrap();
+        assert!(
+            !completed && written < total,
+            "{framing:?}: the body was drained ({written} of {total} bytes written)"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_declared_length_cannot_stretch_the_body() {
+    // A header smaller than what follows: HTTP/1.1 framing ends the body
+    // at the declared length, the rest is not read as body.
+    let mut body = json_body(16);
+    body.extend_from_slice(&json_body(MAX_LEN * 4));
+    let (addr, _server) = raw_server(200, Framing::Length(16), body.clone(), false).await;
+    let response = within(
+        "the answer",
+        bounded(Some(MAX)).send(HttpRequest::new(Method::GET, raw_url(addr))),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.body.as_ref(), &body[..16]);
+}
+
+#[tokio::test]
+async fn none_reads_any_size_and_refuses_no_declared_length() {
+    let total = 4 * 1024 * 1024;
+    let body = json_body(total);
+    let (addr, server) = raw_server(200, Framing::Chunked, body.clone(), false).await;
+    let response = within(
+        "the answer",
+        bounded(None).send(HttpRequest::new(Method::GET, raw_url(addr))),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.body.len(), total);
+    // Not `assert_eq!`: a failure would print 4 MiB.
+    assert!(response.body.iter().eq(body.iter()), "the body differs");
+    assert_eq!(within("the server", server).await.unwrap(), (total, true));
+
+    // A length past the default is not refused up front: the read fails
+    // only because the server sends less than it declared.
+    let declared = meta_whatsapp_adapters::http::DEFAULT_MAX_RESPONSE_BYTES + 1;
+    let (addr, _server) =
+        raw_server(200, Framing::Length(declared), json_body(MAX_LEN), false).await;
+    let err = within(
+        "the cut-off body",
+        bounded(None).send(HttpRequest::new(Method::GET, raw_url(addr))),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        !err.to_string().contains("exceeds"),
+        "None refused a declared length: {err}"
+    );
+}
+
+#[tokio::test]
+async fn the_default_bound_is_256_mib_from_the_builder_and_with_clients() {
+    use meta_whatsapp_adapters::http::DEFAULT_MAX_RESPONSE_BYTES;
+
+    assert_eq!(DEFAULT_MAX_RESPONSE_BYTES, 256 * 1024 * 1024);
+    let plain = || reqwest::Client::builder().referer(false).build().unwrap();
+    let credentialed = || {
+        reqwest::Client::builder()
+            .referer(false)
+            .redirect(credential_redirect_policy())
+            .build()
+            .unwrap()
+    };
+    for (what, transport) in [
+        ("new", transport()),
+        ("builder", ReqwestTransport::builder().build().unwrap()),
+        (
+            "with_clients",
+            ReqwestTransport::with_clients(plain(), credentialed()),
+        ),
+    ] {
+        // Past the default by one: refused on the header.
+        let (addr, _server) = raw_server(
+            200,
+            Framing::Length(DEFAULT_MAX_RESPONSE_BYTES + 1),
+            Vec::new(),
+            true,
+        )
+        .await;
+        let err = within(
+            "the refusal",
+            transport.send(HttpRequest::new(Method::GET, raw_url(addr))),
+        )
+        .await
+        .unwrap_err();
+        assert_too_large(&err, DEFAULT_MAX_RESPONSE_BYTES, what);
+
+        // At it: not refused on the header (the stalled body then times out).
+        let (addr, _server) = raw_server(
+            200,
+            Framing::Length(DEFAULT_MAX_RESPONSE_BYTES),
+            Vec::new(),
+            true,
+        )
+        .await;
+        let mut at_the_bound = HttpRequest::new(Method::GET, raw_url(addr));
+        at_the_bound.timeout = Some(Duration::from_millis(300));
+        let err = within("the timeout", transport.send(at_the_bound))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, TransportError::Timeout), "{what}: {err:?}");
+    }
+    // `with_max_response_bytes` changes it on a transport from `with_clients`.
+    let small =
+        ReqwestTransport::with_clients(plain(), credentialed()).with_max_response_bytes(Some(MAX));
+    let (addr, _server) = raw_server(200, Framing::Chunked, json_body(MAX_LEN + 1), false).await;
+    let err = within(
+        "the refusal",
+        small.send(HttpRequest::new(Method::GET, raw_url(addr))),
+    )
+    .await
+    .unwrap_err();
+    assert_too_large(&err, MAX, "with_max_response_bytes");
+}
+
+#[tokio::test]
+async fn send_streaming_is_not_bounded_by_it() {
+    // The stream's reader bounds a streamed body (the client's media
+    // download), not the transport.
+    let body = json_body(MAX_LEN * 8);
+    let (addr, _server) = raw_server(200, Framing::Chunked, body.clone(), false).await;
+    let streamed = within(
+        "the head",
+        bounded(Some(MAX)).send_streaming(HttpRequest::new(Method::GET, raw_url(addr))),
+    )
+    .await
+    .unwrap();
+    let mut read = Vec::new();
+    let mut stream = streamed.body;
+    while let Some(chunk) = within("a chunk", stream.next()).await {
+        read.extend_from_slice(&chunk.unwrap());
+    }
+    assert_eq!(read, body);
 }

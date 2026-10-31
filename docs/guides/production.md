@@ -209,14 +209,27 @@ first bytes. That bound is the client's, on what the transport streams:
 not yet handed over (a read buffer of a few hundred KiB on HTTP/1.1, up
 to the 2 MiB stream window on HTTP/2); a transport of your own that keeps
 the port's default `send_streaming` buffers the whole body through `send`
-first. Every other request's answer is read whole by the transport
-(`ReqwestTransport` sets no size limit). Those answers come from the
-configured Graph endpoint, from `api.facebook.com` for the Parent BSUID
-Accounts call, and from wherever a redirect to another origin leads
-(followed without the token, up to 10 hops). So give a proxy you put
-there a response size limit of its own if it could answer with more than
-you want to buffer, and an egress proxy one if the redirect targets
-worry you.
+first. Every other request's answer is buffered by the transport, and
+`ReqwestTransport` bounds it: at most `max_response_bytes` (builder
+setting; `ReqwestTransport::with_max_response_bytes` for one built with
+`with_clients`), 256 MiB by default (`DEFAULT_MAX_RESPONSE_BYTES`),
+`None` for no bound, for 2xx and error answers alike. Those answers come
+from the configured Graph endpoint or proxy, from `api.facebook.com` for
+the Parent BSUID Accounts call, from a URL you pass to
+`Client::request_url`, and from wherever a redirect to another origin
+leads (followed without the token, up to 10 hops), so the bound is what
+keeps a hostile or broken one from making the process buffer any size.
+A `Content-Length` over it is refused before the body is read, and the
+body is read chunk by chunk and refused as soon as it passes it (a body
+without a length, chunked or ended by closing, included); the answer is
+a `TransportError::Backend` saying `response body exceeds <n> bytes`,
+never the body or the URL, and the connection is dropped, not drained.
+The default leaves room for the largest JSON the client asks for:
+analytics field expansions (`Analytics::pricing`, `conversation`,
+`calls`) are unpaged, and a year of `HALF_HOUR` points broken down by
+several dimensions can run to a hundred MiB; split such a range or raise
+the bound. Lower it if nothing you call answers that much. A transport of
+your own should bound its `send` too.
 
 Sends are never replayed after a timeout or a 5xx. A campaign or
 notification queue on top must be idempotent itself: tag each message with
