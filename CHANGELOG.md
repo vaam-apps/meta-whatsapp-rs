@@ -217,6 +217,32 @@ stored data, the owner's).
 
 ### Added
 
+- **Call recording and transcription** (`meta_whatsapp_client::calling`,
+  roadmap L14, parity row 135, from `calling/call-recording` and
+  `calling/call-transcription`): the per-call `recording` and
+  `transcription` objects of `connect` and `accept`, as
+  `CallRecording` and `CallTranscription` (`status`, `purpose`,
+  `announcement_language`; `enabled(purpose, language)` and
+  `disabled()`). `ConnectCall` carries them (see Changed, breaking) with
+  the setters `recording`, `transcription` and
+  `biz_opaque_callback_data`; `Calling::accept_with(call_id, sdp_answer,
+  &AcceptOptions)` carries them on an accept (`Calling::accept` is
+  unchanged and sends neither). Off unless the caller sets them: no
+  other call sends either object, and an unset one sends no key. Meta
+  plays a recording or transcription announcement built from `purpose`
+  to both participants before it starts; a participant who does not
+  consent ends the call. Checked before any request: with `ENABLED`,
+  `purpose` and `announcement_language` present and not blank
+  (whitespace-only is blank), `purpose` at most 250 characters whatever
+  the status (`calling::recording::PURPOSE_MAX_CHARS`, counted in
+  Unicode scalar values), a given language not blank, each object on
+  its own (Meta ignores the transcription's when both are enabled, but
+  both pages require them);
+  errors on `recording.<field>` or `transcription.<field>`. The list of
+  announcement languages is not checked locally. Neither action is
+  replayed after a timeout, as before. The results were already typed
+  (`call_recording_available`, `call_transcription_available` in
+  `meta-whatsapp-webhooks`) and download through the Media API.
 - **Throughput upgrades, followed** in `meta-whatsapp-bot` (roadmap B2a,
   parity row 89), from `webhooks/reference/phone_number_quality_update`
   and `throughput` (read on 2026-10-30). Opt-in, off by default:
@@ -1353,6 +1379,18 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking — `ConnectCall` has two more fields**
+  (`meta_whatsapp_client::calling`, roadmap L14; see Added, "Call
+  recording and transcription"): `recording: Option<CallRecording>` and
+  `transcription: Option<CallTranscription>`. Its fields are public, so
+  a struct literal that names every field stops compiling.
+  `ConnectCall::new` sets both to `None` and the request is unchanged
+  when they are. **Upgrade:** add `recording: None, transcription: None`
+  to the literal, or build it as
+  `ConnectCall::new(to, sdp).biz_opaque_callback_data(data)` (or a
+  literal ending in `..ConnectCall::new(to, sdp)`), which later fields
+  do not break. `ConnectCall` stays exhaustive: OPEN_QUESTIONS #28 keeps
+  `#[non_exhaustive]` off request types.
 - **Breaking — numeric ids are checked when they are built**
   (`meta_whatsapp_core::ids`, roadmap L20c, decided as OPEN_QUESTIONS
   #20, now closed). `AppId`, `BusinessId`, `WabaId`, `PhoneNumberId`,
