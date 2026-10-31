@@ -32,307 +32,120 @@ use meta_whatsapp_rs::core::error::{StorageError, TransportError};
 use meta_whatsapp_rs::{Error, ErrorKind, GraphApiError};
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
-/// `(code, HTTP status, the service's sentence)` for every error code the
-/// API answers: the table of docs/design/server.md, section 5.2, which
-/// the service's `tests/errors.rs` reads to compare.
-pub const CODES: &[(&str, u16, &str)] = &[
+/// The code table: each entry is a constant of [`ErrorCode`] (its name the
+/// code in capitals), a row of [`CODES`] and an element of
+/// [`ErrorCode::ALL`], in one place, so a code the source names is one
+/// the table has: a misspelled one does not compile. Kept equal to the
+/// table of docs/design/server.md, section 5.2, code for code and status
+/// for status, by `the_codes_are_the_designs` (here, and the service's
+/// `tests/errors.rs`), and each constant's name to its code by
+/// `each_constant_is_named_after_its_code`.
+macro_rules! codes {
+    ($($name:ident = ($code:literal, $status:literal, $message:literal),)*) => {
+        impl ErrorCode {
+            $(
+                #[doc = concat!("`", $status, " ", $code, "`: ", $message)]
+                pub const $name: Self = Self {
+                    code: $code,
+                    status: $status,
+                    message: $message,
+                };
+            )*
+
+            /// Every code, in the order of [`CODES`].
+            pub const ALL: &'static [Self] = &[$(Self::$name),*];
+        }
+
+        /// `(code, HTTP status, the service's sentence)` for every error
+        /// code the API answers ([`ErrorCode::ALL`], as tuples): the table
+        /// of docs/design/server.md, section 5.2, which the tests read to
+        /// compare.
+        pub const CODES: &[(&str, u16, &str)] = &[$(($code, $status, $message)),*];
+
+        /// Each constant's name, for `each_constant_is_named_after_its_code`.
+        #[cfg(test)]
+        const NAMES: &[&str] = &[$(stringify!($name)),*];
+    };
+}
+
+codes! {
     // 401, 405
-    (
-        "unauthenticated",
-        401,
-        "A valid API key is required: send Authorization: Bearer wak_….",
-    ),
-    (
-        "method_not_allowed",
-        405,
-        "This path does not take this method: see the Allow header.",
-    ),
+    UNAUTHENTICATED = ("unauthenticated", 401, "A valid API key is required: send Authorization: Bearer wak_…."),
+    METHOD_NOT_ALLOWED = ("method_not_allowed", 405, "This path does not take this method: see the Allow header."),
     // 422: fix the request; nothing was sent.
-    (
-        "invalid_request",
-        422,
-        "The request is invalid: see `field`.",
-    ),
-    (
-        "invalid_parameter",
-        422,
-        "Meta rejected a parameter of the request.",
-    ),
-    (
-        "unsupported_message_type",
-        422,
-        "This message type is not supported.",
-    ),
-    (
-        "recipient_not_supported",
-        422,
-        "This message cannot be sent to that recipient: address them by phone number.",
-    ),
-    (
-        "undeliverable",
-        422,
-        "The message cannot be delivered to this recipient.",
-    ),
-    (
-        "template_parameter_mismatch",
-        422,
-        "The parameters do not match the approved template.",
-    ),
-    (
-        "template_not_found",
-        422,
-        "The template does not exist in that language, or is not approved.",
-    ),
-    (
-        "template_text_too_long",
-        422,
-        "The template's text is too long once its parameters are filled in.",
-    ),
-    (
-        "template_policy_violation",
-        422,
-        "The content violates WhatsApp's policies.",
-    ),
-    (
-        "template_rejected",
-        422,
-        "Meta rejected the template's content or format.",
-    ),
-    (
-        "sample_template_not_allowed",
-        422,
-        "Meta sends its sample template only from its public test numbers: send one of your own templates.",
-    ),
-    (
-        "idempotency_key_reused",
-        422,
-        "This Idempotency-Key was used with another request.",
-    ),
+    INVALID_REQUEST = ("invalid_request", 422, "The request is invalid: see `field`."),
+    INVALID_PARAMETER = ("invalid_parameter", 422, "Meta rejected a parameter of the request."),
+    UNSUPPORTED_MESSAGE_TYPE = ("unsupported_message_type", 422, "This message type is not supported."),
+    RECIPIENT_NOT_SUPPORTED = ("recipient_not_supported", 422, "This message cannot be sent to that recipient: address them by phone number."),
+    UNDELIVERABLE = ("undeliverable", 422, "The message cannot be delivered to this recipient."),
+    TEMPLATE_PARAMETER_MISMATCH = ("template_parameter_mismatch", 422, "The parameters do not match the approved template."),
+    TEMPLATE_NOT_FOUND = ("template_not_found", 422, "The template does not exist in that language, or is not approved."),
+    TEMPLATE_TEXT_TOO_LONG = ("template_text_too_long", 422, "The template's text is too long once its parameters are filled in."),
+    TEMPLATE_POLICY_VIOLATION = ("template_policy_violation", 422, "The content violates WhatsApp's policies."),
+    TEMPLATE_REJECTED = ("template_rejected", 422, "Meta rejected the template's content or format."),
+    SAMPLE_TEMPLATE_NOT_ALLOWED = ("sample_template_not_allowed", 422, "Meta sends its sample template only from its public test numbers: send one of your own templates."),
+    IDEMPOTENCY_KEY_REUSED = ("idempotency_key_reused", 422, "This Idempotency-Key was used with another request."),
     // 409: a state must change first.
-    (
-        "customer_service_window_closed",
-        409,
-        "More than 24 hours since the customer's last message: send a template.",
-    ),
-    (
-        "thread_owned_elsewhere",
-        409,
-        "Another app owns this conversation's thread: send a template, or wait for the thread.",
-    ),
-    (
-        "marketing_opted_out",
-        409,
-        "The customer stopped marketing messages from this business.",
-    ),
-    (
-        "blocked_by_business",
-        409,
-        "This business blocked the customer: unblock them first.",
-    ),
-    (
-        "experiment_holdout",
-        409,
-        "Meta held the message back as part of an experiment.",
-    ),
-    (
-        "template_paused",
-        409,
-        "The template is paused for low quality.",
-    ),
-    ("template_disabled", 409, "The template is disabled."),
-    (
-        "template_syncing",
-        409,
-        "The template is still syncing: try again in a few minutes.",
-    ),
-    (
-        "template_unavailable",
-        409,
-        "The template is not available for this API.",
-    ),
-    (
-        "template_limit_reached",
-        409,
-        "The WhatsApp Business Account has reached its template limit.",
-    ),
-    ("flow_unavailable", 409, "The Flow is blocked or throttled."),
-    (
-        "registration",
-        409,
-        "The phone number is not registered or verified.",
-    ),
-    (
-        "two_step_verification",
-        409,
-        "The two-step verification PIN is wrong, or was guessed too often.",
-    ),
-    (
-        "sync_not_allowed",
-        409,
-        "The coexistence sync is no longer allowed.",
-    ),
-    (
-        "duplicate_onboarding",
-        409,
-        "A partner already requested this onboarding.",
-    ),
-    (
-        "number_not_connected",
-        409,
-        "The phone number has no stored token: connect it first.",
-    ),
-    (
-        "reconnect_required",
-        409,
-        "The number's token is no longer valid: connect it again.",
-    ),
-    (
-        "waba_owned_by_another_tenant",
-        409,
-        "This WhatsApp Business Account, or one of its numbers, belongs to another tenant.",
-    ),
-    ("tenant_exists", 409, "A tenant with this id exists."),
-    (
-        "idempotency_in_progress",
-        409,
-        "A request with this Idempotency-Key is still running.",
-    ),
-    (
-        "outcome_unknown",
-        409,
-        "The outcome of the request with this Idempotency-Key is unknown: reconcile before retrying.",
-    ),
+    CUSTOMER_SERVICE_WINDOW_CLOSED = ("customer_service_window_closed", 409, "More than 24 hours since the customer's last message: send a template."),
+    THREAD_OWNED_ELSEWHERE = ("thread_owned_elsewhere", 409, "Another app owns this conversation's thread: send a template, or wait for the thread."),
+    MARKETING_OPTED_OUT = ("marketing_opted_out", 409, "The customer stopped marketing messages from this business."),
+    BLOCKED_BY_BUSINESS = ("blocked_by_business", 409, "This business blocked the customer: unblock them first."),
+    EXPERIMENT_HOLDOUT = ("experiment_holdout", 409, "Meta held the message back as part of an experiment."),
+    TEMPLATE_PAUSED = ("template_paused", 409, "The template is paused for low quality."),
+    TEMPLATE_DISABLED = ("template_disabled", 409, "The template is disabled."),
+    TEMPLATE_SYNCING = ("template_syncing", 409, "The template is still syncing: try again in a few minutes."),
+    TEMPLATE_UNAVAILABLE = ("template_unavailable", 409, "The template is not available for this API."),
+    TEMPLATE_LIMIT_REACHED = ("template_limit_reached", 409, "The WhatsApp Business Account has reached its template limit."),
+    FLOW_UNAVAILABLE = ("flow_unavailable", 409, "The Flow is blocked or throttled."),
+    REGISTRATION = ("registration", 409, "The phone number is not registered or verified."),
+    TWO_STEP_VERIFICATION = ("two_step_verification", 409, "The two-step verification PIN is wrong, or was guessed too often."),
+    SYNC_NOT_ALLOWED = ("sync_not_allowed", 409, "The coexistence sync is no longer allowed."),
+    DUPLICATE_ONBOARDING = ("duplicate_onboarding", 409, "A partner already requested this onboarding."),
+    NUMBER_NOT_CONNECTED = ("number_not_connected", 409, "The phone number has no stored token: connect it first."),
+    RECONNECT_REQUIRED = ("reconnect_required", 409, "The number's token is no longer valid: connect it again."),
+    WABA_OWNED_BY_ANOTHER_TENANT = ("waba_owned_by_another_tenant", 409, "This WhatsApp Business Account, or one of its numbers, belongs to another tenant."),
+    TENANT_EXISTS = ("tenant_exists", 409, "A tenant with this id exists."),
+    IDEMPOTENCY_IN_PROGRESS = ("idempotency_in_progress", 409, "A request with this Idempotency-Key is still running."),
+    OUTCOME_UNKNOWN = ("outcome_unknown", 409, "The outcome of the request with this Idempotency-Key is unknown: reconcile before retrying."),
     // 403: not allowed, by Meta or the service.
-    (
-        "permission",
-        403,
-        "The token lacks a permission, or access to this asset.",
-    ),
-    (
-        "account_restricted",
-        403,
-        "The account is restricted for a policy violation.",
-    ),
-    (
-        "country_restricted",
-        403,
-        "The account cannot message users in that country.",
-    ),
-    ("payment", 403, "The account has a payment problem."),
-    (
-        "feature_not_available",
-        403,
-        "This feature is not enabled for the account.",
-    ),
-    (
-        "marketing_not_allowed",
-        403,
-        "Marketing messages are not allowed here.",
-    ),
-    ("forbidden", 403, "This key may not do this."),
-    ("tenant_suspended", 403, "The tenant is suspended."),
-    (
-        "stale_attempt",
-        403,
-        "The signup attempt expired, was used, or belongs to another tenant.",
-    ),
+    PERMISSION = ("permission", 403, "The token lacks a permission, or access to this asset."),
+    ACCOUNT_RESTRICTED = ("account_restricted", 403, "The account is restricted for a policy violation."),
+    COUNTRY_RESTRICTED = ("country_restricted", 403, "The account cannot message users in that country."),
+    PAYMENT = ("payment", 403, "The account has a payment problem."),
+    FEATURE_NOT_AVAILABLE = ("feature_not_available", 403, "This feature is not enabled for the account."),
+    MARKETING_NOT_ALLOWED = ("marketing_not_allowed", 403, "Marketing messages are not allowed here."),
+    FORBIDDEN = ("forbidden", 403, "This key may not do this."),
+    TENANT_SUSPENDED = ("tenant_suspended", 403, "The tenant is suspended."),
+    STALE_ATTEMPT = ("stale_attempt", 403, "The signup attempt expired, was used, or belongs to another tenant."),
     // 429
-    (
-        "rate_limited",
-        429,
-        "Too many requests: back off and retry.",
-    ),
-    (
-        "pair_rate_limited",
-        429,
-        "Too many messages to this recipient: slow down for them.",
-    ),
-    (
-        "spam_rate_limited",
-        429,
-        "Sending is restricted after messages were reported as spam: do not retry.",
-    ),
-    (
-        "ecosystem_engagement_limit",
-        429,
-        "Not delivered, to keep engagement healthy: do not retry for 24 hours.",
-    ),
-    (
-        "classification_limit_reached",
-        429,
-        "The messaging limit was reached after template classification violations.",
-    ),
-    (
-        "too_many_requests",
-        429,
-        "Too many requests: back off and retry.",
-    ),
-    ("too_many_streams", 429, "Too many open event streams."),
+    RATE_LIMITED = ("rate_limited", 429, "Too many requests: back off and retry."),
+    PAIR_RATE_LIMITED = ("pair_rate_limited", 429, "Too many messages to this recipient: slow down for them."),
+    SPAM_RATE_LIMITED = ("spam_rate_limited", 429, "Sending is restricted after messages were reported as spam: do not retry."),
+    ECOSYSTEM_ENGAGEMENT_LIMIT = ("ecosystem_engagement_limit", 429, "Not delivered, to keep engagement healthy: do not retry for 24 hours."),
+    CLASSIFICATION_LIMIT_REACHED = ("classification_limit_reached", 429, "The messaging limit was reached after template classification violations."),
+    TOO_MANY_REQUESTS = ("too_many_requests", 429, "Too many requests: back off and retry."),
+    TOO_MANY_STREAMS = ("too_many_streams", 429, "Too many open event streams."),
     // 404, 410, 413
-    ("not_found", 404, "Not found."),
-    (
-        "nothing_to_resume",
-        404,
-        "There is no signup attempt to resume.",
-    ),
-    (
-        "cursor_expired",
-        410,
-        "The cursor is past the retention period.",
-    ),
-    ("payload_too_large", 413, "The request body is too large."),
-    ("media_too_large", 413, "The media is larger than allowed."),
+    NOT_FOUND = ("not_found", 404, "Not found."),
+    NOTHING_TO_RESUME = ("nothing_to_resume", 404, "There is no signup attempt to resume."),
+    CURSOR_EXPIRED = ("cursor_expired", 410, "The cursor is past the retention period."),
+    PAYLOAD_TOO_LARGE = ("payload_too_large", 413, "The request body is too large."),
+    MEDIA_TOO_LARGE = ("media_too_large", 413, "The media is larger than allowed."),
     // 502: Meta or the network failed.
-    (
-        "service_unavailable",
-        502,
-        "Meta is unavailable or overloaded: try again later.",
-    ),
-    (
-        "unknown",
-        502,
-        "Meta answered with an error the service does not know.",
-    ),
-    (
-        "upstream",
-        502,
-        "Meta answered with something that is not a Graph API answer.",
-    ),
-    (
-        "integrity",
-        502,
-        "The downloaded media failed its integrity check.",
-    ),
-    (
-        "media_download_failed",
-        502,
-        "The media could not be downloaded.",
-    ),
-    (
-        "media_upload_failed",
-        502,
-        "The media could not be uploaded.",
-    ),
-    ("onboarding_failed", 502, "Onboarding stopped at `step`."),
+    SERVICE_UNAVAILABLE = ("service_unavailable", 502, "Meta is unavailable or overloaded: try again later."),
+    UNKNOWN = ("unknown", 502, "Meta answered with an error the service does not know."),
+    UPSTREAM = ("upstream", 502, "Meta answered with something that is not a Graph API answer."),
+    INTEGRITY = ("integrity", 502, "The downloaded media failed its integrity check."),
+    MEDIA_DOWNLOAD_FAILED = ("media_download_failed", 502, "The media could not be downloaded."),
+    MEDIA_UPLOAD_FAILED = ("media_upload_failed", 502, "The media could not be uploaded."),
+    ONBOARDING_FAILED = ("onboarding_failed", 502, "Onboarding stopped at `step`."),
     // 504
-    (
-        "timeout",
-        504,
-        "Meta did not answer in time: the request may have taken effect.",
-    ),
+    TIMEOUT = ("timeout", 504, "Meta did not answer in time: the request may have taken effect."),
     // 503, 500
-    (
-        "storage_unavailable",
-        503,
-        "The service's storage is unavailable: try again later.",
-    ),
-    (
-        "shutting_down",
-        503,
-        "The service is shutting down: retry on another replica.",
-    ),
-    ("internal", 500, "Internal error."),
-];
+    STORAGE_UNAVAILABLE = ("storage_unavailable", 503, "The service's storage is unavailable: try again later."),
+    SHUTTING_DOWN = ("shutting_down", 503, "The service is shutting down: retry on another replica."),
+    INTERNAL = ("internal", 500, "Internal error."),
+}
 
 /// The status and sentence of `code`; `None` for a code not in [`CODES`].
 pub fn code_info(code: &str) -> Option<(u16, &'static str)> {
@@ -340,8 +153,33 @@ pub fn code_info(code: &str) -> Option<(u16, &'static str)> {
 }
 
 /// One of [`CODES`]: a stable error code, with the HTTP status it is
-/// answered with and the service's sentence for it. Only [`CODES`] makes
-/// one, so a code a caller receives is always documented.
+/// answered with and the service's sentence for it. Only the table makes
+/// one (a constant per code, e.g. [`ErrorCode::NOT_FOUND`]), so a code a
+/// caller receives is always documented, and a code the source names is
+/// checked by the compiler:
+///
+/// ```
+/// use meta_whatsapp_server_core::error::{ErrorCode, ServiceError};
+///
+/// let error = ServiceError::new(ErrorCode::CUSTOMER_SERVICE_WINDOW_CLOSED);
+/// assert_eq!((error.code(), error.status()), ("customer_service_window_closed", 409));
+/// ```
+///
+/// A misspelled code is no constant (`E0599`):
+///
+/// ```compile_fail,E0599
+/// use meta_whatsapp_server_core::error::{ErrorCode, ServiceError};
+///
+/// let error = ServiceError::new(ErrorCode::CUSTOMER_SERVICE_WINDOW_CLSOED);
+/// ```
+///
+/// and a string is no code (`E0308`), whatever it spells:
+///
+/// ```compile_fail,E0308
+/// use meta_whatsapp_server_core::error::ServiceError;
+///
+/// let error = ServiceError::new(ErrorCode::CUSTOMER_SERVICE_WINDOW_CLOSED);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ErrorCode {
     code: &'static str,
@@ -350,24 +188,11 @@ pub struct ErrorCode {
 }
 
 impl ErrorCode {
-    /// `500 internal`: what a code missing from [`CODES`] (a bug) is
-    /// answered as.
-    pub const INTERNAL: Self = Self {
-        code: "internal",
-        status: 500,
-        message: "Internal error.",
-    };
-
-    /// The entry of [`CODES`] named `code`.
+    /// The entry of [`CODES`] named `code` (one read at run time: a kept
+    /// answer's, a library kind's name). A code the source names is a
+    /// constant instead.
     pub fn of(code: &str) -> Option<Self> {
-        CODES
-            .iter()
-            .find(|(c, _, _)| *c == code)
-            .map(|(code, status, message)| Self {
-                code,
-                status: *status,
-                message,
-            })
+        Self::ALL.iter().find(|known| known.code == code).copied()
     }
 
     /// The code, e.g. `customer_service_window_closed`.
@@ -479,11 +304,11 @@ impl fmt::Display for ServiceError {
 impl std::error::Error for ServiceError {}
 
 impl ServiceError {
-    /// An error with `code` from [`CODES`]: not retryable, nothing sent.
-    /// An unknown code is a bug, answered as `internal`.
-    pub fn new(code: &'static str) -> Self {
+    /// An error with `code` (a constant of [`ErrorCode`], so one of
+    /// [`CODES`]): not retryable, nothing sent.
+    pub fn new(code: ErrorCode) -> Self {
         Self(Box::new(Details {
-            code: ErrorCode::of(code).unwrap_or(ErrorCode::INTERNAL),
+            code,
             retryable: false,
             may_have_been_sent: false,
             field: None,
@@ -496,36 +321,36 @@ impl ServiceError {
 
     /// `429 too_many_requests`, retryable, with `Retry-After`.
     pub fn too_many_requests(retry_after_secs: u64) -> Self {
-        let mut error = Self::new("too_many_requests").retryable(true);
+        let mut error = Self::new(ErrorCode::TOO_MANY_REQUESTS).retryable(true);
         error.0.retry_after = Some(retry_after_secs);
         error
     }
 
     /// `422 invalid_request` on `field`.
     pub fn invalid(field: impl Into<String>) -> Self {
-        let mut error = Self::new("invalid_request");
+        let mut error = Self::new(ErrorCode::INVALID_REQUEST);
         error.0.field = Some(field.into());
         error
     }
 
     /// `404 not_found`.
     pub fn not_found() -> Self {
-        Self::new("not_found")
+        Self::new(ErrorCode::NOT_FOUND)
     }
 
     /// `403 forbidden`.
     pub fn forbidden() -> Self {
-        Self::new("forbidden")
+        Self::new(ErrorCode::FORBIDDEN)
     }
 
     /// `401 unauthenticated`.
     pub fn unauthenticated() -> Self {
-        Self::new("unauthenticated")
+        Self::new(ErrorCode::UNAUTHENTICATED)
     }
 
     /// `500 internal`.
     pub fn internal() -> Self {
-        Self::new("internal")
+        Self::new(ErrorCode::INTERNAL)
     }
 
     /// Set `retryable`.
@@ -653,21 +478,27 @@ impl ServiceError {
 
     fn classify(error: &Error) -> Self {
         match error {
-            Error::Api(graph) => Self::new(kind_code(graph.kind())),
+            // Every kind's code is in the table (the service's
+            // `every_error_kind_maps_to_a_documented_code_and_status`
+            // iterates `ErrorKind::ALL`); a kind a library release adds
+            // without one would be a bug, answered as `internal`.
+            Error::Api(graph) => {
+                Self::new(ErrorCode::of(kind_code(graph.kind())).unwrap_or(ErrorCode::INTERNAL))
+            }
             // A non-Graph answer, or a 2xx of the wrong shape.
-            Error::Http { .. } | Error::Decode { .. } => Self::new("upstream"),
-            Error::Transport(TransportError::Timeout) => Self::new("timeout"),
-            Error::Transport(TransportError::Integrity(_)) => Self::new("integrity"),
-            Error::Transport(_) => Self::new("service_unavailable"),
+            Error::Http { .. } | Error::Decode { .. } => Self::new(ErrorCode::UPSTREAM),
+            Error::Transport(TransportError::Timeout) => Self::new(ErrorCode::TIMEOUT),
+            Error::Transport(TransportError::Integrity(_)) => Self::new(ErrorCode::INTEGRITY),
+            Error::Transport(_) => Self::new(ErrorCode::SERVICE_UNAVAILABLE),
             Error::Validation(v) if v.is_customer_service_window_closed() => {
-                Self::new("customer_service_window_closed")
+                Self::new(ErrorCode::CUSTOMER_SERVICE_WINDOW_CLOSED)
             }
             Error::Validation(v) if v.is_thread_owned_elsewhere() => {
-                Self::new("thread_owned_elsewhere")
+                Self::new(ErrorCode::THREAD_OWNED_ELSEWHERE)
             }
             // The library's reason may quote the value: only the field.
             Error::Validation(v) => Self::invalid(v.field.clone()),
-            Error::Storage(_) => Self::new("storage_unavailable"),
+            Error::Storage(_) => Self::new(ErrorCode::STORAGE_UNAVAILABLE),
             Error::Step { step, source } => {
                 let mut inner = Self::classify(source);
                 inner.0.step = Some(step);
@@ -788,56 +619,122 @@ mod tests {
         }
     }
 
-    /// Every code this crate's source names (`ServiceError::new("…")`,
-    /// `.code() == "…"`) is in [`CODES`]: a typo would otherwise answer
-    /// `internal`, or never match. (The service's own source has the same
-    /// test.)
+    /// A code read at run time (a kept answer's, a library kind's name) is
+    /// the table's entry, or none. (A code the source names is a
+    /// constant, which the compiler checks: the source scans of roadmap S1
+    /// to S5e went with S6.)
     #[test]
-    fn every_code_the_source_names_exists() {
-        let sources = [
-            include_str!("admin.rs"),
-            include_str!("authz.rs"),
-            include_str!("error.rs"),
-            include_str!("events.rs"),
-            include_str!("idempotency.rs"),
-            include_str!("media.rs"),
-            include_str!("messages.rs"),
-            include_str!("numbers.rs"),
-            include_str!("request.rs"),
-            include_str!("templates.rs"),
-        ];
-        let mut named = 0;
-        for source in sources {
-            let code = source.split("#[cfg(test)]").next().unwrap_or(source);
-            for needle in ["ServiceError::new(\"", ".code() == \"", "Self::new(\""] {
-                for (i, _) in code.match_indices(needle) {
-                    let rest = &code[i + needle.len()..];
-                    let name = &rest[..rest.find('"').unwrap()];
-                    named += 1;
-                    assert!(
-                        CODES.iter().any(|(c, _, _)| *c == name),
-                        "`{name}` is not in CODES"
-                    );
-                }
-            }
-        }
-        // The media operations name theirs here since roadmap S5d.
-        assert!(named >= 38, "{named}");
-    }
-
-    /// The fallback for a code missing from the table is the table's own
-    /// `internal`. Decisive: a drifted `ErrorCode::INTERNAL`.
-    #[test]
-    fn an_unknown_code_is_the_tables_internal() {
+    fn a_code_read_at_run_time_is_the_tables() {
         assert_eq!(ErrorCode::of("internal"), Some(ErrorCode::INTERNAL));
-        let error = ServiceError::new("no_such_code");
-        assert_eq!(error.code(), "internal");
-        assert_eq!(error.status(), 500);
+        assert_eq!(ErrorCode::of("no_such_code"), None);
         assert_eq!(
             code_info("cursor_expired"),
             Some((410, "The cursor is past the retention period."))
         );
         assert_eq!(code_info("no_such_code"), None);
+        let error = ServiceError::new(ErrorCode::CURSOR_EXPIRED);
+        assert_eq!(error.error_code(), ErrorCode::CURSOR_EXPIRED);
+        assert_eq!((error.code(), error.status()), ("cursor_expired", 410));
+    }
+
+    /// The constants, [`ErrorCode::ALL`] and [`CODES`] are one table: each
+    /// constant named after its code in capitals (`NOT_FOUND` is
+    /// `not_found`, never another code), each code once, in snake case,
+    /// with an error status and a sentence. Decisive: a constant whose
+    /// name and code differ, a code twice.
+    #[test]
+    fn each_constant_is_named_after_its_code() {
+        assert_eq!(NAMES.len(), ErrorCode::ALL.len());
+        assert_eq!(CODES.len(), ErrorCode::ALL.len());
+        let mut seen = std::collections::HashSet::new();
+        for ((name, code), row) in NAMES.iter().zip(ErrorCode::ALL).zip(CODES) {
+            assert_eq!(name.to_ascii_lowercase(), code.as_str(), "{name}");
+            assert_eq!(*row, (code.as_str(), code.status(), code.message()));
+            assert!(seen.insert(code.as_str()), "{name} twice");
+            assert!(
+                code.as_str()
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "{name}"
+            );
+            assert!((400..600).contains(&code.status()), "{name}");
+            assert!(!code.message().is_empty(), "{name}");
+        }
+    }
+
+    /// docs/design/server.md, section 5.2, read from the document itself:
+    /// every code of its table with the status of its row. Parenthesized
+    /// remarks are not codes; a row of several statuses (`404, 410, 413`)
+    /// gives each its `;`-separated group of codes. (The service's
+    /// `tests/errors.rs` reads it the same way, for its own tests.)
+    fn design() -> std::collections::HashMap<String, u16> {
+        let doc = include_str!("../../../docs/design/server.md");
+        let section = doc
+            .split("### 5.2 Codes and statuses")
+            .nth(1)
+            .and_then(|rest| rest.split("\n### ").next())
+            .expect("section 5.2 of docs/design/server.md");
+        let mut map = std::collections::HashMap::new();
+        let rows = section
+            .lines()
+            .filter(|l| l.starts_with("| ") && !l.starts_with("| HTTP") && !l.starts_with("| ---"));
+        for row in rows {
+            let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+            let statuses: Vec<u16> = cells[1]
+                .split(',')
+                .map(|s| s.trim().parse().unwrap())
+                .collect();
+            let mut codes = String::new();
+            let mut depth = 0;
+            for c in cells[2].chars() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth -= 1,
+                    _ if depth == 0 => codes.push(c),
+                    _ => {}
+                }
+            }
+            let groups: Vec<&str> = codes.split(';').collect();
+            assert!(
+                statuses.len() == 1 || statuses.len() == groups.len(),
+                "5.2: {row}"
+            );
+            for (i, group) in groups.iter().enumerate() {
+                let status = statuses[if statuses.len() == 1 { 0 } else { i }];
+                for code in group.split('`').skip(1).step_by(2) {
+                    assert!(
+                        map.insert(code.to_owned(), status).is_none(),
+                        "{code} twice in 5.2"
+                    );
+                }
+            }
+        }
+        assert!(map.len() >= 60, "{} codes read from 5.2", map.len());
+        map
+    }
+
+    /// The constants are the design's table, code for code and status for
+    /// status: a constant the table lacks, or a code of the table with no
+    /// constant, fails. Decisive: an entry added to or dropped from
+    /// `codes!`.
+    #[test]
+    fn the_codes_are_the_designs() {
+        let design = design();
+        for code in ErrorCode::ALL {
+            assert_eq!(
+                design.get(code.as_str()),
+                Some(&code.status()),
+                "`{}` is not the design's",
+                code.as_str()
+            );
+        }
+        for (code, status) in &design {
+            assert_eq!(
+                ErrorCode::of(code).map(ErrorCode::status),
+                Some(*status),
+                "`{code}` of the design has no constant"
+            );
+        }
     }
 
     /// `as_invalid` keeps what Meta said and whether it may have been sent,

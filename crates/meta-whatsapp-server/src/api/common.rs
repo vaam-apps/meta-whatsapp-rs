@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorCode};
 use crate::model::{Listing, MAX_PAGE_SIZE, PageRequest};
 
 /// A JSON request body. A body that is not the documented JSON object
@@ -31,7 +31,7 @@ where
         match Json::<T>::from_request(request, state).await {
             Ok(Json(value)) => Ok(Self(value)),
             Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
-                Err(ApiError::new("payload_too_large"))
+                Err(ApiError::new(ErrorCode::PAYLOAD_TOO_LARGE))
             }
             Err(_) => Err(ApiError::invalid("body")),
         }

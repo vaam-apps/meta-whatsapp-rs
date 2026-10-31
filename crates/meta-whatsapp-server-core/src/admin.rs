@@ -33,7 +33,7 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::audit::{Subject, audit};
 use crate::authz::{AdminCaller, Authorizer, OwnedWaba, VaultRotation};
-use crate::error::ServiceError;
+use crate::error::{ErrorCode, ServiceError};
 use crate::keys::MintedKey;
 use crate::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
@@ -338,7 +338,7 @@ impl<'a> Admin<'a> {
                 Ok(tenant)
             }
             // Taken (docs/design/server.md, section 5.2).
-            None => Err(ServiceError::new("tenant_exists")),
+            None => Err(ServiceError::new(ErrorCode::TENANT_EXISTS)),
         }
     }
 
@@ -678,7 +678,7 @@ impl<'a> Admin<'a> {
             .await?
             .is_some_and(|w| w.tenant_id != tenant)
         {
-            return Err(ServiceError::new("waba_owned_by_another_tenant"));
+            return Err(ServiceError::new(ErrorCode::WABA_OWNED_BY_ANOTHER_TENANT));
         }
         let waba = self
             .authz
@@ -711,7 +711,7 @@ impl<'a> Admin<'a> {
                 max = MAX_WABA_NUMBERS,
                 "Meta listed more numbers on a WABA than attach binds"
             );
-            return Err(ServiceError::new("upstream"));
+            return Err(ServiceError::new(ErrorCode::UPSTREAM));
         }
         // D4 again, atomically with the binding. Binding before storing: a
         // store first would overwrite the owner's token before D4 refused.
@@ -722,7 +722,7 @@ impl<'a> Admin<'a> {
         {
             BindOutcome::Bound => {}
             BindOutcome::OwnedByAnotherTenant => {
-                return Err(ServiceError::new("waba_owned_by_another_tenant"));
+                return Err(ServiceError::new(ErrorCode::WABA_OWNED_BY_ANOTHER_TENANT));
             }
             // Deleted since it was read above.
             BindOutcome::NoSuchTenant => return Err(ServiceError::not_found()),
@@ -833,7 +833,7 @@ impl<'a> Admin<'a> {
         match self.authz.waba_for_admin(self.caller, binding).await {
             Ok(owned) => self.unsubscribe_and_forget(owned).await,
             // Storage down: nothing can be deleted either.
-            Err(error) if error.code() == "storage_unavailable" => Err(error),
+            Err(error) if error.error_code() == ErrorCode::STORAGE_UNAVAILABLE => Err(error),
             // No token, an expired one, or one that no longer decrypts.
             Err(unusable) => {
                 self.authz

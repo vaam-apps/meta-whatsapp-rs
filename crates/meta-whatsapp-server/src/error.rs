@@ -26,7 +26,7 @@ use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::http::{HeaderValue, StatusCode, header};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::error::{self as core_error, ServiceError};
-pub use meta_whatsapp_server_core::error::{CODES, MAX_DETAILS_CHARS, kind_code};
+pub use meta_whatsapp_server_core::error::{CODES, ErrorCode, MAX_DETAILS_CHARS, kind_code};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -88,7 +88,7 @@ pub struct ErrorBody {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ErrorObject {
     /// Stable error code (one of the `ErrorCode` values).
-    #[schema(value_type = ErrorCode)]
+    #[schema(value_type = ErrorCodeSchema)]
     pub code: &'static str,
     /// The service's sentence for the code.
     pub message: &'static str,
@@ -115,9 +115,9 @@ pub struct ErrorObject {
 }
 
 impl ApiError {
-    /// An error with `code` from [`CODES`]: not retryable, nothing sent.
-    /// An unknown code is a bug, answered as `internal`.
-    pub fn new(code: &'static str) -> Self {
+    /// An error with `code` (a constant of [`ErrorCode`], so one of
+    /// [`CODES`]): not retryable, nothing sent.
+    pub fn new(code: ErrorCode) -> Self {
         Self(ServiceError::new(code))
     }
 
@@ -313,9 +313,9 @@ impl From<Error> for ApiError {
 
 /// The `KnownErrorCode` schema: every code in [`CODES`], the ones this
 /// version answers.
-pub struct KnownErrorCode;
+pub struct KnownErrorCodeSchema;
 
-impl utoipa::PartialSchema for KnownErrorCode {
+impl utoipa::PartialSchema for KnownErrorCodeSchema {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         use utoipa::openapi::schema::{ObjectBuilder, Type};
         ObjectBuilder::new()
@@ -329,13 +329,18 @@ impl utoipa::PartialSchema for KnownErrorCode {
     }
 }
 
-impl ToSchema for KnownErrorCode {}
+impl ToSchema for KnownErrorCodeSchema {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("KnownErrorCode")
+    }
+}
 
-/// The `ErrorCode` schema: a [`KnownErrorCode`], or any other string,
-/// since codes grow within `v1`.
-pub struct ErrorCode;
+/// The `ErrorCode` schema: a `KnownErrorCode` ([`KnownErrorCodeSchema`]),
+/// or any other string, since codes grow within `v1`. (The codes
+/// themselves are [`ErrorCode`]'s constants, the core's.)
+pub struct ErrorCodeSchema;
 
-impl utoipa::PartialSchema for ErrorCode {
+impl utoipa::PartialSchema for ErrorCodeSchema {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         use utoipa::openapi::Ref;
         use utoipa::openapi::schema::{AnyOfBuilder, ObjectBuilder, Type};
@@ -350,7 +355,11 @@ impl utoipa::PartialSchema for ErrorCode {
     }
 }
 
-impl ToSchema for ErrorCode {}
+impl ToSchema for ErrorCodeSchema {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ErrorCode")
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -370,52 +379,13 @@ mod tests {
         }
     }
 
-    /// Every code the source names (`ApiError::new("…")`, `.code() ==
-    /// "…"`) is in [`CODES`]: a typo would otherwise answer `internal`, or
-    /// never match.
+    /// An error answers its code's status and code; a code is an
+    /// [`ErrorCode`] constant, so a misspelled one does not compile (the
+    /// core's doctest), where it answered `internal` before roadmap S6.
     #[test]
-    fn every_code_the_source_names_exists() {
-        let sources = [
-            include_str!("auth.rs"),
-            include_str!("error.rs"),
-            include_str!("idempotency.rs"),
-            include_str!("api/mod.rs"),
-            include_str!("api/admin.rs"),
-            include_str!("api/numbers.rs"),
-            include_str!("api/ops.rs"),
-            include_str!("api/common.rs"),
-            include_str!("api/webhooks.rs"),
-            include_str!("api/messages.rs"),
-            include_str!("api/media.rs"),
-            include_str!("api/templates.rs"),
-            include_str!("api/events.rs"),
-            include_str!("events.rs"),
-        ];
-        let mut named = 0;
-        for source in sources {
-            let code = source.split("#[cfg(test)]").next().unwrap_or(source);
-            for needle in ["ApiError::new(\"", ".code() == \"", "Self::new(\""] {
-                for (i, _) in code.match_indices(needle) {
-                    let rest = &code[i + needle.len()..];
-                    let name = &rest[..rest.find('"').unwrap()];
-                    named += 1;
-                    assert!(
-                        CODES.iter().any(|(c, _, _)| *c == name),
-                        "`{name}` is not in CODES"
-                    );
-                }
-            }
-        }
-        // The admin operations name theirs in the core since roadmap S5a,
-        // the message operations since S5b, and the media operations since
-        // S5d (its own `every_code_the_source_names_exists` reads them).
-        assert!(named >= 8, "{named}");
-    }
-
-    #[test]
-    fn an_unknown_code_is_internal() {
-        let error = ApiError::new("no_such_code");
-        assert_eq!(error.code(), "internal");
-        assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    fn an_error_answers_its_codes_status() {
+        let error = ApiError::new(ErrorCode::CURSOR_EXPIRED);
+        assert_eq!(error.code(), "cursor_expired");
+        assert_eq!(error.status(), StatusCode::GONE);
     }
 }

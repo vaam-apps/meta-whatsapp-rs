@@ -42,7 +42,7 @@ use meta_whatsapp_rs::webhooks::fields::StandbyItem;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
-use crate::error::ServiceError;
+use crate::error::{ErrorCode, ServiceError};
 use crate::model::TenantId;
 use crate::outbox::{
     DedupWindow, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
@@ -540,7 +540,7 @@ pub async fn poll(outbox: &dyn Outbox, query: &EventQuery) -> Result<Polled, Ser
     let page = outbox.page(query).await?;
     let start = match query.after {
         Some(after) if after < page.purged_through => {
-            return Err(ServiceError::new("cursor_expired"));
+            return Err(ServiceError::new(ErrorCode::CURSOR_EXPIRED));
         }
         Some(after) if after > page.high_water => return Err(ServiceError::invalid("after")),
         Some(after) => after,

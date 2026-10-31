@@ -41,7 +41,7 @@ use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use crate::auth::{admin_guard, guard, tenant_guard};
-use crate::error::{ApiError, ErrorBody, ErrorCode, KnownErrorCode};
+use crate::error::{ApiError, ErrorBody, ErrorCode, ErrorCodeSchema, KnownErrorCodeSchema};
 use crate::events::MAX_WEBHOOK_BODY_BYTES;
 use crate::model::Scope;
 use crate::state::AppState;
@@ -102,7 +102,7 @@ impl Modify for Security {
                        `error.code` (`ErrorCode`), and resend only when `may_have_been_sent` is false."
     ),
     modifiers(&Security),
-    components(schemas(ErrorBody, ErrorCode, KnownErrorCode, events::EventType, events::KnownEventType)),
+    components(schemas(ErrorBody, ErrorCodeSchema, KnownErrorCodeSchema, events::EventType, events::KnownEventType)),
     tags(
         (name = "admin", description = "Tenants, keys, WABA bindings and the vault key (admin key)"),
         (name = "numbers", description = "WABAs, numbers and business profiles (scope `numbers`)"),
@@ -271,14 +271,14 @@ async fn not_found() -> ApiError {
 /// A path that exists, with a method it does not take: `405
 /// method_not_allowed`, with the error body (axum adds `Allow`).
 async fn method_not_allowed() -> ApiError {
-    ApiError::new("method_not_allowed")
+    ApiError::new(ErrorCode::METHOD_NOT_ALLOWED)
 }
 
 /// Answer `504 timeout` for a request not answered within `limit`.
 async fn deadline(State(limit): State<Duration>, request: Request, next: Next) -> Response {
     let Ok(response) = tokio::time::timeout(limit, next.run(request)).await else {
         tracing::warn!(deadline_s = limit.as_secs(), "request cut at its deadline");
-        return ApiError::new("timeout")
+        return ApiError::new(ErrorCode::TIMEOUT)
             .retryable(true)
             .with_may_have_been_sent(true)
             .into_response();

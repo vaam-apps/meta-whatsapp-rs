@@ -90,7 +90,7 @@ use sha2::{Digest, Sha256};
 use utoipa::ToSchema;
 
 use crate::auth::{Caller, OwnedNumber};
-use crate::error::{ApiError, ErrorBody};
+use crate::error::{ApiError, ErrorBody, ErrorCode};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
 use crate::state::AppState;
 
@@ -146,14 +146,14 @@ fn form_error(error: &multer::Error) -> ApiError {
         multer::Error::FieldSizeExceeded { field_name, .. }
             if field_name.as_deref() == Some("file") =>
         {
-            ApiError::new("media_too_large")
+            ApiError::new(ErrorCode::MEDIA_TOO_LARGE)
         }
         multer::Error::FieldSizeExceeded { field_name, .. }
             if field_name.as_deref() == Some("type") =>
         {
             ApiError::invalid("type")
         }
-        multer::Error::StreamSizeExceeded { .. } => ApiError::new("payload_too_large"),
+        multer::Error::StreamSizeExceeded { .. } => ApiError::new(ErrorCode::PAYLOAD_TOO_LARGE),
         _ => ApiError::invalid("body"),
     }
 }
@@ -329,7 +329,7 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
                 let mut data = Vec::new();
                 while let Some(chunk) = field.chunk().await.map_err(|e| form_error(&e))? {
                     if u64::try_from(data.len() + chunk.len()).unwrap_or(u64::MAX) > cap {
-                        return Err(ApiError::new("media_too_large"));
+                        return Err(ApiError::new(ErrorCode::MEDIA_TOO_LARGE));
                     }
                     data.extend_from_slice(&chunk);
                 }

@@ -94,7 +94,7 @@ use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::{Error, ErrorKind};
 use time::OffsetDateTime;
 
-use crate::error::ServiceError;
+use crate::error::{ErrorCode, ServiceError};
 use crate::keys::PresentedKey;
 use crate::model::{
     ApiKeyRecord, BindingEpoch, KeyOwner, MAX_PAGE_SIZE, NumberStatus, PageRequest, Scope,
@@ -517,7 +517,7 @@ impl Authorizer {
         match self.records.tenant(&tenant).await? {
             None => Err(ServiceError::forbidden()),
             Some(t) if t.status == TenantStatus::Suspended => {
-                Err(ServiceError::new("tenant_suspended"))
+                Err(ServiceError::new(ErrorCode::TENANT_SUSPENDED))
             }
             Some(_) => Ok(tenant),
         }
@@ -581,9 +581,11 @@ impl Authorizer {
         match binding.status {
             NumberStatus::Connected => {}
             NumberStatus::ReconnectRequired => {
-                return Err(ServiceError::new("reconnect_required"));
+                return Err(ServiceError::new(ErrorCode::RECONNECT_REQUIRED));
             }
-            NumberStatus::Disconnected => return Err(ServiceError::new("number_not_connected")),
+            NumberStatus::Disconnected => {
+                return Err(ServiceError::new(ErrorCode::NUMBER_NOT_CONNECTED));
+            }
         }
         // The WABA's binding the number is held by: what `failed` marks,
         // and nothing bound since.
@@ -657,7 +659,7 @@ impl Authorizer {
         let read = self.tokens.vault.get_versioned(waba_id).await;
         self.still_bound(binding).await?;
         let Some((token, version)) = read? else {
-            return Err(ServiceError::new("number_not_connected"));
+            return Err(ServiceError::new(ErrorCode::NUMBER_NOT_CONNECTED));
         };
         let token = usable(Some(token), waba_id, self.clock.now())?;
         Ok(OwnedWaba {
@@ -831,13 +833,13 @@ fn usable(
     waba_id: &WabaId,
     now: OffsetDateTime,
 ) -> Result<StoredBusinessToken, ServiceError> {
-    let token = token.ok_or_else(|| ServiceError::new("number_not_connected"))?;
+    let token = token.ok_or_else(|| ServiceError::new(ErrorCode::NUMBER_NOT_CONNECTED))?;
     if &token.waba_id != waba_id {
         tracing::warn!("the vault routes a bound number to another WABA");
-        return Err(ServiceError::new("number_not_connected"));
+        return Err(ServiceError::new(ErrorCode::NUMBER_NOT_CONNECTED));
     }
     if token.is_expired(now) {
-        return Err(ServiceError::new("reconnect_required"));
+        return Err(ServiceError::new(ErrorCode::RECONNECT_REQUIRED));
     }
     Ok(token)
 }

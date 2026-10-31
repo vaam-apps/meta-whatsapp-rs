@@ -45,7 +45,7 @@ use meta_whatsapp_rs::core::error::StorageError;
 use sha2::{Digest, Sha256};
 
 use crate::authz::{Authorizer, Caller};
-use crate::error::ServiceError;
+use crate::error::{ErrorCode, ServiceError};
 use crate::model::{
     IdempotencyClaim, IdempotencyKey, IdempotencyRecord, IdempotencyState, TenantId,
 };
@@ -215,12 +215,12 @@ impl Repeat {
     /// The kept answer, `(status, body)`, or the error to answer instead.
     pub fn into_answer(self) -> Result<(u16, Vec<u8>), ServiceError> {
         match self {
-            Self::Reused => Err(ServiceError::new("idempotency_key_reused")),
-            Self::InProgress => Err(ServiceError::new("idempotency_in_progress")
+            Self::Reused => Err(ServiceError::new(ErrorCode::IDEMPOTENCY_KEY_REUSED)),
+            Self::InProgress => Err(ServiceError::new(ErrorCode::IDEMPOTENCY_IN_PROGRESS)
                 .retryable(true)
                 .with_may_have_been_sent(true)),
             Self::OutcomeUnknown => {
-                Err(ServiceError::new("outcome_unknown").with_may_have_been_sent(true))
+                Err(ServiceError::new(ErrorCode::OUTCOME_UNKNOWN).with_may_have_been_sent(true))
             }
             Self::Replay { status, body } => Ok((status, body)),
         }
@@ -379,7 +379,7 @@ impl Drop for Claim {
         }
         // Cut before it settled (the request deadline, or the client
         // leaving): whatever was under way may have been sent.
-        let answer = ServiceError::new("timeout")
+        let answer = ServiceError::new(ErrorCode::TIMEOUT)
             .retryable(true)
             .with_may_have_been_sent(true);
         let status = answer.status();
@@ -694,9 +694,9 @@ mod tests {
                 body: b"{}",
             })
             .await;
-        let sent = ServiceError::new("timeout").with_may_have_been_sent(true);
+        let sent = ServiceError::new(ErrorCode::TIMEOUT).with_may_have_been_sent(true);
         claimed(&records).await.settle(Outcome::Failed(&sent)).await;
-        let refused = ServiceError::new("customer_service_window_closed");
+        let refused = ServiceError::new(ErrorCode::CUSTOMER_SERVICE_WINDOW_CLOSED);
         claimed(&records)
             .await
             .settle(Outcome::Failed(&refused))

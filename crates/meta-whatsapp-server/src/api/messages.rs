@@ -46,7 +46,7 @@ use utoipa::ToSchema;
 
 use super::common::ApiJson;
 use crate::auth::{Caller, OwnedNumber};
-use crate::error::{ApiError, ErrorBody};
+use crate::error::{ApiError, ErrorBody, ErrorCode};
 use crate::idempotency::{self, Fingerprint, KeyHeader, Success};
 use crate::state::AppState;
 
@@ -923,7 +923,7 @@ where
             .await
             .map_err(|rejection| {
                 if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
-                    ApiError::new("payload_too_large")
+                    ApiError::new(ErrorCode::PAYLOAD_TOO_LARGE)
                 } else {
                     ApiError::invalid("body")
                 }
