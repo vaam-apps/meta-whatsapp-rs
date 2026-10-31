@@ -69,7 +69,7 @@ async fn the_services_own_capabilities_pass_the_same_extractors() {
     let tenant_key = h.tenant_key(VICTIM, &ALL_SCOPES).await;
     let app = tenant_routes()
         .route_layer(middleware::from_fn_with_state(
-            guard(&h.state, Scope::Numbers),
+            guard(&h.state, Scope::Numbers, &tenant_operations()),
             tenant_guard,
         ))
         .merge(

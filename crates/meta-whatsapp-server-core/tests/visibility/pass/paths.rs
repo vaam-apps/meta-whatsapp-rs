@@ -17,7 +17,8 @@ use meta_whatsapp_server_core::backend::Backend;
 use meta_whatsapp_server_core::inbound::{DELIVERED, Inbound, Pipeline, Refused};
 use meta_whatsapp_server_core::media::{DownloadLimits, Media, MediaSlots, Upload};
 use meta_whatsapp_server_core::model::TenantId;
-use meta_whatsapp_server_core::ratelimit::Slots;
+use meta_whatsapp_server_core::operation::Operation;
+use meta_whatsapp_server_core::ratelimit::{RateLimiter, RateLimits, RouteClass, Slots};
 use meta_whatsapp_server_core::store::RecordStore;
 
 #[allow(dead_code, clippy::too_many_arguments)]
@@ -36,6 +37,9 @@ async fn public(
     let _: &Client = authz.client();
     let _: &str = admin.key_id();
     let _: &TenantId = caller.tenant();
+    // A request charged by its operation (the class is the core's).
+    let limiter = RateLimiter::new(RateLimits::default());
+    let _: Result<RouteClass, _> = limiter.charge(caller.tenant(), Operation::ListNumbers);
     let _ = format!("{tokens:?}");
     let number: OwnedNumber = authz.owned_number(caller, pn).await?;
     let _: ServiceError = number.failed(authz, error).await;

@@ -1,19 +1,25 @@
 //! Rate limits (docs/design/server.md, section 6): a token bucket per
-//! tenant and route class, per replica, checked after the key, the tenant
+//! tenant and route class, per replica, charged after the key, the tenant
 //! and the scope (steps 1 to 3 of the authorization order) and before
 //! ownership, the vault and the body: a limited request costs nothing
 //! else. Past the limit: `429 too_many_requests`, `retryable`, with
-//! `Retry-After`.
+//! `Retry-After` ([`Limited::error`]).
+//!
+//! A request is charged **by its operation** ([`RateLimiter::charge`],
+//! with an [`Operation`]), never by its HTTP method: the class is the
+//! operation's ([`RouteClass::of`]), so a read lands in the read budget
+//! through any API adapter, whatever method that adapter serves it with
+//! (roadmap S6). Nothing outside this crate charges a class directly.
 //!
 //! The bucket is the **tenant's**: a tenant key and a platform key acting
 //! for the same tenant draw from one bucket, and one tenant exhausting
 //! its budget leaves the others' untouched.
 //!
-//! | Class | Routes | Default (per tenant and replica) |
+//! | Class | Operations | Default (per tenant and replica) |
 //! | --- | --- | --- |
-//! | `send` | every write that is not template management: sends, read receipts, media uploads and deletes, profile changes, disconnection | 20/s, burst 40 (the design's "sends") |
-//! | `read` | every `GET` but templates' | 50/s, burst 50 (the design's "reads"; it states no burst) |
-//! | `templates` | every templates route | 2/s, burst 2 (the design's "template management"; it states no burst) |
+//! | `send` | every write that is not template management: `send_message`, `mark_read`, `upload_media`, `delete_media`, `update_profile`, `disconnect_waba` | 20/s, burst 40 (the design's "sends") |
+//! | `read` | every read but templates': `list_wabas`, `list_numbers`, `get_number`, `get_profile`, `download_media`, `list_events` | 50/s, burst 50 (the design's "reads"; it states no burst) |
+//! | `templates` | every template operation: `list_templates`, `get_template`, `create_template`, `delete_templates` | 2/s, burst 2 (the design's "template management"; it states no burst) |
 //!
 //! The design names classes for sends, reads and template management; it
 //! does not say where read receipts, media and profile writes belong: they
@@ -29,7 +35,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{Duration, Instant};
 
-use crate::model::{Scope, TenantId};
+use crate::error::ServiceError;
+use crate::model::TenantId;
+use crate::operation::Operation;
 
 /// The classes of routes a tenant's budget is split into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,15 +54,26 @@ impl RouteClass {
     /// Every class.
     pub const ALL: [Self; 3] = [Self::Send, Self::Read, Self::Templates];
 
-    /// The class of a route needing `scope`, called with the HTTP method
-    /// `method` (`GET`, as an HTTP adapter's method type or a string).
-    pub fn of<M: AsRef<str> + ?Sized>(scope: Scope, method: &M) -> Self {
-        if scope == Scope::Templates {
-            Self::Templates
-        } else if matches!(method.as_ref(), "GET" | "HEAD") {
-            Self::Read
-        } else {
-            Self::Send
+    /// The class of `operation` (the module's table): its own, whatever
+    /// HTTP method, or none, an adapter serves it with.
+    pub fn of(operation: Operation) -> Self {
+        match operation {
+            Operation::ListWabas
+            | Operation::ListNumbers
+            | Operation::GetNumber
+            | Operation::GetProfile
+            | Operation::DownloadMedia
+            | Operation::ListEvents => Self::Read,
+            Operation::UpdateProfile
+            | Operation::DisconnectWaba
+            | Operation::SendMessage
+            | Operation::MarkRead
+            | Operation::UploadMedia
+            | Operation::DeleteMedia => Self::Send,
+            Operation::ListTemplates
+            | Operation::CreateTemplate
+            | Operation::DeleteTemplates
+            | Operation::GetTemplate => Self::Templates,
         }
     }
 
@@ -150,9 +169,26 @@ impl RateLimiter {
         self.limits
     }
 
+    /// Charge `tenant` one request of `operation`: a token from the
+    /// bucket of its class ([`RouteClass::of`]), else [`Limited`] (`429
+    /// too_many_requests` with `Retry-After`, [`Limited::error`]). The
+    /// class charged is returned, for the adapter's metrics.
+    ///
+    /// # Errors
+    ///
+    /// The bucket is empty: [`Limited`], with the class and the wait.
+    pub fn charge(&self, tenant: &TenantId, operation: Operation) -> Result<RouteClass, Limited> {
+        let class = RouteClass::of(operation);
+        match self.check(tenant, class) {
+            Ok(()) => Ok(class),
+            Err(wait) => Err(Limited { class, wait }),
+        }
+    }
+
     /// Take a token from `tenant`'s `class` bucket, or say how long until
-    /// one is there.
-    pub fn check(&self, tenant: &TenantId, class: RouteClass) -> Result<(), Duration> {
+    /// one is there. Crate-private: an adapter charges an operation
+    /// ([`Self::charge`]), never a class of its choosing.
+    pub(crate) fn check(&self, tenant: &TenantId, class: RouteClass) -> Result<(), Duration> {
         let rate = self.limits.of(class);
         let per_second = f64::from(rate.per_second.max(1));
         let burst = f64::from(rate.burst.max(1));
@@ -171,6 +207,23 @@ impl RateLimiter {
         } else {
             Err(Duration::from_secs_f64((1.0 - bucket.tokens) / per_second))
         }
+    }
+}
+
+/// A request past its tenant's budget ([`RateLimiter::charge`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limited {
+    /// The class whose bucket is empty.
+    pub class: RouteClass,
+    /// How long until it holds a token again.
+    pub wait: Duration,
+}
+
+impl Limited {
+    /// `429 too_many_requests`, retryable, with `Retry-After` the wait in
+    /// whole seconds ([`retry_after_secs`]).
+    pub fn error(&self) -> ServiceError {
+        ServiceError::too_many_requests(retry_after_secs(self.wait))
     }
 }
 
@@ -311,28 +364,109 @@ mod tests {
         assert_eq!(Slots::new(0).per_tenant(), 1);
     }
 
-    /// A route's class follows its scope, then its method's name: reads
-    /// (`GET`, and `HEAD`, which axum answers on every `GET` route) apart
-    /// from writes, template management apart from both. Names are
-    /// case-sensitive, as HTTP methods are. Decisive: each name in
-    /// `RouteClass::of`, and the templates scope first.
+    /// Each operation's class, the module's table, written out: reads
+    /// apart from writes, template management apart from both (its scope's
+    /// operations, and only they). Decisive: each arm of `RouteClass::of`.
     #[test]
-    fn a_routes_class_follows_its_scope_and_its_methods_name() {
-        for (scope, method, class) in [
-            (Scope::Numbers, "GET", RouteClass::Read),
-            (Scope::Numbers, "HEAD", RouteClass::Read),
-            (Scope::Media, "GET", RouteClass::Read),
-            (Scope::Events, "HEAD", RouteClass::Read),
-            (Scope::Numbers, "PATCH", RouteClass::Send),
-            (Scope::Send, "POST", RouteClass::Send),
-            (Scope::Media, "DELETE", RouteClass::Send),
-            (Scope::Numbers, "get", RouteClass::Send),
-            (Scope::Templates, "GET", RouteClass::Templates),
-            (Scope::Templates, "HEAD", RouteClass::Templates),
-            (Scope::Templates, "POST", RouteClass::Templates),
-        ] {
-            assert_eq!(RouteClass::of(scope, method), class, "{scope:?} {method}");
+    fn an_operations_class_is_the_tables() {
+        use crate::model::Scope;
+        let table = [
+            ("list_wabas", RouteClass::Read),
+            ("list_numbers", RouteClass::Read),
+            ("get_number", RouteClass::Read),
+            ("get_profile", RouteClass::Read),
+            ("update_profile", RouteClass::Send),
+            ("disconnect_waba", RouteClass::Send),
+            ("send_message", RouteClass::Send),
+            ("mark_read", RouteClass::Send),
+            ("upload_media", RouteClass::Send),
+            ("download_media", RouteClass::Read),
+            ("delete_media", RouteClass::Send),
+            ("list_templates", RouteClass::Templates),
+            ("create_template", RouteClass::Templates),
+            ("delete_templates", RouteClass::Templates),
+            ("get_template", RouteClass::Templates),
+            ("list_events", RouteClass::Read),
+        ];
+        assert_eq!(table.len(), Operation::ALL.len(), "every operation");
+        for (id, class) in table {
+            let operation = Operation::from_id(id).unwrap();
+            assert_eq!(RouteClass::of(operation), class, "{id}");
+            assert_eq!(
+                class == RouteClass::Templates,
+                operation.scope() == Scope::Templates,
+                "{id}"
+            );
         }
+    }
+
+    /// The decisive case of roadmap S6: a read, charged by its operation's
+    /// id, lands in the read budget whatever HTTP method an adapter serves
+    /// it with (axum's `GET`, and the `HEAD` it answers on every `GET`
+    /// route; an RPC-style adapter's `POST`): the method is no input of
+    /// [`RateLimiter::charge`], so it cannot move the request to another
+    /// budget. Spending the read budget leaves the send and template
+    /// budgets whole, and a write does not spend the read budget.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_charged_by_operation_id_lands_in_the_read_budget_whatever_its_method() {
+        let reads: Vec<Operation> = Operation::ALL
+            .into_iter()
+            .filter(|operation| RouteClass::of(*operation) == RouteClass::Read)
+            .collect();
+        let served = ["GET", "HEAD", "POST"];
+        let burst = u32::try_from(reads.len() * served.len()).unwrap();
+        let one = Rate {
+            per_second: 1,
+            burst: 1,
+        };
+        let limiter = RateLimiter::new(RateLimits {
+            send: one,
+            read: Rate {
+                per_second: 1,
+                burst,
+            },
+            templates: one,
+        });
+        let a = tenant("a");
+        // What an adapter hands the core: the operation's id, never the
+        // method it served the request with.
+        let charge = |_method: &str, id: &str| limiter.charge(&a, Operation::from_id(id).unwrap());
+        for operation in &reads {
+            for method in served {
+                assert_eq!(
+                    charge(method, operation.id()),
+                    Ok(RouteClass::Read),
+                    "{method} {operation}"
+                );
+            }
+        }
+        for operation in &reads {
+            for method in served {
+                let limited = charge(method, operation.id()).unwrap_err();
+                assert_eq!(limited.class, RouteClass::Read, "{method} {operation}");
+                assert_eq!(limited.wait, Duration::from_secs(1));
+                let error = limited.error();
+                assert_eq!((error.status(), error.code()), (429, "too_many_requests"));
+                assert!(error.is_retryable());
+                assert_eq!(error.retry_after(), Some(1));
+            }
+        }
+        // The other budgets are whole: a write and a template operation
+        // each take their own one token.
+        assert_eq!(charge("GET", "send_message"), Ok(RouteClass::Send));
+        assert_eq!(charge("GET", "list_templates"), Ok(RouteClass::Templates));
+        assert_eq!(
+            charge("POST", "send_message").unwrap_err().class,
+            RouteClass::Send
+        );
+        // And a write spends none of the read budget once it refills.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert_eq!(charge("POST", "list_events"), Ok(RouteClass::Read));
+        assert_eq!(charge("POST", "update_profile"), Ok(RouteClass::Send));
+        assert_eq!(
+            charge("GET", "list_events").unwrap_err().class,
+            RouteClass::Read
+        );
     }
 
     #[test]

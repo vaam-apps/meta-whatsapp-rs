@@ -6,7 +6,9 @@
 //! 1. to 3. **The key, the tenant, the scope**, before the body is read:
 //!    [`tenant_guard`] and [`admin_guard`] are middleware, which runs
 //!    before any extractor that reads the body. Then the tenant's rate
-//!    limit for the route's class ([`crate::ratelimit`]), else `429
+//!    limit, charged by the request's operation ([`Operations`]: its
+//!    method and route template to the core's [`Operation`], whose class
+//!    the core decides, [`crate::ratelimit`]), else `429
 //!    too_many_requests`: before ownership, so a limited request reads
 //!    neither the bindings nor the vault.
 //! 4. and 5. **Ownership, then the vault**, for the path's `{pn}` or
@@ -31,6 +33,7 @@
 //! these guards.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::Error;
@@ -45,12 +48,13 @@ use meta_whatsapp_server_core::ServiceError;
 use meta_whatsapp_server_core::admin::Admin;
 use meta_whatsapp_server_core::authz as core_authz;
 pub use meta_whatsapp_server_core::authz::{AdminCaller, Authorizer, Caller, Tokens};
+pub use meta_whatsapp_server_core::operation::Operation;
 
 use crate::error::ApiError;
 use crate::model::{Scope, WabaBinding};
-use crate::ratelimit::{RouteClass, retry_after_secs};
 use crate::state::AppState;
 use crate::store::RecordStore;
+use crate::telemetry::template_matches;
 
 /// `WA-Tenant`: the tenant a platform key acts as.
 pub static WA_TENANT: HeaderName = HeaderName::from_static("wa-tenant");
@@ -156,18 +160,55 @@ fn authorization(request: &Request) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
 }
 
-/// The scope a [`tenant_guard`] requires.
+/// The tenant operations a [`tenant_guard`] charges: each operation of
+/// the OpenAPI document that is a core [`Operation`] (its `operationId`
+/// is the operation's id), by its method and route template
+/// ([`crate::api::tenant_operations`]). A request is the operation of its
+/// method and the template its path matches; `HEAD`, which axum answers
+/// on every `GET` route, is that `GET`'s. Cheap to clone.
+#[derive(Debug, Clone, Default)]
+pub struct Operations(Arc<Vec<(String, String, Operation)>>);
+
+impl Operations {
+    /// The operations `(method, route template, operation)`, the method in
+    /// capitals (`GET`).
+    pub fn new(routes: impl IntoIterator<Item = (String, String, Operation)>) -> Self {
+        Self(Arc::new(routes.into_iter().collect()))
+    }
+
+    /// The operation a request with `method` on `path` calls, if any.
+    pub fn of(&self, method: &str, path: &str) -> Option<Operation> {
+        let method = if method == "HEAD" { "GET" } else { method };
+        self.0
+            .iter()
+            .find(|(m, template, _)| m == method && template_matches(template, path))
+            .map(|(_, _, operation)| *operation)
+    }
+
+    /// Every `(method, route template, operation)`.
+    pub fn routes(&self) -> &[(String, String, Operation)] {
+        &self.0
+    }
+}
+
+/// What a [`tenant_guard`] requires and charges.
 #[derive(Clone)]
 pub struct Guard {
     /// The state.
     pub state: AppState,
     /// The scope every route behind the guard needs.
     pub scope: Scope,
+    /// The operations behind it, which its rate limit charges.
+    pub operations: Operations,
 }
 
 /// Middleware for tenant routes: steps 1 to 3
-/// ([`Authorizer::tenant_caller`]), then the tenant's rate limit, then the
-/// [`Caller`] in the request's extensions.
+/// ([`Authorizer::tenant_caller`]), then the tenant's rate limit for the
+/// request's operation ([`Operations::of`], charged with the core's
+/// `RateLimiter::charge`: the class is the operation's, never the
+/// method's), then the [`Caller`] in the request's extensions. A route
+/// behind the guard that is no tenant operation is a bug: `500 internal`,
+/// after the key (an unauthenticated request learns nothing).
 pub async fn tenant_guard(
     State(guard): State<Guard>,
     mut request: Request,
@@ -183,11 +224,17 @@ pub async fn tenant_guard(
         Ok(caller) => caller,
         Err(error) => return ApiError::from(error).into_response(),
     };
-    // The tenant's budget for this class of route, per replica.
-    let class = RouteClass::of(guard.scope, request.method());
-    if let Err(wait) = guard.state.limiter().check(caller.tenant(), class) {
-        guard.state.metrics().rate_limited(class.as_str());
-        return ApiError::too_many_requests(retry_after_secs(wait)).into_response();
+    // The tenant's budget for this operation's class, per replica.
+    let Some(operation) = guard
+        .operations
+        .of(request.method().as_str(), request.uri().path())
+    else {
+        tracing::error!("a tenant route is no tenant operation");
+        return ApiError::internal().into_response();
+    };
+    if let Err(limited) = guard.state.limiter().charge(caller.tenant(), operation) {
+        guard.state.metrics().rate_limited(limited.class.as_str());
+        return ApiError::from(limited.error()).into_response();
     }
     request.extensions_mut().insert(caller);
     next.run(request).await
@@ -423,10 +470,12 @@ fn counted(state: &AppState, api: ServiceError, error: &Error) -> ApiError {
     api
 }
 
-/// Shared by the routers: the guard for tenant routes needing `scope`.
-pub fn guard(state: &AppState, scope: Scope) -> Guard {
+/// Shared by the routers: the guard for tenant routes needing `scope`,
+/// charging `operations`.
+pub fn guard(state: &AppState, scope: Scope, operations: &Operations) -> Guard {
     Guard {
         state: state.clone(),
         scope,
+        operations: operations.clone(),
     }
 }

@@ -102,17 +102,26 @@ pub struct Observed {
 /// The template among `routes` that `path` matches (`{name}` matches one
 /// segment), or `unmatched`.
 pub fn route_template<'a>(routes: &'a [String], path: &str) -> &'a str {
-    let segments: Vec<&str> = path.split('/').collect();
     routes
         .iter()
-        .find(|template| {
-            let parts: Vec<&str> = template.split('/').collect();
-            parts.len() == segments.len()
-                && parts.iter().zip(&segments).all(|(t, s)| {
-                    (t.starts_with('{') && t.ends_with('}') && !s.is_empty()) || t == s
-                })
-        })
+        .find(|template| template_matches(template, path))
         .map_or("unmatched", String::as_str)
+}
+
+/// Whether `path` is one of `template`'s, segment by segment: `{name}`
+/// matches one segment that is not empty (as the path carries it,
+/// percent-encoded or not), anything else itself.
+pub fn template_matches(template: &str, path: &str) -> bool {
+    let mut parts = template.split('/');
+    let mut segments = path.split('/');
+    loop {
+        match (parts.next(), segments.next()) {
+            (None, None) => return true,
+            (Some(t), Some(s))
+                if (t.starts_with('{') && t.ends_with('}') && !s.is_empty()) || t == s => {}
+            _ => return false,
+        }
+    }
 }
 
 /// Middleware around every request: request id, span, final log line and

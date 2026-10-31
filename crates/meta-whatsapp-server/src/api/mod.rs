@@ -40,7 +40,7 @@ use utoipa::{Modify, OpenApi};
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
-use crate::auth::{admin_guard, guard, tenant_guard};
+use crate::auth::{Operation, Operations, admin_guard, guard, tenant_guard};
 use crate::error::{ApiError, ErrorBody, ErrorCode, ErrorCodeSchema, KnownErrorCodeSchema};
 use crate::events::MAX_WEBHOOK_BODY_BYTES;
 use crate::model::Scope;
@@ -252,6 +252,34 @@ pub fn internal_routes() -> Vec<String> {
     openapi().paths.paths.keys().cloned().collect()
 }
 
+/// The tenant operations of the internal listener, by method and route
+/// template: every operation of the document whose `operationId` is a
+/// core [`Operation`]'s id (the admin and operations routes are none),
+/// what the tenant guard charges ([`Operations`]). The `tenant_operations`
+/// tests check each tenant route has one, with its group's scope.
+pub fn tenant_operations() -> Operations {
+    let document = openapi();
+    let mut routes = Vec::new();
+    for (template, item) in &document.paths.paths {
+        let methods = [
+            ("GET", &item.get),
+            ("PUT", &item.put),
+            ("POST", &item.post),
+            ("DELETE", &item.delete),
+            ("PATCH", &item.patch),
+        ];
+        for (method, operation) in methods {
+            let id = operation
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref());
+            if let Some(operation) = id.and_then(Operation::from_id) {
+                routes.push((method.to_owned(), template.clone(), operation));
+            }
+        }
+    }
+    Operations::new(routes)
+}
+
 /// A panic in a handler answers `500 internal` instead of dropping the
 /// connection.
 async fn catch_panic(request: Request, next: Next) -> Response {
@@ -297,9 +325,10 @@ pub fn internal_router(state: &AppState) -> Router {
     let admin = |routes: OpenApiRouter<AppState>| {
         routes.route_layer(middleware::from_fn_with_state(state.clone(), admin_guard))
     };
+    let operations = tenant_operations();
     let tenant = |routes: OpenApiRouter<AppState>, scope: Scope| {
         routes.route_layer(middleware::from_fn_with_state(
-            guard(state, scope),
+            guard(state, scope, &operations),
             tenant_guard,
         ))
     };
@@ -531,5 +560,85 @@ mod tests {
                 "mod.rs: .route(\"/livez\", get(ops::livez));",
             ]
         );
+    }
+
+    /// Every tenant route is one core operation (roadmap S6): each
+    /// operation of a tenant group's document has an `operationId` that is
+    /// a core [`Operation`]'s id, with its group's scope, and the guard's
+    /// [`Operations`] resolves a path of its template, with its method (and
+    /// `HEAD` for a `GET`), to it and to no other: two templates a path
+    /// could match would charge one operation's budget for another's.
+    /// Every core operation is served exactly once. Decisive: a tenant
+    /// route the guard cannot resolve, or resolves to another operation.
+    #[test]
+    fn each_tenant_route_is_one_core_operation_with_its_groups_scope() {
+        let grouped = std::cell::RefCell::new(Vec::new());
+        let _ = api_routes(
+            |routes| routes,
+            |routes, scope| {
+                for (template, item) in &routes.get_openapi().paths.paths {
+                    for (method, operation) in [
+                        ("GET", &item.get),
+                        ("PUT", &item.put),
+                        ("POST", &item.post),
+                        ("DELETE", &item.delete),
+                        ("PATCH", &item.patch),
+                    ] {
+                        if let Some(operation) = operation {
+                            let id = operation.operation_id.clone().unwrap();
+                            grouped
+                                .borrow_mut()
+                                .push((method, template.clone(), id, scope));
+                        }
+                    }
+                }
+                routes
+            },
+        );
+        let operations = tenant_operations();
+        let mut served = std::collections::HashSet::new();
+        for (method, template, id, scope) in &grouped.into_inner() {
+            let operation = Operation::from_id(id)
+                .unwrap_or_else(|| panic!("{method} {template}: `{id}` is no core operation"));
+            assert_eq!(operation.scope(), *scope, "{id}");
+            assert!(served.insert(operation), "{id} served twice");
+            // A path of the template, its parameters filled in, spelled
+            // plainly or percent-encoded: the guard reads the path as the
+            // request carries it.
+            for value in ["106540352242922", "%31%30%36", "wamid.HBgL%3D%3D"] {
+                let path = template
+                    .split('/')
+                    .map(|part| if part.starts_with('{') { value } else { part })
+                    .collect::<Vec<_>>()
+                    .join("/");
+                assert_eq!(
+                    operations.of(method, &path),
+                    Some(operation),
+                    "{method} {path}"
+                );
+                let others: Vec<_> = operations
+                    .routes()
+                    .iter()
+                    .filter(|(m, t, _)| m == method && t != template)
+                    .filter(|(_, t, _)| crate::telemetry::template_matches(t, &path))
+                    .collect();
+                assert!(others.is_empty(), "{method} {path} also matches {others:?}");
+                if *method == "GET" {
+                    assert_eq!(operations.of("HEAD", &path), Some(operation), "HEAD {path}");
+                }
+            }
+        }
+        assert_eq!(
+            served.len(),
+            Operation::ALL.len(),
+            "every core operation is served"
+        );
+        assert_eq!(operations.routes().len(), Operation::ALL.len());
+        // Nothing else resolves: a method the route does not take, an
+        // admin route, a lower-case method, an empty segment.
+        assert_eq!(operations.of("POST", "/v1/numbers"), None);
+        assert_eq!(operations.of("GET", "/v1/admin/tenants"), None);
+        assert_eq!(operations.of("get", "/v1/numbers"), None);
+        assert_eq!(operations.of("GET", "/v1/numbers/"), None);
     }
 }

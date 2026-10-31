@@ -18,7 +18,8 @@ pub use meta_whatsapp_rs::webhooks::axum::middleware::{self, Next};
 pub use meta_whatsapp_rs::webhooks::axum::routing::get;
 pub use meta_whatsapp_server::api::admin::mint;
 pub use meta_whatsapp_server::auth::{
-    AdminCaller, Authorizer, Caller, OwnedNumber, OwnedWaba, admin_guard, guard, tenant_guard,
+    AdminCaller, Authorizer, Caller, Operation, Operations, OwnedNumber, OwnedWaba, admin_guard,
+    guard, tenant_guard,
 };
 pub use meta_whatsapp_server::model::{KeyOwner, Scope, TenantId};
 pub use meta_whatsapp_server::state::AppState;
@@ -145,6 +146,25 @@ pub fn admin_routes() -> Router<AppState> {
         "/admin",
         get(|admin: AdminCaller| async move { admin.key_id().to_owned() }),
     )
+}
+
+/// The operations [`tenant_routes`] stand for, for the guard's rate
+/// limit (it charges a request by its operation, roadmap S6): reads of
+/// the numbers scope.
+pub fn tenant_operations() -> Operations {
+    Operations::new([
+        ("GET".to_owned(), "/caller".to_owned(), Operation::ListWabas),
+        (
+            "GET".to_owned(),
+            "/numbers/{pn}".to_owned(),
+            Operation::GetNumber,
+        ),
+        (
+            "GET".to_owned(),
+            "/wabas/{waba_id}".to_owned(),
+            Operation::ListWabas,
+        ),
+    ])
 }
 
 pub fn paths() -> [String; 4] {

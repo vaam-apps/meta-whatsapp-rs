@@ -23,8 +23,9 @@
 //! | [`audit`], [`observe`] | the audit events (target `audit`); what an operation reports to the adapter's metrics |
 //! | [`events`] | routing Meta's webhook events to tenants, their outbox keys and ids, polling |
 //! | [`inbound`] | the webhook pipeline: a signed body verified before anything is stored, parsed, each event under its dedup lease, routed by the records and recorded (inbox, then outbox), and what to answer Meta |
-//! | [`idempotency`] | `Idempotency-Key`: claim, settle, replay; running an operation under a key (`run`: a status, a body, and whether it replayed) |
-//! | [`ratelimit`] | per-tenant token buckets by route class, transfer slots |
+//! | [`idempotency`] | `Idempotency-Key`: claim, settle, replay, over a fingerprint of the operation and its canonical input; running an operation under a key (`run`: a status, a body, and whether it replayed) |
+//! | [`operation`] | the tenant operations by id (the HTTP adapter's `operationId`): what a rate class and an idempotency fingerprint follow, whatever the adapter |
+//! | [`ratelimit`] | per-tenant token buckets by route class, charged by operation; transfer slots |
 //! | [`store`], [`outbox`], [`backend`] | the ports, and the bundle a backend gives |
 //! | [`housekeeping`] | the periodic purges, over a [`backend::Backend`], one replica at a time |
 //! | `conformance` (feature `conformance`) | the ports' contracts as executable suites, run over a [`backend::Backend`]: every backend's tests run them |
@@ -43,7 +44,8 @@
 //!
 //! No port names a type of a database driver, an HTTP framework or an
 //! API toolkit: failures are the library's `StorageError`, times are
-//! `time`'s, and an HTTP method is its name. What every backend
+//! `time`'s, and no HTTP method or path enters the core: a request is its
+//! [`operation::Operation`] and its input. What every backend
 //! guarantees, whatever its database (the routing checked again with each
 //! outbox insert, the referential rules, one clock, typed contention,
 //! purges without locks, byte order), is [`store`]'s module
@@ -68,6 +70,7 @@ pub mod messages;
 pub mod model;
 pub mod numbers;
 pub mod observe;
+pub mod operation;
 pub mod outbox;
 pub mod ratelimit;
 pub mod request;

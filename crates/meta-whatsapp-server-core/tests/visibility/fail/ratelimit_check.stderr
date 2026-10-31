@@ -1,0 +1,10 @@
+error[E0624]: method `check` is private
+ --> tests/visibility/fail/ratelimit_check.rs:8:21
+  |
+8 |     let _ = limiter.check(tenant, RouteClass::Read);
+  |                     ^^^^^ private method
+  |
+ ::: src/ratelimit.rs
+  |
+  |     pub(crate) fn check(&self, tenant: &TenantId, class: RouteClass) -> Result<(), Duration> {
+  |     ---------------------------------------------------------------------------------------- private method defined here

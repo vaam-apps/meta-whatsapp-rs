@@ -5,7 +5,8 @@
 //! limits, not made by their checks (`src/media.rs`); the webhook
 //! pipeline's sink, so that an event reaches the stores only through
 //! `Pipeline::deliver`, after its signature (`src/inbound.rs`, roadmap
-//! S5e). `tests/visibility/pass/` is the
+//! S5e); a rate class charged directly, rather than a request's operation
+//! (`RateLimiter::check`: `src/ratelimit.rs`, roadmap S6). `tests/visibility/pass/` is the
 //! control: it names every path those cases use, and compiles.
 //!
 //! The expected errors are the pinned toolchain's (`rust-toolchain.toml`).
