@@ -29,12 +29,15 @@
 //!   any cross-origin redirect target, so the bound is what stops a
 //!   hostile or broken one from making the process buffer without limit.
 //!   A `Content-Length` over the bound is refused before a byte of the
-//!   body is read; the body is still read chunk by chunk and refused as
+//!   body is read (except on an answer that has no body: to a `HEAD`, a
+//!   204 or a 304); the body is still read chunk by chunk and refused as
 //!   soon as it passes the bound, whatever the header said (or without
-//!   one: chunked or close-delimited). Past it, the answer is
-//!   [`TransportError::Backend`] saying `response body exceeds <n> bytes`,
-//!   never the body or the URL, and the connection is dropped, not
-//!   drained. [`send_streaming`] is not bounded here: its caller reads the
+//!   one: chunked or close-delimited), over HTTP/1.1 and HTTP/2 alike.
+//!   Past it, the answer is [`TransportError::Backend`] saying
+//!   `response body exceeds <n> bytes`, never the body or the URL, and
+//!   the rest is not read: an HTTP/1.1 connection is closed, not drained
+//!   or pooled; an HTTP/2 stream is reset, its connection kept for other
+//!   requests. [`send_streaming`] is not bounded here: its caller reads the
 //!   stream and bounds it (`meta-whatsapp-client`'s media download takes a
 //!   `max_bytes`, its error answers are read to 64 KiB).
 //! - **Errors.** Timeout → `Timeout`; DNS/TCP/TLS failure → `Connect`; an
@@ -78,7 +81,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use http::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, PROXY_AUTHORIZATION};
-use http::{HeaderMap, HeaderName, HeaderValue};
+use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use meta_whatsapp_core::error::{ConfigError, TransportError};
 use meta_whatsapp_core::transport::{
     HttpRequest, HttpResponse, HttpTransport, Multipart, RequestBody, StreamingResponse,
@@ -406,13 +409,15 @@ impl ReqwestTransportBuilder {
     /// 2xx or not; `None` reads any size. Default
     /// [`DEFAULT_MAX_RESPONSE_BYTES`] (256 MiB).
     ///
-    /// A `Content-Length` over it is refused before the body is read, and
+    /// A `Content-Length` over it is refused before the body is read
+    /// (unless the answer has no body: to a `HEAD`, a 204 or a 304), and
     /// the body is read chunk by chunk and refused as soon as it passes it,
     /// whatever the header said: [`TransportError::Backend`] saying
     /// `response body exceeds <n> bytes` (never the body or the URL), with
-    /// the connection dropped, not drained. A body of exactly `max` bytes is
-    /// read. [`HttpTransport::send_streaming`] is not bounded by it: the
-    /// stream's reader bounds it.
+    /// the rest not read (an HTTP/1.1 connection closed, an HTTP/2 stream
+    /// reset). A body of exactly `max` bytes is read.
+    /// [`HttpTransport::send_streaming`] is not bounded by it: the stream's
+    /// reader bounds it.
     ///
     /// Raise it (or disable it) for analytics field expansions over long
     /// `HALF_HOUR` ranges, which Meta answers unpaged; lower it if nothing
@@ -500,10 +505,13 @@ fn map_error(error: reqwest::Error) -> TransportError {
 
 /// `response` buffered, its body refused past `max` bytes (see
 /// [`ReqwestTransportBuilder::max_response_bytes`]). Returning early drops
-/// `response`, which closes its connection rather than reading the rest.
+/// `response`, which closes its connection rather than reading the rest
+/// (on HTTP/2, resets its stream). `head`: the request was a `HEAD`,
+/// whose answer has no body whatever its `Content-Length` says.
 async fn read_bounded(
     mut response: reqwest::Response,
     max: Option<u64>,
+    head: bool,
 ) -> Result<HttpResponse, TransportError> {
     let status = response.status();
     let headers = std::mem::take(response.headers_mut());
@@ -516,11 +524,18 @@ async fn read_bounded(
         });
     };
     // The cheap refusal; the loop below is the bound, the header can lie.
+    // An answer that has no body (to a `HEAD`, a 1xx, 204 or 304) may still
+    // carry the length of the one a `GET` would get (RFC 9110 §8.6): not a
+    // body to refuse.
+    let bodyless = head
+        || status.is_informational()
+        || status == StatusCode::NO_CONTENT
+        || status == StatusCode::NOT_MODIFIED;
     let declared = headers
         .get(CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.trim().parse::<u64>().ok());
-    if declared.is_some_and(|len| len > max) {
+    if !bodyless && declared.is_some_and(|len| len > max) {
         return Err(too_large(max));
     }
     let mut body = Vec::new();
@@ -546,9 +561,10 @@ fn too_large(max: u64) -> TransportError {
 #[async_trait]
 impl HttpTransport for ReqwestTransport {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+        let head = request.method == Method::HEAD;
         let (client, request) = self.prepare(request)?;
         let response = client.execute(request).await.map_err(map_error)?;
-        read_bounded(response, self.max_response_bytes).await
+        read_bounded(response, self.max_response_bytes, head).await
     }
 
     async fn send_streaming(

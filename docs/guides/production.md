@@ -106,13 +106,18 @@ the file's length (`data_len`), not its bytes. Inbound webhooks carry the
 same links: `MediaContent::url` (a media message's, an echo's, a call
 recording's) and the Meta CDN links of a Click to WhatsApp `Referral`
 (`image_url`, `video_url`, `thumbnail_url`) stay `String`s too and print
-that way, so a logged `WebhookEvent` or payload holds no signature;
-serializing one still writes them whole. Both crates use
+that way, so a logged `WebhookEvent` or payload holds no signature in
+those fields; serializing one still writes them whole. What the crate
+did not parse is kept, and printed, as Meta sent it: the `raw` JSON of an
+`Unknown` field or message type and the body of an `Unparsed` event can
+hold such a link, so do not log those whole. Both crates use
 `meta_whatsapp_core::secret::RedactedUrl` for it, which you can use for
-your own types. A group invite link (`GroupUpdate::invite_link`) carries
-its code in the path, so its `Debug` keeps only scheme and host
-(`https://chat.whatsapp.com/<redacted>`), through
-`meta_whatsapp_core::secret::RedactedPath`.
+your own types. A group invite link (`GroupUpdate::invite_link` in a
+webhook, `InviteLink::invite_link` from `Group::invite_link` and
+`reset_invite_link`) carries its code in the path, so its `Debug` keeps
+only scheme and host (`https://chat.whatsapp.com/<redacted>`), through
+`meta_whatsapp_core::secret::RedactedPath`, and an invite link answer
+that does not decode gives an `Error::Decode` without the body.
 
 The client attaches a token to the configured Graph endpoint (scheme, host
 and port), to `https://lookaside.fbsbx.com`, Meta's media download host,
@@ -222,11 +227,14 @@ the Parent BSUID Accounts call, from a URL you pass to
 `Client::request_url`, and from wherever a redirect to another origin
 leads (followed without the token, up to 10 hops), so the bound is what
 keeps a hostile or broken one from making the process buffer any size.
-A `Content-Length` over it is refused before the body is read, and the
-body is read chunk by chunk and refused as soon as it passes it (a body
-without a length, chunked or ended by closing, included); the answer is
-a `TransportError::Backend` saying `response body exceeds <n> bytes`,
-never the body or the URL, and the connection is dropped, not drained.
+A `Content-Length` over it is refused before the body is read (not on
+an answer that has none: to a `HEAD`, a 204 or a 304), and the body is
+read chunk by chunk and refused as soon as it passes it (a body without
+a length, chunked or ended by closing, included), on HTTP/1.1 and
+HTTP/2; the answer is a `TransportError::Backend` saying
+`response body exceeds <n> bytes`, never the body or the URL, not
+retried, and the rest is not read: an HTTP/1.1 connection is closed, an
+HTTP/2 stream reset.
 The default leaves room for the largest JSON the client asks for:
 analytics field expansions (`Analytics::pricing`, `conversation`,
 `calls`) are unpaged, and a year of `HALF_HOUR` points broken down by

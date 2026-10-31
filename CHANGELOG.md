@@ -2957,3 +2957,25 @@ The final security review of 8ee6fab found, and fixed before 7940d15:
   unchanged). Tests: `no_group_invite_code_reaches_debug_of_a_payload_or_its_events`
   (every fixture with an `invite_link`, a sentinel code planted) and
   `secret::tests::redacted_path_keeps_only_scheme_host_and_port`.
+- **The client's group invite link answer no longer reaches `Debug` or a
+  decode error** (`meta-whatsapp-client`; found by the security review of
+  this change). `groups::InviteLink`, the answer of `Group::invite_link`
+  and `Group::reset_invite_link`, derived `Debug`, so the code the
+  webhook's `GroupUpdate` now hid was printed whole by the call that
+  fetches it. Its `Debug` is now written by hand, through
+  `RedactedPath` (`https://chat.whatsapp.com/<redacted>`); the field stays
+  a `String`. An answer that does not decode is an `Error::Decode`
+  without the body or serde's message (`send_withheld`), where it used to
+  carry the body's first bytes, link included. Test:
+  `invite_link_code_never_reaches_debug_or_a_decode_error`.
+- **`ReqwestTransport`'s bound no longer refuses an answer without a
+  body** (found by the same review). A `HEAD`'s answer and a 304 may
+  carry the `Content-Length` of the body a `GET` would get; the up-front
+  refusal now skips them (and a 204), the read loop still bounds what
+  arrives. New tests: `an_answer_without_a_body_is_not_refused_for_its_declared_length`,
+  `a_redirect_target_is_bounded_like_the_url_asked_for` (a bodiless
+  302 to another origin whose body is past the bound: refused) and
+  `the_bound_holds_over_http2` (h2c with prior knowledge: a body at the
+  bound is read, one past it is refused with and without a
+  `content-length`, an 8 MiB answer too, and the transport serves the
+  next request after them).

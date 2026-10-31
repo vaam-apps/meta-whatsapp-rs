@@ -1610,3 +1610,172 @@ async fn send_streaming_is_not_bounded_by_it() {
     }
     assert_eq!(read, body);
 }
+
+#[tokio::test]
+async fn an_answer_without_a_body_is_not_refused_for_its_declared_length() {
+    // A `HEAD`'s answer, and a 304, may carry the length of the body a
+    // `GET` would get (RFC 9110 §8.6); there is no body to refuse.
+    let huge = Framing::Length(MAX * 1024);
+    let (addr, _server) = raw_server(200, huge, Vec::new(), false).await;
+    let response = within(
+        "the HEAD answer",
+        bounded(Some(MAX)).send(HttpRequest::new(Method::HEAD, raw_url(addr))),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status.as_u16(), 200);
+    assert!(response.body.is_empty());
+
+    let (addr, _server) = raw_server(304, huge, Vec::new(), false).await;
+    let response = within(
+        "the 304",
+        bounded(Some(MAX)).send(HttpRequest::new(Method::GET, raw_url(addr))),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status.as_u16(), 304);
+    assert!(response.body.is_empty());
+
+    // The same length on a `GET`'s 200 is refused.
+    let (addr, _server) = raw_server(200, huge, Vec::new(), true).await;
+    let err = within(
+        "the refusal",
+        bounded(Some(MAX)).send(HttpRequest::new(Method::GET, raw_url(addr))),
+    )
+    .await
+    .unwrap_err();
+    assert_too_large(&err, MAX, "GET");
+}
+
+/// Answer one request with a `302` to `to`, without a body.
+async fn raw_redirect(to: Url) -> SocketAddr {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut buf = [0u8; 4096];
+        while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = socket.read(&mut buf).await.unwrap();
+            assert!(n > 0, "the client closed before its request ended");
+            request.extend_from_slice(&buf[..n]);
+        }
+        let head = format!("HTTP/1.1 302 Found\r\nlocation: {to}\r\ncontent-length: 0\r\n\r\n");
+        socket.write_all(head.as_bytes()).await.unwrap();
+        let _ = socket.shutdown().await;
+    });
+    addr
+}
+
+#[tokio::test]
+async fn a_redirect_target_is_bounded_like_the_url_asked_for() {
+    // Each hop's answer is the policy's to follow, not a body to buffer;
+    // the one at the end of the chain is read through the bound.
+    for framing in [Framing::Length(MAX + 1), Framing::Chunked] {
+        let (target, _server) = raw_server(200, framing, json_body(MAX_LEN + 1), false).await;
+        let first = raw_redirect(raw_url(target)).await;
+        let err = within(
+            "the refusal",
+            bounded(Some(MAX)).send(HttpRequest::new(Method::GET, raw_url(first))),
+        )
+        .await
+        .unwrap_err();
+        assert_too_large(&err, MAX, &format!("redirected, {framing:?}"));
+    }
+}
+
+/// `/h2/{len}?length=<bool>`: a body of `len` bytes, with a
+/// `content-length` or streamed without one, and the HTTP version the
+/// request came in on as `x-version`.
+async fn h2_body(
+    axum::extract::Path(len): axum::extract::Path<usize>,
+    request: Request,
+) -> Response {
+    let version = format!("{:?}", request.version());
+    let with_length = request
+        .uri()
+        .query()
+        .is_some_and(|q| q.starts_with("length=true"));
+    let body = json_body(len);
+    let body = if with_length {
+        Body::from(body)
+    } else {
+        let chunks: Vec<Result<Bytes, Infallible>> = body
+            .chunks(4 * 1024)
+            .map(|c| Ok(Bytes::copy_from_slice(c)))
+            .collect();
+        Body::from_stream(futures::stream::iter(chunks))
+    };
+    let mut response = Response::new(body);
+    let headers = response.headers_mut();
+    headers.insert("x-version", version.parse().unwrap());
+    if with_length {
+        headers.insert(axum::http::header::CONTENT_LENGTH, len.into());
+    }
+    response
+}
+
+#[tokio::test]
+async fn the_bound_holds_over_http2() {
+    // graph.facebook.com negotiates h2 over TLS; here h2c with prior
+    // knowledge, so the same frames arrive without a certificate.
+    let app = Router::new().route("/h2/{len}", get(h2_body));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let h2 = || {
+        reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .referer(false)
+            .build()
+            .unwrap()
+    };
+    let transport = ReqwestTransport::with_clients(h2(), h2()).with_max_response_bytes(Some(MAX));
+    let url = |len: usize, length: bool| {
+        Url::parse(&format!(
+            "http://{addr}/h2/{len}?length={length}&client_secret={QUERY_SECRET}"
+        ))
+        .unwrap()
+    };
+    for length in [true, false] {
+        let response = within(
+            "the answer",
+            transport.send(HttpRequest::new(Method::GET, url(MAX_LEN, length))),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.headers["x-version"], "HTTP/2.0");
+        assert_eq!(response.body.as_ref(), json_body(MAX_LEN).as_slice());
+        if length {
+            assert_eq!(response.headers[http::header::CONTENT_LENGTH], "1024");
+        } else {
+            assert!(!response.headers.contains_key(http::header::CONTENT_LENGTH));
+        }
+
+        let err = within(
+            "the refusal",
+            transport.send(HttpRequest::new(Method::GET, url(MAX_LEN + 1, length))),
+        )
+        .await
+        .unwrap_err();
+        assert_too_large(&err, MAX, &format!("h2, content-length {length}"));
+        // Far past it: refused, and the transport still answers the
+        // next request.
+        let err = within(
+            "the refusal",
+            transport.send(HttpRequest::new(Method::GET, url(8 * 1024 * 1024, length))),
+        )
+        .await
+        .unwrap_err();
+        assert_too_large(&err, MAX, &format!("h2 8 MiB, content-length {length}"));
+    }
+    let response = within(
+        "an answer after the refusals",
+        transport.send(HttpRequest::new(Method::GET, url(16, false))),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.body.as_ref(), json_body(16).as_slice());
+}

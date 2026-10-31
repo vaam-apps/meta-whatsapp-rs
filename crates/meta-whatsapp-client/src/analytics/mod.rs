@@ -32,15 +32,15 @@
 //! # Answer size
 //!
 //! A field expansion is answered in one unpaged object, buffered whole by
-//! the transport. With `HALF_HOUR` granularity over a long range and
+//! the transport. With [`Granularity::HalfHour`] over a long range and
 //! several `dimensions` (country, number, pricing category and type),
 //! [`Analytics::pricing`], [`Analytics::conversation`] and
 //! [`Analytics::calls`] can answer tens or a hundred MiB: a year of
 //! half-hours is 17,520 slots, each with a data point per combination
 //! of dimension values. The stock `ReqwestTransport` refuses a body past
 //! its `max_response_bytes` (256 MiB by default) with a
-//! `TransportError::Backend`. Split such a range into shorter ones, or
-//! raise or disable that bound.
+//! `TransportError::Backend`. Split such a range into shorter ones (each
+//! query's `start` and `end`), or raise or disable that bound.
 
 use std::collections::BTreeMap;
 use std::fmt;
