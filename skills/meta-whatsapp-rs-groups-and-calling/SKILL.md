@@ -1,11 +1,11 @@
 ---
 name: meta-whatsapp-rs-groups-and-calling
-description: "What a merchant inbox built on meta-whatsapp-rs needs beyond one-to-one text - blocking and unblocking a customer (block_users, BSUID or phone, the 24-hour rule, partial failures 139100), WhatsApp group chats (Groups API - create by request id and webhook, invite links, join requests, participants, pins, group messages in the inbox), and WhatsApp calls (Calling API signalling only - settings, permissions, reject or accept with SDP, call webhooks; no audio). Load when adding a block button, group chats or call handling to a CMS or support inbox, or when group or call webhooks arrive."
+description: "What a merchant inbox built on meta-whatsapp-rs needs beyond one-to-one text - blocking and unblocking a customer (block_users, BSUID or phone, the 24-hour rule, partial failures 139100), WhatsApp group chats (Groups API - create by request id and webhook, invite links, join requests, participants, pins, group messages in the inbox), and WhatsApp calls (Calling API signalling only - settings, permissions, reject or accept with SDP, per-call recording and transcription, call webhooks; no audio). Load when adding a block button, group chats or call handling to a CMS or support inbox, or when group or call webhooks arrive."
 ---
 
 # meta-whatsapp-rs-groups-and-calling
 
-> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 42af67b96a29a2c24289e0aed99eca79892ea1da (2026-10-31).** On another revision, trust the code over this page.
 
 Reference code: [examples/groups_calls.rs](examples/groups_calls.rs),
 compiled and tested by meta-whatsapp-rs's own gate (Meta-shaped answers and
@@ -102,6 +102,27 @@ merchant
 
 Calls arrive as `WebhookEvent::CallUpdated` and `CallStatusUpdated`
 (field `calls`); calling is not supported in groups.
+
+With a media stack, recording and transcription are opt-in per call and
+off unless you set them: on an accept through `accept_with`,
+
+```rust
+// Meta speaks `purpose` (1-250 characters) in `announcement_language`.
+let options =
+    AcceptOptions::default().recording(CallRecording::enabled("quality assurance", "en_US"));
+merchant
+    .calling(number)
+    .accept_with(call_id, sdp_answer, &options) // not replayed after a timeout
+    .await
+```
+
+and on a connect through `ConnectCall::recording` (and
+`CallTranscription` through `.transcription(..)` on either). Checked
+locally: with `ENABLED`, a non-blank `purpose` and
+`announcement_language`; the language list is Meta's to check. The
+files arrive later as `call_recording_available` /
+`call_transcription_available` events with a media id: download them
+within 7 days (`meta-whatsapp-rs-media`).
 
 ## Pitfalls
 

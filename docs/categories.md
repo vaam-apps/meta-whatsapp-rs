@@ -16,7 +16,8 @@ a send bills (roadmap L16a), category 20 again with the number settings
 L9 left (roadmap L26), category 39 again when the service was composed
 from the bundle alone (roadmap S4), category 14 again with the catalog
 and product reads (roadmap L17), category 11 again with the typed Flow
-JSON builder (roadmap L18). The
+JSON builder (roadmap L18), category 12 again with call recording and
+transcription (roadmap L14). The
 per-feature detail is in [coverage.md](coverage.md) (the linked rows);
 the capability-level comparison with Zaileys is in [parity.md](parity.md)
 (the rows named); the plan is [roadmap.md](roadmap.md).
@@ -25,7 +26,7 @@ the capability-level comparison with Zaileys is in [parity.md](parity.md)
 
 | 40 categories | done | partial | gap |
 | --- | --- | --- | --- |
-| Library | 22 | 16 | 2 |
+| Library | 23 | 15 | 2 |
 | Service | 1 | 24 | 15 |
 
 35 categories follow Meta's grouping, 2 are APIs Meta documents
@@ -63,7 +64,7 @@ by reference only (36, 37), and 3 are our own (38–40).
 | 9 | Authentication templates and OTP (copy code, one-tap, zero-tap, previews, bulk management) | `templates/authentication-templates/authentication-templates.md` and its pages | the `authentication` module; `OtpService` (hashed, namespaced, counted attempts, cooldown, issue limit) | M3c | [4](coverage.md#row-4) | 98 | done / gap (M3c) | — |
 | 10 | Direct Send (beta) | `direct-send` and its pages | category, TTL, the Direct Send configuration | refused today (design §4.3); M5a | [20](coverage.md#row-20) | 37 | done / gap (M5a) | the templates Direct Send generates are listed through the template list's source filter (`TemplateListQuery::source`); their insights are WhatsApp Manager's |
 | 11 | WhatsApp Flows | `flows` and its pages; `reference/whatsapp-business-phone-number/business-encryption-api.md` | the management API, a typed Flow JSON model and builder, the business public key, endpoint crypto and signature, media decryption, `nfm_reply` and `flows` webhooks | answers and `flow_updated` events; sending in M5a, management and the endpoint in M5d | [14](coverage.md#row-14) | 60–63 | done / partial (M5a, M5d) | the metrics API is skipped (Meta deprecated it on 2026-04-30); Flow JSON is typed in `client::flows::flow_json` (parity row 63, L18) |
-| 12 | Calling | `calling` and its pages; `reference/whatsapp-business-phone-number/calling-api.md` | settings (hours, SIP, voicemail, icons, restrictions), permissions, connect, pre-accept, accept, reject, terminate; the `calls` webhooks, with recording and transcription availability | the call events; the rest in M5e | [19](coverage.md#row-19) | 74, 75, 134, 135 | partial / partial (M5e) | WebRTC media is the integrator's stack; the per-call recording and transcription options are not carried (the files download through the Media API) |
+| 12 | Calling | `calling` and its pages; `reference/whatsapp-business-phone-number/calling-api.md` | settings (hours, SIP, voicemail, icons, restrictions), permissions, connect, pre-accept, accept, reject, terminate; the per-call recording and transcription options on connect and accept (L14); the `calls` webhooks, with recording and transcription availability | the call events; the rest in M5e | [19](coverage.md#row-19) | 74, 75, 134, 135 | done / partial (M5e) | WebRTC media is the integrator's stack; the recordings and transcripts download through the Media API (the transcript document is not typed) |
 | 13 | Groups | `groups` and its pages; `reference/groups/groups-query-api.md` and its neighbours, `reference/whatsapp-business-phone-number/groups-management-api.md` | create, info, list, update, picture, delete, invite links, participants, join requests, pin; group webhooks and analytics | sends to a group and `group_updated` events; management in M5f | [18](coverage.md#row-18) | 35, 76–81 | done / partial (M5f) | adding participants is kept with a warning (OPEN_QUESTIONS #23) |
 | 14 | Catalogs and commerce | `catalogs/catalogs-overview` and its pages; `reference/whatsapp-business-phone-number/commerce-settings-api.md`; for the reads, Meta's Catalog API, outside these docs (parity § Sources) | commerce settings; the WABA's connected catalog, a catalog's products and product sets, a set's products and one product, paged by cursor (L17); single-product, multi-product, catalog and product-carousel messages; catalog, MPM, SPM and product-card-carousel templates; `order` webhooks | order events; product messages in M5a, the rest in M5g | [5](coverage.md#row-5) | 102–105 | done / partial (M5a, M5g) | catalog writes (uploading inventory, connecting a catalog to a WABA) stay in Commerce Manager or the Catalog API, not wrapped |
 | 15 | Payments (India UPI, Brazil Pix and Boleto) | `payments/payments-in/overview.md`, `payments/payments-br/overview.md` and their pages | the `payment_configuration_update` webhook; messages only through `MessageContent::Raw` | `payment_configuration_updated` events | [32](coverage.md#row-32) | 38, 141 | partial / partial (P2) | in scope since 2026-09-26, last in the roadmap |
