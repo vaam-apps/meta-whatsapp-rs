@@ -65,7 +65,7 @@ use crate::store::IdempotencyRecords;
 ///
 /// | Operation | Canonical input |
 /// | --- | --- |
-/// | `send_message` ([`Self::send_message`]) | the number's id, as a [`PhoneNumberId`] (the path parameter decoded: `%31` and `1` are one number); the JSON body as the request carried it, its object keys sorted and its whitespace ignored |
+/// | `send_message` ([`Self::send_message`]) | the number's id, as a [`PhoneNumberId`] (the path parameter decoded: `%31` and `1` are one number); the JSON body as the request carried it, parsed (an escape is the character it spells; of a key given twice, the last, as the operation reads it), its object keys sorted and its whitespace ignored; nothing else is folded (`1` and `1.0` are two bodies) |
 /// | `upload_media` ([`Self::upload_media`]) | the number's id; the checked [`Upload`]'s MIME type, the file name sent to Meta, and the file's SHA-256 |
 /// | `create_template` ([`Self::create_template`]) | the WABA's id, as a [`WabaId`]; the JSON body, canonical as above |
 ///
@@ -767,9 +767,10 @@ mod tests {
         Release,
     }
 
-    /// Records that claim every key and remember how each was settled.
+    /// Records that claim every key and remember how each was settled,
+    /// and the fingerprint each claim stored.
     #[derive(Debug, Default)]
-    struct Recorded(Mutex<Vec<Call>>);
+    struct Recorded(Mutex<Vec<Call>>, Mutex<Vec<[u8; 32]>>);
 
     #[async_trait]
     impl IdempotencyRecords for Recorded {
@@ -777,11 +778,12 @@ mod tests {
             &self,
             _: &TenantId,
             _: &IdempotencyKey,
-            _: &[u8; 32],
+            fingerprint: &[u8; 32],
             _: &str,
             _: Duration,
             _: Duration,
         ) -> StoreResult<IdempotencyClaim> {
+            self.1.lock().unwrap().push(*fingerprint);
             Ok(IdempotencyClaim::Claimed)
         }
 
@@ -874,6 +876,43 @@ mod tests {
                 Call::Release,
             ]
         );
+    }
+
+    /// A claim stores the request's own fingerprint, never the legacy one
+    /// it also matches (`or_legacy`): a record claimed after the upgrade
+    /// is the new fingerprint's, and replays through every spelling of its
+    /// path. Decisive: `claim` passing `Fingerprint::as_bytes` (the legacy
+    /// digest stored instead is a key that only its first spelling
+    /// replays).
+    #[tokio::test]
+    async fn a_claim_stores_the_new_fingerprint_never_the_legacy_one() {
+        let records = Arc::new(Recorded::default());
+        let ports: Arc<dyn IdempotencyRecords> = records.clone();
+        let body = serde_json::json!({"to": {"phone": "+1"}, "type": "text"});
+        let new = Fingerprint::send_message(&pn("1"), &body);
+        let legacy = Fingerprint::legacy_v1_json("POST", "/v1/numbers/%31/messages", &body);
+        let admission = claim(
+            &ports,
+            &TenantId::parse("tenant-a").unwrap(),
+            IdempotencyKey::parse("order:1").unwrap(),
+            &new.or_legacy(legacy),
+            Duration::from_secs(60),
+            Duration::from_secs(3600),
+            render,
+        )
+        .await
+        .unwrap();
+        let Admission::Claimed(claim) = admission else {
+            panic!("not claimed")
+        };
+        claim
+            .settle(Outcome::Answered {
+                status: 202,
+                body: b"{}",
+            })
+            .await;
+        assert_eq!(*records.1.lock().unwrap(), [*new.as_bytes()]);
+        assert_ne!(new.as_bytes(), legacy.as_bytes());
     }
 
     /// A claim dropped before it settled keeps a `504 timeout`, from a task
@@ -1200,6 +1239,50 @@ mod tests {
         assert_ne!(png("a.png", b"x"), png("a.png", b"y"));
         let jpeg = Upload::new("image/jpeg", Some("a.png"), b"x".to_vec().into()).unwrap();
         assert_ne!(png("a.png", b"x"), Fingerprint::upload_media(&one, &jpeg));
+    }
+
+    /// The canonical input is the JSON as parsed (D27: the request's JSON
+    /// as it came, canonicalized), so two bodies share a fingerprint only
+    /// when they parse to one value, which is what the operation then
+    /// sends: an escape and the character it spells are one string, and
+    /// of a key given twice the parser keeps the last, both for the
+    /// fingerprint and for the request. What parses to two values never
+    /// shares one, even when Meta might read them alike: `1` and `1.0`,
+    /// a precomposed `é` and `e` with a combining accent, `0` and `-0`,
+    /// `null` and an absent key. Decisive: `canonical`'s number arm
+    /// reading the value as a float (`1` and `1.0` collide), and its
+    /// string arm normalizing text.
+    #[test]
+    fn two_bodies_share_a_fingerprint_only_when_they_parse_alike() {
+        let one = pn("1");
+        let fp = |json: &str| {
+            let body: serde_json::Value = serde_json::from_str(json).unwrap();
+            Fingerprint::send_message(&one, &body)
+        };
+        // One value, spelled two ways.
+        assert_eq!(fp(r#"{"a":"é"}"#), fp("{\"a\":\"\u{e9}\"}"));
+        assert_eq!(fp(r#"{"a":1}"#), fp(r#"{"a":1}"#));
+        assert_eq!(fp(r#"{"a":1,"a":2}"#), fp(r#"{"a":2}"#));
+        assert_ne!(fp(r#"{"a":1,"a":2}"#), fp(r#"{"a":1}"#));
+        assert_eq!(fp(r#"{ "a" : [ 1 , 2 ] }"#), fp(r#"{"a":[1,2]}"#));
+        // Two values, however close.
+        for (a, b) in [
+            (r#"{"a":1}"#, r#"{"a":1.0}"#),
+            (r#"{"a":0}"#, r#"{"a":-0}"#),
+            (r#"{"a":100}"#, r#"{"a":1e2}"#),
+            ("{\"a\":\"\u{e9}\"}", "{\"a\":\"e\u{301}\"}"),
+            (r#"{"a":"A"}"#, r#"{"a":"a"}"#),
+            (r#"{"a":null}"#, r#"{}"#),
+            (r#"{"a":[]}"#, r#"{"a":{}}"#),
+            (r#"{"a":[1,2]}"#, r#"{"a":[2,1]}"#),
+            (r#"{"a":[[1],2]}"#, r#"{"a":[1,[2]]}"#),
+            (r#"{"a":{"b":1}}"#, r#"{"a.b":1}"#),
+            (r#"{"a":"1"}"#, r#"{"a":1}"#),
+            (r#"{"a":true}"#, r#"{"a":"t"}"#),
+            (r#"{"ab":"c"}"#, r#"{"a":"bc"}"#),
+        ] {
+            assert_ne!(fp(a), fp(b), "{a} and {b}");
+        }
     }
 
     /// `Debug` of a kept answer shows its length, never its bytes: the

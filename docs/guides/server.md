@@ -353,8 +353,9 @@ how its path is spelled. A key covers the operation (a send, an upload,
 a template creation), the number or WABA its path names, read as an id
 (`/v1/numbers/106540352242922/messages` and the same path with the
 digits percent-encoded are one request), and the body: a JSON body as
-JSON (key order and whitespace do not count), an upload as its type,
-file name and file. The same key and body on another of your numbers,
+JSON (key order and whitespace do not count; `1` and `1.0` are two
+bodies), an upload as its type, its file name as the service sends it to
+Meta (cleaned: `résumé.pdf` goes as `r_sum_.pdf`) and its file. The same key and body on another of your numbers,
 or for another operation, is `422 idempotency_key_reused`.
 
 > **Changed before the first release** (roadmap S6, design D27): before
