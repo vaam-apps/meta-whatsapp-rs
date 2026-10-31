@@ -45,7 +45,9 @@
 //! No port names a type of a database driver, an HTTP framework or an
 //! API toolkit: failures are the library's `StorageError`, times are
 //! `time`'s, and no HTTP method or path enters the core: a request is its
-//! [`operation::Operation`] and its input. What every backend
+//! [`operation::Operation`] and its input (but for the fingerprint of
+//! before roadmap S6, `idempotency::Fingerprint::legacy_v1_json` and
+//! `legacy_v1_upload`, which an HTTP adapter matches for one TTL). What every backend
 //! guarantees, whatever its database (the routing checked again with each
 //! outbox insert, the referential rules, one clock, typed contention,
 //! purges without locks, byte order), is [`store`]'s module

@@ -178,7 +178,7 @@ pub fn code_info(code: &str) -> Option<(u16, &'static str)> {
 /// ```compile_fail,E0308
 /// use meta_whatsapp_server_core::error::ServiceError;
 ///
-/// let error = ServiceError::new(ErrorCode::CUSTOMER_SERVICE_WINDOW_CLOSED);
+/// let error = ServiceError::new("customer_service_window_closed");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ErrorCode {

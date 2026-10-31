@@ -489,7 +489,9 @@ pub enum IdempotencyClaim {
 /// body is the caller's data.
 #[derive(Clone, PartialEq, Eq)]
 pub struct IdempotencyRecord {
-    /// SHA-256 of the request that claimed it (method, path, body).
+    /// SHA-256 of the request that claimed it: its operation and its
+    /// canonical input (`idempotency::Fingerprint`; a record claimed
+    /// before roadmap S6 holds that of its method, path and body).
     pub fingerprint: [u8; 32],
     /// Its state.
     pub state: IdempotencyState,
