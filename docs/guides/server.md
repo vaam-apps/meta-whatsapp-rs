@@ -348,6 +348,25 @@ same. With one:
 Answers are kept `WA_SERVER_IDEMPOTENCY_TTL` (24 hours), then the key is
 free again.
 
+What "the same request" means: the operation and what it acts on, never
+how its path is spelled. A key covers the operation (a send, an upload,
+a template creation), the number or WABA its path names, read as an id
+(`/v1/numbers/106540352242922/messages` and the same path with the
+digits percent-encoded are one request), and the body: a JSON body as
+JSON (key order and whitespace do not count), an upload as its type,
+file name and file. The same key and body on another of your numbers,
+or for another operation, is `422 idempotency_key_reused`.
+
+> **Changed before the first release** (roadmap S6, design D27): until
+> then, a key covered the request's method, its path as sent and its
+> body. A key claimed before the upgrade and repeated after it, with the
+> same request, answers `422 idempotency_key_reused` (it never sends
+> twice) until its record expires: `WA_SERVER_IDEMPOTENCY_TTL` after the
+> first request, 24 hours by default; during a rolling deploy, a repeat
+> served by the other release answers the same. Treat that `422` as "this
+> key was used": reconcile the first request through its status events,
+> and do not resend it under a new key unless you know it never went out.
+
 ## Media
 
 `POST /v1/numbers/{pn}/media` (scope `media`) uploads a

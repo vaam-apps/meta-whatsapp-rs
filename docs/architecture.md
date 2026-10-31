@@ -1246,9 +1246,12 @@ decisions and the delivery milestones, is
     from outside its own code calls `Authorizer::admit` or
     `admit_admin` before acting on it, as the service's extractors do:
     design §8.1), event
-    routing and polling, the idempotency engine, the rate limiter, the
-    error model as data (`ServiceError`: a code of `CODES`, its status
-    as a number, `retryable`, `may_have_been_sent`), and the operations
+    routing and polling, the idempotency engine (a key's fingerprint
+    the operation and its canonical input, since S6), the rate limiter
+    (a request charged by its operation's class, since S6), the error
+    model as data (`ServiceError`: an `ErrorCode`, one constant per row
+    of `CODES`, generated from one table since S6, its status as a
+    number, `retryable`, `may_have_been_sent`), and the operations
     as services an API adapter parses for, calls and renders: since
     roadmap S5a the admin ones (`admin::Admin`, opened with an
     `AdminCaller` its `Authorizer` admits), since S5b the messages
@@ -1277,7 +1280,11 @@ decisions and the delivery milestones, is
     `WebhookHandler`, each event under its dedup lease, routed by the
     records, never by the payload, into the inbox and the outbox; the
     answer, `Delivered` or a `Refused` with its status, only once every
-    event is recorded). It depends on the
+    event is recorded), and since S6 the tenant operations by id
+    (`operation::Operation`: the HTTP adapter's `operationId`s), which a
+    request's rate class and its idempotency fingerprint follow whatever
+    the adapter, with the `Authorizer`'s writes to the vault reached
+    only through `admin::Admin`. It depends on the
     facade without its adapters' features: no axum, no sqlx, no utoipa
     (the `http` crate is in its graph only through the library, whose
     `HttpTransport` port and client speak it; no `http` type crosses the
@@ -1373,7 +1380,14 @@ decisions and the delivery milestones, is
   adds no send retries to the library's; a caller's `Idempotency-Key`
   (sends, uploads, template creation) keeps the answer of a request that
   may have taken effect and replays it, and releases the key only when
-  the library's `Error::may_have_been_sent` is `false`.
+  the library's `Error::may_have_been_sent` is `false`. A key's
+  fingerprint is the operation and its canonical input (the number or
+  WABA as a decoded id, the body canonical), never the request's method
+  or path, so a key means the same through every API adapter (design
+  D27). Fingerprints are stored with their key but are not stable
+  identifiers: records last `WA_SERVER_IDEMPOTENCY_TTL`, and a
+  fingerprint derived otherwise after an upgrade answers a repeat across
+  it `422 idempotency_key_reused` for that long, never a second send.
 - **Webhooks in** go through the library's `WebhookHandler` (signature
   before parsing, 3 MiB, the leased `DedupGuard` in the shared
   `KvStore`) into `InboxSink`, then the service's event outbox, one

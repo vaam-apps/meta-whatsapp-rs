@@ -832,7 +832,7 @@ and `store-postgres`.
     server's public but unusable `events::ServiceSink` is gone (the sink
     is private to the core, pinned by the UI case `inbound_sink`), and
     `Inbound::clock` is public.
-- [ ] **S6. Adapter-neutral pieces** (`meta-whatsapp-server-core`; D27):
+- [x] **S6. Adapter-neutral pieces** (`meta-whatsapp-server-core`; D27):
   a rate class per operation id, not per HTTP method; the idempotency
   fingerprint over the operation id and the canonical input, not the
   request path, so a key means the same through every adapter (a
@@ -847,6 +847,77 @@ and `store-postgres`.
     fingerprint fails that test; a read charged by operation id lands in
     the read budget whatever its HTTP method; a misspelled error code
     fails to compile (a `compile_fail` doctest).
+  - **Landed:** `meta_whatsapp_server_core::operation::Operation` names
+    the sixteen tenant operations by id (the HTTP adapter's
+    `operationId`, its handler's name) with their scope. A request's
+    rate class is its operation's (`RouteClass::of(Operation)`), and
+    `RateLimiter::charge(tenant, operation)` is the only public way to
+    spend a budget (`check` is crate-private: the UI case
+    `ratelimit_check`); the server's tenant guard resolves a request to
+    its operation (`auth::Operations`, built from the OpenAPI document:
+    the method and the route template, `HEAD` as its `GET`) and charges
+    it, `500 internal` for a tenant route that is no operation (a test
+    holds every tenant route to one core operation with its group's
+    scope, a path of each template, plain or percent-encoded, matching
+    no other). The fingerprint is the operation and its canonical input,
+    defined once in the core: `Fingerprint::send_message`, `upload_media`
+    and `create_template` hash the operation's id, its path parameter as
+    a typed id (the number or the WABA, decoded), and the JSON body
+    canonical (object keys sorted, whitespace ignored) or the checked
+    upload's type, file name and SHA-256; no method and no path (the
+    generic `json` and `parts` are private, so every adapter derives the
+    same fingerprint), its known answers pinned again apart from the
+    code. `ErrorCode`'s constants, `ErrorCode::ALL` and `CODES` come from
+    one `codes!` table in `error.rs`, kept equal to §5.2 by the core's
+    own `the_codes_are_the_designs` (beside the service's) and each
+    constant's name to its code by `each_constant_is_named_after_its_code`;
+    `ServiceError::new` and the server's `ApiError::new` take an
+    `ErrorCode`, so a misspelled code fails to compile (the
+    `compile_fail` doctests on `ErrorCode`: `E0599` for a misspelled
+    constant, `E0308` for a string), and the source scans for string
+    codes are gone with the strings (the server's schema markers are
+    `ErrorCodeSchema` and `KnownErrorCodeSchema`, their schema names
+    unchanged). The `Authorizer`'s admin writes (`store_token`,
+    `rotate_vault`, `forget_for_admin`, `graph_failed_for_admin`) are
+    crate-private: an adapter reaches them only through `admin::Admin`,
+    opened by `Admin::new`'s admission (S5a's pattern), and each still
+    checks the admin (the UI cases `authorizer_*`; the conformance case
+    `capabilities::an_admins_vault_writes_take_an_admitted_admin`, in
+    `conformance::run`: the core's memory backend, the service's and
+    live Postgres). No dependency of either crate was unused (rustc's
+    `unused-crate-dependencies` on both libraries, the dev-dependencies
+    by grep; `cargo udeps` is not in the pinned toolchain), so none was
+    dropped; `just features` checks the core's library alone and
+    documents it with `conformance`. Decisive:
+    `two_spellings_of_one_path_replay_the_same_key` (the service's
+    `tests/messages.rs`, with the template and upload ones beside it),
+    which fails with `uri.path()` back in the fingerprint (the
+    percent-encoded repeat answers `422 idempotency_key_reused`) and
+    with the number out of it (another number's send replays);
+    `a_read_charged_by_operation_id_lands_in_the_read_budget_whatever_its_method`
+    (the core) and `a_read_served_by_post_lands_in_the_read_budget` (the
+    service's `tests/rate_limits.rs`: an RPC-shaped router whose reads
+    are `POST`s, behind the service's own guard and limiter), the latter
+    failing with the class read from the method; in `/v1` every read is
+    a `GET`, so no route of the HTTP adapter can tell the two rules
+    apart (`v1s_routes_keep_their_class` pins that the budgets did not
+    move); and the `compile_fail` doctests. By mutation: an entry added
+    to or dropped from `codes!` fails `the_codes_are_the_designs` (core
+    and service), a constant named after another code
+    `each_constant_is_named_after_its_code`; a vault write's own check
+    dropped (`store_token`'s, `rotate_vault`'s) fails the conformance
+    case, `Admin::new`'s admission dropped fails it and
+    `the_admin_services_refuse_another_authorizers_admin`, and
+    `store_token` public again the UI case; a read moved to the send
+    class fails `an_operations_class_is_the_tables` and
+    `v1s_routes_keep_their_class`. `openapi/v1.json` is byte-identical,
+    and no status or body changed but the fingerprint's semantics, a
+    pre-release change of `/v1` (D27): a key claimed before the upgrade
+    and repeated after it with the same request answers `422
+    idempotency_key_reused`, never a second send, until its record
+    expires (`WA_SERVER_IDEMPOTENCY_TTL` from its claim, 24 hours by
+    default; between replicas of the two releases during a rolling
+    deploy too), which the guide and the CHANGELOG say.
 - [ ] **S7. The crate split**: `meta-whatsapp-server-store-memory`,
   `meta-whatsapp-server-store-postgres`, `meta-whatsapp-server-http`
   (listeners, auth before the body, the §5 renderer, `/webhooks/meta`,
