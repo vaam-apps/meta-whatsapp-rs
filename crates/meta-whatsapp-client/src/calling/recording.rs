@@ -19,12 +19,21 @@
 //! days.
 //!
 //! Limits enforced locally: with `status` `ENABLED`, `purpose` and
-//! `announcement_language` are present and not blank; `purpose` is at most
-//! [`PURPOSE_MAX_CHARS`] characters; a given `announcement_language` is not
-//! blank. The list of supported announcement languages is Meta's to check
-//! (it answers an unsupported one with a request error): the pages list
-//! `en` (and `en_US`, `en_AU`, `en_CA`, `en_GB`, `en_IN`, `en_NZ`), `nl`,
-//! `fr`, `de`, `hi`, `it`, `kn`, `pt`, `es`, `es_ES`, `te`, `vi`.
+//! `announcement_language` are present and not blank (whitespace-only
+//! counts as blank); `purpose` is at most [`PURPOSE_MAX_CHARS`] characters
+//! (Unicode scalar values; the pages do not say how Meta counts) whatever
+//! the `status`, as the pages' error table states the limit without one; a
+//! given `announcement_language` is not blank. With any other `status`, a
+//! missing or blank `purpose` is sent as given: the pages' "missing
+//! purpose" error is for `ENABLED` only. Each object is checked on its own.
+//! Left to Meta, which answers them with a request error: the list of
+//! supported announcement languages (the pages list `en` (and `en_US`,
+//! `en_AU`, `en_CA`, `en_GB`, `en_IN`, `en_NZ`), `nl`, `fr`, `de`, `hi`,
+//! `it`, `kn`, `pt`, `es`, `es_ES`, `te`, `vi`), and a `status` other than
+//! `ENABLED` or `DISABLED` ([`FeatureStatus::Other`], passed through).
+//!
+//! Not to be confused with `meta_whatsapp_webhooks::fields::CallRecording`
+//! and `CallTranscript`: those are the results, delivered by the webhooks.
 
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
@@ -146,7 +155,8 @@ impl CallTranscription {
 }
 
 /// The rules both pages state for their object. A `status` other than
-/// `ENABLED` or `DISABLED` is passed through for Meta to judge.
+/// `ENABLED` or `DISABLED` is passed through for Meta to judge (it refuses
+/// one, per the pages' error table).
 fn validate(
     object: &str,
     status: &FeatureStatus,

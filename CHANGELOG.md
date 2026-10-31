@@ -232,10 +232,12 @@ stored data, the owner's).
   plays a recording or transcription announcement built from `purpose`
   to both participants before it starts; a participant who does not
   consent ends the call. Checked before any request: with `ENABLED`,
-  `purpose` and `announcement_language` present and not blank, `purpose`
-  at most 250 characters (`calling::recording::PURPOSE_MAX_CHARS`), a
-  given language not blank, each object on its own (Meta ignores the
-  transcription's when both are enabled, but both pages require them);
+  `purpose` and `announcement_language` present and not blank
+  (whitespace-only is blank), `purpose` at most 250 characters whatever
+  the status (`calling::recording::PURPOSE_MAX_CHARS`, counted in
+  Unicode scalar values), a given language not blank, each object on
+  its own (Meta ignores the transcription's when both are enabled, but
+  both pages require them);
   errors on `recording.<field>` or `transcription.<field>`. The list of
   announcement languages is not checked locally. Neither action is
   replayed after a timeout, as before. The results were already typed

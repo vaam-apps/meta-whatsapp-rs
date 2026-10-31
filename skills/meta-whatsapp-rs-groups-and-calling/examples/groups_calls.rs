@@ -1,12 +1,14 @@
 //! Reference code for the `meta-whatsapp-rs-groups-and-calling` skill: what a merchant
 //! inbox needs beyond one-to-one text — blocking a customer, group chats,
-//! and WhatsApp calls the CMS cannot take.
+//! WhatsApp calls the CMS cannot take, and recording the ones a media
+//! stack answers.
 //!
 //! meta-whatsapp-rs compiles this file and runs its tests in its own gate
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`).
 
+use meta_whatsapp_rs::client::calling::{AcceptOptions, CallRecording};
 use meta_whatsapp_rs::client::groups::{CreateGroup, JoinApprovalMode};
-use meta_whatsapp_rs::core::ids::GroupId;
+use meta_whatsapp_rs::core::ids::{CallId, GroupId};
 use meta_whatsapp_rs::prelude::*;
 use meta_whatsapp_rs::webhooks::fields::{CallDirection, CallEventType, GroupUpdateType};
 
@@ -81,6 +83,23 @@ pub async fn decline_call(
         .reject(&call.id)
         .await?;
     Ok(true)
+}
+
+/// With a media stack of your own: accept a customer's call, recorded. Meta
+/// announces `purpose` to both sides first; who does not consent hangs up.
+pub async fn accept_recorded(
+    merchant: &Client,
+    number: PhoneNumberId,
+    call_id: &CallId,
+    sdp_answer: &str, // your stack's SDP answer, the one given to `pre_accept`
+) -> meta_whatsapp_rs::Result<()> {
+    // Meta speaks `purpose` (1-250 characters) in `announcement_language`.
+    let options =
+        AcceptOptions::default().recording(CallRecording::enabled("quality assurance", "en_US"));
+    merchant
+        .calling(number)
+        .accept_with(call_id, sdp_answer, &options) // not replayed after a timeout
+        .await
 }
 
 #[cfg(test)]
@@ -231,6 +250,32 @@ mod tests {
                 "call_id": "wacid.ABGGFjFVU2AfAgo6V-Hc5eCgK5Gh", "action": "reject"})
         );
         assert_eq!(transport.requests().len(), 1);
+        assert_eq!(transport.remaining(), 0);
+    }
+
+    #[tokio::test]
+    async fn an_accepted_call_is_recorded_and_announced() {
+        let transport = ScriptedTransport::new();
+        transport.push_json(
+            200,
+            json!({"messaging_product": "whatsapp", "success": true}),
+        );
+        accept_recorded(
+            &merchant(&transport),
+            PhoneNumberId::new(NUMBER).unwrap(),
+            &CallId::new("wacid.ABGGFjFVU2AfAgo6V"),
+            "v=0\r\n",
+        )
+        .await
+        .unwrap();
+        // `calling/call-recording`'s accept example.
+        assert_eq!(
+            transport.last_request().unwrap().json().unwrap(),
+            json!({"messaging_product": "whatsapp", "call_id": "wacid.ABGGFjFVU2AfAgo6V",
+                "action": "accept", "session": {"sdp_type": "answer", "sdp": "v=0\r\n"},
+                "recording": {"status": "ENABLED", "purpose": "quality assurance",
+                    "announcement_language": "en_US"}})
+        );
         assert_eq!(transport.remaining(), 0);
     }
 }

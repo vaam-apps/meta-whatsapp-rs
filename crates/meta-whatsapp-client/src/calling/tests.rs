@@ -730,6 +730,66 @@ async fn recording_limits_admit_their_edges() {
     assert_eq!(ts.remaining(), 0);
 }
 
+/// Only `ENABLED` needs an announcement (the pages' "Missing `purpose`"
+/// error is for `ENABLED` only): an opt-out or an unknown status with a
+/// blank `purpose` is sent as given. The length counts characters
+/// (Unicode scalar values), not bytes or UTF-16 units: 250 four-byte,
+/// two-unit characters pass, 251 do not.
+#[tokio::test]
+async fn only_enabled_needs_a_purpose_and_length_counts_characters() {
+    let ts = ScriptedTransport::new();
+    ts.push_json(200, json!({"calls": [{"id": DOCS_CALL}]}));
+    ts.push_json(200, success());
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
+    calling
+        .connect(
+            &docs_connect()
+                .recording(CallRecording {
+                    purpose: Some(" ".into()),
+                    ..CallRecording::disabled()
+                })
+                .transcription(CallTranscription {
+                    status: FeatureStatus::Other("PAUSED".into()),
+                    purpose: Some(String::new()),
+                    announcement_language: None,
+                }),
+        )
+        .await
+        .unwrap();
+    assert_calls_post(
+        &ts,
+        &json!({
+            "messaging_product": "whatsapp",
+            "to": "14085551234",
+            "recipient": "US.13491208655302741918",
+            "action": "connect",
+            "session": {"sdp_type": "offer", "sdp": "<<RFC 8866 SDP>>"},
+            "recording": {"status": "DISABLED", "purpose": " "},
+            "transcription": {"status": "PAUSED", "purpose": ""}
+        }),
+    );
+    calling
+        .accept_with(
+            &CallId::new(CALL),
+            SDP,
+            &AcceptOptions::default()
+                .transcription(CallTranscription::enabled("🎧".repeat(250), "en")),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        refused(
+            &calling,
+            None,
+            Some(CallTranscription::enabled("🎧".repeat(251), "en"))
+        )
+        .await,
+        "transcription.purpose"
+    );
+    assert_eq!(ts.requests().len(), 2);
+    assert_eq!(ts.remaining(), 0);
+}
+
 #[tokio::test]
 async fn accept_with_options_is_never_replayed() {
     let ts = ScriptedTransport::new();

@@ -1517,7 +1517,24 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     replayed after a timeout (`accept_with_options_is_never_replayed`).
     The results already arrive as typed webhooks
     (`call_recording_available`, `call_transcription_available`); the
-    downloaded transcript document is not typed.
+    downloaded transcript document is not typed. Decided with it
+    (coordinator, owner's delegation; each swappable as noted):
+    `ConnectCall`, `AcceptOptions`, `CallRecording` and
+    `CallTranscription` carry no `#[non_exhaustive]`, as request types
+    (OPEN_QUESTIONS #28); the language list is not enforced locally
+    (Meta's, and it changes; a local check is one more rule in
+    `calling::recording`); each object is validated on its own, even
+    though Meta ignores the transcription's `purpose` and language when
+    both are enabled (both pages require them; dropping the check is a
+    one-line change); a whitespace-only `purpose` or language counts as
+    empty; `status` reuses `calling::settings::FeatureStatus` (its own
+    enum later is additive if Meta's values diverge); the accept side is
+    a separate `AcceptOptions` struct for an additive `accept_with`,
+    leaving `accept`'s signature as it was. The 250-character limit
+    applies whatever the `status` (the pages' error table states it
+    without one), and only `ENABLED` requires a `purpose`
+    (`only_enabled_needs_a_purpose_and_length_counts_characters`, which
+    also pins the count in Unicode scalar values).
 - [ ] **L15. The thread control API** (`meta-whatsapp-client`, a new
   client module; row 139): pass, take, release.
   - **Kind:** additive.
