@@ -5,7 +5,7 @@ description: "Sending WhatsApp messages, media and templates through meta-whatsa
 
 # meta-whatsapp-rs-server-send
 
-> **Verified against meta-whatsapp-rs 8d7a60f5e884bc3fbc6fee013ad93d2368cb9ff8 (2026-10-31).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 5450045075ffa00aeacce7b631436f2c8903e33e (2026-10-31).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/send.ts](examples/send.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -91,10 +91,10 @@ export function outcome(error: ErrorObject, retryAfter: string | null): Outcome 
 - false (`invalid_request`, a Meta refusal such as
   `customer_service_window_closed`, throttling): nothing went out and the
   key is released: fix the cause, then repeat with the same key.
-- `idempotency_key_reused` (422): another body, number or operation (never
-  another spelling of the path). `idempotency_in_progress` (409): still running.
-  `outcome_unknown` (409): the first died mid-way; reconcile, it never
-  resends. Kept `WA_SERVER_IDEMPOTENCY_TTL` (24 hours).
+- `idempotency_key_reused` (422): another body, number or operation (or another
+  path spelling, for a key claimed before this version). `idempotency_in_progress`
+  (409): still running. `outcome_unknown` (409): the first died mid-way;
+  reconcile, it never resends. Kept `WA_SERVER_IDEMPOTENCY_TTL` (24 hours).
 
 ## Media
 
