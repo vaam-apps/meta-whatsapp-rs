@@ -608,6 +608,15 @@ mod tests {
                 routes
             },
         );
+        // The overlap check itself: a literal against a parameter, two
+        // parameters crossed, and literals apart.
+        assert!(templates_overlap("/v1/numbers/{pn}", "/v1/numbers/stats"));
+        assert!(templates_overlap("/v1/{a}/x", "/v1/y/{b}"));
+        assert!(!templates_overlap(
+            "/v1/numbers/{pn}/profile",
+            "/v1/wabas/{waba_id}/templates"
+        ));
+        assert!(!templates_overlap("/v1/numbers/{pn}", "/v1/numbers"));
         let operations = tenant_operations();
         let mut served = std::collections::HashSet::new();
         for (method, template, id, scope) in &grouped.into_inner() {
