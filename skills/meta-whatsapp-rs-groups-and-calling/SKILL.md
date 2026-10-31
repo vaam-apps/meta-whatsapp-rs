@@ -103,6 +103,15 @@ merchant
 Calls arrive as `WebhookEvent::CallUpdated` and `CallStatusUpdated`
 (field `calls`); calling is not supported in groups.
 
+Recording and transcription are opt-in per call, and off unless you set
+them: `ConnectCall::new(to, sdp).recording(CallRecording::enabled(purpose, "en_US"))`
+(or `.transcription(CallTranscription::enabled(..))`) on a connect,
+`accept_with(&call_id, sdp, &AcceptOptions::default().recording(..))`
+on an accept. Meta speaks `purpose` (at most 250 characters, required
+with `ENABLED`) to both sides before it starts. The files arrive later
+as `call_recording_available` / `call_transcription_available` events
+with a media id: download them within 7 days (`meta-whatsapp-rs-media`).
+
 ## Pitfalls
 
 - **Ownership first**: `block_users(number)` and `groups(number)` act on

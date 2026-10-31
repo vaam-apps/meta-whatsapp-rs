@@ -25,7 +25,10 @@ settings L9 left (roadmap L26), against its code and Meta's pages of
 2026-10-27 (§ Sources); row 103 with the catalog and product reads
 (roadmap L17), against its code and Meta's Catalog API pages of
 2026-10-27 (§ Sources); row 63 with the typed Flow JSON builder (roadmap
-L18), against its code and Meta's Flows pages of 2026-10-28. Every cell
+L18), against its code and Meta's Flows pages of 2026-10-28; row 135
+with call recording and transcription (roadmap L14), against its code
+and Meta's `calling/call-recording` and `calling/call-transcription`
+pages of 2026-10-31. Every cell
 about us was
 checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
@@ -41,7 +44,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 106 | 19 | 6 | 1 |
+| Library | 107 | 18 | 6 | 1 |
 | Service | 39 | 25 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -49,7 +52,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 25 partial or gap rows is cited by a
+- Each of the library's 24 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
@@ -367,7 +370,7 @@ The owner's definition (2026-09-26):
 | 132 | Numbers | Health status of a number, a WABA or a business | — | — | `support/health-status.md` | one type, `client::common::HealthStatus` (entities, `can_send_message`, `can_receive_call_sip`, errors, additional info): `client::phone_numbers::PhoneNumber::health_status`, `client::waba::Waba::health_status`, and the `health_status` of `client::templates::TemplateInfo`. Meta documents the field on numbers, WABAs and templates only; a business portfolio's status is the `BUSINESS` entity each of them returns (`HealthStatus::entity`) | — | done / gap (M5c3) |
 | 133 | Bots | Conversational components (welcome message, ice breakers, commands); bot details | — | — | `business-phone-numbers/conversational-components`; `reference/whatsapp-business-account/conversational-automation-api.md`, `reference/whatsapp-business-bot/bot-details-api.md` | `PhoneNumber::conversational_automation`, `configure_conversational_automation`; bot details `client::phone_numbers::WabaBot::get` (`Client::waba_bot`; the page has no example, and no mirrored page says where a bot id comes from) | not exposed | done / gap (M5c3) |
 | 134 | Calling | Calling settings (hours, SIP, voicemail, icons), permissions, business-initiated calls | — | — | `calling`, `calling/call-settings`, `calling/business-initiated-calls`; `reference/whatsapp-business-phone-number/calling-api.md` | `client::calling::Calling::settings`, `update_settings`, `permissions`, `connect`; `client::calling::CallingSettings` (signalling only: WebRTC media is the integrator's stack) | not exposed | done / gap (M5e) |
-| 135 | Calling | Call recording and transcription | — | — | `calling/call-recording`, `calling/call-transcription` | the webhooks are typed (`call_recording_available`, `call_transcription_available` in `webhooks::fields`) and the files download through `Media::download` by the media id they carry; the per-call `recording` and `transcription` objects on connect and accept are not carried by `client::calling::ConnectCall` or `Calling::accept` | the call events only | partial / gap (M5e) |
+| 135 | Calling | Call recording and transcription | — | — | `calling/call-recording`, `calling/call-transcription` | the per-call `recording` and `transcription` objects on connect and accept: `client::calling::ConnectCall::recording`, `client::calling::ConnectCall::transcription`, `client::calling::Calling::accept_with` with `client::calling::AcceptOptions` (`client::calling::CallRecording`, `client::calling::CallTranscription`: off unless set; `purpose` and `announcement_language` required with `ENABLED`, `purpose` at most 250 characters, checked locally; L14); the webhooks are typed (`call_recording_available`, `call_transcription_available` in `webhooks::fields`) and the files download through `Media::download` by the media id they carry; the downloaded transcript document is not typed | the call events only | done / gap (M5e) |
 | 136 | Marketing | Marketing Messages API: send (product policy, activity sharing, bid multiplier), onboarding, the Cloud API marketing switch, partner onboarding to MM Lite | — | — | `marketing-messages/overview.md`, `marketing-messages/send-marketing-messages.md`, `marketing-messages/onboarding.md`; `reference/whatsapp-business-phone-number/marketing-messages-api-for-whatsapp.md`, `reference/business/whatsapp-business-partner-onboarding-to-mm-lite-api.md` | `client::marketing::Marketing::send`; `client::marketing::MarketingAccount::onboarding_status`, `set_cloud_api_marketing_disabled`; `client::marketing::MarketingBusiness::request_onboarding` | not exposed | done / gap (M5h) |
 | 137 | Marketing | Max price (agreement, partner allow list, duplicating a template at another price), reach estimates, click tracking (metrics and conversion measurement are Meta's ads APIs: not part of this row) | — | — | `marketing-messages/pricing/enroll-max-price.md`, `marketing-messages/pricing/duplicate-templates.md`, `marketing-messages/pricing.md` (`GET /{WABA_ID}/reachestimate`), `marketing-messages/view-metrics.md`, `marketing-messages/measure-conversion.md`, `marketing-messages/track-click-events.md` | max price and reach estimates not wrapped (L13). Click tracking opt-out: `client::analytics::Analytics::set_button_click_tracking`; clicks as `webhooks::WebhookEvent::UserActionReported`. Enrolling in max price signs Meta's beta agreement, a legal act: wrapped as an explicit call, and signing it is the deployer's (OPEN_QUESTIONS #45); the metrics and conversion measurement come from Meta's ads APIs (insights on ad objects, events for ads), outside the Cloud API | clicks are operator-only until M2d (D25); max price in M5h, its agreement an explicit, audited operator action | partial / gap (M2d, M5h) |
 | 138 | Marketing | Click-to-WhatsApp: the referral on inbound messages, automatic events, welcome message sequences | — | — | `ctwa/welcome-message-sequences`; `embedded-signup/automatic-events-api` | `webhooks::fields::Referral`; `webhooks::WebhookEvent::AutomaticEventDetected`; the sequences (`/{WABA_ID}/welcome_message_sequences`) not wrapped (coverage row 31); the sequences come with L13; reporting automatic events to Meta's Conversions API (optional) is outside the Cloud API, and not part of this row | the referral in `message_received` events, `automatic_event_detected` events | partial / partial (M5h) |

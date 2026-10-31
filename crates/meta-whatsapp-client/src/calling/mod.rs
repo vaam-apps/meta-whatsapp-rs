@@ -16,6 +16,10 @@
 //!   /{phone-number-id}/calls` and `call_permissions`.
 //! - `business-scoped-user-ids#calling-api` — calling and permission lookup
 //!   by BSUID (`recipient`).
+//! - `calling/call-recording`, `calling/call-transcription` — the per-call
+//!   `recording` and `transcription` objects of `connect` and `accept`
+//!   ([`CallRecording`], [`CallTranscription`]; see [`recording`]), off
+//!   unless set.
 //!
 //! Every call action is a `POST /{phone-number-id}/calls` with an `action`.
 //! SDP is opaque here: it is passed through unparsed (RFC 8866; WebRTC
@@ -25,7 +29,8 @@
 //!
 //! Limits enforced locally: `biz_opaque_callback_data` ≤ 512 characters,
 //! non-empty SDP and call ids, no groups (calling is not supported in
-//! groups), and the call-settings limits listed in [`settings`].
+//! groups), the recording and transcription limits listed in
+//! [`recording`], and the call-settings limits listed in [`settings`].
 //!
 //! Doc paths are relative to
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
@@ -40,10 +45,12 @@ use time::OffsetDateTime;
 
 use crate::Client;
 
+pub mod recording;
 pub mod settings;
 #[cfg(test)]
 mod tests;
 
+pub use recording::{CallRecording, CallTranscription};
 pub use settings::CallingSettings;
 
 /// Longest `biz_opaque_callback_data`, in characters.
@@ -153,6 +160,11 @@ impl Calling {
     /// "connect"` (`calling/business-initiated-calls#initiate-call`). You
     /// need the user's call permission first.
     ///
+    /// [`ConnectCall`]'s `recording` and `transcription` fields, when set,
+    /// are sent as the `recording` and `transcription` objects
+    /// (`calling/call-recording`, `calling/call-transcription`), checked
+    /// first; unset, neither key is sent.
+    ///
     /// Not idempotent: a replay would ring the user twice.
     pub async fn connect(&self, call: &ConnectCall) -> Result<CallStarted> {
         let (to, recipient) = match &call.to {
@@ -166,6 +178,8 @@ impl Calling {
             recipient,
             session: Some(Session::new(SdpType::Offer, &call.sdp_offer)?),
             biz_opaque_callback_data: opaque(call.biz_opaque_callback_data.as_deref())?,
+            recording: checked(call.recording.as_ref(), CallRecording::validate)?,
+            transcription: checked(call.transcription.as_ref(), CallTranscription::validate)?,
             ..CallsBody::new(Action::Connect)
         };
         self.client
@@ -193,16 +207,42 @@ impl Calling {
     /// `action: "accept"` (`calling/user-initiated-calls#accept-call`). The
     /// SDP answer must match the one given to [`Self::pre_accept`], if any.
     /// Start sending media only after this returns.
+    ///
+    /// Sends neither `recording` nor `transcription`; to record or
+    /// transcribe the call, use [`Self::accept_with`].
     pub async fn accept(
         &self,
         call_id: &CallId,
         sdp_answer: &str,
         biz_opaque_callback_data: Option<&str>,
     ) -> Result<()> {
+        let options = AcceptOptions {
+            biz_opaque_callback_data: biz_opaque_callback_data.map(str::to_owned),
+            ..AcceptOptions::default()
+        };
+        self.accept_with(call_id, sdp_answer, &options).await
+    }
+
+    /// [`Self::accept`] with its optional fields: `biz_opaque_callback_data`
+    /// and the `recording` and `transcription` objects
+    /// (`calling/call-recording#enable-recording-on-a-user-initiated-call`,
+    /// `calling/call-transcription#enable-transcription-on-a-user-initiated-call`),
+    /// checked first. An unset option sends no key. The pages take the
+    /// objects on `accept` only, not on [`Self::pre_accept`].
+    ///
+    /// Not idempotent, as every call action.
+    pub async fn accept_with(
+        &self,
+        call_id: &CallId,
+        sdp_answer: &str,
+        options: &AcceptOptions,
+    ) -> Result<()> {
         let body = CallsBody {
             call_id: Some(check_call_id(call_id)?),
             session: Some(Session::new(SdpType::Answer, sdp_answer)?),
-            biz_opaque_callback_data: opaque(biz_opaque_callback_data)?,
+            biz_opaque_callback_data: opaque(options.biz_opaque_callback_data.as_deref())?,
+            recording: checked(options.recording.as_ref(), CallRecording::validate)?,
+            transcription: checked(options.transcription.as_ref(), CallTranscription::validate)?,
             ..CallsBody::new(Action::Accept)
         };
         self.send_action(&body, "accept call response").await
@@ -276,6 +316,14 @@ fn opaque(data: Option<&str>) -> Result<Option<&str>> {
     Ok(data)
 }
 
+/// `option`, after `validate` passes on it.
+fn checked<T>(option: Option<&T>, validate: fn(&T) -> Result<()>) -> Result<Option<&T>> {
+    if let Some(o) = option {
+        validate(o)?;
+    }
+    Ok(option)
+}
+
 #[derive(Serialize)]
 struct CallsBody<'a> {
     messaging_product: &'static str,
@@ -290,6 +338,10 @@ struct CallsBody<'a> {
     session: Option<Session<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     biz_opaque_callback_data: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recording: Option<&'a CallRecording>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transcription: Option<&'a CallTranscription>,
 }
 
 impl CallsBody<'_> {
@@ -302,6 +354,8 @@ impl CallsBody<'_> {
             action,
             session: None,
             biz_opaque_callback_data: None,
+            recording: None,
+            transcription: None,
         }
     }
 }
@@ -341,6 +395,10 @@ enum SdpType {
 }
 
 /// Arguments of [`Calling::connect`].
+///
+/// Build it with [`ConnectCall::new`] and its setters, or as a struct
+/// literal ending in `..ConnectCall::new(to, sdp_offer)`, which a field
+/// added later does not break.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectCall {
     /// Callee: a phone number (`to`), a BSUID or parent BSUID
@@ -350,16 +408,85 @@ pub struct ConnectCall {
     pub sdp_offer: String,
     /// Up to 512 characters echoed in the call terminate webhook.
     pub biz_opaque_callback_data: Option<String>,
+    /// The `recording` object: record the call (`calling/call-recording`).
+    /// `None`, the default, sends no key and does not record.
+    pub recording: Option<CallRecording>,
+    /// The `transcription` object: transcribe the call
+    /// (`calling/call-transcription`). `None`, the default, sends no key
+    /// and does not transcribe.
+    pub transcription: Option<CallTranscription>,
 }
 
 impl ConnectCall {
-    /// A call to `to` with `sdp_offer`.
+    /// A call to `to` with `sdp_offer`, neither recorded nor transcribed.
     pub fn new(to: impl Into<Recipient>, sdp_offer: impl Into<String>) -> Self {
         Self {
             to: to.into(),
             sdp_offer: sdp_offer.into(),
             biz_opaque_callback_data: None,
+            recording: None,
+            transcription: None,
         }
+    }
+
+    /// Set the `biz_opaque_callback_data` field.
+    #[must_use]
+    pub fn biz_opaque_callback_data(mut self, data: impl Into<String>) -> Self {
+        self.biz_opaque_callback_data = Some(data.into());
+        self
+    }
+
+    /// Set the `recording` field, e.g.
+    /// `CallRecording::enabled("quality assurance", "en_US")`.
+    #[must_use]
+    pub fn recording(mut self, recording: CallRecording) -> Self {
+        self.recording = Some(recording);
+        self
+    }
+
+    /// Set the `transcription` field, e.g.
+    /// `CallTranscription::enabled("quality assurance", "en_US")`.
+    #[must_use]
+    pub fn transcription(mut self, transcription: CallTranscription) -> Self {
+        self.transcription = Some(transcription);
+        self
+    }
+}
+
+/// The optional fields of [`Calling::accept_with`]. The default sets none
+/// of them: no `biz_opaque_callback_data`, not recorded, not transcribed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AcceptOptions {
+    /// Up to 512 characters echoed in the call terminate webhook.
+    pub biz_opaque_callback_data: Option<String>,
+    /// The `recording` object: record the call (`calling/call-recording`).
+    /// `None`, the default, sends no key.
+    pub recording: Option<CallRecording>,
+    /// The `transcription` object: transcribe the call
+    /// (`calling/call-transcription`). `None`, the default, sends no key.
+    pub transcription: Option<CallTranscription>,
+}
+
+impl AcceptOptions {
+    /// Set the `biz_opaque_callback_data` field.
+    #[must_use]
+    pub fn biz_opaque_callback_data(mut self, data: impl Into<String>) -> Self {
+        self.biz_opaque_callback_data = Some(data.into());
+        self
+    }
+
+    /// Set the `recording` field.
+    #[must_use]
+    pub fn recording(mut self, recording: CallRecording) -> Self {
+        self.recording = Some(recording);
+        self
+    }
+
+    /// Set the `transcription` field.
+    #[must_use]
+    pub fn transcription(mut self, transcription: CallTranscription) -> Self {
+        self.transcription = Some(transcription);
+        self
     }
 }
 

@@ -65,6 +65,8 @@ async fn connect_matches_docs_example_with_bsuid() {
             },
             sdp_offer: SDP.into(),
             biz_opaque_callback_data: Some("0fS5cePMok".into()),
+            recording: None,
+            transcription: None,
         })
         .await
         .unwrap();
@@ -296,6 +298,479 @@ async fn call_inputs_are_validated() {
         .await
         .unwrap();
     assert_eq!(ts.remaining(), 0);
+}
+
+// ── Recording and transcription (roadmap L14) ───────────────────────────
+
+/// The `sdp` and call id of the `calling/call-recording` and
+/// `calling/call-transcription` examples, verbatim.
+const DOCS_SDP: &str = "<<RFC 8866 SDP>>";
+const DOCS_CALL: &str = "wacid.ABGGFjFVU2AfAgo6V";
+
+fn success() -> serde_json::Value {
+    json!({"messaging_product": "whatsapp", "success": true})
+}
+
+fn docs_connect() -> ConnectCall {
+    ConnectCall::new(
+        Recipient::PhoneAndUser {
+            phone: "14085551234".into(),
+            user: "US.13491208655302741918".into(),
+        },
+        DOCS_SDP,
+    )
+}
+
+#[tokio::test]
+async fn connect_with_recording_matches_docs_example() {
+    let ts = ScriptedTransport::new();
+    ts.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "calls": [{"id": DOCS_CALL}]}),
+    );
+    let started = client(&ts)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
+        .connect(&docs_connect().recording(CallRecording::enabled("quality assurance", "en_US")))
+        .await
+        .unwrap();
+    // calling/call-recording § Enable recording on a business-initiated call.
+    assert_calls_post(
+        &ts,
+        &json!({
+            "messaging_product": "whatsapp",
+            "to": "14085551234",
+            "recipient": "US.13491208655302741918",
+            "action": "connect",
+            "session": {"sdp_type": "offer", "sdp": "<<RFC 8866 SDP>>"},
+            "recording": {
+                "status": "ENABLED",
+                "purpose": "quality assurance",
+                "announcement_language": "en_US"
+            }
+        }),
+    );
+    assert_eq!(started.call_id(), Some(&CallId::new(DOCS_CALL)));
+    assert_eq!(ts.remaining(), 0);
+}
+
+#[tokio::test]
+async fn connect_with_transcription_matches_docs_example() {
+    let ts = ScriptedTransport::new();
+    ts.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "calls": [{"id": DOCS_CALL}]}),
+    );
+    client(&ts)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
+        .connect(
+            &docs_connect().transcription(CallTranscription::enabled("quality assurance", "en_US")),
+        )
+        .await
+        .unwrap();
+    // calling/call-transcription § Enable transcription on a
+    // business-initiated call.
+    assert_calls_post(
+        &ts,
+        &json!({
+            "messaging_product": "whatsapp",
+            "to": "14085551234",
+            "recipient": "US.13491208655302741918",
+            "action": "connect",
+            "session": {"sdp_type": "offer", "sdp": "<<RFC 8866 SDP>>"},
+            "transcription": {
+                "status": "ENABLED",
+                "purpose": "quality assurance",
+                "announcement_language": "en_US"
+            }
+        }),
+    );
+    assert_eq!(ts.remaining(), 0);
+}
+
+#[tokio::test]
+async fn accept_with_recording_matches_docs_example() {
+    let ts = ScriptedTransport::new();
+    ts.push_json(200, success());
+    client(&ts)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
+        .accept_with(
+            &CallId::new(DOCS_CALL),
+            DOCS_SDP,
+            &AcceptOptions::default()
+                .recording(CallRecording::enabled("quality assurance", "en_US")),
+        )
+        .await
+        .unwrap();
+    // calling/call-recording § Enable recording on a user-initiated call.
+    assert_calls_post(
+        &ts,
+        &json!({
+            "messaging_product": "whatsapp",
+            "call_id": "wacid.ABGGFjFVU2AfAgo6V",
+            "action": "accept",
+            "session": {"sdp_type": "answer", "sdp": "<<RFC 8866 SDP>>"},
+            "recording": {
+                "status": "ENABLED",
+                "purpose": "quality assurance",
+                "announcement_language": "en_US"
+            }
+        }),
+    );
+    assert_eq!(ts.remaining(), 0);
+}
+
+#[tokio::test]
+async fn accept_with_transcription_matches_docs_example() {
+    let ts = ScriptedTransport::new();
+    ts.push_json(200, success());
+    client(&ts)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
+        .accept_with(
+            &CallId::new(DOCS_CALL),
+            DOCS_SDP,
+            &AcceptOptions {
+                transcription: Some(CallTranscription::enabled("quality assurance", "en_US")),
+                ..AcceptOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    // calling/call-transcription § Enable transcription on a
+    // user-initiated call.
+    assert_calls_post(
+        &ts,
+        &json!({
+            "messaging_product": "whatsapp",
+            "call_id": "wacid.ABGGFjFVU2AfAgo6V",
+            "action": "accept",
+            "session": {"sdp_type": "answer", "sdp": "<<RFC 8866 SDP>>"},
+            "transcription": {
+                "status": "ENABLED",
+                "purpose": "quality assurance",
+                "announcement_language": "en_US"
+            }
+        }),
+    );
+    assert_eq!(ts.remaining(), 0);
+}
+
+/// The decisive test of L14's other half: without the options, neither key
+/// is sent, by `connect`, `accept` or `accept_with`.
+#[tokio::test]
+async fn connect_and_accept_without_options_send_neither_key() {
+    let ts = ScriptedTransport::new();
+    ts.push_json(200, json!({"calls": [{"id": DOCS_CALL}]}));
+    ts.push_json(200, success());
+    ts.push_json(200, success());
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
+    let neither = |ts: &ScriptedTransport| {
+        let body = ts.last_request().unwrap().json().unwrap();
+        let body = body.as_object().unwrap();
+        assert!(!body.contains_key("recording"), "{body:?}");
+        assert!(!body.contains_key("transcription"), "{body:?}");
+    };
+    calling.connect(&docs_connect()).await.unwrap();
+    neither(&ts);
+    assert_calls_post(
+        &ts,
+        &json!({
+            "messaging_product": "whatsapp",
+            "to": "14085551234",
+            "recipient": "US.13491208655302741918",
+            "action": "connect",
+            "session": {"sdp_type": "offer", "sdp": "<<RFC 8866 SDP>>"}
+        }),
+    );
+    calling
+        .accept(&CallId::new(DOCS_CALL), DOCS_SDP, None)
+        .await
+        .unwrap();
+    neither(&ts);
+    calling
+        .accept_with(&CallId::new(DOCS_CALL), DOCS_SDP, &AcceptOptions::default())
+        .await
+        .unwrap();
+    neither(&ts);
+    assert_calls_post(
+        &ts,
+        &json!({
+            "messaging_product": "whatsapp",
+            "call_id": "wacid.ABGGFjFVU2AfAgo6V",
+            "action": "accept",
+            "session": {"sdp_type": "answer", "sdp": "<<RFC 8866 SDP>>"}
+        }),
+    );
+    assert_eq!(ts.remaining(), 0);
+}
+
+#[tokio::test]
+async fn both_options_and_explicit_opt_outs_are_sent_as_given() {
+    let ts = ScriptedTransport::new();
+    ts.push_json(200, json!({"calls": [{"id": DOCS_CALL}]}));
+    ts.push_json(200, success());
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
+    // Both on one call (calling/call-recording § Using recording with
+    // transcription): two objects, each with its own fields.
+    calling
+        .connect(
+            &docs_connect()
+                .biz_opaque_callback_data("0fS5cePMok")
+                .recording(CallRecording::enabled("quality assurance", "es"))
+                .transcription(CallTranscription::enabled("quality assurance", "es")),
+        )
+        .await
+        .unwrap();
+    assert_calls_post(
+        &ts,
+        &json!({
+            "messaging_product": "whatsapp",
+            "to": "14085551234",
+            "recipient": "US.13491208655302741918",
+            "action": "connect",
+            "session": {"sdp_type": "offer", "sdp": "<<RFC 8866 SDP>>"},
+            "biz_opaque_callback_data": "0fS5cePMok",
+            "recording": {"status": "ENABLED", "purpose": "quality assurance", "announcement_language": "es"},
+            "transcription": {"status": "ENABLED", "purpose": "quality assurance", "announcement_language": "es"}
+        }),
+    );
+    // "send it with "status": "DISABLED"": an explicit opt-out.
+    calling
+        .accept_with(
+            &CallId::new(DOCS_CALL),
+            DOCS_SDP,
+            &AcceptOptions::default()
+                .biz_opaque_callback_data("random_string")
+                .recording(CallRecording::disabled())
+                .transcription(CallTranscription::disabled()),
+        )
+        .await
+        .unwrap();
+    assert_calls_post(
+        &ts,
+        &json!({
+            "messaging_product": "whatsapp",
+            "call_id": "wacid.ABGGFjFVU2AfAgo6V",
+            "action": "accept",
+            "session": {"sdp_type": "answer", "sdp": "<<RFC 8866 SDP>>"},
+            "biz_opaque_callback_data": "random_string",
+            "recording": {"status": "DISABLED"},
+            "transcription": {"status": "DISABLED"}
+        }),
+    );
+    assert_eq!(ts.remaining(), 0);
+}
+
+/// The field `connect` and `accept_with` each name when refusing these
+/// options; asserts the two agree.
+async fn refused(
+    calling: &Calling,
+    recording: Option<CallRecording>,
+    transcription: Option<CallTranscription>,
+) -> String {
+    let connect = ConnectCall {
+        recording: recording.clone(),
+        transcription: transcription.clone(),
+        ..ConnectCall::new(Recipient::phone("1"), SDP)
+    };
+    let on_connect = calling.connect(&connect).await.unwrap_err();
+    let options = AcceptOptions {
+        recording,
+        transcription,
+        ..AcceptOptions::default()
+    };
+    let on_accept = calling
+        .accept_with(&CallId::new(CALL), SDP, &options)
+        .await
+        .unwrap_err();
+    assert_eq!(validation_field(&on_connect), validation_field(&on_accept));
+    validation_field(&on_connect).to_owned()
+}
+
+#[tokio::test]
+async fn recording_limits_are_enforced() {
+    let ts = ScriptedTransport::new();
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
+    let cases = [
+        (
+            CallRecording {
+                purpose: None,
+                ..CallRecording::enabled("x", "en")
+            },
+            "recording.purpose",
+        ),
+        (CallRecording::enabled(" ", "en"), "recording.purpose"),
+        (
+            CallRecording::enabled("x".repeat(251), "en"),
+            "recording.purpose",
+        ),
+        (
+            CallRecording {
+                purpose: Some("x".repeat(251)),
+                ..CallRecording::disabled()
+            },
+            "recording.purpose",
+        ),
+        (
+            CallRecording {
+                announcement_language: None,
+                ..CallRecording::enabled("x", "en")
+            },
+            "recording.announcement_language",
+        ),
+        (
+            CallRecording::enabled("x", ""),
+            "recording.announcement_language",
+        ),
+        (
+            CallRecording {
+                announcement_language: Some(" ".into()),
+                ..CallRecording::disabled()
+            },
+            "recording.announcement_language",
+        ),
+    ];
+    for (bad, field) in cases {
+        assert_eq!(
+            refused(&calling, Some(bad.clone()), None).await,
+            field,
+            "{bad:?}"
+        );
+    }
+    assert!(ts.requests().is_empty());
+}
+
+#[tokio::test]
+async fn transcription_limits_are_enforced() {
+    let ts = ScriptedTransport::new();
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
+    let cases = [
+        (
+            CallTranscription {
+                purpose: None,
+                ..CallTranscription::enabled("x", "en")
+            },
+            "transcription.purpose",
+        ),
+        (
+            CallTranscription::enabled("", "en"),
+            "transcription.purpose",
+        ),
+        (
+            CallTranscription::enabled("é".repeat(251), "en"),
+            "transcription.purpose",
+        ),
+        (
+            CallTranscription {
+                announcement_language: None,
+                ..CallTranscription::enabled("x", "en")
+            },
+            "transcription.announcement_language",
+        ),
+        (
+            CallTranscription::enabled("x", "\t"),
+            "transcription.announcement_language",
+        ),
+    ];
+    for (bad, field) in cases {
+        assert_eq!(
+            refused(&calling, None, Some(bad.clone())).await,
+            field,
+            "{bad:?}"
+        );
+    }
+    // A valid recording does not excuse an invalid transcription, though
+    // Meta speaks only the recording's announcement: each page requires
+    // its own fields.
+    assert_eq!(
+        refused(
+            &calling,
+            Some(CallRecording::enabled("x", "en")),
+            Some(CallTranscription::enabled("", "en")),
+        )
+        .await,
+        "transcription.purpose"
+    );
+    assert!(ts.requests().is_empty());
+}
+
+#[tokio::test]
+async fn recording_limits_admit_their_edges() {
+    let ts = ScriptedTransport::new();
+    ts.push_json(200, success());
+    ts.push_json(200, success());
+    let calling = client(&ts).calling(PhoneNumberId::new(PHONE).unwrap());
+    // 250 characters exactly is fine.
+    calling
+        .accept_with(
+            &CallId::new(CALL),
+            SDP,
+            &AcceptOptions::default()
+                .recording(CallRecording::enabled("é".repeat(250), "en"))
+                .transcription(CallTranscription::enabled("x".repeat(250), "pt")),
+        )
+        .await
+        .unwrap();
+    // An unknown status is Meta's to judge: no field is required with it.
+    calling
+        .accept_with(
+            &CallId::new(CALL),
+            SDP,
+            &AcceptOptions::default().recording(CallRecording {
+                status: FeatureStatus::Other("PAUSED".into()),
+                purpose: None,
+                announcement_language: None,
+            }),
+        )
+        .await
+        .unwrap();
+    assert_calls_post(
+        &ts,
+        &json!({"messaging_product": "whatsapp", "call_id": CALL, "action": "accept", "session": {"sdp_type": "answer", "sdp": SDP}, "recording": {"status": "PAUSED"}}),
+    );
+    assert_eq!(ts.remaining(), 0);
+}
+
+#[tokio::test]
+async fn accept_with_options_is_never_replayed() {
+    let ts = ScriptedTransport::new();
+    ts.push_error(|| TransportError::Timeout);
+    let c = Client::builder()
+        .transport(ts.clone())
+        .access_token("TOKEN")
+        .retry(RetryPolicy {
+            max_retries: 2,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+        })
+        .build()
+        .unwrap();
+    let err = c
+        .calling(PhoneNumberId::new(PHONE).unwrap())
+        .accept_with(
+            &CallId::new(CALL),
+            SDP,
+            &AcceptOptions::default().recording(CallRecording::enabled("x", "en")),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Transport(TransportError::Timeout)));
+    assert_eq!(ts.requests().len(), 1);
+    assert_eq!(ts.remaining(), 0);
+}
+
+#[test]
+fn recording_objects_read_back_with_unknown_values() {
+    let r: CallRecording = serde_json::from_value(
+        json!({"status": "ENABLED", "purpose": "p", "announcement_language": "vi", "new_field": 1}),
+    )
+    .unwrap();
+    assert_eq!(r, CallRecording::enabled("p", "vi"));
+    let t: CallTranscription = serde_json::from_value(json!({"status": "SOMETIMES"})).unwrap();
+    assert_eq!(t.status, FeatureStatus::Other("SOMETIMES".into()));
+    assert_eq!(
+        serde_json::to_value(&t).unwrap(),
+        json!({"status": "SOMETIMES"})
+    );
 }
 
 // ── Permissions ─────────────────────────────────────────────────────────
