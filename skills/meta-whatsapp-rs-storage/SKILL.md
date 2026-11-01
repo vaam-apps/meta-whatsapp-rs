@@ -26,12 +26,12 @@ stores (vault, OTP, dedup, dead letters, sessions, bot cooldowns and jobs) are b
 | bot jobs (`KvJobs`; names pending the owner) | `KvStore` | `wa.bot.jobs`, `wa.bot.jobs.due`, `.sent`, `.message`, `.limited` | scheduled jobs; resumed ones resend |
 | inbox history (`InboxSink`, `Inbox`) | `ConversationStore` | tables `wa_*` | the history |
 
-| | Memory (`memory`) | Postgres (`postgres`) | Redis (`redis`) |
-| --- | --- | --- | --- |
-| `KvStore` | `MemoryKvStore` | `PostgresKvStore` | `RedisKvStore` |
-| `ConversationStore` | `MemoryConversationStore` | `PostgresConversationStore` | — |
-| shared, survives restarts | no | yes | yes, with persistence on |
-| expiry clock | the process (`with_clock`) | the database server | the Redis server |
+| | Memory (`memory`) | Postgres (`postgres`) | SQLite (`sqlite`) | Redis (`redis`) |
+| --- | --- | --- | --- | --- |
+| `KvStore` | `MemoryKvStore` | `PostgresKvStore` | `SqliteKvStore` | `RedisKvStore` |
+| `ConversationStore` | `MemoryConversationStore` | `PostgresConversationStore` | `SqliteConversationStore` | `RedisConversationStore` |
+| shared, survives restarts | no | yes | survives; one machine | yes, with persistence on |
+| expiry clock | the process (`with_clock`) | the database server | the process (`with_clock`) | the Redis server |
 
 ## Postgres: the simple choice
 
@@ -126,7 +126,7 @@ direction and stores `StoredMessage::tombstone` when the id is unknown, as histo
 never sees it). Since roadmap L5: `message` (scoped to the number), window events, thread ownership
 and synced contacts (the latest record wins; a removal is kept, key and time only, and refuses an
 older sync), identity links, `identities`, `erase_all` (one step; group messages per `erasure_mode`;
-`erase` is provided) and `purge_before`; since B4, `trim_conversations`. The suite checks all of it, and that content (kind, text,
+`erase` is provided) and `purge_before`; since B4, `trim_conversations` (memory, Postgres, SQLite and Redis implement it). The suite checks all of it, and that content (kind, text,
 payload strings and keys, status error, preview) reads back exactly, U+0000 included. A `KvStore`
 keeps values as any bytes; a key holding U+0000 may be refused, never stored as another key. ~~Six
 methods to implement~~: until 6d50701 and a9593f3 (2026-09-24), which added `append_synced`,
@@ -149,8 +149,8 @@ that made U+0000 lossless (PR #7, 2026-09-25).
 
 ## What meta-whatsapp-rs does not do
 
-- No Redis Cluster or Sentinel over TLS (`RedisTls` is one server, roadmap L21c), no Redis
-  `ConversationStore`, no backups of inbox history.
+- No Redis Cluster or Sentinel over TLS (`RedisTls` is one server, roadmap L21c), no backups
+  of inbox history; a `RedisConversationStore` keeps a whole inbox on one shard.
 - Message ids are unique per store, not per business number
   ([open question 33](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
 

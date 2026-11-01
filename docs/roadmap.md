@@ -1849,6 +1849,13 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     `live_postgres_the_locks_are_the_documented_ones`. Not caught: the
     key order of the summaries' locks (the ranking already yields them
     in key order); in memory a trim cannot race an append (one lock).
+    SQLite and Redis implement it since L8's merge of B4: SQLite in one
+    `BEGIN IMMEDIATE` transaction (summaries, then rows, on one
+    ranking), Redis in one script per conversation of at most 1024 rows
+    (several for a conversation further over its cap), over a new set of
+    each number's conversations with a history (`B:c:<pn>`); both pass
+    the trim cases, and `live_redis_a_trim_beyond_one_script_takes_several`
+    fails a trim stopping after one script.
     The server compiles and passes unchanged (it implements no
     `ConversationStore`); retention over HTTP is M5k. The sabotage
     review added what three surviving mutations showed missing: a cap
@@ -1979,7 +1986,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     (`ReplyChecks::trust_handover`, OPEN_QUESTIONS #44); a
     `user_id_update`'s `wa_id` is linked too. Row 139 stays partial (the
     thread control API, L15); `conversation_context` is not stored.
-- [ ] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
+- [x] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
   features `redis` and a new `sqlite`; `meta_whatsapp_rs::inbox`; rows
   69, 111): a Redis `ConversationStore`, SQLite adapters for both ports,
   and `InboxSink` keeping the coexistence sync's contacts through L5's
@@ -1992,6 +1999,87 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** every adapter passes both conformance suites; a second
     `append` of one id on another number returns `false` on each, as the
     suite says today; the synced contacts are read back from the store.
+  - **Landed:** `store::{SqliteKvStore, SqliteConversationStore}`
+    (feature `sqlite`, `store::sqlite::{open, memory, migrate}`) pass
+    both suites in process, in `just test` (an in-memory database, and
+    a file shared by a pool of connections under another prefix);
+    `store::RedisConversationStore` passes the conversation suite live
+    (`live_redis_conversation_*`, both erasure modes and a retention).
+    The suite gains `conversation_conformance::ids_are_stored_once_per_store`,
+    outside `run` (the port allows either answer to OPEN_QUESTIONS #33,
+    which stays open): the memory store and both new stores pass it in
+    `just test`, Redis and Postgres live; it fails a SQLite store whose
+    id index is not unique, and a Redis store checking ids per number.
+    `InboxSink` records `smb_app_state_sync`, and
+    `crates/meta-whatsapp-rs/tests/synced_contacts.rs` reads Meta's
+    examples back through `Inbox::contacts` and `Inbox::contact` on
+    memory and SQLite (it fails when a removal is applied under one key
+    only). Rows 69 and 111 are done in the library (the service's sides
+    stay with M3b and M2a); categories 30 and 39 too. The sabotage
+    review added `conversation_conformance::erase_one_person_of_every_record`
+    and `purge_one_person_of_every_record` (outside `run`), after which
+    each adapter scans its own storage for what must be gone (Redis
+    kept a redacted group message's sender and index members naming the
+    person, with every port read passing), and `run`'s
+    `an_unbounded_limit_reads_everything` (Redis refused `usize::MAX`).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable behind the
+    `KvStore` and `ConversationStore` ports, or a switch):
+    1. **SQLite through sqlx's driver**, the library compiled in
+       (`sqlite-bundled`: MIT, no TLS); sqlx's Postgres driver, its TLS
+       and its macros move from the dependency to the `postgres`
+       feature, so `sqlite` alone links neither (`just features` checks
+       both alone). Its migrations are embedded with `include_str!` from
+       `migrations-sqlite/`, templates under the same `TablePrefix`, now
+       `store::TablePrefix` (still `store::postgres::TablePrefix`), and
+       each prefix keeps its own migration history
+       (`<prefix>sqlx_migrations`). Swappable: another store behind the
+       same ports.
+    2. **SQLite concurrency is SQLite's write lock**: every write one
+       `BEGIN IMMEDIATE` transaction (read, decide in Rust, write), the
+       busy timeout `store::sqlite::open` sets (30 s) the wait; times
+       `INTEGER` microseconds, identifiers `TEXT` refusing U+0000 (as on
+       Postgres), content `BLOB`; the key/value store's expiry on the
+       application's injectable clock (`SqliteKvStore::with_clock`), its
+       versions from one counter row, so a deleted record's row goes at
+       once. Swappable by building the pool yourself
+       (`store::sqlite::sqlx`).
+    3. **One Redis hash tag per conversation store**
+       (`<prefix>{conversations:<prefix>}`, so stores of other prefixes
+       hash to other slots: inboxes spread with one store per prefix,
+       `with_prefix`): every write one Lua script over keys of one slot.
+       Status updates are a compare-and-swap decided in Rust
+       (`DeliveryStatus::supersedes`); a purge of every number is one
+       script per number over the store's set of numbers, which never
+       shrinks (it names businesses only). Times are 16 hex digits that
+       sort as they compare.
+    4. **The inbox's contact rules, as built**: a switch,
+       `RecordingSwitches::contacts`, on in the library's
+       `RecordingSwitches::ALL`; an `add` stored under
+       `inbox::synced_contact_key` (the BSUID, else the phone number
+       without `+`, which is also the phone number stored, so that
+       `identities` meets the conversations' keys); a `remove` under
+       each key it names (the BSUID and the phone number), so that an
+       entry keyed by the phone number before Meta sent the BSUID does
+       not keep the person's names; a change without
+       `metadata.timestamp`, without a usable id or with U+0000 in one
+       is skipped with a warning, without content (Meta's order is the
+       timestamp; the sink's clock would let a late redelivery win). A
+       `remove` naming only a phone number leaves an entry keyed by the
+       BSUID (Meta's reference shows a removal with both).
+    5. **Category 39's library side is done**; MongoDB adapters stay
+       with S17.
+    6. **The service records no synced contacts until M3b**:
+       `meta-whatsapp-server-core`'s `inbound::INBOX_RECORDING` is the
+       library's switches with `contacts(false)`, the events still
+       reaching their tenant (decisive:
+       `conformance::webhooks::an_address_book_change_reaches_its_tenant_and_no_inbox`);
+       M3b turns it on with the routes that read them.
+  - **Pending the owner's confirmation before the first release**
+    (architecture § Stable identifiers): the new stored names, SQLite
+    migration 1 (`wa_kv_version`, the SQLite tables and their columns,
+    its checksum pinned) and the Redis conversation layout (keys,
+    fields, the hash tag, the time encoding).
 - [x] **L9. Phone numbers** (`meta-whatsapp-client`,
   `client::phone_numbers`; rows 66, 129–133, 151): the business
   username calls, deleting a contact book entry, search visibility,
@@ -2173,7 +2261,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     stays in the skill's `hosted_signup.rs`); the skill not re-stamped.
     The library's side of OPEN_QUESTIONS #11 is decided; the service's
     is M3f.
-- [ ] **L11b. Several WABAs in one signup** (`client::embedded_signup`;
+- [x] **L11b. Several WABAs in one signup** (`client::embedded_signup`;
   row 122; OPEN_QUESTIONS #5): opt-in onboarding of every granted WABA,
   each bound and resumable on its own.
   - **Kind:** additive.
@@ -2181,6 +2269,134 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** with the option off, a signup granting two WABAs
     onboards only the claimed one; with it on, both, and a failure on
     the second leaves the first stored and resumable.
+  - **Landed:** row 122 done in the library (the service's side stays
+    with M3f). `OnboardingRequest::every_granted_waba` (field and
+    setter, off by default) and `EmbeddedSignup::onboard_wabas` /
+    `onboard_wabas_with_approval` (module `embedded_signup::multi`):
+    `exchange_code` and `debug_token` once; with the option on, a
+    session info naming a WABA (`waba_id`, `waba_ids`) the token was not
+    granted fails the call at `verify_assets` before anything is read or
+    stored; then the claimed WABA (else the newest grant: what `onboard`
+    picks) with the request as it is, and every other grant of
+    `granular_scopes`' `whatsapp_business_management`, in Meta's order
+    (newest first), each through its own `verify_assets`, `approve`,
+    `store_token` and tail (its own vault record, phone index,
+    subscription, system user and credit line; the shared steps refactored
+    out of `onboard_granted` into `onboard_waba`, so `onboard` runs the
+    same code). The result is `WabasOnboarded` (`#[must_use]`), one
+    `WabaOnboarding` per WABA with a `WabaOutcome`: `Onboarded`, `Held`
+    or `Failed { error, steps_completed }` (an `Error::Step`;
+    `is_resumable` once `store_token` ran). Meta documents the
+    session info's `waba_ids` (`embedded-signup/implementation`) and the
+    grants, newest first (`solution-providers/manage-accounts`), and no
+    more: nothing on which grants a multi-WABA flow's token carries
+    beyond those, and no multi-WABA hosted flow. Nothing new is stored.
+    The decisive tests, in `embedded_signup::multi`:
+    `with_the_option_off_only_the_claimed_waba_is_onboarded` (through
+    `onboard` and `onboard_wabas`; the other grant never read),
+    `with_the_option_on_every_granted_waba_is_onboarded` (each request
+    exact: one exchange, one `debug_token`, the claimed WABA's owner,
+    numbers, subscription and registration, then the other's owner,
+    numbers and subscription, each record and phone index under its own
+    WABA), `a_failure_on_the_second_waba_leaves_the_first_and_both_resume`;
+    with `a_failure_on_the_claimed_waba_does_not_stop_the_others`,
+    `another_granted_waba_the_vault_holds_is_left_as_it_is`,
+    `a_claimed_waba_the_token_was_not_granted_refuses_the_signup`,
+    `one_waba_calls_refuse_the_option_before_any_request` (`onboard`,
+    `onboard_with_approval`, `onboard_hosted`),
+    `only_the_claimed_number_of_a_coexistence_signup_syncs`,
+    `a_solution_partner_approves_records_and_funds_each_waba` (one
+    approval per WABA, each recorded for its own token record, a share
+    for each though the business-wide lookup lists the first's
+    allocation, and a plain `resume` of the second sharing nothing
+    again) and `a_refused_approval_skips_that_waba_only`. Mutations that
+    each fail them: the option ignored, a WABA's failure returned as the
+    call's, a failure stopping the next WABAs, the other WABAs onboarded
+    without the approval, a held WABA replaced, the claimed session's
+    phone given to the others, an unbacked claim accepted, the others
+    registering or keeping the finish, `onboard` or `onboard_hosted`
+    accepting the option, `is_resumable` ignoring `store_token`.
+  - **Found in review** (sabotage review, security lens): a token's
+    `granular_scopes` list every WABA that granted the app, across
+    signups, and the token in Meta's own `debug_token` example is a
+    user's, whose grants may span businesses; the draft onboarded every
+    grant whoever owned it, under the request's credit settings (a
+    `reshare_after_revocation` meant for one business re-funding
+    another's revoked line). The other grants must now be the primary
+    WABA's business's: Meta must report, for each, the owner it reported
+    for the primary WABA, or the grant fails at `verify_assets` before
+    its numbers are read, approved or stored; when the primary's owner is
+    unknown (it failed before it was verified, or Meta reported none),
+    every other grant fails there with no request
+    (`a_grant_of_another_business_is_not_onboarded`,
+    `the_others_fail_closed_when_the_signup_business_is_unknown`). And
+    `Held` was a read followed, two Meta round trips and the approval
+    later, by a replacing `store`: another signup or a hosted
+    `PARTNER_ADDED` storing the WABA in that window was overwritten. The
+    other grants are now stored with `put_if_absent`
+    (`TokenVault::store_new`, crate-private, the phone index untouched
+    when it loses) and fail at `store_token` when the vault came to hold
+    them (`a_grant_stored_meanwhile_is_not_replaced`); `onboard_hosted`,
+    whose `holds` read had the same window the other way round (a
+    code-flow or multi-WABA onboarding storing after it was replaced),
+    now stores the same way and fails at `store_token`
+    (`a_hosted_signup_never_replaces_a_record_stored_meanwhile`). A read of the
+    vault that fails fails the grant closed
+    (`a_grant_whose_record_cannot_be_read_fails_closed`); the others keep
+    the request's subscription override
+    (`the_others_keep_the_subscription_override`) and a revoked
+    business is funded again for none of them
+    (`a_revoked_business_is_funded_again_for_no_waba`); with nothing
+    claimed the newest grant is the primary one, and every record carries
+    the code exchange's expiry
+    (`with_nothing_claimed_the_newest_grant_is_primary`). Mutations the
+    review added that each fail a test: the others' owner checked only
+    when reported, or not at all; the signup's owner taken from the
+    browser's `business_id`, or not recorded; the others stored with a
+    replacing `store` (or `store_new` with `put`); a failed vault read
+    taken as absent; the others' subscription override, or the token's
+    expiry, dropped. Three survive as equivalent: the `waba_id` claim
+    left out of the unbacked check (`verify_grant` already refuses it),
+    and the others' `currency` or `reshare_after_revocation` changed
+    (the credit plan is computed once, from the request, for every
+    WABA).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable):
+    1. the option is the request's (`OnboardingRequest::every_granted_waba`,
+       OPEN_QUESTIONS #5), and only the new calls, `onboard_wabas` and
+       `onboard_wabas_with_approval` (its approval an `FnMut`, called and,
+       for a Solution Partner, recorded once per WABA), act on it;
+    2. `onboard` and `onboard_hosted` refuse the option rather than drop
+       the other WABAs; `resume` ignores it (it resumes the WABA it is
+       given);
+    3. the token's grants decide what is onboarded, not the browser's
+       `waba_ids`: every WABA the session info names must be among them,
+       or the signup is refused before anything is stored; the claimed
+       WABA first, then the grants in Meta's order; tightened in review,
+       a grant other than the claimed WABA is onboarded only when Meta
+       reports the claimed WABA's owner as its owner too, and none is
+       when that owner is unknown;
+    4. the other WABAs register no number and request no coexistence
+       sync (the PIN, region and finish are the claimed number's;
+       registering counts against 10 per 72 hours, the sync is once per
+       number), and keep the request's subscription override and credit
+       settings;
+    5. another grant the vault holds is `Held` and left alone, and,
+       tightened in review, stored only where the vault still holds none
+       (`put_if_absent`): the read alone let a signup or a hosted
+       `PARTNER_ADDED` racing this one be overwritten; the claimed WABA is
+       replaced, as `onboard` replaces it;
+    6. per-WABA failures are outcomes in `WabasOnboarded` (`#[must_use]`),
+       not the call's error; only the shared steps fail the call;
+    7. hosted signup stays one WABA per `PARTNER_ADDED`;
+    8. `OnboardingRequest` carries an
+       `#[expect(clippy::struct_excessive_bools)]`: each bool is an
+       independent option of its own setter, not a state machine.
+
+    Swappable by the option (off: `onboard`'s behaviour), and by calling
+    `onboard` per signup instead. Not offered, a follow-up if wanted:
+    onboarding a WABA that failed before `store_token` from the token
+    another WABA of the same signup stored.
 - [ ] **L11c. Pre-verified numbers** (`client::embedded_signup` and
   `client::waba`; row 123): pools, adding, codes, sharing, partners
   (`reference/business/*pre-verified*`,
@@ -3707,7 +3923,11 @@ design's (§9).
   - **After:** S7, L4.
   - **Decisive:** M3.1–M3.4.
 - [ ] **M3b. Coexistence** (rows 69, 124): onboarding, the automatic
-  sync (D7), the synced contacts stored and readable by their tenant.
+  sync (D7), the synced contacts stored and readable by their tenant:
+  M3b turns the inbox's contacts recording on
+  (`meta-whatsapp-server-core`'s `inbound::INBOX_RECORDING`, off since
+  L8: the library's `RecordingSwitches::ALL` with `contacts(false)`),
+  with the routes that read them and their erasure.
   - **After:** M3a, L8, L11d.
   - **Decisive:** a coexistence onboarding over HTTP starts the sync
     exactly once, and a second onboarding of the number does not;
@@ -4048,7 +4268,8 @@ everything else goes into the parity-completion report.
   and the table `wa_server_waba_tombstones` with its columns and its
   `ON DELETE SET NULL` rule, added and awaiting confirmation; L11d's
   `wa.es.coexistence` and its record layout, added and awaiting
-  confirmation; and L21a's
+  confirmation; L8's SQLite migration 1, its tables and columns, and its
+  Redis conversation layout, added and awaiting confirmation; and L21a's
   `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
   keys' derivations and their records' shapes, added and awaiting
   confirmation before the first release), for the same reason as L5's.

@@ -1,6 +1,6 @@
 [package]
 name = "meta-whatsapp-adapters"
-description = "Adapters for the meta-whatsapp-core ports: reqwest transport, memory/Postgres/Redis stores, event sinks and streams."
+description = "Adapters for the meta-whatsapp-core ports: reqwest transport, memory/Postgres/SQLite/Redis stores, event sinks and streams."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,11 +17,25 @@ memory = ["tokio/sync"]
 # crypto crate the workspace already uses for RSA-OAEP).
 reqwest = ["dep:reqwest"]
 # Postgres KvStore + ConversationStore (sqlx), with embedded migrations.
-postgres = ["dep:sqlx", "dep:serde"]
-# Redis KvStore, over `redis://` or `rediss://` (TLS: rustls with an
-# explicit aws-lc-rs provider, never the process default; roadmap L21c).
+# sqlx's Postgres driver, its TLS and its macros are enabled here, not on the
+# dependency, so that `sqlite` alone links neither.
+postgres = [
+  "dep:sqlx",
+  "dep:serde",
+  "sqlx/postgres",
+  "sqlx/tls-rustls-aws-lc-rs",
+  "sqlx/macros",
+]
+# SQLite KvStore + ConversationStore (sqlx's SQLite driver, the SQLite library
+# bundled and compiled in: nothing to install), with embedded migrations
+# (roadmap L8). No TLS: the database is a local file.
+sqlite = ["dep:sqlx", "dep:serde", "sqlx/sqlite-bundled"]
+# Redis KvStore + ConversationStore, over `redis://` or `rediss://` (TLS:
+# rustls with an explicit aws-lc-rs provider, never the process default;
+# roadmap L21c).
 redis = [
   "dep:redis",
+  "dep:serde",
   "dep:rustls",
   "dep:tokio-rustls",
   "dep:rustls-platform-verifier",
@@ -55,18 +69,19 @@ tracing.workspace = true
 # upload, `http2` because graph.facebook.com negotiates it. No default
 # features: no system-proxy discovery or charset sniffing we do not use.
 reqwest = { workspace = true, optional = true, features = ["rustls", "stream", "multipart", "http2"] }
-# Postgres: `serde::de::Error::custom`, so a stored column that does not
-# decode is `StorageError::Corrupt` (whose source is a `serde_json::Error`).
+# Postgres, SQLite, Redis: `serde::de::Error::custom`, so a stored column or
+# field that does not decode is `StorageError::Corrupt` (whose source is a
+# `serde_json::Error`).
 serde = { workspace = true, optional = true }
-# `macros` only for `sqlx::migrate!` (embedding); every query is a runtime
-# query, so building never needs DATABASE_URL. TLS uses aws-lc-rs to match
-# reqwest, so one crypto provider serves both.
+# The drivers are the `postgres` and `sqlite` features' (above). `macros`
+# (the `postgres` feature's) only for `sqlx::migrate!` (embedding the
+# Postgres migrations; the SQLite ones are embedded with `include_str!`);
+# every query is a runtime query, so building never needs DATABASE_URL.
+# Postgres' TLS uses aws-lc-rs to match reqwest, so one crypto provider
+# serves both.
 sqlx = { workspace = true, optional = true, features = [
   "runtime-tokio",
-  "postgres",
-  "tls-rustls-aws-lc-rs",
   "migrate",
-  "macros",
   "time",
   "json",
 ] }

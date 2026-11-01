@@ -69,6 +69,34 @@ of its own, after an HTML comment; keep that when you add one.
    onboarding request, each WABA onboarded, bound and resumable on its
    own. Swappable by that option. Roadmap L11b.
 
+   **Landed with roadmap L11b (2026-11-01), the library's side, its
+   choices the coordinator's (owner's delegation):** the option is `OnboardingRequest::every_granted_waba(true)`, off by
+   default, acted on by two new calls, `EmbeddedSignup::onboard_wabas`
+   and `onboard_wabas_with_approval` (its approval called once per WABA
+   and, for a Solution Partner, recorded per WABA), because `onboard`'s
+   result names one WABA; `onboard` and `onboard_hosted` refuse the
+   option, and `resume` ignores it. The code is exchanged and the token
+   inspected once; the WABAs onboarded are the token's grants
+   (`granular_scopes`, `whatsapp_business_management`, newest first:
+   `solution-providers/manage-accounts`), and a session info naming one
+   (`waba_id`, `waba_ids`: `embedded-signup/implementation`) the token
+   was not granted refuses the signup before anything is stored. The
+   claimed WABA runs with the request as it is; each other grant runs its
+   own `verify_assets`, `approve`, `store_token` and tail (its own vault
+   record, phone index, subscription and credit line), registering no
+   number and requesting no coexistence sync (the PIN and the finish are
+   the claimed number's), only when Meta reports the claimed WABA's
+   owner as its owner too (a token's grants outlast a signup and, for a
+   user's token, may span businesses); one the vault already holds is
+   left alone (`WabaOutcome::Held`), and one stored by another
+   onboarding while this one runs is not replaced (`put_if_absent`).
+   Per-WABA outcomes come back in `WabasOnboarded`; a WABA that fails
+   does not fail the call or stop the next, and each is resumed on its
+   own. Hosted signup stays one WABA per
+   `PARTNER_ADDED` webhook. Nothing new is stored. Swappable by the
+   option (off: one WABA, as `onboard`) and by calling `onboard` instead.
+   Roadmap L11b (landed); the service's side, M3f.
+
 6. **One WABA shared by several tenants.** The vault is keyed by WABA and
    knows no tenants; the last onboarding wins. `onboard_with_approval`
    lets an integrator refuse (or apply any other policy) before anything
@@ -568,7 +596,11 @@ Found while writing the integrator guides and checking them against
 
 33. **Message ids are unique per store, not per business number.** The
     Postgres `messages.id` is the table's primary key on its own (and the
-    memory store keys by id alone). If the same message id is ever
+    memory store keys by id alone; the SQLite and Redis stores of roadmap
+    L8 key a message by `(phone_number_id, id)` and keep the rule with a
+    separate index on the id, which the other answer would drop:
+    `conversation_conformance::ids_are_stored_once_per_store`). If the
+    same message id is ever
     delivered on two of an integrator's business numbers (for example a
     group both numbers are in, or one of its numbers writing to another,
     should Meta use one id on both sides), it is stored once, under the
