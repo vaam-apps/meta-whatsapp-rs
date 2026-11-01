@@ -20,13 +20,14 @@
 //! is older is not listed, and a listed one whose customer last wrote
 //! before the binding shows no `last_inbound_at` and no unread count. A
 //! WABA no other tenant held shows all of it (a coexistence onboarding's
-//! history, synced from before its binding, included). The 24-hour window
-//! and the thread's owner, which the reply checks, are Meta's state for
-//! the number and the customer, not a tenant's history: they are read
-//! whole, as Meta applies them. A page is answered only if the number's
-//! binding did not move while it was read
-//! ([`crate::authz::OwnedNumber`]'s epoch: `503 storage_unavailable`,
-//! retryable, otherwise).
+//! history, synced from before its binding, included). A listed
+//! conversation's `unread` counts only the customer's messages dated from
+//! the cut on (at most [`UNREAD_SCAN`] of its latest messages are read to
+//! count them, only on a number with a cut). A reply follows the same cut
+//! (see "The reply's checks" below). A page is answered only if the
+//! number's binding did not move while it was read
+//! ([`crate::authz::OwnedNumber`]'s epoch and binding: `503
+//! storage_unavailable`, retryable, otherwise).
 //!
 //! **Pages** take a limit (1 to [`MAX_PAGE_SIZE`]) and an exclusive
 //! cursor: the store's own (`(last_message_at, contact)` of a page's last
@@ -40,22 +41,32 @@
 //! number it does not list). A free-form reply outside the window is `409
 //! customer_service_window_closed`, and one while another app owns the
 //! thread `409 thread_owned_elsewhere`, before any request; a template is
-//! exempt from both.
+//! exempt from both. On a number with a cut, a free-form reply needs a
+//! window opened from the cut on (the customer's message, a call or a
+//! standby message dated from it, or, with the handover trusted, a
+//! handover to this app recorded since): a window the previous holder's
+//! customer opened is not the new holder's conversation to continue, and
+//! answering it would tell the new holder that the customer wrote to the
+//! previous one. Otherwise `409 customer_service_window_closed`, before
+//! the library's checks and any request; a template goes (a new
+//! conversation, the number's to start). To swap: drop
+//! [`Conversations::reply`]'s `refuse_across_the_cut`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use meta_whatsapp_rs::Error;
+use meta_whatsapp_rs::client::messages::{DirectSendCategory, MessageContent, OutboundMessage};
 use meta_whatsapp_rs::core::clock::Clock;
 use meta_whatsapp_rs::core::ids::{MessageId, PhoneNumberId};
 use meta_whatsapp_rs::core::store::{
-    ConversationKey, ConversationStore, ConversationSummary, StoredMessage,
+    ConversationKey, ConversationStore, ConversationSummary, Direction, StoredMessage, ThreadOwner,
 };
 use meta_whatsapp_rs::inbox::{Inbox, ReplyChecks};
 use time::OffsetDateTime;
 
 use crate::authz::{Authorizer, OwnedNumber};
-use crate::error::ServiceError;
+use crate::error::{ErrorCode, ServiceError};
 use crate::messages::{self, Accepted, ReplyMessage};
 use crate::model::{Listing, MAX_PAGE_SIZE, PageRequest};
 use crate::observe::Observer;
@@ -63,6 +74,12 @@ use crate::observe::Observer;
 /// Longest conversation contact accepted, in bytes: a BSUID, a `wa_id` or
 /// a group id is far shorter.
 pub const MAX_CONTACT_BYTES: usize = 256;
+
+/// On a number with a cut, how many of a listed conversation's latest
+/// messages are read, at most, to count its unread messages dated from
+/// the cut on: past them, the count is what was found (fewer, never a
+/// previous holder's).
+pub const UNREAD_SCAN: usize = 1000;
 
 /// The conversation of `contact` on `number`: `contact` as the request
 /// named it (a BSUID, a `wa_id`, a group id), 1 to [`MAX_CONTACT_BYTES`]
@@ -254,6 +271,8 @@ pub struct Conversations<'a> {
     authz: &'a Authorizer,
     number: &'a OwnedNumber,
     inbox: Inbox,
+    /// The inbox's store, read for what the library's inbox does not cut.
+    store: Arc<dyn ConversationStore>,
     observer: &'a dyn Observer,
 }
 
@@ -290,7 +309,7 @@ impl<'a> Conversations<'a> {
         let inbox = Inbox::new(
             number.client().clone(),
             number.phone_number_id().clone(),
-            store,
+            Arc::clone(&store),
         )
         .with_clock(clock)
         .with_reply_checks(checks);
@@ -298,6 +317,7 @@ impl<'a> Conversations<'a> {
             authz,
             number,
             inbox,
+            store,
             observer: &(),
         })
     }
@@ -340,7 +360,6 @@ impl<'a> Conversations<'a> {
             .inbox
             .conversations(before, limit.saturating_add(1))
             .await?;
-        self.number.still_held(self.authz).await?;
         let from = self.number.history_from();
         let mut items: Vec<ConversationSummary> = rows
             .into_iter()
@@ -352,10 +371,60 @@ impl<'a> Conversations<'a> {
             .then(|| items.last())
             .flatten()
             .map(|last| position(last.last_message_at, &last.key.contact));
+        let mut shown = Vec::with_capacity(items.len());
+        for summary in items {
+            let mut summary = masked(summary, from);
+            if let Some(cut) = from
+                && summary.unread > 0
+            {
+                summary.unread = self.unread_since(&summary.key, cut, summary.unread).await?;
+            }
+            shown.push(summary);
+        }
+        // Answered only if the binding held throughout the reads.
+        self.number.still_held(self.authz).await?;
         Ok(Listing {
-            items: items.into_iter().map(|s| masked(s, from)).collect(),
+            items: shown,
             next_after,
         })
+    }
+
+    /// The unread messages of `key` dated from `cut` on: the customer's
+    /// messages among its latest ones, newest first, down to the cut, at
+    /// most `unread` (the store's count, by arrival since the last read)
+    /// and reading at most [`UNREAD_SCAN`] messages. The store counts the
+    /// previous holder's unread messages too.
+    async fn unread_since(
+        &self,
+        key: &ConversationKey,
+        cut: OffsetDateTime,
+        unread: u64,
+    ) -> Result<u64, ServiceError> {
+        let mut counted = 0_u64;
+        let mut read = 0_usize;
+        let mut before = None;
+        while counted < unread && read < UNREAD_SCAN {
+            let page = self
+                .inbox
+                .history(key, before.take(), MAX_PAGE_SIZE.min(UNREAD_SCAN - read))
+                .await?;
+            let full = page.len() == MAX_PAGE_SIZE.min(UNREAD_SCAN - read);
+            read = read.saturating_add(page.len());
+            for message in &page {
+                if !visible(Some(cut), message.timestamp) {
+                    return Ok(counted.min(unread));
+                }
+                if message.direction == Direction::Inbound && message.kind != StoredMessage::REVOKED
+                {
+                    counted = counted.saturating_add(1);
+                }
+            }
+            match page.last() {
+                Some(last) if full => before = Some((last.timestamp, last.id.clone())),
+                _ => break,
+            }
+        }
+        Ok(counted.min(unread))
     }
 
     /// The history of `contact`'s conversation, newest first, from the
@@ -412,7 +481,8 @@ impl<'a> Conversations<'a> {
     ///
     /// `422 invalid_request` on `contact` or on the request's field at
     /// fault ([`messages::reply_message`]); `409 thread_owned_elsewhere` or
-    /// `409 customer_service_window_closed`, nothing sent; Meta's refusal
+    /// `409 customer_service_window_closed` (also, on a number with a cut,
+    /// for a window not opened since it), nothing sent; Meta's refusal
     /// or failure, with its `details` (`504 timeout`, `may_have_been_sent`,
     /// …); `502 upstream` when Meta accepted without a message id.
     pub async fn reply(
@@ -422,10 +492,63 @@ impl<'a> Conversations<'a> {
     ) -> Result<Accepted, ServiceError> {
         let key = conversation_key(self.number.phone_number_id(), contact)?;
         let message = messages::reply_message(request, self.inbox.recipient(&key))?;
+        self.refuse_across_the_cut(&key, &message).await?;
         match self.inbox.send(&key, message).await {
             Ok(response) => Accepted::from_response(response),
             Err(error) => Err(self.failed(&error).await),
         }
+    }
+
+    /// On a number with a cut ([`crate::authz::history_from`]), a free-form
+    /// `message` to `key` (what the library's window check covers: not a
+    /// template, nor a Direct Send category Meta sends as one) whose window
+    /// was not opened from the cut on: `409 customer_service_window_closed`
+    /// (the [module](self)'s "The reply's checks"). Opened from the cut on:
+    /// the customer's last message ([`ConversationStore::last_inbound_at`])
+    /// or the latest window event (a call, a standby message) dated from
+    /// it, or, when the number trusts a handover, a handover to this app
+    /// recorded since (the library's checks then decide). Nothing is read
+    /// on a number without a cut or with the window check off.
+    async fn refuse_across_the_cut(
+        &self,
+        key: &ConversationKey,
+        message: &OutboundMessage,
+    ) -> Result<(), ServiceError> {
+        let Some(cut) = self.number.history_from() else {
+            return Ok(());
+        };
+        let checks = self.inbox.reply_checks();
+        let as_template = matches!(message.content, MessageContent::Template(_))
+            || matches!(
+                message.category,
+                Some(
+                    DirectSendCategory::Utility
+                        | DirectSendCategory::Authentication
+                        | DirectSendCategory::Other(_)
+                )
+            );
+        if !checks.checks_window() || as_template {
+            return Ok(());
+        }
+        let last = self.store.last_inbound_at(key).await?;
+        let event = self
+            .store
+            .window_events(key, None, 1)
+            .await?
+            .into_iter()
+            .next()
+            .map(|event| event.at);
+        if last.max(event).is_some_and(|at| visible(Some(cut), at)) {
+            return Ok(());
+        }
+        if checks.trusts_handover()
+            && self.store.thread_owner(key).await?.is_some_and(|owner| {
+                owner.owner == ThreadOwner::ThisApp && visible(Some(cut), owner.since)
+            })
+        {
+            return Ok(());
+        }
+        Err(ServiceError::new(ErrorCode::CUSTOMER_SERVICE_WINDOW_CLOSED))
     }
 
     /// The error of a failed reply: the number's `failed` (a `190` marks

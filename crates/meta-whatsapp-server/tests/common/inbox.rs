@@ -269,8 +269,10 @@ pub async fn a_moved_numbers_history_is_hidden_from_its_new_tenant(h: &Harness) 
 /// Roadmap M2h over HTTP: Meta migrated merchant-a's number to
 /// merchant-b's WABA, neither WABA moving (merchant-b's bound before,
 /// merchant-a's still its own). merchant-b's key lists no conversation and
-/// reads no history of merchant-a's on the number (kept in the inbox), and
-/// reads its own once the customer writes under its WABA.
+/// reads no history of merchant-a's on the number (kept in the inbox),
+/// cannot answer in free form the window merchant-a's customer opened
+/// (`409 customer_service_window_closed`, zero requests), and reads its own
+/// once the customer writes under its WABA, its `unread` its own.
 pub async fn a_number_migrated_between_two_tenants_wabas_hides_its_history(h: &Harness) {
     const WABA_B: &str = "102290129340399";
     let (waba_a, pn) = (EXAMPLE_WABA, EXAMPLE_PN);
@@ -319,10 +321,29 @@ pub async fn a_number_migrated_between_two_tenants_wabas_hides_its_history(h: &H
     );
     let gone = h.call(Call::get(&conversations).key(&a_key)).await;
     assert_eq!(gone.status, StatusCode::NOT_FOUND, "{}", gone.text);
+    // merchant-a's customer opened a window on the number minutes ago:
+    // not merchant-b's conversation to continue in free form, refused
+    // before any request.
+    let refused = h
+        .call(reply(&b_key, pn, EXAMPLE_WA_ID, "nmove:1", "Hello from B"))
+        .await;
+    assert_eq!(
+        (refused.status, refused.code().as_str()),
+        (StatusCode::CONFLICT, "customer_service_window_closed"),
+        "{}",
+        refused.text
+    );
+    assert!(h.graph.requests().is_empty(), "refused with zero requests");
 
     let mut after = dated(text(WABA_B, pn, "wamid.NMOVE-B"), now() + 1);
     after["entry"][0]["changes"][0]["value"]["messages"][0]["text"]["body"] = json!("Hello again");
     assert_eq!(h.webhook(&bytes(&after)).await.status, StatusCode::OK);
+    let listed = read(h, &b_key, &conversations).await;
+    assert_eq!(listed["data"].as_array().unwrap().len(), 1, "{listed}");
+    assert_eq!(
+        listed["data"][0]["unread"], 1,
+        "merchant-b's unread message, not merchant-a's: {listed}"
+    );
     let read_history = read(h, &b_key, &history).await;
     let ids: Vec<&str> = read_history["data"]
         .as_array()

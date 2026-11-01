@@ -60,3 +60,11 @@ async fn a_number_migrated_between_two_tenants_wabas_hides_its_history() {
     conformance::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history(&backend)
         .await;
 }
+
+/// A capability made before its number left its binding (to another WABA
+/// of its tenant, then to another tenant) reads nothing: `503`.
+#[tokio::test]
+async fn a_capability_made_before_its_number_left_reads_nothing() {
+    let backend = memory::Memory::default();
+    conformance::inbox::a_capability_made_before_its_number_left_reads_nothing(&backend).await;
+}

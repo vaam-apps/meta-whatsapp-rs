@@ -22,6 +22,11 @@
 //!   is `409 thread_owned_elsewhere` with zero requests; with the
 //!   number's ownership check off ([`ReplyChecks`] per number), it goes
 //!   to Meta; a template needs no ownership.
+//!   A free-form reply into a window the previous holder's customer
+//!   opened is `409 customer_service_window_closed`, with zero requests;
+//!   `unread` counts the new holder's messages only.
+//! - A capability made before its number left its binding (another WABA
+//!   of the tenant, then another tenant) reads nothing: `503`.
 //! - Only the order's own number opens the services.
 //! - Housekeeping applies the inbox store's retention
 //!   (`ConversationStore::apply_retention`, under its turn): a message
@@ -35,11 +40,13 @@ use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::client::embedded_signup::{
     StoredBusinessToken, TokenVault, VaultKey, VaultKeys,
 };
+use meta_whatsapp_rs::core::clock::Clock as _;
 use meta_whatsapp_rs::core::clock::ManualClock;
 use meta_whatsapp_rs::core::ids::{MessageId, PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, VerifyToken};
 use meta_whatsapp_rs::core::store::{
-    ConversationKey, DeliveryStatus, Direction, Retention, StoredMessage,
+    ConversationKey, DeliveryStatus, Direction, Retention, StoredMessage, ThreadOwner,
+    ThreadOwnership,
 };
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
 use meta_whatsapp_rs::inbox::ReplyChecks;
@@ -71,6 +78,7 @@ pub async fn run(backend: &dyn Backend) {
     an_inbound_message_is_listed_read_and_answered_within_its_window(backend).await;
     a_moved_numbers_history_is_hidden_from_its_new_tenant(backend).await;
     a_number_migrated_between_two_tenants_wabas_hides_its_history(backend).await;
+    a_capability_made_before_its_number_left_reads_nothing(backend).await;
     a_reply_while_another_app_owns_the_thread_is_refused_unless_its_number_turns_the_check_off(
         backend,
     )
@@ -576,6 +584,10 @@ pub async fn a_moved_numbers_history_is_hidden_from_its_new_tenant(backend: &dyn
     assert_eq!(listed.items.len(), 1);
     assert_eq!(listed.items[0].last_text.as_deref(), Some("Hello again"));
     assert!(listed.items[0].last_inbound_at.is_some());
+    assert_eq!(
+        listed.items[0].unread, 1,
+        "B's unread message, not A's (the store counts both)"
+    );
     let history = inbox.history(CONTACT, &first(50)).await.unwrap();
     let ids: Vec<_> = history.items.iter().map(|m| m.id.as_str()).collect();
     assert_eq!(ids, ["wamid.EPOCH-B"], "B's own message, and not A's");
@@ -625,6 +637,7 @@ pub async fn a_moved_numbers_history_is_hidden_from_its_new_tenant(backend: &dyn
 /// store: hidden, never purged), and reads its own; B's cut is the
 /// number's own start under B. Decisive: the number's cut in
 /// `authz::history_from` (the WABA's cut alone shows A's history to B).
+#[allow(clippy::too_many_lines)] // a scenario: it reads top to bottom
 pub async fn a_number_migrated_between_two_tenants_wabas_hides_its_history(backend: &dyn Backend) {
     let (waba_a, waba_b, pn) = ("102290129340358", "102290129340357", "106540352242872");
     let records = backend.records();
@@ -703,6 +716,78 @@ pub async fn a_number_migrated_between_two_tenants_wabas_hides_its_history(backe
     assert_eq!(kept.len(), 1, "hidden, never purged");
     drop(inbox);
 
+    // A's customer opened a window on the number, minutes ago: not B's
+    // conversation to continue (B cannot see it). A free-form reply is
+    // refused before any request, also with the ownership check off; a
+    // template goes (B's own conversation, dated after the cut).
+    let b_clock = ManualClock::new(OffsetDateTime::now_utc());
+    for checks in [ReplyChecks::ALL, ReplyChecks::ALL.thread_owner(false)] {
+        let refused = b
+            .inbox(backend, checks, &b_clock)
+            .reply(CONTACT, text_reply("Hello from B"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (refused.status(), refused.code()),
+            (409, "customer_service_window_closed"),
+            "{checks:?}"
+        );
+        assert!(!refused.may_have_been_sent());
+    }
+    assert!(b.script.requests().is_empty(), "refused with zero requests");
+    let inbox = b.inbox(backend, ReplyChecks::ALL, &b_clock);
+    b.script.push_json(200, accepted("wamid.NMOVE-B-TEMPLATE"));
+    inbox.reply(CONTACT, template_reply()).await.unwrap();
+    assert_eq!(b.script.requests().len(), 1, "a template is exempt");
+    // With the window check off on the number, Meta decides.
+    b.script.push_json(200, accepted("wamid.NMOVE-B-UNCHECKED"));
+    b.inbox(backend, ReplyChecks::NONE, &b_clock)
+        .reply(CONTACT, text_reply("Hello from B"))
+        .await
+        .unwrap();
+    assert_eq!(b.script.requests().len(), 2, "no check: Meta decides");
+    // Listed now (B's replies are after the cut), with nothing of A's
+    // customer: no `last_inbound_at`, no unread.
+    let listed = inbox.list(&first(50)).await.unwrap();
+    assert_eq!(listed.items.len(), 1);
+    assert_eq!(
+        (listed.items[0].last_inbound_at, listed.items[0].unread),
+        (None, 0),
+        "A's customer's last message and unread count, shown to B: {listed:?}"
+    );
+    // A handover to B's app recorded since the cut: B's thread, and with
+    // the handover trusted, B's window; not trusted, still refused.
+    let key = ConversationKey::new(PhoneNumberId::new(pn).unwrap(), CONTACT);
+    assert!(
+        backend
+            .conversations()
+            .set_thread_owner(
+                &key,
+                ThreadOwnership {
+                    owner: ThreadOwner::ThisApp,
+                    role: None,
+                    app_id: None,
+                    since: b_clock.now(),
+                },
+            )
+            .await
+            .unwrap()
+    );
+    let untrusted = b
+        .inbox(backend, ReplyChecks::ALL.trust_handover(false), &b_clock)
+        .reply(CONTACT, text_reply("Hello from B"))
+        .await
+        .unwrap_err();
+    assert_eq!(untrusted.code(), "customer_service_window_closed");
+    assert_eq!(b.script.requests().len(), 2, "refused with zero requests");
+    b.script.push_json(200, accepted("wamid.NMOVE-B-HANDOVER"));
+    inbox
+        .reply(CONTACT, text_reply("Hello from B"))
+        .await
+        .unwrap();
+    assert_eq!(b.script.requests().len(), 3, "a handover since the cut");
+    drop(inbox);
+
     // The customer writes to B, under B's WABA.
     deliver(
         &pipeline,
@@ -716,13 +801,101 @@ pub async fn a_number_migrated_between_two_tenants_wabas_hides_its_history(backe
         ),
     )
     .await;
-    let inbox = b.inbox(backend, ReplyChecks::ALL, &clock);
+    let inbox = b.inbox(backend, ReplyChecks::ALL, &b_clock);
     let history = inbox.history(CONTACT, &first(50)).await.unwrap();
     let ids: Vec<_> = history.items.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(ids, ["wamid.NMOVE-B"], "B's own message, and not A's");
+    assert_eq!(
+        ids,
+        [
+            "wamid.NMOVE-B",
+            "wamid.NMOVE-B-UNCHECKED",
+            "wamid.NMOVE-B-TEMPLATE",
+            "wamid.NMOVE-B-HANDOVER"
+        ],
+        "B's own messages, and not A's"
+    );
     let listed = inbox.list(&first(50)).await.unwrap();
     assert_eq!(listed.items.len(), 1);
     assert_eq!(listed.items[0].last_text.as_deref(), Some("Hello again"));
+    assert_eq!(
+        listed.items[0].unread, 1,
+        "B's unread message, not A's (the store counts both)"
+    );
+    // A window B's customer opened is B's: a free-form reply goes.
+    b.script.push_json(200, accepted("wamid.NMOVE-B-REPLY"));
+    inbox
+        .reply(CONTACT, text_reply("Hello from B"))
+        .await
+        .unwrap();
+    assert_eq!(b.script.requests().len(), 4);
+    assert_eq!(b.script.remaining(), 0);
+}
+
+/// A capability holds the number only while its binding does: one made
+/// before the number moved to another WABA of its tenant, was released
+/// from there and bound to another tenant (its first WABA's binding never
+/// changing) reads nothing, `503 storage_unavailable` (retryable), rather
+/// than the new holder's history under its own, absent, cut. Decisive: the
+/// number's binding in `OwnedNumber::still_held` (the WABA's epoch alone
+/// still holds).
+pub async fn a_capability_made_before_its_number_left_reads_nothing(backend: &dyn Backend) {
+    let (waba_b, waba_b2, waba_c, pn) = (
+        "102290129340338",
+        "102290129340337",
+        "102290129340336",
+        "106540352242852",
+    );
+    let records = backend.records();
+    let pipeline = pipeline(backend);
+    let clock = ManualClock::new(OffsetDateTime::now_utc());
+    let b = merchant(backend, "inbox-left-b", waba_b, pn).await;
+    let tenant_b = TenantId::parse("inbox-left-b").unwrap();
+    // To B's other WABA, then released by it: B's first WABA's binding
+    // stays as the capability read it.
+    for numbers in [vec![PhoneNumberId::new(pn).unwrap()], vec![]] {
+        assert_eq!(
+            records
+                .bind_waba(&tenant_b, &WabaId::new(waba_b2).unwrap(), &numbers)
+                .await
+                .unwrap(),
+            BindOutcome::Bound
+        );
+    }
+    let c = merchant(backend, "inbox-left-c", waba_c, pn).await;
+    deliver(
+        &pipeline,
+        &text(
+            waba_c,
+            pn,
+            CONTACT,
+            "wamid.LEFT-C",
+            "My address is 1 Hacker Way",
+            now() + 1,
+        ),
+    )
+    .await;
+    let theirs = c.inbox(backend, ReplyChecks::ALL, &clock);
+    assert_eq!(
+        theirs
+            .history(CONTACT, &first(50))
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1,
+        "C reads its own"
+    );
+    let stale = b.inbox(backend, ReplyChecks::ALL, &clock);
+    let listed = stale.list(&first(50)).await.unwrap_err();
+    assert_eq!(
+        (listed.status(), listed.code()),
+        (503, "storage_unavailable")
+    );
+    let history = stale.history(CONTACT, &first(50)).await.unwrap_err();
+    assert_eq!(
+        (history.status(), history.code()),
+        (503, "storage_unavailable")
+    );
 }
 
 /// Meta's `control_taken`: another app owns the thread.
