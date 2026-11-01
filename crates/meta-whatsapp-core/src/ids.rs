@@ -404,6 +404,14 @@ id_type!(
     /// Opaque: Meta's pages show only a placeholder, no shape.
     MigrationIntentId
 );
+id_type!(
+    /// A Click-to-WhatsApp welcome message sequence id: the `sequence_id`
+    /// that `POST /{WABA_ID}/welcome_message_sequences` returns and that
+    /// its update, get and delete take (`ctwa/welcome-message-sequences`).
+    /// Opaque: the guide types it a string, and its examples (digits, one
+    /// with a leading zero, `0139138`) state no shape.
+    WelcomeSequenceId
+);
 
 #[cfg(test)]
 mod tests {
@@ -508,6 +516,7 @@ mod tests {
             assert_eq!(GroupId::new(raw).as_str(), raw);
             assert_eq!(raw.parse::<UserId>().unwrap().as_str(), raw);
             assert_eq!(MessageId::from(raw).as_str(), raw);
+            assert_eq!(WelcomeSequenceId::new(raw).as_str(), raw);
         }
     }
 
