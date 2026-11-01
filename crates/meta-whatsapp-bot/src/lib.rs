@@ -138,8 +138,8 @@ pub use markdown::MarkdownRenderer;
 pub use middleware::{Logging, MarkRead, Middleware, Next};
 pub use outbound::{ClientOutbound, Outbound};
 pub use pacer::{
-    PacedOutbound, Pacer, Rate, RateLimiter, Reservation, SlotRequest, SlowDownRule,
-    ThrottlingErrors, Timer, TokenBucket,
+    KvRateLimiter, PACER_NAMESPACE, PacedOutbound, Pacer, Rate, RateLimiter, Reservation,
+    SlotRequest, SlowDownRule, ThrottlingErrors, Timer, TokenBucket,
 };
 pub use parse::{CommandParser, ParsedCommand, PrefixParser};
 pub use plugin::{DEFAULT_CATEGORY, Listen, Plugin, Registrar};
