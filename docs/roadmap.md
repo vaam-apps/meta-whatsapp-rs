@@ -51,7 +51,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
-| last | P1, P2 (payments) |
+| last | P1a–P1c, P2 (payments) |
 
 ## 1. The service's modular split (design §8, D26)
 
@@ -1981,7 +1981,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     default, and the record never expires; M3b builds on these steps
     (OPEN_QUESTIONS #7, confirmed). Swappable by the option (and by
     `PhoneNumber::sync_smb_app_data` called yourself).
-- [ ] **L11e. A token-expiry signal** (`client::embedded_signup`; row 6;
+- [x] **L11e. A token-expiry signal** (`client::embedded_signup`; row 6;
   OPEN_QUESTIONS #8): a configurable lead time before a stored business
   token's `expires_at`.
   - **Kind:** additive.
@@ -1989,6 +1989,32 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** under a fake clock, a token expiring inside the lead
     time is reported and one expiring after it is not; removing the
     comparison fails the test.
+  - **Landed:** row 6 done for the library. `TokenVault::token_expiry(waba_id,
+    lead)` answers, on the vault's clock, with a `TokenExpiry`: `Never`
+    (no `expires_at`: Meta reported none, or `0`), `Fresh`,
+    `ExpiresSoon { expires_at, remaining }` (`now + lead` included) or
+    `Expired` (`expires_at <= now`, as `StoredBusinessToken::is_expired`);
+    `is_due()` is the last two. `DEFAULT_EXPIRY_LEAD` is 7 days (business
+    tokens default to never expiring; one generated to expire lasts 60
+    days). It reads the record's clear `expires_at` only: nothing is
+    decrypted, no key is needed, nothing is written (no re-encryption on
+    read), and the stored format (`wa-rs/token-vault/v1`) is unchanged;
+    the clear copy is not authenticated, so `StoredBusinessToken::expiry`
+    gives the same answer on a token `get` decrypted. A record naming
+    another WABA or of another version is refused. The vault cannot list
+    its records: the caller walks the WABAs it holds, and M3e walks the
+    service's bindings as its vault rotation does. The decisive tests, in
+    `embedded_signup::vault`:
+    `a_token_inside_the_lead_is_reported_and_one_after_it_is_not` (a
+    `ManualClock`; inside, outside, exactly at the lead, expired, at
+    `now`, absent; the clock moved across the boundary) and
+    `the_boundaries_of_the_lead_time`; with
+    `the_expiry_check_decrypts_nothing_and_writes_nothing` (a record
+    under a key the vault lacks still answers; a record under a previous
+    key is not rewritten), `an_absent_expiry_never_expires` and
+    `the_expiry_check_refuses_what_is_not_this_wabas_record`. Removing
+    the lead comparison, `<` for `<=` at either boundary, and an absent
+    expiry read as expired each fail them.
 - [x] **L12. Partners** (`meta-whatsapp-client`, new client modules; rows
   144, 145): Multi-Partner Solutions (create, accept, reject,
   deactivation, the solution token, an app's solutions and connected
@@ -2743,7 +2769,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     OPEN_QUESTIONS #31 is closed and deleted (CHANGELOG). No parity row
     changes: parity row 10 already counted `webhooks::sse` and
     `BroadcastSink` as done.
-- [ ] **L21c. `rediss://`** (`meta-whatsapp-adapters`, feature `redis`;
+- [x] **L21c. `rediss://`** (`meta-whatsapp-adapters`, feature `redis`;
   OPEN_QUESTIONS #19): an explicit aws-lc-rs provider handed to the
   connection, never the process default; if redis-rs cannot take one,
   integrator-built connections stay the way, documented.
@@ -2754,6 +2780,66 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     binary linking both `ring` and aws-lc-rs with no process default
     installed (the case that panics today); handing the connection the
     process default instead makes that test panic.
+  - **Landed:** redis-rs 1.7 cannot take a provider (its rustls path
+    always calls `ClientConfig::builder()`) but takes any stream, so
+    `store::RedisTls` does the TLS itself: a `ClientConfig` on
+    `aws_lc_rs::default_provider()` (the platform's roots, or the CAs of
+    `root_certificates_pem`; `client_auth_pem` for mutual TLS;
+    `from_client_config` for your own), the handshake with tokio-rustls,
+    the stream to `MultiplexedConnection::new_with_config`, and a
+    `RedisTlsConnection` for `RedisKvStore::new` that reconnects on its
+    own; none of redis-rs's TLS features is enabled. The test binaries
+    link `ring` too (an adapters dev-dependency, rustls with both
+    providers). The decisive test is
+    `live_rediss_store_connects_with_both_providers_and_no_default`
+    (`tests/redis_tls.rs`: the key/value conformance suite over TLS,
+    asserting before and after that no process default is installed),
+    against compose.test.yaml's `redis-tls` (TLS only, client
+    certificates required, test-only certificates generated by
+    `tools/test-tls/generate.sh`). Building on the process default
+    (`ClientConfig::builder()`) panics it and every other test of that
+    binary, the non-live
+    `builds_on_aws_lc_rs_with_both_providers_linked_and_no_default`
+    included; the library installing a default fails them on the
+    no-default assertion; taking the process default when one is
+    installed (reqwest's rule) fails
+    `uses_aws_lc_rs_when_the_process_default_is_ring`
+    (`tests/redis_tls_ring_default.rs`, which installs `ring`). The
+    sentinel `tests/redis_tls_process_default.rs` (`#[should_panic]`)
+    proves those binaries are the hostile case: without `ring` linked,
+    `builder()` would install aws-lc-rs quietly and it fails. Also live:
+    an untrusted server and a missing client certificate are refused, and
+    a killed connection is replaced on the next command. Not covered:
+    Cluster and Sentinel over TLS.
+  - **Review (2026-11-01):** the live tests share one Redis whose
+    certificate names every host they use, so a verifier that ignored
+    the name passed them all. `tests/redis_tls_handshake.rs` runs
+    `RedisTls` against an in-process TLS server (certificates made per
+    test by rcgen, a dev-dependency): a trusted certificate for another
+    name is refused, an IP host is checked against IP SANs only
+    (`an_ip_host_is_checked_against_ip_sans_only`), an untrusted issuer
+    is refused, the connection timeout bounds a stalled handshake and a
+    stalled setup, a reconnect sends `AUTH` and `SELECT` again and
+    replays nothing, and eight commands that find the connection gone
+    share one failed attempt
+    (`concurrent_commands_share_one_failed_reconnect_attempt`). PEM
+    errors no longer quote the offending line (a client chain can be a
+    combined file holding the key). Left untested: the generation check
+    that keeps a late error from an old connection from discarding its
+    replacement (no deterministic way to deliver that error late).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation; each swappable as noted): TLS through a stream handed to
+    `MultiplexedConnection::new_with_config`, rather than leaving
+    `rediss://` to integrator-built connections (an integrator's own
+    connection still goes to `RedisKvStore::new`); the platform's roots
+    by default (`root_certificates_pem` replaces them,
+    `from_client_config` takes any configuration); TLS under the
+    existing `redis` feature, not a feature of its own; `ring` allowed in
+    the workspace's test builds through the adapters' rustls
+    dev-dependency only, never in a library build (`cargo tree -e normal
+    -p meta-whatsapp-adapters --features redis -i ring` finds nothing);
+    the test Redis requires client certificates; its certificates are
+    generated, none committed (OPEN_QUESTIONS #19).
 - [ ] **L22a. `llms.txt` and a `doctor`** (docs; the service's CLI in
   `meta-whatsapp-server`; row 117): `llms.txt` for the docs, and a
   `doctor` command checking the configuration, the webhook subscription
@@ -3131,18 +3217,95 @@ or WABA fails the family's own cross-tenant test).
 
 ## 5. Payments (last)
 
-- [ ] **P1. A `payments` client module** (`meta-whatsapp-client`; rows
-  38, 141): India (UPI, payment links, order details and order status,
-  onboarding) and Brazil (Pix, Boleto, payment links, one-click), typed,
-  instead of `MessageContent::Raw`; the payment buttons of templates
-  (`order_details`, `payment_request`).
+A `payments` client module (`meta-whatsapp-client`; rows 38, 141):
+India (UPI, payment links, order details and order status, onboarding)
+and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
+`MessageContent::Raw`; the payment buttons of templates (`order_details`,
+`payment_request`). Too large for one pull request, it lands in three:
+
+- [x] **P1a. India: the order messages, the lookup, refunds and
+  onboarding** (`meta-whatsapp-client`; rows 38, 141, partly).
+  `client::messages::Interactive::OrderDetails` and `OrderStatus`
+  (UPI intent links, payment links, payment gateways and the older
+  payment configuration, every documented rule checked first), all
+  re-exported from `client::payments`, with `Client::payments` (the
+  payment lookup, refunds) and `Client::payment_configurations` (list,
+  get, create, regenerate the OAuth link, delete).
   - **After:** nothing.
-  - **Decisive:** exact JSON from `payments/payments-in/*` and
-    `payments/payments-br/*`; the payments pages' webhook examples join
-    the conformance sweep (their manifest status moves from `OutOfScope`
-    to `Typed`).
+  - **Kind:** additive.
+  - **Decisive:** exact JSON, both ways, from
+    `payments/payments-in/upi-intent/dynamic-vpa`,
+    `payments-in/payment-links`, `payments-in/pg`,
+    `payments-in/upi-intent` and `payments-in/onboarding-apis`; a
+    refund, a configuration's creation and an OAuth link are never
+    replayed after a timeout.
+  - **Landed:** `client::payments` (the messages in
+    `client::messages::payments`, re-exported), every example of the
+    five pages an exact-JSON test (`payments/tests.rs`), every rule
+    the pages state checked first. Not checked locally: the subtotal,
+    the expiration's 300-second minimum and the beneficiaries of
+    shipped goods (the module docs say why).
+  - **Review (money, wire format, secrets):** an `order_status`
+    message refuses `pending`, which the `payments-in/pg` parameters
+    table excludes, and checks its `reference_id` as an
+    `order_details` message's; the items' origin and importer are not
+    required with the older `payment_configuration` alone (its page
+    makes them optional); a total above `u64::MAX` is refused as such
+    (`Order::total` sums in `u128`, so nothing overflows; the message
+    no longer says "negative"); a refusal of the two OAuth link
+    endpoints that is not Meta's envelope keeps its status, never its
+    body, and `PaymentOauthLink`'s `Debug` hides the link's path as
+    well as its query (no page says where its credential sits). Tests
+    added for what no test caught: every limit exactly reached, in
+    two-byte characters (`every_limit_is_inclusive_and_counts_characters`),
+    amounts at and beyond `u64::MAX`, the lookup's error example, `.`
+    and `..` as lookup names, a refund not replayed on a server error.
+    Documented: a replayed deletion can answer an error when the first
+    went through, a refund's amount is not compared with what was
+    paid, and the onboarding calls are refused with `131005`.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions): where the pages contradict
+    themselves, the examples win (`payment_settings` an array,
+    `importer_address` an object, `partially_shipped`, `parameters` an
+    object); the subtotal is not checked locally, the total equation
+    is; the header image's `provider` is not modelled; the
+    `order_details` header is an image only; the answers' fields the
+    tables call required but some example leaves out, or another table
+    calls optional, are optional (`merchant_category_code`,
+    `purpose_code`, a transaction's `pg_transaction_id`);
+    `purpose_code` is sent as a string, as both examples do, and a
+    configuration's name has at most 60 characters, an order's limit;
+    the tests put numeric ids where the examples print placeholder
+    names (`the-catalog_id`, `your-media-id`).
+- [ ] **P1b. Brazil** (`meta-whatsapp-client`; rows 38, 141): `BRL`
+  orders (`payment_type` `br`, the `order` object optional, a
+  `reference_id` of 60), the payment settings `pix_dynamic_code`,
+  `payment_link`, `boleto` and `offsite_card_pay`, and the `payment`
+  object of an `order_status` message (whose status may be `pending`
+  in Brazil, which India's check refuses), on P1a's types
+  (`payments/payments-br/orders`, `offsite-pix`, `payment-links`,
+  `boleto`, `one-click-payments`).
+  - **After:** P1a.
+  - **Kind:** additive.
+  - **Decisive:** exact JSON from `payments/payments-br/*`; a `BRL`
+    order checked by Brazil's rules, an `INR` one by India's.
+- [ ] **P1c. The payment template buttons and the payment webhooks**
+  (`meta-whatsapp-client`, `meta-whatsapp-webhooks`; rows 38, 141): a
+  template's `order_details` button and `order_status` component
+  (`payments-in/orderdetailstemplate`, `orderstatustemplate`,
+  `payments-br/orderdetailstemplate`), its `payment_request` button
+  (`payments-br/payment-request-cta`), the creation of these templates
+  (which the service refuses until then), and the status of type
+  `payment` (`payments-in/pg`) and the `payment_method` reply
+  (`payments-br/one-click-payments`) typed.
+  - **After:** P1a, P1b.
+  - **Kind:** additive.
+  - **Decisive:** the payments pages' webhook examples join the
+    conformance sweep (their manifest status moves from `OutOfScope` to
+    `Typed`), with new event data snapshots only (no changed one); exact
+    JSON of the template pages' examples.
 - [ ] **P2. Payment routes in the service** (rows 38, 141).
-  - **After:** P1.
+  - **After:** P1a, P1b, P1c.
   - **Decisive:** M1.3 over the new routes; an order-details send
     carries the tenant's token.
 

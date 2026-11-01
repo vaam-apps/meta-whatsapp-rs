@@ -160,6 +160,32 @@ of its own, after an HTML comment; keep that when you add one.
    add a refresh, a refresher behind a trait slots in. Roadmap L11e (the
    library's signal) and M3e (the service's event).
 
+   **Landed with roadmap L11e (2026-11-01), the library's side, its
+   choices proposed to the coordinator (owner's delegation):**
+   `TokenVault::token_expiry(waba_id, lead)` reports a stored token as
+   `TokenExpiry::Never` (no `expires_at`), `Fresh`, `ExpiresSoon`
+   (`now + lead` included: a boundary token is warned about, not missed)
+   or `Expired` (`expires_at <= now`, as `is_expired`), on the vault's
+   clock. The lead is the caller's, per call; `DEFAULT_EXPIRY_LEAD` is 7
+   days: business tokens default to never expiring
+   (`facebook-login/facebook-login-for-business`), and one generated to
+   expire lasts 60 days, so a week leaves time to run Embedded Signup
+   again. It reads the record's clear `expires_at`, not the sealed one:
+   no key, no token in memory, no write, and the stored format
+   unchanged; the clear copy is not authenticated (whoever writes the
+   store can change the answer, as they can delete the record), so
+   `StoredBusinessToken::expiry` answers on the decrypted record for a
+   caller who wants the authenticated copy. A per-record check, not a
+   listing: the vault cannot enumerate its records, so the caller walks
+   its own WABAs (the service, its bindings). The answer is stateless:
+   notifying once per `(waba_id, expires_at)` is the caller's (M3e's).
+   Not recorded, so not reported: `debug_token`'s
+   `data_access_expires_at` (0 for business tokens in Meta's examples);
+   adding it would change the stored record. Swappable: the lead per
+   call, and the classification is one function (`TokenExpiry::at`) a
+   caller can replace on `expires_at`. Roadmap L11e (landed); the
+   service's event, M3e.
+
 9. **Vault key custody and rotation cadence.** The integrator supplies the
    AES-256 key(s); rotation is supported but not scheduled.
 
@@ -269,6 +295,33 @@ of its own, after an HTML comment; keep that when you add one.
     redis-rs cannot take an explicit provider, integrator-built
     connections stay the way, documented. Swappable: an integrator can
     still pass its own connection. Roadmap L21c.
+
+    **Confirmed 2026-11-01 (coordinator, owner's delegation; roadmap
+    L21c landed):** redis-rs 1.7 cannot take an explicit provider (its
+    rustls path always calls `rustls::ClientConfig::builder()`, and
+    nothing of it accepts a `ClientConfig` or a connector), but it takes
+    any stream (`MultiplexedConnection::new_with_config`), so `rediss://`
+    is wired anyway rather than left to integrator-built connections:
+    `store::RedisTls` builds the `ClientConfig` on
+    `rustls::crypto::aws_lc_rs::default_provider()`, does the handshake
+    with tokio-rustls and hands the stream to that constructor, none of
+    redis-rs's TLS features enabled. The platform's trust store
+    (`rustls-platform-verifier`, as reqwest does) is the default; a
+    private CA or a client certificate is given as PEM. It stays under
+    the existing `redis` feature. `ring` is linked into the workspace's
+    test builds only, through the adapters' rustls dev-dependency, so the
+    tests run in the binary where the process default panics; no library
+    build links it (`cargo tree -e normal -p meta-whatsapp-adapters
+    --features redis -i ring` finds nothing). The test Redis requires
+    client certificates, and its certificates are generated
+    (`tools/test-tls/generate.sh`, and rcgen in the in-process tests),
+    none committed. Why: the decision of 2026-09-26 asked for an explicit
+    provider handed to the connection, and handing redis-rs a stream
+    delivers exactly that without waiting on redis-rs. Swappable by
+    `RedisTls::from_client_config` (any `ClientConfig`: your provider,
+    your verifier) or by an integrator-built connection passed to
+    `RedisKvStore::new`. Not covered: Cluster and Sentinel over TLS.
+    Roadmap L21c (landed).
 
 ## Security posture
 

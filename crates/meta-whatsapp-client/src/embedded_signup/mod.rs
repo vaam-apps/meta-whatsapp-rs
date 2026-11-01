@@ -26,7 +26,7 @@
 //! | [`EmbeddedSignupEvent`] | parses the `WA_EMBEDDED_SIGNUP` message event the page forwards |
 //! | [`EmbeddedSignup::onboard`] | code → verified, stored, subscribed, (credit line shared,) registered business |
 //! | [`HostedSignup`], [`EmbeddedSignup::onboard_hosted`] | Meta's hosted page: a `PARTNER_ADDED` webhook → the business token from `system_user_access_tokens` → the same steps and record |
-//! | [`TokenVault`] | business tokens encrypted at rest, by WABA and by phone number |
+//! | [`TokenVault`] | business tokens encrypted at rest, by WABA and by phone number; [`TokenVault::token_expiry`] reports one due to lapse ([`TokenExpiry`]) without decrypting it |
 //! | [`SolutionPartner`] | per deployment: onboard as a Solution Partner, funding each customer with your credit line; [`EmbeddedSignup::offboard`], [`EmbeddedSignup::revoke_credit_line`], [`EmbeddedSignup::clear_pending_share`] |
 //!
 //! # End to end
@@ -404,7 +404,8 @@ pub use token::{
     WHATSAPP_BUSINESS_MESSAGING,
 };
 pub use vault::{
-    StoredBusinessToken, TOKEN_NAMESPACE, TokenVault, TokenVersion, VaultKey, VaultKeys,
+    DEFAULT_EXPIRY_LEAD, StoredBusinessToken, TOKEN_NAMESPACE, TokenExpiry, TokenVault,
+    TokenVersion, VaultKey, VaultKeys,
 };
 
 use std::future::Future;

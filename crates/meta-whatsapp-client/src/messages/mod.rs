@@ -11,7 +11,9 @@
 //! `calling/call-button-messages-deep-links`,
 //! `calling/user-call-permissions`, `groups/groups-messaging`,
 //! `business-scoped-user-ids`,
-//! `reference/whatsapp-business-phone-number/message-api`.
+//! `reference/whatsapp-business-phone-number/message-api`; the payments
+//! messages (`order_details`, `order_status`) are documented, with their
+//! parts, in [`crate::payments`].
 //!
 //! Doc paths are relative to
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
@@ -137,6 +139,7 @@ mod contacts;
 mod content;
 mod interactive;
 mod outbound;
+pub(crate) mod payments;
 mod response;
 pub(crate) mod validate;
 
@@ -163,6 +166,7 @@ pub use interactive::{
 pub use outbound::{
     Context, DirectSendCategory, DirectSendConfig, MessageContent, OutboundMessage,
 };
+pub use payments::{OrderDetails, OrderStatus};
 pub use response::{MessageStatus, SendResponse, SentContact, SentMessage};
 
 use meta_whatsapp_core::Result;

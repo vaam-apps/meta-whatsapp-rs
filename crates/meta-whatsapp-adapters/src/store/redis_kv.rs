@@ -117,8 +117,10 @@ return version
 /// `KvStore` over a Redis connection. Cheap to clone.
 ///
 /// `C` is any async redis connection that can be cloned and shared:
-/// [`ConnectionManager`] (the default: reconnects on its own) or
-/// `redis::aio::MultiplexedConnection`.
+/// [`ConnectionManager`] (the default: reconnects on its own),
+/// `redis::aio::MultiplexedConnection`, or, for `rediss://`,
+/// [`RedisTlsConnection`](super::RedisTlsConnection) (see
+/// [TLS](#tls-rediss)).
 ///
 /// ```no_run
 /// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
@@ -161,34 +163,28 @@ return version
 ///   [prefix](Self::with_prefix): Redis ignores an empty tag and would hash
 ///   the whole key, splitting a record from its counter.
 ///
-/// # TLS (`rediss://`): bring your own connection
+/// # TLS (`rediss://`)
 ///
-/// This crate enables no TLS feature of `redis`, on purpose. redis-rs builds
-/// its rustls configuration with `rustls::ClientConfig::builder()`, which
-/// uses the **process-wide default** crypto provider. When rustls is built
-/// with both of its providers — `aws-lc-rs` (which `reqwest` and `sqlx` use
-/// here) and `ring` (which many other crates enable) — and the application
-/// installed none, that call **panics** on the first `rediss://` connection.
-/// Whether both are linked depends on the whole dependency graph of the
-/// final binary (in this workspace, the repository's own `xtask` pulls
-/// `ring` in through `ureq`), so a library cannot promise it will not
-/// happen.
+/// Through [`RedisTls`](super::RedisTls), which does the handshake with an
+/// explicit aws-lc-rs provider, never the process default, and hands
+/// redis-rs the encrypted stream:
 ///
-/// `RedisKvStore` accepts any async connection, so TLS stays with the
-/// application, which picks the provider explicitly:
+/// ```no_run
+/// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+/// use meta_whatsapp_adapters::store::{RedisKvStore, RedisTls};
 ///
-/// ```toml
-/// # Your application's Cargo.toml (same `redis` major version as meta-whatsapp-adapters)
-/// redis = { version = "1", features = ["tokio-rustls-comp", "connection-manager"] }
-/// rustls = "0.23"
+/// let tls = RedisTls::builder().build()?; // the platform's trust store
+/// let kv = RedisKvStore::new(tls.connect("rediss://:password@redis.example.com:6380").await?);
+/// # Ok(()) }
 /// ```
 ///
-/// ```ignore
-/// // Once at startup, before any TLS connection is made.
-/// let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-/// let client = redis::Client::open("rediss://:password@redis.example.com:6380")?;
-/// let kv = meta_whatsapp_adapters::store::RedisKvStore::new(client.get_connection_manager().await?);
-/// ```
+/// This crate enables no TLS feature of `redis`, on purpose: redis-rs builds
+/// its rustls configuration with `rustls::ClientConfig::builder()`, the
+/// **process-wide default** crypto provider, which **panics** on the first
+/// `rediss://` connection when rustls is built with both of its providers
+/// and the application installed none ([`RedisTls`](super::RedisTls) says
+/// more). An application that enables redis-rs's TLS itself and installs
+/// a default can still hand that connection to `new`.
 #[derive(Clone)]
 pub struct RedisKvStore<C = ConnectionManager> {
     conn: C,
