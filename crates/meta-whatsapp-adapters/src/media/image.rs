@@ -59,7 +59,8 @@ pub(super) const INPUT_ARGS: &[&str] = &[
 /// After the encoder: the encoder's packet as it is, on stdout. Not the
 /// `webp` muxer: writing to a pipe, it left the RIFF size of a large
 /// WebP at zero (it patches it by seeking back, which a pipe cannot do),
-/// where libwebp's own packet carries it.
+/// where libwebp's own packet carries it (`libwebp_anim`'s one packet is
+/// the whole animated file).
 pub(super) const OUTPUT_ARGS: &[&str] = &["-f", "image2pipe", "pipe:1"];
 
 /// One attempt: a filter (scale, then the pixel format) and an encoder
@@ -249,13 +250,26 @@ pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
     kept.push(0..PNG_SIGNATURE.len());
     png_chunks(data, |kind, chunk| {
         if !PNG_DROPPED.iter().any(|dropped| &dropped[..] == kind) {
-            match kept.last_mut() {
-                Some(last) if last.end == chunk.start => last.end = chunk.end,
-                _ => kept.push(chunk),
-            }
+            keep(&mut kept, chunk);
         }
     })?;
-    Ok(match kept.as_slice() {
+    Ok(gathered(data, &kept))
+}
+
+/// Add `range` to the byte ranges `kept` of a file, merged with the last
+/// one when they touch.
+pub(super) fn keep(kept: &mut Vec<Range<usize>>, range: Range<usize>) {
+    match kept.last_mut() {
+        Some(last) if last.end == range.start => last.end = range.end,
+        _ => kept.push(range),
+    }
+}
+
+/// The ranges `kept` of `data`, in order: `data` itself, uncopied, when
+/// they are the whole of it, a slice of it when they are one range, a copy
+/// otherwise.
+pub(super) fn gathered(data: &Bytes, kept: &[Range<usize>]) -> Bytes {
+    match kept {
         [whole] if *whole == (0..data.len()) => data.clone(),
         [one] => data.slice(one.clone()),
         ranges => {
@@ -265,7 +279,7 @@ pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
             }
             Bytes::from(out)
         }
-    })
+    }
 }
 
 /// Walk a PNG's chunks (`data` begins with its signature), from the first

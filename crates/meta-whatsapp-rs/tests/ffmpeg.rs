@@ -1,14 +1,16 @@
 //! `adapters::media::FfmpegConverter` against a real `ffmpeg`, its result
-//! through `client::media::Media::upload_converted` (roadmap L19's and
-//! L19b's decisive tests: voice, then stickers and images). In the facade,
-//! where the adapters and the client meet: neither depends on the other.
-//! The tests make their inputs themselves (in Rust, or with ffmpeg's
-//! `lavfi` sources); no media file is committed.
+//! through `client::media::Media::upload_converted` (roadmap L19's,
+//! L19b's and L19c's decisive tests: voice, then stickers and images, then
+//! animated stickers). In the facade, where the adapters and the client
+//! meet: neither depends on the other. The tests make their inputs
+//! themselves (in Rust, or with ffmpeg's `lavfi` sources); no media file
+//! is committed.
 //!
 //! The binary is `META_WHATSAPP_RS_TEST_FFMPEG` when set, else `ffmpeg` on
 //! `PATH` (and `META_WHATSAPP_RS_TEST_FFPROBE`, else `ffprobe`). Without
 //! one that starts and has libopus (and, for the image tests, libwebp,
-//! mjpeg and png), every test here skips, printing why,
+//! mjpeg and png; for the animation tests, `libwebp_anim`), every test here
+//! skips, printing why,
 //! unless `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`, which turns the skip into a
 //! failure. CI installs `ffmpeg` on its runner and sets it, so the tests
 //! count there; no image or dev container carries one. That variable is
@@ -1416,4 +1418,407 @@ async fn ffmpeg_refuses_a_frame_over_the_allocation_bound() {
         .unwrap();
     let (_, width, height, _) = jpeg_frame(&under.data);
     assert_eq!((width, height), (8192, 4094));
+}
+
+// Animated stickers (roadmap L19c).
+
+/// An animation made by a `lavfi` source, in the container `muxer` names
+/// (a GIF, an animated PNG, an animated WebP): the tests' animations,
+/// made here rather than committed.
+fn lavfi_animation(ffmpeg: &PathBuf, source: &str, frames: usize, muxer: &[&str]) -> Vec<u8> {
+    let frames = frames.to_string();
+    let mut args = vec![
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        source,
+        "-frames:v",
+        frames.as_str(),
+    ];
+    args.extend_from_slice(muxer);
+    args.push("pipe:1");
+    run(ffmpeg, &args, &[]).unwrap_or_else(|| panic!("making {source} as {muxer:?}"))
+}
+
+/// A GIF of `frames` frames of `source`.
+fn gif(ffmpeg: &PathBuf, source: &str, frames: usize) -> Vec<u8> {
+    let gif = lavfi_animation(ffmpeg, source, frames, &["-f", "gif"]);
+    assert!(gif.starts_with(b"GIF89a"), "not a GIF");
+    gif
+}
+
+/// An animated WebP, read here apart from the converter's own check
+/// (Google's "WebP Container Specification", extended file format): its
+/// chunks in order, the extended header's flags and canvas, the animation
+/// header's loop count, and its frames with their total duration.
+#[derive(Debug)]
+struct AnimatedWebp {
+    chunks: Vec<[u8; 4]>,
+    flags: u8,
+    width: u32,
+    height: u32,
+    loops: u32,
+    frames: usize,
+    duration_ms: u32,
+}
+
+fn animated_webp(file: &[u8]) -> AnimatedWebp {
+    assert_eq!(&file[..4], b"RIFF", "not a RIFF file");
+    assert_eq!(&file[8..12], b"WEBP", "not a WebP file");
+    assert_eq!(
+        usize::try_from(le32(file, 4)).unwrap() + 8,
+        file.len(),
+        "the RIFF size is not the file's"
+    );
+    let mut w = AnimatedWebp {
+        chunks: Vec::new(),
+        flags: 0,
+        width: 0,
+        height: 0,
+        loops: u32::MAX,
+        frames: 0,
+        duration_ms: 0,
+    };
+    let mut at = 12;
+    while at < file.len() {
+        let kind = <[u8; 4]>::try_from(&file[at..at + 4]).unwrap();
+        let len = usize::try_from(le32(file, at + 4)).unwrap();
+        let data = &file[at + 8..at + 8 + len];
+        match &kind {
+            b"VP8X" => {
+                w.flags = data[0];
+                w.width = 1 + le24(data, 4);
+                w.height = 1 + le24(data, 7);
+            }
+            b"ANIM" => w.loops = le16(data, 4),
+            b"ANMF" => {
+                w.frames += 1;
+                w.duration_ms += le24(data, 12);
+            }
+            _ => {}
+        }
+        w.chunks.push(kind);
+        at += 8 + len + len % 2;
+    }
+    assert_eq!(at, file.len(), "chunks past the end");
+    w
+}
+
+/// A busy animated GIF (5 s of a moving picture at 20 frames a second,
+/// 480 × 360) comes out as an animated WebP within 500 000 bytes: its
+/// extended header has the animation flag, an `ANIM` chunk comes before
+/// its `ANMF` frames, it loops forever and plays for the GIF's time, its
+/// aspect ratio kept; `Media::upload`'s type check takes it as a
+/// sticker.
+#[tokio::test]
+async fn ffmpeg_turns_a_gif_into_an_animated_webp_sticker_that_upload_accepts() {
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let animation = gif(&ffmpeg, "testsrc2=s=480x360:r=20", 100);
+    assert!(animation.len() > 500_000, "{} bytes", animation.len());
+
+    let started = Instant::now();
+    let sticker = converter
+        .convert(MediaInput::new(animation), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap();
+    eprintln!(
+        "animated sticker: {} bytes in {:?}",
+        sticker.data.len(),
+        started.elapsed()
+    );
+    assert_eq!(sticker.format, TargetFormat::AnimatedSticker);
+    let len = sticker.data.len();
+    assert!(len <= 500_000, "{len} bytes");
+    let w = animated_webp(&sticker.data);
+    assert_eq!(&w.chunks[0], b"VP8X");
+    assert_eq!(w.flags & 0x02, 0x02, "the animation flag is not set: {w:?}");
+    let anim = w
+        .chunks
+        .iter()
+        .position(|c| c == b"ANIM")
+        .expect("no ANIM chunk");
+    let first_frame = w
+        .chunks
+        .iter()
+        .position(|c| c == b"ANMF")
+        .expect("no ANMF chunk");
+    assert!(anim < first_frame, "{w:?}");
+    assert!(w.frames >= 2, "{w:?}");
+    for still in [b"VP8 ", b"VP8L"] {
+        assert!(!w.chunks.contains(still), "{w:?}");
+    }
+    assert_eq!(w.loops, 0, "loops forever");
+    assert!(
+        (4800..=5200).contains(&w.duration_ms),
+        "plays {} ms",
+        w.duration_ms
+    );
+    assert!(
+        w.width <= 480 && w.width * 3 == w.height * 4,
+        "{}x{}",
+        w.width,
+        w.height
+    );
+
+    assert_eq!(
+        validate_upload(sticker.format.mime_type(), u64::try_from(len).unwrap()),
+        Ok(MediaKind::Sticker)
+    );
+    assert_uploaded(sticker, "animated").await;
+}
+
+/// The frame bound: a GIF of 501 frames is refused, before ffmpeg reads
+/// it; one of 500 converts. The control: ffmpeg alone converts the 501
+/// frames, so the bound is the converter's.
+#[tokio::test]
+async fn ffmpeg_refuses_an_animation_over_the_frame_bound() {
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let over = gif(&ffmpeg, "testsrc2=s=32x32:r=50", 501);
+    let direct = run(
+        &ffmpeg,
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            "-c:v",
+            "libwebp_anim",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+        ],
+        &over,
+    )
+    .expect("ffmpeg did not convert it");
+    assert_eq!(animated_webp(&direct).flags & 0x02, 0x02);
+
+    let err = converter
+        .convert(MediaInput::new(over), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("more than 500 frames"), "{err}");
+
+    let at_bound = gif(&ffmpeg, "testsrc2=s=32x32:r=50", 500);
+    let sticker = converter
+        .convert(MediaInput::new(at_bound), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap();
+    assert!(animated_webp(&sticker.data).frames >= 2);
+}
+
+/// The time bound: 31 frames of a second each are refused; 30 convert.
+#[tokio::test]
+async fn ffmpeg_refuses_an_animation_over_the_time_bound() {
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let over = gif(&ffmpeg, "testsrc2=s=32x32:r=1", 31);
+    let err = converter
+        .convert(MediaInput::new(over), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("longer than 30 seconds"), "{err}");
+    let at_bound = gif(&ffmpeg, "testsrc2=s=32x32:r=1", 30);
+    let sticker = converter
+        .convert(MediaInput::new(at_bound), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap();
+    let w = animated_webp(&sticker.data);
+    assert!(
+        (29_000..=30_000).contains(&w.duration_ms),
+        "plays {} ms",
+        w.duration_ms
+    );
+}
+
+/// The pixel bound: a GIF whose canvas is 2048 × 1026 (two rows past
+/// 2 Mi pixels: lavfi keeps sizes even) is refused; 2048 × 1024 converts,
+/// scaled within 512. The control: ffmpeg alone converts the larger one.
+#[tokio::test]
+async fn ffmpeg_refuses_an_animation_over_the_pixel_bound() {
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let over = gif(&ffmpeg, "testsrc2=s=2048x1026:r=5", 2);
+    assert!(
+        run(
+            &ffmpeg,
+            &[
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                "-c:v",
+                "libwebp_anim",
+                "-f",
+                "image2pipe",
+                "pipe:1",
+            ],
+            &over,
+        )
+        .is_some_and(|o| o.starts_with(b"RIFF")),
+        "ffmpeg did not convert it"
+    );
+    let err = converter
+        .convert(MediaInput::new(over), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("over 2097152 pixels"), "{err}");
+
+    let at_bound = gif(&ffmpeg, "testsrc2=s=2048x1024:r=5", 2);
+    let sticker = converter
+        .convert(MediaInput::new(at_bound), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap();
+    let w = animated_webp(&sticker.data);
+    assert_eq!((w.width, w.height), (512, 256), "{w:?}");
+}
+
+/// `gif` with `extensions` spliced in after its header and global colour
+/// table, before its first block.
+fn with_extensions(gif: &[u8], extensions: &[u8]) -> Vec<u8> {
+    let flags = gif[10];
+    let header = 13
+        + if flags & 0x80 == 0 {
+            0
+        } else {
+            3 << ((flags & 7) + 1)
+        };
+    [&gif[..header], extensions, &gif[header..]].concat()
+}
+
+/// `data` as GIF sub-blocks: runs of at most 255 bytes, each after its
+/// length, then a zero length.
+fn sub_blocks(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for run in data.chunks(255) {
+        out.push(u8::try_from(run.len()).unwrap());
+        out.extend_from_slice(run);
+    }
+    out.push(0);
+    out
+}
+
+/// A GIF with megabytes of comments, XMP and an ICC profile around its
+/// frames (which ffmpeg would hold in memory with the first frame) still
+/// converts, and nothing of them reaches the sticker.
+#[tokio::test]
+async fn ffmpeg_makes_a_sticker_of_a_gif_without_its_comments_and_extensions() {
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let plain = gif(&ffmpeg, "testsrc2=s=160x120:r=10", 10);
+    let comment = b"Jane Doe, 12 Main Street. ".repeat(80_000);
+    // A comment, two application extensions (an identifier of eleven
+    // bytes, then data) and a plain text one (a header of twelve, then
+    // text).
+    let extensions = [
+        &[0x21, 0xFE][..],
+        &sub_blocks(&comment),
+        &[0x21, 0xFF, 11],
+        b"XMP DataXMP",
+        &sub_blocks(b"<x:xmpmeta>Jane</x:xmpmeta>"),
+        &[0x21, 0xFF, 11],
+        b"ICCRGBG1012",
+        &sub_blocks(&[7; 3000]),
+        &[0x21, 0x01, 12],
+        &[0; 12],
+        &sub_blocks(b"Jane"),
+    ]
+    .concat();
+    let rich = [
+        with_extensions(&plain, &extensions),
+        b"Jane, after the trailer".to_vec(),
+    ]
+    .concat();
+    assert!(rich.len() > 2_000_000, "{} bytes", rich.len());
+    let sticker = converter
+        .convert(MediaInput::new(rich), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap();
+    assert!(!sticker.data.windows(4).any(|w| w == b"Jane"));
+    let w = animated_webp(&sticker.data);
+    assert_eq!((w.width, w.height, w.frames), (160, 120, 10), "{w:?}");
+    for metadata in [b"EXIF", b"XMP ", b"ICCP"] {
+        assert!(!w.chunks.contains(metadata), "{w:?}");
+    }
+}
+
+/// An animated PNG, an animated WebP, a PNG, a JPEG, a GIF of one frame
+/// and a GIF whose frames are all alike are refused for an animated
+/// sticker; a GIF is still refused for a static one.
+#[tokio::test]
+async fn ffmpeg_refuses_what_is_not_an_animated_gif() {
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let source = "testsrc2=s=160x120:r=5";
+    let apng = lavfi_animation(&ffmpeg, source, 5, &["-plays", "0", "-f", "apng"]);
+    assert!(apng.windows(4).any(|w| w == b"acTL"), "not animated");
+    let webp = lavfi_animation(
+        &ffmpeg,
+        source,
+        5,
+        &["-c:v", "libwebp_anim", "-f", "image2pipe"],
+    );
+    assert_eq!(animated_webp(&webp).flags & 0x02, 0x02, "not animated");
+    let png = lavfi(&ffmpeg, source, &["-c:v", "png"]);
+    let jpeg = lavfi(&ffmpeg, source, &["-c:v", "mjpeg"]);
+    let one = gif(&ffmpeg, source, 1);
+    let still = gif(&ffmpeg, "color=c=red:s=160x120:r=5", 5);
+    for (what, file, why) in [
+        ("apng", &apng, "not a GIF's"),
+        ("webp", &webp, "not a GIF's"),
+        ("png", &png, "not a GIF's"),
+        ("jpeg", &jpeg, "not a GIF's"),
+        ("one frame", &one, "fewer than two frames"),
+        ("still", &still, "all alike"),
+    ] {
+        let err = converter
+            .convert(MediaInput::new(file.clone()), TargetFormat::AnimatedSticker)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+            "{what}: {err:?}"
+        );
+        assert!(err.to_string().contains(why), "{what}: {err}");
+    }
+    let animated = gif(&ffmpeg, source, 5);
+    let err = converter
+        .convert(MediaInput::new(animated), TargetFormat::StaticSticker)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
 }

@@ -3162,7 +3162,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     4-core machine, encoding a WebP far over the limit, so a timeout
     under the default can fail a large photo; an image over 256:1 can
     fail at a smaller attempt (a side scaled to nothing).
-- [ ] **L19c. Animated stickers** (`meta-whatsapp-core`: an
+- [x] **L19c. Animated stickers** (`meta-whatsapp-core`: an
   `AnimatedSticker` `TargetFormat`; `meta-whatsapp-adapters`: its
   conversion behind the `ffmpeg` feature, or another converter; row 48):
   an animation (an animated GIF, PNG or WebP) into an animated WebP
@@ -3179,6 +3179,127 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     type check accepts as a sticker, against a real converter in CI; an
     animation over the frame bound is refused, and removing that bound
     fails a test.
+  - **Landed:** a sixth `TargetFormat` in core, `AnimatedSticker` (an
+    animated WebP, `image/webp`, `.webp`, at most
+    `media::ANIMATED_STICKER_MAX_BYTES`, 500 000 bytes), read from
+    `messages/sticker-messages` and `business-phone-numbers/media` on
+    2026-11-01, which give "500 KB" and no dimensions, frame rate or
+    length; the client's test keeps it within its upload table.
+    `FfmpegConverter` makes it from a GIF only: the input's first bytes
+    (`GIF87a`, `GIF89a`) are checked before ffmpeg starts, and ffmpeg's
+    own detection may land on nothing but `gif` (`-format_whitelist
+    gif`; from a pipe, ffmpeg 6.1.1 detects a GIF as `gif`, never
+    `gif_pipe`). The GIF is walked block by block first, and refused
+    (`InputRejected`, before ffmpeg starts) when cut short of its
+    trailer, with a block GIF does not define or a graphic control
+    extension not of four bytes, or out of bounds: a canvas of no pixels
+    or over 2 Mi (2 097 152), fewer than 2 frames or more than 500, or
+    longer than 30 s (each frame counted for its delay, or 10
+    hundredths without one or under 2); ffmpeg gets it with its header,
+    colour tables, graphic control extensions and images only, without
+    comments, plain text and application extensions, and without
+    anything after its trailer. Each attempt runs fixed literal
+    arguments: the L19 prefix (`-protocol_whitelist pipe`, `-abort_on
+    empty_output`, environment reduced to `PATH`, stderr drained and
+    withheld), `-max_alloc 268435456`, `-max_pixels 2097152`, the first
+    video stream, no metadata, `-fps_mode vfr`, `-frames:v 500` (a
+    second wall behind the walk's frame bound), a filter and
+    `libwebp_anim` from a fixed ladder (512 at the GIF's own frame rate
+    and quality 75; then 512 at 15 frames a second and 50, 384 at 12 and
+    40, 256 at 10 and 40, 192 at 8 and 30, 128 at 5 and 25; compression
+    level 4), `-f image2pipe` on stdout; the aspect ratio and the
+    transparency kept, never enlarged, the whole ladder within
+    `with_timeout`. A still result (libwebp's answer to frames all
+    alike) is `InputRejected`; the result is checked (a RIFF size that
+    is its length, chunks ending with the file, `VP8X` first with the
+    animation flag, `ANIM` before the `ANMF` frames, at least one
+    `ANMF`, no `VP8 `, `VP8L` or `ALPH` outside them).
+    `check_for(&[TargetFormat::AnimatedSticker])` wants `libwebp_anim`.
+    Decisive (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`, against ffmpeg
+    6.1.1, Ubuntu 24.04's package, CI's):
+    `ffmpeg_turns_a_gif_into_an_animated_webp_sticker_that_upload_accepts`
+    (a 480 × 360 GIF of 100 frames at 20 a second, too large at the
+    first attempt, comes out as an animated WebP of 494 836 bytes in
+    about 3 s, its RIFF size, `VP8X` animation flag, `ANIM` before its
+    `ANMF` frames, loop count (0, forever), 5 s of play and 4:3 read in
+    the test apart from the converter, `validate_upload` taking it as a
+    sticker, and its upload's exact request) and
+    `ffmpeg_refuses_an_animation_over_the_frame_bound` (501 frames are
+    `InputRejected`, 500 convert; ffmpeg alone converts the 501: the
+    control). Also: the time bound (31 one-second frames refused, 30
+    converted, 30 s of play), the pixel bound (2048 × 1026 refused,
+    ffmpeg alone converting it; 2048 × 1024 comes out 512 × 256), a GIF
+    with 2 MB of comments, XMP, an ICC profile and plain text converted
+    with none of them in the sticker, and an animated PNG, an animated
+    WebP, a PNG, a JPEG, a one-frame GIF and a GIF of identical frames
+    refused. The inputs are made by the tests (`lavfi` sources, GIF
+    blocks written in Rust); nothing is committed. Removing the walk's
+    frame bound, its pixel bound, its time bound (or counting a delay
+    under 2 hundredths as given), the two-frame minimum, the extension
+    stripping, the cut after the trailer, the first-bytes check, the
+    still-result refusal, the output check or any of its parts (the
+    animation flag, `VP8X` first, `ANIM`, `ANMF`, `ANIM` before `ANMF`,
+    the RIFF size, no image outside the frames), `-frames:v` or
+    `-max_pixels`, widening the format whitelist, checking for
+    `libwebp` instead of `libwebp_anim`, a 16 MiB allocation bound, or
+    setting the limit to 512 000 or the static one fails a test, 24
+    mutations in all. The extension stripping, the trailer cut, the
+    delay rule and the output check's parts fail only the adapters'
+    tests (libwebp writes none of a GIF's metadata, and a real ffmpeg
+    makes no malformed WebP); `-frames:v`, `-max_pixels`, the whitelist
+    and the allocation bound only the arguments' literal test: the
+    walk and the first-bytes check stand in front of them, so they are
+    second walls.
+    Timings (4 cores, ffmpeg 6.1.1, the whole ladder): the decisive GIF
+    3.4 s, two attempts; a 10 s, 512 × 512 GIF of 250 busy frames 15 s,
+    four; 500 frames of a fine moving pattern 17 s, three; 30 s of noise
+    at 15 frames a second (a 51 MB GIF) 34 s, five, fitting at 192
+    pixels in 455 180 bytes (the last attempt made 121 844).
+    Measured against ffmpeg 6.1.1 (peak resident memory, 4 cores): a
+    GIF's extensions are not compressed, so none inflates, but ffmpeg
+    holds them with the first frame: 60 MB of comments, XMP, ICC, plain
+    text or loop-count data around a 16 × 16 GIF took 162 MB against
+    51 MB without them, the same in one extension or 600 (the walk takes
+    them out); 60 MB of padding inside one image's data took 162 MB with
+    a 64 MiB allocation bound. Frames cost time, not memory: 5 001
+    frames of one changed pixel on a 1920 × 1080 canvas (a 2.5 MB GIF)
+    took 41 s for one attempt at 66 MB, 200 001 (7 MB) ran past 60 s.
+    The worst within the bounds: 500 frames of a fine moving pattern (a
+    0.9 MB GIF) made a 25 MB WebP at the first attempt, in 12.5 s and
+    130 MB (a 75 MB GIF of a pattern that compresses badly, over the
+    input bound, took 26 s and 257 MB). A WebP input never reaches
+    ffmpeg (its first bytes): an `EXIF` chunk of 300 entries naming the
+    same 1 MB took ffmpeg 2.7 GB. Not done: animated PNG or WebP input
+    (ffmpeg 6.1.1 reads neither from a pipe: the APNG reader seeks, the
+    WebP decoder skips `ANIM` and `ANMF`), a GIF's own loop count (the
+    sticker loops forever), and the service's side (M5c1).
+  - **Proposed** (the implementer's, for the coordinator to decide
+    under the owner's delegation, AGENTS.md § Decisions; each swappable
+    by another `MediaConverter`, or a literal of this one):
+    1. Meta's "500 KB" read as decimal (500 000), as L19b reads its
+       figures: under the upload check's 500 KiB, a converted file fits
+       whichever Meta means.
+    2. Inputs: GIF only. An animated PNG and an animated WebP are
+       refused by their first bytes, since ffmpeg 6.1 reads neither from
+       a pipe; an ffmpeg that does would make each one list entry and
+       one first-bytes check, with a walk of its metadata first
+       (ffmpeg's EXIF reader copies a value once per entry naming it).
+    3. Bounds: a canvas of 2 Mi pixels (1920 × 1080 fits), 500 frames,
+       30 s, 256 MiB a single allocation, the existing 64 MiB of input
+       and 60 s for the whole ladder. Meta gives no frame or length
+       limit; these are cost bounds, not Meta's.
+    4. The ladder as built, starting at 512 pixels rather than the
+       GIF's own size (Meta gives no dimensions; an attempt costs its
+       frames times its pixels), the frame rate kept on the first
+       attempt only; a GIF no attempt brings under is a
+       `ValidationError` on `input`, as L19b's.
+    5. Frames all alike (a still result) are `InputRejected`, not a
+       static sticker passed off as an animated one.
+    6. The sticker loops forever (libwebp's default); the GIF's loop
+       count is dropped with its other application extensions.
+    7. Row 48 done on the library's side: voice, stickers static and
+       animated, and resizing are all made; the service's side stays
+       M5c1's.
 - [ ] **L20a. One catch-all shape for open enums** (`meta-whatsapp-core`
   and every crate with an open enum; OPEN_QUESTIONS #27): `Other(String)`,
   generated by one macro in core.
