@@ -64,7 +64,14 @@
 //! ```
 //!
 //! For small files, [`Media::download_bytes`] does the same with a size cap.
+//!
+//! # Converting before an upload
+//!
+//! Meta converts nothing: a voice message must already be Ogg with Opus,
+//! mono. [`MediaConverter`] is the conversion, implemented outside this
+//! crate (`meta-whatsapp-adapters`, feature `ffmpeg`); see [`convert`].
 
+pub mod convert;
 mod kinds;
 mod resumable;
 mod verify;
@@ -72,6 +79,7 @@ mod verify;
 #[cfg(test)]
 mod tests;
 
+pub use convert::{ConvertedMedia, MediaConverter, MediaInput, TargetFormat};
 pub use kinds::{MediaKind, validate_upload};
 pub use verify::{DownloadedMedia, MediaDownload, VerifiedBody, VerifiedDownload};
 
