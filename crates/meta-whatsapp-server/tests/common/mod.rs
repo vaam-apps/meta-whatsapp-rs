@@ -1030,6 +1030,30 @@ impl TestDb {
         })
     }
 
+    /// A pool whose connections use the schema and are named `app` in
+    /// `pg_stat_activity`, so a test can see its own sessions wait on a
+    /// lock while other tests run on the same server.
+    pub async fn named_pool(
+        &self,
+        size: u32,
+        app: &str,
+    ) -> meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool {
+        use std::str::FromStr;
+
+        use meta_whatsapp_rs::adapters::store::postgres::sqlx::postgres::{
+            PgConnectOptions, PgPoolOptions,
+        };
+        let options = PgConnectOptions::from_str(&self.url)
+            .unwrap()
+            .application_name(app)
+            .options([("search_path", self.schema.as_str())]);
+        PgPoolOptions::new()
+            .max_connections(size)
+            .connect_with(options)
+            .await
+            .unwrap()
+    }
+
     /// A pool whose connections use the schema.
     pub async fn pool(
         &self,

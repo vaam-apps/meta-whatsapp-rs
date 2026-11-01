@@ -75,6 +75,37 @@ async fn live_postgres_a_number_migrated_between_two_tenants_wabas_hides_its_his
     .await;
 }
 
+/// [`harness`] on a pool whose sessions are named `app`, for
+/// [`until_waiting`].
+async fn named_harness(db: &TestDb, app: &str) -> Harness {
+    let pool = db.named_pool(10, app).await;
+    migrate(&pool).await.unwrap();
+    Harness::with(Stores::postgres(&pool))
+}
+
+/// Wait until `n` sessions named `app` wait on a lock, or `done` says the
+/// racing operation finished without waiting. A wait, not a sleep: on a
+/// slow runner a fixed sleep can end before the session reaches its lock.
+async fn until_waiting(db: &TestDb, app: &str, n: i64, done: impl Fn() -> bool) {
+    use std::time::Duration;
+    let watch = db.pool(1).await;
+    for _ in 0..3000 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity \
+             WHERE application_name = $1 AND wait_event_type = 'Lock'",
+        )
+        .bind(app)
+        .fetch_one(&watch)
+        .await
+        .unwrap();
+        if waiting >= n || done() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{n} sessions of {app} never waited on a lock");
+}
+
 /// The attach's confirmation on Postgres (records and vault): an attach
 /// whose WABA moves to another tenant while it binds and stores leaves no
 /// token of its own under the other tenant's binding, and answers `503`
@@ -758,12 +789,13 @@ async fn live_postgres_an_event_whose_binding_moved_before_its_insert_is_nobodys
 #[tokio::test]
 async fn live_postgres_an_unbinding_waits_for_an_insert_in_flight() {
     use meta_whatsapp_rs::core::ids::WabaId;
-    use std::time::Duration;
     let Some(db) = TestDb::new().await else {
         return;
     };
+    // Its sessions, by name: the insert and the unbinding are seen to wait.
+    let app = format!("unbind-wait-{}", db.schema);
     for names_a_number in [true, false] {
-        let h = harness(&db).await;
+        let h = named_harness(&db, &app).await;
         sqlx::query("DELETE FROM wa_server_events")
             .execute(&db.pool(1).await)
             .await
@@ -797,13 +829,16 @@ async fn live_postgres_an_unbinding_waits_for_an_insert_in_flight() {
             .await
             .unwrap();
         let store = h.store.clone();
+        let (db, app) = (&db, app.as_str());
         let admin = async move {
             // The insert reaches the stream's row and waits there.
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            until_waiting(db, app, 1, || false).await;
             let unbind = tokio::spawn(async move {
                 store.unbind_waba(&WabaId::new(EXAMPLE_WABA).unwrap()).await
             });
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            // The unbinding waits behind the insert, or finishes without
+            // waiting (the defect this case is for).
+            until_waiting(db, app, 2, || unbind.is_finished()).await;
             let waited = !unbind.is_finished();
             holder.rollback().await.unwrap();
             (waited, unbind.await.unwrap().unwrap())
