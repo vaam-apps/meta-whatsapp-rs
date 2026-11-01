@@ -875,6 +875,39 @@ stored data, the owner's).
   keys and records and pending the owner's confirmation before the first
   release (architecture.md § Stable identifiers). Opt-in: no existing
   API changed.
+- **The job store is a trait** in `meta-whatsapp-bot` (roadmap B3b;
+  design D29): `JobStore` puts every operation of the durable jobs
+  behind one object-safe trait the `JobRunner` holds as an
+  `Arc<dyn JobStore>`: scheduling, cancelling, re-running and reading
+  jobs, the `131049` feedback (`JobStore::limit_message`, and
+  `JobStore::observe` on top of it), and the runner's own steps
+  (`claim_due`, which hands each claimed job, a `JobClaim`, to a
+  `ClaimHandler`; `hold`, `check_run`; a recipient's marker,
+  `recipient`, `mark_sending`, `mark_outcome`, `unmark`, and
+  `limit_recipient`; `settle`, `retry`). Its rustdoc is the contract
+  under concurrency: claims atomic under a lease, a claim checked on
+  every write, markers created atomically and durably before the send
+  and only their runner's to complete or remove, a "sending" nobody
+  completed read as an outcome unknown, cancels winning or losing
+  whole, the `131049` skip per job, each job handed over once a call.
+  `KvJobs` is its default (same records, keys and namespaces: no data
+  migration); `MemoryJobs` is a second implementation, in this process
+  behind one mutex, independent of `KvStore`; `Arc<T>` forwards.
+  `jobs::conformance::run` is the job suite as a reusable conformance
+  suite (as `meta_whatsapp_adapters::store::conformance` is for
+  `KvStore`): 24 checks, the B3 tests made store-independent plus each
+  method on its own, with runners interleaved at every store call (two
+  to five racing one job, four racing twenty) and a decorator that runs
+  another runner at a chosen call. Both stores pass it, `KvJobs` also
+  on a `KvStore` that yields at every call (so the races reach inside
+  its compare-and-swaps), and runners on threads send each recipient
+  once from either (`crates/meta-whatsapp-bot/tests/jobs.rs`). New:
+  `JobStore`, `MemoryJobs`, `JobClaim`, `JobHalt`, `Holding`,
+  `RecipientMark`, `SendRecord`, `ClaimHandler`,
+  `JobRunner::builder_shared`, `JobFeedback::new` and
+  `JobFeedback::shared`, `MemoryJobs::feedback`, `Job::into_scheduled`
+  (the checks and the each-person-once rule every store applies),
+  `JobState::is_settled`.
 - **Thread control** (`meta_whatsapp_client::thread_control`, roadmap
   L15, parity row 139, from `conversation-routing/thread-control`):
   `client.thread_control(phone_number_id)` with `ThreadControl::pass`,
@@ -2201,6 +2234,15 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking — the durable jobs' operations are `JobStore`'s** (roadmap
+  B3b): `KvJobs::schedule`, `cancel`, `rerun`, `get` and `observe` are
+  no longer inherent methods but the `JobStore` trait's (bring it into
+  scope: `use meta_whatsapp_bot::JobStore`); `JobRunner::builder` takes
+  any `impl JobStore` (a `KvJobs` as before; `builder_shared` for an
+  `Arc<dyn JobStore>`); `JobFeedback` wraps any store. `KvJobs`
+  records a send's outcome after reading its marker again (one more
+  `KvStore` read per send), so its runner-side steps stand alone; its
+  stored records are unchanged.
 - **Breaking: pre-verified ids are typed** (roadmap L11c).
   `embedded_signup::PreVerifiedPhone::ids` is a
   `Vec<PreVerifiedPhoneNumberId>` (it was `Vec<PhoneNumberId>`), and

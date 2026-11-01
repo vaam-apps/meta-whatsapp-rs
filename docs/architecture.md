@@ -1447,9 +1447,10 @@ for every event, after the ban and the match.
   handlers; `PacedGroups` and `PacedGroup` wrap the client's group
   operations the same way, and `Pacer::acquire` is the hook for any other
   call. No new port and no persistence: a run lives in memory.
-- **Durable jobs** (`jobs`, roadmap B3; design D29): `KvJobs` keeps
-  `Job`s (a number, a due time, the recipients each person once, a JSON
-  payload) as a typed store on `KvStore`, no port of its own. `KvStore`
+- **Durable jobs** (`jobs`, roadmap B3, B3b; design D29): a `JobStore`
+  keeps `Job`s (a number, a due time, the recipients each person once, a
+  JSON payload); by default `KvJobs`, a typed store on `KvStore`, no
+  port of its own. `KvStore`
   has no range scan, so due times are bucketed by the minute: a job's id
   is appended to its minute's page by compare-and-swap (256 ids a page,
   then the next page; a due time already past, to the current minute's),
@@ -1470,11 +1471,19 @@ for every event, after the ban and the match.
   by a race. A pass that leaves recipients provably unsent
   (`Error::may_resend`, a stop, a store failure) is retried with backoff,
   then stopped. A message's id is kept for its status webhooks: a
-  `131049` marks that recipient for 24 hours (`KvJobs::observe`,
-  `JobFeedback`), and a re-run (`KvJobs::rerun`) skips them. The job
-  store is not behind a trait yet (the `KvStore` adapter is what swaps;
-  a `JobStore` trait is roadmap B3b); the runner's outbound, pacer,
-  failure policy and composer are.
+  `131049` marks that recipient for 24 hours (`JobStore::observe`,
+  `JobFeedback`), and a re-run (`JobStore::rerun`) skips them. The job
+  store is a trait (`JobStore`, B3b), object-safe and held by the runner
+  as an `Arc<dyn JobStore>`: scheduling, cancel, re-run, reads, the
+  `131049` feedback, and the runner's own steps (claiming what is due,
+  holding the claim, each recipient's marker, settling), with the
+  contract under concurrency in its rustdoc (claims atomic under a
+  lease, a claim checked on every write, markers created atomically
+  before the send and only their runner's, cancels winning or losing
+  whole) and `jobs::conformance` its executable form, which `KvJobs`
+  and `MemoryJobs` (in memory behind one mutex, independent of
+  `KvStore`) pass. The runner's outbound, pacer, failure policy and
+  composer are traits too.
 
 ## Typst (`meta-whatsapp-typst`)
 
