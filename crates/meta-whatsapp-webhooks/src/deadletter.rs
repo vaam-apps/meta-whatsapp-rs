@@ -59,16 +59,27 @@
 //! store's erasure, which cannot reach this store (`KvStore` has no scan).
 //!
 //! The contacts a letter is indexed under are every person the event
-//! names, found in its serialized form: per object, the BSUID
-//! (`user_id`, `from_user_id`, `to_user_id`, `recipient_user_id`,
-//! `recipient_participant_user_id`, and both sides of a BSUID change)
-//! first, and the phone number beside it (`wa_id`, `from`, `to`,
-//! `recipient_id`, `recipient_participant_id`) only when that object has
-//! no BSUID; the business's own number (`display_phone_number`) is left
-//! out. A letter whose event names no business number
-//! ([`WebhookEvent::phone_number_id`], else a `phone_number_id` in its
-//! body) is indexed under the empty number, which every number's erasure
-//! also reads.
+//! names, by every identifier it gives, found in its serialized form:
+//! each field whose name ends in `user_id` (BSUIDs, parent BSUIDs, both
+//! sides of a BSUID change) or `wa_id`, the person fields `from`, `to`,
+//! `recipient_id`, `recipient_participant_id`, `participant_recipient_id`,
+//! `phone_number` and `input` (a group participant), and any string with
+//! a BSUID's shape, wherever it sits. A phone number is indexed without
+//! its `+` (and [`DeadLetters::erase`] drops it from what it is given);
+//! the business's own number (`display_phone_number`) is left out. Every
+//! identifier, not the BSUID alone: an erasure may know the person by
+//! their phone number only, when the link to their BSUID came with the
+//! very event the sink refused. A letter whose event names no business
+//! number ([`WebhookEvent::phone_number_id`], else a `phone_number_id` in
+//! its body) is indexed under the empty number, which every number's
+//! erasure also reads. A letter naming nobody (an unparsed body that is
+//! not JSON, an account-level event) is in no index: only the age and
+//! count bounds remove it.
+//!
+//! The sink's error text is stored (cut to 512 bytes) and returned by
+//! [`DeadLetters::get`] and [`DeadLetters::list`]: it is your sink's
+//! text, so if it can name the person (a value it quotes), it is personal
+//! data too; it is erased with its letter.
 //!
 //! # Alert
 //!
@@ -97,11 +108,19 @@
 //! # Concurrency
 //!
 //! Ids come from a compare-and-swap on the head, so two replicas never
-//! share one. The index is updated by compare-and-swap. A letter is
-//! written before it is indexed: an append racing an erasure may land
-//! after it, and is then indexed, so the next erasure (or the age bound)
-//! removes it. When the index cannot be updated, the letter is deleted
-//! again and the handler answers `500`. The count bound evicts the oldest
+//! share one; an append that loses it 16 times in a row (a burst of
+//! dead letters on many replicas at once) fails with
+//! [`StorageError::Busy`], and the handler answers `500`, so Meta
+//! redelivers. The index is updated by compare-and-swap. A letter is
+//! written before it is indexed, so an erasure that reads an index entry
+//! always finds its letter; an append racing an erasure may be indexed
+//! after the erasure read the index, and the next erasure (or the age
+//! bound) removes it: erase again, as the erasure procedure says
+//! (`docs/guides/cms-inbox.md` § 8). When the index cannot be updated,
+//! the letter is deleted again and the handler answers `500`. A replay
+//! racing an erasure may hand the event to the sink after the erasure
+//! (the sink then holds the person again): do not replay while erasing,
+//! or erase again after. The count bound evicts the oldest
 //! letter except in a race of more than `capacity` appends at once, where
 //! a delayed one may overwrite a newer one; either way one of them is
 //! evicted, as the bound says. Changing the capacity moves slots: letters
@@ -253,7 +272,8 @@ pub struct ReplayReport {
     pub still_permanent: usize,
     /// Stored without their event, kept.
     pub no_payload: usize,
-    /// Failed transiently (the sink's error is logged), kept.
+    /// Failed transiently (the sink's error is logged), or their event no
+    /// longer decodes; kept.
     pub failed: usize,
 }
 
@@ -344,42 +364,82 @@ fn truncate(text: &str, cap: usize) -> String {
     text[..end].to_owned()
 }
 
-/// The BSUID fields, each with the phone number field beside it.
-const IDENTITY_PAIRS: [(&str, &str); 5] = [
-    ("user_id", "wa_id"),
-    ("from_user_id", "from"),
-    ("to_user_id", "to"),
-    ("recipient_user_id", "recipient_id"),
-    ("recipient_participant_user_id", "recipient_participant_id"),
+/// The fields naming a person by phone number (`input`, in a group
+/// participants update: by phone number or BSUID), beside every field
+/// whose name ends in `user_id` (BSUIDs, parent BSUIDs) or `wa_id`.
+const PERSON_FIELDS: [&str; 7] = [
+    "from",
+    "to",
+    "recipient_id",
+    "recipient_participant_id",
+    "participant_recipient_id",
+    "phone_number",
+    "input",
 ];
 
 fn non_empty(value: Option<&Value>) -> Option<&str> {
     value.and_then(Value::as_str).filter(|s| !s.is_empty())
 }
 
-/// Every person `value` names (BSUID first, per object), and every
-/// business number it displays (to leave out).
+/// Whether `field` names a person (see [`PERSON_FIELDS`]).
+fn names_a_person(field: &str) -> bool {
+    field.ends_with("user_id") || field.ends_with("wa_id") || PERSON_FIELDS.contains(&field)
+}
+
+/// Whether `s` has a BSUID's shape (`business-scoped-user-ids`: an ISO
+/// 3166 alpha-2 code, a period, `ENT.` for a parent BSUID, then up to 128
+/// alphanumerics), so a field this list does not know is still found.
+fn looks_like_bsuid(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let [a, b, b'.', ..] = bytes else {
+        return false;
+    };
+    let rest = &s[3..];
+    let rest = rest.strip_prefix("ENT.").unwrap_or(rest);
+    a.is_ascii_uppercase()
+        && b.is_ascii_uppercase()
+        && !rest.is_empty()
+        && rest.len() <= 128
+        && rest.bytes().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// A contact as indexed and erased: a phone number without its `+`, so
+/// `+16505551234` and `16505551234` are one contact.
+fn normalize(contact: &str) -> &str {
+    contact.strip_prefix('+').unwrap_or(contact)
+}
+
+fn add(found: &mut BTreeSet<String>, id: &str) {
+    let id = normalize(id);
+    if !id.is_empty() {
+        found.insert(id.to_owned());
+    }
+}
+
+/// Every person `value` names, by every identifier it gives (BSUID,
+/// parent BSUID, phone number), and every business number it displays
+/// (to leave out).
 fn walk_identities(value: &Value, found: &mut BTreeSet<String>, business: &mut BTreeSet<String>) {
     match value {
         Value::Object(map) => {
-            for (bsuid, phone) in IDENTITY_PAIRS {
-                // A BSUID change: `user_id` is `{previous, current}`.
-                if let Some(Value::Object(change)) = map.get(bsuid) {
-                    for side in ["previous", "current"] {
-                        if let Some(id) = non_empty(change.get(side)) {
-                            found.insert(id.to_owned());
+            for (field, nested) in map {
+                match nested {
+                    Value::String(s) if field == "display_phone_number" => {
+                        business.insert(s.chars().filter(char::is_ascii_digit).collect());
+                    }
+                    Value::String(s) if names_a_person(field) || looks_like_bsuid(s) => {
+                        add(found, s);
+                    }
+                    // A BSUID change: `user_id` is `{previous, current}`.
+                    Value::Object(change) if field.ends_with("user_id") => {
+                        for side in ["previous", "current"] {
+                            if let Some(id) = non_empty(change.get(side)) {
+                                add(found, id);
+                            }
                         }
                     }
-                } else if let Some(id) = non_empty(map.get(bsuid)) {
-                    found.insert(id.to_owned());
-                } else if let Some(number) = non_empty(map.get(phone)) {
-                    found.insert(number.to_owned());
+                    _ => {}
                 }
-            }
-            if let Some(number) = non_empty(map.get("display_phone_number")) {
-                business.insert(number.chars().filter(char::is_ascii_digit).collect());
-            }
-            for nested in map.values() {
                 walk_identities(nested, found, business);
             }
         }
@@ -789,12 +849,15 @@ impl DeadLetters {
         }
     }
 
-    /// [`Self::replay`] every letter kept, oldest first. A transient sink
-    /// failure is logged and counted, and the next letter is tried.
+    /// [`Self::replay`] every letter kept when it starts, oldest first (a
+    /// letter written meanwhile waits for the next run). A transient sink
+    /// failure, or a stored event that no longer decodes, is logged and
+    /// counted in [`ReplayReport::failed`], and the next letter is tried:
+    /// one bad letter does not hold back the others.
     ///
     /// # Errors
     ///
-    /// When the store fails or a record does not decode.
+    /// When the store fails or a record does not decode while listing.
     pub async fn replay_all(
         &self,
         sink: &dyn EventSink<WebhookEvent>,
@@ -808,6 +871,13 @@ impl DeadLetters {
                 Ok(Replay::Missing) => {}
                 Err(meta_whatsapp_core::Error::Sink(error)) => {
                     tracing::warn!(%error, letter = letter.id.0, "dead letter replay failed; kept");
+                    report.failed += 1;
+                }
+                Err(meta_whatsapp_core::Error::Storage(StorageError::Corrupt { .. })) => {
+                    tracing::warn!(
+                        letter = letter.id.0,
+                        "dead letter's event no longer decodes; kept, not replayed"
+                    );
                     report.failed += 1;
                 }
                 Err(other) => return Err(other),
@@ -838,7 +908,7 @@ impl DeadLetters {
     ) -> meta_whatsapp_core::Result<u64> {
         let contacts: BTreeSet<&str> = contacts
             .iter()
-            .map(String::as_str)
+            .map(|c| normalize(c))
             .filter(|c| !c.is_empty())
             .collect();
         let mut erased = 0;

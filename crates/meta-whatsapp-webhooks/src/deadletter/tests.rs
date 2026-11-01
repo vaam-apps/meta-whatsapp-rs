@@ -141,7 +141,8 @@ async fn the_record_bytes_are_pinned() {
         concat!(
             r#"{{"v":1,"id":0,"at":1793361600,"attempts":1,"kind":"message_received","#,
             r#""error":"sink refused the event permanently: NUL in an id","#,
-            r#""phone_number_id":"106540352242922","contacts":["US.13491208655302741918"],"#,
+            r#""phone_number_id":"106540352242922","#,
+            r#""contacts":["16505551234","US.13491208655302741918"],"#,
             r#""event_bytes":{},"event":{}}}"#
         ),
         event_json.len(),
@@ -163,34 +164,51 @@ async fn the_record_bytes_are_pinned() {
     let read = letters.get(id).await.unwrap().unwrap();
     assert_eq!(read.at, datetime!(2026-10-30 12:00 UTC));
     assert_eq!(read.kind, "message_received");
-    assert_eq!(read.contacts, [BSUID]);
+    assert_eq!(read.contacts, ["16505551234", BSUID]);
     assert_eq!(read.event, Some(serde_json::to_value(&event).unwrap()));
 }
 
-/// BSUID first: a contact with both is indexed under the BSUID alone; one
-/// without is indexed under the phone number. The business's own number
-/// is never a contact.
+/// Every identifier: a contact with both is indexed under the BSUID and
+/// the phone number (an erasure may know only one of them); a phone
+/// number without its `+`. The business's own number is never a contact.
 #[test]
-fn contacts_are_bsuids_first_without_the_business_number() {
+fn contacts_are_every_identifier_without_the_business_number() {
     let with_bsuid = serde_json::to_value(text("wamid.A", "16505551234", Some(BSUID))).unwrap();
-    assert_eq!(contacts_of(&with_bsuid), [BSUID]);
+    assert_eq!(contacts_of(&with_bsuid), ["16505551234", BSUID]);
     let without = serde_json::to_value(text("wamid.B", "16505551234", None)).unwrap();
     assert_eq!(contacts_of(&without), ["16505551234"]);
 
     // An echo: `from` is the business's number, `to_user_id` the customer.
     let echo = json!({"event": "message_echoed", "display_phone_number": "+1 555-078-3881",
-                      "echo": {"from": "15550783881", "to_user_id": BSUID, "to": "16505551234"}});
-    assert_eq!(contacts_of(&echo), [BSUID]);
+                      "echo": {"from": "15550783881", "to_user_id": BSUID, "to": "+16505551234"}});
+    assert_eq!(contacts_of(&echo), ["16505551234", BSUID]);
 
-    // A BSUID change names both sides; a group status its participant.
+    // A BSUID change names both sides, and the parent BSUID's; a group
+    // status its participant.
     let change = json!({"user_id_update": [{"wa_id": "16505551234",
-                        "user_id": {"previous": "US.1", "current": "US.2"}}]});
-    assert_eq!(contacts_of(&change), ["US.1", "US.2"]);
+                        "user_id": {"previous": "US.1", "current": "US.2"},
+                        "parent_user_id": {"previous": "US.ENT.3", "current": "US.ENT.4"}}]});
+    assert_eq!(
+        contacts_of(&change),
+        ["16505551234", "US.1", "US.2", "US.ENT.3", "US.ENT.4"]
+    );
     let group = json!({"status": {"recipient_id": "120363025246125486@g.us",
+                       "participant_recipient_id": "16505551236",
                        "recipient_participant_id": "16505551234"}});
     assert_eq!(
         contacts_of(&group),
-        ["120363025246125486@g.us", "16505551234"]
+        ["120363025246125486@g.us", "16505551234", "16505551236"]
+    );
+
+    // A handover's sender, an address book entry, a group participant's
+    // `input`, and a BSUID in a field no list names.
+    let others = json!({"sender": {"phone_number": "16505551237"},
+                        "contact": {"phone_number": "16505551238"},
+                        "failed_participants": [{"input": "US.5"}],
+                        "something_new": "BR.6"});
+    assert_eq!(
+        contacts_of(&others),
+        ["16505551237", "16505551238", "BR.6", "US.5"]
     );
 }
 
@@ -324,6 +342,30 @@ async fn erase_removes_the_contacts_letters_through_the_index() {
         0
     );
     assert!(letters.get(again).await.unwrap().is_some());
+}
+
+/// An erasure that knows the person by one identifier only reaches a
+/// letter naming them by both: the BSUID alone, or the phone number
+/// alone (with or without its `+`). The link between the two may have
+/// come with the very event the sink refused, so the conversation store
+/// may not know it.
+#[tokio::test]
+async fn erase_reaches_a_letter_by_either_identifier() {
+    let kv = Arc::new(MemoryKvStore::new());
+    let clock = clock();
+    let letters = store(&kv, &clock, 10);
+    for contacts in [vec![BSUID.to_owned()], vec!["+16505551234".to_owned()]] {
+        let id = letters
+            .record(&text("wamid.A", "16505551234", Some(BSUID)), &permanent())
+            .await
+            .unwrap();
+        assert_eq!(
+            letters.erase(&number(), &contacts).await.unwrap(),
+            1,
+            "{contacts:?}"
+        );
+        assert_eq!(letters.get(id).await.unwrap(), None, "{contacts:?}");
+    }
 }
 
 /// A letter whose event names no business number is erased by any
@@ -489,4 +531,33 @@ fn the_error_text_is_cut_at_a_character_boundary() {
     assert_eq!(truncate("abc", 5), "abc");
     assert_eq!(truncate("aé", 2), "a");
     assert_eq!(truncate(&"x".repeat(600), ERROR_TEXT_CAP).len(), 512);
+}
+
+/// One letter whose event no longer decodes (written by another release,
+/// edited by hand) is counted as failed and kept; the letters after it
+/// are still replayed.
+#[tokio::test]
+async fn replay_all_goes_past_a_letter_that_no_longer_decodes() {
+    let kv = Arc::new(MemoryKvStore::new());
+    let clock = clock();
+    let letters = store(&kv, &clock, 10);
+    let bad = letters
+        .record(&text("wamid.A", "16505551234", None), &permanent())
+        .await
+        .unwrap();
+    let good = text("wamid.B", "4915112345678", None);
+    letters.record(&good, &permanent()).await.unwrap();
+    let key = slot_key(bad.get());
+    let stored = kv.get(&key).await.unwrap().unwrap();
+    let mut record: Record = serde_json::from_slice(&stored.value).unwrap();
+    record.event = Some(json!({"event": "no_such_kind"}));
+    kv.put(&key, serde_json::to_vec(&record).unwrap(), Expiry::Keep)
+        .await
+        .unwrap();
+
+    let sink = Sink::default();
+    let report = letters.replay_all(&sink).await.unwrap();
+    assert_eq!((report.delivered, report.failed), (1, 1));
+    assert_eq!(*sink.seen.lock().unwrap(), [good]);
+    assert!(letters.get(bad).await.unwrap().is_some(), "kept");
 }
