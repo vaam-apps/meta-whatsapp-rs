@@ -1374,7 +1374,7 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     as the bot's listener, running after the middleware, so a middleware
     that stops the event stops the upgrade (documented; the sink is the
     way around it).
-- [ ] **B2b. A pacer shared by replicas** (`meta-whatsapp-bot`; for the
+- [x] **B2b. A pacer shared by replicas** (`meta-whatsapp-bot`; for the
   service's broadcasts, M5k): a `RateLimiter` keeping each number's rate
   schedule (the generic cell rate algorithm's state) as a typed store on
   `KvStore`, read and written with `compare_and_swap` (no new port), so
@@ -1388,6 +1388,81 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     window; replacing the compare-and-swap by a plain put fails it. The
     live runs on Redis and Postgres go through the store conformance
     suite.
+  - **Landed:** `KvRateLimiter` (module `pacer`, opt-in: `TokenBucket`
+    stays the default). Each number's record, under `PACER_NAMESPACE`
+    (`wa.bot.pacer`, keyed by the SHA-256 of the length-prefixed phone
+    number id, as the cooldowns' keys), is a 49-byte version 1 layout
+    (a version byte, then the due time, the raised rate, the slow-down's
+    divisor and times, the last slot's id and base), read and swapped on
+    its version, expiring `KvRateLimiter::idle_expiry` (24 hours by
+    default) after its last slot. Under contention it reads again after a
+    jittered backoff (1 ms doubling to 64 ms), at most 8 times
+    (`KvRateLimiter::contention`), then `StorageError::Busy`; a store
+    error, contention past the bound or a record of another version
+    fails closed (the booking fails, nothing is sent: a broadcast ends
+    `BroadcastEnd::LimiterFailed`). A throughput upgrade is shared:
+    `RateLimiter::raise_rate` (a new method, defaulting to raising
+    nothing) writes the raised rate into the record, checked against the
+    record read under the same compare-and-swap so it is never lowered,
+    and `ThroughputUpgrades` takes any limiter (`ThroughputUpgrades::new`
+    generic, `ThroughputUpgrades::shared` over `Arc<dyn RateLimiter>`); a
+    slow-down is shared too. The replicas' clocks are assumed
+    synchronized (NTP): a skew lets up to `⌈skew × rate⌉` more into a
+    one-second window (documented on `KvRateLimiter`), and the schedule
+    never moves back. The decisive test, in
+    `crates/meta-whatsapp-bot/tests/shared_pacer.rs`:
+    `two_pacers_on_one_store_never_exceed_20_a_second` (the two replicas
+    of each pair both read the record before either writes, driven by a
+    store that yields after each read; with a plain put, 40 sends fall in
+    one second). The others fail on their own mutation:
+    `two_bookings_racing_for_one_slot_both_succeed_in_different_slots`
+    (the plain put), `contention_past_the_bound_is_busy_after_backing_off`
+    (the bound removed, or the backoff), `a_raised_rate_is_shared_and_never_lowered`
+    (the never-lower check), `a_store_that_fails_lets_nothing_through`
+    and `an_unreadable_record_fails_closed_and_is_kept` (failing open),
+    `a_slot_given_back_is_reused_only_when_none_was_booked_after_it`;
+    `an_idle_record_expires` the TTL, and the unit tests
+    `the_pacer_key_is_pinned_and_hashed` and `the_pacer_record_is_pinned`
+    the namespace, key and bytes. The pacer needs no new `KvStore`
+    behaviour (`get`, `put_if_absent`, `compare_and_swap` with
+    `Expiry::After`), so the store conformance suite proves what it
+    relies on, on Redis and Postgres; no live test runs the limiter
+    itself there. A slot given back is reused only while it is the last
+    booked. The namespace and the record layout wait for the owner's
+    confirmation before the first release (§ Owner touchpoints).
+  - **Review (concurrency):** a new record's slot ids start at a random
+    value, so a slot of a record deleted or expired since gives back
+    nothing of the record created after it
+    (`a_slot_of_a_forgotten_record_gives_back_nothing`). Tests added for
+    what no test caught: a booking that lost the swap books as of its
+    new read and never before its request
+    (`a_booking_that_lost_books_again_as_of_its_new_read`,
+    `a_booking_that_lost_never_books_before_its_request`), the burst,
+    a multi-send cost, the divisor bound, a slow-down after recovery, an
+    upgrade whose store fails, a seeded interleaving property of three
+    replicas booking, giving back and racing
+    (`any_interleaving_keeps_every_kept_slot_an_interval_apart`), and
+    record round trips with far instants saturating. Documented:
+    deleting the record (`KvRateLimiter::store_key`) is the remedy for
+    an unreadable record, slots a clock stepped forward booked, and a
+    raised rate to lower, and drops the slots booked; a raised rate is
+    forgotten silently when the record expires. Not changed: with a
+    burst above one, a slow-down (or a lower rate) while slots are booked
+    re-reads the burst's tolerance at the slower interval, so the next
+    bookings can start before ones booked earlier; `TokenBucket` does
+    the same, and the default burst of one is not affected.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a setting or behind
+    `RateLimiter`): it fails closed, a broadcast stopping on
+    `StorageError::Busy` too, the attempts and backoff a setting
+    (`KvRateLimiter::contention`); the defaults of 8 attempts, a 1 ms
+    base delay doubling to a 64 ms cap with jitter, and a 24-hour idle
+    expiry (`KvRateLimiter::idle_expiry`); a number's rate is the higher
+    of the configured one and the raised one; `RateLimiter::release`
+    gives back the last slot only, one level deep; the shared schedule
+    never moves back; the name `KvRateLimiter`. **Pending the owner**
+    (a stable identifier): the namespace `wa.bot.pacer` and the version
+    1 record layout.
 - [ ] **B3. Durable scheduling** (`meta-whatsapp-bot`; row 90; D29): jobs
   as a typed store on `KvStore` (a bucketed due-time index, claims by
   compare-and-swap with a lease; no new port), send at a time, cancel,
@@ -2629,9 +2704,9 @@ everything else goes into the parity-completion report.
   release is a data migration.
 - **New stable identifiers**, confirmed before the first release: each
   store namespace or stored name an item adds after the table in
-  architecture.md § Stable identifiers was last confirmed (B2b's planned
-  `wa.bot.pacer`, and those B3 and L21a add), for the same reason as
-  L5's.
+  architecture.md § Stable identifiers was last confirmed (B2b's
+  `wa.bot.pacer` and its record layout, added and awaiting
+  confirmation, and those B3 and L21a add), for the same reason as L5's.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored

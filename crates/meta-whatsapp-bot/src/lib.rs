@@ -39,7 +39,7 @@
 //! | how Markdown becomes messages | [`MarkdownRenderer`] | [`markdown::Renderer`] |
 //! | how Markdown text is escaped | [`markdown::Escape`] | [`markdown::NoEscape`] (text as written; [`markdown::WordJoinerEscape`] opt-in) |
 //! | how the help reads | [`HelpFormatter`] | [`CategoryHelp`] (name, description and category configurable) |
-//! | how fast each business number sends (broadcasts; replies, read receipts and typing indicators with [`BotBuilder::pacer`]; group operations through [`PacedGroups`]) | [`RateLimiter`] | [`TokenBucket`] (80 a second per number, in this process) |
+//! | how fast each business number sends (broadcasts; replies, read receipts and typing indicators with [`BotBuilder::pacer`]; group operations through [`PacedGroups`]) | [`RateLimiter`] | [`TokenBucket`] (80 a second per number, in this process; opt-in, one budget for every replica: [`KvRateLimiter`], a typed store on `KvStore`, namespace `wa.bot.pacer`) |
 //! | which errors slow a number's pacer down (a broadcast's sends, a paced bot's replies) | [`SlowDownRule`] | [`ThrottlingErrors`] |
 //! | what "now" is for the pacer, and how it waits | [`Timer`] | `SystemClock` (Tokio's sleep) |
 //! | which number a throughput upgrade names (opt-in: [`ThroughputUpgrades`], [`BotBuilder::follow_throughput_upgrades`]) | [`NumberDirectory`] | [`KnownNumbers`] (the numbers you register, by WABA and display number) |
@@ -138,8 +138,8 @@ pub use markdown::MarkdownRenderer;
 pub use middleware::{Logging, MarkRead, Middleware, Next};
 pub use outbound::{ClientOutbound, Outbound};
 pub use pacer::{
-    PacedOutbound, Pacer, Rate, RateLimiter, Reservation, SlotRequest, SlowDownRule,
-    ThrottlingErrors, Timer, TokenBucket,
+    KvRateLimiter, PACER_NAMESPACE, PacedOutbound, Pacer, Rate, RateLimiter, Reservation,
+    SlotRequest, SlowDownRule, ThrottlingErrors, Timer, TokenBucket,
 };
 pub use parse::{CommandParser, ParsedCommand, PrefixParser};
 pub use plugin::{DEFAULT_CATEGORY, Listen, Plugin, Registrar};
