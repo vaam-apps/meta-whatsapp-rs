@@ -194,7 +194,8 @@ service's use `wa_server_` and their own migration history:
 | --- | --- |
 | `wa_server_tenants` | id, name, status, settings (OTP sender and template, limits) |
 | `wa_server_api_keys` | key id, SHA-256 of the secret, kind, tenant(s), scopes, expiry, revocation, last use |
-| `wa_server_wabas` | `waba_id` (unique) → tenant, credit allocation id (Solution Partner) |
+| `wa_server_wabas` | `waba_id` (unique) → tenant, credit allocation id (Solution Partner), when the binding began, its generation (attaches) and when the WABA last left another tenant (S2b) |
+| `wa_server_waba_tombstones` (S2b) | `waba_id` (unique) → the tenant its last unbinding was from (null once deleted), when, and when it had last left another tenant before |
 | `wa_server_numbers` | `phone_number_id` (unique) → tenant, WABA, status (`connected`, `reconnect_required`, `disconnected`) |
 | `wa_server_signup_attempts` | resumable attempts: tenant, WABA, failed step, session info (never the code or PIN) |
 | `wa_server_idempotency` | [§5.4](#54-idempotency-keys) |
@@ -253,19 +254,27 @@ rest follows from the list above and decides nothing for the owner:
   number is bound under (stale bindings route to nobody); an event naming
   only a WABA goes to the WABA's tenant. And only when Meta dated the
   event (the message's, status's, call's own time, else the entry's; a
-  contact sync's, when its webhook was triggered) in a later second than
-  the one that WABA's binding began in: a WABA moved from one tenant to
-  another does not bring the first one's dated events, which Meta
-  retries for up to 7 days, to the second, and an event of the binding's
-  own second, which may be either's since Meta dates in whole seconds,
-  is operator-only (S2's security review, L3: a WABA's first second
-  after an attach delivers to no tenant). Undated events route by the
-  current binding: history syncs (the past, on purpose), errors and
-  group updates without a date. So after a WABA moves to another tenant,
-  the previous holder's undated events that Meta redelivers (a history
-  chunk holds message text, an error its details) reach the new holder,
-  within Meta's 7-day retry window: an open gap until roadmap S2b makes
-  them operator-only for a window after a move (D36). The inbox records an event only
+  contact sync's, when its webhook was triggered) no earlier than the
+  second that WABA's binding began in, and, when the WABA had a previous
+  tenant, in a later second, by a skew margin more
+  (`WA_SERVER_MOVE_SKEW_MARGIN`, none by default): a WABA moved from one
+  tenant to another does not bring the first one's dated events, which
+  Meta retries for up to 7 days, to the second, and after a move an
+  event of the binding's own second, which may be either's since Meta
+  dates in whole seconds, is operator-only (S2's security review, L3); a
+  first onboarding keeps the events of its first second (roadmap S2b).
+  Undated events (history syncs, the past on purpose; errors and group
+  updates without a date) of a WABA that moved from another tenant are
+  operator-only until a window after the move has passed (D36's
+  `undated_after_move`, `OperatorOnly` with 7 days and an hour by
+  default, `WA_SERVER_UNDATED_AFTER_MOVE`), since the previous holder's
+  that Meta redelivers (a history chunk holds message text, an error its
+  details) would otherwise reach the new holder; for a WABA no other
+  tenant held, and with `CurrentHolder`, they route by the current
+  binding. What tells the two apart is the store's record of the WABA's
+  last unbinding (its tombstone: [§8.1](#81-a-framework-free-core-with-ports)),
+  which counts a tenant deleted and created again under its id as
+  another tenant. The inbox records an event only
   when a tenant owns it, so an unowned number's messages never wait in
   the inbox for whoever binds it later, and keeps no synced address book
   contact before roadmap M3b (D38); the outbox records every event.
@@ -274,19 +283,19 @@ rest follows from the list above and decides nothing for the owner:
   [§8.1](#81-a-framework-free-core-with-ports)): the routing hands the
   insert a typed route guard (`RouteGuard`: the binding the event was
   routed by, the number under the WABA it was bound under, else the WABA;
-  and the event's date), and the insert keeps the tenant only while that
-  binding still names that tenant and, for an event Meta dated, began in
-  a second before the event's; a row with a tenant and no guard is
-  operator-only. On Postgres the insert reads that binding under a `FOR
+  the event's date; and the rules after a move), and the insert keeps
+  the tenant only while that binding still names that tenant and, read
+  then, is one the event may reach by those rules; a row with a tenant
+  and no guard is operator-only. On Postgres the insert reads that binding under a `FOR
   KEY SHARE` lock, so an unbinding (and with it a deletion of the tenant)
   waits for the insert to commit; the memory outbox checks under the lock
   of the store whose bindings it reads. So an event routed just before
   its WABA moved to another tenant, or before its tenant was deleted and
   created again under the same id and bound again, is operator-only. An
-  undated event (an error, a history chunk, an undated group update) has
-  only the binding's tenant to go by: it reaches whoever holds the
-  binding when it arrives, the tenant created again in that last race,
-  and the new holder after a move (S2b).
+  undated event (an error, a history chunk, an undated group update)
+  has no date to compare: within the window after a move (the tenant
+  created again in that last race included) it is operator-only, and
+  otherwise it reaches whoever holds the binding when it arrives.
 - **Replays go to nobody, under the same id.** An event Meta dated before
   what the dedup lease remembers (7 days and an hour) is operator-only.
   An event's id is derived from it (HMAC-SHA256 of its outbox key, under
@@ -861,7 +870,7 @@ which never sends twice. The service adds no send retries of its own.
 | --- | --- |
 | Forged Meta deliveries | signature over raw bytes with any of N app secrets; missing or malformed header `401` before the body is read; 3 MiB; at most 64 read at once per replica (`503` before the body), 15 s to send one (`408`), refusals logged once a minute; the public listener serves nothing else; Meta's IP ranges or mTLS at the ingress (below) |
 | Replayed Meta bodies | dedup for 7 days and an hour (errors and bodies that are not webhooks: an hour, D23); events Meta dated before that go to nobody; an event keeps its id when recorded again, until `WA_APP_SECRET` is rotated; bodies never logged |
-| A WABA or number moving between tenants | events Meta dated before the binding began, or in its first second, go to nobody, inbox included; undated ones (errors, history chunks, undated group updates) of the previous tenant that Meta redelivers still reach the new one, until S2b (D36); the previous tenant's inbox rows stay under the number (M2's inbox reads must filter by binding epoch, or D10 decides a purge on unbind) |
+| A WABA or number moving between tenants | events Meta dated before the binding began go to nobody, inbox included, and so do, after a move from another tenant (not for a first onboarding), those of its first second and its skew margin; undated ones (errors, history chunks, undated group updates) go to nobody for 7 days and an hour after a move (D36, S2b; `CurrentHolder` gives them to the new holder); the previous tenant's inbox rows stay under the number (M2's inbox reads must filter by binding epoch, or D10 decides a purge on unbind) |
 | A tenant reading or sending as another | ownership before the vault ([§3.3](#33-authorization-order)); foreign numbers are `404`; the core's `OwnedNumber` and `OwnedWaba` are the only path to a token, and a capability another `Authorizer` made is refused (`403`; the core's security review, SR-H1). *As built in M1b*: one token may reach several tenants' WABAs (the platform's system user token attached to each), so an id in a path is checked to be the path's number's or WABA's own: media with Meta's `phone_number_id`, templates through the WABA's own list; another's is `404` like a missing one |
 | A stolen platform key | limited to its tenants and scopes; internal network only; revocation effective across replicas at once |
 | A stolen database dump | tokens encrypted (vault key elsewhere), API keys hashed, OTP codes and numbers only as HMACs (pepper elsewhere), webhook secrets encrypted (data key elsewhere); the inbox history, the event outbox (`wa_server_events`: message texts, vCards, orders, Flow answers, BSUIDs, phone numbers, coexistence history; operator-only rows keep whole raw bodies and parse error texts) and the answers idempotency records keep for 24 h (a send's recipient: phone number, `wa_id` or BSUID) are readable, so database encryption at rest is the operator's, and the inbox's and the outbox's retention is D10 |
@@ -950,6 +959,9 @@ third-party licences of what it contains (M4); it contains no `ffmpeg`
 | `WA_SERVER_MEDIA_CONCURRENCY` (M1b) | 4 | uploads and whole-file downloads held in memory at once per replica (section 6's "bounded media concurrency"; the next is `429`); one tenant holds half at most (the service's default, not the design's) |
 | `WA_SERVER_MEDIA_STREAMS` (M1b) | 16 | streamed downloads at once per replica, one tenant holding half at most (the service's defaults, not the design's) |
 | `WA_SERVER_RATE_SEND`, `…_READ`, `…_TEMPLATES`, each with `…_BURST` (M1b) | 20 and 40, 50 and 50, 2 and 2 | section 6's rates, per tenant and replica; the bursts of reads and template management are the service's defaults (section 6 states none) |
+| `WA_SERVER_UNDATED_AFTER_MOVE` (S2b) | `operator_only` | D36's `undated_after_move`: an undated event (an error, a history chunk, an undated group update) of a WABA that moved from another tenant is operator-only within the window after the move; `current_holder` gives it to the holder, the behaviour before S2b. A WABA no other tenant held is never concerned |
+| `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` (S2b) | `169h` (7 days and an hour) | the window, from the WABA's last unbinding from another tenant; a positive duration, with `operator_only` only (refused with `current_holder`) |
+| `WA_SERVER_MOVE_SKEW_MARGIN` (S2b) | `0s` | after a move only: an event Meta dated must be this much past the second its binding began in, and more, to reach the holder (Meta's clock ahead of the database's) |
 | `RUST_LOG`, `WA_SERVER_LOG_FORMAT`, `OTEL_EXPORTER_OTLP_ENDPOINT` | `info`, `json`, unset | |
 
 ### 7.3 Start, observability, shutdown
@@ -1094,7 +1106,7 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
-**As built (roadmap S1, S2, S3, S4, S5a, S5b, S5c, S5d, S5e, S6, S7).** `crates/meta-whatsapp-server-core`
+**As built (roadmap S1, S2, S2b, S3, S4, S5a, S5b, S5c, S5d, S5e, S6, S7).** `crates/meta-whatsapp-server-core`
 exists, with the model, the keys, event routing and polling, the
 idempotency engine, the rate limiter, the error model, authorization,
 housekeeping (over a `Backend`, since S4), the admin operations
@@ -1114,13 +1126,45 @@ What it holds today, where it differs from the target above:
     event's date as `not_after`), which the core's routing sets
     (`events::owner` returns the tenant and the guard, `outbox_row`
     copies it); a row keeps its tenant only while the guarded binding
-    names it and began in a second before the event's (`attached_at <
-    to_timestamp(n)` on Postgres; an event of the binding's own second
-    is operator-only), and a tenant without a guard is operator-only
-    (§2.3). The memory outbox belongs to its `MemoryStore` and checks
-    under its lock. An undated event has only the binding's tenant to
-    go by: after a move, the previous holder's reach the new holder
-    until S2b (D36).
+    names it and is one the event may reach (`RouteGuard::admits`, which
+    the routing applies too, and the Postgres insert writes in SQL from
+    the bounds the core computes, `RouteGuard::dated_bounds`): a dated
+    event's binding began by its second (`attached_at <
+    to_timestamp(n + 1)`), or, when the WABA had a previous tenant, in a
+    second before it by the skew margin (`attached_at <
+    to_timestamp(n - margin)`: an event of a moved binding's own second
+    is operator-only); an undated event reaches a binding with a previous
+    tenant only once the window after the move passed (the guard's
+    `AfterMove::undated_moved_by`, the event's arrival less the window,
+    D36). A tenant without a guard is operator-only (§2.3). The memory
+    outbox belongs to its `MemoryStore` and checks under its lock.
+  - **Moves are recorded** (roadmap S2b). Every unbind (`unbind_waba`,
+    `unbind_waba_if`) leaves, in the same step, the WABA's tombstone
+    (`model::WabaTombstone`: the tenant it left, when, and when the WABA
+    had last left another tenant before), which replaces its previous
+    one; a new binding reads it into
+    `WabaBinding::previous_tenant_unbound_at` (`WabaTombstone::previous_for`:
+    the tombstone's time when another tenant left, else the time it
+    carried), and a refresh keeps it. Deleting a tenant makes its
+    tombstones a deleted tenant's (Postgres: `ON DELETE SET NULL`), so a
+    tenant created again under its id binds the WABA as a move. On
+    Postgres, migration 4 adds the columns `wa_server_wabas.generation`
+    and `previous_tenant_unbound_at` and the table
+    `wa_server_waba_tombstones`, additively: its defaults give the rows
+    written before it generation 1 and a previous tenant recorded as
+    unknown (`UNRECORDED_MOVE`, the Unix epoch), so they keep S2's rules
+    (an event of their own second operator-only; their undated events
+    the holder's), and the same for the rows a replica of the previous
+    release writes during the rolling deploy. An unbind made by an
+    earlier release, before the upgrade or during its rolling deploy,
+    leaves no tombstone, so the WABA's next binding reads as a first
+    onboarding: a move whose unbind came less than the window before the
+    deploy is not protected (the guide: no moves between tenants in the
+    7 days and an hour before the deploy, nor during it). A new binding
+    on Postgres begins no earlier than the unbinding it follows (its
+    `attached_at` moved past the transaction's start and the tombstone's
+    time: the sabotage review's race). The new names are stable
+    identifiers, pending the owner's confirmation.
   - Referential rules: `bind_waba` to a missing tenant answers
     `BindOutcome::NoSuchTenant`, and `bind_waba` and `delete_tenant` on
     one tenant serialize (Postgres: the tenant's row, `FOR KEY SHARE`
@@ -1141,8 +1185,10 @@ What it holds today, where it differs from the target above:
     in byte order of their ids.
   - A capability's writes are conditioned on what it was made from
     (below): `unbind_waba_if` and `set_waba_status_if` take a
-    `BindingEpoch` (the WABA, its tenant, when the binding began) and do
-    nothing once the WABA was unbound since.
+    `BindingEpoch` (the WABA, its tenant, when the binding began, and
+    since S2b its generation, which every attach to the tenant holding
+    it moves) and do nothing once the WABA was unbound since, or
+    refreshed since.
   - **The port rule between the bindings and the vault**, which no
     transaction spans (the `RecordStore` module's docs, and the
     library's `TokenVault`'s): the vault is written for a WABA only by
@@ -1492,19 +1538,23 @@ What it holds today, where it differs from the target above:
   subscription. The call's own window stays: `forget` then finds the
   binding moved, deletes nothing, and logs at `warn` (the WABA's id)
   that the new holder's subscription may be gone (S2's security review,
-  L1). Not covered: a binding refreshed for its own tenant without an
-  unbind (the operator attaching the WABA again with a new token, as a
-  reconnect or a token rotation does) keeps its epoch, so a `190`
+  L1). A binding refreshed for its own tenant without an unbind (the
+  operator attaching the WABA again with a new token, as a reconnect or
+  a token rotation does) is another generation since S2b
+  (`WabaBinding::generation`, a column on Postgres), so a `190`
   answered, after the refresh, to a capability made before it (the old
-  token revoked meanwhile) marks the refreshed binding's numbers
-  `reconnect_required` again, until the next attach clears it.
-  `attached_at` cannot carry the refresh: the route guard and the API
-  read it as when the binding began, and moving it would send a
-  tenant's in-flight events to nobody. Closing it takes an epoch every
-  `bind_waba` moves (a generation beside `attached_at`, a new column on
-  Postgres): roadmap S2b. The admin's unbind of a WABA without a usable
-  token, and the admin's own `190` right after attaching, are not a
-  capability's and stay unconditioned.
+  token revoked meanwhile) marks nothing; `attached_at` does not move
+  (the route guard and the API read it as when the binding began, and
+  moving it would send a tenant's in-flight events to nobody). A
+  capability made while a refresh lands is refused as one made while
+  its WABA moves is (`503`, retryable), and so is an attach whose
+  confirmation finds another attach of the same tenant landed after its
+  binding (its write kept, a token of the binding's own tenant: taking
+  it back could leave the binding with none when it had overwritten the
+  other attach's, which answered success; the sabotage review of S2b).
+  The admin's unbind of a WABA without a usable token, and the admin's
+  own `190` right after attaching, are not a capability's and stay
+  unconditioned.
 - **Adapter-neutral pieces** (S6). The tenant operations are named by
   id (`operation::Operation`: the HTTP adapter's `operationId`s, with
   their scope), and what the core decides about a request follows its
@@ -1916,7 +1966,7 @@ choice stays the owner's.
 | D33 | Ordering an erasure and a purge against appends on Postgres (the sabotage review of L5: an append in flight left without its summary; purges and erasures deadlocking) | row locks alone / serializable transactions / two transaction-level advisory locks | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: two advisory locks**, the number lock (`append`, `append_synced` shared; `erase_all` exclusive) and the purge lock (`purge_before` exclusive; `erase_all` shared), in the two-key form with the table's object id as class. Their SQL is a stable identifier ([architecture.md](../architecture.md#stable-identifiers)), pinned by `the_locks_are_pinned`: replicas of two releases must take the same ones. The cost, documented: an erasure makes the appends of its business number wait. To swap, the locks live in the Postgres adapter only; another adapter orders itself its own way, behind the same port and conformance suite | L5 |
 | D34 | Two thread-ownership records of the same second (Meta's timestamps are seconds; the sabotage review of L5) | the last one stored wins / a tie-break on content | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the last one stored wins, documented** on `set_thread_owner`: a tie-break on content would be deterministic but would pick the wrong record as often as the right one, and the dedup markers keep redeliveries of a delivered event out. To swap, a caller orders the records it stores, or an adapter of its own applies another rule | L5 |
 | D35 | Identity links under a retention (the review of L5's remediation: a link is personal data, and `purge_before` keeps it) | purge a link by age, like a contact removal / keep it until an erasure | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: keep it until an erasure**, documented on `link_identity` and in cms-inbox.md § 8. A link is what lets an erasure reach the person's records under their other identity, and those can be newer than the link (a history thread keyed by a phone number, synced after a link recorded earlier, and synced contacts, which no retention purges): a link purged by age would hide them from the erasure. It holds two identifiers and a time, no content, and `erase_all` deletes it. To swap, a deployment bounds them itself: on Postgres a link is a row of `wa_identity_links` with its time (`ts`), so a `DELETE` of the rows older than its own cutoff, scheduled beside `apply_retention`, purges them (another adapter keeps them its own way) | L5 |
-| D36 | Undated tenant-visible events of a WABA's previous holder (errors, history chunks, undated group updates), which Meta redelivers for up to 7 days after a failed delivery, arriving after the WABA moved to another tenant (S2's security review, M2) | the current holder (as built) / operator-only within a window after a move | **Coordinator's decision 2026-09-27 under the owner's delegation, swappable: fail closed by default.** A setting `undated_after_move`: `OperatorOnly { window }` by default, the window 7 days and an hour (Meta's retry window plus the dedup margin), and `CurrentHolder`, the behaviour before it. A first onboarding (no previous tenant) is unaffected, so its history sync reaches it. The same item adds a skew margin setting around `attached_at` for dated events, applied only when a previous tenant exists, and relaxes the same-second rule (strict since S2: an event of its binding's own second is operator-only) to `<=` when the WABA has no previous tenant, so a first onboarding keeps the events of its first second; the tombstone is what tells the two apart. Why: a new holder can be another business, and the operator still sees the events in the operator stream. Not a legal choice. Until S2b lands, the current holder gets them (§2.3). To swap, the setting | S2b |
+| D36 | Undated tenant-visible events of a WABA's previous holder (errors, history chunks, undated group updates), which Meta redelivers for up to 7 days after a failed delivery, arriving after the WABA moved to another tenant (S2's security review, M2) | the current holder (as built) / operator-only within a window after a move | **Coordinator's decision 2026-09-27 under the owner's delegation, swappable: fail closed by default.** A setting `undated_after_move`: `OperatorOnly { window }` by default, the window 7 days and an hour (Meta's retry window plus the dedup margin), and `CurrentHolder`, the behaviour before it. A first onboarding (no previous tenant) is unaffected, so its history sync reaches it. The same item adds a skew margin setting around `attached_at` for dated events, applied only when a previous tenant exists, and relaxes the same-second rule (strict since S2: an event of its binding's own second is operator-only) to `<=` when the WABA has no previous tenant, so a first onboarding keeps the events of its first second; the tombstone is what tells the two apart. Why: a new holder can be another business, and the operator still sees the events in the operator stream. Not a legal choice. **Built in S2b**: `events::UndatedAfterMove` and `events::MoveRules` (the core; `Inbound::with_move_rules`), the window measured from the WABA's last unbinding from another tenant (its tombstone: a tenant deleted and created again under its id counts as another), checked by the routing and again by the outbox with each insert (`RouteGuard::after_move`); the skew margin defaults to none beyond the strict second. Bindings made before the Postgres migration 4 keep S2's rules (a move before them unknown). *Decided 2026-11-01 (coordinator, owner's delegation), with S2b's build, swappable behind the same settings and the `RecordStore` port*: the window from the unbinding, not the new attach; a margin of `0s`; the epoch (`UNRECORDED_MOVE`), not NULL, for bindings made before migration 4; a deleted and recreated tenant another tenant; the generation from 1 per binding; the undated check in the routing (`events::owner`) and `RouteGuard::admits`, for every undated event; a refresh met by a capability or an attach `503`, retryable; tombstones never purged. The names of migration 4 stay the owner's (stable identifiers). To swap, the settings `WA_SERVER_UNDATED_AFTER_MOVE` (`operator_only`, `current_holder`), `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` (169h) and `WA_SERVER_MOVE_SKEW_MARGIN` (0s), [§7.2](#72-environment) | S2b |
 | D37 | A number under several Messaging Accounts (Meta's account model evolution, phase 1 from H2 2026: a WABA's id now names its Messaging Account, which holds templates, billing and webhook subscriptions, and a number can belong to several, one per partner or billing currency) | one binding per number in a deployment, the sends naming it / several bindings per number, keyed by `(waba_id, phone_number_id)` | **Coordinator's decision 2026-10-26 under the owner's delegation, swappable: one binding per number, as built.** A number stays under exactly one binding (`wa_server_numbers`, keyed by `phone_number_id`): an attach whose number another tenant's binding holds is refused (D4), and one whose number the same tenant holds under another binding moves the number to the new binding, and M5c5 makes the latest attach the account billed: a send from a number names its binding's WABA id as `messaging_account_id` (the library's `OutboundMessage::messaging_account_id`, L16a), which Meta requires when the access token can send from several Messaging Accounts on the number, from phase 2 (H1 2027), so the binding's account is billed whichever ones the token reaches. A tenant's send body cannot name the account itself (the send body's unknown keys are refused). Until M5c5 lands, the service's sends name none and Meta resolves the account from the stored token. Why: it is the rule the schema already has, and nothing about events routed by Messaging Account is published yet. The cost, documented: templates belong to the Messaging Account they were created in (`account-model-evolution`), so after a same-tenant move the number's template sends find only the new account's templates (the tenant creates them there, or migrates them with Meta's Template Migration API, which resets their quality rating). Several bindings per number is a primary-key migration, left to the owner (OPEN_QUESTIONS #46). To swap, the setting `send_messaging_account_id` M5c5 adds (on by default; off sends none, as today) | M5c5 |
 | D38 | The coexistence address book (`smb_app_state_sync`) in the service's inbox, which the library's `InboxSink` records by default since roadmap L8 | record it now, readable by no route / record nothing until M3b exposes it | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: record nothing until M3b.** The pipeline builds its `InboxSink` with `meta-whatsapp-server-core`'s `inbound::INBOX_RECORDING`, the library's `RecordingSwitches::ALL` with `contacts(false)`: the `app_state_synced` events still reach their tenant, but no synced contact (names, phone numbers, BSUIDs) is stored where no route reads it and no tenant can ask for it to be erased. Swap: the constant; M3b turns it on with the routes that read the contacts. Decisive: `conformance::webhooks::an_address_book_change_reaches_its_tenant_and_no_inbox` (memory and Postgres backends). | M3 |
 

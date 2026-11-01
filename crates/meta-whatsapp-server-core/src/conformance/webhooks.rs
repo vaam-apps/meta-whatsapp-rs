@@ -47,6 +47,7 @@ use tokio::sync::watch;
 
 use super::messages::Told;
 use crate::backend::{Backend, BackendKind};
+use crate::events::{MoveRules, UndatedAfterMove};
 use crate::inbound::{
     Delivered, Inbound, MAX_DELIVERIES_RECORDING, MAX_WEBHOOK_BODY_BYTES, Pipeline, RECORDING_WAIT,
     Refused,
@@ -148,6 +149,25 @@ const ADDRESS_BOOK: Holder = Holder {
 const MOVED_TO: &str = "wh-moved-to";
 /// The WABA of [`MOVED_TO`]'s that [`MOVED_ALONE`]'s number moves under.
 const MOVED_TO_WABA: &str = "102290129340418";
+/// The tenant a WABA moves away from in the undated and first-second
+/// cases (roadmap S2b).
+const LEFT: Holder = Holder {
+    id: "wh-left",
+    waba: "102290129340419",
+    pn: "106540352242939",
+};
+/// The tenant it moves to: [`LEFT`]'s WABA and number.
+const ARRIVED: Holder = Holder {
+    id: "wh-arrived",
+    waba: LEFT.waba,
+    pn: LEFT.pn,
+};
+/// A first onboarding: a WABA no other tenant held.
+const FIRST: Holder = Holder {
+    id: "wh-first",
+    waba: "102290129340420",
+    pn: "106540352242940",
+};
 /// The customer of Meta's examples (`wa_id`): the inbox's contact.
 const CONTACT: &str = "16505551234";
 
@@ -172,6 +192,216 @@ pub async fn run(backend: &dyn Backend) {
     the_answer_comes_only_once_every_event_is_recorded(backend).await;
     unknown_and_unparsed_bodies_are_acknowledged_as_operator_only_rows(backend).await;
     an_address_book_change_reaches_its_tenant_and_no_inbox(backend).await;
+    undated_events_after_a_move_reach_no_tenant_within_the_window(backend).await;
+    an_event_of_its_bindings_first_second_reaches_a_first_onboarding_only(backend).await;
+}
+
+/// Roadmap S2b's decisive case (design D36), through the core's pipeline:
+/// after a WABA moved from tenant A to tenant B, the undated events the
+/// security review named (a history chunk, an error, a group update
+/// without a date), which Meta may be redelivering from A's time, reach no
+/// tenant within the window (`undated_after_move` `OperatorOnly`, the
+/// default: no row of B's, nothing in the inbox); under `CurrentHolder`,
+/// the behaviour before, they reach B; past the window (the pipeline's
+/// clock beyond it), they reach B; and a WABA no other tenant held (a
+/// first onboarding) gets them all, its history in its inbox. Decisive:
+/// the window check (in the routing, and the outbox's for the row), and
+/// the first onboarding's exemption from it.
+pub async fn undated_events_after_a_move_reach_no_tenant_within_the_window(backend: &dyn Backend) {
+    let records = backend.records();
+    hold(records.as_ref(), LEFT).await;
+    let waba = WabaId::new(LEFT.waba).unwrap();
+    assert!(records.unbind_waba(&waba).await.unwrap());
+    hold(records.as_ref(), ARRIVED).await;
+    hold(records.as_ref(), FIRST).await;
+    let watched = Watched::of(backend);
+    let told = Arc::new(Told::default());
+    let fail_closed = pipeline(&watched, &told);
+    let current_holder = pipeline_with(
+        &watched,
+        &told,
+        Arc::new(Ahead(Duration::ZERO)),
+        MoveRules {
+            undated_after_move: UndatedAfterMove::CurrentHolder,
+            ..MoveRules::default()
+        },
+    );
+    let window = crate::events::DEFAULT_UNDATED_AFTER_MOVE_WINDOW;
+    let past_the_window = pipeline_at(
+        &watched,
+        &told,
+        Arc::new(Ahead(window + Duration::from_mins(1))),
+    );
+    let undated = |holder: Holder, tag: &str| {
+        [
+            ("a history chunk", history(holder.waba, holder.pn, tag)),
+            ("an error", error_of(holder.waba, holder.pn, tag)),
+            (
+                "an undated group update",
+                undated_group_update(holder.waba, holder.pn, tag),
+            ),
+        ]
+    };
+    let cases: [(&str, &Pipeline, Holder, Option<&str>); 4] = [
+        ("within the window", &fail_closed, ARRIVED, None),
+        ("CurrentHolder", &current_holder, ARRIVED, Some(ARRIVED.id)),
+        (
+            "past the window",
+            &past_the_window,
+            ARRIVED,
+            Some(ARRIVED.id),
+        ),
+        ("a first onboarding", &fail_closed, FIRST, Some(FIRST.id)),
+    ];
+    let mut asked = 0;
+    for (case, pipeline, holder, owner) in cases {
+        for (what, payload) in undated(holder, case) {
+            let report = deliver(pipeline, &body(&payload))
+                .await
+                .unwrap_or_else(|refused| panic!("{case}, {what}: refused {refused:?}"));
+            assert_eq!(report.delivered, 1, "{case}, {what}");
+            let inserted = watched.outbox.inserted();
+            asked += 1;
+            assert_eq!(inserted.len(), asked, "{case}, {what}: one row asked for");
+            let (row, sequence) = &inserted[asked - 1];
+            assert!(sequence.is_some(), "{case}, {what}: recorded");
+            assert_eq!(
+                row.tenant.as_ref().map(TenantId::as_str),
+                owner,
+                "{case}, {what}: the row's tenant"
+            );
+        }
+        if case == "within the window" {
+            assert!(
+                polled(backend, ARRIVED.id).await.is_empty(),
+                "{case}: the new holder polled the previous holder's undated events"
+            );
+            assert_eq!(
+                inbox(backend, ARRIVED.pn).await,
+                0,
+                "{case}: the history reached the new holder's inbox"
+            );
+        }
+    }
+    assert_eq!(
+        types(&polled(backend, ARRIVED.id).await),
+        [
+            "history_synced",
+            "error_reported",
+            "group_updated",
+            "history_synced",
+            "error_reported",
+            "group_updated"
+        ],
+        "the new holder: under CurrentHolder, and past the window"
+    );
+    assert_eq!(
+        types(&polled(backend, FIRST.id).await),
+        ["history_synced", "error_reported", "group_updated"],
+        "a first onboarding gets its own"
+    );
+    assert_eq!(
+        inbox(backend, FIRST.pn).await,
+        1,
+        "its history, in its inbox"
+    );
+    assert!(polled(backend, LEFT.id).await.is_empty());
+    let _ = told.take_webhook_events();
+}
+
+/// Roadmap S2b and S2's L3, through the core's pipeline: a customer's
+/// message Meta dated in the second its WABA's binding began reaches the
+/// tenant of a first onboarding (its stream and its inbox), and no tenant
+/// after a move; dated the next second, it reaches the new holder.
+/// Decisive: the same-second rule, relaxed without a previous tenant only.
+pub async fn an_event_of_its_bindings_first_second_reaches_a_first_onboarding_only(
+    backend: &dyn Backend,
+) {
+    let records = backend.records();
+    let (moved, first) = (
+        Holder {
+            id: "wh-second-arrived",
+            waba: "102290129340421",
+            pn: "106540352242941",
+        },
+        Holder {
+            id: "wh-second-first",
+            waba: "102290129340422",
+            pn: "106540352242942",
+        },
+    );
+    hold(
+        records.as_ref(),
+        Holder {
+            id: "wh-second-left",
+            ..moved
+        },
+    )
+    .await;
+    assert!(
+        records
+            .unbind_waba(&WabaId::new(moved.waba).unwrap())
+            .await
+            .unwrap()
+    );
+    hold(records.as_ref(), moved).await;
+    hold(records.as_ref(), first).await;
+    let began = |holder: Holder| {
+        let records = records.clone();
+        async move {
+            records
+                .waba(&WabaId::new(holder.waba).unwrap())
+                .await
+                .unwrap()
+                .unwrap()
+                .attached_at
+                .unix_timestamp()
+        }
+    };
+    let watched = Watched::of(backend);
+    let told = Arc::new(Told::default());
+    let pipeline = pipeline(&watched, &told);
+    let cases = [
+        (
+            "a first onboarding, its first second",
+            first,
+            0,
+            Some(first.id),
+        ),
+        ("after a move, its first second", moved, 0, None),
+        ("after a move, the next second", moved, 1, Some(moved.id)),
+    ];
+    for (i, (case, holder, offset, owner)) in cases.into_iter().enumerate() {
+        let at = began(holder).await + offset;
+        let payload = dated(
+            text(holder.waba, holder.pn, &format!("wamid.first-second.{i}")),
+            at,
+        );
+        let report = deliver(&pipeline, &body(&payload)).await.unwrap();
+        assert_eq!(report.delivered, 1, "{case}");
+        let inserted = watched.outbox.inserted();
+        assert_eq!(
+            inserted[i].0.tenant.as_ref().map(TenantId::as_str),
+            owner,
+            "{case}: the row's tenant"
+        );
+    }
+    assert_eq!(
+        types(&polled(backend, first.id).await),
+        ["message_received"]
+    );
+    assert_eq!(
+        inbox(backend, first.pn).await,
+        1,
+        "a first onboarding's inbox"
+    );
+    assert_eq!(
+        types(&polled(backend, moved.id).await),
+        ["message_received"],
+        "after a move: the next second's only"
+    );
+    assert_eq!(inbox(backend, moved.pn).await, 1, "the next second's only");
+    let _ = told.take_webhook_events();
 }
 
 /// Roadmap S5e, decisive: M1.2's routing cases, through the core's
@@ -1096,6 +1326,16 @@ fn pipeline(watched: &Watched, told: &Arc<Told>) -> Pipeline {
 
 /// [`pipeline`], reading "now" from `clock`.
 fn pipeline_at(watched: &Watched, told: &Arc<Told>, clock: Arc<dyn Clock>) -> Pipeline {
+    pipeline_with(watched, told, clock, MoveRules::default())
+}
+
+/// [`pipeline_at`], routing a moved WABA's events by `moves`.
+fn pipeline_with(
+    watched: &Watched,
+    told: &Arc<Told>,
+    clock: Arc<dyn Clock>,
+    moves: MoveRules,
+) -> Pipeline {
     let inbound = Inbound::new(
         vec![
             AppSecret::new(APP_SECRET),
@@ -1104,7 +1344,9 @@ fn pipeline_at(watched: &Watched, told: &Arc<Told>, clock: Arc<dyn Clock>) -> Pi
         VerifyToken::new("verify-token-of-the-webhook-suite"),
     )
     .unwrap()
-    .with_clock(clock);
+    .with_clock(clock)
+    .with_move_rules(moves);
+    assert_eq!(inbound.move_rules(), moves);
     Pipeline::new(inbound, watched, told.clone())
 }
 
@@ -1304,6 +1546,75 @@ fn error(waba: &str, pn: &str) -> Value {
                     }]
                 },
                 "field": "messages"
+            }]
+        }]
+    })
+}
+
+/// [`error`], its details ending in `tag`: a body of its own.
+fn error_of(waba: &str, pn: &str, tag: &str) -> Value {
+    let mut payload = error(waba, pn);
+    payload["entry"][0]["changes"][0]["value"]["errors"][0]["error_data"]["details"] =
+        json!(format!("Message failed to send ({tag})"));
+    payload
+}
+
+/// webhooks/reference/history, its `history_threads` example cut to one
+/// thread of one message (message id ending in `tag`), on `pn` of `waba`:
+/// a history chunk, undated (it carries the past).
+fn history(waba: &str, pn: &str, tag: &str) -> Value {
+    json!({
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "id": waba,
+            "changes": [{
+                "value": {
+                    "messaging_product": "whatsapp",
+                    "metadata": {"display_phone_number": "15550783881", "phone_number_id": pn},
+                    "history": [{
+                        "metadata": {"phase": 0, "chunk_order": 1, "progress": 55},
+                        "threads": [{
+                            "id": CONTACT,
+                            "messages": [{
+                                "from": CONTACT,
+                                "id": format!("wamid.history.{tag}"),
+                                "timestamp": "1739230970",
+                                "type": "text",
+                                "text": {"body": "Thanks!"},
+                                "history_context": {"status": "READ"}
+                            }]
+                        }]
+                    }]
+                },
+                "field": "history"
+            }]
+        }]
+    })
+}
+
+/// `webhooks/reference/group_settings_update`, its example without its
+/// `timestamp` (request id ending in `tag`), on `pn` of `waba`: a group
+/// update with no date.
+fn undated_group_update(waba: &str, pn: &str, tag: &str) -> Value {
+    json!({
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "id": waba,
+            "changes": [{
+                "value": {
+                    "messaging_product": "whatsapp",
+                    "metadata": {"display_phone_number": "15550783881", "phone_number_id": pn},
+                    "groups": [{
+                        "group_id": "Y2FwaV9ncm91cDoxNzA1NTU1MDEzOToxMjAzNjM0MDQ2OTQyMzM4MjAZD",
+                        "type": "group_settings_update",
+                        "request_id": format!("ae5b60d19fbc8c4d-{tag}"),
+                        "group_description": {
+                            "text": "Test Description",
+                            "update_successful": true
+                        }
+                    }]
+                },
+                "field": "group_settings_update"
             }]
         }]
     })

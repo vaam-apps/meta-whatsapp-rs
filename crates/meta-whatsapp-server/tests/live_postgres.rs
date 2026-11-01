@@ -787,9 +787,15 @@ async fn live_postgres_an_unbinding_waits_for_an_insert_in_flight() {
 /// to the same WABA and number. The re-check finds a binding naming
 /// "tenant-a", but one that began after Meta dated the event: operator-only,
 /// the new tenant polls nothing. For an event naming a number, then one
-/// naming only its WABA. An event Meta did not date (an error) cannot be
-/// told apart, and goes to the new tenant: the documented limit. Decisive:
-/// the insert's `attached_at` re-check in each branch.
+/// naming only its WABA. An event Meta did not date (an error) has no date
+/// to tell the bindings apart by; since roadmap S2b the re-check finds the
+/// new binding a move (the deleted tenant's tombstone is another
+/// tenant's), within the window after it: operator-only too (it went to
+/// the new tenant before, the limit S2 documented). Each case starts from
+/// a WABA no other tenant held (a first onboarding: the cases before it
+/// left a move behind). Decisive: the insert's `attached_at` re-check in
+/// each branch, and, for the error, its window check and the tombstone
+/// forgetting a deleted tenant.
 #[tokio::test]
 async fn live_postgres_an_event_dated_before_its_tenant_was_bound_again_is_nobodys() {
     use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
@@ -819,11 +825,15 @@ async fn live_postgres_an_event_dated_before_its_tenant_was_bound_again_is_nobod
         let _ = h.store.create_tenant(&tenant, "").await.unwrap();
         h.connect("tenant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
             .await;
-        // The old tenant has held the WABA for an hour.
-        sqlx::query("UPDATE wa_server_wabas SET attached_at = now() - interval '1 hour'")
-            .execute(&db.pool(1).await)
-            .await
-            .unwrap();
+        // The old tenant has held the WABA for an hour, as its first
+        // onboarding.
+        sqlx::query(
+            "UPDATE wa_server_wabas SET attached_at = now() - interval '1 hour', \
+             previous_tenant_unbound_at = NULL",
+        )
+        .execute(&db.pool(1).await)
+        .await
+        .unwrap();
         let store = h.store.clone();
         h.outbox.before_next_insert(Box::new(move || {
             Box::pin(async move {
@@ -854,35 +864,37 @@ async fn live_postgres_an_event_dated_before_its_tenant_was_bound_again_is_nobod
         assert_eq!(rows.len(), 1, "{rows:?}");
         let key = h.tenant_key("tenant-a", &[Scope::Events]).await;
         let polled = h.call(Call::get("/v1/events").key(&key)).await.json()["data"].clone();
-        if dated_event {
-            assert_eq!(
-                rows[0].0, None,
-                "the new tenant-a got the old one's event: {polled}"
-            );
-            assert_eq!(polled, serde_json::json!([]));
+        let why = if dated_event {
+            "a binding begun after the event"
         } else {
-            // Undated: the re-check has only the tenant's id to go by.
-            assert_eq!(rows[0].0.as_deref(), Some("tenant-a"));
-            assert_eq!(polled.as_array().unwrap().len(), 1);
-        }
+            "an undated event within the window after a move"
+        };
+        assert_eq!(
+            rows[0].0, None,
+            "the new tenant-a got the old one's event ({why}): {polled}"
+        );
+        assert_eq!(polled, serde_json::json!([]), "{why}");
     }
 }
 
-/// Roadmap S2, the security review's L3: an event Meta dated in the very
-/// second its WABA's binding began is nobody's, through the routing and
-/// through the insert's re-check, which agree to the second. Meta's dates
-/// are whole seconds, so an event of that second may be a previous
-/// holder's. (Until then it was the tenant's: `attached_at <
-/// to_timestamp(t + 1)`.) Through the routing: bound half a second into
-/// the event's second, the event is routed to nobody. Through the re-check:
-/// routed to tenant-a (bound for an hour), then, before the insert, bound
-/// again (tenant-a deleted and created again) half a second into the
-/// event's second, or at its very first instant: operator-only; half a
-/// second before it: tenant-a's. For an event naming a number, then one
-/// naming only its WABA; each case on a database of its own (a body is
-/// delivered once per database). Decisive: the routing's `began_by`, and
-/// the re-check's bound (`attached_at < to_timestamp(t)`) in each branch,
-/// both ways, and strict (`<=` keeps the first instant's row).
+/// Roadmap S2, the security review's L3, and S2b: after a move, an event
+/// Meta dated in the very second its WABA's binding began is nobody's,
+/// through the routing and through the insert's re-check, which agree to
+/// the second. Meta's dates are whole seconds, so an event of that second
+/// may be a previous holder's. A first onboarding (no previous tenant)
+/// keeps it (S2b: `attached_at < to_timestamp(t + 1)`). Through the
+/// routing: bound half a second into the event's second, after a move the
+/// event is routed to nobody, as a first onboarding to tenant-a. Through
+/// the re-check: routed to tenant-a (bound for an hour), then, before the
+/// insert, bound again (tenant-a deleted and created again: a move, the
+/// deleted tenant being another) half a second into the event's second,
+/// or at its very first instant: operator-only; half a second before it:
+/// tenant-a's. For an event naming a number, then one naming only its
+/// WABA; each case on a database of its own (a body is delivered once per
+/// database). Decisive: the routing's `RouteGuard::admits`, and the
+/// re-check's bound after a move (`attached_at < to_timestamp(t -
+/// margin)`) in each branch, both ways, and strict (`<=` keeps the first
+/// instant's row), and the first onboarding's relaxed one.
 #[tokio::test]
 async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_nobodys() {
     use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
@@ -890,12 +902,14 @@ async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_nobodys()
     let second = common::meta::now() - 600;
     // Bound again before the insert at this offset into the event's
     // second, and whether tenant-a keeps the row; `None`: bound in the
-    // event's second before the routing.
-    for bound_again in [
-        None,
-        Some(("0.5 second", false)),
-        Some(("0 second", false)),
-        Some(("-0.5 second", true)),
+    // event's second before the routing, after a move (`true`) or as a
+    // first onboarding (`false`).
+    for (bound_again, moved) in [
+        (None, true),
+        (None, false),
+        (Some(("0.5 second", false)), true),
+        (Some(("0 second", false)), true),
+        (Some(("-0.5 second", true)), true),
     ] {
         let Some(db) = TestDb::new().await else {
             return;
@@ -918,16 +932,20 @@ async fn live_postgres_an_event_dated_in_its_binding_s_first_second_is_nobodys()
                 // Through the routing.
                 sqlx::query(
                     "UPDATE wa_server_wabas \
-                     SET attached_at = to_timestamp($1::bigint) + interval '0.5 second'",
+                     SET attached_at = to_timestamp($1::bigint) + interval '0.5 second', \
+                     previous_tenant_unbound_at = \
+                       CASE WHEN $2 THEN now() - interval '30 days' ELSE NULL END",
                 )
                 .bind(second)
+                .bind(moved)
                 .execute(&pool)
                 .await
                 .unwrap();
+                let holder = (!moved).then(|| "tenant-a".to_owned());
                 assert_eq!(h.webhook(&bytes(&body)).await.status, StatusCode::OK);
-                assert_eq!(routed_to(&h), None, "routed: {body}");
+                assert_eq!(routed_to(&h), holder, "routed, moved {moved}: {body}");
                 let rows = outbox_rows(&pool).await;
-                assert_eq!(rows, [(None, rows[0].1.clone())], "{body}");
+                assert_eq!(rows, [(holder, rows[0].1.clone())], "moved {moved}: {body}");
                 continue;
             };
             // Through the re-check. The old tenant has held the WABA for an

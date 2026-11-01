@@ -87,7 +87,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
 use crate::backend::Backend;
-use crate::events::{EventIdKey, EventKey, outbox_row, route};
+use crate::events::{EventIdKey, EventKey, MoveRules, Routing, outbox_row, route};
 use crate::observe::Observer;
 use crate::outbox::Outbox;
 use crate::store::RecordStore;
@@ -124,6 +124,7 @@ pub struct Inbound {
     ids: EventIdKey,
     verify_token: VerifyToken,
     clock: Arc<dyn Clock>,
+    moves: MoveRules,
 }
 
 impl std::fmt::Debug for Inbound {
@@ -132,6 +133,7 @@ impl std::fmt::Debug for Inbound {
         // event id key and the verify token are not shown at all.
         f.debug_struct("Inbound")
             .field("verifier", &self.verifier)
+            .field("moves", &self.moves)
             .finish_non_exhaustive()
     }
 }
@@ -160,6 +162,7 @@ impl Inbound {
             ids,
             verify_token,
             clock: Arc::new(SystemClock),
+            moves: MoveRules::default(),
         })
     }
 
@@ -177,6 +180,21 @@ impl Inbound {
     /// The service's clock.
     pub fn clock(&self) -> Arc<dyn Clock> {
         self.clock.clone()
+    }
+
+    /// Route the events of a WABA that moved between tenants by `moves`
+    /// (roadmap S2b, design D36), instead of [`MoveRules::default`]: an
+    /// undated event operator-only for 7 days and an hour after a move, no
+    /// skew margin beyond the strict second.
+    #[must_use]
+    pub fn with_move_rules(mut self, moves: MoveRules) -> Self {
+        self.moves = moves;
+        self
+    }
+
+    /// The rules after a move it routes by.
+    pub fn move_rules(&self) -> MoveRules {
+        self.moves
     }
 }
 
@@ -298,6 +316,7 @@ impl Pipeline {
             ids: inbound.ids,
             replay_window: dedup.ttl(),
             clock: inbound.clock,
+            moves: inbound.moves,
         };
         Self {
             verifier: inbound.verifier,
@@ -438,9 +457,11 @@ struct ServiceSink {
     /// lease's memory (`DedupGuard::ttl`), past which a captured body would
     /// otherwise be recorded again.
     replay_window: Duration,
-    /// "Now", for the replay window and
+    /// "Now", for the replay window, the window after a move and
     /// [`crate::events::KEYLESS_DEDUP_WINDOW`].
     clock: Arc<dyn Clock>,
+    /// The rules after a move (roadmap S2b).
+    moves: MoveRules,
 }
 
 impl ServiceSink {
@@ -462,8 +483,12 @@ impl ServiceSink {
     async fn record(&self, event: WebhookEvent, key: &EventKey) -> Result<(), SinkError> {
         let kind = event.kind();
         let now = self.clock.now();
-        let not_before = now - self.replay_window;
-        let route = route(self.store.as_ref(), &event, not_before)
+        let at = Routing {
+            now,
+            not_before: now - self.replay_window,
+            moves: self.moves,
+        };
+        let route = route(self.store.as_ref(), &event, &at)
             .await
             .map_err(|e| self.failed("routing", kind, storage(e)))?;
         // The row: its data, key and id (`crate::events::outbox_row`).

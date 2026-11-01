@@ -849,6 +849,224 @@ pub async fn listings_are_in_byte_order(backend: &dyn Backend) {
     }
 }
 
+/// Roadmap S2b, the tombstone: a binding records when its WABA was last
+/// unbound from another tenant (`previous_tenant_unbound_at`), from what
+/// every unbind leaves. A first onboarding has none; the WABA attached
+/// again to the tenant that unbound it, none still; moved to another
+/// tenant (by either unbind), that unbinding's time, after the previous
+/// binding began and by the new one's start; a refresh keeps it, and so
+/// does the new holder's own unbind and attach again (the move it records
+/// is still the last one from another tenant); moved back, the new
+/// holder's unbinding. A tenant deleted and created again under its id is
+/// another tenant: its WABA bound again is a move. A WABA moved twice (A
+/// to B to C) reads the last move, B's unbinding. Decisive: the tombstone
+/// written by each unbind, read by a new binding, carried for the same
+/// tenant, and forgotten by a tenant's deletion, on each backend.
+pub async fn a_move_is_recorded(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = records.as_ref();
+    let (a, b) = (id("move-a"), id("move-b"));
+    store.create_tenant(&a, "").await.unwrap().unwrap();
+    store.create_tenant(&b, "").await.unwrap().unwrap();
+    let waba = WabaId::new("171").unwrap();
+    let numbers = pns(&["271"]);
+    let bind = |tenant: TenantId| {
+        let (waba, numbers) = (waba.clone(), numbers.clone());
+        async move {
+            assert_eq!(
+                store.bind_waba(&tenant, &waba, &numbers).await.unwrap(),
+                BindOutcome::Bound,
+                "{tenant:?}"
+            );
+            store.waba(&waba).await.unwrap().unwrap()
+        }
+    };
+
+    let first = bind(a.clone()).await;
+    assert_eq!(first.previous_tenant_unbound_at, None, "a first onboarding");
+    assert!(store.unbind_waba(&waba).await.unwrap());
+    let again = bind(a.clone()).await;
+    assert_eq!(
+        again.previous_tenant_unbound_at, None,
+        "attached again to the tenant that unbound it"
+    );
+    assert!(again.attached_at > first.attached_at, "a new binding");
+
+    // A to B, by a capability's unbind.
+    assert!(store.unbind_waba_if(&again.epoch()).await.unwrap());
+    let to_b = bind(b.clone()).await;
+    let left_a = to_b
+        .previous_tenant_unbound_at
+        .expect("moved from A to B: a previous tenant");
+    assert!(
+        again.attached_at <= left_a && left_a <= to_b.attached_at,
+        "A's unbinding, between A's binding and B's"
+    );
+    let refreshed = bind(b.clone()).await;
+    assert_eq!(
+        refreshed.previous_tenant_unbound_at,
+        Some(left_a),
+        "a refresh keeps it"
+    );
+    assert!(store.unbind_waba(&waba).await.unwrap());
+    let b_again = bind(b.clone()).await;
+    assert_eq!(
+        b_again.previous_tenant_unbound_at,
+        Some(left_a),
+        "B's own unbind and attach again: A's move is still the last"
+    );
+
+    // B back to A.
+    assert!(store.unbind_waba(&waba).await.unwrap());
+    let back = bind(a.clone()).await;
+    let left_b = back
+        .previous_tenant_unbound_at
+        .expect("moved back from B to A");
+    assert!(
+        b_again.attached_at <= left_b && left_b <= back.attached_at && left_a < left_b,
+        "B's unbinding"
+    );
+
+    // A deleted and created again: another tenant.
+    assert!(store.unbind_waba(&waba).await.unwrap());
+    assert_eq!(
+        store.delete_tenant(&a).await.unwrap(),
+        DeleteTenantOutcome::Deleted
+    );
+    store.create_tenant(&a, "").await.unwrap().unwrap();
+    let recycled = bind(a.clone()).await;
+    let left_old_a = recycled
+        .previous_tenant_unbound_at
+        .expect("a tenant created again under a deleted one's id is another tenant");
+    assert!(
+        back.attached_at <= left_old_a && left_old_a <= recycled.attached_at,
+        "the deleted tenant's unbinding"
+    );
+    // Moved twice, A to B to C: C reads B's unbinding, the last move,
+    // later than A's (so the window after it covers A's redeliveries too).
+    let c = id("move-c");
+    store.create_tenant(&c, "").await.unwrap().unwrap();
+    let twice = WabaId::new("173").unwrap();
+    let bind_twice = |tenant: &TenantId| {
+        let (tenant, twice) = (tenant.clone(), twice.clone());
+        async move {
+            assert_eq!(
+                store.bind_waba(&tenant, &twice, &[]).await.unwrap(),
+                BindOutcome::Bound,
+                "{tenant:?}"
+            );
+            store.waba(&twice).await.unwrap().unwrap()
+        }
+    };
+    bind_twice(&a).await;
+    assert!(store.unbind_waba(&twice).await.unwrap());
+    let at_b = bind_twice(&b).await;
+    let left_first = at_b.previous_tenant_unbound_at.expect("A to B");
+    assert!(store.unbind_waba(&twice).await.unwrap());
+    let at_c = bind_twice(&c).await;
+    let left_second = at_c.previous_tenant_unbound_at.expect("B to C");
+    assert!(
+        left_first < left_second && at_b.attached_at <= left_second,
+        "C reads B's unbinding, not A's: {left_first} then {left_second}"
+    );
+    // Another WABA never unbound: a first onboarding, whoever binds it.
+    let other = WabaId::new("172").unwrap();
+    assert_eq!(
+        store.bind_waba(&b, &other, &[]).await.unwrap(),
+        BindOutcome::Bound
+    );
+    assert_eq!(
+        store
+            .waba(&other)
+            .await
+            .unwrap()
+            .unwrap()
+            .previous_tenant_unbound_at,
+        None
+    );
+}
+
+/// Roadmap S2b, the bind generation: a binding begins at generation 1, and
+/// every attach of the WABA to the tenant holding it (a refresh) moves it
+/// up by one, keeping `attached_at`; a write conditioned on the epoch read
+/// before a refresh (`set_waba_status_if`, `unbind_waba_if`) does nothing
+/// after it, and one conditioned on the epoch read after does. A refused
+/// attach (another tenant's) moves nothing; a binding made after an unbind
+/// starts at 1 again, later. Decisive: the generation in `bind_waba` and
+/// in each conditioned write, on each backend.
+pub async fn a_refresh_moves_the_generation(backend: &dyn Backend) {
+    let records = backend.records();
+    let store = records.as_ref();
+    let (a, b) = (id("gen-a"), id("gen-b"));
+    store.create_tenant(&a, "").await.unwrap().unwrap();
+    store.create_tenant(&b, "").await.unwrap().unwrap();
+    let waba = WabaId::new("181").unwrap();
+    let pn = PhoneNumberId::new("281").unwrap();
+    let numbers = [pn.clone()];
+    assert_eq!(
+        store.bind_waba(&a, &waba, &numbers).await.unwrap(),
+        BindOutcome::Bound
+    );
+    let before = store.waba(&waba).await.unwrap().unwrap();
+    assert_eq!(before.generation, 1, "a new binding");
+    assert_eq!(
+        store.bind_waba(&a, &waba, &numbers).await.unwrap(),
+        BindOutcome::Bound
+    );
+    let after = store.waba(&waba).await.unwrap().unwrap();
+    assert_eq!(
+        (after.generation, after.attached_at),
+        (2, before.attached_at),
+        "a refresh: the next generation, the same start"
+    );
+    assert_ne!(after.epoch(), before.epoch());
+    assert_eq!(
+        store.bind_waba(&b, &waba, &numbers).await.unwrap(),
+        BindOutcome::OwnedByAnotherTenant
+    );
+    assert_eq!(
+        store.waba(&waba).await.unwrap().unwrap().generation,
+        2,
+        "a refused attach moves nothing"
+    );
+    // Conditioned on the epoch before the refresh: nothing.
+    assert!(
+        !store
+            .set_waba_status_if(&before.epoch(), NumberStatus::ReconnectRequired)
+            .await
+            .unwrap(),
+        "a status change conditioned on the generation before the refresh"
+    );
+    let status =
+        |pn: PhoneNumberId| async move { store.number(&pn).await.unwrap().map(|n| n.status) };
+    assert_eq!(status(pn.clone()).await, Some(NumberStatus::Connected));
+    assert!(
+        !store.unbind_waba_if(&before.epoch()).await.unwrap(),
+        "an unbind conditioned on the generation before the refresh"
+    );
+    assert!(store.waba(&waba).await.unwrap().is_some());
+    // On the epoch after it: done.
+    assert!(
+        store
+            .set_waba_status_if(&after.epoch(), NumberStatus::ReconnectRequired)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        status(pn.clone()).await,
+        Some(NumberStatus::ReconnectRequired)
+    );
+    assert!(store.unbind_waba_if(&after.epoch()).await.unwrap());
+    assert!(store.waba(&waba).await.unwrap().is_none());
+    assert_eq!(
+        store.bind_waba(&a, &waba, &numbers).await.unwrap(),
+        BindOutcome::Bound
+    );
+    let anew = store.waba(&waba).await.unwrap().unwrap();
+    assert_eq!(anew.generation, 1, "a binding after an unbind starts again");
+    assert!(anew.attached_at > after.attached_at);
+}
+
 /// Every case above, on `backend`, empty.
 pub async fn run(backend: &dyn Backend) {
     backend.records().ping().await.unwrap();
@@ -860,4 +1078,6 @@ pub async fn run(backend: &dyn Backend) {
     binding_to_a_missing_tenant_binds_nothing(backend).await;
     a_binding_and_a_deletion_of_one_tenant_serialize(backend).await;
     listings_are_in_byte_order(backend).await;
+    a_move_is_recorded(backend).await;
+    a_refresh_moves_the_generation(backend).await;
 }

@@ -18,7 +18,7 @@ use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::conformance;
 use meta_whatsapp_server_core::outbox::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
+    AfterMove, EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
 };
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult,
@@ -242,6 +242,34 @@ async fn an_outbox_that_ignores_the_route_guard_fails_the_suite() {
             .is_some_and(|m| m.contains("only the rows dated after the binding's own second")),
         "{failed:?}"
     );
+    // Roadmap S2b's guard cases: a first onboarding's second before, a
+    // moved WABA's margin, an undated row within the window.
+    let failed =
+        failure(conformance::invariants::a_first_onboarding_keeps_its_first_second(&backend)).await;
+    assert!(
+        failed
+            .as_deref()
+            .is_some_and(|m| m.contains("a first onboarding's first second is its own")),
+        "{failed:?}"
+    );
+    let failed =
+        failure(conformance::invariants::the_skew_margin_applies_after_a_move_only(&backend)).await;
+    assert!(
+        failed
+            .as_deref()
+            .is_some_and(|m| m.contains("after a move: only the rows dated past the skew margin")),
+        "{failed:?}"
+    );
+    let failed = failure(
+        conformance::invariants::an_undated_event_after_a_move_waits_out_the_window(&backend),
+    )
+    .await;
+    assert!(
+        failed.as_deref().is_some_and(
+            |m| m.contains("after a move: an undated row within the window kept its tenant")
+        ),
+        "{failed:?}"
+    );
     // And the suite of what crosses ports, as a backend runs it: on the
     // guard, not on what this outbox lacks besides (it purges nothing).
     let backend = Altered {
@@ -291,13 +319,15 @@ impl Outbox for RewritesTheGuard {
 /// Each `RouteGuard` case is in `conformance::run`, not only callable: an
 /// outbox that drops every guard's date fails the guard's first case
 /// (its row dated before the binding began), one that drops a number
-/// guard's date fails the number guard's case, and one that reads the date
-/// a second late fails the binding's own second (L3). Each passes every
-/// suite before `invariants`, and each fails the whole suite. Decisive:
-/// removing a guard case from `invariants::run`.
+/// guard's date fails the number guard's case, one that reads the date a
+/// second late fails the binding's own second after a move (L3), one that
+/// drops the skew margin fails the margin's case, and one that drops the
+/// window after a move fails the undated case (roadmap S2b). Each passes
+/// every suite before `invariants`, and each fails the whole suite.
+/// Decisive: removing a guard case from `invariants::run`.
 #[tokio::test]
 async fn an_outbox_that_bends_the_guards_date_fails_the_whole_suite() {
-    let bent: [(&str, Rewrite, &str); 3] = [
+    let bent: [(&str, Rewrite, &str); 5] = [
         (
             "every guard's date dropped",
             |guard| RouteGuard {
@@ -327,6 +357,28 @@ async fn an_outbox_that_bends_the_guards_date_fails_the_whole_suite() {
                 ..guard
             },
             "only the rows dated after the binding's own second",
+        ),
+        (
+            "the skew margin dropped",
+            |guard| RouteGuard {
+                after_move: AfterMove {
+                    skew_margin: Duration::ZERO,
+                    ..guard.after_move
+                },
+                ..guard
+            },
+            "after a move: only the rows dated past the skew margin",
+        ),
+        (
+            "the window after a move dropped",
+            |guard| RouteGuard {
+                after_move: AfterMove {
+                    undated_moved_by: None,
+                    ..guard.after_move
+                },
+                ..guard
+            },
+            "after a move: an undated row within the window kept its tenant",
         ),
     ];
     for (how, rewrite, expected) in bent {
