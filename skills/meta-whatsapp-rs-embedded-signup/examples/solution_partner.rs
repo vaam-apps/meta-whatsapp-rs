@@ -715,6 +715,18 @@ mod tests {
         );
     }
 
+    /// The two coexistence syncs that end a coexistence onboarding
+    /// (`onboarding-business-app-users`, steps 1 and 2: the example
+    /// response).
+    fn script_coexistence_sync(transport: &ScriptedTransport) {
+        for request_id in ["R-CONTACTS", "R-HISTORY"] {
+            transport.push_json(
+                200,
+                json!({"messaging_product": "whatsapp", "request_id": request_id}),
+            );
+        }
+    }
+
     /// A coexistence merchant's new Embedded Signup.
     fn reconnect_request() -> OnboardingRequest {
         let event = EmbeddedSignupEvent::from_json(&format!(
@@ -810,6 +822,7 @@ mod tests {
         // `reconnect` consumes the grant: funded again, once.
         script_until_share(&transport);
         script_reshare(&transport);
+        script_coexistence_sync(&transport);
         let done = reconnect(&es, &vault, &reservations, request, "m7")
             .await
             .unwrap();
@@ -1008,6 +1021,7 @@ mod tests {
         );
         script_until_share(&transport);
         script_reshare(&transport);
+        script_coexistence_sync(&transport);
         reconnect(&es, &vault, &reservations, reconnect_request(), "m7")
             .await
             .unwrap();

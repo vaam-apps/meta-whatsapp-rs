@@ -19,7 +19,7 @@
 //! | `GET /` | anyone | a minimal page with the Facebook JavaScript SDK launch code (no secrets in it) |
 //! | `GET /signup/start` | a tenant | a new attempt bound to the calling tenant: `{"state", "launch_options"}` |
 //! | `POST /signup/complete` | the tenant who started it | `{"state", "code", "event", "pin"?}` from the page: redeem, onboard, store |
-//! | `POST /signup/resume` | the tenant whose attempt it was | `{"pin"?}`: after `subscribe_app` or `register_phone` failed, redo just those |
+//! | `POST /signup/resume` | the tenant whose attempt it was | `{"pin"?}`: after `subscribe_app`, `register_phone` or a coexistence sync step failed, redo just those |
 //!
 //! # Tech Provider only
 //!
@@ -240,13 +240,14 @@ async fn complete(
                 "waba_id": onboarded.waba_id,
                 "phone_number_ids": onboarded.phone_number_ids,
                 "steps_completed": onboarded.steps_completed,
-                // Coexistence: start the smb_app_data syncs within 24 hours.
+                // Coexistence: onboarding requested the smb_app_data syncs
+                // (steps sync_contacts, sync_history), due within 24 hours.
                 "needs_coexistence_sync": onboarded.needs_coexistence_sync(),
             })))
         }
         Err(error) => {
-            // The token is already verified and stored when only the last
-            // two steps failed: keep the request so `/signup/resume` can
+            // The token is already verified and stored when only a step
+            // after it failed: keep the request so `/signup/resume` can
             // finish once the cause is fixed.
             if resumable(&error)
                 && let Some(waba_id) = request.session.primary_waba_id().cloned()
@@ -267,8 +268,9 @@ struct Resume {
     pin: Option<String>,
 }
 
-/// `POST /signup/resume`: redo `subscribe_app` and `register_phone` with
-/// the token onboarding stored, for the calling merchant's own attempt.
+/// `POST /signup/resume`: redo `subscribe_app` and `register_phone` (and a
+/// coexistence onboarding's sync steps, which never post a request twice)
+/// with the token onboarding stored, for the calling merchant's own attempt.
 async fn resume(
     State(signup): State<Signup>,
     Extension(Tenant(tenant)): Extension<Tenant>,
@@ -303,12 +305,16 @@ async fn resume(
     }
 }
 
-/// Whether `error` left the token stored, so `resume` can finish the job.
+/// Whether `error` left the token stored, so `resume` can finish the job
+/// (a coexistence sync step included: `resume` never posts a sync twice).
 fn resumable(error: &Error) -> bool {
     matches!(
         error,
         Error::Step {
-            step: steps::SUBSCRIBE_APP | steps::REGISTER_PHONE,
+            step: steps::SUBSCRIBE_APP
+                | steps::REGISTER_PHONE
+                | steps::SYNC_CONTACTS
+                | steps::SYNC_HISTORY,
             ..
         }
     )
