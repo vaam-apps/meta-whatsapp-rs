@@ -18,9 +18,10 @@ use async_trait::async_trait;
 use meta_whatsapp_rs::client::embedded_signup::{
     StoredBusinessToken, TokenVault, VaultKey, VaultKeys,
 };
+use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::WabaId;
 use meta_whatsapp_rs::core::secret::AccessToken;
-use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
+use meta_whatsapp_rs::core::store::{ConversationStore, Expiry, KvStore, StoreKey, Versioned};
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
 use meta_whatsapp_server::config::{Env, NotUnicode, Storage};
 use meta_whatsapp_server::doctor::{Doctor, Report, Status};
@@ -48,11 +49,12 @@ const WABA: &str = "102289599326934";
 const WABA_TOKEN: &str = "SENTINEL-WABA-TOKEN";
 
 /// Every value the report must never show.
-const SECRETS: [&str; 7] = [
+const SECRETS: [&str; 8] = [
     APP_SECRET,
     VERIFY_TOKEN,
     DB_PASSWORD,
     VAULT_KEY,
+    OTHER_VAULT_KEY,
     PEPPER,
     PARTNER_TOKEN,
     WABA_TOKEN,
@@ -97,8 +99,45 @@ fn production() -> Vars {
 }
 
 /// A memory backend that does not say it is one, so the doctor walks its
-/// WABAs as it walks a shared database's.
+/// WABAs as it walks a shared database's; and read-only: a write to its
+/// key/value store (the vault re-encrypting a token, say) or a call for a
+/// port the doctor has no business with (migrations, locks, the janitor,
+/// the outbox, idempotency, conversations) panics, failing the test.
 struct Shared(MemoryBackend);
+
+/// A key/value store that refuses every write by panicking.
+#[derive(Debug)]
+struct ReadOnlyKv(Arc<dyn KvStore>);
+
+#[async_trait]
+impl KvStore for ReadOnlyKv {
+    async fn get(&self, key: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+        self.0.get(key).await
+    }
+    async fn put(&self, _: &StoreKey, _: Vec<u8>, _: Expiry) -> Result<u64, StorageError> {
+        panic!("doctor wrote to the key/value store (put)")
+    }
+    async fn put_if_absent(
+        &self,
+        _: &StoreKey,
+        _: Vec<u8>,
+        _: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        panic!("doctor wrote to the key/value store (put_if_absent)")
+    }
+    async fn compare_and_swap(
+        &self,
+        _: &StoreKey,
+        _: u64,
+        _: Option<Vec<u8>>,
+        _: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        panic!("doctor wrote to the key/value store (compare_and_swap)")
+    }
+    async fn delete(&self, _: &StoreKey) -> Result<bool, StorageError> {
+        panic!("doctor wrote to the key/value store (delete)")
+    }
+}
 
 #[async_trait]
 impl Backend for Shared {
@@ -109,25 +148,25 @@ impl Backend for Shared {
         self.0.records()
     }
     fn idempotency(&self) -> Arc<dyn IdempotencyRecords> {
-        self.0.idempotency()
+        panic!("doctor asked for the idempotency records")
     }
     fn outbox(&self) -> Arc<dyn Outbox> {
-        self.0.outbox()
+        panic!("doctor asked for the outbox")
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
-        self.0.leader_lock()
+        panic!("doctor asked for a lock")
     }
     fn janitor(&self) -> Arc<dyn Janitor> {
-        self.0.janitor()
+        panic!("doctor asked for the janitor")
     }
     fn migrator(&self) -> Arc<dyn SchemaMigrator> {
-        self.0.migrator()
+        panic!("doctor asked for the migrator")
     }
     fn kv(&self) -> Arc<dyn KvStore> {
-        self.0.kv()
+        Arc::new(ReadOnlyKv(self.0.kv()))
     }
     fn conversations(&self) -> Arc<dyn ConversationStore> {
-        self.0.conversations()
+        panic!("doctor asked for the conversations")
     }
     async fn close(&self) {}
 }
@@ -155,7 +194,12 @@ impl BackendFactory for Unreachable {
 /// A shared backend with `WABA` bound to a tenant, its token sealed under
 /// `vault_key` (or none stored).
 async fn deployment(token: Option<(&str, &str)>) -> Arc<dyn Backend> {
-    let backend = Arc::new(Shared(MemoryBackend::new()));
+    deployment_under("k1", token).await
+}
+
+/// [`deployment`], the token sealed under the key `key_id`.
+async fn deployment_under(key_id: &str, token: Option<(&str, &str)>) -> Arc<dyn Backend> {
+    let backend = MemoryBackend::new();
     let tenant = TenantId::parse("merchant-42").unwrap();
     let records = backend.records();
     records
@@ -168,7 +212,7 @@ async fn deployment(token: Option<(&str, &str)>) -> Arc<dyn Backend> {
         .await
         .unwrap();
     if let Some((vault_key, value)) = token {
-        let keys = VaultKeys::new(VaultKey::from_base64("k1", vault_key).unwrap());
+        let keys = VaultKeys::new(VaultKey::from_base64(key_id, vault_key).unwrap());
         TokenVault::new(backend.kv(), keys)
             .unwrap()
             .store(&StoredBusinessToken::new(
@@ -178,7 +222,7 @@ async fn deployment(token: Option<(&str, &str)>) -> Arc<dyn Backend> {
             .await
             .unwrap();
     }
-    backend
+    Arc::new(Shared(backend))
 }
 
 /// The subscriptions-edge guide's example answer, for WhatsApp: object
@@ -733,6 +777,138 @@ async fn a_solution_partners_system_token_is_inspected() {
     assert_eq!(graph.remaining(), 0);
 }
 
+/// A token sealed under a previous vault key opens, and stays as it is:
+/// the doctor's vault does not re-encrypt on read (a write would panic in
+/// the read-only backend).
+#[tokio::test]
+async fn a_token_under_a_previous_key_is_read_without_re_encrypting_it() {
+    let graph = ScriptedTransport::new();
+    let backend = deployment_under("k0", Some((OTHER_VAULT_KEY, WABA_TOKEN))).await;
+    let key = StoreKey::new("wa.token", format!("waba/{WABA}"));
+    let before = backend.kv().get(&key).await.unwrap().unwrap();
+    graph.push_json(200, subscriptions(&all_fields()));
+    graph.push_json(200, debug_ok());
+    graph.push_json(200, subscribed_ok());
+    let env = production().set("WA_VAULT_PREVIOUS_KEYS", &format!("k0:{OTHER_VAULT_KEY}"));
+    let report = doctor(&env, &Opens(Arc::clone(&backend)), &graph).await;
+    assert_eq!(
+        check(&report, "token.waba.102289599326934").0,
+        Status::Ok,
+        "{report}"
+    );
+    let after = backend.kv().get(&key).await.unwrap().unwrap();
+    assert_eq!(after.version, before.version, "the record was rewritten");
+    assert_eq!(after.value, before.value, "the record was rewritten");
+    assert_eq!(graph.remaining(), 0);
+}
+
+/// A shared backend with `n` WABAs bound and no token stored.
+async fn deployment_of(n: usize) -> Arc<dyn Backend> {
+    let backend = MemoryBackend::new();
+    let tenant = TenantId::parse("merchant-42").unwrap();
+    let records = backend.records();
+    records
+        .create_tenant(&tenant, "Merchant 42")
+        .await
+        .unwrap()
+        .unwrap();
+    for i in 0..n {
+        let waba = WabaId::new(format!("1000000000{i:05}")).unwrap();
+        records.bind_waba(&tenant, &waba, &[]).await.unwrap();
+    }
+    Arc::new(Shared(backend))
+}
+
+/// The WABA checks stop at `MAX_WABAS`, and say so.
+#[tokio::test]
+async fn at_most_max_wabas_are_checked_and_the_rest_named_as_unchecked() {
+    use meta_whatsapp_server::doctor::MAX_WABAS;
+    for (bound, status, says) in [
+        (MAX_WABAS, Status::Ok, "100 bound, each checked below"),
+        (
+            MAX_WABAS + 1,
+            Status::Warn,
+            "more than 100 bound: the first 100 checked below",
+        ),
+    ] {
+        let graph = ScriptedTransport::new();
+        graph.push_json(200, subscriptions(&all_fields()));
+        let report = doctor(&production(), &Opens(deployment_of(bound).await), &graph).await;
+        let (got, detail) = check(&report, "token.wabas");
+        assert_eq!((got, detail.as_str()), (status, says), "{report}");
+        let checked = report
+            .checks
+            .iter()
+            .filter(|c| c.name.starts_with("token.waba."))
+            .count();
+        assert_eq!(checked, MAX_WABAS, "{report}");
+        // No token stored: no call per WABA.
+        assert_eq!(graph.requests().len(), 1);
+    }
+}
+
+/// A bind doctor reset to its default may meet the other bind's value:
+/// that collision is not reported, and the refusals after it still are.
+#[tokio::test]
+async fn a_bind_replaced_by_its_default_does_not_hide_the_next_refusal() {
+    let graph = ScriptedTransport::new();
+    let env = production()
+        .set("WA_SERVER_PUBLIC_BIND", "not-an-address")
+        // The public bind's default.
+        .set("WA_SERVER_INTERNAL_BIND", "127.0.0.1:8080")
+        .unset("WA_APP_SECRET");
+    let report = doctor(&env, &Unreachable, &graph).await;
+    assert_fails(
+        &report,
+        "config.WA_SERVER_PUBLIC_BIND",
+        "expected an address and port",
+    );
+    assert_fails(&report, "config.WA_APP_SECRET", "WA_APP_SECRET is required");
+    let binds: Vec<_> = report
+        .checks
+        .iter()
+        .filter(|c| c.name == "config.WA_SERVER_PUBLIC_BIND")
+        .collect();
+    assert_eq!(binds.len(), 1, "{report}");
+}
+
+/// `DATABASE_URL` holds a password (in its userinfo or its query): the
+/// built-in backends' failures never show it, whether the URL does not
+/// parse, the server does not answer, or the configuration is refused.
+#[tokio::test]
+async fn a_database_url_never_reaches_the_report() {
+    for (url, refused) in [
+        // Nothing listens on port 1: the pool gives up after its 10 s.
+        (
+            format!(
+                "postgres://wa:{DB_PASSWORD}@127.0.0.1:1/wa?sslmode=disable&password={DB_PASSWORD}"
+            ),
+            false,
+        ),
+        (
+            format!("postgres://wa:{DB_PASSWORD}@127.0.0.1:notaport/wa"),
+            false,
+        ),
+        (format!("postgres://wa:{DB_PASSWORD}@[::1/wa"), false),
+        (
+            format!("postgres://wa@127.0.0.1:notaport/wa?password={DB_PASSWORD}"),
+            true,
+        ),
+    ] {
+        let graph = ScriptedTransport::new();
+        let mut env = production().unset("WA_APP_ID").set("DATABASE_URL", &url);
+        if refused {
+            env = env.unset("WA_VERIFY_TOKEN");
+        }
+        // `doctor` asserts no secret reaches the report.
+        let report = doctor(&env, &BuiltinBackends, &graph).await;
+        let (status, detail) = check(&report, "database");
+        assert_eq!(status, Status::Fail, "{url}: {report}");
+        assert!(detail.contains("DATABASE_URL"), "{detail}");
+        assert!(graph.requests().is_empty());
+    }
+}
+
 // ─── The command ───────────────────────────────────────────────────────
 
 /// The real binary: a refused configuration is reported on standard
@@ -767,6 +943,44 @@ fn the_command_exits_non_zero_naming_the_misconfiguration() {
     assert!(!stdout.contains(VERIFY_TOKEN) && !stderr.contains(VERIFY_TOKEN));
 }
 
+/// The real binary, with a database that does not answer and a password
+/// in `DATABASE_URL` (userinfo and query): neither standard output nor
+/// standard error shows it, nor any other secret set.
+#[test]
+fn the_command_prints_no_secret_when_the_database_fails() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_meta-whatsapp-server"))
+        .arg("doctor")
+        .env_clear()
+        .env(
+            "DATABASE_URL",
+            format!("postgres://wa:{DB_PASSWORD}@127.0.0.1:1/wa?password={DB_PASSWORD}"),
+        )
+        .env("WA_APP_SECRET", APP_SECRET)
+        .env("WA_VERIFY_TOKEN", VERIFY_TOKEN)
+        .env("WA_VAULT_KEY", VAULT_KEY)
+        .env("WA_OTP_PEPPER", PEPPER)
+        .env("WA_ONBOARDING_MODE", "solution_partner")
+        .env("WA_PARTNER_SYSTEM_TOKEN", PARTNER_TOKEN)
+        .env("RUST_LOG", "trace")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!output.status.success(), "{stdout}{stderr}");
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.starts_with("FAIL database: cannot connect to DATABASE_URL")),
+        "{stdout}"
+    );
+    for secret in SECRETS {
+        assert!(
+            !stdout.contains(secret) && !stderr.contains(secret),
+            "{secret} printed:\n{stdout}{stderr}"
+        );
+    }
+}
+
 // ─── Live: the migration histories, read-only ──────────────────────────
 
 /// On a fresh schema the histories are missing: a failure with
@@ -794,6 +1008,19 @@ async fn live_postgres_doctor_reads_the_migration_histories_without_migrating() 
         .await;
     assert_eq!(check(&report, "database").0, Status::Ok, "{report}");
     assert_fails(&report, "database.migrations", "WA_SERVER_MIGRATE=skip");
+    // With `auto` (the default) a warning, and still nothing migrated:
+    // `serve` migrates, the doctor does not.
+    let auto = env.clone().unset("WA_SERVER_MIGRATE");
+    let report = Doctor::new(&BuiltinBackends)
+        .transport(Arc::new(graph.clone()))
+        .run(&auto)
+        .await;
+    assert_eq!(check(&report, "database").0, Status::Ok, "{report}");
+    assert_eq!(
+        check(&report, "database.migrations").0,
+        Status::Warn,
+        "{report}"
+    );
     let pool = db.pool(2).await;
     let tables: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM information_schema.tables WHERE table_schema = $1",
@@ -814,5 +1041,127 @@ async fn live_postgres_doctor_reads_the_migration_histories_without_migrating() 
     assert_eq!(status, Status::Ok, "{report}");
     assert!(detail.contains("up to date"), "{detail}");
     assert!(!report.failed(), "{report}");
+    assert!(graph.requests().is_empty());
+}
+
+/// A recorded checksum that differs, a half-applied migration (the
+/// service's or the library's), a version newer than the binary and a
+/// pending one are each reported, read-only: with `auto`, the pending
+/// migration is still pending after the run.
+#[tokio::test]
+async fn live_postgres_doctor_reports_a_changed_dirty_newer_or_pending_history() {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx;
+    let Some(db) = common::TestDb::new().await else {
+        return;
+    };
+    let separator = if db.url.contains('?') { '&' } else { '?' };
+    let url = format!(
+        "{}{separator}options=-c%20search_path%3D{}",
+        db.url, db.schema
+    );
+    let skip = production()
+        .unset("WA_APP_ID")
+        .set("DATABASE_URL", &url)
+        .set("WA_SERVER_MIGRATE", "skip");
+    let auto = skip.clone().unset("WA_SERVER_MIGRATE");
+    let pool = db.pool(2).await;
+    meta_whatsapp_server::store::migrate(&pool).await.unwrap();
+    let graph = ScriptedTransport::new();
+    let migrations = |env: Vars| {
+        let graph = graph.clone();
+        async move {
+            let report = Doctor::new(&BuiltinBackends)
+                .transport(Arc::new(graph))
+                .run(&env)
+                .await;
+            assert_eq!(check(&report, "database").0, Status::Ok, "{report}");
+            check(&report, "database.migrations")
+        }
+    };
+    let exec = |sql: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+    };
+    let service = meta_whatsapp_server::store::MIGRATIONS_TABLE;
+    assert_eq!(service, "wa_server_sqlx_migrations");
+
+    // A checksum that differs from the binary's.
+    let original: Vec<u8> =
+        sqlx::query_scalar("SELECT checksum FROM wa_server_sqlx_migrations WHERE version = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    exec("UPDATE wa_server_sqlx_migrations SET checksum = '\\x00'::bytea WHERE version = 1").await;
+    for env in [skip.clone(), auto.clone()] {
+        let (status, detail) = migrations(env).await;
+        assert_eq!(status, Status::Fail, "{detail}");
+        assert!(detail.contains("service migrations 1 differ"), "{detail}");
+    }
+    sqlx::query("UPDATE wa_server_sqlx_migrations SET checksum = $1 WHERE version = 1")
+        .bind(&original)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(migrations(skip.clone()).await.0, Status::Ok);
+
+    // Half-applied: the service's, then the library's.
+    exec("UPDATE wa_server_sqlx_migrations SET success = false WHERE version = 3").await;
+    let (status, detail) = migrations(auto.clone()).await;
+    assert_eq!(status, Status::Fail, "{detail}");
+    assert!(
+        detail.contains("service migration 3 was left half-applied"),
+        "{detail}"
+    );
+    exec("UPDATE wa_server_sqlx_migrations SET success = true WHERE version = 3").await;
+    exec(
+        "UPDATE wa_sqlx_migrations SET success = false \
+         WHERE version = (SELECT max(version) FROM wa_sqlx_migrations)",
+    )
+    .await;
+    let (status, detail) = migrations(auto.clone()).await;
+    assert_eq!(status, Status::Fail, "{detail}");
+    assert!(detail.contains("library migration"), "{detail}");
+    assert!(detail.contains("half-applied"), "{detail}");
+    exec("UPDATE wa_sqlx_migrations SET success = true").await;
+
+    // A version this binary does not have: a later release migrated.
+    exec(
+        "INSERT INTO wa_server_sqlx_migrations \
+         (version, description, success, checksum, execution_time) \
+         VALUES (999, 'later', true, '\\x00'::bytea, 0)",
+    )
+    .await;
+    let (status, detail) = migrations(skip.clone()).await;
+    assert_eq!(status, Status::Warn, "{detail}");
+    assert!(
+        detail.contains("service migrations 999 are newer"),
+        "{detail}"
+    );
+    exec("DELETE FROM wa_server_sqlx_migrations WHERE version = 999").await;
+
+    // Pending: a failure with `skip`, a warning with `auto`, and the
+    // doctor applies nothing.
+    exec("DELETE FROM wa_server_sqlx_migrations WHERE version = 3").await;
+    let (status, detail) = migrations(skip.clone()).await;
+    assert_eq!(status, Status::Fail, "{detail}");
+    assert!(
+        detail.contains("service migrations 3 are pending"),
+        "{detail}"
+    );
+    let (status, detail) = migrations(auto.clone()).await;
+    assert_eq!(status, Status::Warn, "{detail}");
+    assert!(
+        detail.contains("service migrations 3 are pending"),
+        "{detail}"
+    );
+    let recorded: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM wa_server_sqlx_migrations WHERE version = 3")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(recorded, 0, "the doctor migrated");
+    pool.close().await;
     assert!(graph.requests().is_empty());
 }

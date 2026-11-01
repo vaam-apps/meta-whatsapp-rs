@@ -43,6 +43,7 @@ use meta_whatsapp_rs::client::embedded_signup::{
     WHATSAPP_BUSINESS_MESSAGING,
 };
 use meta_whatsapp_rs::core::config::GraphEndpoint;
+use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{AppId, WabaId};
 use meta_whatsapp_rs::core::secret::{AccessToken, redacted_url};
 use meta_whatsapp_rs::core::transport::HttpTransport;
@@ -254,9 +255,12 @@ impl<'a> Doctor<'a> {
                         backend.close().await;
                     }
                 }
+                Err(ConfigError::Missing(_)) => {
+                    report.push(Check::skip("database", "DATABASE_URL is unset"));
+                }
                 Err(_) => report.push(Check::skip(
                     "database",
-                    "the configuration is refused, DATABASE_URL or WA_SERVER_MIGRATE among it",
+                    "DATABASE_URL or WA_SERVER_MIGRATE is refused (above)",
                 )),
             }
             for name in ["webhooks.subscription", "token.wabas"] {
@@ -281,22 +285,20 @@ impl<'a> Doctor<'a> {
             .clone()
             .zip(config.app_secrets.first().cloned())
             .map(|(id, secret)| AppCredentials::new(id, secret));
-        let Some(app) = app else {
-            for name in ["webhooks.subscription", "token.wabas"] {
-                report.push(Check::skip(
-                    name,
-                    "WA_APP_ID is unset: the app token needs it",
-                ));
+        let partner = matches!(config.onboarding, OnboardingMode::SolutionPartner(_));
+        let skipped = |report: &mut Report, why: &str| {
+            for name in ["webhooks.subscription", "token.partner", "token.wabas"] {
+                if name != "token.partner" || partner {
+                    report.push(Check::skip(name, why));
+                }
             }
+        };
+        let Some(app) = app else {
+            skipped(report, "WA_APP_ID is unset: the app token needs it");
             return;
         };
         let Ok(client) = self.client(&config.graph_endpoint) else {
-            for name in ["webhooks.subscription", "token.wabas"] {
-                report.push(Check::skip(
-                    name,
-                    "the Graph client cannot be built (its TLS backend)",
-                ));
-            }
+            skipped(report, "the Graph client cannot be built (its TLS backend)");
             return;
         };
         webhooks(&client, &app, report).await;
@@ -459,8 +461,9 @@ fn configuration(env: &dyn Env, report: &mut Report) -> Option<Config> {
         replaced: HashMap::new(),
     };
     let mut refused = BTreeSet::new();
-    // Each round replaces at least one new variable: bounded by how many
-    // the configuration has.
+    // Each round replaces at least one new variable (or, for binds that
+    // collide, unsets both, after which their defaults differ): bounded by
+    // how many the configuration has.
     for _ in 0..64 {
         let error = match Config::from_env(&overlay) {
             Ok(config) if refused.is_empty() => {
@@ -470,18 +473,30 @@ fn configuration(env: &dyn Env, report: &mut Report) -> Option<Config> {
             Ok(_) => return None,
             Err(error) => error,
         };
+        if matches!(error, ConfigError::SameBinds) {
+            const BINDS: [&str; 2] = ["WA_SERVER_PUBLIC_BIND", "WA_SERVER_INTERNAL_BIND"];
+            // A bind doctor unset (to its default) can meet the other's
+            // value: that collision is the replacement's, not the setting's.
+            if !BINDS.iter().any(|b| refused.contains(b)) {
+                report.push(Check::fail(
+                    format!("config.{}", subject(&error)),
+                    error.to_string(),
+                ));
+            }
+            refused.extend(BINDS);
+            for bind in BINDS {
+                overlay.replace(bind, None);
+            }
+            continue;
+        }
         let name = subject(&error);
-        report.push(Check::fail(format!("config.{name}"), error.to_string()));
         if !refused.insert(name) {
-            // The stand-in did not help: stop rather than loop.
+            // Refused again: about the stand-in, not the value set. Stop
+            // rather than loop, or report doctor's value as the operator's.
             return None;
         }
-        if matches!(error, ConfigError::SameBinds) {
-            overlay.replace("WA_SERVER_PUBLIC_BIND", None);
-            overlay.replace("WA_SERVER_INTERNAL_BIND", None);
-        } else {
-            overlay.replace(name, stand_in(name));
-        }
+        report.push(Check::fail(format!("config.{name}"), error.to_string()));
+        overlay.replace(name, stand_in(name));
     }
     None
 }
@@ -994,9 +1009,16 @@ async fn wabas(
         let listing = match records.all_wabas(&page).await {
             Ok(listing) => listing,
             Err(error) => {
+                // The kind only: a backend error's text (a sqlx error's,
+                // say) is not ours to vouch for.
+                let why = match error {
+                    StorageError::Busy => "the database is busy",
+                    StorageError::Corrupt { .. } => "a stored binding is unreadable",
+                    _ => "the storage backend failed",
+                };
                 report.push(Check::fail(
                     "token.wabas",
-                    format!("the bound WABAs cannot be listed: {error}"),
+                    format!("the bound WABAs cannot be listed: {why}"),
                 ));
                 return;
             }
