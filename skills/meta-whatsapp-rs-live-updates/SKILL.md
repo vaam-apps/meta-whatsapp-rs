@@ -104,7 +104,7 @@ while let Some(event) = jobs.recv().await {
 
 ## What meta-whatsapp-rs does not do
 
-- No dead-letter store yet for events a sink cannot take
+- Dead letters only for a sink's `SinkError::Permanent`, and only with a store
   ([OPEN_QUESTIONS.md #30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates),
   decided on 2026-09-26, roadmap L21a), no cross-instance relay, no
   per-number channels (one channel, every stream filters it).
