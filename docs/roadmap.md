@@ -1437,21 +1437,80 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     timed-out send resent), `a_job_cancelled_while_it_runs_stops_before_its_next_send`
     (no cancel check), `a_job_indexed_while_the_cursor_moves_is_not_lost`
     and `a_rerun_into_the_minute_it_ran_in_is_not_lost` (the cursor's
-    second read, the page written again). Proposed by the draft, for the
-    coordinator to decide (AGENTS.md § Decisions): the namespaces' names;
-    minute buckets of 256 ids a page; a 2-minute lease renewed at half;
-    the 131049 skip scoped to the job (not to the number) and its 24
-    hours counted from the webhook's arrival; message ids kept 7 days and
-    settled jobs and markers 30 days; job-level retries (5, from 30 s
-    doubling to 30 min) for recipients provably unsent; 8 sends in flight
-    per job. The runner paces through any `Pacer`, B2b's `KvRateLimiter`
-    included (`jobs_pace_through_a_pacer_shared_by_replicas`). Not in it:
-    a job-store trait (D29 names the job store a trait; here the swap is
-    the `KvStore` adapter, and the runner's outbound, pacer, policy and
-    composer), recurring schedules, a job's
-    lines per recipient beyond its summary, and live runs on Postgres and
-    Redis (the jobs use only the port the store conformance suite
-    checks).
+    second read, the page written again). The runner paces through any
+    `Pacer`, B2b's `KvRateLimiter` included
+    (`jobs_pace_through_a_pacer_shared_by_replicas`). Not in it: a
+    job-store trait (B3b; here the swap is the `KvStore` adapter, and the
+    runner's outbound, pacer, policy and composer), recurring schedules,
+    a job's lines per recipient beyond its summary, and live runs on
+    Postgres and Redis (the jobs use only the port the store conformance
+    suite checks).
+  - **Sabotage review** (concurrency, at-most-once, crash safety), each
+    fixed with a test that fails without the fix:
+    `a_runner_failing_right_after_moving_the_cursor_loses_no_job` (a
+    runner failing, or crashing, between moving the cursor and reading
+    the minute again lost a job indexed meanwhile, for good: the cursor
+    now keeps the minute's page versions and every tick reads it again
+    first); `a_job_due_long_ago_is_run_without_reading_every_minute_since`
+    (a due time a month past moved the cursor back a month, 86 410 reads
+    for one job, the Unix epoch some 56 million: a due time already past
+    is indexed under the current minute, its due time kept);
+    `an_unreadable_marker_is_an_outcome_unknown_not_a_stuck_runner` (one
+    unreadable marker failed every tick at that job, every later job
+    waiting behind it: it is now an outcome unknown, never resent);
+    `a_long_marker_scan_keeps_the_lease` (reading many markers outlasted
+    the lease, and another replica took the job over, again and again
+    with more replicas: the scan renews it);
+    `a_send_checked_before_a_cancel_and_a_rerun_is_not_made` (a cancel
+    and a re-run between a runner's check and its marker let the old
+    run's runner send to someone the re-run had sent to, its marker
+    being the old run's: the job is read again with the marker in place).
+    Tests added for what held: a lease that expires mid-send while
+    another runner claims the job, the marker stopping the second send
+    (`a_runner_whose_lease_expired_mid_send_never_sends_after_the_new_claim`),
+    the lease renewed between long sends
+    (`a_runner_renews_its_lease_between_sends`), a cancel racing a claim
+    in both orders (`a_cancel_racing_a_claim_sends_nothing`), the 131049
+    skip still on two minutes short of 24 hours, and scoped to its job
+    (`a_131049_skip_is_scoped_to_its_job`); the key pins are known
+    answers computed outside the crate. Documented: at most once, not
+    exactly once (a crash after the marker and before the request leaves
+    that recipient unsent, reported unknown); leases read each runner's
+    clock (skew, or a pause past the lease, costs a takeover, never a
+    duplicate). Not changed: a tick runs its jobs one after the other
+    (a long broadcast delays the jobs due after it) and `run_until`
+    stops between ticks only; a job left unrun past its index pages'
+    retention stays pending, never found (decided below).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a setting, or swappable
+    through the `KvStore` adapter until B3b): the namespaces
+    `wa.bot.jobs`, `wa.bot.jobs.due`, `wa.bot.jobs.sent`,
+    `wa.bot.jobs.message` and `wa.bot.jobs.limited`; minute buckets of
+    256 ids a page (`BUCKET_SECONDS`, `BUCKET_PAGE_CAPACITY`); a
+    2-minute lease renewed at half (`JobRunnerBuilder::lease`); the
+    `131049` skip scoped to the job, its 24 hours counted from the
+    webhook's arrival (`MARKETING_LIMIT_WAIT`); retention of 7 days for
+    message ids (`KvJobs::message_ttl`) and 30 days for settled jobs,
+    markers and index pages (`KvJobs::retention`), **a job left unrun
+    past 30 days no longer found**; job retries 5 × (30 s doubling to
+    30 min) (`JobRunnerBuilder::retries`, `JobRunnerBuilder::retry_delay`);
+    8 sends in flight per job (`JobRunnerBuilder::concurrency`); the
+    default runner id of the process id, the time and a counter, each
+    replica setting its own (`JobRunnerBuilder::runner_id`); D29's
+    "the job store is a trait" met for now by the concrete `KvJobs`,
+    swappable through its `KvStore` adapter, the trait itself B3b
+    (design D29 amended); row 90 done in the library. **Pending the
+    owner** (stable identifiers, before the first release): the five
+    namespaces, their keys' derivations and their records' layouts
+    (architecture.md § Stable identifiers, § Owner touchpoints below).
+- [ ] **B3b. A `JobStore` trait** (`meta-whatsapp-bot`; D29): the job
+  store's operations (schedule, cancel, re-run, get, the 131049
+  feedback, and the runner's claim, markers and due index) behind a
+  trait the runner takes, `KvJobs` its default, so a job queue of the
+  integrator's own can stand in.
+  - **After:** B3.
+  - **Decisive:** `KvJobs` implements it, and a second, in-memory
+    implementation passes the same job suite.
 - [ ] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
   age and a cap per chat, through `ConversationStore`'s erasure.
   - **After:** B1, L5.
@@ -2677,8 +2736,8 @@ everything else goes into the parity-completion report.
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
   with their keys' derivations and their records' shapes, added and
-  awaiting confirmation; and those L21a adds), for the same reason as
-  L5's.
+  awaiting confirmation before the first release; and those L21a adds),
+  for the same reason as L5's.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored

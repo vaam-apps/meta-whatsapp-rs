@@ -218,11 +218,20 @@ pub(super) struct Page {
 }
 
 /// The oldest bucket that may still hold a job to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct Cursor {
     pub(super) v: u32,
     /// Unix seconds.
     pub(super) bucket: i64,
+    /// When a runner moved the cursor forward: the versions of the pages
+    /// of the bucket just behind `bucket`, as that runner read them before
+    /// moving it. A tick starts by reading that bucket again: pages that
+    /// changed since (a job indexed meanwhile, by a writer that read the
+    /// cursor before it moved) move the cursor back, even when the runner
+    /// that moved it failed before its own second read. Absent when the
+    /// cursor was moved back, or created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) behind: Option<Vec<u64>>,
 }
 
 /// A recipient's marker ([`super::JOBS_SENT_NAMESPACE`]).
@@ -354,7 +363,9 @@ impl KvJobs {
     /// Keep settled jobs, markers and index pages this long (default
     /// [`Self::DEFAULT_RETENTION`]). A job resumed later than this after a
     /// marker was written sends that recipient again; one left unrun this
-    /// long after its due time is no longer found.
+    /// long after its due time (or after it was scheduled, for a due time
+    /// already past) is no longer found: its record stays, pending, and is
+    /// never sent.
     #[must_use]
     pub fn retention(mut self, retention: Duration) -> Self {
         self.retention = retention;
@@ -470,6 +481,9 @@ impl KvJobs {
     /// its own, so everyone is sent to again) except the recipients Meta
     /// refused with `131049` within the last 24 hours. Whether it was
     /// scheduled again; `false` for a job unknown, pending or claimed.
+    /// After an error, call it again: a re-run that stopped before its
+    /// index was written is indexed then (and `false` is returned, the job
+    /// being pending already).
     pub async fn rerun(&self, id: &JobId, at: time::OffsetDateTime) -> Result<bool> {
         let key = job_key(id.as_str());
         for _ in 0..CAS_ATTEMPTS {
@@ -573,10 +587,16 @@ impl KvJobs {
         }
     }
 
-    /// Append `id` to the due index under `due_ms`'s bucket, then move the
-    /// cursor back to that bucket if it is past it.
+    /// Append `id` to the due index under `due_ms`'s bucket (the current
+    /// one for a due time already past), then move the cursor back to that
+    /// bucket if it is past it.
     pub(super) async fn index(&self, id: &str, due_ms: i64) -> Result<()> {
-        let bucket = bucket_of(due_ms);
+        // A due time already past is due now: indexed under the current
+        // minute, so a job due long ago (a year, the Unix epoch) does not
+        // move the cursor back to then, every minute since read one by
+        // one by the next tick. A runner meeting a job in a bucket later
+        // than its due time's runs it there (`JobRunner::process`).
+        let bucket = bucket_of(due_ms).max(bucket_of(millis(self.clock.now())));
         // Every page of a bucket expires at once (a reader stops at the
         // first page missing), retention after the bucket, or after now
         // for a bucket already that old.
@@ -633,7 +653,14 @@ impl KvJobs {
     /// Move the cursor back to `bucket` when it is past it (or create it).
     pub(super) async fn lower_cursor(&self, bucket: i64) -> Result<()> {
         let key = cursor_key();
-        let bytes = encode(&key, &Cursor { v: VERSION, bucket })?;
+        let bytes = encode(
+            &key,
+            &Cursor {
+                v: VERSION,
+                bucket,
+                behind: None,
+            },
+        )?;
         for _ in 0..CAS_ATTEMPTS {
             match self.kv.get(&key).await? {
                 None => {
@@ -825,8 +852,17 @@ mod tests {
             &Cursor {
                 v: 1,
                 bucket: 1793534400,
+                behind: None,
             },
             r#"{"v":1,"bucket":1793534400}"#,
+        );
+        pinned(
+            &Cursor {
+                v: 1,
+                bucket: 1793534460,
+                behind: Some(vec![7, 12]),
+            },
+            r#"{"v":1,"bucket":1793534460,"behind":[7,12]}"#,
         );
         let marker = |state, runner: Option<&str>, message_id: Option<&str>, code| Marker {
             v: 1,

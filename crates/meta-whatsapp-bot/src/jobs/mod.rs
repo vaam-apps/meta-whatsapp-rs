@@ -73,14 +73,19 @@
 //!    succeeds, the other's compare-and-swap fails and it moves on. No
 //!    send without a successful claim: a store error ends the tick.
 //! 2. **Skips** every recipient that already has a marker for this run
-//!    (sent, failed, or an outcome unknown), and every one Meta refused
-//!    with `131049` within the last 24 hours ([`KvJobs::observe`]).
+//!    (sent, failed, or an outcome unknown; an unreadable marker is an
+//!    outcome unknown), and every one Meta refused with `131049` within
+//!    the last 24 hours ([`KvJobs::observe`]). Reading the markers renews
+//!    the lease too, so a long scan is not taken over.
 //! 3. **Sends** to the others as a [`Broadcast`] does (its pacer, its
 //!    [`BroadcastPolicy`], its retries only when `Error::may_resend`
 //!    holds), each send after a check that the job is still this runner's
 //!    and not cancelled (renewing the lease when half of it is gone), and a
 //!    per-recipient marker created with `put_if_absent` *before* the
 //!    request: a recipient another runner holds is never sent to twice.
+//!    With the marker in place the job is read once more: cancelled, or
+//!    re-run meanwhile (a later run's markers are its own), the marker is
+//!    removed and nothing is sent.
 //!    After the request, the marker says sent (with the message's id),
 //!    failed (Meta refused it: an error with `Error::may_have_been_sent`
 //!    false), or unknown (a timeout, a 5xx: it may have gone out). A send
@@ -92,16 +97,24 @@
 //!    later with backoff ([`JobRunnerBuilder::retries`]), the attempt
 //!    counted in [`ScheduledJob::retries`], and stopped after the last.
 //!
-//! **At most once.** A runner that crashes mid-send leaves that
-//! recipient's marker saying "sending": whoever resumes the job reads it as
-//! an outcome unknown and never sends it again
+//! **At most once, not exactly once.** A runner that crashes mid-send
+//! leaves that recipient's marker saying "sending": whoever resumes the
+//! job reads it as an outcome unknown and never sends it again
 //! ([`JobSummary::unknown`]); reconcile those with the status webhooks.
-//! A timed-out send is never resent, here or by the client (give it
+//! That includes a crash after the marker and before the request left:
+//! that recipient is never sent, and reported unknown all the same. A
+//! timed-out send is never resent, here or by the client (give it
 //! `RetryPolicy::NONE`, as [`JobRunnerBuilder::client`] does).
+//!
+//! **Two runners.** A lease is read against each runner's clock: a runner
+//! whose clock runs ahead, or one paused longer than the lease (a send, a
+//! pacer's wait), sees the job taken over. That costs a pass, never a
+//! duplicate: within a run, the recipient's marker decides who sends.
 //!
 //! **Cancel** ([`KvJobs::cancel`]) moves a pending or claimed job to
 //! cancelled by compare-and-swap; a runner running it stops before its
-//! next send (a send already past its check goes out).
+//! next send (a send already past its second check, with its marker in
+//! place, goes out).
 //!
 //! **The per-user marketing limit.** A `131049` (Meta: wait at least 24
 //! hours before resending, `templates/marketing-templates/per-user-limits`)
@@ -124,7 +137,7 @@
 //! | Namespace | Key | Record |
 //! | --- | --- | --- |
 //! | [`JOBS_NAMESPACE`] | digest of the job id | the job: number, due time, state, run, retries, claims, lease, recipients, payload, summary |
-//! | [`JOBS_DUE_NAMESPACE`] | `<bucket start, unix seconds>:<page>`, and `cursor` | a minute's job ids, [`BUCKET_PAGE_CAPACITY`] a page (then the next page); the oldest bucket still to read |
+//! | [`JOBS_DUE_NAMESPACE`] | `<bucket start, unix seconds>:<page>`, and `cursor` | a minute's job ids, [`BUCKET_PAGE_CAPACITY`] a page (then the next page); the oldest bucket still to read, with the page versions of the one behind it once moved forward |
 //! | [`JOBS_SENT_NAMESPACE`] | digest of the job id, the run and the recipient's key | a recipient's marker: sending, sent (message id), failed, unknown |
 //! | [`JOBS_MESSAGE_NAMESPACE`] | digest of the message id | which job and recipient a sent message was for |
 //! | [`JOBS_LIMITED_NAMESPACE`] | digest of the job id and the recipient's key | "marketing-limited", expiring after 24 hours |
@@ -136,22 +149,29 @@
 //!
 //! **The due index.** `KvStore` has no range scan, so due times are
 //! bucketed by the minute ([`BUCKET_SECONDS`]): a job's id is appended to
-//! its minute's page by compare-and-swap, and a `cursor` record names the
-//! oldest minute that may still hold a job to run. A runner reads from the
-//! cursor up to now and moves it past a minute whose every job is
-//! settled (done, cancelled, stopped, or moved to a later minute), then
-//! reads that minute again and moves the cursor back if it changed
-//! meanwhile; scheduling into a minute behind the cursor moves the cursor
-//! back to it. Index pages expire [`KvJobs::retention`] after their
-//! minute: a job not run within that time of its due time (no runner for
-//! a month) is no longer found.
+//! its minute's page by compare-and-swap (a due time already past: the
+//! current minute's, so the cursor never moves back to a time long gone),
+//! and a `cursor` record names the oldest minute that may still hold a
+//! job to run. A runner reads from the cursor up to now and moves it past
+//! a minute whose every job is settled (done, cancelled, stopped, or
+//! moved to a later minute), keeping in the cursor the versions of that
+//! minute's pages as it read them; it then reads that minute again and
+//! moves the cursor back if it changed meanwhile, and every tick starts by
+//! the same second read, so a runner failing between the two loses no
+//! job. Scheduling into a minute behind the cursor moves the cursor back
+//! to it. Index pages expire [`KvJobs::retention`] after their minute (or
+//! after their writing, for a minute already past): **a job left unrun
+//! that long (no runner for a month) is no longer found**, its record kept
+//! but never sent.
 //!
 //! **Retention.** A settled job's record, the markers and the index pages
 //! expire after [`KvJobs::retention`] (30 days by default); a pending or
 //! claimed job's record never does. Resume a job within that time of its
 //! markers' writing, or its recipients are sent again. Expired records are
 //! invisible at once and removed by Redis itself, or by the memory and
-//! Postgres stores' `purge_expired`.
+//! Postgres stores' `purge_expired`. On Redis, run `maxmemory-policy
+//! noeviction`: an evicted marker is a recipient sent again, an evicted
+//! index page a job never found.
 //!
 //! These namespaces are new stable identifiers, pending the owner's
 //! confirmation before the first release (`docs/architecture.md` § Stable
@@ -460,10 +480,16 @@ mod tests {
 
     /// The keys' namespaces and derivations, pinned (`\x77` is `w`, so a
     /// search-and-replace of the library's name cannot rewrite the pin
-    /// along with the constants).
+    /// along with the constants). The digests are known answers, computed
+    /// outside the crate (`printf '8:promo-42,' | sha256sum`, …), next to
+    /// their preimages.
     #[test]
     fn the_job_keys_are_pinned_and_hashed() {
         assert_eq!(job_key("promo-42").namespace(), "\x77a.bot.jobs");
+        assert_eq!(
+            job_key("promo-42").key(),
+            "7f8f047dd5fcfb2f9f1009c97b37b9c9506460a160b92e834b2442537f0ed643"
+        );
         assert_eq!(
             job_key("promo-42").key(),
             hex::encode(Sha256::digest("8:promo-42,"))
@@ -472,9 +498,17 @@ mod tests {
         assert_eq!(marker.namespace(), "\x77a.bot.jobs.sent");
         assert_eq!(
             marker.key(),
+            "0b1f8a37d4165f3995d10dd00739b916c75dbaa816589ce74aa4daa7e59b75dd"
+        );
+        assert_eq!(
+            marker.key(),
             hex::encode(Sha256::digest(
                 "8:promo-42,1:1,28:user:US.13491208655302741918,"
             ))
+        );
+        assert_eq!(
+            limited_digest("promo-42", "phone:16505551234"),
+            "5ff9dca8d0a818819c7e52123675ff46b1e387493e081c9e86d66b2b68fb0ed4"
         );
         assert_eq!(
             limited_digest("promo-42", "phone:16505551234"),
@@ -482,6 +516,10 @@ mod tests {
         );
         let message = message_key("wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBI0QUQ2MjA4NEYyRkExNjMyREUA");
         assert_eq!(message.namespace(), "\x77a.bot.jobs.message");
+        assert_eq!(
+            message.key(),
+            "55f8d32701a21ec7c09c0bcf471ee8f91c68c7aefb25368ecf3cce67605e86e5"
+        );
         assert_eq!(
             message.key(),
             hex::encode(Sha256::digest(

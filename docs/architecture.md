@@ -142,7 +142,7 @@ rewrite them along with the code.
 | `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server-core/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
 | `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key; for a subcommand, the command part is its path, `order status`). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed`, `a_subcommands_cooldown_key_is_over_its_path` |
 | `wa.bot.pacer` (added by roadmap B2b; the namespace and the record layout **pending the owner's confirmation**, roadmap § Owner touchpoints) | `PACER_NAMESPACE`, `meta-whatsapp-bot/src/pacer/kv.rs` | store namespace of `KvRateLimiter`'s per-number schedules (key: SHA-256 hex of the length-prefixed phone number id, `<len>:<id>,`; value: the 49-byte version 1 record, its first byte the version). **Ephemeral**: changing it forgets each number's schedule, slow-down and raised rate (records expire 24 hours after their last slot by default), so while replicas of two releases run side by side they book from two budgets; no data is stranded | `the_pacer_key_is_pinned_and_hashed` (known answer), `the_pacer_record_is_pinned` |
-| `wa.bot.jobs`, `wa.bot.jobs.due`, `wa.bot.jobs.sent`, `wa.bot.jobs.message`, `wa.bot.jobs.limited` (**pending the owner's confirmation before the first release**, roadmap § Owner touchpoints; added by B3) | `JOBS_NAMESPACE`, `JOBS_DUE_NAMESPACE`, `JOBS_SENT_NAMESPACE`, `JOBS_MESSAGE_NAMESPACE`, `JOBS_LIMITED_NAMESPACE`, `BUCKET_SECONDS`, `meta-whatsapp-bot/src/jobs/mod.rs`; the records, `meta-whatsapp-bot/src/jobs/store.rs` | store namespaces of the durable jobs: the job records (key: SHA-256 hex of the length-prefixed job id), the due index (pages `<minute start, unix seconds>:<page>` of job ids, and its `cursor`), the per-recipient markers (digest of the job id, the run and the recipient's key: `user:<BSUID>` first, else `phone:<digits>`, or `group:<id>`), the sent messages' ids (digest of the `wamid`) and the marketing-limited markers (digest of the job id and the recipient's key); every record JSON with `"v":1`, in a pinned field order. **Not ephemeral**: changing a name, a key's derivation or a record's shape strands the jobs scheduled, or makes a resumed job send again to recipients it sent to | `the_job_keys_are_pinned_and_hashed`, `a_recipient_is_keyed_by_bsuid_first`, `buckets_are_minutes_in_unix_seconds` (key bytes, known answers); `the_job_records_are_pinned`, `the_index_and_marker_records_are_pinned` (record bytes, written and read back) |
+| `wa.bot.jobs`, `wa.bot.jobs.due`, `wa.bot.jobs.sent`, `wa.bot.jobs.message`, `wa.bot.jobs.limited` (**pending the owner's confirmation before the first release**, roadmap § Owner touchpoints; added by B3) | `JOBS_NAMESPACE`, `JOBS_DUE_NAMESPACE`, `JOBS_SENT_NAMESPACE`, `JOBS_MESSAGE_NAMESPACE`, `JOBS_LIMITED_NAMESPACE`, `BUCKET_SECONDS`, `meta-whatsapp-bot/src/jobs/mod.rs`; the records, `meta-whatsapp-bot/src/jobs/store.rs` | store namespaces of the durable jobs: the job records (key: SHA-256 hex of the length-prefixed job id), the due index (pages `<minute start, unix seconds>:<page>` of job ids, and its `cursor`, with the page versions of the minute behind it once moved forward), the per-recipient markers (digest of the job id, the run and the recipient's key: `user:<BSUID>` first, else `phone:<digits>`, or `group:<id>`), the sent messages' ids (digest of the `wamid`) and the marketing-limited markers (digest of the job id and the recipient's key); every record JSON with `"v":1`, in a pinned field order. **Not ephemeral**: changing a name, a key's derivation or a record's shape strands the jobs scheduled, or makes a resumed job send again to recipients it sent to | `the_job_keys_are_pinned_and_hashed`, `a_recipient_is_keyed_by_bsuid_first`, `buckets_are_minutes_in_unix_seconds` (key bytes, known answers); `the_job_records_are_pinned`, `the_index_and_marker_records_are_pinned` (record bytes, written and read back) |
 
 Library store namespaces are `wa.<module>[.<purpose>]` (`wa.token`,
 `wa.otp.rate`, `wa.webhook.dedup`, `wa.bot.cooldown`): a new typed store
@@ -1239,24 +1239,29 @@ for every event, after the ban and the match.
   payload) as a typed store on `KvStore`, no port of its own. `KvStore`
   has no range scan, so due times are bucketed by the minute: a job's id
   is appended to its minute's page by compare-and-swap (256 ids a page,
-  then the next page), and a `cursor` record names the oldest minute
-  still to read. A `JobRunner` reads from the cursor up to now, claims
+  then the next page; a due time already past, to the current minute's),
+  and a `cursor` record names the oldest minute still to read. A `JobRunner` reads from the cursor up to now, claims
   each due job by compare-and-swap (pending, or claimed under an expired
   lease, to claimed with a lease naming it), and sends through a paced
   `Broadcast` whose outbound checks before each send that the job is
   still its own and not cancelled (renewing the lease) and creates the
-  recipient's marker with `put_if_absent` before the request: a
-  "sending" marker nobody completed is an outcome unknown, never resent.
-  It moves the cursor past a minute whose jobs are all settled, reads
-  that minute again and moves it back if it changed meanwhile, and
-  indexing into a minute behind the cursor moves the cursor back, so no
-  job is skipped by a race. A pass that leaves recipients provably unsent
+  recipient's marker with `put_if_absent` before the request, then
+  reads the job once more (a cancel or a re-run meanwhile: no request):
+  a "sending" marker nobody completed is an outcome unknown, never
+  resent (at most once, not exactly once). It moves the cursor past a
+  minute whose jobs are all settled, keeping that minute's page
+  versions in it, reads that minute again and moves it back if it
+  changed meanwhile (every tick starts by the same second read, so a
+  runner failing between the two loses nothing), and indexing into a
+  minute behind the cursor moves the cursor back, so no job is skipped
+  by a race. A pass that leaves recipients provably unsent
   (`Error::may_resend`, a stop, a store failure) is retried with backoff,
   then stopped. A message's id is kept for its status webhooks: a
   `131049` marks that recipient for 24 hours (`KvJobs::observe`,
   `JobFeedback`), and a re-run (`KvJobs::rerun`) skips them. The job
-  store is not behind a trait (the `KvStore` adapter is what swaps);
-  the runner's outbound, pacer, failure policy and composer are.
+  store is not behind a trait yet (the `KvStore` adapter is what swaps;
+  a `JobStore` trait is roadmap B3b); the runner's outbound, pacer,
+  failure policy and composer are.
 
 ## Typst (`meta-whatsapp-typst`)
 

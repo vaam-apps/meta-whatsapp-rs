@@ -283,6 +283,29 @@ struct Gate {
     fail_markers: AtomicBool,
     /// Refuse every read.
     fail_reads: AtomicBool,
+    /// Refuse every read once the cursor has moved forward (a runner that
+    /// fails, or crashes, right after moving it).
+    fail_reads_after_cursor_moves: AtomicBool,
+    /// Runs on every read, after it (the clock moving while a runner
+    /// reads, another runner ticking meanwhile).
+    on_get: Mutex<Option<KeyHook>>,
+    /// Runs on every `put_if_absent`, before it.
+    on_put_if_absent: Mutex<Option<KeyHook>>,
+    /// Reads made.
+    gets: AtomicUsize,
+}
+
+/// What a [`KeyHook`] runs.
+type KeyFn = dyn Fn(&StoreKey) -> BoxFuture<'static, ()> + Send + Sync;
+
+/// A hook run with the key of each call.
+#[derive(Clone)]
+struct KeyHook(Arc<KeyFn>);
+
+impl std::fmt::Debug for KeyHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("KeyHook")
+    }
 }
 
 struct Hook(Box<dyn FnOnce() -> BoxFuture<'static, ()> + Send>);
@@ -303,7 +326,22 @@ impl Gate {
             before_cursor_moves: Mutex::new(None),
             fail_markers: AtomicBool::new(false),
             fail_reads: AtomicBool::new(false),
+            fail_reads_after_cursor_moves: AtomicBool::new(false),
+            on_get: Mutex::new(None),
+            on_put_if_absent: Mutex::new(None),
+            gets: AtomicUsize::new(0),
         })
+    }
+
+    fn on_get(&self, hook: impl Fn(&StoreKey) -> BoxFuture<'static, ()> + Send + Sync + 'static) {
+        *self.on_get.lock().unwrap() = Some(KeyHook(Arc::new(hook)));
+    }
+
+    fn on_put_if_absent(
+        &self,
+        hook: impl Fn(&StoreKey) -> BoxFuture<'static, ()> + Send + Sync + 'static,
+    ) {
+        *self.on_put_if_absent.lock().unwrap() = Some(KeyHook(Arc::new(hook)));
     }
 
     fn arm(&self) {
@@ -317,9 +355,14 @@ impl KvStore for Gate {
         if self.fail_reads.load(Ordering::SeqCst) {
             return Err(StorageError::Backend(anyhow::anyhow!("down")));
         }
+        self.gets.fetch_add(1, Ordering::SeqCst);
         // Read first, then wait: both runners hold the same version when
         // either goes on to claim.
         let read = self.inner.get(key).await;
+        let hook = self.on_get.lock().unwrap().clone();
+        if let Some(KeyHook(hook)) = hook {
+            hook(key).await;
+        }
         if key.namespace() == JOBS_NAMESPACE
             && self.armed.load(Ordering::SeqCst)
             && self.waits.fetch_add(1, Ordering::SeqCst) < 2
@@ -345,6 +388,10 @@ impl KvStore for Gate {
         if self.fail_markers.load(Ordering::SeqCst) && key.namespace() == JOBS_SENT_NAMESPACE {
             return Err(StorageError::Backend(anyhow::anyhow!("down")));
         }
+        let hook = self.on_put_if_absent.lock().unwrap().clone();
+        if let Some(KeyHook(hook)) = hook {
+            hook(key).await;
+        }
         self.inner.put_if_absent(key, value, expiry).await
     }
     async fn compare_and_swap(
@@ -354,15 +401,24 @@ impl KvStore for Gate {
         new: Option<Vec<u8>>,
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
-        if key.key() == "cursor" {
+        let cursor = key.key() == "cursor";
+        if cursor {
             let hook = self.before_cursor_moves.lock().unwrap().take();
             if let Some(Hook(hook)) = hook {
                 hook().await;
             }
         }
-        self.inner
+        let swapped = self
+            .inner
             .compare_and_swap(key, expected, new, expiry)
-            .await
+            .await;
+        if cursor
+            && matches!(swapped, Ok(Some(_)))
+            && self.fail_reads_after_cursor_moves.load(Ordering::SeqCst)
+        {
+            self.fail_reads.store(true, Ordering::SeqCst);
+        }
+        swapped
     }
     async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
         self.inner.delete(key).await
@@ -600,18 +656,29 @@ async fn a_131049_status_makes_a_rerun_within_24_hours_skip_that_recipient() {
     expected.extend(labels(&[recipients[0].clone(), recipients[2].clone()]));
     assert_eq!(outbound.attempts(), expected);
 
-    // 24 hours after the status, the limit is over.
-    world.advance(Duration::from_mins(23 * 60 + 1));
+    // Two minutes short of 24 hours after the status, still limited.
+    world.advance(Duration::from_mins(22 * 60 + 58));
     assert!(
         jobs.rerun(&id("weekly-deals"), world.clock.now())
             .await
             .unwrap()
     );
     let third = runner.tick().await.unwrap();
-    let summary = summary_of(&third.runs[0].ended);
+    assert_eq!(summary_of(&third.runs[0].ended).limited, [1]);
+    assert_eq!(outbound.attempts().len(), 7);
+
+    // 24 hours after the status, the limit is over.
+    world.advance(Duration::from_mins(3));
+    assert!(
+        jobs.rerun(&id("weekly-deals"), world.clock.now())
+            .await
+            .unwrap()
+    );
+    let fourth = runner.tick().await.unwrap();
+    let summary = summary_of(&fourth.runs[0].ended);
     assert!(summary.limited.is_empty());
     assert_eq!(summary.sent, 3);
-    assert_eq!(outbound.attempts().len(), 8);
+    assert_eq!(outbound.attempts().len(), 10);
 }
 
 /// The feedback as a bot's listener of `status_updated`: the bot hears
@@ -1101,4 +1168,423 @@ fn the_runner_needs_its_parts() {
         .build()
         .unwrap();
     assert_ne!(a.id(), b.id(), "two runners of one process have two ids");
+}
+
+// ─── Two runners, crash points, the due index (the sabotage review) ──────
+
+/// A hook that runs `then` once, the first time a call's key is in
+/// `namespace`, after moving the clock forward by `advance`.
+fn once_in(
+    namespace: &'static str,
+    clock: &ManualClock,
+    advance: Duration,
+    then: impl Fn() -> BoxFuture<'static, ()> + Send + Sync + 'static,
+) -> impl Fn(&StoreKey) -> BoxFuture<'static, ()> + Send + Sync + 'static {
+    let fired = Arc::new(AtomicBool::new(false));
+    let clock = clock.clone();
+    let then = Arc::new(then);
+    move |key: &StoreKey| {
+        let fire = key.namespace() == namespace && !fired.swap(true, Ordering::SeqCst);
+        let (clock, then) = (clock.clone(), then.clone());
+        Box::pin(async move {
+            if fire {
+                clock.advance(advance);
+                then().await;
+            }
+        })
+    }
+}
+
+/// The reports of the ticks a hook ran.
+type Reports = Arc<Mutex<Vec<meta_whatsapp_bot::TickReport>>>;
+
+/// A hook's tick of `runner`, its report kept in `reports`.
+fn tick_into(runner: &Arc<JobRunner>, reports: &Reports) -> BoxFuture<'static, ()> {
+    let (runner, reports) = (runner.clone(), reports.clone());
+    Box::pin(async move {
+        let report = runner.tick().await.unwrap();
+        reports.lock().unwrap().push(report);
+    })
+}
+
+/// A runner paused between its check and the recipient's marker (a GC
+/// pause, a slow store) for longer than its lease, while another runner
+/// claims the job and sends to that recipient: the marker, created by
+/// whoever comes first, stops the second send, and the first runner
+/// learns it lost the job. Creating the marker with a plain `put` fails
+/// this (the recipient is sent twice).
+#[tokio::test]
+async fn a_runner_whose_lease_expired_mid_send_never_sends_after_the_new_claim() {
+    let world = World::new();
+    let gate = Gate::new(world.kv.clone());
+    let jobs = world.jobs_on(gate.clone());
+    jobs.schedule(Job::new(id("j"), number(), T0).to([user(1)]))
+        .await
+        .unwrap();
+    let outbound = Fake::default();
+    let a = world.runner(jobs.clone(), &outbound, "replica-a");
+    let b = Arc::new(world.runner(world.jobs(), &outbound, "replica-b"));
+    let reports = Reports::default();
+    let (runner, kept) = (b.clone(), reports.clone());
+    gate.on_put_if_absent(once_in(
+        JOBS_SENT_NAMESPACE,
+        &world.clock,
+        Duration::from_secs(121),
+        move || tick_into(&runner, &kept),
+    ));
+
+    let ta = a.tick().await.unwrap();
+    let tb = reports.lock().unwrap().pop().unwrap();
+    assert_eq!(outbound.attempts(), labels(&[user(1)]), "sent once, by b");
+    assert!(matches!(tb.runs[0].ended, JobEnd::Done(_)), "{tb:?}");
+    assert!(matches!(ta.runs[0].ended, JobEnd::LeaseLost), "{ta:?}");
+    assert_eq!(
+        jobs.get(&id("j"))
+            .await
+            .unwrap()
+            .unwrap()
+            .summary
+            .unwrap()
+            .sent,
+        1
+    );
+}
+
+/// A cancel and a re-run land between a runner's check and its marker;
+/// the re-run's runner sends to that recipient. The first runner, whose
+/// marker is its old run's (so no marker stops it), checks the job again
+/// with its marker in place, finds it no longer its own, and never sends.
+/// Without that second check the recipient is sent twice.
+#[tokio::test]
+async fn a_send_checked_before_a_cancel_and_a_rerun_is_not_made() {
+    let world = World::new();
+    let gate = Gate::new(world.kv.clone());
+    let jobs = world.jobs_on(gate.clone());
+    jobs.schedule(Job::new(id("j"), number(), T0).to([user(1)]))
+        .await
+        .unwrap();
+    let outbound = Fake::default();
+    let a = world.runner(jobs.clone(), &outbound, "replica-a");
+    let b = Arc::new(world.runner(world.jobs(), &outbound, "replica-b"));
+    let reports = Reports::default();
+    let (runner, kept, plain, clock) = (
+        b.clone(),
+        reports.clone(),
+        world.jobs(),
+        world.clock.clone(),
+    );
+    gate.on_put_if_absent(once_in(
+        JOBS_SENT_NAMESPACE,
+        &world.clock,
+        Duration::ZERO,
+        move || {
+            let (plain, clock, tick) = (plain.clone(), clock.clone(), tick_into(&runner, &kept));
+            Box::pin(async move {
+                assert!(plain.cancel(&id("j")).await.unwrap());
+                assert!(plain.rerun(&id("j"), clock.now()).await.unwrap());
+                tick.await;
+            })
+        },
+    ));
+
+    let ta = a.tick().await.unwrap();
+    let tb = reports.lock().unwrap().pop().unwrap();
+    assert_eq!(
+        outbound.attempts(),
+        labels(&[user(1)]),
+        "sent once, by run 2"
+    );
+    assert_eq!(tb.runs[0].run, 2);
+    assert!(matches!(tb.runs[0].ended, JobEnd::Done(_)), "{tb:?}");
+    assert!(matches!(ta.runs[0].ended, JobEnd::LeaseLost), "{ta:?}");
+}
+
+/// The runner moves the cursor past a minute, then fails before reading
+/// that minute again (a store error; a crash is the same), while a job was
+/// indexed into it by a writer that read the cursor before it moved (so
+/// did not move it back). The next tick reads that minute again first,
+/// against the page versions the cursor keeps, and finds the job. Without
+/// them the cursor stays past the job, which is never sent.
+#[tokio::test]
+async fn a_runner_failing_right_after_moving_the_cursor_loses_no_job() {
+    let world = World::new();
+    let gate = Gate::new(world.kv.clone());
+    let jobs = world.jobs_on(gate.clone());
+    jobs.schedule(Job::new(id("first"), number(), T0).to([phone(1)]))
+        .await
+        .unwrap();
+    let late = world.jobs();
+    *gate.before_cursor_moves.lock().unwrap() = Some(Hook(Box::new(move || {
+        Box::pin(async move {
+            late.schedule(Job::new(id("late"), number(), T0).to([phone(2)]))
+                .await
+                .unwrap();
+        })
+    })));
+    gate.fail_reads_after_cursor_moves
+        .store(true, Ordering::SeqCst);
+    let outbound = Fake::default();
+    let runner = world.runner(jobs.clone(), &outbound, "r");
+    assert!(runner.tick().await.is_err());
+    assert_eq!(outbound.attempts(), labels(&[phone(1)]));
+
+    gate.fail_reads_after_cursor_moves
+        .store(false, Ordering::SeqCst);
+    gate.fail_reads.store(false, Ordering::SeqCst);
+    let second = runner.tick().await.unwrap();
+    assert_eq!(second.runs.len(), 1, "the late job is found");
+    assert_eq!(second.runs[0].id, id("late"));
+    assert_eq!(outbound.attempts(), labels(&[phone(1), phone(2)]));
+}
+
+/// A job due long ago ("now or earlier" is allowed: a month, here) keeps
+/// its due time but is indexed under the current minute, so the next tick
+/// runs it without reading every minute since. Indexing it under its own
+/// minute fails this: the cursor moves back a month, and the tick reads
+/// over 40 000 minutes before it gets to anything else.
+#[tokio::test]
+async fn a_job_due_long_ago_is_run_without_reading_every_minute_since() {
+    let world = World::new();
+    let gate = Gate::new(world.kv.clone());
+    let jobs = world.jobs_on(gate.clone());
+    let long_ago = T0 - Duration::from_hours(30 * 24);
+    jobs.schedule(Job::new(id("j"), number(), long_ago).to([phone(1)]))
+        .await
+        .unwrap();
+    assert_eq!(
+        jobs.get(&id("j")).await.unwrap().unwrap().due_at,
+        long_ago,
+        "the due time is kept as given"
+    );
+    let outbound = Fake::default();
+    let runner = world.runner(jobs.clone(), &outbound, "r");
+    let before = gate.gets.load(Ordering::SeqCst);
+    let report = runner.tick().await.unwrap();
+    let reads = gate.gets.load(Ordering::SeqCst) - before;
+    assert_eq!(report.runs.len(), 1);
+    assert!(matches!(report.runs[0].ended, JobEnd::Done(_)));
+    assert_eq!(outbound.attempts(), labels(&[phone(1)]));
+    assert!(reads < 50, "{reads} reads for one job");
+}
+
+/// The key of a recipient's marker, derived here independently of the
+/// crate (the pinned derivation: SHA-256 hex of `<len>:<part>,` parts).
+fn marker_key_of(job: &str, run: u32, recipient: &str) -> StoreKey {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    for part in [job, &run.to_string(), recipient] {
+        hasher.update(format!("{}:{part},", part.len()));
+    }
+    StoreKey::new(JOBS_SENT_NAMESPACE, hex::encode(hasher.finalize()))
+}
+
+/// An unreadable marker (a later release's, or damaged) is something
+/// written for that recipient: an outcome unknown, never resent. The job
+/// settles, and the jobs after it run. Failing on it instead stops every
+/// tick at that job, for good, and every later job waits behind it.
+#[tokio::test]
+async fn an_unreadable_marker_is_an_outcome_unknown_not_a_stuck_runner() {
+    let world = World::new();
+    let jobs = world.jobs();
+    jobs.schedule(Job::new(id("j"), number(), T0).to([phone(1), phone(2)]))
+        .await
+        .unwrap();
+    jobs.schedule(Job::new(id("k"), number(), T0).to([phone(3)]))
+        .await
+        .unwrap();
+    world
+        .kv
+        .put(
+            &marker_key_of("j", 1, "phone:16505550001"),
+            br#"{"v":2,"state":"superseded"}"#.to_vec(),
+            Expiry::Never,
+        )
+        .await
+        .unwrap();
+    let outbound = Fake::default();
+    let report = world
+        .runner(jobs.clone(), &outbound, "r")
+        .tick()
+        .await
+        .unwrap();
+    assert_eq!(report.runs.len(), 2, "{report:?}");
+    let summary = summary_of(&report.runs[0].ended);
+    assert_eq!((summary.sent, summary.unknown.clone()), (1, vec![0]));
+    assert!(matches!(report.runs[1].ended, JobEnd::Done(_)));
+    assert_eq!(outbound.attempts(), labels(&[phone(2), phone(3)]));
+}
+
+/// A job of many recipients on a slow store (a second a read): reading
+/// their markers takes longer than the lease, which the runner renews as
+/// it reads, so another runner ticking meanwhile leaves the job alone.
+/// Without that renewal the second runner takes the job over and sends to
+/// everyone while the first is still reading (the first's pass wasted;
+/// with more replicas, the job can be taken over and over).
+#[tokio::test]
+async fn a_long_marker_scan_keeps_the_lease() {
+    let world = World::new();
+    let gate = Gate::new(world.kv.clone());
+    let jobs = world.jobs_on(gate.clone());
+    let recipients: Vec<Recipient> = (0..200).map(phone).collect();
+    jobs.schedule(Job::new(id("j"), number(), T0).to(recipients.clone()))
+        .await
+        .unwrap();
+    let outbound = Fake::default();
+    let a = world.runner(jobs.clone(), &outbound, "replica-a");
+    let b = Arc::new(world.runner(world.jobs(), &outbound, "replica-b"));
+    let reports = Reports::default();
+    let reads = Arc::new(AtomicUsize::new(0));
+    let (clock, runner, kept) = (world.clock.clone(), b.clone(), reports.clone());
+    gate.on_get(move |key| {
+        let n = (key.namespace() == JOBS_SENT_NAMESPACE)
+            .then(|| reads.fetch_add(1, Ordering::SeqCst) + 1);
+        if n.is_some() {
+            clock.advance(Duration::from_secs(1));
+        }
+        if n == Some(150) {
+            tick_into(&runner, &kept)
+        } else {
+            Box::pin(async {})
+        }
+    });
+
+    let ta = a.tick().await.unwrap();
+    let tb = reports.lock().unwrap().pop().unwrap();
+    assert!(tb.runs.is_empty(), "b took the job over: {tb:?}");
+    assert_eq!(summary_of(&ta.runs[0].ended).sent, 200);
+    assert_eq!(outbound.attempts(), labels(&recipients));
+}
+
+/// Sends that take long (50 s each, here): the runner renews its lease
+/// before a send once half of it is gone, so another runner ticking past
+/// the first lease's end leaves the job alone. Without the renewal, the
+/// second runner takes it over mid-broadcast.
+#[tokio::test]
+async fn a_runner_renews_its_lease_between_sends() {
+    let world = World::new();
+    let gate = Gate::new(world.kv.clone());
+    let jobs = world.jobs_on(gate.clone());
+    let recipients: Vec<Recipient> = (1..=4).map(phone).collect();
+    jobs.schedule(Job::new(id("j"), number(), T0).to(recipients.clone()))
+        .await
+        .unwrap();
+    let outbound = Fake::default();
+    let a = world.runner(jobs.clone(), &outbound, "replica-a");
+    let b = Arc::new(world.runner(world.jobs(), &outbound, "replica-b"));
+    let reports = Reports::default();
+    let markers = Arc::new(AtomicUsize::new(0));
+    let (clock, runner, kept) = (world.clock.clone(), b.clone(), reports.clone());
+    gate.on_put_if_absent(move |key| {
+        if key.namespace() != JOBS_SENT_NAMESPACE {
+            return Box::pin(async {});
+        }
+        clock.advance(Duration::from_secs(50));
+        // The fourth send starts 200 s after the claim, past its first
+        // lease (120 s), within the one renewed at the third (100 s).
+        if markers.fetch_add(1, Ordering::SeqCst) + 1 == 4 {
+            tick_into(&runner, &kept)
+        } else {
+            Box::pin(async {})
+        }
+    });
+
+    let ta = a.tick().await.unwrap();
+    let tb = reports.lock().unwrap().pop().unwrap();
+    assert!(tb.runs.is_empty(), "b took the job over: {tb:?}");
+    assert_eq!(summary_of(&ta.runs[0].ended).sent, 4);
+    assert_eq!(outbound.attempts(), labels(&recipients));
+}
+
+/// A cancel racing a claim, both reading the job at one version. The
+/// cancel's compare-and-swap first: the claim fails, nothing is sent. The
+/// claim's first: the cancel, its compare-and-swap failing on the version
+/// it read, reads the job again and cancels it while the runner is
+/// creating its first marker; the runner's check with the marker in place
+/// sees it, and nothing is sent. Either way the job ends cancelled.
+#[tokio::test]
+async fn a_cancel_racing_a_claim_sends_nothing() {
+    for claim_first in [true, false] {
+        let world = World::new();
+        let gate = Gate::new(world.kv.clone());
+        let jobs = world.jobs_on(gate.clone());
+        jobs.schedule(Job::new(id("j"), number(), T0).to([phone(1)]))
+            .await
+            .unwrap();
+        let outbound = Fake::default();
+        let runner = world.runner(jobs.clone(), &outbound, "r");
+        // The runner's first marker waits for the cancel to be done.
+        let done = Arc::new(Notify::new());
+        let waited = done.clone();
+        gate.on_put_if_absent(once_in(
+            JOBS_SENT_NAMESPACE,
+            &world.clock,
+            Duration::ZERO,
+            move || {
+                let waited = waited.clone();
+                Box::pin(async move { waited.notified().await })
+            },
+        ));
+        gate.arm();
+        let j = id("j");
+        let cancel = async {
+            let cancelled = jobs.cancel(&j).await;
+            done.notify_one();
+            cancelled
+        };
+        // The one polled first waits at the gate; the second goes on first.
+        let (cancelled, report) = if claim_first {
+            tokio::join!(cancel, runner.tick())
+        } else {
+            let (report, cancelled) = tokio::join!(runner.tick(), cancel);
+            (cancelled, report)
+        };
+        assert!(cancelled.unwrap(), "claim first: {claim_first}");
+        let report = report.unwrap();
+        if claim_first {
+            assert!(
+                matches!(report.runs[..], [ref run] if run.ended == JobEnd::Cancelled),
+                "{report:?}"
+            );
+        } else {
+            assert!(report.runs.is_empty(), "{report:?}");
+        }
+        assert!(outbound.attempts().is_empty(), "claim first: {claim_first}");
+        assert_eq!(
+            jobs.get(&id("j")).await.unwrap().unwrap().state,
+            JobState::Cancelled
+        );
+    }
+}
+
+/// The `131049` skip is the job's: another job to the same person, in the
+/// same 24 hours, sends to them.
+#[tokio::test]
+async fn a_131049_skip_is_scoped_to_its_job() {
+    let world = World::new();
+    let jobs = world.jobs();
+    jobs.schedule(Job::new(id("weekly"), number(), T0).to([user(1)]))
+        .await
+        .unwrap();
+    let outbound = Fake::default();
+    let runner = world.runner(jobs.clone(), &outbound, "r");
+    runner.tick().await.unwrap();
+    assert!(
+        jobs.observe(&marketing_limited(&outbound.message_id(&user(1))))
+            .await
+            .unwrap()
+    );
+    jobs.schedule(Job::new(id("order-1042"), number(), world.clock.now()).to([user(1)]))
+        .await
+        .unwrap();
+    assert!(jobs.rerun(&id("weekly"), world.clock.now()).await.unwrap());
+    let report = runner.tick().await.unwrap();
+    let by_id: HashMap<_, _> = report
+        .runs
+        .iter()
+        .map(|run| (run.id.as_str().to_owned(), summary_of(&run.ended).clone()))
+        .collect();
+    assert_eq!(by_id["weekly"].limited, [0]);
+    assert_eq!(by_id["order-1042"].sent, 1);
+    assert!(by_id["order-1042"].limited.is_empty());
+    assert_eq!(outbound.attempts(), labels(&[user(1), user(1)]));
 }

@@ -907,15 +907,19 @@ oldest minute still to read up to now, and for each job due:
    send when half is gone): of two replicas that read the same job, one
    claim succeeds; a replica that crashes holds the job until its lease
    expires, then any replica resumes it;
-2. skips every recipient already marked for this run, and every one Meta
-   refused with `131049` in the last 24 hours (below);
+2. skips every recipient already marked for this run (an unreadable
+   marker counts as an outcome unknown), and every one Meta refused with
+   `131049` in the last 24 hours (below), renewing the lease as it reads
+   them;
 3. sends to the others through a paced `Broadcast` (its pacer, its
    `BroadcastPolicy`, its retries only when `Error::may_resend` holds;
    a pacer over a `KvRateLimiter` shares the number's budget across
    replicas, as for any broadcast),
    each send after a check that the job is still the runner's and not
    cancelled, and after the recipient's marker is created
-   (`put_if_absent`): another runner never sends to them too;
+   (`put_if_absent`): another runner never sends to them too. With the
+   marker in place the job is read once more, and a cancel or a re-run
+   that landed meanwhile gets no request;
 4. settles it: done when every recipient is marked or skipped; when
    some are provably unsent (a throttled send out of retries, a stop,
    the rate limiter or the store failing), the job is due again later,
@@ -923,17 +927,22 @@ oldest minute still to read up to now, and for each job due:
    5 retries from 30 s, doubling to 30 min), and stopped after the last
    (`JobState::Stopped`, `JobSummary::unsent`).
 
-**At most once.** The marker says "sending" before the request, then
-sent (with the message id), failed (Meta refused it), or unknown (a
-timeout, a 5xx: it may have gone out). A runner that crashes mid-send
-leaves "sending", which whoever resumes the job reads as unknown: it is
-never sent again (`JobSummary::unknown`; reconcile with the status
-webhooks), and neither is a timed-out send. A store that fails fails
-closed: no send without a claim and a marker.
+**At most once, not exactly once.** The marker says "sending" before
+the request, then sent (with the message id), failed (Meta refused it),
+or unknown (a timeout, a 5xx: it may have gone out). A runner that
+crashes mid-send leaves "sending", which whoever resumes the job reads
+as unknown: it is never sent again (`JobSummary::unknown`; reconcile
+with the status webhooks), and neither is a timed-out send. A crash
+after the marker but before the request left is read the same way:
+that recipient is never sent. A store that fails fails closed: no send
+without a claim and a marker. Leases are read against each replica's
+clock: one whose clock runs ahead, or a replica paused past its lease,
+sees the job taken over, which costs a pass but never a duplicate (the
+marker decides who sends to whom).
 
 **Cancel and re-run.** `KvJobs::cancel` moves a pending or running job
 to cancelled; a runner running it stops before its next send (a send
-already past its check goes out). `KvJobs::rerun` runs a settled job
+already past its second check, its marker in place, goes out). `KvJobs::rerun` runs a settled job
 again at a time: a new run, everyone sent to again, except the
 recipients marked limited. `KvJobs::get` reads a job: its state, run,
 retries, recipients, payload and, once settled, its `JobSummary`.
@@ -952,8 +961,14 @@ job may still send to them.
 
 **Retention.** Settled jobs, markers and index pages expire after 30
 days (`KvJobs::retention`); a pending or running job never does. Resume
-a job within that time, or its recipients are sent again. With the
-memory or Postgres store, call `purge_expired` now and then.
+a job within that time, or its recipients are sent again. **A job left
+unrun for 30 days after its due time** (no runner all that time) **is
+no longer found**: its index pages have expired, and its record stays
+pending, never sent. A due time already past is due now: the job is
+indexed under the current minute (its 30 days count from then). With
+the memory or Postgres store, call `purge_expired` now and then; on
+Redis, run `maxmemory-policy noeviction` (an evicted marker is a
+recipient sent again, an evicted index page a job never found).
 
 **Stable names.** The five namespaces, their keys and their records are
 stable identifiers once released, pending the owner's confirmation

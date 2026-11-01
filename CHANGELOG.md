@@ -246,7 +246,19 @@ stored data, the owner's).
   that recipient for 24 hours, and a re-run of the job skips them
   (`JobSummary::limited`) and sends everyone else; a `131049` the send
   returns marks them too. Settled jobs, markers and index pages expire
-  after 30 days (`KvJobs::retention`). Five new store namespaces,
+  after 30 days (`KvJobs::retention`): a job left unrun that long is no
+  longer found. At most once, not exactly once: a runner that crashes
+  after a recipient's marker and before its request leaves that
+  recipient unsent, reported unknown. Reviewed for concurrency and crash
+  safety before release: a runner failing between moving the due
+  index's cursor and reading the minute again loses no job (the cursor
+  keeps the minute's page versions, and every tick reads it again
+  first); a due time already past is indexed under the current minute
+  (a job due long ago no longer sends the next tick through every minute
+  since); an unreadable marker is an outcome unknown, not a tick that
+  fails for good; the lease is renewed while a long job's markers are
+  read; and a send whose check preceded a cancel and a re-run is not
+  made (the job is read again once its marker is in place). Five new store namespaces,
   `wa.bot.jobs`, `wa.bot.jobs.due`, `wa.bot.jobs.sent`,
   `wa.bot.jobs.message` and `wa.bot.jobs.limited`, pinned with their
   keys and records and pending the owner's confirmation before the first
