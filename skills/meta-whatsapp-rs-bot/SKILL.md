@@ -12,7 +12,7 @@ Reference code: [examples/bot.rs](examples/bot.rs), compiled and tested by the g
 
 ## When to use
 
-For a number that answers commands, taps and free text, and sends to many. Per event: (1) a
+For a number that answers commands, taps and free text, and sends to many; its stored chats go by age or a cap per chat (`retention::RetentionSweeper` on the inbox's store; guide, section 10). Per event: (1) a
 banned sender's message stops, nothing below runs; (2) the match, a `/name args` (or a caption)
 or a tapped button or list row whose id is a payload, sets `Ctx::invocation`; (3) middleware,
 which see the match; (4) the command's guards (scope, owner, flags, cooldown) and handler, else

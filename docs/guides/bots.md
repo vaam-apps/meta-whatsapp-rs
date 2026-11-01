@@ -4,8 +4,9 @@
 on reply buttons and list rows, and free text, with formatted replies
 (images, reply buttons, lists and product carousels among them);
 built from plugins, one feature each, on the webhook endpoint you already
-run; and that sends one message to many customers at the pace Meta
-allows (section 9).
+run; that sends one message to many customers at the pace Meta
+allows (section 9); and that deletes the stored chat history by age and
+by a cap per chat (section 10).
 
 Crate: `meta-whatsapp-bot`, re-exported as `meta_whatsapp_rs::bot`
 (feature `bot`, off by default; `full` includes it). Agent skill:
@@ -858,7 +859,73 @@ A send takes no time on it: to test slow sends overlapping, implement
 `#[tokio::test(start_paused = true)]`). A wall clock stepping back
 neither pauses the pacer nor puts off a retry.
 
-## 10. Testing
+## 10. Retention and auto-delete
+
+The bot keeps no history of its own: the chats it answers are in the
+`ConversationStore` your inbox records them in (`InboxSink`, section 6).
+A `RetentionPolicy` deletes from it by age, by a cap per chat, or both,
+with the store's own operations, so the store's rules hold (and the
+store's own `with_retention` need not be set):
+
+```rust,ignore
+use std::time::Duration;
+use meta_whatsapp_rs::bot::retention::{RetentionPolicy, RetentionSweeper};
+
+let policy = RetentionPolicy::default()
+    .max_age(Duration::from_hours(24 * 30)) // 30 days
+    .max_messages_per_chat(500);
+let sweeper = RetentionSweeper::new(store, policy) // Arc<dyn ConversationStore>
+    .number(phone_number_id)                     // this bot's number(s) only
+    .every(Duration::from_hours(1));
+tokio::spawn(async move { sweeper.run(shutdown_signal).await });
+```
+
+(Not from the skill's example: the rustdoc of
+`meta_whatsapp_rs::bot::retention` has a compiled one like it.)
+
+- **By age** (`max_age`): `ConversationStore::purge_before` at
+  `now - max_age`: messages older than the cutoff (one exactly at it
+  stays), window events, ownership records and contact removals before
+  it, and the summary of a chat whose latest message went, so the chat
+  leaves the inbox list too.
+- **By a cap per chat** (`max_messages_per_chat`):
+  `ConversationStore::trim_conversations`: each chat keeps its newest `n`
+  rows by `(timestamp, id)`, the order the history pages in. Every row
+  counts: messages of both directions, synced history, a revoke's
+  tombstone, and a group message an erasure redacted. A chat whose newest
+  `n` rows are all tombstones, or a cap of 0 (no history at all), loses
+  its summary; any other keeps it as it was (the unread count may count
+  deleted messages until `mark_read`).
+- Either way, synced contacts and the links between a person's
+  identities stay (design D35: a later erasure follows them), and a
+  deleted message's id is free again. A group is a chat like the others:
+  its oldest rows go whoever sent them; what an erasure redacted there
+  stays redacted until it is old enough to go. Retention is not erasure:
+  to delete one person, use `Inbox::erase_all` (cms-inbox.md).
+- **Once or on a schedule.** `RetentionPolicy::apply(store, number, now)`
+  sweeps once, at the time you give (from your own housekeeping);
+  `RetentionSweeper::sweep` once at its timer's time; `run` sweeps at once
+  and then every `every` (an hour by default) until its stop future
+  completes, logging a failed sweep (never a message) and trying again
+  next time. The age is applied first, then the cap.
+- **Scope.** Give the sweeper your bot's numbers (`number`, once each)
+  on a store other tenants use too: without one it sweeps every number
+  in the store with one policy.
+- **Replicas.** Several may each run a sweeper on one store: the sweeps
+  delete the same rows and stay correct (on Postgres, trims and purges
+  take turns under one lock), only redundant. An append at the same time
+  is never lost to a trim, and keeps its summary; a message older than
+  what a trim keeps, recorded while it runs (a late history chunk), may
+  stay over the cap until the next sweep.
+- **Time** comes from the sweeper's `Timer` (`SystemClock` by default):
+  on a `ManualClock`, `run` moves forward an interval at a time without
+  waiting, so a test reads exactly which sweep deleted what.
+
+Which retention you need is your privacy obligations' call (design D10):
+the default policy keeps everything, and nothing deletes until you apply
+one.
+
+## 11. Testing
 
 Build the bot on a client with a `ScriptedTransport` (feature `testing`)
 and deliver events parsed from Meta's documented payloads; assert the
@@ -877,7 +944,7 @@ reads flags; `.with_subcommand(sub)` for a subcommand), and
 ## Not here yet
 
 Scheduling and broadcasts that survive a restart
-([roadmap](../roadmap.md) B3), and auto-delete (B4). A rich reply's
+([roadmap](../roadmap.md) B3). A rich reply's
 image goes by link only (an uploaded media id: build the message and use
 `Ctx::send`), and Markdown's own `![alt](url)` stays text (`alt (url)`):
 images are their own part. Subcommands nest one level, and flags have no

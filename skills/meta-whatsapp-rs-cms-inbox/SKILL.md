@@ -136,7 +136,7 @@ inbox.erase_all(&ids).await // `Erased` holds counts only: log those, never the 
 
 Group messages are redacted in place (`ErasureMode::Delete` deletes them); `Inbox::erase` and
 `Inbox::identities` refuse another number's key. Procedure and limits: [references/erasure.md](references/erasure.md).
-History is kept unless the store has `with_retention` and you schedule `apply_retention`.
+History is kept unless the store has `with_retention` and you schedule `apply_retention`, or you cap each chat (`trim_conversations`; the bot's `RetentionSweeper` runs both).
 
 ## Pitfalls
 

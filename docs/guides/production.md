@@ -28,7 +28,7 @@ Everything stateful sits on two ports. The typed stores are built on
 | `ConversationStore` | `MemoryConversationStore` | `PostgresConversationStore` | — |
 | survives restarts, shared by instances | no | yes | yes, with persistence on |
 | expiry clock | the process | the database server | the Redis server |
-| maintenance | `apply_retention` on a schedule, when a retention is set | `migrate` at startup; `purge_expired()` every few minutes to hourly; `apply_retention` on a schedule, when a retention is set | eviction policy `noeviction`, on an instance of its own |
+| maintenance | `apply_retention` (or a bot `RetentionSweeper`: by age and a cap per chat) on a schedule, when a retention is set | `migrate` at startup; `purge_expired()` every few minutes to hourly; `apply_retention` (or a bot `RetentionSweeper`) on a schedule, when a retention is set | eviction policy `noeviction`, on an instance of its own |
 | limits | one instance | refuses U+0000 in ids and keys (message content keeps it, as bytes and `json`: search on bytes, no payload indexes) | no built-in TLS |
 
 Postgres alone covers everything and is the simplest choice. Put the vault
@@ -328,7 +328,9 @@ notification queue on top must be idempotent itself: tag each message with
 - Webhook fields subscribed; alerts wired ([webhooks.md](webhooks.md#8-operational-alerts)).
 - Secrets from the secret manager, none in the repository or the database.
 - Inbox history's retention chosen (kept by default; `with_retention` on
-  the conversation store and a scheduled `apply_retention`), and, if
+  the conversation store and a scheduled `apply_retention`, or a
+  `RetentionPolicy` with an age and a cap per chat run by a
+  `RetentionSweeper`, bots.md § 10), and, if
   your privacy obligations require erasure, the whole procedure of
   [section 8](#8-retention-and-erasure-on-postgres) wired, not
   `ConversationStore::erase` alone: every identity (`Inbox::identities`),
@@ -432,11 +434,17 @@ notification queue on top must be idempotent itself: tag each message with
     recorded before an upgrade stay as they were written (synced history
     recorded before 6d50701 keeps the unread count and window it moved,
     for instance).
+  - The pull request of roadmap B4 (retention and auto-delete): a
+    custom `ConversationStore` must implement one new method,
+    `trim_conversations` (the cap per chat), and pass
+    `conversation_conformance::run` again. No migration: the Postgres
+    store ranks rows on the existing `messages_conversation_idx` and
+    takes the existing purge lock.
 
 ## 8. Retention and erasure on Postgres
 
-The Postgres store deletes for real: `purge_before`, `apply_retention`
-and `erase_all` run `DELETE`s (and, for a group message under
+The Postgres store deletes for real: `purge_before`, `apply_retention`,
+`trim_conversations` and `erase_all` run `DELETE`s (and, for a group message under
 `ErasureMode::Redact`, an `UPDATE` that overwrites its content). What a
 deletion leaves behind is Postgres's, and yours to handle
 ([cms-inbox.md § 8](cms-inbox.md#8-erasing-a-customer-and-retention)

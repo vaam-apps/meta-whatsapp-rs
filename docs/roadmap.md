@@ -1477,12 +1477,48 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     recorded from a status webhook (the job keeps each message's id)
     makes a re-run within 24 hours skip that recipient and send everyone
     else.
-- [ ] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
+- [x] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
   age and a cap per chat, through `ConversationStore`'s erasure.
   - **After:** B1, L5.
   - **Decisive:** removing the age filter fails the test; the erased
     messages are gone from `messages` and `conversations` on memory and,
     live, on Postgres.
+  - **Landed:** L5 gave the age (`purge_before`, `apply_retention`);
+    the cap per chat is a new port method,
+    `ConversationStore::trim_conversations(phone_number_id, keep_last)`
+    (no composition of the existing ones deletes some rows of one
+    conversation): each conversation keeps its newest rows by
+    `(timestamp, id)`, every row counting (tombstones and redacted group
+    messages too), and the summary goes when its latest message does
+    (the newest rows all tombstones, or a cap of 0), as under a purge;
+    window events, ownership records, contact removals, synced contacts
+    and identity links stay (D35). Memory under its lock; Postgres in
+    one statement under the existing purge lock, ranking on the
+    existing `messages_conversation_idx`: no migration and no new stable
+    identifier. In the bot, module `retention`: `RetentionPolicy`
+    (`max_age`, `max_messages_per_chat`), applied once
+    (`RetentionPolicy::apply`) or on the bot's `Timer`
+    (`RetentionSweeper`, every hour by default, restricted to the bot's
+    numbers with `number`). The decisive tests:
+    `the_age_filter_deletes_exactly_what_is_older_in_memory` and its
+    `live_postgres_` twin (`crates/meta-whatsapp-bot/tests/retention.rs`:
+    disabling the policy's age, setting its cutoff to now, or removing
+    the memory store's age filter fails them), and
+    `a_sweep_deletes_by_age_and_cap_from_messages_and_conversations_*`
+    (the chats gone from both, memory and live). The cap's off-by-ones,
+    a trim that leaves the summary, and a reversed tie order fail the
+    conformance case `trim_keeps_the_newest_rows_of_each_conversation`
+    (memory, and live under both erasure modes); a trim deleting the
+    summary from its own snapshot fails
+    `live_postgres_a_trim_keeps_the_summary_an_append_moved`; a trim in
+    two statements, which loses the message appended between them,
+    fails `live_postgres_trims_racing_appends_keep_every_new_message`
+    (three runs of three); a trim without the purge lock fails
+    `live_postgres_the_locks_are_the_documented_ones`. Not caught: the
+    key order of the summaries' locks (the ranking already yields them
+    in key order); in memory a trim cannot race an append (one lock).
+    The server compiles and passes unchanged (it implements no
+    `ConversationStore`); retention over HTTP is M5k.
 
 ## 3. Library gap batches
 
