@@ -296,9 +296,9 @@ fn certificates(pem: &[u8], what: &'static str) -> RedisResult<Vec<CertificateDe
     Ok(certs)
 }
 
-/// What is wrong with a PEM, never quoting it: rustls' own errors show the
-/// offending line or byte, and a certificate file can hold the private key
-/// too (a combined PEM), whose sections are decoded along with the rest.
+/// What is wrong with a PEM, never quoting it: rustls' own errors print the
+/// malformed `BEGIN` line or a byte that is not base64, and the file is the
+/// caller's (a client chain can be a combined file, its key included).
 fn pem_problem(error: &rustls::pki_types::pem::Error) -> &'static str {
     use rustls::pki_types::pem::Error;
     match error {
@@ -722,7 +722,8 @@ mod tests {
             .self_signed(&key)
             .unwrap();
         let secret = "-----BEGIN PRIVATE KEY-----\nhunter2hunter2\n-----END PRIVATE KEY-----\n";
-        let nested = "-----BEGIN PRIVATE KEY-----\n-----BEGIN hunter2-----\n";
+        // A `BEGIN` line without its trailing dashes: rustls quotes it.
+        let nested = "-----BEGIN PRIVATE KEY-----\n-----BEGIN hunter2\n";
         for bad in [secret, nested, "-----BEGIN PRIVATE KEY-----\nhunter2\n"] {
             let error = RedisTls::builder()
                 .root_certificates_pem(cert.pem())
