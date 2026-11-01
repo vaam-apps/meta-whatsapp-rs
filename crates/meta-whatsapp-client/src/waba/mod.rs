@@ -8,6 +8,29 @@
 //! [`Waba::product_catalogs`], defined with the other catalog reads in
 //! [`crate::commerce`].
 //!
+//! Administration (roadmap L10b):
+//!
+//! - creating a WABA under a portfolio
+//!   ([`Business::create_whatsapp_business_account`]);
+//! - a client business's system user token, with the `appsecret_proof` of
+//!   yours ([`Business::system_user_access_token`]); a WABA's system users
+//!   ([`Waba::system_users`]); the WABAs assigned to a user
+//!   ([`BusinessUser::assigned_whatsapp_business_accounts`]);
+//! - a WABA's activity history ([`Waba::activities`]) and its Multi-Partner
+//!   Solutions ([`Waba::solutions`]);
+//! - the billing currency or payment method migration
+//!   ([`Waba::set_payment_method_migration_intent`], then
+//!   [`PaymentMethodMigration`]), two explicit calls nothing else makes;
+//! - the delivery events of a message history entry
+//!   ([`MessageHistory::events`]);
+//! - Meta's campaign schedules ([`Waba::schedules`],
+//!   [`Waba::create_schedule`]).
+//!
+//! Every creation here (a WABA, a migration intent, a schedule, a resumed
+//! migration, a generated token) is a `POST` that is never replayed after a
+//! timeout ([`crate::RetryPolicy`]); fetching a client's existing token
+//! (`fetch_only`, read-only by Meta's page) is replayed as a read is.
+//!
 //! Docs: `whatsapp-business-accounts`, `support/health-status`,
 //! `reference/whatsapp-business-account/{whatsapp-business-account-api,
 //! phone-number-management-api, subscribed-apps-api,
@@ -16,7 +39,17 @@
 //! `solution-providers/{manage-accounts, manage-webhooks, manage-phone-numbers,
 //! manage-system-users, registering-phone-numbers}`, `webhooks/override`,
 //! `in-app-signup` (messaging customer bases), `business-scoped-user-ids`
-//! (§ Get parent BSUID account).
+//! (§ Get parent BSUID account); for L10b
+//! `reference/business/whatsapp-business-accounts-api` (`POST`),
+//! `solution-providers/partner-initiated-waba-creation`,
+//! `reference/whatsapp-business-account/{whatsapp-business-account-activities-api,
+//! whatsapp-business-account-solutions-list-api, schedules-api}`,
+//! `reference/user/assigned-whatsapp-business-accounts-api`,
+//! `pricing/change-billing-currency`,
+//! `reference/message-history/whatsapp-business-message-history-events-api`,
+//! `embedded-signup/hosted-es` (step 5), and, outside that tree,
+//! `facebook-login/facebook-login-for-business` (§ Get tokens) and the
+//! Marketing API's `ads-commerce/marketing-api/reference/business/system_user_access_tokens`.
 //!
 //! Doc paths are relative to
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
@@ -36,6 +69,41 @@
 //! leave the override alone"; repeat it with the same argument you used
 //! the first time.
 //!
+//! # Partner-initiated WABA creation
+//!
+//! A Solution Partner requests a WABA for a client in Meta Business Suite
+//! (`solution-providers/partner-initiated-waba-creation`): the page
+//! documents no API call for the request itself. What follows the
+//! client's acceptance is the API's: a `PARTNER_ADDED` `account_update`
+//! webhook, then a number ([`Waba::create_phone_number`]) and the credit
+//! line ([`crate::credit_lines`]), with the partner's system user token.
+//! [`Business::create_whatsapp_business_account`] creates a WABA under a
+//! portfolio you manage.
+//!
+//! # The billing migration: two explicit calls
+//!
+//! [`Waba::set_payment_method_migration_intent`] clones the WABA into a new
+//! one in the target currency and migrates its templates (and the Flows
+//! they use); [`PaymentMethodMigration::resume_migration`] makes the clone
+//! the billing account of the numbers, after which the old WABA can no
+//! longer send (`pricing/change-billing-currency`). The currency, with the
+//! legal entity's headquarters address, decides which Meta billing entity
+//! invoices the business. No other call of the library makes either
+//! request: deciding to is the integrator's. A credit card cannot be
+//! attached through the API; for a card, add it to the clone in Business
+//! Manager between the two calls (a Line of Credit is attached by passing
+//! its id to the first).
+//!
+//! # Message history ids and campaign schedules
+//!
+//! The message history reference says its id comes from "message history
+//! APIs", and no page of Meta's WhatsApp docs documents one: where a
+//! [`MessageHistory`] id comes from is the caller's to know. Likewise the
+//! schedules reference is all Meta documents about them: no guide says
+//! where an `audience_id` comes from, nor what `waba_cs_id` holds beyond
+//! "WABA customer status ID (phone number)" ([`NewSchedule`]). A schedule
+//! there is Meta's, kept by Meta.
+//!
 //! # Where Meta's pages disagree
 //!
 //! - Assigned users: the reference describes `user`/`tasks` as a form body,
@@ -48,11 +116,46 @@
 //!   (`manage-accounts`), `creation_time.asc` or
 //!   `last_onboarded_time_ascending` for phone numbers; phone number sorting
 //!   is therefore a raw string.
+//! - System users: `manage-system-users` reads them from
+//!   `GET /{WABA_ID}/system_users`, while its prose tells you to look up a
+//!   *business* id. This client follows the request it prints.
+//! - The system user token: `hosted-es` sends `appsecret_proof` and
+//!   `fetch_only` in a form body with the token as bearer,
+//!   `onboard-business-customers` in the query string with the token. This
+//!   client sends the form body, which keeps the proof out of URLs.
+//! - The billing migration: the page asks for the Line of Credit id "during
+//!   the Complete migration step", but its `resume_migration` request has
+//!   no body, and its initiate request takes `extended_credit_id`. This
+//!   client sends it with the intent, as the requests show.
 
+mod accounts;
+mod activity;
+mod billing;
 mod business;
+mod history;
+mod schedules;
+mod system_users;
 mod types;
 
+pub use accounts::{CreatedWaba, NewWaba, WabaBusinessType};
+pub use activity::{
+    ActivityCategory, ActivityEventType, ApplicationRef, ListWabaRecords, SolutionPendingStatus,
+    SolutionStatus, WabaActivity, WabaSolution,
+};
+pub use billing::{
+    MigrationStarted, MigrationState, MigrationStatus, PaymentMethodMigration,
+    PaymentMethodMigrationIntent,
+};
 pub use business::{Business, CreatedMessagingCustomerBase, ParentBsuidAccount, WabaListQuery};
+pub use history::{
+    DeliveryStatus, DeliveryStatusOccurrence, ListMessageHistoryEvents, MessageHistory,
+    MessageHistoryEvent, WebhookUpdateState,
+};
+pub use schedules::{CampaignSchedule, CreatedSchedule, NewSchedule, ScheduleStatus};
+pub use system_users::{
+    BusinessUser, ListAssignedWabas, SystemUser, SystemUserAccessToken, SystemUserRole,
+    SystemUserTokenRequest,
+};
 pub use types::{
     AccountReviewStatus, AssignedUser, AssignedUserType, BusinessInfo, BusinessRef,
     BusinessVerificationStatus, CallbackOverride, Filter, MAX_CALLBACK_URI_CHARS,
@@ -215,6 +318,23 @@ impl ListAssignedUsers {
         self.before = Some(cursor.into());
         self
     }
+}
+
+/// Refuse a page size outside 1–100, the range every paged read of this
+/// module documents.
+fn check_limit(limit: Option<u32>) -> Result<()> {
+    match limit {
+        Some(limit) if !(1..=100).contains(&limit) => {
+            Err(ValidationError::new("limit", "must be 1-100").into())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The `fields` parameter: the fields joined with commas, `None` for Meta's
+/// defaults.
+fn fields_query(fields: &[String]) -> Option<String> {
+    (!fields.is_empty()).then(|| fields.join(","))
 }
 
 #[derive(Serialize)]

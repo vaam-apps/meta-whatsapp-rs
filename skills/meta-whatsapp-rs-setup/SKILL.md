@@ -144,9 +144,9 @@ decoding and the credential host allowlist. Mark a POST
 
 ## What meta-whatsapp-rs does not do
 
-- No token acquisition or refresh: system user tokens come from Business
-  Settings, merchants' tokens from Embedded Signup, and an expired one
-  (`ErrorKind::Authentication`, code 190) means a new one
+- No token refresh: system user tokens come from Business Settings,
+  merchants' from Embedded Signup or `Business::system_user_access_token`,
+  and an expired one (`ErrorKind::Authentication`, code 190) means a new one
   ([OPEN_QUESTIONS.md #8](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants),
   decided on 2026-09-26: no refresh).
 - `meta_whatsapp_rs::client` is both a module and a function

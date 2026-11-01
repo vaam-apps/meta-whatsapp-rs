@@ -1512,7 +1512,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     and the `HttpTransport` port states that rule; `GraphRequest::header`
     refuses credential headers, so the rules cannot be stepped around
     (both found in the L10a reviews, CHANGELOG § Security).
-- [ ] **L10b. WABAs, accounts, billing, history** (`meta-whatsapp-client`,
+- [x] **L10b. WABAs, accounts, billing, history** (`meta-whatsapp-client`,
   `client::waba`; rows 90's Meta side, 127, 146–148): WABA creation
   (partner-initiated), system user tokens for client businesses,
   activities, a WABA's solutions, system users, a user's assigned WABAs,
@@ -1523,6 +1523,35 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** exact JSON per endpoint; a non-idempotent creation is
     never retried after a timeout (`RetryPolicy`); a system user token
     never reaches `Debug` (a sentinel test).
+  - **Landed:** rows 127 and 146–148 done in the library, row 90 partial
+    there (Meta's schedules wrapped, the bot's durable ones are B3); the
+    service's sides stay with M5c4, M5j and M5k. The decisive tests, in
+    `client::waba`'s modules: the exact bodies and queries
+    (`accounts::create_sends_the_documented_body_and_parses_the_answer`,
+    `system_users::a_client_token_is_fetched_with_the_proof_of_the_system_token`,
+    `billing::the_intent_sends_the_pages_example`,
+    `schedules::create_sends_every_documented_field` and a test per
+    read); no replay after a timeout
+    (`accounts::a_creation_is_never_replayed_after_a_timeout`, and the
+    same for a schedule, a migration intent, a resume and a token
+    generation; a `fetch_only` token read, read-only by Meta's page, is
+    replayed as a read); the sentinel
+    (`system_users::a_system_user_token_never_reaches_debug_or_an_error`:
+    the token, the system token, the app secret and the proof reach no
+    `Debug` and no error). The client business's token takes the
+    `appsecret_proof` of the partner's, computed from the app secret
+    and sent in a form body (`embedded-signup/hosted-es`), its
+    parameters from `facebook-login/facebook-login-for-business`
+    (§ Get tokens); L11a builds on it. The billing migration's intent and
+    resume are explicit calls no other call makes. Not found or not
+    offered: an API call for partner-initiated creation (the page
+    describes a Business Suite flow only); the creation's
+    `on_behalf_of_business_id` (the On-Behalf-Of model is deprecated);
+    `GET /{BUSINESS_ID}/whatsapp_business_accounts` (not in the item;
+    its `business_type` array has no shown encoding); where a message
+    history id or a schedule's `audience_id` comes from (no page says).
+    Message history, migration, schedule and solution ids are strings:
+    core has no type for them yet.
 - [ ] **L11a. Hosted Embedded Signup** (`meta-whatsapp-client`,
   `client::embedded_signup`; row 121; OPEN_QUESTIONS #11): started by the
   `PARTNER_ADDED` webhook, its business token from
