@@ -116,11 +116,22 @@
 //!   as it was; scoped to one number, or to every number; synced contacts
 //!   and identity links stay;
 //! - `apply_retention` purges by the store's `retention()`, and nothing
-//!   under `Retention::Keep`.
+//!   under `Retention::Keep`;
+//! - a trim (`trim_conversations`) keeps exactly the newest `keep_last`
+//!   rows of each conversation by `(timestamp, id)`, every row counting
+//!   (live, synced, tombstones, and messages an erasure redacted in a
+//!   group, whichever the store's erasure mode), and deletes the summary
+//!   of a conversation whose latest message went (its newest rows all
+//!   tombstones, or a cap of zero), its window with it, keeping every
+//!   other summary as it was; window events, ownership records, synced contacts, contact
+//!   removals and identity links stay; a trimmed id is free again;
+//!   scoped to one number, or to every number; and trims racing appends
+//!   of newer messages never lose one, nor leave the summary behind.
 //!
 //! The purge cases delete, across the whole store, what is older than
 //! 2000-01-01 (their own records, and those of a concurrent run of this
-//! suite): never run the suite against a store holding data of your own.
+//! suite), and the trim case every conversation's rows beyond its 300
+//! newest: never run the suite against a store holding data of your own.
 
 use meta_whatsapp_core::error::StorageError;
 use meta_whatsapp_core::ids::{AppId, MessageId, PhoneNumberId, UserId};
@@ -176,6 +187,8 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     a_filled_placeholder_keeps_its_sender(store).await;
     purge_deletes_exactly_what_is_older(store).await;
     apply_retention_follows_the_retention(store).await;
+    trim_keeps_the_newest_rows_of_each_conversation(store).await;
+    trims_racing_appends_lose_nothing(store).await;
 }
 
 const T0: OffsetDateTime = datetime!(2026-09-24 12:00 UTC);
@@ -3635,4 +3648,399 @@ async fn apply_retention_follows_the_retention<S: ConversationStore + ?Sized>(st
             "and deletes nothing"
         );
     }
+}
+
+/// The ids of a conversation's history, newest first, by their local part
+/// (what follows the run's tag).
+async fn history_ids<S: ConversationStore + ?Sized>(
+    store: &S,
+    r: &Run,
+    key: &ConversationKey,
+) -> Vec<String> {
+    let prefix = format!("wamid.{}.", r.tag);
+    store
+        .messages(key, None, 1000)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| {
+            m.id.as_str()
+                .strip_prefix(&prefix)
+                .unwrap_or(m.id.as_str())
+                .to_owned()
+        })
+        .collect()
+}
+
+/// A trim keeps exactly the newest `keep_last` rows of each conversation
+/// of its number by `(timestamp, id)`, every kind of row counting, and
+/// deletes the summary of a conversation whose latest message went;
+/// nothing else of the number, and nothing of another number.
+#[allow(clippy::too_many_lines)] // one scenario, every record kind in turn
+async fn trim_keeps_the_newest_rows_of_each_conversation<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("trim");
+    let other = Run::new("trim-other");
+    // "long": six rows, two of them in the same second (`l4` before `l5`
+    // in byte order, so `l5` is the newer), the oldest a tombstone.
+    let long = r.key("long");
+    assert!(
+        store
+            .revoke(&long, &r.id("t0"), Direction::Inbound, at(0))
+            .await
+            .unwrap()
+    );
+    store
+        .append(r.msg("long", "l1", Direction::Inbound, 1, "l1"))
+        .await
+        .unwrap();
+    store
+        .append(r.msg("long", "l2", Direction::Outbound, 2, "l2"))
+        .await
+        .unwrap();
+    synced(store, r.msg("long", "l3", Direction::Inbound, 3, "l3"))
+        .await
+        .unwrap();
+    store
+        .append(r.msg("long", "l5", Direction::Outbound, 4, "l5"))
+        .await
+        .unwrap();
+    store
+        .append(r.msg("long", "l4", Direction::Inbound, 4, "l4"))
+        .await
+        .unwrap();
+    // "short": under the cap.
+    let short = r.key("short");
+    for (id, secs) in [("s1", 1), ("s2", 2)] {
+        store
+            .append(r.msg("short", id, Direction::Inbound, secs, id))
+            .await
+            .unwrap();
+    }
+    // "tombs": its newest three rows are tombstones, so its only message,
+    // the summary's, goes.
+    let tombs = r.key("tombs");
+    store
+        .append(r.msg("tombs", "k1", Direction::Inbound, 1, "k1"))
+        .await
+        .unwrap();
+    for (id, secs) in [("k2", 2), ("k3", 3), ("k4", 4)] {
+        assert!(
+            store
+                .revoke(&tombs, &r.id(id), Direction::Inbound, at(secs))
+                .await
+                .unwrap()
+        );
+    }
+    // "group": US.X's messages, erased under the store's mode, then the
+    // group capped: a redacted message is a row like any other.
+    let group = r.key("HBgGROUP");
+    let from = |who: &str, id: &str, secs: i64| StoredMessage {
+        payload: serde_json::json!({"from_user_id": who, "group_id": "HBgGROUP", "type": "text"}),
+        ..r.msg("HBgGROUP", id, Direction::Inbound, secs, id)
+    };
+    for (who, id, secs) in [
+        ("US.X", "g1", 1),
+        ("US.Y", "g2", 2),
+        ("US.X", "g3", 3),
+        ("US.Y", "g4", 4),
+    ] {
+        store.append(from(who, id, secs)).await.unwrap();
+    }
+    let redact = store.erasure_mode() == ErasureMode::Redact;
+    assert_eq!(
+        store
+            .erase_all(&r.pn, &["US.X".to_owned()])
+            .await
+            .unwrap()
+            .group_messages,
+        2
+    );
+    // What is not history, on "long".
+    let event = r.event("long", "e", WindowEventKind::CustomerCall, at(-10));
+    assert!(store.record_window_event(event.clone()).await.unwrap());
+    let owner = ownership(ThreadOwner::ThisApp, None, at(-10));
+    store.set_thread_owner(&long, owner.clone()).await.unwrap();
+    let address_book = r.contact("long", -10);
+    store.put_contact(address_book.clone()).await.unwrap();
+    let link = IdentityLink::new(r.pn.clone(), "long", "US.long", at(-10));
+    assert!(store.link_identity(link.clone()).await.unwrap());
+    assert!(
+        !store
+            .remove_contact(&r.key("US.gone"), at(-10))
+            .await
+            .unwrap()
+    );
+    // The same shape on another number.
+    let other_key = other.key("long");
+    for (id, secs) in [("l1", 1), ("l2", 2), ("l3", 3), ("l4", 4), ("l5", 5)] {
+        store
+            .append(other.msg("long", id, Direction::Inbound, secs, id))
+            .await
+            .unwrap();
+    }
+    let other_before = recorded(store, &other_key).await;
+    let long_summary = summary(store, &long).await.unwrap();
+    let short_before = recorded(store, &short).await;
+    let group_summary = summary(store, &group).await;
+
+    assert_eq!(
+        store.trim_conversations(Some(&r.pn), 3).await.unwrap(),
+        Purged {
+            messages: 4 + u64::from(redact),
+            conversations: 1,
+            ..Purged::default()
+        },
+        "l2, l1, t0, k1 and, redacted, g1; the summary of \"tombs\""
+    );
+    assert_eq!(
+        history_ids(store, &r, &long).await,
+        ["l5", "l4", "l3"],
+        "the three newest by (timestamp, id), of every origin"
+    );
+    assert_eq!(
+        summary(store, &long).await,
+        Some(long_summary),
+        "a conversation keeping its latest message keeps its summary as it was (window, \
+         unread)"
+    );
+    recorded(store, &short)
+        .await
+        .assert_same(&short_before, "a conversation under the cap");
+    assert_eq!(
+        history_ids(store, &r, &tombs).await,
+        ["k4", "k3", "k2"],
+        "the three tombstones are the newest rows"
+    );
+    assert_eq!(
+        summary(store, &tombs).await,
+        None,
+        "a conversation whose latest message went loses its summary (and its preview)"
+    );
+    assert_eq!(
+        store.last_inbound_at(&tombs).await.unwrap(),
+        None,
+        "and the window it held, however recent (documented on `trim_conversations`)"
+    );
+    assert_eq!(store.message(&r.pn, &r.id("k1")).await.unwrap(), None);
+    if redact {
+        assert_eq!(
+            history_ids(store, &r, &group).await,
+            ["g4", "g3", "g2"],
+            "a redacted message counts as a row: the oldest, g1, goes"
+        );
+        assert_eq!(
+            store.messages(&group, None, 10).await.unwrap()[1].kind,
+            StoredMessage::ERASED,
+            "and the one kept stays redacted"
+        );
+    } else {
+        assert_eq!(history_ids(store, &r, &group).await, ["g4", "g2"]);
+    }
+    assert_eq!(
+        summary(store, &group).await,
+        group_summary,
+        "the group keeps its latest message"
+    );
+    assert_eq!(
+        store.window_events(&long, None, 10).await.unwrap(),
+        std::slice::from_ref(&event),
+        "window events are not history"
+    );
+    assert_eq!(store.thread_owner(&long).await.unwrap(), Some(owner));
+    assert_eq!(
+        store.contact(&address_book.key).await.unwrap().as_ref(),
+        Some(&address_book)
+    );
+    assert_eq!(
+        store.identity_links(&long).await.unwrap(),
+        std::slice::from_ref(&link),
+        "identity links stay (design D35)"
+    );
+    assert!(
+        !store.put_contact(r.contact("US.gone", -11)).await.unwrap(),
+        "a contact removal stays, and refuses an older sync"
+    );
+    recorded(store, &other_key)
+        .await
+        .assert_same(&other_before, "another number, under a trim scoped to one");
+    assert!(
+        store
+            .trim_conversations(Some(&r.pn), 3)
+            .await
+            .unwrap()
+            .is_empty(),
+        "trimming again deletes nothing"
+    );
+    assert!(
+        store
+            .append(r.msg("long", "l1", Direction::Inbound, 1, "l1 again"))
+            .await
+            .unwrap(),
+        "a trimmed id is free again"
+    );
+    assert_eq!(
+        store.trim_conversations(Some(&r.pn), 3).await.unwrap(),
+        Purged {
+            messages: 1,
+            ..Purged::default()
+        },
+        "and the cap applies to it as to the rest"
+    );
+
+    // A cap of one: the newest row of each conversation stays.
+    assert_eq!(
+        store.trim_conversations(Some(&r.pn), 1).await.unwrap(),
+        Purged {
+            messages: 2 + 1 + 2 + 1 + u64::from(redact),
+            ..Purged::default()
+        },
+        "two of long, one of short, two of tombs, one or two of the group; every latest \
+         message stays"
+    );
+    assert_eq!(history_ids(store, &r, &long).await, ["l5"]);
+    assert_eq!(history_ids(store, &r, &short).await, ["s2"]);
+    assert_eq!(history_ids(store, &r, &tombs).await, ["k4"]);
+    assert_eq!(history_ids(store, &r, &group).await, ["g4"]);
+
+    // A cap of zero keeps no history: every message and summary of the
+    // number goes, and nothing that is not history.
+    assert_eq!(
+        store.trim_conversations(Some(&r.pn), 0).await.unwrap(),
+        Purged {
+            messages: 4,
+            conversations: 3,
+            ..Purged::default()
+        }
+    );
+    for key in [&long, &short, &tombs, &group] {
+        assert!(
+            store.messages(key, None, 10).await.unwrap().is_empty(),
+            "{key}"
+        );
+    }
+    assert!(
+        store
+            .conversations(&r.pn, None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(store.window_events(&long, None, 10).await.unwrap().len(), 1);
+    assert_eq!(store.identity_links(&long).await.unwrap(), [link]);
+    assert_eq!(
+        store.contact(&address_book.key).await.unwrap(),
+        Some(address_book)
+    );
+    recorded(store, &other_key)
+        .await
+        .assert_same(&other_before, "another number, under a cap of zero on one");
+
+    // Every number: only a conversation over the cap is trimmed. The
+    // suite's other conversations hold at most 200 rows.
+    let all = Run::new("trim-all");
+    let (big, small) = (all.key("big"), all.key("small"));
+    let rows: Vec<_> = (0..400)
+        .map(|i| all.msg("big", &format!("b{i:04}"), Direction::Inbound, i, "big"))
+        .collect();
+    assert!(store.append_synced(rows).await.unwrap().iter().all(|i| *i));
+    store
+        .append(all.msg("small", "s", Direction::Inbound, 0, "small"))
+        .await
+        .unwrap();
+    // The same contact on another number is another conversation, with a
+    // cap of its own: its five rows, older than every row of "big", are
+    // under it, though the two together are not.
+    let twin_run = Run::new("trim-all-twin");
+    let twin = twin_run.key("big");
+    for i in 0..5 {
+        store
+            .append(twin_run.msg("big", &format!("t{i}"), Direction::Inbound, i - 10, "twin"))
+            .await
+            .unwrap();
+    }
+    let big_summary = summary(store, &big).await;
+    let small_before = recorded(store, &small).await;
+    let twin_before = recorded(store, &twin).await;
+    // Counts are not checked: a concurrent run of this suite on the same
+    // store may trim its own big conversation, and ours, first.
+    store.trim_conversations(None, 300).await.unwrap();
+    let kept = history_ids(store, &all, &big).await;
+    assert_eq!(kept.len(), 300, "the cap applies to every number");
+    assert_eq!(
+        (
+            kept.first().map(String::as_str),
+            kept.last().map(String::as_str)
+        ),
+        (Some("b0399"), Some("b0100")),
+        "the newest 300"
+    );
+    assert_eq!(summary(store, &big).await, big_summary);
+    recorded(store, &small).await.assert_same(
+        &small_before,
+        "a conversation under the cap, on another number",
+    );
+    recorded(store, &twin).await.assert_same(
+        &twin_before,
+        "the same contact on another number: a conversation of its own, under the cap",
+    );
+    recorded(store, &other_key)
+        .await
+        .assert_same(&other_before, "another number's conversation under the cap");
+}
+
+/// Trims racing appends of newer messages to the same conversation, in
+/// one interleaving (and, on a store that runs them at once, any), never
+/// lose one of them, nor leave the summary on anything but the latest.
+async fn trims_racing_appends_lose_nothing<S: ConversationStore + ?Sized>(store: &S) {
+    use futures::future::LocalBoxFuture;
+
+    let r = Run::new("trim-race");
+    let key = r.key("c");
+    let old: Vec<_> = (0..20)
+        .map(|i| r.msg("c", &format!("o{i:02}"), Direction::Inbound, i, "old"))
+        .collect();
+    store.append_synced(old).await.unwrap();
+    let new: Vec<StoredMessage> = (0..8)
+        .map(|i| {
+            r.msg(
+                "c",
+                &format!("n{i}"),
+                Direction::Inbound,
+                100 + i,
+                &format!("n{i}"),
+            )
+        })
+        .collect();
+    // An append, a trim, an append, …: each trim keeps eight rows while
+    // the new messages arrive, so it may delete old rows only.
+    let mut racing: Vec<LocalBoxFuture<'_, ()>> = Vec::new();
+    for m in new.iter().cloned() {
+        racing.push(Box::pin(async move {
+            assert!(
+                store.append(m).await.unwrap(),
+                "each new message is recorded"
+            );
+        }));
+        racing.push(Box::pin(async {
+            store.trim_conversations(Some(&r.pn), 8).await.unwrap();
+        }));
+    }
+    futures::future::join_all(racing).await;
+    store.trim_conversations(Some(&r.pn), 8).await.unwrap();
+    let expected: Vec<StoredMessage> = new.iter().rev().cloned().collect();
+    assert_eq!(
+        store.messages(&key, None, 100).await.unwrap(),
+        expected,
+        "the eight new messages, the newest rows, all kept"
+    );
+    let s = summary(store, &key).await.unwrap();
+    assert_eq!(
+        (
+            s.last_message_at,
+            s.last_text.as_deref(),
+            s.last_inbound_at,
+            s.unread
+        ),
+        (at(107), Some("n7"), Some(at(107)), 8)
+    );
 }
