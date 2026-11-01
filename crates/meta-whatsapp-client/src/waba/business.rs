@@ -21,8 +21,8 @@ use crate::{Client, GraphRequest};
 /// Entry point, see [`Client::business`].
 #[derive(Debug, Clone)]
 pub struct Business {
-    client: Client,
-    business_id: BusinessId,
+    pub(super) client: Client,
+    pub(super) business_id: BusinessId,
 }
 
 impl Client {
