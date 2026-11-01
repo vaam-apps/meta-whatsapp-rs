@@ -3627,10 +3627,60 @@ design's (§9).
     core suites and the HTTP epoch test; the `apply_retention` call
     removed fails the retention case on the memory backend and live on
     Postgres; the window check, or the ownership refusal's mapping,
-    removed fails M2.1 and the ownership cases. Left, and why: a number
-    Meta migrated from one tenant's WABA to another tenant's WABA, the
-    WABA itself not moving, is not cut (the store records a WABA's moves,
-    not a number's: M2h); a conversation the customer continued after a
+    removed fails M2.1 and the ownership cases. **With M2h, in the same
+    pull request:** a number's own move record, so that a number Meta
+    migrated from one tenant's WABA to another tenant's, neither WABA
+    moving, is cut too. `NumberBinding` gains `attached_at` (when the
+    number came under its tenant: a refresh, and a move between the
+    tenant's own WABAs while bound, keep it) and
+    `previous_tenant_released_at` (when another tenant last released it,
+    from its `NumberTombstone`: a release is a binding that no longer
+    lists it, or an unbind of its WABA, recorded in the same step; a
+    deleted tenant counts as another), and `authz::history_from` is the
+    later of the WABA's cut and the number's (a number another tenant
+    released hides what is dated before its own `attached_at`; a first
+    binding of a number no other tenant held keeps everything). The port
+    rules are `RecordStore::bind_waba`'s and `unbind_waba`'s, applied by
+    `NumberBinding::newly_bound` and `NumberTombstone` in memory and in the
+    Postgres SQL. Postgres: migration 5, `number moves`
+    (`0005_number_moves.sql`, additive, metadata only on Postgres 16:
+    `wa_server_numbers.attached_at`, no default for the existing rows,
+    which read their WABA's `attached_at`, and `now()` for the rows a
+    replica of the previous release inserts;
+    `wa_server_numbers.previous_tenant_released_at`, the Unix epoch
+    (`UNRECORDED_MOVE`) by default, read as a move: fail closed; the table
+    `wa_server_number_tombstones`), checksums 1 to 4 unchanged; a released
+    number's tombstone is written in the releasing statement, and a new
+    number binding reads it in a statement of its own after its insert,
+    its start `GREATEST(now(), clock_timestamp(), released_at)`, as S2b's
+    review had a WABA's. The event outbox's routing needs no per-number
+    rule: an event names the WABA of the entry Meta sent it under, and the
+    routing gives a number's event to its tenant only when that WABA is
+    the one the number is bound under, so the previous holder's events,
+    dated or not, redelivered or late, name its WABA and reach nobody
+    (S2b's window exists because a moved WABA keeps its id; a migrated
+    number does not keep its WABA). Decisive tests:
+    `conformance::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history`
+    (the core's memory backend, the memory crate's, live on Postgres) and
+    over HTTP `a_number_migrated_between_two_tenants_wabas_hides_its_history`
+    and `live_postgres_a_number_migrated_between_two_tenants_wabas_hides_its_history`;
+    `records::a_numbers_moves_are_recorded`,
+    `races::a_number_taken_while_released_records_the_move` (and the
+    number's assertions added to
+    `races::a_binding_racing_an_unbind_records_the_move`), on memory and
+    live; `live_postgres_migration_5_rewrites_no_table` (the numbers
+    table's file unchanged by migration 5, a number from before it read as
+    unrecorded); the S7/S2b continuity test, which now adds migrations 4
+    and 5 to `main`'s database and reads `main`'s number as unrecorded,
+    its move then recorded. By mutation: the number's cut removed from
+    `history_from` fails the migration case on the core's memory backend,
+    the memory crate's and live on Postgres, and over HTTP on memory and
+    live; the read of the tombstone in a new number binding removed
+    (memory's `newly_bound` given none; Postgres's statement after the
+    insert skipped) fails `records::a_numbers_moves_are_recorded` and the
+    HTTP migration case, on memory and live; a refresh's release writing
+    no tombstone on Postgres fails them too, live. Left, and why: a
+    conversation the customer continued after a
     move counts the previous holder's unread messages in `unread` until
     it is marked read (no read route yet: M2g); the window and the
     thread's owner a reply checks are read whole, across the cut (they
@@ -3645,21 +3695,28 @@ design's (§9).
     retention are per deployment (by number id, and for every number),
     not per tenant. No new stored identifier: the two settings are
     environment variables.
-  - **Proposed** (for the coordinator, under the owner's delegation,
-    each swappable): `ReplyChecks` per number as a deployment setting
-    keyed by phone number id (`WA_SERVER_INBOX_REPLY_CHECKS`), not a
-    field on the binding (no schema change; to swap, a column read into
-    `ReplyChecksByNumber` instead, which `Conversations::new` takes as a
-    value); the cut at the binding's `attached_at` when its WABA had a
-    previous tenant (a binding made before migration 4, which reads
-    `UNRECORDED_MOVE`, counts as moved: fail closed, hiding a
-    pre-migration coexistence history older than its binding; to swap,
-    `authz::history_from`); a refused or failed page (`503`) when the
-    binding moved while it was read; the reads behind the whole
-    authorization order, vault included (to swap, a token-less
-    capability for reads); the retention's refusal at start rather than
-    a warning; the reply through `Inbox::send` rather than
-    `Inbox::reply`, to carry `reply_to` and `callback_data`.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable):
+    1. `ReplyChecks` per number as a deployment setting keyed by phone
+       number id, `WA_SERVER_INBOX_REPLY_CHECKS`, in the format as built,
+       not a field on the binding (no schema change; to swap, a column
+       read into `ReplyChecksByNumber`, which `Conversations::new` takes
+       as a value).
+    2. A binding made before migration 4 (and, with M2h, a number bound
+       before migration 5), which reads `UNRECORDED_MOVE`, counts as
+       moved: fail closed, hiding a pre-migration coexistence history
+       older than its binding (to swap, `authz::history_from`).
+    3. The inbox's reads go through the whole authorization order, the
+       vault included, so a number whose token lapsed answers `409
+       reconnect_required` (to swap, a token-less capability for reads).
+    4. `serve` refuses a backend whose inbox applies another retention
+       than `WA_SERVER_INBOX_RETENTION`, rather than warning.
+    5. M2g kept as an item of its own (the window and read routes, a
+       message by id).
+  - **Still proposed** (not in the decided list): a page refused `503`
+    when the binding moved while it was read; the reply through
+    `Inbox::send` rather than `Inbox::reply`, to carry `reply_to` and
+    `callback_data`.
   - **Also, after the first release** (from S7, carried by M2a, which
     landed before it): drop the legacy fingerprint (S6's window:
     `Fingerprint::legacy_v1_json`, `legacy_v1_upload`, `or_legacy`, and
@@ -3711,8 +3768,8 @@ design's (§9).
     fails it; the journal and the audit event hold no identity in
     clear; a tenant's key cannot erase on another tenant's number.
 
-- [ ] **M2g. The inbox's other routes** (row 111; **Proposed** by M2a,
-  for the coordinator): the design's `GET
+- [ ] **M2g. The inbox's other routes** (row 111; added by M2a, kept as
+  an item by the coordinator's decision of 2026-11-01): the design's `GET
   /v1/numbers/{pn}/conversations/{contact}/window` (`{open, closes_at}`,
   `Inbox::check_reply`'s answer beside the recorded window) and `POST
   …/{contact}/read` (unread reset, `notify_customer` marking the latest
@@ -3724,8 +3781,9 @@ design's (§9).
     id to the new holder (removing the epoch from the lookup fails it);
     after the read route, `unread` is 0 and Meta got one read receipt for
     the latest inbound message only with `notify_customer`.
-- [ ] **M2h. A number's own move record** (row 111; **Proposed** by M2a,
-  for the coordinator): the binding epoch for a number Meta migrated from
+- [x] **M2h. A number's own move record** (row 111; added by M2a, and
+  folded into it by the coordinator: the inbox never ships with the leak):
+  the binding epoch for a number Meta migrated from
   one tenant's WABA to another tenant's WABA, the WABA not moving (M2a
   cuts by the WABA's move record only): a per-number record of the last
   tenant that held it, written with every number a binding drops (an
@@ -3738,6 +3796,9 @@ design's (§9).
     tenant B's WABA, bound long before, shows B none of A's history;
     removing the number's record from the cut fails it, on memory and
     live on Postgres.
+  - **Landed:** with M2a, in the same pull request: see M2a's Landed
+    note ("With M2h"). Migration 5's names are stable identifiers pending
+    the owner (§ Owner touchpoints).
 
 ### M3. Embedded Signup, OTP, coexistence
 
@@ -4085,7 +4146,14 @@ everything else goes into the parity-completion report.
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
   with their keys' derivations and their records' shapes, added and
-  awaiting confirmation before the first release; S2b's Postgres
+  awaiting confirmation before the first release; M2h's Postgres
+  migration 5, "number moves": the columns
+  `wa_server_numbers.attached_at` (a row from before it read as its
+  WABA's start) and `wa_server_numbers.previous_tenant_released_at` with
+  its default, the Unix epoch read as "a move before the records began"
+  (`UNRECORDED_MOVE`, failing closed), and the table
+  `wa_server_number_tombstones` with its columns and its `ON DELETE SET
+  NULL` rule, added and awaiting confirmation; S2b's Postgres
   migration 4, "waba moves": the columns `wa_server_wabas.generation` and
   `wa_server_wabas.previous_tenant_unbound_at` with its default, the Unix
   epoch read as "a move before the records began" (`UNRECORDED_MOVE`),

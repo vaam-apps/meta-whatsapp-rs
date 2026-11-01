@@ -1084,12 +1084,12 @@ pub async fn a_numbers_moves_are_recorded(backend: &dyn Backend) {
     let (a, b) = (id("nmove-a"), id("nmove-b"));
     store.create_tenant(&a, "").await.unwrap().unwrap();
     store.create_tenant(&b, "").await.unwrap().unwrap();
-    let (x, y, z) = (
+    let (first_waba, b_waba, second_waba) = (
         WabaId::new("9181").unwrap(),
         WabaId::new("9182").unwrap(),
         WabaId::new("9183").unwrap(),
     );
-    let n = PhoneNumberId::new("9281").unwrap();
+    let pn = PhoneNumberId::new("9281").unwrap();
     let bind = |tenant: &TenantId, waba: &WabaId, numbers: &[PhoneNumberId]| {
         let (tenant, waba, numbers) = (tenant.clone(), waba.clone(), numbers.to_vec());
         async move {
@@ -1100,19 +1100,19 @@ pub async fn a_numbers_moves_are_recorded(backend: &dyn Backend) {
             );
         }
     };
-    let number = || async { store.number(&n).await.unwrap() };
-    let one = std::slice::from_ref(&n);
+    let number = || async { store.number(&pn).await.unwrap() };
+    let one = std::slice::from_ref(&pn);
 
     // B's WABA, bound long before the number reaches it.
-    bind(&b, &y, &[]).await;
-    bind(&a, &x, one).await;
+    bind(&b, &b_waba, &[]).await;
+    bind(&a, &first_waba, one).await;
     let first = number().await.unwrap();
     assert_eq!(first.previous_tenant_released_at, None, "a first binding");
     assert_eq!(
         (first.tenant_id.clone(), first.waba_id.clone()),
-        (a.clone(), x.clone())
+        (a.clone(), first_waba.clone())
     );
-    bind(&a, &x, one).await;
+    bind(&a, &first_waba, one).await;
     let refreshed = number().await.unwrap();
     assert_eq!(
         (refreshed.attached_at, refreshed.previous_tenant_released_at),
@@ -1120,14 +1120,14 @@ pub async fn a_numbers_moves_are_recorded(backend: &dyn Backend) {
         "a refresh keeps them"
     );
     // A move between A's own WABAs, while bound: the same start.
-    bind(&a, &z, one).await;
+    bind(&a, &second_waba, one).await;
     let moved_within = number().await.unwrap();
-    assert_eq!(moved_within.waba_id, z);
+    assert_eq!(moved_within.waba_id, second_waba);
     assert_eq!(moved_within.attached_at, first.attached_at, "A's all along");
     // Released by A (Z no longer lists it), then taken by A again.
-    bind(&a, &z, &[]).await;
+    bind(&a, &second_waba, &[]).await;
     assert_eq!(number().await, None, "released");
-    bind(&a, &x, one).await;
+    bind(&a, &first_waba, one).await;
     let again = number().await.unwrap();
     assert_eq!(
         again.previous_tenant_released_at, None,
@@ -1136,8 +1136,8 @@ pub async fn a_numbers_moves_are_recorded(backend: &dyn Backend) {
     assert!(again.attached_at > first.attached_at, "a new start");
 
     // A to B, the number alone: X no longer lists it, Y does.
-    bind(&a, &x, &[]).await;
-    bind(&b, &y, one).await;
+    bind(&a, &first_waba, &[]).await;
+    bind(&b, &b_waba, one).await;
     let at_b = number().await.unwrap();
     let left_a = at_b
         .previous_tenant_released_at
@@ -1148,7 +1148,7 @@ pub async fn a_numbers_moves_are_recorded(backend: &dyn Backend) {
     );
     assert_eq!(
         store
-            .waba(&y)
+            .waba(&b_waba)
             .await
             .unwrap()
             .unwrap()
@@ -1156,7 +1156,7 @@ pub async fn a_numbers_moves_are_recorded(backend: &dyn Backend) {
         None,
         "B's WABA never moved"
     );
-    bind(&b, &y, one).await;
+    bind(&b, &b_waba, one).await;
     assert_eq!(
         number().await.unwrap().previous_tenant_released_at,
         Some(left_a),
@@ -1164,7 +1164,7 @@ pub async fn a_numbers_moves_are_recorded(backend: &dyn Backend) {
     );
     // While B holds it, A cannot take it (D4), and nothing moves.
     assert_eq!(
-        store.bind_waba(&a, &x, one).await.unwrap(),
+        store.bind_waba(&a, &first_waba, one).await.unwrap(),
         BindOutcome::OwnedByAnotherTenant
     );
     let held = number().await.unwrap();
@@ -1175,13 +1175,13 @@ pub async fn a_numbers_moves_are_recorded(backend: &dyn Backend) {
             held.attached_at,
             held.previous_tenant_released_at
         ),
-        (b.clone(), y.clone(), at_b.attached_at, Some(left_a)),
+        (b.clone(), b_waba.clone(), at_b.attached_at, Some(left_a)),
         "refused: nothing moved"
     );
 
     // B to A, by an unbind of B's WABA: the unbind releases it too.
-    assert!(store.unbind_waba(&y).await.unwrap());
-    bind(&a, &x, one).await;
+    assert!(store.unbind_waba(&b_waba).await.unwrap());
+    bind(&a, &first_waba, one).await;
     let back = number().await.unwrap();
     let left_b = back
         .previous_tenant_released_at
@@ -1192,14 +1192,14 @@ pub async fn a_numbers_moves_are_recorded(backend: &dyn Backend) {
     );
 
     // A deleted and created again: another tenant.
-    assert!(store.unbind_waba(&x).await.unwrap());
-    assert!(store.unbind_waba(&z).await.unwrap());
+    assert!(store.unbind_waba(&first_waba).await.unwrap());
+    assert!(store.unbind_waba(&second_waba).await.unwrap());
     assert_eq!(
         store.delete_tenant(&a).await.unwrap(),
         DeleteTenantOutcome::Deleted
     );
     store.create_tenant(&a, "").await.unwrap().unwrap();
-    bind(&a, &x, one).await;
+    bind(&a, &first_waba, one).await;
     let recycled = number().await.unwrap();
     let left_old_a = recycled
         .previous_tenant_released_at

@@ -577,10 +577,13 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.1349120
   the binding began, and a conversation's `last_inbound_at` and `unread`
   only when the customer wrote since. A number no other tenant held
   shows all of it, a coexistence history synced from before the binding
-  included. The cut follows the WABA's binding (its move record, roadmap
-  S2b): a number Meta migrated from one tenant's WABA to another
-  tenant's WABA, the WABA itself not moving, is not cut yet (roadmap
-  M2h); and a conversation the customer continued after a move counts
+  included. The cut follows both the WABA's move record (roadmap S2b)
+  and the number's own (roadmap M2h): a number Meta migrated from
+  another tenant's WABA to one of yours, neither WABA moving, also shows
+  nothing from before it came under you. A number bound before this
+  release (Postgres migration 5) has no move record and is treated as
+  moved, its cut at its WABA's binding. A conversation the customer
+  continued after a move counts
   the previous holder's unread messages in `unread`.
 - Reads answer `409 reconnect_required` or `number_not_connected` for a
   number whose token does not work, as every number route does.
@@ -880,8 +883,8 @@ SKIP token.wabas: the configuration is refused
 
 ## Not yet
 
-The inbox's window and read routes and a message by id (M2g), a moved
-number's own move record (M2h), `GET /v1/events/{id}`, SSE, webhooks-out
+The inbox's window and read routes and a message by id (M2g),
+`GET /v1/events/{id}`, SSE, webhooks-out
 and the service's own number events (M2); Embedded Signup,
 disconnection by Meta's webhooks, coexistence sync and OTP (M3); the
 Docker image, a Compose file, the documents route and the TypeScript

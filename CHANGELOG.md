@@ -338,7 +338,7 @@ stored data, the owner's).
   `live_postgres_a_trim_and_a_history_chunk_never_deadlock`, and the
   trims added to `live_postgres_the_locks_are_the_documented_ones`.
 
-- **The service's inbox routes** (roadmap M2a; parity row 119 now done on
+- **The service's inbox routes** (roadmaps M2a and M2h; parity row 119 now done on
   the service's side, rows 91 and 111 partial; design D10). Scope `inbox`:
   `GET /v1/numbers/{pn}/conversations` (`list_conversations`) and `GET
   /v1/numbers/{pn}/conversations/{contact}/messages`
@@ -352,8 +352,23 @@ stored data, the owner's).
   customer_service_window_closed` outside the 24-hour window and `409
   thread_owned_elsewhere` while another app owns the thread, templates
   exempt. A number whose WABA moved from another tenant shows its holder
-  nothing dated before its binding began (hidden, never purged:
-  `server_core::authz::history_from`). The core's services are
+  nothing dated before its binding began, and a number Meta migrated from
+  another tenant's WABA (neither WABA moving) nothing dated before it came
+  under its tenant (hidden, never purged:
+  `server_core::authz::history_from(waba, number)`, the later cut). Each
+  number's moves are recorded (roadmap M2h): `NumberBinding` gains
+  `attached_at` and `previous_tenant_released_at`, and a release (an
+  unbind of its WABA, a binding that no longer lists it) leaves a
+  `model::NumberTombstone`, which a new binding of the number reads
+  (`NumberBinding::newly_bound`), on both backends; on Postgres, the
+  additive migration 5, `number moves` (`0005_number_moves.sql`: the
+  columns `wa_server_numbers.attached_at` and
+  `wa_server_numbers.previous_tenant_released_at`, the table
+  `wa_server_number_tombstones`; metadata only, no table rewrite; a number
+  bound before it reads its WABA's start and `UNRECORDED_MOVE`, a move:
+  fail closed). Its names are stable identifiers pending the owner's
+  confirmation before the first release (architecture.md § Stable
+  identifiers). The core's services are
   `meta_whatsapp_server_core::inbox` (`Conversations`,
   `ReplyChecksByNumber`, `conversation_key`) and
   `messages::{ReplyMessage, reply_message}`, with the conformance suite
@@ -370,8 +385,11 @@ stored data, the owner's).
   and the HTTP crate `Grant::conversations` and `AppState::clock`. The
   OpenAPI document gains the two paths, the tag `inbox` and the schemas
   `Conversation`, `ConversationList`, `InboxMessage`, `InboxMessageList`,
-  `MessageDirection` and `ReplyMessage` (additions only). No stored name
-  is added.
+  `MessageDirection` and `ReplyMessage` (additions only). Conformance:
+  `records::a_numbers_moves_are_recorded`,
+  `races::a_number_taken_while_released_records_the_move` (and
+  `races::Report::releases`),
+  `inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history`.
 
 - **The service's routing after a move, and the bind generation**
   (roadmap S2b, design D36; parity rows 9 and 112 now done on the
@@ -2075,6 +2093,14 @@ stored data, the owner's).
   each conversation's history"); implement it and run
   `conversation_conformance::run` again. The in-tree memory and Postgres
   stores implement it; nothing else changes for their users.
+
+- **Breaking for a custom `RecordStore`** (roadmap M2h): `NumberBinding`
+  gains two fields (`attached_at`, `previous_tenant_released_at`), and
+  `bind_waba` and the unbinds must record a number's release and read it
+  when a binding takes the number anew, as the port's documentation now
+  says; run `conformance::run` again (its records, races and inbox suites
+  check it). The in-tree memory and Postgres backends do; on Postgres,
+  migration 5 runs at start like the others.
 
 - **`meta-whatsapp-server serve` refuses a backend whose inbox applies
   another retention than `WA_SERVER_INBOX_RETENTION`** (roadmap M2a): a
