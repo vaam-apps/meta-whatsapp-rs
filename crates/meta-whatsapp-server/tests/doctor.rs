@@ -847,6 +847,28 @@ async fn at_most_max_wabas_are_checked_and_the_rest_named_as_unchecked() {
     }
 }
 
+/// A secret's file that cannot be read is replaced with its file variable
+/// unset, so the refusals after it are still read.
+#[tokio::test]
+async fn an_unreadable_secret_file_does_not_hide_the_next_refusal() {
+    let graph = ScriptedTransport::new();
+    let env = production()
+        .unset("WA_APP_SECRET")
+        .set("WA_APP_SECRET_FILE", "/run/secrets/missing")
+        .unset("WA_VERIFY_TOKEN");
+    let report = doctor(&env, &Unreachable, &graph).await;
+    assert_fails(
+        &report,
+        "config.WA_APP_SECRET",
+        "WA_APP_SECRET_FILE: the file cannot be read",
+    );
+    assert_fails(
+        &report,
+        "config.WA_VERIFY_TOKEN",
+        "WA_VERIFY_TOKEN is required",
+    );
+}
+
 /// A bind doctor reset to its default may meet the other bind's value:
 /// that collision is not reported, and the refusals after it still are.
 #[tokio::test]
