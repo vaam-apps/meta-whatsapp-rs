@@ -2817,7 +2817,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     -p meta-whatsapp-adapters --features redis -i ring` finds nothing);
     the test Redis requires client certificates; its certificates are
     generated, none committed (OPEN_QUESTIONS #19).
-- [ ] **L22a. `llms.txt` and a `doctor`** (docs; the service's CLI in
+- [x] **L22a. `llms.txt` and a `doctor`** (docs; the service's CLI in
   `meta-whatsapp-server`; row 117): `llms.txt` for the docs, and a
   `doctor` command checking the configuration, the webhook subscription
   fields and the token's reach.
@@ -2826,6 +2826,54 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** `doctor` reports each scripted misconfiguration by
     name and exits non-zero; `llms.txt` links only files that exist (a
     test reads it).
+  - **Landed:** row 117 done in the service; the library's side stays
+    partial for the MCP server (L22b). `docs/public/llms.txt`, served at
+    the docs site's root (VitePress copies `docs/public/`), indexes the
+    guides, design, planning docs and every consumer skill, each link
+    the file's Markdown on `main`; `crates/meta-whatsapp-rs/tests/llms_txt.rs`
+    refuses a link to a missing file or off the repository, and an
+    unlisted guide or skill. `meta-whatsapp-server doctor`
+    (`meta_whatsapp_server::doctor`) prints one line per check (`OK`,
+    `WARN`, `FAIL`, `SKIP`) and exits non-zero on a `FAIL`: every
+    refusal of the configuration by variable (a refused variable is
+    replaced and the reading repeated, so one does not hide the next),
+    the backend opened as `serve` opens it, the migration histories read
+    by `SELECT` (pending service migrations fail with
+    `WA_SERVER_MIGRATE=skip`, warn with `auto`), the app's
+    `whatsapp_business_account` subscription and its fields
+    (`GET /{app-id}/subscriptions`: `messages` and `account_update`
+    required, eleven more recommended), and each bound WABA's token
+    (`debug_token`: valid, this app's, not expired, both permissions, a
+    grant naming the WABA) and the app's subscription to it
+    (`GET /{waba-id}/subscribed_apps`), plus the Solution Partner's
+    system token. Read-only (no migration, no re-encryption on read,
+    `GET`s only); no secret printed. `tests/doctor.rs` scripts each
+    misconfiguration (36 tests, four live) and runs the binary for its
+    exit code; its test backend panics on any key/value write and on
+    the ports doctor has no use for (migrator, locks, janitor, outbox),
+    so a vault re-encrypting on read fails it, and the live tests show
+    `WA_SERVER_MIGRATE=auto` warns without migrating and that a changed
+    checksum, a half-applied migration (the service's or the library's),
+    a newer and a pending version are each reported.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a constant or a format in
+    one place, swapped by changing it): `llms.txt` at the docs site's
+    root (`docs/public/`), its links the raw Markdown on GitHub's
+    `main`; a fourth status, `SKIP`, for a check that could not run;
+    every refusal found by replacing the refused variable and reading
+    again, the limit documented (a replacement can hide a problem only
+    the intended value would show); `messages` and `account_update`
+    required (`REQUIRED_FIELDS`), the other fields only warning
+    (`RECOMMENDED_FIELDS`); pending service migrations warning with
+    `WA_SERVER_MIGRATE=auto` and failing with `skip`; at most 100 WABAs
+    a run (`MAX_WABAS`) and a warning 7 days before a token expires
+    (`EXPIRY_WARNING`); no permission check on the Solution Partner's
+    system token; the `GET /{app-id}/subscriptions` read stays in the
+    service until the client has it.
+  - **Left:** a JSON report (`doctor --json`) for deploy jobs; the
+    library's migration versions compared, not only counted (their list
+    is private to the adapters crate: it needs a public accessor there);
+    the subscriptions read moved into the client.
 - [ ] **L22b. A docs MCP server** (a tool under `tools/`, outside the
   library; row 117): search and read the docs and skills over MCP's
   stdio transport.
