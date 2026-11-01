@@ -1088,8 +1088,15 @@ keyed by business number and contact, and
   checked by the input's first bytes before ffmpeg starts, and by
   ffmpeg's own detection (`-format_whitelist png_pipe,jpeg_pipe`); a
   PNG walked chunk by chunk first (one cut short refused, its text and
-  EXIF chunks and anything after its end not passed on: ffmpeg inflates
-  every `zTXt` and keeps the text); the
+  EXIF chunks, any colour profile over 16 KiB or after the first, and
+  anything after its end not passed on: ffmpeg inflates every `zTXt`
+  and every profile and keeps them); a JPEG walked segment by segment
+  (one cut short, or with a length running past the end, refused; only
+  the segments ffmpeg reads whole passed on, its tables, frame header,
+  scans and their data, the JFIF and Adobe segments at their fixed
+  size, and in place of its EXIF a minimal one of the Orientation alone:
+  ffmpeg copies an EXIF value once for every entry pointing at it, and
+  reads every `APP1`); the
   first frame, no metadata, at most 32 Mi pixels (`-max_pixels`) and
   256 MiB a single allocation; brought under the format's limit by a
   fixed ladder of sizes and qualities (each attempt killed once past

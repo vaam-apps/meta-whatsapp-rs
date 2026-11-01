@@ -3264,7 +3264,12 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
        are L19c. The service's side stays M5c1's.
     8. An input's ICC profile passes into a JPEG or PNG result, so its
        colours stay right; its size is bounded by the output limit.
-       Stripping it is one filter in the fixed table.
+       Stripping it is one filter in the fixed table. **Decided
+       2026-11-01** (coordinator): iCCP kept only up to 16 KiB
+       compressed, after a 660 MB measurement (`image::PNG_ICCP_MAX`,
+       one literal; the first `iCCP` chunk only). A JPEG input's profile
+       (`APP2`) is no longer passed on at all (the EXIF fix below drops
+       every application segment but JFIF and Adobe).
     9. The allocation bound stays 256 MiB, its edge documented (a 16-bit
        RGBA frame of 8192 × 4096 is refused by ffmpeg's padding, 8192 ×
        4094 converts); headroom is one literal.
@@ -3305,6 +3310,46 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     4-core machine, encoding a WebP far over the limit, so a timeout
     under the default can fail a large photo; an image over 256:1 can
     fail at a smaller attempt (a side scaled to nothing).
+  - **Fix: EXIF and colour profile bombs** (2026-11-01, found by L19c's
+    implementer, against ffmpeg 6.1.1). The JPEG path passed EXIF
+    through for its orientation, and ffmpeg copies an EXIF value once
+    for every IFD entry pointing at it, over every `APP1`: a 67 KB JPEG
+    of one crafted segment took 916 MB, 264 KB of four 3.6 GB, 658 KB of
+    ten 8.4 GB; a PNG's 200 KB `iCCP` inflating to 200 MiB took 660 MB.
+    The converter now walks a JPEG's segments before ffmpeg starts
+    (`image::jpeg_prepared`) and passes on only what ffmpeg reads by the
+    segment's length, since ffmpeg moves on by the bytes it read, not by
+    the length (a scan header it skips, a JFIF thumbnail, which it does
+    not skip, would otherwise hide a segment from the walk): `DQT`,
+    `DHT`, `SOF0`–`SOF3`, `SOF55`, `DRI` and `SOS`, each refused unless
+    its length is exactly its content (a scan header with no `FF`), and
+    the scans' entropy-coded data; the first JFIF and Adobe segments at
+    their fixed fields; in place of the first EXIF segment a minimal
+    EXIF of 36 bytes (`image::minimal_exif`: big-endian TIFF, one IFD,
+    the Orientation alone, 1 to 8; no EXIF without a valid one); the end
+    of image. Everything else is dropped (every other `APP1`, `APP2`,
+    `APP13`, comments, other `APPn`, markers ffmpeg does not decode,
+    bytes between segments, anything after the end of image), and a
+    JPEG cut short or with a segment past its end is `InputRejected`,
+    which replaces the review's "a truncated JPEG decodes partly". A
+    PNG keeps its first `iCCP` only up to 16 KiB (decision 8 above).
+    Decisive: `ffmpeg_applies_the_orientation_of_a_jpeg_whose_exif_is_a_bomb`
+    (the 67 KB file as it is peaks at about 980 MB, the control; with a
+    second segment, through the converter, about 50 MB, under a 400 MB
+    bound, and Orientation 6 still applied) and
+    `ffmpeg_keeps_a_small_colour_profile_and_drops_a_large_one` (650 MB
+    against 48 MB; a 3 KB profile still reaches a PNG result), both
+    reading `VmHWM` from `/proc`; the bytes ffmpeg is given, exactly, in
+    `a_jpeg_reaches_ffmpeg_with_only_what_ffmpeg_reads_whole`,
+    `a_jpeg_s_exif_is_its_orientation_alone` (each orientation, both
+    byte orders), `a_jpeg_cut_short_or_with_a_wrong_length_is_refused`,
+    `a_png_keeps_one_colour_profile_of_at_most_16_kib` and the stand-in
+    `ffmpeg_gets_the_jpeg_without_its_metadata`. Removing the EXIF
+    rewrite, keeping a second `APP1`, dropping the length check, raising
+    the `iCCP` cap or keeping a second profile, dropping the scan
+    header's `FF` check or a table's exact length, keeping the JFIF
+    thumbnail, the tail after the end of image or an unknown marker, or
+    the orientation's range check, fails a test.
 - [ ] **L19c. Animated stickers** (`meta-whatsapp-core`: an
   `AnimatedSticker` `TargetFormat`; `meta-whatsapp-adapters`: its
   conversion behind the `ffmpeg` feature, or another converter; row 48):

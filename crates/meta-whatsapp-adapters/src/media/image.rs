@@ -228,44 +228,110 @@ pub(super) fn accepted(data: &[u8]) -> bool {
 /// and a 64 MiB input holds hundreds.
 const PNG_DROPPED: &[&[u8; 4]] = &[b"tEXt", b"zTXt", b"iTXt", b"eXIf"];
 
+/// The largest colour profile chunk (`iCCP`) passed on, in bytes of
+/// chunk data (its name and its compressed profile): 16 KiB. `ffmpeg`
+/// 6.1 inflates the profile whole: a 200 KB chunk inflating to 200 MiB
+/// took it 660 MB, where a real profile is a few kilobytes. A larger
+/// one, and every `iCCP` chunk after the first, is taken out.
+pub(super) const PNG_ICCP_MAX: usize = 16 * 1024;
+
 /// The longest chunk PNG allows (2^31 − 1 bytes of data).
 const PNG_MAX_CHUNK: u32 = 0x7FFF_FFFF;
 
 /// What a truncated PNG is, in words.
 const PNG_TRUNCATED: &str = "a PNG whose chunks stop before its end chunk (a truncated file)";
 
-/// What `ffmpeg` is given of an accepted image: a JPEG as it is; a PNG
-/// walked chunk by chunk from its signature to its end chunk (`IEND`),
-/// without [`PNG_DROPPED`] and without anything after the end chunk (a
-/// second image, appended data), the same bytes uncopied when there is
-/// nothing to take out. A PNG whose chunks do not reach an end chunk is
-/// refused, in words.
+/// What `ffmpeg` is given of an accepted image, or why it is refused, in
+/// words: a PNG walked chunk by chunk ([`png_prepared`]), a JPEG segment
+/// by segment ([`jpeg_prepared`]); anything else as it is.
 pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
-    if !data.starts_with(PNG_SIGNATURE) {
-        return Ok(data.clone());
+    if data.starts_with(PNG_SIGNATURE) {
+        png_prepared(data)
+    } else if data.starts_with(&JPEG_START[..2]) {
+        jpeg_prepared(data)
+    } else {
+        Ok(data.clone())
     }
-    // The byte ranges kept, the adjacent ones merged.
-    let mut kept: Vec<Range<usize>> = Vec::with_capacity(8);
-    kept.push(0..PNG_SIGNATURE.len());
-    png_chunks(data, |kind, chunk| {
-        if !PNG_DROPPED.iter().any(|dropped| &dropped[..] == kind) {
-            match kept.last_mut() {
-                Some(last) if last.end == chunk.start => last.end = chunk.end,
-                _ => kept.push(chunk),
-            }
-        }
-    })?;
-    Ok(match kept.as_slice() {
-        [whole] if *whole == (0..data.len()) => data.clone(),
-        [one] => data.slice(one.clone()),
-        ranges => {
-            let mut out = Vec::with_capacity(ranges.iter().map(ExactSizeIterator::len).sum());
-            for range in ranges {
-                out.extend_from_slice(&data[range.clone()]);
+}
+
+/// A piece of what `ffmpeg` is given: a range of the input, or bytes
+/// written in its place.
+enum Piece {
+    Input(Range<usize>),
+    Written(Vec<u8>),
+}
+
+/// Keep `range` of the input, merged with the range before it when the
+/// two touch.
+fn keep(pieces: &mut Vec<Piece>, range: Range<usize>) {
+    if let Some(Piece::Input(last)) = pieces.last_mut()
+        && last.end == range.start
+    {
+        last.end = range.end;
+        return;
+    }
+    pieces.push(Piece::Input(range));
+}
+
+/// Keep `range` of `data` when it is `written` already, or put `written`
+/// in its place.
+fn keep_or_write(pieces: &mut Vec<Piece>, data: &[u8], range: Range<usize>, written: &[u8]) {
+    if data.get(range.clone()) == Some(written) {
+        keep(pieces, range);
+    } else {
+        pieces.push(Piece::Written(written.to_vec()));
+    }
+}
+
+/// The pieces, gathered: `data` itself, uncopied, when they are all of
+/// it; a slice of it when they are one range; a copy otherwise.
+fn gathered(data: &Bytes, pieces: &[Piece]) -> Bytes {
+    match pieces {
+        [Piece::Input(whole)] if *whole == (0..data.len()) => data.clone(),
+        [Piece::Input(one)] => data.slice(one.clone()),
+        _ => {
+            let len = pieces
+                .iter()
+                .map(|piece| match piece {
+                    Piece::Input(range) => range.len(),
+                    Piece::Written(bytes) => bytes.len(),
+                })
+                .sum();
+            let mut out = Vec::with_capacity(len);
+            for piece in pieces {
+                match piece {
+                    Piece::Input(range) => out.extend_from_slice(&data[range.clone()]),
+                    Piece::Written(bytes) => out.extend_from_slice(bytes),
+                }
             }
             Bytes::from(out)
         }
-    })
+    }
+}
+
+/// A PNG walked chunk by chunk from its signature to its end chunk
+/// (`IEND`): without [`PNG_DROPPED`], with its first colour profile
+/// chunk (`iCCP`) only if it is at most [`PNG_ICCP_MAX`], and without
+/// anything after the end chunk (a second image, appended data); the
+/// same bytes uncopied when there is nothing to take out. One whose
+/// chunks do not reach an end chunk is refused.
+fn png_prepared(data: &Bytes) -> Result<Bytes, &'static str> {
+    let mut pieces = Vec::with_capacity(8);
+    keep(&mut pieces, 0..PNG_SIGNATURE.len());
+    let mut profiles = 0usize;
+    png_chunks(data, |kind, chunk| {
+        let kept = if kind == b"iCCP" {
+            profiles += 1;
+            // Length, type, data, CRC: the data is 12 bytes shorter.
+            profiles == 1 && chunk.len().saturating_sub(12) <= PNG_ICCP_MAX
+        } else {
+            !PNG_DROPPED.iter().any(|dropped| &dropped[..] == kind)
+        };
+        if kept {
+            keep(&mut pieces, chunk);
+        }
+    })?;
+    Ok(gathered(data, &pieces))
 }
 
 /// Walk a PNG's chunks (`data` begins with its signature), from the first
@@ -299,6 +365,244 @@ fn png_chunks(
             return Ok(at);
         }
     }
+}
+
+/// What a JPEG cut short is, in words.
+const JPEG_TRUNCATED: &str = "a JPEG that stops before its end of image (a truncated file)";
+
+/// What a JPEG segment longer than the file is, in words.
+const JPEG_PAST_END: &str = "a JPEG segment whose length runs past the end of the file";
+
+/// A JPEG walked segment by segment, from its start of image to its end
+/// of image (`EOI`), keeping only what `ffmpeg` reads by the segment's
+/// length:
+///
+/// - the tables, the frame header and the scans that `ffmpeg` 6.1 can
+///   decode (`DQT`, `DHT`, `SOF0` to `SOF3` and JPEG-LS's `SOF55`, `DRI`,
+///   `SOS`), each refused unless its length is exactly its content (as
+///   libjpeg refuses one), and each scan's entropy-coded data (its
+///   stuffed `FF 00` bytes and its restart markers) up to the next
+///   marker;
+/// - the first JFIF segment (`APP0`) and the first Adobe segment
+///   (`APP14`, which says whether three components are RGB), rewritten
+///   to their fixed fields (no JFIF thumbnail);
+/// - in place of the first EXIF segment (`APP1`, `Exif\0\0`), a minimal
+///   EXIF of its Orientation alone ([`minimal_exif`]), or nothing when
+///   it has no valid one;
+///
+/// and the end of image. Everything else is dropped: every other `APP1`
+/// (EXIF, XMP), every other application segment (`APP2`'s ICC profile,
+/// `APP13`), comments, the markers `ffmpeg` does not decode, bytes
+/// between segments, and anything after the end of image. One cut short
+/// before its end of image, a segment whose length runs past the end or
+/// is under two bytes, a header whose length is not its content, or a
+/// second start of image, is refused.
+///
+/// The reason is memory: `ffmpeg` 6.1 copies an EXIF value once for
+/// every IFD entry pointing at it, and reads every `APP1` it meets: a
+/// 67 KB JPEG of one such segment took 916 MB, one of ten 8.4 GB. And
+/// since `ffmpeg` moves on by the bytes it read, not by a segment's
+/// length, a segment it reads only in part (a scan header it skips, a
+/// JFIF thumbnail, which it does not skip) would show it whatever the
+/// walk took for that segment's content: so each segment kept is one it
+/// reads whole.
+fn jpeg_prepared(data: &Bytes) -> Result<Bytes, &'static str> {
+    let mut pieces = Vec::with_capacity(16);
+    keep(&mut pieces, 0..2);
+    let (mut exif, mut jfif, mut adobe) = (false, false, false);
+    // Just after a scan's header: what comes before the next marker is
+    // its entropy-coded data.
+    let mut scan = false;
+    let mut at = 2;
+    loop {
+        let start = jpeg_marker(data, at).ok_or(JPEG_TRUNCATED)?;
+        if std::mem::take(&mut scan) {
+            keep(&mut pieces, at..start);
+        }
+        let marker = data[start + 1];
+        match marker {
+            // End of image: the end of what ffmpeg is given.
+            0xD9 => {
+                keep(&mut pieces, start..start + 2);
+                return Ok(gathered(data, &pieces));
+            }
+            0xD8 => return Err("a JPEG with a second start of image before its end"),
+            _ => {}
+        }
+        // A segment: its length counts itself, not the marker.
+        let len = data
+            .get(start + 2..start + 4)
+            .map(|b| usize::from(u16::from_be_bytes([b[0], b[1]])))
+            .ok_or(JPEG_TRUNCATED)?;
+        if len < 2 {
+            return Err("a JPEG segment whose length is under the two bytes of its length field");
+        }
+        let end = start + 2 + len;
+        let body = data.get(start + 4..end).ok_or(JPEG_PAST_END)?;
+        let segment = start..end;
+        match marker {
+            0xC0..=0xC4 | 0xDA | 0xDB | 0xDD | 0xF7 => {
+                if !jpeg_exact(marker, body) {
+                    return Err(
+                        "a JPEG table, frame or scan header whose length is not its content",
+                    );
+                }
+                keep(&mut pieces, segment);
+                scan = marker == 0xDA;
+            }
+            0xE1 if !exif && body.starts_with(b"Exif\0\0") => {
+                exif = true;
+                if let Some(orientation) = exif_orientation(&body[6..]) {
+                    keep_or_write(&mut pieces, data, segment, &minimal_exif(orientation));
+                }
+            }
+            0xE0 if !jfif && body.len() >= 14 && body.starts_with(b"JFIF\0") => {
+                jfif = true;
+                // Version, density units, X and Y density; no thumbnail.
+                let mut written = *b"\xFF\xE0\0\x10JFIF\0\0\0\0\0\0\0\0\0\0";
+                written[9..16].copy_from_slice(&body[5..12]);
+                keep_or_write(&mut pieces, data, segment, &written);
+            }
+            0xEE if !adobe && body.len() >= 12 && body.starts_with(b"Adobe") => {
+                adobe = true;
+                // Version, two flag words, the colour transform.
+                let mut written = [0u8; 16];
+                written[..4].copy_from_slice(&[0xFF, 0xEE, 0, 14]);
+                written[4..].copy_from_slice(&body[..12]);
+                keep_or_write(&mut pieces, data, segment, &written);
+            }
+            _ => {}
+        }
+        at = end;
+    }
+}
+
+/// The position of the next marker at or after `from`, as `ffmpeg` 6.1
+/// finds one: `FF` followed by `C0` to `FE`, a restart marker (`D0` to
+/// `D7`) aside, which is part of a scan's data. Fill bytes (`FF FF`), a
+/// stuffed `FF 00` and JPEG-LS's `FF` followed by under `80` are not
+/// markers.
+fn jpeg_marker(data: &[u8], from: usize) -> Option<usize> {
+    let rest = data.get(from..)?;
+    rest.windows(2)
+        .position(|w| w[0] == 0xFF && matches!(w[1], 0xC0..=0xCF | 0xD8..=0xFE))
+        .map(|i| from + i)
+}
+
+/// Whether a table, frame or scan header's `body` (after its length) is
+/// exactly what its content says, as `ffmpeg` reads it: no byte left
+/// over, none missing. A scan header must also hold no `FF`: `ffmpeg`
+/// skips a scan it cannot decode without reading its header, and would
+/// find a marker there.
+fn jpeg_exact(marker: u8, mut body: &[u8]) -> bool {
+    match marker {
+        // Quantization tables: precision (0 or 1) and table (0 to 3),
+        // then 64 values of 8 or 16 bits.
+        0xDB => {
+            while let Some(&pq_tq) = body.first() {
+                if pq_tq >> 4 > 1 || pq_tq & 0x0F > 3 {
+                    return false;
+                }
+                let size = 1 + 64 * (1 + usize::from(pq_tq >> 4));
+                let Some(rest) = body.get(size..) else {
+                    return false;
+                };
+                body = rest;
+            }
+            true
+        }
+        // Huffman tables: class (0 or 1) and table (0 to 3), 16 counts,
+        // then as many values (at most 256).
+        0xC4 => {
+            while let Some(&tc_th) = body.first() {
+                if tc_th >> 4 > 1 || tc_th & 0x0F > 3 {
+                    return false;
+                }
+                let Some(counts) = body.get(1..17) else {
+                    return false;
+                };
+                let values: usize = counts.iter().map(|&c| usize::from(c)).sum();
+                let Some(rest) = body.get(17 + values..).filter(|_| values <= 256) else {
+                    return false;
+                };
+                body = rest;
+            }
+            true
+        }
+        // A frame header: precision, height, width, the component count,
+        // three bytes a component.
+        0xC0..=0xC3 | 0xF7 => body
+            .get(5)
+            .is_some_and(|&n| body.len() == 6 + 3 * usize::from(n)),
+        // A restart interval.
+        0xDD => body.len() == 2,
+        // A scan header: the component count, two bytes a component,
+        // then three.
+        0xDA => {
+            body.first()
+                .is_some_and(|&n| body.len() == 4 + 2 * usize::from(n))
+                && !body.contains(&0xFF)
+        }
+        _ => false,
+    }
+}
+
+/// A valid Orientation (1 to 8) in the first IFD of an EXIF segment's
+/// TIFF data (after `Exif\0\0`): the tag `0x0112`, one SHORT. `None`
+/// for anything else: no such tag, another type or count, a value out
+/// of range, an offset out of the data.
+fn exif_orientation(tiff: &[u8]) -> Option<u8> {
+    let big = match tiff.get(..4)? {
+        b"MM\0*" => true,
+        b"II*\0" => false,
+        _ => return None,
+    };
+    let u16_at = |at: usize| {
+        let b = tiff.get(at..at.checked_add(2)?)?;
+        Some(if big {
+            u16::from_be_bytes([b[0], b[1]])
+        } else {
+            u16::from_le_bytes([b[0], b[1]])
+        })
+    };
+    let u32_at = |at: usize| {
+        let b = tiff.get(at..at.checked_add(4)?)?;
+        let b = [b[0], b[1], b[2], b[3]];
+        Some(if big {
+            u32::from_be_bytes(b)
+        } else {
+            u32::from_le_bytes(b)
+        })
+    };
+    let ifd = usize::try_from(u32_at(4)?).ok()?;
+    let count = usize::from(u16_at(ifd)?);
+    // Entries of 12 bytes after the count; the first Orientation.
+    let entry = (0..count)
+        .map_while(|i| {
+            ifd.checked_add(2 + 12 * i)
+                .filter(|&e| e + 12 <= tiff.len())
+        })
+        .find(|&e| u16_at(e) == Some(0x0112))?;
+    if u16_at(entry + 2)? != 3 || u32_at(entry + 4)? != 1 {
+        return None;
+    }
+    u8::try_from(u16_at(entry + 8)?)
+        .ok()
+        .filter(|o| (1..=8).contains(o))
+}
+
+/// The EXIF segment `ffmpeg` is given in place of a JPEG's own, 36
+/// bytes: `APP1` and its length (34); `Exif\0\0`; a big-endian TIFF
+/// header (`MM`, 42, the first IFD at 8); one IFD of one entry, the
+/// Orientation (tag `0x0112`, SHORT, one value: `orientation`, padded to
+/// four bytes); no next IFD. Enough for `ffmpeg` to rotate the frame,
+/// and nothing it could copy.
+pub(super) const fn minimal_exif(orientation: u8) -> [u8; 36] {
+    let mut segment = *b"\xFF\xE1\x00\x22Exif\0\0MM\x00\x2A\x00\x00\x00\x08\
+                         \x00\x01\x01\x12\x00\x03\x00\x00\x00\x01\x00\x00\x00\x00\
+                         \x00\x00\x00\x00";
+    segment[29] = orientation;
+    segment
 }
 
 /// Check that `out` is `target`, reading its header; what it found
