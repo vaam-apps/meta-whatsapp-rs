@@ -2587,6 +2587,12 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
        Meta's 500 KB animated limit and the row's capability is "stickers
        from images", which Zaileys makes animated too; animated stickers
        are L19c. The service's side stays M5c1's.
+    8. An input's ICC profile passes into a JPEG or PNG result, so its
+       colours stay right; its size is bounded by the output limit.
+       Stripping it is one filter in the fixed table.
+    9. The allocation bound stays 256 MiB, its edge documented (a 16-bit
+       RGBA frame of 8192 × 4096 is refused by ffmpeg's padding, 8192 ×
+       4094 converts); headroom is one literal.
   - **Review** (adversarial, 2026-11-01, against ffmpeg 6.1.1): a PNG's
     `zTXt` chunks were a memory bomb inside every bound (ffmpeg inflates
     each and keeps the text until the frame is decoded: four 100 KB
