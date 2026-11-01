@@ -78,11 +78,6 @@ pub enum Status {
     /// Shows only part of a payload (one message object), which a composed
     /// fixture wraps; the text says what the page shows. Lists no example.
     Fragments(&'static str),
-    /// Documents a feature this crate does not type yet: the payments
-    /// pages, `docs/coverage.md` row 32, planned since 2026-09-26 (roadmap
-    /// item P1 types them and moves them to `Typed`); the text says which.
-    /// Lists no example, and no case may cite it.
-    OutOfScope(&'static str),
     /// Listed by Meta but not readable when the mirror was taken; the text
     /// says what was tried. No case may cite it.
     Unreadable(&'static str),
@@ -236,11 +231,8 @@ fn coverage_problems<'a>(pages: &[Page], cases: impl IntoIterator<Item = &'a Cas
                 ));
                 continue;
             };
-            if matches!(listed.status, Status::Unreadable(_) | Status::OutOfScope(_)) {
-                out.push(format!(
-                    "{}: cites unreadable or out-of-scope {page}",
-                    c.fixture
-                ));
+            if matches!(listed.status, Status::Unreadable(_)) {
+                out.push(format!("{}: cites unreadable {page}", c.fixture));
             }
             if listed.unusable.iter().any(|(e, _)| *e == example) {
                 out.push(format!("{}: cites unusable {page} {example:?}", c.fixture));
@@ -264,7 +256,7 @@ fn coverage_problems<'a>(pages: &[Page], cases: impl IntoIterator<Item = &'a Cas
             }
         }
         match page.status {
-            Status::Unreadable(why) | Status::Fragments(why) | Status::OutOfScope(why) => {
+            Status::Unreadable(why) | Status::Fragments(why) => {
                 if why.is_empty() || !page.examples.is_empty() {
                     out.push(format!(
                         "{}: a page without examples says why, and lists none",
@@ -787,7 +779,7 @@ fn the_coverage_check_catches_uncovered_and_wrongly_cited_examples() {
         coverage_problems(PAGES_, [&ONLY_A, &B, &WRONG]),
         [
             "w.json: p has no example \"C\"",
-            "w.json: cites unreadable or out-of-scope gone",
+            "w.json: cites unreadable gone",
             "w.json: cites nowhere, which PAGES does not list",
             "w.json: cites unusable p \"U\"",
         ]

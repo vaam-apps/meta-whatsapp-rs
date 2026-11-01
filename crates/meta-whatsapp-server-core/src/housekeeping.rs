@@ -1,8 +1,9 @@
 //! Housekeeping (docs/design/server.md, section 2.4), over a [`Backend`]:
 //! every [`HOUSEKEEPING_INTERVAL`], one round ([`round`]) under one
 //! [`LeaderLock`] turn, purging what expired on every port of the bundle
-//! (the outbox past its retention, the expired idempotency records, and
-//! what the backend's [`Janitor`] sweeps).
+//! (the outbox past its retention, the inbox past the retention its store
+//! was built with, the expired idempotency records, and what the
+//! backend's [`Janitor`] sweeps).
 //!
 //! It reaches the database only through the bundle, so a backend an
 //! integrator brings is kept as the in-tree ones are, with nothing to
@@ -16,6 +17,8 @@ use std::future::Future;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
+
+use time::OffsetDateTime;
 
 use crate::backend::Backend;
 use crate::events::purge_outbox;
@@ -56,6 +59,11 @@ pub async fn run(
 /// One round of housekeeping on `backend`, under one turn of its
 /// [`LeaderLock`](crate::store::LeaderLock) for [`HOUSEKEEPING`], leased for
 /// [`HOUSEKEEPING_LEASE`]: purge its outbox past `retention`, then its
+/// inbox past the retention its `ConversationStore` applies
+/// (`ConversationStore::apply_retention`: the store's own setting, built
+/// in with the adapter's `with_retention`; the service's
+/// `WA_SERVER_INBOX_RETENTION`; nothing under `Retention::Keep`, the
+/// default, decision D10), then its
 /// expired idempotency records (already ignored: this bounds the table),
 /// then what its [`Janitor`](crate::store::Janitor) sweeps (on Postgres,
 /// the library's dead key/value rows: webhook dedup markers add one per
@@ -80,6 +88,21 @@ pub async fn round(backend: &dyn Backend, retention: Duration) -> bool {
     };
     if let Err(error) = purge_outbox(backend.outbox().as_ref(), retention).await {
         tracing::warn!(error = %error, "purging the outbox failed");
+    }
+    match backend
+        .conversations()
+        .apply_retention(OffsetDateTime::now_utc())
+        .await
+    {
+        Ok(purged) if purged.is_empty() => {}
+        Ok(purged) => tracing::debug!(
+            messages = purged.messages,
+            conversations = purged.conversations,
+            window_events = purged.window_events,
+            thread_owners = purged.thread_owners,
+            "inbox records past their retention purged"
+        ),
+        Err(error) => tracing::warn!(error = %error, "purging the inbox failed"),
     }
     match backend.idempotency().purge_idempotency_keys().await {
         Ok(0) => {}

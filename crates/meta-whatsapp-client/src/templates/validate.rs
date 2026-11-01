@@ -19,6 +19,7 @@ use super::definition::{
     AppDeepLink, Button, CarouselCard, FlowAction, FlowButton, HeaderComponent, HeaderFormat,
     OtpButton, SupportedApp, TemplateComponent, TemplateDefinition, TemplateEdit,
 };
+use super::payments::PaymentRequestSetting;
 use super::types::{ParameterFormat, TemplateCategory};
 
 type Check = Result<(), ValidationError>;
@@ -173,6 +174,7 @@ struct Ctx<'a> {
     auth: bool,
     lto: bool,
     product_header: bool,
+    header_format: Option<&'a HeaderFormat>,
 }
 
 fn components(
@@ -185,11 +187,13 @@ fn components(
     let mut n = Counts::default();
     let mut has_otp = false;
     let mut product_header = false;
+    let mut header_format = None;
     for c in list {
         match c {
             TemplateComponent::Header(h) => {
                 n.header += 1;
                 product_header |= h.format == HeaderFormat::Product;
+                header_format = Some(&h.format);
             }
             TemplateComponent::Body(_) => n.body += 1,
             TemplateComponent::Footer(_) => n.footer += 1,
@@ -280,6 +284,7 @@ fn components(
         auth,
         lto: n.lto == 1,
         product_header,
+        header_format,
     };
     if auth {
         auth_components(list, path)?;
@@ -674,6 +679,7 @@ fn button_list(buttons: &[Button], ctx: &Ctx<'_>, field: &str) -> Check {
             "at most 1 COPY_CODE button",
         ));
     }
+    payment_request_buttons(buttons, field)?;
     // `templates/components#quick-reply-buttons`: quick replies and other
     // buttons must form two groups ("Quick Reply, URL, Quick Reply" is
     // invalid).
@@ -778,6 +784,12 @@ fn button(b: &Button, ctx: &Ctx<'_>, field: &str) -> Check {
             }
             Ok(())
         }
+        Button::OrderDetails { text: t } => order_details_button(t, ctx, field),
+        Button::PaymentRequest {
+            text: t,
+            payment_setting,
+        } => payment_request_button(t, payment_setting, field),
+        Button::Other(raw) => untyped_payment_button(raw, field),
         Button::RequestContactInfo { text: t } => {
             // `business-scoped-user-ids#using-templates`: utility and
             // marketing templates; label fixed.
@@ -799,6 +811,103 @@ fn button(b: &Button, ctx: &Ctx<'_>, field: &str) -> Check {
         }
         _ => Ok(()),
     }
+}
+
+/// A payment button that did not parse typed (a method this client has
+/// no rules for, a setting without its object, `type` spelled
+/// `Payment_Request`) would be created unchecked: refused, as in a send.
+/// Any other button this client does not model passes as written.
+fn untyped_payment_button(raw: &serde_json::Value, field: &str) -> Check {
+    let payment = raw
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|t| {
+            t.eq_ignore_ascii_case("ORDER_DETAILS") || t.eq_ignore_ascii_case("PAYMENT_REQUEST")
+        });
+    if payment {
+        return Err(err(
+            field,
+            "an ORDER_DETAILS or PAYMENT_REQUEST button must be typed: a label, and a payment method this client knows with its object",
+        ));
+    }
+    Ok(())
+}
+
+/// `payments-br/payment-request-cta`, the buttons table: `text` "Must be
+/// `Copy Pix code` for `pix_dynamic_code`, …"; a sample value, and none
+/// for `offsite_card_pay` ("set `type` to `offsite_card_pay` and omit this
+/// object").
+fn payment_request_button(t: &str, setting: &PaymentRequestSetting, field: &str) -> Check {
+    let label = setting.label();
+    if t != label {
+        return Err(err(
+            format!("{field}.text"),
+            format!(
+                "must be `{label}` for a `{}` payment request",
+                setting.type_name()
+            ),
+        ));
+    }
+    setting.validate(&format!("{field}.payment_setting"), false)
+}
+
+/// `payments-br/payment-request-cta`: "up to three payment request
+/// buttons in a message, each supporting a different payment method";
+/// "A template that includes a payment request button supports three
+/// buttons in total".
+fn payment_request_buttons(buttons: &[Button], field: &str) -> Check {
+    let mut methods = BTreeSet::new();
+    for (i, b) in buttons.iter().enumerate() {
+        if let Button::PaymentRequest {
+            payment_setting, ..
+        } = b
+            && !methods.insert(payment_setting.type_name())
+        {
+            return Err(err(
+                format!("{field}.buttons[{i}].payment_setting.type"),
+                "each payment request button needs a different payment method",
+            ));
+        }
+    }
+    if !methods.is_empty() && buttons.len() > 3 {
+        return Err(err(
+            format!("{field}.buttons"),
+            "a template with a payment request button has at most 3 buttons",
+        ));
+    }
+    Ok(())
+}
+
+/// `payments-br/orderdetailstemplate`: "The `category` must be `UTILITY`
+/// or `MARKETING`, and the header `format` must be `TEXT`, `IMAGE`, or
+/// `DOCUMENT`" (India's page: "categorized as Utility", or marketing with
+/// `display_format`). The label is not checked beyond being there: India
+/// fixes it to `Review and Pay`, Brazil's example prints a placeholder.
+fn order_details_button(t: &str, ctx: &Ctx<'_>, field: &str) -> Check {
+    if t.trim().is_empty() {
+        return Err(err(format!("{field}.text"), "must not be empty"));
+    }
+    if ctx
+        .category
+        .is_some_and(|c| !matches!(c, TemplateCategory::Utility | TemplateCategory::Marketing))
+    {
+        return Err(err(
+            field,
+            "ORDER_DETAILS requires a UTILITY or MARKETING template",
+        ));
+    }
+    if let Some(format) = ctx.header_format
+        && !matches!(
+            format,
+            HeaderFormat::Text | HeaderFormat::Image | HeaderFormat::Document
+        )
+    {
+        return Err(err(
+            field,
+            "an order details template's header is TEXT, IMAGE or DOCUMENT",
+        ));
+    }
+    Ok(())
 }
 
 /// `marketing-messages/deep-links`: `android_deep_link` and

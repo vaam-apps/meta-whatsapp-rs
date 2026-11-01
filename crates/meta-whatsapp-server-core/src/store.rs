@@ -182,6 +182,15 @@ pub trait RecordStore: Send + Sync + 'static {
     /// from the WABA's tombstone, if it has one
     /// ([`WabaTombstone::previous_for`](crate::model::WabaTombstone::previous_for)),
     /// in the same step: an unbinding that committed before it is seen.
+    /// The numbers follow the same rules (roadmap M2h): one the WABA had
+    /// and `numbers` lacks is released, leaving its tombstone
+    /// ([`NumberTombstone::of`](crate::model::NumberTombstone::of): the
+    /// tenant, now, and its `previous_tenant_released_at`) in the same
+    /// step; one already `tenant`'s (under this WABA or another of
+    /// `tenant`'s) keeps its `attached_at` and `previous_tenant_released_at`;
+    /// one newly bound reads its tombstone, if it has one, in the same step
+    /// ([`NumberBinding::newly_bound`](crate::model::NumberBinding::newly_bound):
+    /// its `attached_at` now, never before that release).
     /// Serialized with [`Self::delete_tenant`] of the
     /// same tenant: a binding lands before the deletion (which then finds
     /// the WABA) or after it (which then finds no tenant), never beside it.
@@ -201,7 +210,9 @@ pub trait RecordStore: Send + Sync + 'static {
     /// rule: see the [module](self)). The WABA's tombstone
     /// ([`WabaTombstone::of`](crate::model::WabaTombstone::of): its tenant,
     /// now, and the binding's `previous_tenant_unbound_at`) replaces the
-    /// one it had, atomically with the removal (roadmap S2b).
+    /// one it had, atomically with the removal (roadmap S2b), and so does
+    /// each of its numbers' ([`NumberTombstone::of`](crate::model::NumberTombstone::of),
+    /// roadmap M2h). [`Self::unbind_waba_if`] leaves the same records.
     async fn unbind_waba(&self, waba_id: &WabaId) -> StoreResult<bool>;
 
     /// Remove the binding of `epoch.waba_id` and its numbers only if it is

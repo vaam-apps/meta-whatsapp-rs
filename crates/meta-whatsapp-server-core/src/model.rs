@@ -333,7 +333,8 @@ pub struct WabaBinding {
     pub previous_tenant_unbound_at: Option<OffsetDateTime>,
 }
 
-/// What [`WabaBinding::previous_tenant_unbound_at`] reads for a binding
+/// What [`WabaBinding::previous_tenant_unbound_at`] (and, since roadmap
+/// M2h, [`NumberBinding::previous_tenant_released_at`]) reads for a binding
 /// made before the store recorded moves (Postgres: its rows from before
 /// migration 4, and those a replica of an earlier release writes during a
 /// rolling deploy): the Unix epoch, as "a previous tenant may have held
@@ -474,6 +475,96 @@ pub struct NumberBinding {
     pub status: NumberStatus,
     /// When the status last changed.
     pub updated_at: OffsetDateTime,
+    /// When the number came under its tenant: when a binding of the tenant
+    /// first listed it (roadmap M2h). A refresh of its WABA, and a move to
+    /// another WABA of the same tenant while it is bound, keep it; listed
+    /// again after its tenant released it, it begins again. Never before
+    /// its last release ([`NumberTombstone::released_at`]). A number bound
+    /// before the store recorded numbers' moves (on Postgres, before
+    /// migration 5) reads its WABA's [`WabaBinding::attached_at`].
+    pub attached_at: OffsetDateTime,
+    /// When the number was last released by a tenant other than its
+    /// current one: the record of its last move (roadmap M2h, the
+    /// number's counterpart of [`WabaBinding::previous_tenant_unbound_at`]),
+    /// read from its [`NumberTombstone`] when it came under its tenant and
+    /// kept while it stays there. `None`: no other tenant held it. A
+    /// tenant deleted since counts as another tenant. A number bound before
+    /// the store recorded numbers' moves reads [`UNRECORDED_MOVE`].
+    pub previous_tenant_released_at: Option<OffsetDateTime>,
+}
+
+impl NumberBinding {
+    /// `phone_number_id`, newly bound to `tenant` under `waba_id` at
+    /// `now` (it was not `tenant`'s a moment before), after its last
+    /// release `released` (`None`: never released): connected, its
+    /// [`Self::attached_at`] `now` but never before that release, and its
+    /// previous tenant read from the release ([`NumberTombstone::previous_for`]).
+    /// The memory backends apply this as written; the Postgres one in its
+    /// SQL; the conformance suite holds both to it.
+    pub fn newly_bound(
+        phone_number_id: PhoneNumberId,
+        waba_id: WabaId,
+        tenant: TenantId,
+        now: OffsetDateTime,
+        released: Option<&NumberTombstone>,
+    ) -> Self {
+        Self {
+            previous_tenant_released_at: released.and_then(|t| t.previous_for(&tenant)),
+            attached_at: released.map_or(now, |t| now.max(t.released_at)),
+            phone_number_id,
+            waba_id,
+            tenant_id: tenant,
+            status: NumberStatus::Connected,
+            updated_at: now,
+        }
+    }
+}
+
+/// The record a number's last release leaves (roadmap M2h, the number's
+/// counterpart of [`WabaTombstone`]): which tenant held it (`None` once
+/// that tenant was deleted), when it was released (its WABA unbound, or a
+/// binding that no longer lists it), and when it had last been released
+/// by a tenant other than that one. A store keeps one per number ever
+/// released (Postgres: `wa_server_number_tombstones`), written atomically
+/// with the release, and reads it when a binding takes the number anew
+/// ([`NumberBinding::newly_bound`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberTombstone {
+    /// The tenant that released it; `None` once that tenant was deleted.
+    pub tenant_id: Option<TenantId>,
+    /// When it was released.
+    pub released_at: OffsetDateTime,
+    /// The released binding's [`NumberBinding::previous_tenant_released_at`].
+    pub previous_tenant_released_at: Option<OffsetDateTime>,
+}
+
+impl NumberTombstone {
+    /// The record `binding`'s release at `at` leaves.
+    pub fn of(binding: &NumberBinding, at: OffsetDateTime) -> Self {
+        Self {
+            tenant_id: Some(binding.tenant_id.clone()),
+            released_at: at,
+            previous_tenant_released_at: binding.previous_tenant_released_at,
+        }
+    }
+
+    /// When the number was last released by a tenant other than `tenant`,
+    /// for a binding of it to `tenant`: this release, when it was another
+    /// tenant's (or a deleted tenant's); else the one before it.
+    pub fn previous_for(&self, tenant: &TenantId) -> Option<OffsetDateTime> {
+        if self.tenant_id.as_ref() == Some(tenant) {
+            self.previous_tenant_released_at
+        } else {
+            Some(self.released_at)
+        }
+    }
+
+    /// `tenant` was deleted: from now on, any tenant is another.
+    pub fn forget_tenant(&mut self, tenant: &TenantId) {
+        if self.tenant_id.as_ref() == Some(tenant) {
+            self.tenant_id = None;
+        }
+    }
 }
 
 /// A page request: at most `limit` items after the exclusive cursor
