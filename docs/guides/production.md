@@ -438,12 +438,15 @@ notification queue on top must be idempotent itself: tag each message with
   `ffmpeg` you install on the host (built with libopus; the library
   links none, and the service's image carries none, so its licence is
   that of the build you choose). Point `with_program` at an absolute
-  path, call `check()` at startup so a missing binary is a configuration
-  error before the first upload, and bound how many conversions run at
+  path, call `check()` at startup so a missing binary or libopus fails
+  there (`ConversionError::BinaryMissing`, `EncoderMissing`) rather than
+  at the first upload, and bound how many conversions run at
   once (each is a process on a CPU core; the converter queues nothing).
   Its input and run time are bounded (64 MiB and 60 s by default), the
-  result to the 16 MB upload limit, and `ffmpeg`'s own diagnostics are
-  never logged: they name files and URLs.
+  result to the 16 MiB upload limit, and `ffmpeg`'s own diagnostics are
+  never logged: they name files and URLs. Its failures are
+  `Error::Conversion` (retry only `Timeout`; none was sent to Meta).
+  CI proves it against a real `ffmpeg` (docs/dev-environment.md).
 
 ## 8. Retention and erasure on Postgres
 

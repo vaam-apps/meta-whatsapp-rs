@@ -55,11 +55,8 @@ outside integrator would; no library crate depends on a service crate;
 other or on `meta-whatsapp-adapters` (except as a dev-dependency for
 tests); `meta-whatsapp-bot` sits above both and depends on core, client
 and webhooks only, never on the adapters (dev-dependency aside) or the
-facade, which re-exports it behind its `bot` feature;
-`meta-whatsapp-adapters` depends on `meta-whatsapp-client` only behind
-its `ffmpeg` feature, for the one trait it implements that is not
-core's (`media::MediaConverter`, roadmap L19). An adapter never leaks
-its library's types through a port.
+facade, which re-exports it behind its `bot` feature. An adapter never
+leaks its library's types through a port.
 
 ## Ports (`meta-whatsapp-core`)
 
@@ -70,6 +67,7 @@ its library's types through a port.
 | `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at`; `message` (the lookup, scoped: `phone_number_id, id`, never another number's); `record_window_event`, `window_events` (a call or a standby message that reopens the window: never history, never the summary); `set_thread_owner`, `thread_owner` (Conversation Routing: the latest record wins); `put_contact`, `remove_contact`, `contact`, `contacts` (the coexistence address book; a removal is kept, key and time only, so an older sync arriving after it is refused); `link_identity`, `identity_links` (two identities of one person on one number, as Meta reports a BSUID or number change); `identities` (a person's keys on one number: the closure over the synced contacts and the links, read only); `erase_all` (a person on one number, deleted: every record under their keys, the contacts and links naming them, and their messages in groups redacted or deleted per the store's `ErasureMode`); `purge_before` (by age, one number or all); `erase` (one key), `erasure_mode`, `retention`, `apply_retention` (provided: redact group messages and keep everything unless the adapter is configured) | `meta_whatsapp_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
+| `media::MediaConverter` | `convert` (a `MediaInput` into a `TargetFormat`, today `OggOpus`: a voice message's mono Ogg Opus, uploaded as `audio/ogg`; `TargetFormat::max_bytes` is core's own `media::AUDIO_MAX_BYTES`, kept equal to the client's upload table by `every_target_format_is_what_the_upload_check_takes`) | rustdoc; `meta-whatsapp-client` re-exports it from `client::media` (`Media::upload_converted`) |
 
 Typed stores are built **on `KvStore`**, never as new ports: token vault,
 OTP challenges, webhook dedup, Embedded Signup sessions, bot cooldowns. An
@@ -197,7 +195,7 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   automatically, although `may_have_been_sent` is `false`.
 - Multi-step flows (Embedded Signup onboarding) wrap failures with
   `Error::in_step("stable_step_name")` so callers know how far they got.
-- **`Error::Credit(CreditError)`**, the one leaf added for a feature
+- **`Error::Credit(CreditError)`**, the first leaf added for a feature
   module, and why: a Solution Partner credit line is money (the partner
   pays for every message on a shared line, and an attached line cannot be
   taken back), and its steps stop in ways no existing leaf describes. A
@@ -229,6 +227,24 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   `Error::credit()` (looks through `Step`, like `graph()`),
   `CreditError::revocation()`, and `EmbeddedSignup::is_credit_line_revoked`
   / `is_credit_step_busy`.
+- **`Error::Conversion(ConversionError)`**, the second leaf added for a
+  feature, and why: a `media::MediaConverter` (roadmap L19) fails in ways
+  that are not input errors alone. A converter that is not installed
+  (`BinaryMissing`) or lacks an encoder (`EncoderMissing`) is the
+  deployment's to fix (`FeatureNotAvailable`); a run past its time limit
+  (`Timeout`, `ServiceUnavailable`) is the one worth retrying; an input
+  it cannot read (`InputRejected`) is `InvalidParameter`; an output of
+  the wrong format (`OutputInvalid`) or a process killed (`Killed`) is
+  `Unknown`. A `ValidationError` would make the first two the caller's
+  fault and the timeout final; a `TransportError::Timeout` would say a
+  conversion may have reached Meta. None of them was sent:
+  `may_have_been_sent` is `false` for every variant. An empty input, or
+  one too large before or after conversion, stays a `ValidationError` on
+  `input`. A missing binary is this node, not a `ConfigError`, so that a
+  caller handles every converter failure in one place. It adds no
+  `ErrorKind`, so the service's error codes are unchanged (its
+  `classify` answers it `internal` until a route converts, M5c1). Helper:
+  `Error::conversion()` (looks through `Step`).
 - Examples and binaries use `anyhow::Result` at the edge.
 - No module adds a variant to the root for its own convenience; a new leaf
   needs a reason in this document.
@@ -914,8 +930,8 @@ Logs carry sizes, digests and field names only — never payload values.
   redacts or deletes are the number's, so the number lock covers them;
   `set_thread_owner` and `put_contact` one upsert
   whose update applies only when the stored record is not later.
-- `media::FfmpegConverter` (feature `ffmpeg`): `meta-whatsapp-client`'s
-  `media::MediaConverter` over an `ffmpeg` binary the integrator
+- `media::FfmpegConverter` (feature `ffmpeg`): core's
+  `media::MediaConverter` port over an `ffmpeg` binary the integrator
   installs, run with `tokio::process` (no shell) and fixed literal
   arguments; nothing is linked. The input goes on stdin and the result
   comes from stdout (no file); `-protocol_whitelist pipe` and a
@@ -923,9 +939,9 @@ Logs carry sizes, digests and field names only — never payload values.
   making ffmpeg open a file or a URL; input, output (the upload limit)
   and run time are bounded, the process killed past the last two; its
   stderr is drained and never kept (it names files); the output is
-  checked to be mono Ogg Opus. Errors use existing leaves: a missing
-  binary is `ConfigError`, input refused a `ValidationError` on
-  `input`, a timeout `TransportError::Timeout`.
+  checked to be mono Ogg Opus. An empty or oversized input (or result)
+  is a `ValidationError` on `input`; every other failure an
+  `Error::Conversion` (see Error tree).
 - `store::RedisKvStore` (feature `redis`; CAS via Lua). Requires the
   `noeviction` policy: every key with a TTL here enforces a limit (OTP
   issue logs, dedup markers), and Redis evicts silently.

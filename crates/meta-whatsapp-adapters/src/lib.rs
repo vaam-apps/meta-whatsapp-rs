@@ -12,7 +12,7 @@
 //! | `reqwest` | `http::ReqwestTransport` | `HttpTransport` | reqwest (rustls, aws-lc-rs, HTTP/2) |
 //! | `postgres` | `store::PostgresKvStore`, `store::PostgresConversationStore`, `store::postgres::migrate` | `KvStore`, `ConversationStore` | sqlx (Postgres, tokio, rustls) |
 //! | `redis` | `store::RedisKvStore` | `KvStore` | redis (tokio, connection manager; no TLS) |
-//! | `ffmpeg` | `media::FfmpegConverter` | `meta-whatsapp-client`'s `media::MediaConverter` | `meta-whatsapp-client`, tokio `process`; runs an `ffmpeg` you install, links none |
+//! | `ffmpeg` | `media::FfmpegConverter` | `MediaConverter` | tokio `process`; runs an `ffmpeg` you install, links none |
 //!
 //! Every feature compiles on its own; none is required by another.
 //!

@@ -1,5 +1,6 @@
 //! Media conversion over an `ffmpeg` the integrator installs (feature
-//! `ffmpeg`): [`FfmpegConverter`], a [`MediaConverter`].
+//! `ffmpeg`): [`FfmpegConverter`], an implementation of core's
+//! [`MediaConverter`] port.
 //!
 //! Nothing is linked or bundled. The converter starts the `ffmpeg`
 //! binary as a child process, feeds it the input on stdin and reads the
@@ -44,12 +45,17 @@
 //!
 //! | Bound or failure | Default | Error |
 //! | --- | --- | --- |
-//! | `ffmpeg` missing or not executable | — | [`Error::Config`] |
-//! | the output is not mono Ogg Opus (a binary that is not the `ffmpeg` it should be) | — | [`Error::Config`] |
 //! | an empty input, or one over [`with_max_input_bytes`](FfmpegConverter::with_max_input_bytes) | 64 MiB | [`Error::Validation`] on `input`, before `ffmpeg` starts |
-//! | a result over the upload limit ([`TargetFormat::max_bytes`], 16 MB) | — | [`Error::Validation`] on `input`; `ffmpeg` is killed |
-//! | `ffmpeg` fails (input it cannot read, a format off the list) | — | [`Error::Validation`] on `input` |
-//! | a run over [`with_timeout`](FfmpegConverter::with_timeout) | 60 s | `Error::Transport(TransportError::Timeout)`; `ffmpeg` is killed |
+//! | a result over the upload limit ([`TargetFormat::max_bytes`], 16 MiB) | — | [`Error::Validation`] on `input`; `ffmpeg` is killed |
+//! | `ffmpeg` missing or not executable | — | [`ConversionError::BinaryMissing`] |
+//! | no libopus ([`FfmpegConverter::check`]) | — | [`ConversionError::EncoderMissing`] |
+//! | `ffmpeg` fails (input it cannot read, a format off the list) | — | [`ConversionError::InputRejected`] |
+//! | the output is not mono Ogg Opus (a binary that is not the `ffmpeg` it should be) | — | [`ConversionError::OutputInvalid`] |
+//! | a run over [`with_timeout`](FfmpegConverter::with_timeout) | 60 s | [`ConversionError::Timeout`], the one retryable; `ffmpeg` is killed |
+//! | `ffmpeg` killed by a signal, or a pipe to it broken | — | [`ConversionError::Killed`] |
+//!
+//! Every [`ConversionError`] is [`Error::Conversion`]: never
+//! `may_have_been_sent` (a conversion sends nothing to Meta).
 //!
 //! `ffmpeg`'s diagnostics (stderr) are read and discarded, never put in
 //! an error or a log: they name files and URLs. An error says what
@@ -63,10 +69,10 @@
 //! # async fn demo(wav: Vec<u8>) -> meta_whatsapp_core::Result<()> {
 //! use std::time::Duration;
 //! use meta_whatsapp_adapters::media::FfmpegConverter;
-//! use meta_whatsapp_client::media::{MediaConverter, MediaInput, TargetFormat};
+//! use meta_whatsapp_core::media::{MediaConverter, MediaInput, TargetFormat};
 //!
 //! let converter = FfmpegConverter::new().with_timeout(Duration::from_secs(30));
-//! converter.check().await?; // at startup: a missing ffmpeg is a configuration error
+//! converter.check().await?; // at startup: a missing ffmpeg or libopus fails here
 //! let note = converter
 //!     .convert(MediaInput::new(wav), TargetFormat::OggOpus)
 //!     .await?;
@@ -84,8 +90,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use meta_whatsapp_client::media::{ConvertedMedia, MediaConverter, MediaInput, TargetFormat};
-use meta_whatsapp_core::error::{ConfigError, TransportError, ValidationError};
+use meta_whatsapp_core::error::{ConversionError, ValidationError};
+use meta_whatsapp_core::media::{ConvertedMedia, MediaConverter, MediaInput, TargetFormat};
 use meta_whatsapp_core::{Error, Result};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -225,11 +231,13 @@ impl FfmpegConverter {
     ///
     /// # Errors
     ///
-    /// [`Error::Config`] when the binary cannot be started, does not list
-    /// its encoders, or lists no `libopus`;
-    /// `Error::Transport(TransportError::Timeout)` past the timeout.
+    /// [`ConversionError::BinaryMissing`] when the binary cannot be
+    /// started, [`ConversionError::OutputInvalid`] when it does not list
+    /// its encoders as ffmpeg does, [`ConversionError::EncoderMissing`]
+    /// when it lists no `libopus`, [`ConversionError::Timeout`] past the
+    /// timeout.
     pub async fn check(&self) -> Result<()> {
-        let overflow = ConfigError::new(format!(
+        let overflow = ConversionError::OutputInvalid(format!(
             "`{}` listed more than {ENCODERS_CAP} bytes of encoders: is it ffmpeg?",
             self.program.display()
         ));
@@ -237,7 +245,7 @@ impl FfmpegConverter {
             .run(ENCODERS_ARGS, None, ENCODERS_CAP, overflow.into())
             .await?;
         if !status.success() {
-            return Err(ConfigError::new(format!(
+            return Err(ConversionError::OutputInvalid(format!(
                 "`{}` did not list its encoders ({}): is it ffmpeg?",
                 self.program.display(),
                 describe(status)
@@ -254,7 +262,7 @@ impl FfmpegConverter {
         if listed {
             Ok(())
         } else {
-            Err(ConfigError::new(format!(
+            Err(ConversionError::EncoderMissing(format!(
                 "`{}` has no libopus encoder: Ogg Opus needs an ffmpeg built with libopus",
                 self.program.display()
             ))
@@ -317,7 +325,7 @@ impl FfmpegConverter {
             let status = child
                 .wait()
                 .await
-                .map_err(|e| process_error("wait for", e))?;
+                .map_err(|e| process_error("wait for", &e))?;
             Ok::<_, Error>((out, status))
         };
         let outcome = tokio::time::timeout(self.timeout, work).await;
@@ -333,7 +341,7 @@ impl FfmpegConverter {
                     timeout_ms = u64::try_from(self.timeout.as_millis()).unwrap_or(u64::MAX),
                     "ffmpeg ran past its timeout and was killed"
                 );
-                Err(TransportError::Timeout.into())
+                Err(ConversionError::Timeout(self.timeout).into())
             }
         }
     }
@@ -367,8 +375,7 @@ impl MediaConverter for FfmpegConverter {
         let overflow = ValidationError::new(
             "input",
             format!(
-                "converted to {target:?}, it exceeds {max} bytes, the most {:?} media can be uploaded with",
-                target.kind()
+                "converted to {target:?}, it exceeds {max} bytes, the most an upload of it takes"
             ),
         );
         let (out, status) = self
@@ -376,19 +383,16 @@ impl MediaConverter for FfmpegConverter {
             .await?;
         if !status.success() {
             return Err(match status.code() {
-                Some(_) => ValidationError::new(
-                    "input",
-                    format!(
-                        "ffmpeg could not convert it to {target:?} ({}); its diagnostics are withheld",
-                        describe(status)
-                    ),
-                )
+                Some(_) => ConversionError::InputRejected(format!(
+                    "ffmpeg could not convert it to {target:?} ({}); its diagnostics are withheld",
+                    describe(status)
+                ))
                 .into(),
-                None => Error::Other(anyhow::anyhow!("ffmpeg was stopped ({})", describe(status))),
+                None => ConversionError::Killed(format!("ffmpeg was {}", describe(status))).into(),
             });
         }
         check_output(target, &out).map_err(|why| {
-            ConfigError::new(format!(
+            ConversionError::OutputInvalid(format!(
                 "`{}` returned {why}, not mono Ogg Opus: is it ffmpeg with libopus?",
                 self.program.display()
             ))
@@ -409,7 +413,7 @@ async fn read_bounded<R: AsyncRead + Unpin>(
         .take(max.saturating_add(1))
         .read_to_end(&mut out)
         .await
-        .map_err(|e| process_error("read the output of", e))?;
+        .map_err(|e| process_error("read the output of", &e))?;
     if u64::try_from(out.len()).unwrap_or(u64::MAX) > max {
         return Err(overflow);
     }
@@ -417,25 +421,28 @@ async fn read_bounded<R: AsyncRead + Unpin>(
 }
 
 /// A failure to start the program. Missing or not executable is the
-/// integrator's configuration.
+/// deployment's to fix; anything else (out of processes, say) stopped the
+/// conversion before it began.
 fn spawn_error(program: &Path, e: &io::Error) -> Error {
     match e.kind() {
-        io::ErrorKind::NotFound => ConfigError::new(format!(
+        io::ErrorKind::NotFound => ConversionError::BinaryMissing(format!(
             "ffmpeg not found: `{}` could not be started; install ffmpeg, or point FfmpegConverter::with_program at it",
             program.display()
         ))
         .into(),
-        io::ErrorKind::PermissionDenied => ConfigError::new(format!(
+        io::ErrorKind::PermissionDenied => ConversionError::BinaryMissing(format!(
             "ffmpeg could not be started: `{}` is not executable",
             program.display()
         ))
         .into(),
-        _ => Error::Other(anyhow::anyhow!("could not start ffmpeg: {e}")),
+        _ => ConversionError::Killed(format!("could not start ffmpeg: {e}")).into(),
     }
 }
 
-fn process_error(what: &str, e: io::Error) -> Error {
-    Error::Other(anyhow::Error::new(e).context(format!("could not {what} ffmpeg")))
+/// A pipe to the process, or waiting for it, failed: the conversion
+/// stopped. An I/O error's text names no file of the input.
+fn process_error(what: &str, e: &io::Error) -> Error {
+    ConversionError::Killed(format!("could not {what} ffmpeg: {e}")).into()
 }
 
 /// An exit status in words, without the program's output.

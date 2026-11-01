@@ -16,6 +16,9 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
       ─ Webhook / Storage / Sink / Crypto / Config
       ─ Credit(CreditError)                       Solution Partner credit line: refused, busy,
                                                   reconcile, or a revocation part-way (with report)
+      ─ Conversion(ConversionError)               a media converter failed: binary or encoder missing,
+                                                  timeout (the one retryable), input rejected, bad output, killed;
+                                                  never sent
       ─ Step{step, source}                        multi-step flow failed at `step`
       ─ Other(anyhow::Error)                      integrator code
 ```
@@ -93,7 +96,10 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   whose `RevocationIncomplete` carries the partial report instead of
   leaving it in a log line. Reach it through a helper that looks through
   `Step` (`Error::credit()`, like `Error::graph()`), and document the
-  helpers in `docs/architecture.md` § Error tree.
+  helpers in `docs/architecture.md` § Error tree. The second is
+  `Error::Conversion(ConversionError)` (`Error::conversion()`): a media
+  converter's failures, each with an existing kind, `Timeout` the only
+  retryable one, none ever `may_have_been_sent`.
 - `anyhow` only wraps errors from code we don't own
   (`TransportError::Backend`, `StorageError::Backend`, `SinkError::Delivery`,
   `Error::Other`).

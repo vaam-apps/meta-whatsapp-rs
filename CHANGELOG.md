@@ -218,29 +218,37 @@ stored data, the owner's).
 ### Added
 
 - **Media conversion** (roadmap L19, parity row 48, from
-  `business-phone-numbers/media` and `messages/audio-messages`):
-  `meta_whatsapp_client::media::MediaConverter`, an object-safe async
-  trait (`convert(MediaInput, TargetFormat) -> Result<ConvertedMedia>`),
+  `business-phone-numbers/media` and `messages/audio-messages`): a new
+  port, `meta_whatsapp_core::media::MediaConverter`, an object-safe
+  async trait (`convert(MediaInput, TargetFormat) -> Result<ConvertedMedia>`),
   and `TargetFormat::OggOpus`, a voice message's mono Ogg Opus, uploaded
-  as `audio/ogg` (`mime_type`, `extension`, `kind`, `max_bytes`);
-  `MediaInput` and `ConvertedMedia` show only their length in `Debug`.
-  `meta_whatsapp_adapters::media::FfmpegConverter` implements it behind
-  a new `ffmpeg` feature of the adapters and the facade (off by default;
-  in `full`): it runs an `ffmpeg` you install (`with_program`, else
-  `ffmpeg` on `PATH`) with fixed arguments, the input on stdin and the
-  result on stdout, its input protocols restricted to the pipe and its
-  input formats to recording formats, bounded in input
-  (`with_max_input_bytes`, 64 MiB), output (the 16 MB upload limit) and
+  as `audio/ogg` (`mime_type`, `extension`, `max_bytes`: core's
+  `media::AUDIO_MAX_BYTES`, 16 MiB); `MediaInput` and `ConvertedMedia`
+  show only their length in `Debug`. `meta_whatsapp_client::media`
+  re-exports them and adds `Media::upload_converted(converted, stem)`
+  (uploaded as the format's type, named `stem.ogg`, checked by
+  `validate_upload` first). A new error node,
+  `Error::Conversion(ConversionError)` (`BinaryMissing`, `EncoderMissing`,
+  `Timeout`, `InputRejected`, `OutputInvalid`, `Killed`; `Error::conversion()`),
+  with existing kinds, retryable only on `Timeout`, never
+  `may_have_been_sent`; no `ErrorKind` is added, so the service's error
+  codes are unchanged. `meta_whatsapp_adapters::media::FfmpegConverter`
+  implements the port behind a new `ffmpeg` feature of the adapters and
+  the facade (off by default; in `full`): it runs an `ffmpeg` you install
+  (`with_program`, else `ffmpeg` on `PATH`) with fixed arguments, the
+  input on stdin and the result on stdout, its input protocols
+  restricted to the pipe and its input formats to recording formats,
+  bounded in input (`with_max_input_bytes`, 64 MiB; refused as
+  `Error::Validation` on `input`), output (the 16 MiB upload limit) and
   time (`with_timeout`, 60 s; killed past it), its stderr withheld, the
   result checked to be mono Ogg Opus; `check()` finds a missing binary or
-  libopus at startup. A missing `ffmpeg` is `Error::Config`, unreadable
-  input `Error::Validation` on `input`, a timeout
-  `TransportError::Timeout`. Nothing is linked, and the service's image
-  gains no `ffmpeg`. Images into stickers and resizing are not
-  converted. For contributors: the real-`ffmpeg` tests
-  (`crates/meta-whatsapp-adapters/tests/ffmpeg.rs`) skip without one
-  unless `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`; `META_WHATSAPP_RS_TEST_FFMPEG`
-  names the binary.
+  libopus at startup. Nothing is linked, and the service's image gains
+  no `ffmpeg`. Images into stickers and resizing are not converted
+  (roadmap L19b). For contributors: the real-`ffmpeg` tests
+  (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`) skip without one unless
+  `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`, which CI sets after installing
+  `ffmpeg` on its runner; `META_WHATSAPP_RS_TEST_FFMPEG` names the
+  binary (docs/dev-environment.md).
 - **Multi-Partner Solutions and migration intents**
   (`meta_whatsapp_client::partners`, roadmap L12, parity rows 144 and
   145, from `solution-providers/multi-partner-solutions`,

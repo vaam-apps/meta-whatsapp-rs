@@ -107,11 +107,13 @@ files: `start_upload_session`, `upload_chunk`, `upload_session_status`.
 - No virus scanning or image resizing, and no conversion of its own:
   unsupported types are refused rather than converted. A recording can
   become a voice message's Ogg Opus through
-  `meta_whatsapp_client::media::MediaConverter` (`TargetFormat::OggOpus`,
-  upload it as `audio/ogg` and send `Audio::new(id).voice()`), which
+  `meta_whatsapp_client::media::MediaConverter` (core's port, re-exported;
+  `TargetFormat::OggOpus`; upload the result with
+  `Media::upload_converted` and send `Audio::new(id).voice()`), which
   `meta_whatsapp_rs::adapters::media::FfmpegConverter` implements
   (feature `ffmpeg`, off by default) by running an `ffmpeg` with libopus
-  that you install; call its `check()` at startup.
+  that you install; call its `check()` at startup. Its failures are
+  `Error::Conversion` (`ConversionError`): retry only `Timeout`.
 
 ## Related skills
 

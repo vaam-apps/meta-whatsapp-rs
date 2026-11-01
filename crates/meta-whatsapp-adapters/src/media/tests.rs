@@ -70,17 +70,27 @@ fn the_output_check_wants_mono_ogg_opus() {
 }
 
 #[tokio::test]
-async fn a_missing_ffmpeg_is_a_configuration_error() {
+async fn a_missing_ffmpeg_is_a_typed_error() {
     let converter = FfmpegConverter::new().with_program("/nonexistent-l19/bin/ffmpeg");
     let err = converter
         .convert(MediaInput::new(vec![1u8; 16]), TargetFormat::OggOpus)
         .await
         .unwrap_err();
-    assert!(matches!(&err, Error::Config(_)), "{err:?}");
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::BinaryMissing(_))),
+        "{err:?}"
+    );
     assert!(err.to_string().contains("ffmpeg not found"), "{err}");
-    assert!(!err.may_have_been_sent());
+    assert!(!err.may_have_been_sent() && !err.is_retryable());
+    assert_eq!(
+        err.kind(),
+        meta_whatsapp_core::ErrorKind::FeatureNotAvailable
+    );
     let err = converter.check().await.unwrap_err();
-    assert!(matches!(&err, Error::Config(_)), "{err:?}");
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::BinaryMissing(_))),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -206,7 +216,10 @@ mod processes {
         let err = convert(&f.converter("not_executable"), b"x")
             .await
             .unwrap_err();
-        assert!(matches!(&err, Error::Config(_)), "{err:?}");
+        assert!(
+            matches!(&err, Error::Conversion(ConversionError::BinaryMissing(_))),
+            "{err:?}"
+        );
         assert!(err.to_string().contains("not executable"), "{err}");
     }
 
@@ -228,7 +241,10 @@ mod processes {
         // At the bound it runs (and this stand-in answers nothing, which is
         // no Ogg Opus).
         let err = convert(&c, &[0u8; 10]).await.unwrap_err();
-        assert!(matches!(&err, Error::Config(_)), "{err:?}");
+        assert!(
+            matches!(&err, Error::Conversion(ConversionError::OutputInvalid(_))),
+            "{err:?}"
+        );
         assert!(f.path("marker.ran").exists());
     }
 
@@ -240,10 +256,13 @@ mod processes {
             .with_timeout(Duration::from_millis(500));
         let started = Instant::now();
         let err = convert(&c, b"RIFF").await.unwrap_err();
-        assert!(
-            matches!(&err, Error::Transport(TransportError::Timeout)),
+        assert_eq!(
+            err.conversion(),
+            Some(&ConversionError::Timeout(Duration::from_millis(500))),
             "{err:?}"
         );
+        // Worth trying again, and nothing went to Meta.
+        assert!(err.is_retryable() && !err.may_have_been_sent(), "{err:?}");
         assert!(
             started.elapsed() < Duration::from_secs(10),
             "{:?}",
@@ -268,7 +287,7 @@ mod processes {
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, Error::Validation(v) if v.field == "input"),
+            matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
             "{err:?}"
         );
         for shown in [err.to_string(), format!("{err:?}")] {
@@ -305,7 +324,10 @@ mod processes {
             ("not_opus", "no Ogg stream"),
         ] {
             let err = convert(&f.converter(name), b"RIFF").await.unwrap_err();
-            assert!(matches!(&err, Error::Config(_)), "{name}: {err:?}");
+            assert!(
+                matches!(&err, Error::Conversion(ConversionError::OutputInvalid(_))),
+                "{name}: {err:?}"
+            );
             assert!(err.to_string().contains(found), "{name}: {err}");
         }
     }
@@ -314,7 +336,10 @@ mod processes {
     async fn a_signal_is_no_input_error() {
         let f = fakes();
         let err = convert(&f.converter("signal"), b"RIFF").await.unwrap_err();
-        assert!(matches!(&err, Error::Other(_)), "{err:?}");
+        assert!(
+            matches!(&err, Error::Conversion(ConversionError::Killed(_))),
+            "{err:?}"
+        );
         assert!(err.to_string().contains("killed by a signal"), "{err}");
     }
 
@@ -323,7 +348,10 @@ mod processes {
         let f = fakes();
         f.converter("encoders_ok").check().await.unwrap();
         let err = f.converter("encoders_without").check().await.unwrap_err();
-        assert!(matches!(&err, Error::Config(_)), "{err:?}");
+        assert!(
+            matches!(&err, Error::Conversion(ConversionError::EncoderMissing(_))),
+            "{err:?}"
+        );
         assert!(err.to_string().contains("no libopus encoder"), "{err}");
         let err = f
             .converter("sleep_quietly")
@@ -332,7 +360,7 @@ mod processes {
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, Error::Transport(TransportError::Timeout)),
+            matches!(&err, Error::Conversion(ConversionError::Timeout(_))),
             "{err:?}"
         );
     }

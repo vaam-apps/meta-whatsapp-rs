@@ -1,12 +1,16 @@
-//! `FfmpegConverter` against a real `ffmpeg` (roadmap L19's decisive test).
+//! `adapters::media::FfmpegConverter` against a real `ffmpeg`, its result
+//! through `client::media::Media::upload_converted` (roadmap L19's decisive
+//! test). In the facade, where the adapters and the client meet: neither
+//! depends on the other.
 //!
 //! The binary is `META_WHATSAPP_RS_TEST_FFMPEG` when set, else `ffmpeg` on
 //! `PATH` (and `META_WHATSAPP_RS_TEST_FFPROBE`, else `ffprobe`). Without
 //! one that starts and has libopus, every test here skips, printing why,
 //! unless `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`, which turns the skip into a
-//! failure. That variable is not `META_WHATSAPP_RS_REQUIRE_LIVE`, and no test
-//! name here contains `live_`: `just test-live` requires Postgres and Redis,
-//! not an `ffmpeg`, which no image or runner of this repository installs.
+//! failure. CI installs `ffmpeg` on its runner and sets it, so the tests
+//! count there; no image or dev container carries one. That variable is
+//! not `META_WHATSAPP_RS_REQUIRE_LIVE`, and no test name here contains
+//! `live_`: `just test-live` requires Postgres and Redis, not an `ffmpeg`.
 #![cfg(feature = "ffmpeg")]
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 
@@ -14,15 +18,15 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use http::Method;
-use meta_whatsapp_adapters::media::FfmpegConverter;
-use meta_whatsapp_client::Client;
-use meta_whatsapp_client::media::{
+use meta_whatsapp_rs::Client;
+use meta_whatsapp_rs::Error;
+use meta_whatsapp_rs::adapters::media::FfmpegConverter;
+use meta_whatsapp_rs::client::media::{
     MediaConverter, MediaInput, MediaKind, TargetFormat, validate_upload,
 };
-use meta_whatsapp_core::Error;
-use meta_whatsapp_core::ids::PhoneNumberId;
-use meta_whatsapp_core::testing::{RecordedBody, ScriptedTransport};
+use meta_whatsapp_rs::core::error::ConversionError;
+use meta_whatsapp_rs::core::ids::PhoneNumberId;
+use meta_whatsapp_rs::core::testing::{RecordedBody, ScriptedTransport};
 use serde_json::json;
 
 fn required() -> bool {
@@ -186,7 +190,8 @@ async fn ffmpeg_turns_wav_into_ogg_opus_that_upload_accepts() {
         None => eprintln!("ffprobe not run: {} did not start", ffprobe.display()),
     }
 
-    // Media::upload's type check takes it, and sends it as audio/ogg.
+    // Media::upload's type check takes it, and upload_converted sends it as
+    // audio/ogg, named after its format.
     assert_eq!(
         validate_upload(
             note.format.mime_type(),
@@ -203,12 +208,12 @@ async fn ffmpeg_turns_wav_into_ogg_opus_that_upload_accepts() {
         .unwrap();
     let id = client
         .media(PhoneNumberId::new("106540352242922").unwrap())
-        .upload(note.data.clone(), note.format.mime_type(), "note.ogg")
+        .upload_converted(note.clone(), "note")
         .await
         .unwrap();
     assert_eq!(id.as_str(), "1037543291543636");
     let req = t.last_request().unwrap();
-    assert_eq!(req.method, Method::POST);
+    assert_eq!(req.method.as_str(), "POST");
     assert_eq!(req.path(), "/v25.0/106540352242922/media");
     assert_eq!(req.bearer(), Some("TOKEN"));
     let (_, _, product) = req.multipart_field("messaging_product").unwrap();
@@ -306,7 +311,7 @@ async fn ffmpeg_refuses_a_format_off_its_list() {
         .await
         .unwrap_err();
     assert!(
-        matches!(&err, Error::Validation(v) if v.field == "input"),
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
         "{err:?}"
     );
 }
@@ -328,7 +333,7 @@ async fn ffmpeg_refuses_input_it_cannot_read() {
             .await
             .unwrap_err();
         assert!(
-            matches!(&err, Error::Validation(v) if v.field == "input"),
+            matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
             "{err:?}"
         );
         assert!(!err.to_string().contains("/etc/hostname"), "{err}");

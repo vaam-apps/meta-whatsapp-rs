@@ -2201,7 +2201,6 @@ dependencies = [
  "bytes",
  "futures",
  "http",
- "meta-whatsapp-client",
  "meta-whatsapp-core",
  "redis",
  "reqwest",

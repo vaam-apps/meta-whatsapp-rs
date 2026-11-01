@@ -68,10 +68,36 @@
 //! # Converting before an upload
 //!
 //! Meta converts nothing: a voice message must already be Ogg with Opus,
-//! mono. [`MediaConverter`] is the conversion, implemented outside this
-//! crate (`meta-whatsapp-adapters`, feature `ffmpeg`); see [`convert`].
+//! mono. [`MediaConverter`] is the conversion, a port of
+//! `meta-whatsapp-core` ([`meta_whatsapp_core::media`]) re-exported here,
+//! implemented outside this crate (`meta-whatsapp-adapters`, feature
+//! `ffmpeg`). [`Media::upload_converted`] uploads its result, through the
+//! same type and size check as [`Media::upload`]:
+//!
+//! ```no_run
+//! # async fn demo(
+//! #     client: meta_whatsapp_client::Client,
+//! #     converter: &dyn meta_whatsapp_client::media::MediaConverter,
+//! #     wav: Vec<u8>,
+//! # ) -> meta_whatsapp_core::Result<()> {
+//! use meta_whatsapp_client::media::{MediaInput, MediaKind, TargetFormat, validate_upload};
+//! use meta_whatsapp_client::messages::{Audio, OutboundMessage};
+//! use meta_whatsapp_core::ids::PhoneNumberId;
+//! use meta_whatsapp_core::recipient::Recipient;
+//!
+//! let number = PhoneNumberId::new("106540352242922")?;
+//! let note = converter
+//!     .convert(MediaInput::new(wav), TargetFormat::OggOpus)
+//!     .await?;
+//! // What the upload checks: the format's MIME type against Meta's table.
+//! let len = u64::try_from(note.data.len()).unwrap_or(u64::MAX);
+//! assert_eq!(validate_upload(note.format.mime_type(), len)?, MediaKind::Audio);
+//! let media_id = client.media(number.clone()).upload_converted(note, "note").await?;
+//! let msg = OutboundMessage::new(Recipient::phone("+16505551234"), Audio::new(media_id).voice());
+//! client.messages(number).send(&msg).await?;
+//! # Ok(()) }
+//! ```
 
-pub mod convert;
 mod kinds;
 mod resumable;
 mod verify;
@@ -79,8 +105,8 @@ mod verify;
 #[cfg(test)]
 mod tests;
 
-pub use convert::{ConvertedMedia, MediaConverter, MediaInput, TargetFormat};
 pub use kinds::{MediaKind, validate_upload};
+pub use meta_whatsapp_core::media::{ConvertedMedia, MediaConverter, MediaInput, TargetFormat};
 pub use verify::{DownloadedMedia, MediaDownload, VerifiedBody, VerifiedDownload};
 
 use std::fmt;
@@ -217,6 +243,18 @@ impl Media {
             .send()
             .await?;
         Ok(uploaded.id)
+    }
+
+    /// Upload what a [`MediaConverter`] produced, as [`upload`](Self::upload)
+    /// does: as its format's MIME type ([`TargetFormat::mime_type`]), named
+    /// `{stem}.{extension}` ([`TargetFormat::extension`]: Meta warns that
+    /// a name whose extension does not match the type is a common cause of
+    /// `131053`), type and size checked first ([`validate_upload`]). Not
+    /// replayed on transient errors.
+    pub async fn upload_converted(&self, media: ConvertedMedia, stem: &str) -> Result<MediaId> {
+        let filename = format!("{stem}.{}", media.format.extension());
+        self.upload(media.data, media.format.mime_type(), &filename)
+            .await
     }
 
     /// Metadata and a short-lived download URL (`GET /{media-id}`).

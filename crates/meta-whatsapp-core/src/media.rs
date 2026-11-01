@@ -1,5 +1,4 @@
-//! Converting media into a format [`Media::upload`](super::Media::upload)
-//! accepts: the [`MediaConverter`] trait.
+//! The media conversion port: [`MediaConverter`].
 //!
 //! Meta converts nothing. Its supported-types table
 //! (`business-phone-numbers/media`) takes Ogg audio only with the Opus
@@ -10,43 +9,25 @@
 //! by a browser or a phone (WAV, `WebM`, M4A, MP3) has to be converted
 //! first, on the integrator's side.
 //!
-//! This crate defines the conversion and does none: no codec is linked.
-//! `meta-whatsapp-adapters` implements it behind its `ffmpeg` feature
-//! (off by default), with an `ffmpeg` the integrator installs; any other
-//! implementation (a conversion service of your own) plugs in the same
-//! way.
-//!
-//! ```no_run
-//! # async fn demo(
-//! #     client: meta_whatsapp_client::Client,
-//! #     converter: &dyn meta_whatsapp_client::media::MediaConverter,
-//! #     wav: Vec<u8>,
-//! # ) -> meta_whatsapp_core::Result<()> {
-//! use meta_whatsapp_client::media::{MediaInput, TargetFormat};
-//! use meta_whatsapp_client::messages::{Audio, OutboundMessage};
-//! use meta_whatsapp_core::ids::PhoneNumberId;
-//! use meta_whatsapp_core::recipient::Recipient;
-//!
-//! let number = PhoneNumberId::new("106540352242922")?;
-//! let note = converter
-//!     .convert(MediaInput::new(wav), TargetFormat::OggOpus)
-//!     .await?;
-//! let media_id = client
-//!     .media(number.clone())
-//!     .upload(note.data, note.format.mime_type(), "note.ogg")
-//!     .await?;
-//! let msg = OutboundMessage::new(Recipient::phone("+16505551234"), Audio::new(media_id).voice());
-//! client.messages(number).send(&msg).await?;
-//! # Ok(()) }
-//! ```
+//! Like the other ports, this is a trait and does nothing itself: no
+//! codec is linked anywhere. `meta-whatsapp-adapters` implements it
+//! behind its `ffmpeg` feature (off by default), with an `ffmpeg` the
+//! integrator installs; a conversion service of your own plugs in the
+//! same way. `meta-whatsapp-client` re-exports it from its `media` module,
+//! where `Media::upload_converted` uploads the result.
 
 use std::fmt;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use meta_whatsapp_core::Result;
 
-use super::MediaKind;
+use crate::Result;
+
+/// The most Meta takes for an audio file: "16 MB" in its table
+/// (`business-phone-numbers/media`), read as 16 MiB, the larger reading,
+/// as `meta-whatsapp-client`'s upload check reads it (its tests keep the
+/// two equal).
+pub const AUDIO_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
 /// The format a [`MediaConverter`] produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,15 +36,14 @@ pub enum TargetFormat {
     /// Ogg container, Opus codec, one channel: what Meta's table accepts
     /// as `audio/ogg` ("OPUS codecs only; base audio/ogg not supported;
     /// mono input only"), and what a voice message must be
-    /// (`messages/audio-messages`). Send it with
-    /// [`Audio::voice`](crate::messages::Audio::voice) for a voice message.
+    /// (`messages/audio-messages`): send it as an audio message with
+    /// `voice` set.
     OggOpus,
 }
 
 impl TargetFormat {
     /// The MIME type to upload it with: the one Meta's table names,
-    /// `audio/ogg`, which [`validate_upload`](super::validate_upload)
-    /// accepts.
+    /// `audio/ogg`.
     pub fn mime_type(self) -> &'static str {
         match self {
             Self::OggOpus => "audio/ogg",
@@ -79,18 +59,13 @@ impl TargetFormat {
         }
     }
 
-    /// The kind of message it can be sent as.
-    pub fn kind(self) -> MediaKind {
-        match self {
-            Self::OggOpus => MediaKind::Audio,
-        }
-    }
-
-    /// The largest result an upload accepts: [`MediaKind::max_bytes`] of
-    /// [`kind`](Self::kind) (16 MB for audio). A converter refuses a
-    /// result above it rather than return one the upload would refuse.
+    /// The largest result an upload accepts ([`AUDIO_MAX_BYTES`] for
+    /// audio). A converter refuses a result above it rather than return
+    /// one the upload would refuse.
     pub fn max_bytes(self) -> u64 {
-        self.kind().max_bytes()
+        match self {
+            Self::OggOpus => AUDIO_MAX_BYTES,
+        }
     }
 }
 
@@ -155,8 +130,9 @@ impl fmt::Debug for ConvertedMedia {
 
 /// Converts media into a [`TargetFormat`] before an upload.
 ///
-/// Implementations do the work out of this crate (a process, a service);
-/// their own library types never cross this trait. What they promise:
+/// Implementations do the work outside this crate (a process, a
+/// service); their own library types never cross this trait. What they
+/// promise:
 ///
 /// - **The result is the format asked for**, at most
 ///   [`TargetFormat::max_bytes`], or an error: never another format
@@ -164,17 +140,20 @@ impl fmt::Debug for ConvertedMedia {
 /// - **The caller's bytes are data, never instructions**: no part of the
 ///   input chooses a program, an option, a file or a URL the converter
 ///   reads.
-/// - **Errors are typed** (`meta_whatsapp_core::Error`): a converter
-///   that is missing or misconfigured (no `ffmpeg` installed, say) is
-///   [`Error::Config`](meta_whatsapp_core::Error::Config), input it cannot
-///   read or that is too large is
-///   [`Error::Validation`](meta_whatsapp_core::Error::Validation) on field
-///   `input`; neither ever panics. An error message never carries the
-///   converter's own diagnostics, which can name files on its host.
+/// - **Errors are typed.** An empty input, or one too large (before or
+///   after conversion), is [`Error::Validation`](crate::Error::Validation)
+///   on field `input`; everything else is
+///   [`Error::Conversion`](crate::Error::Conversion), a
+///   [`ConversionError`](crate::error::ConversionError) (a missing
+///   program or encoder, a timeout, input it cannot read, output of the
+///   wrong format, a process killed). Neither ever panics, and an error
+///   message never carries the converter's own diagnostics, which can
+///   name files on its host.
 /// - **The work is bounded** in input size and run time, and a converter
 ///   that runs past its time is stopped.
 ///
-/// Conversion sends nothing to Meta.
+/// Conversion sends nothing to Meta: its errors are never
+/// [`may_have_been_sent`](crate::Error::may_have_been_sent).
 #[async_trait]
 pub trait MediaConverter: Send + Sync + fmt::Debug + 'static {
     /// Convert `input` into `target`.
@@ -184,25 +163,14 @@ pub trait MediaConverter: Send + Sync + fmt::Debug + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::media::validate_upload;
 
     #[test]
-    fn ogg_opus_is_the_type_upload_accepts_as_audio() {
+    fn ogg_opus_is_audio_ogg_up_to_sixteen_mebibytes() {
         let t = TargetFormat::OggOpus;
         assert_eq!(t.mime_type(), "audio/ogg");
         assert_eq!(t.extension(), "ogg");
-        assert_eq!(t.kind(), MediaKind::Audio);
         assert_eq!(t.max_bytes(), 16 * 1024 * 1024);
-        assert_eq!(
-            validate_upload(t.mime_type(), t.max_bytes()),
-            Ok(MediaKind::Audio)
-        );
-        assert_eq!(
-            validate_upload(t.mime_type(), t.max_bytes() + 1)
-                .unwrap_err()
-                .field,
-            "file"
-        );
+        assert_eq!(AUDIO_MAX_BYTES, 16_777_216);
     }
 
     #[test]
