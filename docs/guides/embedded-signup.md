@@ -732,8 +732,9 @@ share, and to keep marking a business on offboarding, all above):
 
 ## Not handled
 
-Solution Partner APIs other than credit lines (partner-led business
-verification, Multi-Partner Solutions, migration), pre-verified number
-pools, token refresh, PIN storage and recovery, your tenant model, and a
+Partner-led business verification, Multi-Partner Solutions and
+migration intents are their own client modules, outside this flow
+(`client::business_verification`, `client::partners`); not handled:
+pre-verified number pools, token refresh, PIN storage and recovery, your tenant model, and a
 Tech Provider merchant's billing setup ([coverage.md](../coverage.md) rows
 1 and 28).

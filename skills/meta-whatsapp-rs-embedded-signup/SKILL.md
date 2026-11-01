@@ -8,7 +8,7 @@ description: "Letting each merchant of a multi-tenant CMS connect their own What
 > **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code, compiled and tested by meta-whatsapp-rs's own gate:
-[examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs), [examples/business_verification.rs](examples/business_verification.rs). The page side: [references/frontend.md](references/frontend.md). A full
+[examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs), [examples/business_verification.rs](examples/business_verification.rs), [examples/partner_solutions.rs](examples/partner_solutions.rs). The page side: [references/frontend.md](references/frontend.md). A full
 **Tech Provider** server: [`embedded_signup.rs`](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/crates/meta-whatsapp-rs/examples/embedded_signup.rs).
 
 ## When to use
@@ -27,7 +27,7 @@ configuration (its **configuration id**), the app subscribed to
 their number can send, unless you are a **Solution Partner** sharing your
 credit line ([references/solution-partner.md](references/solution-partner.md):
 one `SolutionPartner` per deployment, a currency per merchant, approval
-required; partner-led business verification). [Guide](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/embedded-signup.md).
+required; partner-led business verification; Multi-Partner Solutions, migration intents). [Guide](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/embedded-signup.md).
 
 ## Wire once, on a shared store
 

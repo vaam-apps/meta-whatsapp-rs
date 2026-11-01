@@ -28,7 +28,9 @@ settings L9 left (roadmap L26), against its code and Meta's pages of
 L18), against its code and Meta's Flows pages of 2026-10-28; row 135
 with call recording and transcription (roadmap L14), against its code
 and Meta's `calling/call-recording` and `calling/call-transcription`
-pages of 2026-10-31. Every cell
+pages of 2026-10-31; rows 144 and 145 with Multi-Partner Solutions and
+migration intents (roadmap L12), against its code and Meta's
+solution-provider pages of 2026-11-01. Every cell
 about us was
 checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
@@ -44,7 +46,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 107 | 18 | 6 | 1 |
+| Library | 109 | 16 | 6 | 1 |
 | Service | 39 | 25 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -52,7 +54,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 24 partial or gap rows is cited by a
+- Each of the library's 22 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
@@ -386,8 +388,8 @@ The owner's definition (2026-09-26):
 | 141 | Payments | Payments in India (UPI, payment links, order templates, onboarding) and Brazil (Pix, Boleto, payment links, one-click) | — | — | `payments/payments-in/overview.md`, `payments/payments-br/overview.md` and their pages | `webhooks::WebhookEvent::PaymentConfigurationUpdated` only; messages through `MessageContent::Raw` (in scope since 2026-09-26: P1) | `payment_configuration_updated` events only | partial / partial (P2) |
 | 142 | Partners | Credit lines: share, attach, verify, revoke | — | — | `solution-providers/share-and-revoke-credit-lines.md`; `reference/whatsapp-business-account/extended-credits-api.md` | `client::credit_lines::CreditLines::list`, `share_and_attach`, `revoke`, `allocation_status` | M3a (Solution Partner mode) | done / gap (M3a) |
 | 143 | Partners | Partner-led business verification | — | — | `solution-providers/partner-led-business-verification.md` | `client::business_verification::BusinessVerification::submit`, `submissions`, `status` | not exposed | done / gap (M5j) |
-| 144 | Partners | Multi-Partner Solutions: create, accept or reject, deactivation, the solution token, an app's solutions and client businesses | — | — | `solution-providers/multi-partner-solutions.md`, `solution-providers/multi-partner-solution-embedded-creation.md`; `reference/whatsapp-business-solution/solution-details-api.md` and the pages beside it, `reference/application/application-solutions-api.md`, `reference/application/application-connected-client-businesses.md` | `webhooks::WebhookEvent::PartnerSolutionUpdated`; `LaunchOptions::solution_id`; the endpoints are not wrapped (coverage row 28) | `partner_solution_updated` is operator-only (no WABA to route it by) | partial / gap (M5j) |
-| 145 | Partners | Moving numbers and WABAs between partners or solutions | — | — | `solution-providers/support/migrating-phone-numbers-among-solution-partners-programmatically.md` and the other migration pages; `reference/whatsapp-business-account-migration-intent/migration-intent-details-api.md` | the number migration flag `client::waba::NewPhoneNumber::migrate_phone_number` with the code and register calls; `set_solution_migration_intent` and migration-intent reads not wrapped | — | partial / gap (M5j) |
+| 144 | Partners | Multi-Partner Solutions: create, accept or reject, deactivation, the solution token, an app's solutions and client businesses | — | — | `solution-providers/multi-partner-solutions.md`, `solution-providers/multi-partner-solution-embedded-creation.md`; `reference/whatsapp-business-solution/solution-details-api.md` and the pages beside it, `reference/application/application-solutions-api.md`, `reference/application/application-connected-client-businesses.md` | `client::partners::solutions::PartnerSolutions::create`, `accept`, `reject`, `send_deactivation_request`, `accept_deactivation_request`, `reject_deactivation_request`, `get`, `partners`, `app_solutions`, `connected_client_businesses` (each list with its `…_stream`), and the client's business token through a solution, `PartnerSolutions::access_token` (an `AccessToken`, withheld from decode errors); `webhooks::WebhookEvent::PartnerSolutionUpdated`; `LaunchOptions::solution_id` | `partner_solution_updated` is operator-only (no WABA to route it by) | done / gap (M5j) |
+| 145 | Partners | Moving numbers and WABAs between partners or solutions | — | — | `solution-providers/support/migrating-phone-numbers-among-solution-partners-programmatically.md` and the other migration pages; `reference/whatsapp-business-account-migration-intent/migration-intent-details-api.md` | the number migration flag `client::waba::NewPhoneNumber::migrate_phone_number` with the code and register calls; migration intents, `client::partners::migration::MigrationIntents::create` (`set_solution_migration_intent`) and `get` (`MigrationIntentInfo::is_accepted`); the templates of a moved WABA, `Templates::migrate_from` (row 96); the rest of the migration pages are Meta Business Suite and Embedded Signup steps, not calls | — | done / gap (M5j) |
 | 146 | Partners | A user's assigned WABAs | — | — | `reference/user/assigned-whatsapp-business-accounts-api.md` | not wrapped | — | gap / gap (M5j) |
 | 147 | Billing | Billing currency or payment method migration | — | — | `pricing/change-billing-currency.md` (`set_payment_method_migration_intent`) | not wrapped | — | gap / gap (M5j) |
 | 148 | History | Message history events (the delivery events of one history entry) | — | — | `reference/message-history/whatsapp-business-message-history-events-api.md` (where its id comes from is not in the mirror) | not wrapped | — | gap / gap (M5c4) |
