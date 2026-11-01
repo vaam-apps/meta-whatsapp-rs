@@ -1709,8 +1709,12 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Not wrapped:** the allow list (withdrawn, above); the WhatsApp
     Manager visibility switch
     (`whatsapp_manager_marketing_messages_max_price_enroll_status`,
-    `marketing-messages/pricing/whatsapp-manager-visibility`, not
-    fetched); `optimization_spec` on `templates::TemplateDefinition` at
+    `marketing-messages/pricing/whatsapp-manager-visibility`, read in
+    review on 2026-11-01: a field of the WABA, read with `fields=` and
+    set by `POST /{WABA_ID}`, `OPT_IN` or `OPT_OUT`, which shows or
+    hides the max price screens in WhatsApp Manager and changes neither
+    eligibility nor API settings; no legal act, outside row 137's
+    definition, left for a follow-up); `optimization_spec` on `templates::TemplateDefinition` at
     creation (a template takes its max price after creation with
     `MarketingTemplate::set_max_price`, or as a duplicate); an
     `ErrorKind` for `131061`, `131065` and the welcome sequences'
