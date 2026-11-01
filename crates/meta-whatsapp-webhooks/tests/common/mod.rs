@@ -60,18 +60,27 @@ pub fn all_fixtures() -> Vec<String> {
     out
 }
 
-/// Records every event; optionally fails on the n-th delivery (0-based).
+/// Records every event; optionally fails on the n-th delivery (0-based),
+/// transiently (`SinkError::Closed`) or permanently.
 #[derive(Debug, Default)]
 pub struct RecordingSink {
     pub events: Mutex<Vec<WebhookEvent>>,
     calls: AtomicUsize,
     fail_on: Mutex<Option<usize>>,
+    permanent: bool,
 }
 
 impl RecordingSink {
     pub fn failing_on(call: usize) -> Self {
         let sink = Self::default();
         *sink.fail_on.lock().unwrap() = Some(call);
+        sink
+    }
+
+    /// Fails the n-th delivery with `SinkError::Permanent`.
+    pub fn failing_permanently_on(call: usize) -> Self {
+        let mut sink = Self::failing_on(call);
+        sink.permanent = true;
         sink
     }
 
@@ -93,7 +102,11 @@ impl EventSink<WebhookEvent> for RecordingSink {
     async fn deliver(&self, event: WebhookEvent) -> Result<(), SinkError> {
         let call = self.calls.fetch_add(1, Ordering::SeqCst);
         if *self.fail_on.lock().unwrap() == Some(call) {
-            return Err(SinkError::Closed);
+            return Err(if self.permanent {
+                SinkError::permanent(std::io::Error::other("refused for good"))
+            } else {
+                SinkError::Closed
+            });
         }
         self.events.lock().unwrap().push(event);
         Ok(())

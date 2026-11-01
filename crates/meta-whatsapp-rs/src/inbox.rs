@@ -2318,6 +2318,13 @@ impl Inbox {
     /// with [`ConversationStore::erase_all`], which says what it reaches
     /// and what it does not. Always this inbox's number: erase a person on
     /// each of the merchant's numbers through each one's inbox.
+    ///
+    /// It does not reach the webhook dead letters
+    /// (`meta_whatsapp_webhooks::deadletter`, roadmap L21a): they sit in a
+    /// `KvStore`, which the conversation store cannot scan. If your webhook
+    /// handler keeps them, erase with [`crate::erasure::Eraser`] instead,
+    /// which calls the same `ConversationStore::erase_all` and then
+    /// `DeadLetters::erase`.
     pub async fn erase_all(&self, contacts: &[String]) -> Result<Erased> {
         Ok(self
             .store

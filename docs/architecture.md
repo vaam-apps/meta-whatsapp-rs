@@ -103,7 +103,9 @@ and [production.md § 8](guides/production.md#8-retention-and-erasure-on-postgre
 quotes and contact cards in other people's messages, the ids of redacted
 group messages, identities nothing connects, the webhook dedup markers
 (kept on purpose: they stop Meta's redeliveries from recording the data
-again), the service's outbox and idempotency answers, integrators'
+again), the service's outbox and idempotency answers, the webhook dead
+letters (their own store, with their own index and `erase`: the facade's
+`erasure::Eraser` erases a person from both, roadmap L21a), integrators'
 copies, dead Postgres rows, WAL, replicas and backups, logs, and Meta's
 side; and records created again after the erasure. Retention is set per
 store (design D10): the adapters take a `Retention` (`with_retention`,
@@ -150,6 +152,7 @@ rewrite them along with the code.
 | `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server-core/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
 | `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key; for a subcommand, the command part is its path, `order status`). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed`, `a_subcommands_cooldown_key_is_over_its_path` |
 | `wa.bot.pacer` (added by roadmap B2b; the namespace and the record layout **pending the owner's confirmation**, roadmap § Owner touchpoints) | `PACER_NAMESPACE`, `meta-whatsapp-bot/src/pacer/kv.rs` | store namespace of `KvRateLimiter`'s per-number schedules (key: SHA-256 hex of the length-prefixed phone number id, `<len>:<id>,`; value: the 49-byte version 1 record, its first byte the version). **Ephemeral**: changing it forgets each number's schedule, slow-down and raised rate (records expire 24 hours after their last slot by default), so while replicas of two releases run side by side they book from two budgets; no data is stranded | `the_pacer_key_is_pinned_and_hashed` (known answer), `the_pacer_record_is_pinned` |
+| `wa.webhook.deadletter`, `wa.webhook.deadletter.contact` (added by roadmap L21a; the namespaces, the keys' derivations and the records' shapes **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `DEAD_LETTER_NAMESPACE`, `DEAD_LETTER_INDEX_NAMESPACE`, `slot_key`, `index_key`, `meta-whatsapp-webhooks/src/deadletter.rs` | store namespaces of the webhook dead letters: the ring (slots `0`…`capacity - 1`, decimal, each a letter at `id % capacity`, and its head under the key `head`, `{"v":1,"next":<id>}`, never expiring) and the per-contact index (key: SHA-256 hex of the length-prefixed business number, empty for an event that names none, and contact: `<len>:<phone_number_id>,<len>:<contact>,`; value `{"v":1,"letters":[[<id>,<slot>],…]}`); a letter is JSON with `"v":1`, in a pinned field order (`id`, `at`, `attempts`, `kind`, `error`, `phone_number_id`, `contacts`, `event_bytes`, `event`). **Not ephemeral**: changing a name, a derivation or a record's shape strands the letters written before, and an erasure no longer reaches them (they age out after 14 days by default) | `the_keys_are_pinned_and_hashed` (known answers), `the_record_bytes_are_pinned` (written and read back) |
 | `wa.bot.jobs`, `wa.bot.jobs.due`, `wa.bot.jobs.sent`, `wa.bot.jobs.message`, `wa.bot.jobs.limited` (**pending the owner's confirmation before the first release**, roadmap § Owner touchpoints; added by B3) | `JOBS_NAMESPACE`, `JOBS_DUE_NAMESPACE`, `JOBS_SENT_NAMESPACE`, `JOBS_MESSAGE_NAMESPACE`, `JOBS_LIMITED_NAMESPACE`, `BUCKET_SECONDS`, `meta-whatsapp-bot/src/jobs/mod.rs`; the records, `meta-whatsapp-bot/src/jobs/store.rs` | store namespaces of the durable jobs: the job records (key: SHA-256 hex of the length-prefixed job id), the due index (pages `<minute start, unix seconds>:<page>` of job ids, and its `cursor`, with the page versions of the minute behind it once moved forward), the per-recipient markers (digest of the job id, the run and the recipient's key: `user:<BSUID>` first, else `phone:<digits>`, or `group:<id>`), the sent messages' ids (digest of the `wamid`) and the marketing-limited markers (digest of the job id and the recipient's key); every record JSON with `"v":1`, in a pinned field order. **Not ephemeral**: changing a name, a key's derivation or a record's shape strands the jobs scheduled, or makes a resumed job send again to recipients it sent to | `the_job_keys_are_pinned_and_hashed`, `a_recipient_is_keyed_by_bsuid_first`, `buckets_are_minutes_in_unix_seconds` (key bytes, known answers); `the_job_records_are_pinned`, `the_index_and_marker_records_are_pinned` (record bytes, written and read back) |
 
 Library store namespaces are `wa.<module>[.<purpose>]` (`wa.token`,
@@ -241,6 +244,20 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   `Error::credit()` (looks through `Step`, like `graph()`),
   `CreditError::revocation()`, and `EmbeddedSignup::is_credit_line_revoked`
   / `is_credit_step_busy`.
+- **`SinkError::Permanent(anyhow::Error)`**, the one variant added to
+  an existing leaf for dead-lettering (roadmap L21a, `OPEN_QUESTIONS.md`
+  #30), and why: only the sink knows whether an event can ever be
+  accepted (a value its database refuses forever, a shape its code cannot
+  handle), and the webhook handler must tell that from "try again later"
+  without knowing the sink's error types. `SinkError::permanent(e)`
+  builds it, `SinkError::is_permanent` asks; every other variant is
+  transient, so a sink that never classifies keeps today's behaviour
+  (`500`, Meta redelivers the batch). Not an `ErrorKind` (those classify
+  Graph codes) and not a method on `Error` (the handler sees the
+  `SinkError` before it becomes one). `is_retryable` and
+  `may_have_been_sent` are `false`, like every sink error. `FanoutSink`
+  returns a transient error before a permanent one, so a fan-out is
+  permanent only when every failing sink was.
 - **`Error::Conversion(ConversionError)`**, the second leaf added for a
   feature, and why: a `media::MediaConverter` (roadmap L19) fails in ways
   that are not input errors alone. A converter that is not installed
@@ -875,6 +892,7 @@ POST body ─► verify X-Hub-Signature-256 (HMAC-SHA256, constant-time, any of 
          ─► parse WebhookPayload{object, entry[{id, time?, changes[{field, value}]}]}
          ─► normalize into Vec<WebhookEvent> (one per message/status/change)
          ─► optional DedupGuard: lease a claim (pending, 60 s) → EventSink<WebhookEvent>
+             → on SinkError::Permanent, with DeadLetters: write the dead letter, then go on
              → confirm (done, TTL 7 days + 1 h — Meta retries for 7) or release on sink error
 ```
 
@@ -886,6 +904,30 @@ later). Every claim transition is a version-checked `compare_and_swap`, so an
 expired lease can't overwrite a newer claim. Dedup keys are hashed before
 they reach the store (group status keys contain participants' phone numbers).
 Logs carry sizes, digests and field names only — never payload values.
+
+**Dead letters** (`deadletter::DeadLetters`, `WebhookHandlerBuilder::dead_letters`;
+roadmap L21a). An event the sink refuses permanently
+(`SinkError::Permanent`) is written to a typed store on `KvStore`, its
+dedup claim marked done, and the rest of the batch delivered; the
+delivery is acknowledged only after that write succeeded (a failed write
+releases the claim and answers `500`). Transient and unclassified sink
+errors answer `500` as before, and so does a permanent one without a
+store. The store is bounded by count (a ring of `capacity` slots, 1000 by
+default: letter `id` lives in slot `id % capacity`, so the oldest is
+overwritten without a scan, with a warning), by age (each record's TTL,
+14 days by default: the retention of the personal data an event holds)
+and by size (an event over 256 KiB serialized is kept without its
+content). Alert: a `tracing::error!` per letter (id, kind, business
+number; never content or the sink's error text) and
+`DeliveryReport::dead_lettered`. Replay (`replay(id, sink)`,
+`replay_all(sink)`) hands the stored event to a sink past the dedup guard:
+delivered, the letter goes; refused permanently again, it stays with one
+more attempt. Erasure: `KvStore` has no scan, so the store keeps a
+per-contact index (every identifier the event gives: BSUIDs, parent
+BSUIDs, phone numbers without `+`; the business's own number left out)
+keyed by business number and contact, and
+`DeadLetters::erase(phone_number_id, contacts)`; the facade's
+`erasure::Eraser` calls it beside `ConversationStore::erase_all`.
 
 - `verify_subscription(query, &VerifyToken) -> Result<String /*challenge*/>`
   (constant-time token compare, `hub.mode == "subscribe"`).
@@ -1125,8 +1167,10 @@ and the thread's owner, and sends replies.
 - Content never fails a delivery: it is recorded exactly, U+0000
   included, and every adapter stores it (see Adapters). Storage errors
   still do (500, Meta redelivers the batch), as does, on Postgres, U+0000
-  in a Meta-assigned id of a live message (`OPEN_QUESTIONS.md` #30; a
-  history item with one is skipped, below).
+  in a Meta-assigned id of a live message (`OPEN_QUESTIONS.md` #30: the
+  inbox's sink classifies no error as permanent yet, so the dead letters
+  of roadmap L21a do not take it; a history item with one is skipped,
+  below).
 - A storage (or serialization) failure *after* a successful send is
   logged without the message's content, never returned — an error would
   invite a retry that sends twice.
@@ -1234,8 +1278,9 @@ for every event, after the ban and the match.
 - **Errors**: a handler's error is logged (kinds only) and acknowledged
   by default, because an error answers `500` and Meta redelivers the
   whole batch, repeating replies already sent; a transient failure is
-  then lost but for the log, until the dead-letter store of
-  `OPEN_QUESTIONS.md` #30 exists. `PropagateErrors` opts into
+  then lost but for the log (the webhook dead letters of roadmap L21a take
+  only an error a sink classifies as permanent, and the bot classifies
+  none). `PropagateErrors` opts into
   redelivery. The `ErrorHandler` gets the context from before the
   middleware (the match set, a middleware's values not). After
   `Bot::unload`, delivery fails with `SinkError::Closed`.
