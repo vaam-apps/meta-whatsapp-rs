@@ -1036,7 +1036,7 @@ fn resume_phone(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -2120,9 +2120,10 @@ mod tests {
         assert!(raw(&h.kv, &format!("waba/{WABA_A}")).await.is_none());
     }
 
-    /// A `tracing` subscriber that renders every event and span field.
+    /// A `tracing` subscriber that renders every event and span field
+    /// (also hosted signup's, `super::hosted`).
     #[derive(Clone, Default)]
-    struct Capture(Arc<Mutex<String>>);
+    pub(in super::super) struct Capture(pub(in super::super) Arc<Mutex<String>>);
 
     struct Render<'a>(&'a mut String);
 

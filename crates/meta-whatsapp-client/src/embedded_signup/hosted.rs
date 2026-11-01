@@ -95,18 +95,32 @@ impl EmbeddedSignup {
     /// page asks for no PIN, so the PIN is yours to choose and keep, as the
     /// onboarding guides' `<DESIRED_PIN>`). Refused before any request: a
     /// request with a code, one naming another WABA, a blank system token
-    /// or app secret, a token request that does not validate.
+    /// or app secret, a token request that does not validate, and **a WABA
+    /// `vault` already holds** (a [`ValidationError`] on `waba_id`).
+    ///
+    /// **`PARTNER_ADDED` is not only hosted signup's**: Meta sends it for
+    /// every WABA shared with you, the code flow's onboardings and
+    /// coexistence's included, and may deliver it again. Storing for a WABA
+    /// already held would replace its token and record unasked (the code
+    /// flow's `store_token` replaces, as re-onboarding must), so this
+    /// refuses it: skip such a WABA (check [`TokenVault::get`] first, as
+    /// the skill's example does), [`Self::resume`] it, or, to onboard it
+    /// again on purpose, delete it from the vault first
+    /// ([`TokenVault::delete`], or [`Self::offboard`]). The check is a read
+    /// before the fetch, not a lock: a code-flow onboarding still running
+    /// when the webhook arrives can store after it. Reserve the WABA for a
+    /// tenant atomically in the approval to close that window, as
+    /// [`Self::onboard_with_approval`] shows.
     ///
     /// **Nothing is spent before `store_token`**: the fetch is a read, so a
     /// failure up to `store_token` (an [`Error::Step`](meta_whatsapp_core::Error::Step)
     /// naming it) can be fixed and the call made again. After it, the token
     /// is stored: [`Self::resume`] with the same request redoes only the
-    /// steps after `store_token`, as for the code flow.
+    /// steps after `store_token`, as for the code flow (calling this again
+    /// is refused: the vault holds the WABA).
     ///
-    /// The webhook names no tenant of yours. `PARTNER_ADDED` also comes
-    /// for a WABA onboarded through the code flow (and for coexistence
-    /// onboarding), so check your own WABA → tenant table first; bind the
-    /// WABA to a tenant in [`Self::onboard_hosted_with_approval`].
+    /// The webhook names no tenant of yours: bind the WABA to one in
+    /// [`Self::onboard_hosted_with_approval`].
     pub async fn onboard_hosted(
         &self,
         signup: &HostedSignup,
@@ -168,6 +182,17 @@ impl EmbeddedSignup {
             .into());
         }
         let plan = self.onboarding_plan(request, approve.is_some())?;
+        // `PARTNER_ADDED` also comes for a WABA the code flow (or an earlier
+        // hosted run, or a replayed webhook) onboarded: storing again would
+        // replace its token and record unasked. One read, before any
+        // request; replacing a held WABA is deleting it first.
+        if vault.holds(&signup.waba_id).await? {
+            return Err(ValidationError::new(
+                "waba_id",
+                "the vault already holds this WABA (onboarded by the code flow, an earlier hosted run or a redelivered PARTNER_ADDED): skip it, resume it with EmbeddedSignup::resume, or delete it from the vault first to onboard it again",
+            )
+            .into());
+        }
         let mut done = Vec::with_capacity(10);
 
         // The proof is computed from the app secret, borrowed, and sent in
@@ -250,6 +275,7 @@ mod tests {
 
     use super::super::SolutionPartner;
     use super::super::event::EmbeddedSignupEvent;
+    use super::super::onboard::tests::Capture;
     use super::super::token::SignupCode;
     use super::super::vault::tests::RecordingKv;
     use super::super::vault::{TOKEN_NAMESPACE, VaultKey, VaultKeys};
@@ -992,6 +1018,149 @@ mod tests {
         assert_eq!(h.t.remaining(), 0);
     }
 
+    /// The code flow checks no owner: the browser's `business_id` is a
+    /// claim, never compared, and the owner stored is Meta's.
+    #[tokio::test]
+    async fn the_code_flow_compares_no_owner_with_the_browsers() {
+        let h = harness();
+        h.t.push_json(200, json!({"access_token": BUSINESS_TOKEN}));
+        script_after_token(&h.t);
+        let event = EmbeddedSignupEvent::from_value(json!({
+            "data": {"phone_number_id": PHONE, "waba_id": WABA, "business_id": "520744086200222"},
+            "type": "WA_EMBEDDED_SIGNUP", "event": "FINISH"
+        }))
+        .unwrap();
+        let request = OnboardingRequest::from_event(SignupCode::new(CODE).unwrap(), &event)
+            .unwrap()
+            .register_with_pin(TwoStepPin::new(PIN).unwrap());
+        let done = h.es.onboard(&request, &h.vault).await.unwrap();
+        assert_eq!(
+            done.business_id.as_ref().map(BusinessId::as_str),
+            Some(OWNER),
+            "Meta's owner, not the browser's"
+        );
+        assert_eq!(
+            stored(&h)
+                .await
+                .unwrap()
+                .business_id
+                .as_ref()
+                .map(BusinessId::as_str),
+            Some(OWNER)
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// The WABA onboarded is the webhook's, even when the request's session
+    /// names none and the token's newest grant is another WABA.
+    #[tokio::test]
+    async fn the_webhooks_waba_is_onboarded_whatever_the_session_names() {
+        let h = harness();
+        h.t.push_json(200, token_answer());
+        h.t.push_json(
+            200,
+            json!({"data": {
+              "app_id": APP_ID, "is_valid": true, "expires_at": 0,
+              "granular_scopes": [
+                {"scope": "whatsapp_business_management", "target_ids": ["111111111111111", WABA]}
+              ]
+            }}),
+        );
+        h.t.push_json(200, owner_answer(OWNER));
+        h.t.push_json(200, phones_answer());
+        h.t.push_json(200, success());
+        let request = OnboardingRequest::for_resume(SessionInfo::default());
+        let done =
+            h.es.onboard_hosted(&signup(), &system_token(), &request, &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(done.waba_id.as_str(), WABA);
+        let reqs = h.t.requests();
+        assert_eq!(reqs[2].path(), format!("/v25.0/{WABA}"));
+        assert!(stored(&h).await.is_some());
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// `PARTNER_ADDED` also comes after a code-flow onboarding: the WABA the
+    /// vault holds is refused before any request, its record untouched,
+    /// even when this vault cannot read it; once deleted, it onboards.
+    #[tokio::test]
+    async fn a_waba_the_vault_holds_is_refused_before_any_request() {
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let h = harness_with(kv.clone(), APP_SECRET, RetryPolicy::NONE);
+        // The code flow onboards the WABA first, with another token.
+        h.t.push_json(200, json!({"access_token": "EAAN-CODE-FLOW-TOKEN"}));
+        script_after_token(&h.t);
+        let event = EmbeddedSignupEvent::from_value(json!({
+            "data": {"phone_number_id": PHONE, "waba_id": WABA, "business_id": OWNER},
+            "type": "WA_EMBEDDED_SIGNUP", "event": "FINISH"
+        }))
+        .unwrap();
+        let code_request = OnboardingRequest::from_event(SignupCode::new(CODE).unwrap(), &event)
+            .unwrap()
+            .register_with_pin(TwoStepPin::new(PIN).unwrap());
+        h.es.onboard(&code_request, &h.vault).await.unwrap();
+        let before = h.t.requests().len();
+        let raw = |kv: Arc<dyn KvStore>| async move {
+            let key = StoreKey::new(TOKEN_NAMESPACE, format!("waba/{WABA}"));
+            kv.get(&key).await.unwrap().map(|v| v.value)
+        };
+        let record = raw(kv.clone()).await.unwrap();
+
+        // Then the webhook, with and without an approval.
+        let err =
+            h.es.onboard_hosted(&signup(), &system_token(), &request(), &h.vault)
+                .await
+                .unwrap_err();
+        assert!(matches!(err, Error::Validation(_)), "{err:?}");
+        assert_eq!(field(&err), "waba_id");
+        let err =
+            h.es.onboard_hosted_with_approval(
+                &signup(),
+                &system_token(),
+                &request(),
+                &h.vault,
+                |_| -> std::future::Ready<Result<()>> { panic!("no approval asked") },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(field(&err), "waba_id");
+        // A vault under another key cannot read the record: held all the same.
+        let other = TokenVault::new(
+            kv.clone(),
+            VaultKeys::new(VaultKey::new("k2", SecretBytes::new([7; 32])).unwrap()),
+        )
+        .unwrap();
+        let err =
+            h.es.onboard_hosted(&signup(), &system_token(), &request(), &other)
+                .await
+                .unwrap_err();
+        assert_eq!(field(&err), "waba_id");
+        assert_eq!(h.t.requests().len(), before, "no request");
+        assert_eq!(
+            raw(kv.clone()).await.unwrap(),
+            record,
+            "the record untouched"
+        );
+        assert_eq!(
+            stored(&h).await.unwrap().token.expose_secret(),
+            "EAAN-CODE-FLOW-TOKEN"
+        );
+
+        // Deleted on purpose: onboarded again, the hosted token stored.
+        assert!(h.vault.delete(&WabaId::new(WABA).unwrap()).await.unwrap());
+        script_hosted(&h.t);
+        h.es.onboard_hosted(&signup(), &system_token(), &request(), &h.vault)
+            .await
+            .unwrap();
+        assert_token_request(&h.t.requests()[before], PROOF);
+        assert_eq!(
+            stored(&h).await.unwrap().token.expose_secret(),
+            BUSINESS_TOKEN
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
     /// `fetch_only` is a read: replayed on a timeout. A token request that
     /// generates one is not.
     #[tokio::test]
@@ -1095,35 +1264,58 @@ mod tests {
         assert!(p.t.requests().is_empty());
     }
 
-    /// No secret reaches `Debug`, an error or the store: the app secret,
-    /// the system token, its proof, and the business token outside its
-    /// sealed record.
+    /// No secret reaches `Debug`, an error, the logs or the store: the app
+    /// secret, the system token, its proof, and the business token outside
+    /// its sealed record.
     #[tokio::test]
-    async fn secrets_never_reach_debug_errors_or_the_store() {
+    async fn secrets_never_reach_debug_errors_logs_or_the_store() {
+        // A second dispatcher, as in `onboard`'s test: otherwise a callsite
+        // another test thread registers first may never reach this capture.
+        let _second = tracing::Dispatch::new(Capture::default());
+        let capture = Capture::default();
+        let _guard = tracing::subscriber::set_default(capture.clone());
         let kv = Arc::new(RecordingKv::default());
-        let h = harness_with(kv.clone(), APP_SECRET, RetryPolicy::NONE);
+        let h = harness_with(kv.clone(), APP_SECRET, retrying());
+        // The fetch retried once on a transient error (logged), then the rest.
+        h.t.push_json(
+            500,
+            json!({"error": {"message": "x", "code": 2, "is_transient": true}}),
+        );
         script_hosted(&h.t);
         let done =
             h.es.onboard_hosted(&signup(), &system_token(), &request(), &h.vault)
                 .await
                 .unwrap();
+        assert_token_request(&h.t.requests()[1], PROOF);
         let mut shown = vec![
             format!("{done:?}"),
             format!("{:?}", signup()),
             format!("{:?}", request()),
             format!("{:?}", h.es),
         ];
+        assert_eq!(h.t.remaining(), 0);
+        // The vault holds the WABA now: the failures below need it gone. On
+        // the same store, with no retry: each answer is one call's.
+        assert!(h.vault.delete(&WabaId::new(WABA).unwrap()).await.unwrap());
+        let f = harness_with(kv.clone(), APP_SECRET, RetryPolicy::NONE);
         // A non-2xx answer holding the token, and one that does not decode.
-        h.t.push_json(502, json!({"access_token": BUSINESS_TOKEN}));
-        h.t.push_json(200, json!({"access_token": [BUSINESS_TOKEN]}));
+        f.t.push_json(502, json!({"access_token": BUSINESS_TOKEN}));
+        f.t.push_json(200, json!({"access_token": [BUSINESS_TOKEN]}));
         for _ in 0..2 {
             let err =
-                h.es.onboard_hosted(&signup(), &system_token(), &request(), &h.vault)
+                f.es.onboard_hosted(&signup(), &system_token(), &request(), &f.vault)
                     .await
                     .unwrap_err();
             assert_eq!(step(&err), FETCH_TOKEN);
             shown.push(format!("{err} {err:?}"));
         }
+        assert_eq!(f.t.remaining(), 0);
+        let logs = capture.0.lock().unwrap().clone();
+        assert!(
+            logs.contains("graph request") && logs.contains("retrying graph request"),
+            "capture saw nothing: vacuous check\n{logs}"
+        );
+        shown.push(logs);
         for text in &shown {
             for secret in [APP_SECRET, SYSTEM_TOKEN, PROOF, BUSINESS_TOKEN, PIN] {
                 assert!(!text.contains(secret), "{secret} in {text}");
