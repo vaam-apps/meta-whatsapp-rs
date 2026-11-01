@@ -1694,7 +1694,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     (`ReplyChecks::trust_handover`, OPEN_QUESTIONS #44); a
     `user_id_update`'s `wa_id` is linked too. Row 139 stays partial (the
     thread control API, L15); `conversation_context` is not stored.
-- [ ] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
+- [x] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
   features `redis` and a new `sqlite`; `meta_whatsapp_rs::inbox`; rows
   69, 111): a Redis `ConversationStore`, SQLite adapters for both ports,
   and `InboxSink` keeping the coexistence sync's contacts through L5's
@@ -1707,6 +1707,66 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** every adapter passes both conformance suites; a second
     `append` of one id on another number returns `false` on each, as the
     suite says today; the synced contacts are read back from the store.
+  - **Landed:** `store::{SqliteKvStore, SqliteConversationStore}`
+    (feature `sqlite`, `store::sqlite::{open, memory, migrate}`) pass
+    both suites in process, in `just test` (an in-memory database, and
+    a file shared by a pool of connections under another prefix);
+    `store::RedisConversationStore` passes the conversation suite live
+    (`live_redis_conversation_*`, both erasure modes and a retention).
+    The suite gains `conversation_conformance::ids_are_stored_once_per_store`,
+    outside `run` (the port allows either answer to OPEN_QUESTIONS #33,
+    which stays open): the memory store and both new stores pass it in
+    `just test`, Redis and Postgres live; it fails a SQLite store whose
+    id index is not unique, and a Redis store checking ids per number.
+    `InboxSink` records `smb_app_state_sync`, and
+    `crates/meta-whatsapp-rs/tests/synced_contacts.rs` reads Meta's
+    examples back through `Inbox::contacts` and `Inbox::contact` on
+    memory and SQLite (it fails when a removal is applied under one key
+    only). Rows 69 and 111 are done in the library (the service's sides
+    stay with M3b and M2a); categories 30 and 39 too. Decisions this
+    item proposes, for the coordinator:
+    - **SQLite through sqlx's driver**, the library compiled in
+      (`sqlite-bundled`: MIT, no TLS); sqlx's Postgres driver, its TLS
+      and its macros move from the dependency to the `postgres` feature,
+      so `sqlite` alone links neither (`just features` checks both
+      alone). Its migrations are embedded with `include_str!` from
+      `migrations-sqlite/`, templates under the same `TablePrefix`, now
+      `store::TablePrefix` (still `store::postgres::TablePrefix`), and
+      each prefix keeps its own history (`<prefix>sqlx_migrations`).
+      Swappable: another `ConversationStore` or `KvStore` behind the
+      same ports.
+    - **SQLite concurrency is SQLite's write lock**: every write one
+      `BEGIN IMMEDIATE` transaction (read, decide in Rust, write), the
+      busy timeout `store::sqlite::open` sets (30 s) the wait; times are
+      `INTEGER` microseconds, identifiers `TEXT` refusing U+0000 (as on
+      Postgres), content `BLOB`; the key/value store's expiry is the
+      application's clock (injectable, `SqliteKvStore::with_clock`), its
+      versions one counter row, so a deleted record's row goes at once.
+      Swappable by building the pool yourself (`store::sqlite::sqlx`).
+    - **One hash tag per Redis conversation store**
+      (`{prefix}{conversations}`): every write one Lua script over keys
+      of one slot, so a whole inbox lives on one shard; spread inboxes
+      with one store per prefix (`with_prefix`). Status updates are a
+      compare-and-swap decided in Rust (`DeliveryStatus::supersedes`), a
+      purge of every number one script per number over the store's set
+      of numbers (kept, it names businesses only). Times are 16 hex
+      digits that sort as they compare.
+    - **The inbox's contact rules**: a new switch,
+      `RecordingSwitches::contacts` (on in `ALL`); an `add` stored under
+      `inbox::synced_contact_key` (the BSUID, else the phone number
+      without `+`, which is also the phone number stored, so that
+      `identities` meets the conversations' keys); a `remove` under each
+      key it names (the BSUID and the phone number), so that an entry
+      keyed by the phone number before Meta sent the BSUID does not
+      keep the person's names; a change without `metadata.timestamp`,
+      without a usable id or with U+0000 in one is skipped, logged
+      without content (Meta's order is the timestamp, and the sink's
+      clock would let a late redelivery win).
+    - New stored names, **pending the owner's confirmation before the
+      first release** (architecture § Stable identifiers): SQLite
+      migration 1 (`wa_kv_version`, the SQLite tables and their
+      columns, its checksum pinned) and the Redis conversation layout
+      (keys, fields, the time encoding).
 - [x] **L9. Phone numbers** (`meta-whatsapp-client`,
   `client::phone_numbers`; rows 66, 129–133, 151): the business
   username calls, deleting a contact book entry, search visibility,
@@ -3292,8 +3352,10 @@ everything else goes into the parity-completion report.
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
   with their keys' derivations and their records' shapes, added and
-  awaiting confirmation before the first release; and those L21a adds),
-  for the same reason as L5's.
+  awaiting confirmation before the first release; L8's SQLite migration
+  1, its tables and columns, and its Redis conversation layout, added
+  and awaiting confirmation; and those L21a adds), for the same reason
+  as L5's.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored

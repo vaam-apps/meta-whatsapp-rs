@@ -860,6 +860,14 @@ mod tests {
         conversation_conformance::run(&store).await;
     }
 
+    /// Today's rule (`OPEN_QUESTIONS.md` #33): a second `append` of one id
+    /// on another number returns `false`.
+    #[tokio::test]
+    async fn a_second_append_of_one_id_on_another_number_is_refused() {
+        conversation_conformance::ids_are_stored_once_per_store(&MemoryConversationStore::new())
+            .await;
+    }
+
     #[tokio::test]
     async fn debug_shows_counts_not_messages() {
         let store = MemoryConversationStore::new();

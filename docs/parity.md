@@ -43,7 +43,9 @@ its code and Meta's `business-phone-numbers/media` and
 `messages/audio-messages` pages of 2026-11-01; row 6 with the
 token-expiry signal (roadmap L11e), against its code and Meta's
 `access-tokens` and `facebook-login/facebook-login-for-business` pages
-of 2026-11-01. Every cell
+of 2026-11-01; rows 69, 110 and 111 with the message and contact stores
+(roadmap L8), against its code and Meta's
+`webhooks/reference/smb_app_state_sync` page of 2026-11-01. Every cell
 about us was
 checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
@@ -59,7 +61,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 118 | 13 | 0 | 1 |
+| Library | 120 | 11 | 0 | 1 |
 | Service | 39 | 25 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -67,7 +69,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 13 partial or gap rows is cited by a
+- Each of the library's 11 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 92 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
@@ -298,7 +300,7 @@ The owner's definition (2026-09-26):
 | 66 | Profile | Business username: adopt or change it, read it, reserved names, delete it; changes by webhook | — | — | `business-scoped-user-ids` (§ Business usernames: `POST`, `GET` and `DELETE /{Phone-Number-ID}/username`, `username_suggestions`); `reference/whatsapp-business-phone-number/whatsapp-business-account-phone-number-api.md` | `client::phone_numbers::PhoneNumber::set_username` (the format checked first, `transfer_action` typed), `username`, `username_suggestions`, `delete_username`; the webhook `webhooks::WebhookEvent::BusinessUsernameUpdated` | `business_username_updated` events; no setter | done / partial (M5c3) |
 | 67 | Chats | Archive, pin, mute, star, clear chats | Yes | No | none | the inbox tracks unread only (`inbox::Inbox::mark_read`) | — | n/a — unofficial protocol |
 | 68 | Contacts | Check that a number is on WhatsApp | Yes | No | none: the `contacts` check belonged to the retired On-Premises API (Meta's `changelog`) | — | — | n/a — unofficial protocol |
-| 69 | Contacts | Save, rename, look up contacts | Yes | No | the coexistence contacts sync (`webhooks/reference/smb_app_state_sync.md`) | typed `webhooks::WebhookEvent::AppStateSynced`; the port stores and pages them per number (`core::store::ConversationStore::put_contact`, `remove_contact`, `contacts`, `core::store::StoredContact`: L5), and `inbox::InboxSink` does not record them yet (coverage row 21; L8) | `app_state_synced` events; not stored (M3b) | partial / partial (M3b) |
+| 69 | Contacts | Save, rename, look up contacts | Yes | No | the coexistence contacts sync (`webhooks/reference/smb_app_state_sync.md`) | typed `webhooks::WebhookEvent::AppStateSynced`; the port stores and pages them per number (`core::store::ConversationStore::put_contact`, `remove_contact`, `contacts`, `core::store::StoredContact`: L5), and `inbox::InboxSink` records every field of an `add` and a `remove` (under `inbox::synced_contact_key`, switch `inbox::RecordingSwitches::contacts`), read back with `inbox::Inbox::contacts` and `contact` (coverage row 21; L8) | `app_state_synced` events; an owned number's contacts stored by the inbox since L8 (the core's pipeline runs `inbox::InboxSink`), no route reads them (M3b) | done / partial (M3b) |
 | 70 | Contacts | Privacy settings | Yes | No | none for an account's privacy; the business number's search visibility is row 129 | — | — | n/a — unofficial protocol |
 | 71 | Contacts | Block, unblock, list blocked users | Yes | Yes | `block-users`; `reference/whatsapp-business-phone-number/block-api.md` | `client::block_users::BlockUsers::block`, `unblock`, `list` (phone number or BSUID) | not exposed | done / gap (M5g) |
 | 72 | Contacts | Presence (online, typing, recording) | Yes | No | typing only (row 32) | — | — | n/a — unofficial protocol |
@@ -362,8 +364,8 @@ The owner's definition (2026-09-26):
 
 | # | Area | Capability | Zaileys (Web) | Zaileys (Cloud) | Meta Cloud API | Library | Service | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 110 | Storage | Auth store | Yes (plain JSON in files, SQLite, Postgres, Redis, Convex) | No (a token only) | none (ours) | `client::embedded_signup::TokenVault` (AES-256-GCM, key rotation) on `core::store::KvStore`: `adapters::store::MemoryKvStore`, `PostgresKvStore`, `RedisKvStore` | Postgres and the vault; `POST /v1/admin/vault/rotate` (`server_core::admin::Admin::rotate_vault`) | done / done |
-| 111 | Storage | Message store: backends, history, chat list, a single-message lookup | Yes (memory, SQLite, Postgres, Redis, Convex) | Yes | none (ours) | `core::store::ConversationStore`: `adapters::store::MemoryConversationStore`, `PostgresConversationStore`; the lookup by message id, scoped to the business number (`core::store::ConversationStore::message`, L5); no Redis or SQLite store (L8); `inbox::Inbox::conversations`, `history` | the service records its tenants' inbox since M1c (`server_core::inbound::Pipeline`, the core's webhook pipeline since S5e); its read routes come in M2a | partial / partial (M2a) |
+| 110 | Storage | Auth store | Yes (plain JSON in files, SQLite, Postgres, Redis, Convex) | No (a token only) | none (ours) | `client::embedded_signup::TokenVault` (AES-256-GCM, key rotation) on `core::store::KvStore`: `adapters::store::MemoryKvStore`, `PostgresKvStore`, `SqliteKvStore`, `RedisKvStore` | Postgres and the vault; `POST /v1/admin/vault/rotate` (`server_core::admin::Admin::rotate_vault`) | done / done |
+| 111 | Storage | Message store: backends, history, chat list, a single-message lookup | Yes (memory, SQLite, Postgres, Redis, Convex) | Yes | none (ours) | `core::store::ConversationStore`: `adapters::store::MemoryConversationStore`, `PostgresConversationStore`, `SqliteConversationStore`, `RedisConversationStore` (L8), each passing `adapters::store::conversation_conformance`; the lookup by message id, scoped to the business number (`core::store::ConversationStore::message`, L5); `inbox::Inbox::conversations`, `history`; no Convex adapter (a hosted database of Zaileys' JavaScript world; a `ConversationStore` of an integrator's runs the same suite) | the service records its tenants' inbox since M1c (`server_core::inbound::Pipeline`, the core's webhook pipeline since S5e); its read routes come in M2a | done / partial (M2a) |
 | 112 | Storage | Pluggable stores with conformance tests | Yes (custom interfaces) | Yes | none (ours) | ports in `meta-whatsapp-core`; executable suites `adapters::store::conformance`, `conversation_conformance` | the core's ports (`server_core::store::RecordStore`, `IdempotencyRecords`, `LeaderLock`, `Janitor`, `SchemaMigrator`; `server_core::outbox::Outbox`), bundled per database as `server_core::backend::Backend` with the library's `KvStore` and `ConversationStore`, implemented in memory and on Postgres (`server_store_memory::MemoryBackend`, `PgBackend`), with the contracts any backend must meet since S2 (the outbox's `server_core::outbox::RouteGuard` checked with each insert, `server_core::model::BindOutcome::NoSuchTenant`, leased turns, typed contention, byte order); and since S3 their executable suites in core, which both backends pass (`server_core::conformance::run`, feature `conformance`, over a factory of empty `Backend`s: `records`, `outbox`, the cross-port `invariants` with the `RouteGuard` cases, `capabilities`, `races`), so a backend of an integrator's runs the same suites; and since S4 the service is composed from the bundle alone (`server_http::state::AppState::from_backend`, `server::serve::serve_with`; housekeeping is `server_core::housekeeping::run` over it, and the command line opens it through a `server::serve::BackendFactory`), so a backend of an integrator's is served with no change to the server; the ports' contracts change again in S2b (a record of a WABA's last unbinding from another tenant, and a bind generation, which every backend stores) (design D26) | done / partial (S2b) |
 | 113 | Errors | Typed errors with retry guidance | Yes | Yes | `support/error-codes.md` | `core::Error`, `Error::in_step`; `core::ErrorKind`, `ErrorKind::ALL`, `is_retryable` | the §5 error model as data on `ErrorKind::as_str` (`server_core::error`, over HTTP `server_http::error`), each code a constant generated from the §5.2 table, so a misspelled one does not compile (`server_core::error::ErrorCode`, S6) | done / done |
 | 114 | Ops | Logging without secrets or personal data; metrics | Partial (a custom logger) | Partial | none (ours) | `tracing`; secrets kept out of `Debug`; webhook log redaction (`webhooks::redact`) | request logs with the key id, Prometheus `/metrics` (`server_http::api::ops::metrics`) | done / done |

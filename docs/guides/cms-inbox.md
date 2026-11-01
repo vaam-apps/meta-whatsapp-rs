@@ -109,8 +109,12 @@ let conversations: Arc<dyn ConversationStore> = Arc::new(PostgresConversationSto
   of your business numbers (e.g. a group both are in), it is kept only under
   the first conversation that recorded it
   ([open question](../../OPEN_QUESTIONS.md#cms-inbox) 33).
-- `MemoryConversationStore` is for tests and demos. There is no Redis
-  conversation store.
+- `MemoryConversationStore` is for tests and demos.
+  `SqliteConversationStore` (feature `sqlite`) keeps the inbox in a file
+  for one process on one machine, and `RedisConversationStore` (feature
+  `redis`) in a Redis run with persistence and `noeviction` (a store's
+  whole inbox on one shard); both pass the same conformance suite
+  (roadmap L8).
 - Migration 4 (roadmap L5) adds `wa_window_events`, `wa_thread_owners`,
   `wa_synced_contacts` and `wa_identity_links`, a `sender` column on
   `wa_messages` (section 8) and three indexes. It changes no existing
@@ -641,10 +645,10 @@ very large sync can take several of Meta's redeliveries to finish.
 
 ## Not recorded
 
-Media bytes; the contacts sync (`smb_app_state_sync`: the store keeps
-synced contacts, `put_contact`, and `InboxSink` records them from roadmap
-L8); a call's details (only the window event it opens); the standby
+Media bytes; a call's details (only the window event it opens); the standby
 owner's echoes and receipts; `conversation_context` summaries; every
-event other than messages, statuses, echoes, history, calls, standby
-copies, handovers and BSUID changes. Handle those in your own sink if
+event other than messages, statuses, echoes, history, the address
+book sync (`smb_app_state_sync`: synced contacts since roadmap L8, read
+with `Inbox::contacts`), calls, standby copies, handovers and BSUID
+changes. Handle those in your own sink if
 you need them.

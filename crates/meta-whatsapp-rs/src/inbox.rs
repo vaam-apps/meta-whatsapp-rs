@@ -164,10 +164,11 @@
 //! arrived on. Parent BSUIDs are not linked: nothing is keyed by one.
 //!
 //! **Your own rules.** Each kind of record above (calls, standby copies,
-//! handovers, identity links) can be switched off in [`InboxSink`]
-//! ([`RecordingSwitches`]) and recorded your own way through the same
-//! [`ConversationStore`] methods, reusing the public rules ([`call_window`],
-//! [`call_key`], [`call_status_key`], [`handover_key`]); the idle timeout
+//! handovers, identity links), and the coexistence address book below, can
+//! be switched off in [`InboxSink`] ([`RecordingSwitches`]) and recorded
+//! your own way through the same [`ConversationStore`] methods, reusing
+//! the public rules ([`call_window`], [`call_key`], [`call_status_key`],
+//! [`handover_key`], [`synced_contact_key`]); the idle timeout
 //! is a setting ([`Inbox::with_thread_idle_after`]) and each local check a
 //! switch ([`ReplyChecks`]).
 //!
@@ -220,6 +221,21 @@
 //!   content its sender deleted. The tombstone is in the conversation's
 //!   history, never in its summary ([`Inbox::conversations`]). A revoke
 //!   whose sender (or recipient) has no usable id is skipped.
+//! - The WhatsApp Business app's address book arrives as
+//!   `WebhookEvent::AppStateSynced` (`smb_app_state_sync`, roadmap L8) and
+//!   is kept as synced contacts ([`ConversationStore::put_contact`]), read
+//!   back with [`Inbox::contacts`] and [`Inbox::contact`]: an `add` (also
+//!   how an edit arrives) under [`synced_contact_key`] (the BSUID, else the
+//!   phone number without `+`, which is also the phone number stored), a
+//!   `remove` under each key it names, so that an entry keyed by the phone
+//!   number before Meta sent the BSUID goes too
+//!   ([`ConversationStore::remove_contact`]: the removal is kept, key and
+//!   time only). The store keeps the latest by the change's
+//!   `metadata.timestamp`, so changes may arrive in any order; a change
+//!   without one, without a usable id, or with U+0000 in an id is skipped
+//!   with a warning. A contact is not a conversation, and the contacts
+//!   connect a person's identities ([`Inbox::identities`]). Turn it off
+//!   with [`RecordingSwitches::contacts`].
 //! - One malformed history item never fails the delivery: an item without
 //!   a direction or a conversation, with U+0000 in an id, or (when the
 //!   whole `history` value failed its typed parse and arrived as
@@ -247,8 +263,8 @@ use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::sink::EventSink;
 use meta_whatsapp_core::store::{
     ConversationKey, ConversationStore, ConversationSummary, CustomerServiceWindow, DeliveryStatus,
-    Direction, Erased, IdentityLink, StoredMessage, ThreadOwner, ThreadOwnership, WindowEvent,
-    WindowEventKind,
+    Direction, Erased, IdentityLink, StoredContact, StoredMessage, ThreadOwner, ThreadOwnership,
+    WindowEvent, WindowEventKind,
 };
 use meta_whatsapp_core::{Error, Result};
 use meta_whatsapp_webhooks::WebhookEvent;
@@ -256,7 +272,8 @@ use meta_whatsapp_webhooks::fields::calls::{
     Call, CallDirection, CallEventType, CallStatus, CallStatusValue,
 };
 use meta_whatsapp_webhooks::fields::coexistence::{
-    HistoryMessage, HistoryMessageStatus, HistoryValue, MessageEcho, ThreadContext,
+    HistoryMessage, HistoryMessageStatus, HistoryValue, MessageEcho, StateSyncAction,
+    StateSyncItem, StateSyncType, SyncedContact, ThreadContext,
 };
 use meta_whatsapp_webhooks::fields::common::{Contact, Metadata};
 use meta_whatsapp_webhooks::fields::messages::{
@@ -316,7 +333,8 @@ fn delivery(e: StorageError) -> SinkError {
 
 /// Records inbound messages, status updates, and the coexistence events
 /// (echoes of messages the merchant sent from the WhatsApp Business app,
-/// synchronized history) into a [`ConversationStore`]; see the
+/// synchronized history, the app's address book) into a
+/// [`ConversationStore`]; see the
 /// [module docs](self) for how each is recorded. Idempotent: the store
 /// ignores a message id it already has, and a status that does not
 /// supersede the stored one.
@@ -371,7 +389,8 @@ fn delivery(e: StorageError) -> SinkError {
 /// port methods. The rules are public, so a rule of your own can reuse
 /// the rest: [`call_window`], [`call_key`] and [`call_status_key`] for
 /// calls, [`handover_key`] for a handover's conversation,
-/// [`conversation_key`] for a message's.
+/// [`conversation_key`] for a message's, [`synced_contact_key`] for a
+/// synced address book contact's.
 ///
 /// Put a `meta_whatsapp_webhooks::DedupGuard` in front of the handler anyway — it
 /// saves the store the work — and fan this sink out next to a broadcast
@@ -399,7 +418,11 @@ pub struct InboxSink {
 /// - **identity links** ([`RecordingSwitches::identity_links`]): every
 ///   [`ConversationStore::link_identity`] the sink makes (an inbound or
 ///   standby message's phone number to its BSUID, a number change,
-///   `user_id_update`).
+///   `user_id_update`);
+/// - **contacts** ([`RecordingSwitches::contacts`], roadmap L8): the
+///   coexistence address book (`smb_app_state_sync`), as synced contacts
+///   ([`ConversationStore::put_contact`], [`ConversationStore::remove_contact`],
+///   under [`synced_contact_key`]).
 ///
 /// Turning the calls or standby switch off leaves [`Inbox::window`] to
 /// the window events you record; turning handovers or standby off leaves
@@ -420,6 +443,7 @@ impl fmt::Debug for RecordingSwitches {
             .field("standby", &self.records_standby())
             .field("handovers", &self.records_handovers())
             .field("identity_links", &self.records_identity_links())
+            .field("contacts", &self.records_contacts())
             .finish()
     }
 }
@@ -435,10 +459,11 @@ impl RecordingSwitches {
     const STANDBY: u8 = 1 << 1;
     const HANDOVERS: u8 = 1 << 2;
     const IDENTITY_LINKS: u8 = 1 << 3;
+    const CONTACTS: u8 = 1 << 4;
 
     /// Everything (the default).
     pub const ALL: Self = Self {
-        on: Self::CALLS | Self::STANDBY | Self::HANDOVERS | Self::IDENTITY_LINKS,
+        on: Self::CALLS | Self::STANDBY | Self::HANDOVERS | Self::IDENTITY_LINKS | Self::CONTACTS,
     };
 
     /// Messages, statuses and the coexistence feeds only.
@@ -496,6 +521,17 @@ impl RecordingSwitches {
     /// Whether identity links are recorded.
     pub const fn records_identity_links(&self) -> bool {
         self.has(Self::IDENTITY_LINKS)
+    }
+
+    /// Record the coexistence address book (`smb_app_state_sync`), or not.
+    #[must_use]
+    pub const fn contacts(self, on: bool) -> Self {
+        self.set(Self::CONTACTS, on)
+    }
+
+    /// Whether the coexistence address book is recorded.
+    pub const fn records_contacts(&self) -> bool {
+        self.has(Self::CONTACTS)
     }
 }
 
@@ -721,6 +757,35 @@ fn bare_phone(phone: &str) -> Option<String> {
 /// identifier, which would fail every redelivery).
 fn usable(id: &str) -> bool {
     !id.trim().is_empty() && !id.contains('\0')
+}
+
+/// The key [`InboxSink`] stores a synced address book contact under
+/// (`smb_app_state_sync`, roadmap L8): its BSUID (`user_id`) when Meta sent
+/// a usable one, else its phone number without `+` (as conversations are
+/// keyed), on business number `phone_number_id`. `None` when neither is
+/// usable (empty, or holding U+0000). Public so that a rule of your own
+/// ([`RecordingSwitches::contacts`]) can reuse it.
+pub fn synced_contact_key(
+    phone_number_id: &PhoneNumberId,
+    contact: &SyncedContact,
+) -> Option<ConversationKey> {
+    let bsuid = contact
+        .user_id
+        .as_ref()
+        .map(|u| u.as_str().to_owned())
+        .filter(|u| usable(u));
+    let who = bsuid.or_else(|| contact_phone(contact))?;
+    Some(ConversationKey::new(phone_number_id.clone(), who))
+}
+
+/// A synced contact's phone number as the inbox keys conversations: without
+/// `+` or surrounding spaces, when usable.
+fn contact_phone(contact: &SyncedContact) -> Option<String> {
+    contact
+        .phone_number
+        .as_deref()
+        .and_then(bare_phone)
+        .filter(|p| usable(p))
 }
 
 /// The conversation of a `calls[]` event on `phone_number_id`, whose
@@ -1851,8 +1916,95 @@ impl InboxSink {
                 update,
                 ..
             } => self.link_user_id(&phone_number_id, &update).await,
+            WebhookEvent::AppStateSynced {
+                phone_number_id,
+                item,
+                ..
+            } => self.record_state_sync(&phone_number_id, &item).await,
             _ => Ok(()),
         }
+    }
+
+    /// An address book change (`smb_app_state_sync`): an `add` (also how
+    /// an edit arrives) stores the contact under [`synced_contact_key`], a
+    /// `remove` removes it under each key it names (its BSUID and its phone
+    /// number), so that no copy keyed before Meta sent the BSUID stays. A
+    /// change without a time, a usable key, or with U+0000 in one of its
+    /// ids is skipped with a warning (no content logged), as are other
+    /// types and actions. The store keeps the latest by
+    /// `metadata.timestamp`, so changes may arrive in any order.
+    async fn record_state_sync(
+        &self,
+        phone_number_id: &PhoneNumberId,
+        item: &StateSyncItem,
+    ) -> std::result::Result<(), SinkError> {
+        if !self.recording.records_contacts() || item.sync_type != StateSyncType::Contact {
+            return Ok(());
+        }
+        let action = item.action.as_str();
+        let Some(contact) = &item.contact else {
+            tracing::warn!(
+                action,
+                "address book change without a contact; not recorded"
+            );
+            return Ok(());
+        };
+        let Some(at) = item.metadata.as_ref().and_then(|m| m.timestamp) else {
+            tracing::warn!(
+                action,
+                "address book change without a timestamp; not recorded"
+            );
+            return Ok(());
+        };
+        let ids = [
+            contact.phone_number.as_deref(),
+            contact.user_id.as_ref().map(UserId::as_str),
+            contact.parent_user_id.as_ref().map(UserId::as_str),
+        ];
+        if ids.into_iter().flatten().any(|id| id.contains('\0')) {
+            tracing::warn!(
+                action,
+                "address book change with U+0000 in an id; not recorded"
+            );
+            return Ok(());
+        }
+        let Some(key) = synced_contact_key(phone_number_id, contact) else {
+            tracing::warn!(
+                action,
+                "address book change without a usable id; not recorded"
+            );
+            return Ok(());
+        };
+        match item.action {
+            StateSyncAction::Add => {
+                self.store
+                    .put_contact(StoredContact {
+                        key,
+                        full_name: contact.full_name.clone(),
+                        first_name: contact.first_name.clone(),
+                        phone_number: contact_phone(contact),
+                        user_id: contact.user_id.clone(),
+                        parent_user_id: contact.parent_user_id.clone(),
+                        username: contact.username.clone(),
+                        synced_at: at,
+                    })
+                    .await
+                    .map_err(delivery)?;
+            }
+            StateSyncAction::Remove => {
+                let phone = contact_phone(contact)
+                    .map(|p| ConversationKey::new(phone_number_id.clone(), p))
+                    .filter(|p| p != &key);
+                for key in std::iter::once(key).chain(phone) {
+                    self.store
+                        .remove_contact(&key, at)
+                        .await
+                        .map_err(delivery)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }
 
@@ -2300,6 +2452,29 @@ impl Inbox {
     pub async fn identities(&self, key: &ConversationKey) -> Result<BTreeSet<String>> {
         self.check_key(key)?;
         Ok(self.store.identities(key).await?)
+    }
+
+    /// The synced address book contact stored under `key` on this number
+    /// (the coexistence sync, which [`InboxSink`] records under
+    /// [`synced_contact_key`]: [`ConversationStore::contact`]). A key of
+    /// another number is refused, reading nothing.
+    pub async fn contact(&self, key: &ConversationKey) -> Result<Option<StoredContact>> {
+        self.check_key(key)?;
+        Ok(self.store.contact(key).await?)
+    }
+
+    /// This number's synced address book, by contact in byte order; pass
+    /// the last row's `key.contact` as `after` for the next page
+    /// ([`ConversationStore::contacts`]).
+    pub async fn contacts(
+        &self,
+        after: Option<String>,
+        limit: usize,
+    ) -> Result<Vec<StoredContact>> {
+        Ok(self
+            .store
+            .contacts(&self.phone_number_id, after, limit)
+            .await?)
     }
 
     /// Erase one key of this number ([`ConversationStore::erase`]). A key

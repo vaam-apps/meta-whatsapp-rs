@@ -491,7 +491,11 @@ Found while writing the integrator guides and checking them against
 
 33. **Message ids are unique per store, not per business number.** The
     Postgres `messages.id` is the table's primary key on its own (and the
-    memory store keys by id alone). If the same message id is ever
+    memory store keys by id alone; the SQLite and Redis stores of roadmap
+    L8 key a message by `(phone_number_id, id)` and keep the rule with a
+    separate index on the id, which the other answer would drop:
+    `conversation_conformance::ids_are_stored_once_per_store`). If the
+    same message id is ever
     delivered on two of an integrator's business numbers (for example a
     group both numbers are in, or one of its numbers writing to another,
     should Meta use one id on both sides), it is stored once, under the

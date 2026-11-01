@@ -154,6 +154,21 @@ async fn live_postgres_conversation_conformance_deleting_group_messages() {
     conversation_conformance::run(&store).await;
 }
 
+/// Today's rule (`OPEN_QUESTIONS.md` #33; `wa_messages.id` is the primary
+/// key on its own): a second `append` of one id on another number returns
+/// `false`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_a_second_append_of_one_id_on_another_number_is_refused() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    conversation_conformance::ids_are_stored_once_per_store(&PostgresConversationStore::new(
+        db.pool.clone(),
+    ))
+    .await;
+}
+
 /// The search recipe of `store::postgres`' module docs finds a row holding a
 /// NUL (the one `live_postgres_keeps_nul_in_content_and_refuses_it_in_ids`
 /// stores), and the conversions they warn against fail on it.

@@ -218,6 +218,40 @@ stored data, the owner's).
 
 ### Added
 
+- **SQLite stores** (`meta_whatsapp_adapters::store::{SqliteKvStore,
+  SqliteConversationStore}`, new feature `sqlite`, also on the facade and
+  in `full`; roadmap L8, parity rows 110, 111). sqlx's SQLite driver,
+  the SQLite library compiled in (`sqlite-bundled`; no TLS, nothing to
+  install). `store::sqlite::open(path)` (WAL, a 30-second busy timeout),
+  `store::sqlite::memory()` (one connection the pool never closes) and
+  `store::sqlite::migrate` / `migrate_with_prefix`, whose migrations are
+  embedded from `migrations-sqlite/` under the same `TablePrefix` as
+  Postgres, with a history of their own per prefix. Every write is one
+  `BEGIN IMMEDIATE` transaction; times are microseconds; identifiers
+  holding U+0000 are refused, content keeps it. `SqliteKvStore` decides
+  expiry with an injectable `Clock` (`with_clock`) and has
+  `purge_expired`. Both pass the conformance suites in `just test`, on an
+  in-memory database and on a file shared by a pool of connections.
+- **A Redis conversation store** (`meta_whatsapp_adapters::store::RedisConversationStore`,
+  feature `redis`; roadmap L8, parity row 111): every key under one hash
+  tag per store (`{prefix}{conversations}`), every write one Lua script,
+  status updates a compare-and-swap decided in Rust; `with_prefix`,
+  `with_retention`, `with_erasure_mode`; any connection `RedisKvStore`
+  takes (`RedisTlsConnection` included). Needs persistence and
+  `noeviction`. Passes the conversation suite live.
+- **The inbox keeps the coexistence address book**
+  (`meta_whatsapp_rs::inbox`, roadmap L8, parity row 69): `InboxSink`
+  records `smb_app_state_sync` (`WebhookEvent::AppStateSynced`): an `add`
+  as a synced contact under `synced_contact_key` (the BSUID, else the
+  phone number without `+`), a `remove` under each key it names; a change
+  without a timestamp or a usable id is skipped. `Inbox::contacts` and
+  `Inbox::contact` read them back. A new switch,
+  `RecordingSwitches::contacts`, on in `RecordingSwitches::ALL`: a sink
+  built with `ALL` (the default) now records contacts too.
+- **`conversation_conformance::ids_are_stored_once_per_store`**
+  (`meta_whatsapp_adapters::store`, roadmap L8): today's rule for message
+  ids (`OPEN_QUESTIONS.md` #33, still open), outside `run`; the memory,
+  Postgres, SQLite and Redis stores pass it.
 - **A token-expiry signal** (`meta_whatsapp_client::embedded_signup`,
   roadmap L11e, parity row 6; OPEN_QUESTIONS #8; the service's event is
   M3e). `TokenVault::token_expiry(&waba_id, lead)` answers, on the
@@ -1764,6 +1798,14 @@ stored data, the owner's).
 
 ### Changed
 
+- **`TablePrefix` is `meta_whatsapp_adapters::store::TablePrefix`**
+  (roadmap L8), shared by the Postgres and SQLite adapters;
+  `store::postgres::TablePrefix` still names it. Its error message says
+  "table prefix" rather than "Postgres table prefix". The adapters'
+  `sqlx` dependency now enables its Postgres driver, TLS and macros
+  through the `postgres` feature only (they were on the dependency), so
+  `sqlite` alone links none of them; nothing changes for a build with
+  `postgres`.
 - **Graph error `131070` is `ThreadOwnedElsewhere`**
   (`meta_whatsapp_core::ErrorKind::from_code`, roadmap L15; see Added,
   "Thread control"). `conversation-routing/thread-control` § Errors gives

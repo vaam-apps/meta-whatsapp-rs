@@ -18,6 +18,7 @@ reqwest = ["meta-whatsapp-adapters/reqwest"]
 memory = ["meta-whatsapp-adapters/memory"]
 sinks = ["meta-whatsapp-adapters/sinks"]
 postgres = ["meta-whatsapp-adapters/postgres"]
+sqlite = ["meta-whatsapp-adapters/sqlite"]
 redis = ["meta-whatsapp-adapters/redis"]
 axum = ["meta-whatsapp-webhooks/axum"]
 typst = ["dep:meta-whatsapp-typst"]
@@ -32,7 +33,7 @@ ffmpeg = ["meta-whatsapp-adapters/ffmpeg"]
 # Test doubles for your own tests (`meta_whatsapp_rs::core::testing::ScriptedTransport`),
 # so you don't need a second dependency pinned to the same revision.
 testing = ["meta-whatsapp-core/testing"]
-full = ["reqwest", "memory", "sinks", "postgres", "redis", "axum", "typst", "flows-endpoint", "ffmpeg", "bot"]
+full = ["reqwest", "memory", "sinks", "postgres", "sqlite", "redis", "axum", "typst", "flows-endpoint", "ffmpeg", "bot"]
 
 [dependencies]
 anyhow.workspace = true

@@ -26,12 +26,12 @@ stores (vault, OTP, dedup, sessions, bot cooldowns and jobs) are built on `KvSto
 | bot jobs (`KvJobs`; names pending the owner) | `KvStore` | `wa.bot.jobs`, `wa.bot.jobs.due`, `.sent`, `.message`, `.limited` | scheduled jobs; resumed ones resend |
 | inbox history (`InboxSink`, `Inbox`) | `ConversationStore` | tables `wa_*` | the history |
 
-| | Memory (`memory`) | Postgres (`postgres`) | Redis (`redis`) |
-| --- | --- | --- | --- |
-| `KvStore` | `MemoryKvStore` | `PostgresKvStore` | `RedisKvStore` |
-| `ConversationStore` | `MemoryConversationStore` | `PostgresConversationStore` | — |
-| shared, survives restarts | no | yes | yes, with persistence on |
-| expiry clock | the process (`with_clock`) | the database server | the Redis server |
+| | Memory (`memory`) | Postgres (`postgres`) | SQLite (`sqlite`) | Redis (`redis`) |
+| --- | --- | --- | --- | --- |
+| `KvStore` | `MemoryKvStore` | `PostgresKvStore` | `SqliteKvStore` | `RedisKvStore` |
+| `ConversationStore` | `MemoryConversationStore` | `PostgresConversationStore` | `SqliteConversationStore` | `RedisConversationStore` |
+| shared, survives restarts | no | yes | survives; one machine | yes, with persistence on |
+| expiry clock | the process (`with_clock`) | the database server | the process (`with_clock`) | the Redis server |
 
 ## Postgres: the simple choice
 
@@ -149,8 +149,8 @@ that made U+0000 lossless (PR #7, 2026-09-25).
 
 ## What meta-whatsapp-rs does not do
 
-- No Redis Cluster or Sentinel over TLS (`RedisTls` is one server, roadmap L21c), no Redis
-  `ConversationStore`, no backups of inbox history.
+- No Redis Cluster or Sentinel over TLS (`RedisTls` is one server, roadmap L21c), no backups
+  of inbox history; a `RedisConversationStore` keeps a whole inbox on one shard.
 - Message ids are unique per store, not per business number
   ([open question 33](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).
 

@@ -178,6 +178,82 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     apply_retention_follows_the_retention(store).await;
 }
 
+/// Today's rule for message ids (`OPEN_QUESTIONS.md` #33, open): an id is
+/// stored once per store, whatever the business number. A second `append`
+/// (or `append_synced`) of one id on another number returns `false` and
+/// stores nothing under that number: the lookup, the history and the
+/// conversation list of the other number stay empty, a status or a revoke
+/// there changes nothing (and leaves no tombstone), and the first number
+/// keeps its message as it was. Every adapter of this crate passes it.
+///
+/// Not part of [`run`]: the port allows either answer, and a store keeping
+/// ids once per number (the other answer to #33) fails this case only.
+///
+/// # Panics
+///
+/// On any violation of the rule — this is a test helper.
+pub async fn ids_are_stored_once_per_store<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("once-per-store");
+    let other = Run::new("once-per-store-other");
+    let first = r.msg("c", "1", Direction::Inbound, 1, "hello");
+    assert!(store.append(first.clone()).await.unwrap());
+    let twin = StoredMessage {
+        conversation: other.key("c"),
+        text: Some("the other number's".to_owned()),
+        ..first.clone()
+    };
+    assert!(
+        !store.append(twin.clone()).await.unwrap(),
+        "a second append of one id on another number is refused"
+    );
+    assert_eq!(
+        store.append_synced(vec![twin.clone()]).await.unwrap(),
+        [false],
+        "and so is a synced one"
+    );
+    assert_eq!(store.message(&other.pn, &first.id).await.unwrap(), None);
+    assert!(
+        store
+            .messages(&other.key("c"), None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .conversations(&other.pn, None, 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "no summary on the other number"
+    );
+    assert!(
+        !store
+            .update_status(&other.pn, &first.id, DeliveryStatus::Read, at(2), None)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .revoke(&other.key("c"), &first.id, Direction::Inbound, at(3))
+            .await
+            .unwrap(),
+        "a revoke on the other number finds no message and leaves no tombstone"
+    );
+    assert!(
+        store
+            .messages(&other.key("c"), None, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        only_message(store, &r.key("c")).await,
+        first,
+        "the first number keeps its message"
+    );
+}
+
 const T0: OffsetDateTime = datetime!(2026-09-24 12:00 UTC);
 
 fn at(secs: i64) -> OffsetDateTime {
