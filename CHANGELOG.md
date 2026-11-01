@@ -217,6 +217,41 @@ stored data, the owner's).
 
 ### Added
 
+- **Durable scheduling** in `meta-whatsapp-bot` (roadmap B3, parity row
+  90, now done in the library; design D29), from
+  `templates/marketing-templates/per-user-limits` (read on 2026-11-01).
+  The module `jobs`: `KvJobs`, a typed store on `KvStore` (no new
+  port), keeps `Job`s (an id of yours, `JobId`; one business number; a
+  due time; the recipients, each person once; a JSON payload) and
+  `schedule`s, `cancel`s, `rerun`s and reads (`get`, a `ScheduledJob`)
+  them; a `JobRunner` (`JobRunner::builder`: an outbound or a client, a
+  `Pacer`, a composer that makes each recipient's message from the job,
+  a `BroadcastPolicy`, a lease, retries, a runner id) sends those due,
+  one `tick` at a time or with `run_until`. Due times are bucketed by
+  the minute (`BUCKET_SECONDS`, `BUCKET_PAGE_CAPACITY` ids a page, then
+  the next) under a cursor naming the oldest minute still to read; a
+  runner claims a due job by compare-and-swap with a lease naming it
+  (2 minutes, renewed before a send at half), so two runners on one
+  store send it once and a crashed runner's job is resumed by another
+  once its lease expires; it sends through a paced `Broadcast`, after
+  checking the job is still its own and not cancelled and after creating
+  the recipient's marker (`put_if_absent`): a resumed job skips the
+  recipients marked, and a send whose outcome is unknown (a timeout, a
+  runner that stopped mid-send) is never resent (`JobSummary::unknown`).
+  A pass that leaves recipients provably unsent is retried with backoff
+  (5 retries, 30 s doubling to 30 min), then stopped. Each sent message's
+  id is kept 7 days: a `131049` status webhook for it, handed to
+  `KvJobs::observe` or to `JobFeedback` (`KvJobs::feedback`: a bot
+  listener of `status_updated` or an `EventSink<WebhookEvent>`), marks
+  that recipient for 24 hours, and a re-run of the job skips them
+  (`JobSummary::limited`) and sends everyone else; a `131049` the send
+  returns marks them too. Settled jobs, markers and index pages expire
+  after 30 days (`KvJobs::retention`). Five new store namespaces,
+  `wa.bot.jobs`, `wa.bot.jobs.due`, `wa.bot.jobs.sent`,
+  `wa.bot.jobs.message` and `wa.bot.jobs.limited`, pinned with their
+  keys and records and pending the owner's confirmation before the first
+  release (architecture.md § Stable identifiers). Opt-in: no existing
+  API changed.
 - **A pacer shared by replicas** in `meta-whatsapp-bot` (roadmap B2b,
   parity row 89; for the service's broadcasts, M5k). Opt-in:
   `KvRateLimiter` (module `pacer`) is a `RateLimiter` whose per-number

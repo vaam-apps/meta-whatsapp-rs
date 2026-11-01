@@ -1395,7 +1395,7 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     never moves back; the name `KvRateLimiter`. **Pending the owner**
     (a stable identifier): the namespace `wa.bot.pacer` and the version
     1 record layout.
-- [ ] **B3. Durable scheduling** (`meta-whatsapp-bot`; row 90; D29): jobs
+- [x] **B3. Durable scheduling** (`meta-whatsapp-bot`; row 90; D29): jobs
   as a typed store on `KvStore` (a bucketed due-time index, claims by
   compare-and-swap with a lease; no new port), send at a time, cancel,
   retry, survive a restart. Companion: architecture.md § Stable
@@ -1409,6 +1409,49 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     recorded from a status webhook (the job keeps each message's id)
     makes a re-run within 24 hours skip that recipient and send everyone
     else.
+  - **Landed:** row 90 done in the library (with Meta's own campaign
+    schedules, L10b). The module `jobs`: `KvJobs` (`KvJobs::schedule`,
+    `KvJobs::cancel`, `KvJobs::rerun`, `KvJobs::get`, `KvJobs::observe`,
+    `KvJobs::feedback`), `Job`, `JobId`, `ScheduledJob`, `JobState`,
+    `JobSummary`, `JobRunner` (`JobRunner::tick`, `JobRunner::run_until`)
+    and its builder, `JobFeedback` (the `131049` path as a bot listener or
+    an event sink), `TickReport`, `JobRun`, `JobEnd`; five store
+    namespaces under `wa.bot.jobs`, pending the owner's confirmation
+    (architecture.md § Stable identifiers, § Owner touchpoints below). A
+    job's message is not stored: a composer of the runner makes it from
+    the job's JSON payload at each send, so every replica and every
+    release after a restart registers the same one. The decisive tests,
+    in `crates/meta-whatsapp-bot/tests/jobs.rs`:
+    `two_runners_on_one_store_send_a_due_job_once` (both runners read the
+    job at one version through a gate in the store; with the claim's
+    compare-and-swap replaced by a plain put both claim and it fails; the
+    send itself is guarded a second time by the recipient's marker),
+    `a_job_scheduled_before_a_restart_is_sent_by_a_new_runner`,
+    `a_resumed_broadcast_never_resends_a_recipient_recorded_as_sent`
+    (fails without the per-recipient marker, written or read) and
+    `a_131049_status_makes_a_rerun_within_24_hours_skip_that_recipient`
+    (Meta's failed-status fixture; fails without the limited skip). Each
+    of these fails a test too:
+    `a_crashed_runners_lease_holds_the_job_until_it_expires` (the lease
+    ignored), `a_timed_out_send_is_marked_unknown_and_never_resent` (a
+    timed-out send resent), `a_job_cancelled_while_it_runs_stops_before_its_next_send`
+    (no cancel check), `a_job_indexed_while_the_cursor_moves_is_not_lost`
+    and `a_rerun_into_the_minute_it_ran_in_is_not_lost` (the cursor's
+    second read, the page written again). Proposed by the draft, for the
+    coordinator to decide (AGENTS.md § Decisions): the namespaces' names;
+    minute buckets of 256 ids a page; a 2-minute lease renewed at half;
+    the 131049 skip scoped to the job (not to the number) and its 24
+    hours counted from the webhook's arrival; message ids kept 7 days and
+    settled jobs and markers 30 days; job-level retries (5, from 30 s
+    doubling to 30 min) for recipients provably unsent; 8 sends in flight
+    per job. The runner paces through any `Pacer`, B2b's `KvRateLimiter`
+    included (`jobs_pace_through_a_pacer_shared_by_replicas`). Not in it:
+    a job-store trait (D29 names the job store a trait; here the swap is
+    the `KvStore` adapter, and the runner's outbound, pacer, policy and
+    composer), recurring schedules, a job's
+    lines per recipient beyond its summary, and live runs on Postgres and
+    Redis (the jobs use only the port the store conformance suite
+    checks).
 - [ ] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
   age and a cap per chat, through `ConversationStore`'s erasure.
   - **After:** B1, L5.
@@ -2631,7 +2674,11 @@ everything else goes into the parity-completion report.
   store namespace or stored name an item adds after the table in
   architecture.md § Stable identifiers was last confirmed (B2b's
   `wa.bot.pacer` and its record layout, added and awaiting
-  confirmation, and those B3 and L21a add), for the same reason as L5's.
+  confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
+  `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
+  with their keys' derivations and their records' shapes, added and
+  awaiting confirmation; and those L21a adds), for the same reason as
+  L5's.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored
