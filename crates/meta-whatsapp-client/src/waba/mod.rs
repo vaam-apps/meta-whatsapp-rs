@@ -145,12 +145,12 @@ mod types;
 
 pub use accounts::{CreatedWaba, NewWaba, WabaBusinessType};
 pub use activity::{
-    ActivityCategory, ActivityEventType, ApplicationRef, ListWabaRecords, SolutionPendingStatus,
-    SolutionStatus, WabaActivity, WabaSolution,
+    ActivityCategory, ActivityEventType, ApplicationRef, ListWabaRecords, WabaActivity,
+    WabaSolution,
 };
 pub use billing::{
-    MigrationStarted, MigrationState, MigrationStatus, PaymentMethodMigration,
-    PaymentMethodMigrationIntent,
+    MigrationStarted, MigrationState, PaymentMethodMigration, PaymentMethodMigrationIntent,
+    PaymentMigrationStatus,
 };
 pub use business::{Business, CreatedMessagingCustomerBase, ParentBsuidAccount, WabaListQuery};
 pub use history::{

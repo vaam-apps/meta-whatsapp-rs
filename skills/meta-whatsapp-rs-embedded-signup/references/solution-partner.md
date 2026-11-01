@@ -7,7 +7,8 @@
 > `solution-providers/partner-led-business-verification` and
 > `embedded-signup/website-optional` as fetched on 2026-09-25.
 > Code: [examples/solution_partner.rs](../examples/solution_partner.rs),
-> [examples/business_verification.rs](../examples/business_verification.rs).
+> [examples/business_verification.rs](../examples/business_verification.rs),
+> [examples/partner_solutions.rs](../examples/partner_solutions.rs).
 
 A **Solution Partner** pays Meta for its merchants through its own credit
 line and invoices them; a **Tech Provider**'s merchants add their own
@@ -417,6 +418,61 @@ The status, with the merchant's token from the vault:
 let business = client.with_token(stored.token);
 let info = business.business_verification().status(merchant).await?;
 Ok(info.is_verified())
+```
+
+## Multi-Partner Solutions
+
+A solution joins a Tech Provider's app and yours: clients onboarded
+through Embedded Signup configured with its id (`extras.setup.solutionID`,
+`LaunchOptions::solution_id`) grant both apps the permissions it names,
+and share your credit line. `meta_whatsapp_rs::client::partners` wraps
+the API (`Client::partner_solutions`, `Client::migration_intents`); each
+method's rustdoc says which token Meta expects.
+
+An accepted solution cannot be declined, so read it first, with your
+system user token, and accept only what you agreed:
+
+```rust
+let info = api.get(solution, &fields).await?;
+let agreed = info.partners.iter().flat_map(|p| &p.data).any(|partner| {
+    let ours = partner.partner_app.as_ref().and_then(|a| a.id.as_ref()) == Some(our_app);
+    let messaging = partner
+        .partner_permissions
+        .as_ref()
+        .is_some_and(|tasks| tasks.contains(&WabaTask::Messaging));
+    ours && messaging
+});
+if !agreed {
+    return Ok(false);
+}
+// Cannot be undone, and never retried.
+api.accept(solution).await?;
+```
+
+When you do not host the solution's Embedded Signup, a client's business
+token comes through the solution: their business portfolio id is in the
+`account_update` webhook of their onboarding. The token is an
+`AccessToken`, kept out of `Debug` and of decode errors; store it as you
+store Embedded Signup's. Meta's reference calls it time-limited: when
+`token.expires_at` (unix seconds) is set, keep it with the token and read
+a new one before then.
+
+```rust
+let token = system
+    .partner_solutions()
+    .access_token(solution, customer)
+    .await?;
+Ok(client.with_token(token.access_token))
+```
+
+A Tech Provider moving a client to your solution sends you a migration
+intent id. Read it with the client's business token, and go on
+(webhooks, credit line) only once the client accepted it in Meta Business
+Suite; Meta accepts for a client who does not answer within 90 days.
+
+```rust
+let info = business.migration_intents().get(intent, &[]).await?;
+Ok(info.is_accepted())
 ```
 
 ## Not settled by Meta's pages

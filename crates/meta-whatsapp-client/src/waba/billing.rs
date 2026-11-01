@@ -66,7 +66,7 @@ impl PaymentMethodMigrationIntent {
 
 string_enum! {
     /// Where a migration stands (the page's § Migration status values).
-    pub enum MigrationStatus {
+    pub enum PaymentMigrationStatus {
         /// Initiated: the source WABA is being validated.
         Initiated => "INITIATED",
         /// Accepted and queued.
@@ -95,7 +95,7 @@ pub struct MigrationStarted {
     /// [`Client::payment_method_migration`] takes.
     pub migration_id: String,
     /// Its status.
-    pub migration_status: MigrationStatus,
+    pub migration_status: PaymentMigrationStatus,
 }
 
 /// A migration, from [`PaymentMethodMigration::status`] or
@@ -106,7 +106,7 @@ pub struct MigrationState {
     /// The migration's id.
     pub id: String,
     /// Its status.
-    pub status: MigrationStatus,
+    pub status: PaymentMigrationStatus,
     /// The clone: `id`, `name`, `currency`, `timezone_id`,
     /// `message_template_namespace` in Meta's example.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -175,7 +175,7 @@ impl PaymentMethodMigration {
     }
 
     /// `GET /{MIGRATION_ID}`: where the migration stands. Poll until
-    /// [`MigrationStatus::ReadyToComplete`] or [`MigrationStatus::Completed`].
+    /// [`PaymentMigrationStatus::ReadyToComplete`] or [`PaymentMigrationStatus::Completed`].
     pub async fn status(&self) -> Result<MigrationState> {
         self.client
             .get_at(&[self.checked_id()?])
@@ -187,14 +187,14 @@ impl PaymentMethodMigration {
     /// `POST /{MIGRATION_ID}/resume_migration`: complete the migration,
     /// making the clone the billing account of the numbers; the old WABA
     /// can no longer send, and keeps its history. Call it once the status
-    /// is [`MigrationStatus::ReadyToComplete`], with a payment method on the
+    /// is [`PaymentMigrationStatus::ReadyToComplete`], with a payment method on the
     /// clone (Meta does not complete the migration otherwise).
     ///
     /// An explicit call that nothing else in the library makes (see the
     /// [module docs](crate::waba#the-billing-migration-two-explicit-calls)).
     /// **Never replayed** on a timeout or a transient
     /// error ([`crate::RetryPolicy`]): read [`Self::status`] first, and
-    /// call again only on [`MigrationStatus::FailedToComplete`], as Meta's
+    /// call again only on [`PaymentMigrationStatus::FailedToComplete`], as Meta's
     /// troubleshooting table says.
     pub async fn resume_migration(&self) -> Result<MigrationState> {
         self.client
@@ -251,7 +251,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(started.migration_id, "mig_01HZYK3ABCDEF4567890");
-        assert_eq!(started.migration_status, MigrationStatus::Initiated);
+        assert_eq!(started.migration_status, PaymentMigrationStatus::Initiated);
         let req = t.last_request().unwrap();
         assert_eq!(req.method, Method::POST);
         assert_eq!(
@@ -332,7 +332,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(state.id, "mig_01HZYK3ABCDEF4567890");
-        assert_eq!(state.status, MigrationStatus::ReadyToComplete);
+        assert_eq!(state.status, PaymentMigrationStatus::ReadyToComplete);
         let clone = state.destination_waba.unwrap();
         assert_eq!(clone.id.as_str(), "998877665544332");
         assert_eq!(clone.name.as_deref(), Some("Acme WABA (INR)"));
@@ -367,7 +367,7 @@ mod tests {
             .resume_migration()
             .await
             .unwrap();
-        assert_eq!(state.status, MigrationStatus::Completed);
+        assert_eq!(state.status, PaymentMigrationStatus::Completed);
         let req = t.last_request().unwrap();
         assert_eq!(req.method, Method::POST);
         assert_eq!(
@@ -420,7 +420,7 @@ mod tests {
         t.push_json(200, json!({"status": "FAILED_TO_COMPLETE", "id": "mig_1"}));
         assert_eq!(
             m.status().await.unwrap().status,
-            MigrationStatus::FailedToComplete
+            PaymentMigrationStatus::FailedToComplete
         );
         assert_eq!(t.requests().len(), 3, "a read is replayed");
         assert_eq!(t.remaining(), 0);
@@ -438,11 +438,14 @@ mod tests {
             "FAILED_TO_COMPLETE",
             "REJECTED",
         ] {
-            let parsed: MigrationStatus = serde_json::from_value(json!(value)).unwrap();
-            assert!(!matches!(parsed, MigrationStatus::Other(_)), "{value}");
+            let parsed: PaymentMigrationStatus = serde_json::from_value(json!(value)).unwrap();
+            assert!(
+                !matches!(parsed, PaymentMigrationStatus::Other(_)),
+                "{value}"
+            );
             assert_eq!(parsed.as_str(), value);
         }
-        let other: MigrationStatus = serde_json::from_value(json!("PAUSED")).unwrap();
-        assert_eq!(other, MigrationStatus::Other("PAUSED".into()));
+        let other: PaymentMigrationStatus = serde_json::from_value(json!("PAUSED")).unwrap();
+        assert_eq!(other, PaymentMigrationStatus::Other("PAUSED".into()));
     }
 }

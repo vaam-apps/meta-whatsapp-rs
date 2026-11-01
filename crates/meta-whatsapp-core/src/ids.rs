@@ -12,10 +12,11 @@
 //!
 //! - **Numeric ids** ([`AppId`], [`BusinessId`], [`WabaId`],
 //!   [`PhoneNumberId`], [`MediaId`], [`TemplateId`], [`ProductItemId`],
-//!   [`ProductSetId`]): Meta's ids for these objects are numeric strings
-//!   (the WABA reference's own error example: "must be a valid numeric
-//!   string"; the Catalog API's field tables for products and product
-//!   sets). Their constructors
+//!   [`ProductSetId`], [`SolutionId`]): Meta's ids for these objects are
+//!   numeric strings (the WABA reference's own error example: "must be a
+//!   valid numeric string", and the Solution Details API's: "`solution_id`
+//!   must be a valid numeric string"; the Catalog API's field tables for
+//!   products and product sets). Their constructors
 //!   ([`WabaId::new`], [`FromStr`](std::str::FromStr), [`TryFrom`]) refuse
 //!   anything but 1 to [`MAX_NUMERIC_ID_LEN`] ASCII digits with a
 //!   [`ValidationError`] on the id's field (`waba_id`, `phone_number_id`,
@@ -386,6 +387,23 @@ id_type!(
     /// [`WabaId`] nor a [`PhoneNumberId`].
     WabaBotId
 );
+numeric_id_type!(
+    /// A Multi-Partner Solution id (`GET /{Solution-ID}`,
+    /// `reference/whatsapp-business-solution/solution-details-api`): the
+    /// `solution_id` that `POST /{Application-ID}/whatsapp_business_solution`
+    /// returns, that the `partner_solutions` and `account_update` webhooks
+    /// carry, and that Embedded Signup's `extras.setup.solutionID` takes.
+    SolutionId,
+    "solution_id"
+);
+id_type!(
+    /// A WABA migration intent id: the `id` that
+    /// `POST /{WABA_ID}/set_solution_migration_intent` returns, read back
+    /// with `GET /{Migration-Intent-ID}`
+    /// (`reference/whatsapp-business-account-migration-intent/migration-intent-details-api`).
+    /// Opaque: Meta's pages show only a placeholder, no shape.
+    MigrationIntentId
+);
 
 #[cfg(test)]
 mod tests {
@@ -462,6 +480,7 @@ mod tests {
         check::<TemplateId>("template_id");
         check::<ProductItemId>("product_item_id");
         check::<ProductSetId>("product_set_id");
+        check::<SolutionId>("solution_id");
         assert_eq!(WabaId::new("1/2").unwrap_err().field, WabaId::FIELD);
         assert!(is_numeric_id("1") && !is_numeric_id("1/2"));
     }

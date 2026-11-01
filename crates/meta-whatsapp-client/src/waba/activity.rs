@@ -5,13 +5,14 @@
 
 use futures::Stream;
 use meta_whatsapp_core::Result;
-use meta_whatsapp_core::ids::{AppId, BusinessId};
+use meta_whatsapp_core::ids::{AppId, BusinessId, SolutionId};
 use meta_whatsapp_core::paging::Page;
 use serde::{Deserialize, Serialize};
 
 use super::types::WabaTask;
 use super::{Waba, check_limit, fields_query};
 use crate::GraphRequest;
+use crate::partners::solutions::{PendingRequestStatus, SolutionApp, SolutionStatus};
 use crate::request::{paginate_or_error, reject_cursors};
 use crate::templates::macros::string_enum;
 
@@ -230,36 +231,6 @@ pub struct WabaActivity {
     pub timestamp: Option<i64>,
 }
 
-string_enum! {
-    /// A Multi-Partner Solution's effective `status`
-    /// (`WhatsAppBusinessSolutionStatus`).
-    pub enum SolutionStatus {
-        /// A draft.
-        Draft => "DRAFT",
-        /// Initiated.
-        Initiated => "INITIATED",
-        /// Active.
-        Active => "ACTIVE",
-        /// Rejected.
-        Rejected => "REJECTED",
-        /// Deactivated.
-        Deactivated => "DEACTIVATED",
-    }
-}
-
-string_enum! {
-    /// A Multi-Partner Solution's `status_for_pending_request`
-    /// (`WhatsAppBusinessSolutionPendingStatus`).
-    pub enum SolutionPendingStatus {
-        /// Waiting to be activated.
-        PendingActivation => "PENDING_ACTIVATION",
-        /// Waiting to be deactivated.
-        PendingDeactivation => "PENDING_DEACTIVATION",
-        /// Nothing pending (`NONE`).
-        NothingPending => "NONE",
-    }
-}
-
 /// `{id, name}` of a Meta app (`ApplicationNode`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[non_exhaustive]
@@ -274,6 +245,10 @@ pub struct ApplicationRef {
 
 /// A Multi-Partner Solution a WABA belongs to (`WhatsAppBusinessSolution`).
 ///
+/// Its enums and app are [`crate::partners::solutions`]'s; unlike
+/// [`SolutionInfo`](crate::partners::solutions::SolutionInfo), the id is
+/// optional here, since this list only returns it when `fields` asks.
+///
 /// Which fields are present depends on `fields`: Meta's defaults are
 /// `name`, `status` and `status_for_pending_request`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -281,7 +256,7 @@ pub struct ApplicationRef {
 pub struct WabaSolution {
     /// The solution's id (absent unless requested).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    pub id: Option<SolutionId>,
     /// Its name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -290,10 +265,10 @@ pub struct WabaSolution {
     pub status: Option<SolutionStatus>,
     /// A status change waiting for approval.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status_for_pending_request: Option<SolutionPendingStatus>,
+    pub status_for_pending_request: Option<PendingRequestStatus>,
     /// The app that owns the solution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_app: Option<ApplicationRef>,
+    pub owner_app: Option<SolutionApp>,
     /// The WABA permissions granted to the solution's owner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub owner_permissions: Vec<WabaTask>,
@@ -666,11 +641,14 @@ mod tests {
             .await
             .unwrap();
         let s = &page.data[0];
-        assert_eq!(s.id.as_deref(), Some("1386924215693432"));
+        assert_eq!(
+            s.id.as_ref().map(SolutionId::as_str),
+            Some("1386924215693432")
+        );
         assert_eq!(s.status, Some(SolutionStatus::Active));
         assert_eq!(
             s.status_for_pending_request,
-            Some(SolutionPendingStatus::NothingPending)
+            Some(PendingRequestStatus::NoRequest)
         );
         let app = s.owner_app.as_ref().unwrap();
         assert_eq!(app.id.as_ref().map(AppId::as_str), Some("670843887433847"));
@@ -684,7 +662,7 @@ mod tests {
         );
         assert_eq!(
             page.data[1].status_for_pending_request,
-            Some(SolutionPendingStatus::PendingActivation)
+            Some(PendingRequestStatus::PendingActivation)
         );
         assert_eq!(
             serde_json::to_value(&page.data).unwrap(),
