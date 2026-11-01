@@ -483,6 +483,30 @@ mod processes {
                         "printf '%s\\n' \"$@\" >> '{d}/record_image.args'\ncat > '{d}/record_image.stdin'\ncat '{d}/webp_at_limit.bin'\n"
                     ),
                 ),
+                // Records its pid, answers more than a static sticker
+                // takes, then hangs on, deaf to the closed pipe: only a
+                // kill ends it.
+                (
+                    "overflow_then_hang",
+                    format!(
+                        "echo $$ >> '{d}/overflow_then_hang.pids'\ncat > /dev/null\ntrap '' PIPE\n\
+                         head -c 100001 /dev/zero\nexec sleep 30\n"
+                    ),
+                ),
+                // Counts its runs; fails.
+                (
+                    "image_fails",
+                    format!(
+                        "n=$(cat '{d}/image_fails.count' 2>/dev/null || echo 0)\necho $((n + 1)) > '{d}/image_fails.count'\n\
+                         cat > /dev/null\nexit 1\n"
+                    ),
+                ),
+                // Each encoder name, each of the wrong kind.
+                (
+                    "encoders_wrong_kind",
+                    "printf ' A....D libwebp   libwebp\\n A....D mjpeg   MJPEG\\n A....D png   PNG\\n V....D libopus   libopus\\n'\n"
+                        .to_owned(),
+                ),
                 (
                     "animated",
                     format!("cat > /dev/null\ncat '{d}/animated.bin'\n"),
@@ -949,6 +973,75 @@ mod processes {
         );
         assert!(err.to_string().contains("truncated"), "{err}");
         assert!(!f.path("image_marker.ran").exists(), "ffmpeg was started");
+    }
+
+    /// Every attempt over the limit is killed and reaped before the next
+    /// one starts or the conversion returns, even one that outlives its
+    /// closed pipe: no process is left, not even a zombie.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn an_attempt_over_the_limit_is_killed_and_reaped() {
+        let f = fakes();
+        let err = convert_to(
+            &f.converter("overflow_then_hang"),
+            PNG_START,
+            TargetFormat::StaticSticker,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, Error::Validation(v) if v.field == "input"),
+            "{err:?}"
+        );
+        let pids = std::fs::read_to_string(f.path("overflow_then_hang.pids")).unwrap();
+        let pids: Vec<&str> = pids.lines().collect();
+        assert_eq!(pids.len(), image::STICKER.len());
+        for pid in pids {
+            assert!(
+                !Path::new(&format!("/proc/{pid}")).exists(),
+                "the attempt killed on overflow ({pid}) is still there"
+            );
+        }
+    }
+
+    /// ffmpeg failing on an image is the input's fault: no other attempt
+    /// runs.
+    #[tokio::test]
+    async fn a_failed_attempt_ends_the_ladder() {
+        let f = fakes();
+        let err = convert_to(&f.converter("image_fails"), PNG_START, TargetFormat::Jpeg)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("exit status 1"), "{err}");
+        let runs = std::fs::read_to_string(f.path("image_fails.count")).unwrap();
+        assert_eq!(runs.trim(), "1");
+    }
+
+    /// An encoder of the right name but the wrong kind (`A` for audio, `V`
+    /// for images) is not the one a format needs.
+    #[tokio::test]
+    async fn check_for_wants_the_encoder_s_kind_too() {
+        let f = fakes();
+        for target in [
+            TargetFormat::StaticSticker,
+            TargetFormat::Jpeg,
+            TargetFormat::Png,
+            TargetFormat::OggOpus,
+        ] {
+            let err = f
+                .converter("encoders_wrong_kind")
+                .check_for(&[target])
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, Error::Conversion(ConversionError::EncoderMissing(_))),
+                "{target:?}: {err:?}"
+            );
+        }
     }
 
     #[tokio::test]
