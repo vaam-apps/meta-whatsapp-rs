@@ -211,7 +211,7 @@ async fn live_redis_conversation_layout_and_erasure_leaves_nothing() {
         error: None,
     };
     assert!(store.append(message.clone()).await.unwrap());
-    let base = format!("{prefix}{{conversations}}");
+    let base = format!("{prefix}{{conversations:{prefix}}}");
     let index: String = redis::cmd("GET")
         .arg(format!("{base}:id:wamid.1"))
         .query_async(&mut conn)

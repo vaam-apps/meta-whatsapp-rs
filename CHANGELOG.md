@@ -234,7 +234,8 @@ stored data, the owner's).
   in-memory database and on a file shared by a pool of connections.
 - **A Redis conversation store** (`meta_whatsapp_adapters::store::RedisConversationStore`,
   feature `redis`; roadmap L8, parity row 111): every key under one hash
-  tag per store (`{prefix}{conversations}`), every write one Lua script,
+  tag per store (`<prefix>{conversations:<prefix>}`, so stores of other
+  prefixes hash to other slots), every write one Lua script,
   status updates a compare-and-swap decided in Rust; `with_prefix`,
   `with_retention`, `with_erasure_mode`; any connection `RedisKvStore`
   takes (`RedisTlsConnection` included). Needs persistence and

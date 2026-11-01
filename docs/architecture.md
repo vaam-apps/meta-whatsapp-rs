@@ -142,7 +142,7 @@ rewrite them along with the code.
 | a message's sender: the payload's `from_user_id`, else its `from`, of an inbound message (an empty value, or one holding U+0000, is none) | `StoredMessage::sender`, `meta-whatsapp-core/src/store/conversation.rs`; migration 4's back-fill | what a store keeps beside each message (`wa_messages.sender`) and an erasure matches a person's group messages on: a changed rule leaves the rows written before out of every erasure | `the_sender_is_the_bsuid_else_the_phone_number_of_an_inbound_message`, `live_postgres_migration_4_backfills_senders_by_the_rust_rule` |
 | `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
 | the SQLite migration files and tables (added by roadmap L8; **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `MIGRATIONS`, `meta-whatsapp-adapters/src/store/sqlite/mod.rs`; `meta-whatsapp-adapters/migrations-sqlite/*.sql` | the SQLite adapters' schema under the default prefix: `wa_kv`, `wa_kv_version` (the version counter), `wa_messages` (keyed by business number and id; `wa_messages_id_idx`, unique, keeps an id once per store, `OPEN_QUESTIONS.md` #33), `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_identity_links`, `wa_sqlx_migrations`, their columns (`kind_utf8`, `text_utf8`, `payload_json`, `ts` in unix microseconds, …) and the stored names the Postgres adapter keeps (statuses, directions, owners, kinds); sqlx records each file's checksum, so an edit, a comment included, makes `migrate` refuse a database migrated before | `the_default_tables_and_migration_checksums_are_pinned` (`store::sqlite`) |
-| `{conversations}` and the Redis conversation layout (added by roadmap L8; **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `RedisConversationStore::base`, `key`, `ts16`, `PRELUDE`, `meta-whatsapp-adapters/src/store/redis_conversation.rs` | the hash tag after the `wa:` prefix of every key of a conversation store, the keys under it (`:m:`, `:id:`, `:h:`, `:s:`, `:l:`, … with length-prefixed parts), the fields of each record (`c`, `d`, `k`, `t`, `p`, `s`, `ts`, …) and the time encoding (16 hex digits of the unix microseconds, sign bit flipped) | `the_conversation_layout_is_pinned`, `live_redis_conversation_layout_and_erasure_leaves_nothing` |
+| `{conversations:<prefix>}` and the Redis conversation layout (added by roadmap L8; **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `RedisConversationStore::base`, `key`, `ts16`, `PRELUDE`, `meta-whatsapp-adapters/src/store/redis_conversation.rs` | the hash tag after the `wa:` prefix of every key of a conversation store (naming the prefix: one slot per store), the keys under it (`:m:`, `:id:`, `:h:`, `:s:`, `:l:`, … with length-prefixed parts), the fields of each record (`c`, `d`, `k`, `t`, `p`, `s`, `ts`, …) and the time encoding (16 hex digits of the unix microseconds, sign bit flipped) | `the_conversation_layout_is_pinned`, `each_prefix_has_its_own_hash_tag`, `live_redis_conversation_layout_and_erasure_leaves_nothing` |
 | `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server-core/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
 | `meta-whatsapp-server/event-id/v1`, `evt_` + 32 hex digits | `EventIdKey`, same file | HMAC label of the key event ids are derived with under the app secret, and the id's shape: stored as `wa_server_events.id` and what receivers deduplicate on | `event_ids_are_pinned` (known answers) |
 | `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `lock_key`, `meta-whatsapp-server-store-postgres/src/postgres.rs` (`meta-whatsapp-server/src/store/postgres.rs` until roadmap S7) | Postgres advisory lock keys (the first 8 bytes of their SHA-256; `lock_key` derives the leader lock's the same way, so its `housekeeping` turn is `HOUSEKEEPING_LOCK`): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented`, `the_leader_locks_keys_are_the_services_locks` |
@@ -979,9 +979,9 @@ Logs carry sizes, digests and field names only — never payload values.
   (`wa_kv_version`) under the write lock. `store::sqlite::memory` is a
   private in-memory database on one connection the pool never closes.
 - `store::RedisConversationStore` (feature `redis`, roadmap L8): every
-  key under `{prefix}{conversations}`, one hash tag, so a store's inbox
-  is one slot (one shard on Cluster; spread inboxes with one store per
-  prefix) and every write is one Lua script over it; status updates are
+  key under `<prefix>{conversations:<prefix>}`, one hash tag per store
+  (it names the prefix), so a store's inbox is one slot (one shard on
+  Cluster; stores of other prefixes hash elsewhere, which spreads inboxes) and every write is one Lua script over it; status updates are
   a compare-and-swap decided in Rust, as on Postgres; history, the
   conversation list, window events and contacts page with
   `ZRANGEBYLEX` over sorted sets of 16-hex-digit times and ids (byte
@@ -1046,7 +1046,7 @@ Logs carry sizes, digests and field names only — never payload values.
   memory store does the same; `OPEN_QUESTIONS.md` #33). The SQLite and
   Redis stores (roadmap L8) key a message by business number and id and
   keep that rule with a separate index (`wa_messages_id_idx`, unique;
-  `{conversations}:id:<id>`), which ids unique per number would drop.
+  `{conversations:<prefix>}:id:<id>`), which ids unique per number would drop.
   `conversation_conformance::ids_are_stored_once_per_store` (outside
   `run`: the port allows either answer) pins today's rule; every adapter
   passes it.

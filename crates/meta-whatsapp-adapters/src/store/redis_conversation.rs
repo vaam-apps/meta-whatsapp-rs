@@ -2,10 +2,11 @@
 //!
 //! # Layout
 //!
-//! Every key starts with `{prefix}{conversations}` (`B` below; `wa:` is the
-//! default prefix, the key/value store's): `{conversations}` is a hash tag,
-//! so all of a store's keys live in one slot and every script may touch
-//! any of them. Variable parts are length-prefixed where another follows
+//! Every key starts with the store's base, `B` below: the prefix, then the
+//! hash tag `{conversations:<prefix>}` (`wa:{conversations:wa:}` with the
+//! default prefix, the key/value store's). All of a store's keys live in
+//! one slot, so every script may touch any of them, and stores of other
+//! prefixes hash to other slots. Variable parts are length-prefixed where another follows
 //! (`<len>:<value>`, `lp()` below), so no two records spell one key.
 //! Times are 16 hex digits, the unix microseconds with the sign bit
 //! flipped (`ts16`): their byte order is their time order, so a sorted set
@@ -82,7 +83,7 @@ const SYNCED_PER_SCRIPT: usize = 256;
 const MESSAGE_ARGS: usize = 13;
 
 /// The key builders and helpers every script starts with. `ARGV[1]` is
-/// always the base (`{prefix}{conversations}`), `KEYS[1]` the store's
+/// always the base (`<prefix>{conversations:<prefix>}`), `KEYS[1]` the store's
 /// `B:numbers` key, so that Redis (and a Cluster) routes the script to the
 /// slot of the keys it builds from the base.
 const PRELUDE: &str = r"
@@ -676,12 +677,14 @@ return out
 /// - **Eviction policy: `noeviction`**, as for the key/value store: under
 ///   any other policy Redis may silently drop a message, a summary, or the
 ///   index that keeps an id once per store.
-/// - **Cluster.** All of a store's keys share the hash tag
-///   `{conversations}`: one slot, so one shard holds a store's whole inbox
-///   (the scripts need it, an erasure touching the history, the indexes
-///   and the summaries at once). Spread inboxes over shards with one store
-///   per prefix ([`with_prefix`](Self::with_prefix)); keep an empty `{}`
-///   out of the prefix. The scripts build their key names from the base
+/// - **Cluster.** All of a store's keys share one hash tag,
+///   `{conversations:<prefix>}`: one slot, so one shard holds a store's
+///   whole inbox (the scripts need it, an erasure touching the history,
+///   the indexes and the summaries at once). The tag names the prefix, so
+///   stores of other prefixes ([`with_prefix`](Self::with_prefix)) hash to
+///   other slots: spread inboxes over shards with one store per prefix. A
+///   prefix with a hash tag of its own (`{tenant1}:wa:`) puts the store in
+///   that tag's slot instead; keep an empty `{}` out of the prefix. The scripts build their key names from the base
 ///   they are given (as job queues on Redis commonly do): a proxy that
 ///   refuses undeclared keys refuses them.
 /// - **Cost.** Each call is one script (a purge of every number, one per
@@ -934,9 +937,11 @@ where
         &self.prefix
     }
 
-    /// `{prefix}{conversations}`: the start of every key.
+    /// `<prefix>{conversations:<prefix>}`: the start of every key, whose
+    /// hash tag names the prefix (one slot per store).
     fn base(&self) -> String {
-        format!("{}{{conversations}}", self.prefix)
+        let prefix = &self.prefix;
+        format!("{prefix}{{conversations:{prefix}}}")
     }
 
     /// `B:<kind>:lp(pn)<rest>`.
@@ -983,7 +988,9 @@ where
         limit: usize,
         newest_first: bool,
     ) -> Result<Vec<(String, Record)>, StorageError> {
-        let limit = limit.to_string();
+        // Redis counts in a signed 64-bit integer: saturate, as the SQL
+        // stores do.
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX).to_string();
         let rows: Vec<Vec<Vec<u8>>> = self
             .run(
                 &PAGE,
@@ -1641,15 +1648,15 @@ mod tests {
         // computed without one.
         let store = RedisConversationStore::new(NoConnection);
         assert_eq!(store.prefix(), "\x77a:");
-        assert_eq!(store.base(), "\x77a:{conversations}");
+        assert_eq!(store.base(), "\x77a:{conversations:\x77a:}");
         let pn = PhoneNumberId::new("106540352242922").unwrap();
         assert_eq!(
             store.key("m", &pn, "wamid.1"),
-            "\x77a:{conversations}:m:15:106540352242922wamid.1"
+            "\x77a:{conversations:\x77a:}:m:15:106540352242922wamid.1"
         );
         assert_eq!(
             store.with_prefix("t:").key("s", &pn, "US.1"),
-            "t:{conversations}:s:15:106540352242922US.1"
+            "t:{conversations:t:}:s:15:106540352242922US.1"
         );
         assert_eq!(
             ts16(time::macros::datetime!(1970-01-01 0:00 UTC)),
@@ -1664,6 +1671,62 @@ mod tests {
             ts16(time::macros::datetime!(1969-12-31 23:59:59.999999 UTC)),
             "7fffffffffffffff"
         );
+    }
+
+    /// The hash tag Redis Cluster hashes `key` by: what lies between the
+    /// first `{` and the first `}` after it, when not empty; else the key.
+    fn hash_tag(key: &str) -> &str {
+        key.find('{')
+            .and_then(|open| {
+                let rest = &key[open + 1..];
+                rest.find('}').map(|close| &rest[..close])
+            })
+            .filter(|tag| !tag.is_empty())
+            .unwrap_or(key)
+    }
+
+    /// One slot per store, another per prefix: every key of a store has
+    /// its base's hash tag, which names the prefix (decision of roadmap
+    /// L8: spread inboxes over shards with one store per prefix). A prefix
+    /// with a hash tag of its own keeps it.
+    #[test]
+    fn each_prefix_has_its_own_hash_tag() {
+        let pn = PhoneNumberId::new("106540352242922").unwrap();
+        let tags = |prefix: &str| -> BTreeSet<String> {
+            let store = RedisConversationStore::new(NoConnection).with_prefix(prefix);
+            ["m", "h", "s", "snd", "w", "wi", "o", "p", "pi", "k"]
+                .iter()
+                .map(|kind| store.key(kind, &pn, "US.1"))
+                .chain(
+                    [
+                        "numbers",
+                        "id:wamid.1",
+                        "mt:1",
+                        "l:1",
+                        "wt:1",
+                        "ot:1",
+                        "pl:1",
+                        "pr:1",
+                        "ka:1",
+                    ]
+                    .iter()
+                    .map(|rest| format!("{}:{rest}", store.base())),
+                )
+                .map(|key| hash_tag(&key).to_owned())
+                .collect()
+        };
+        let one = |prefix: &str| {
+            let tags = tags(prefix);
+            assert_eq!(tags.len(), 1, "{prefix:?}: {tags:?}");
+            tags.into_iter().next().unwrap()
+        };
+        assert_eq!(one("\x77a:"), "conversations:\x77a:");
+        assert_eq!(one("tenant1:wa:"), "conversations:tenant1:wa:");
+        assert_ne!(one("tenant1:wa:"), one("tenant2:wa:"));
+        assert_eq!(one(""), "conversations:");
+        assert_eq!(one("{tenant1}:wa:"), "tenant1");
+        // A `}` in the prefix ends the tag early, still in the base.
+        assert_eq!(one("a}b:"), "conversations:a");
     }
 
     /// A connection that is never used.

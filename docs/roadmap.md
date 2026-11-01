@@ -1744,7 +1744,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
       versions one counter row, so a deleted record's row goes at once.
       Swappable by building the pool yourself (`store::sqlite::sqlx`).
     - **One hash tag per Redis conversation store**
-      (`{prefix}{conversations}`): every write one Lua script over keys
+      (`<prefix>{conversations:<prefix>}`): every write one Lua script over keys
       of one slot, so a whole inbox lives on one shard; spread inboxes
       with one store per prefix (`with_prefix`). Status updates are a
       compare-and-swap decided in Rust (`DeliveryStatus::supersedes`), a
