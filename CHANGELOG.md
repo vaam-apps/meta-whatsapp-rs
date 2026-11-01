@@ -218,6 +218,23 @@ stored data, the owner's).
 
 ### Added
 
+- **A docs MCP server** (roadmap L22b, parity row 117, now done in the
+  library too; from the MCP specification, revision 2026-07-28, and
+  2025-11-25's lifecycle, read on 2026-11-01). `tools/docs-mcp`, the
+  binary `meta-whatsapp-docs-mcp` (`just docs-mcp`), serves this
+  repository's docs and consumer skills over MCP's stdio transport:
+  `list` (every page, with its title and a skill's description),
+  `search` (the sections holding every term of a query, each with its
+  heading, line and a snippet) and `read` (a page, or one section by its
+  heading or anchor). It speaks revision 2026-07-28 (per-request
+  `_meta`, `server/discover`) and, after an `initialize`, 2025-11-25 and
+  2025-06-18. A missing page or section, or a path outside the corpus,
+  is a result with `isError: true`; no read leaves the corpus (no `..`,
+  no absolute path, no file the walk did not list, no symbolic link),
+  and every answer is bounded (40 KiB a read, 25 hits a search). A
+  workspace member but not a default one, a binary only, on
+  `serde_json` alone; no library crate depends on it. Setting it up in
+  an MCP client: docs/dev-environment.md § The docs MCP server.
 - **Stickers and image resizing** (roadmap L19b, parity row 48, from
   `messages/sticker-messages` and `business-phone-numbers/media`, read
   on 2026-11-01): three new `meta_whatsapp_core::media::TargetFormat`s,
