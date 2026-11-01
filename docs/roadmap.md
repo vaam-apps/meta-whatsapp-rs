@@ -1512,7 +1512,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     and the `HttpTransport` port states that rule; `GraphRequest::header`
     refuses credential headers, so the rules cannot be stepped around
     (both found in the L10a reviews, CHANGELOG § Security).
-- [ ] **L10b. WABAs, accounts, billing, history** (`meta-whatsapp-client`,
+- [x] **L10b. WABAs, accounts, billing, history** (`meta-whatsapp-client`,
   `client::waba`; rows 90's Meta side, 127, 146–148): WABA creation
   (partner-initiated), system user tokens for client businesses,
   activities, a WABA's solutions, system users, a user's assigned WABAs,
@@ -1523,6 +1523,54 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** exact JSON per endpoint; a non-idempotent creation is
     never retried after a timeout (`RetryPolicy`); a system user token
     never reaches `Debug` (a sentinel test).
+  - **Landed:** rows 127 and 146–148 done in the library, row 90 partial
+    there (Meta's schedules wrapped, the bot's durable ones are B3); the
+    service's sides stay with M5c4, M5j and M5k. The decisive tests, in
+    `client::waba`'s modules: the exact bodies and queries
+    (`accounts::create_sends_the_documented_body_and_parses_the_answer`,
+    `system_users::a_client_token_is_fetched_with_the_proof_of_the_system_token`,
+    `billing::the_intent_sends_the_pages_example`,
+    `schedules::create_sends_every_documented_field` and a test per
+    read); no replay after a timeout
+    (`accounts::a_creation_is_never_replayed_after_a_timeout`, and the
+    same for a schedule, a migration intent, a resume and a token
+    generation; a `fetch_only` token read, read-only by Meta's page, is
+    replayed as a read); the sentinel
+    (`system_users::a_system_user_token_never_reaches_debug_or_an_error`:
+    the token, the system token, the app secret and the proof reach no
+    `Debug` and no error). The client business's token takes the
+    `appsecret_proof` of the partner's, computed from the app secret
+    and sent in a form body (`embedded-signup/hosted-es`), its
+    parameters from `facebook-login/facebook-login-for-business`
+    (§ Get tokens); L11a builds on it. The billing migration's intent and
+    resume are explicit calls no other call makes. Not found or not
+    offered: an API call for partner-initiated creation (the page
+    describes a Business Suite flow only); the creation's
+    `on_behalf_of_business_id` (the On-Behalf-Of model is deprecated);
+    `GET /{BUSINESS_ID}/whatsapp_business_accounts` (not in the item;
+    its `business_type` array has no shown encoding); where a message
+    history id or a schedule's `audience_id` comes from (no page says).
+    Message history, migration, schedule and solution ids are strings:
+    core has no type for them yet. Decided by the coordinator
+    (2026-11-01): the billing migration is not a legal act in AGENTS.md's
+    sense (it accepts no terms), so it stays two explicit calls and no
+    operator gate; a `fetch_only` token read is replayed
+    (`facebook-login-for-business`: "The operation is read-only"); the
+    token request goes in a form body, never the query; the new ids stay
+    `String`; business users are keyed by `SystemUserId`; the Line of
+    Credit id goes with the intent (`extended_credit_id`), as the
+    requests show; row 90 is partial; the overlap with L12, which landed
+    first (PR #67), is reconciled here: `WabaSolution` keeps an optional
+    id (a `SolutionId`, returned only when `fields` asks) but takes
+    `partners::solutions`' `SolutionStatus`, `PendingRequestStatus` and
+    `SolutionApp`, and the payment-method migration's status is
+    `PaymentMigrationStatus`, apart from the WABA migration intent's
+    `partners::migration::MigrationStatus`. Found in review: system users are read from the
+    business portfolio (`Business::system_users`,
+    `GET /{BUSINESS_ID}/system_users`), the edge the Marketing API's
+    Business node documents, not from the WABA the guide's request prints
+    (its prose asks for a business id); a non-2xx answer to the token
+    request never quotes its body.
 - [ ] **L11a. Hosted Embedded Signup** (`meta-whatsapp-client`,
   `client::embedded_signup`; row 121; OPEN_QUESTIONS #11): started by the
   `PARTNER_ADDED` webhook, its business token from
@@ -1570,7 +1618,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** under a fake clock, a token expiring inside the lead
     time is reported and one expiring after it is not; removing the
     comparison fails the test.
-- [ ] **L12. Partners** (`meta-whatsapp-client`, new client modules; rows
+- [x] **L12. Partners** (`meta-whatsapp-client`, new client modules; rows
   144, 145): Multi-Partner Solutions (create, accept, reject,
   deactivation, the solution token, an app's solutions and connected
   client businesses) and migration intents.
@@ -1578,6 +1626,57 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **After:** nothing.
   - **Decisive:** exact JSON per endpoint; the solution token never
     reaches `Debug` (a sentinel test).
+  - **Landed:** rows 144 and 145 done for the library, in a new module
+    `client::partners`: `Client::partner_solutions`
+    (`partners::solutions::PartnerSolutions`: `create`, `accept`,
+    `reject`, `send_deactivation_request`, `accept_deactivation_request`,
+    `reject_deactivation_request`, `get`, `partners`, `app_solutions`,
+    `connected_client_businesses`, each list with a `…_stream`, and
+    `access_token`) and `Client::migration_intents`
+    (`partners::migration::MigrationIntents`: `create`, which is
+    `set_solution_migration_intent`, and `get`); core gains
+    `ids::SolutionId` (numeric) and `ids::MigrationIntentId` (opaque).
+    The solution token is the client's business integration system user
+    token, a bearer credential for the Graph host already allowed: an
+    `AccessToken`, decoded with `send_withheld`. No page ties a call to
+    terms or an agreement; each state change is its own call, and
+    accepting or rejecting a solution cannot be undone. Decisive tests
+    (`partners::tests`): `create_sends_the_embedded_creation_body`,
+    `create_migration_intent_matches_the_guides`, the guide's answers
+    (`get_before_accepting_matches_the_guide`,
+    `app_solutions_match_the_guide`, `partners_match_the_guide`,
+    `get_migration_intent_matches_the_guide`,
+    `deactivation_answers_decode_in_both_shapes`), the sentinel tests
+    `access_token_reads_both_shapes_and_never_shows_the_token` and
+    `an_access_token_answer_that_does_not_decode_is_withheld`, and
+    `state_changes_are_never_replayed`; the lists join
+    `request::paging_withheld_tests`. Where the pages disagree (the
+    token's answer wrapped in `data` or bare, a deactivation answered
+    `success` or with the solution) both shapes decode. A WABA's
+    solutions (`GET /{WABA_ID}/solutions`) are left to L10b. Not
+    wrapped: `POST /{WABA_ID}/migration_intent`, from an unindexed
+    reference page with no example that the guides do not use; the
+    `fields` parameter of the two deactivation answers.
+  - **Decided** (by the coordinating agent, each swappable): the core ids
+    (`SolutionId` numeric, from the Solution Details API's "must be a
+    valid numeric string"; `MigrationIntentId` opaque, no page gives its
+    shape); the module and accessor names (`client::partners::{solutions,
+    migration}`, `Client::partner_solutions`, `Client::migration_intents`);
+    both answer shapes of the token (`{"data": [...]}` and the bare
+    object); `CreateSolution::validate` checking only what the pages agree
+    on (a name, and `MESSAGING` on at least one side: the creation
+    reference allows one side, the embedded creation guide's example
+    gives it to both); page sizes 1 to 100 (the list references); roles
+    not checked locally (the pages disagree on who rejects and who
+    answers a deactivation request; Meta decides from the token).
+  - **Hardened in review:** a non-2xx answer of the token's endpoint that
+    is not Meta's error envelope keeps its body out of `Error::Http`
+    (`a_failed_token_answer_never_quotes_its_body`), and a blank
+    `access_token` is refused like an empty one
+    (`malformed_token_answers_are_withheld`).
+  - **Follow-up:** `LaunchOptions::solution_id` stays a `String`; typing
+    it as `SolutionId` is a breaking change to the Embedded Signup
+    builder, left for its own item.
 - [ ] **L13. Marketing** (`meta-whatsapp-client`, `client::marketing`;
   rows 137, 138, 154; OPEN_QUESTIONS #45): max price (its agreement, the
   partner allow list, duplicating a template at another price), reach

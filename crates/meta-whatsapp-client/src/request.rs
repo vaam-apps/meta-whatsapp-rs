@@ -2333,8 +2333,8 @@ mod id_shape_tests {
 mod paging_withheld_tests {
     use futures::StreamExt;
     use meta_whatsapp_core::ids::{
-        BusinessId, FlowId, GroupId, PhoneNumberId, QrCodeId, TemplateGroupId, TemplateId, UserId,
-        WabaId,
+        AppId, BusinessId, FlowId, GroupId, PhoneNumberId, QrCodeId, SolutionId, TemplateGroupId,
+        TemplateId, UserId, WabaId,
     };
     use meta_whatsapp_core::paging::Page;
     use meta_whatsapp_core::testing::ScriptedTransport;
@@ -2350,11 +2350,17 @@ mod paging_withheld_tests {
     use crate::flows::{ListFlowAssets, ListFlows};
     use crate::groups::{ListGroups, ListJoinRequests};
     use crate::marketing::{ListClientWabas, OnboardingStatus};
+    use crate::partners::solutions::{
+        ListAppSolutions, ListConnectedClientBusinesses, ListSolutionPartners,
+    };
     use crate::qr_codes::{ListQrCodes, QrCodeFields};
     use crate::retry::RetryPolicy;
     use crate::signups::ListSignups;
     use crate::templates::{LibraryQuery, TemplateListQuery};
-    use crate::waba::{ListAssignedUsers, PhoneNumbersQuery, WabaListQuery};
+    use crate::waba::{
+        ListAssignedUsers, ListAssignedWabas, ListMessageHistoryEvents, ListWabaRecords,
+        PhoneNumbersQuery, WabaListQuery,
+    };
 
     /// A `next` link holding the token, as Meta can send it. Values ours.
     const NEXT: &str = "https://graph.facebook.com/v25.0/1/x?access_token=LEAKED&after=c1";
@@ -2438,6 +2444,32 @@ mod paging_withheld_tests {
                 .assigned_users(&ListAssignedUsers::new(business()))
         );
         read!(
+            "business.system_users",
+            c.business(business()).system_users()
+        );
+        read!(
+            "waba.activities",
+            c.waba(waba()).activities(&ListWabaRecords::new())
+        );
+        read!(
+            "waba.solutions",
+            c.waba(waba()).solutions(&ListWabaRecords::new())
+        );
+        read!(
+            "waba.schedules",
+            c.waba(waba()).schedules(&ListWabaRecords::new())
+        );
+        read!(
+            "business_user.assigned_whatsapp_business_accounts",
+            c.business_user("10")
+                .assigned_whatsapp_business_accounts(&ListAssignedWabas::new())
+        );
+        read!(
+            "message_history.events",
+            c.message_history("11")
+                .events(&ListMessageHistoryEvents::new())
+        );
+        read!(
             "business.client_whatsapp_business_accounts",
             c.business(business())
                 .client_whatsapp_business_accounts(&WabaListQuery::new())
@@ -2503,6 +2535,25 @@ mod paging_withheld_tests {
                 .client_wabas_with_status(&ListClientWabas::new([OnboardingStatus::Eligible]))
         );
         read!("credit_lines.list", c.credit_lines().list(&business(), &[]));
+        read!(
+            "partner_solutions.app_solutions",
+            c.partner_solutions()
+                .app_solutions(&AppId::new("10").unwrap(), &ListAppSolutions::new())
+        );
+        read!(
+            "partner_solutions.connected_client_businesses",
+            c.partner_solutions().connected_client_businesses(
+                &AppId::new("10").unwrap(),
+                &ListConnectedClientBusinesses::new()
+            )
+        );
+        read!(
+            "partner_solutions.partners",
+            c.partner_solutions().partners(
+                &SolutionId::new("11").unwrap(),
+                &ListSolutionPartners::new()
+            )
+        );
         read!(
             "business_verification.submissions",
             c.business_verification()
