@@ -16,10 +16,13 @@
 //!   it, and `next_after` never skips one that commits later.
 //! - **An insert checks the routing again** ([`RouteGuard`]): a row keeps
 //!   its tenant only while, atomically with the insert, the binding the
-//!   event was routed by still names that tenant and began in a second
-//!   before the event's. Between the routing (a read) and the insert, a
-//!   WABA can move to another tenant, or its tenant be deleted, created
-//!   again under the same id and bound again; the row is then
+//!   event was routed by still names that tenant and is one the event may
+//!   reach: begun by the event's second (strictly before it, by a skew
+//!   margin, when the WABA had a previous tenant), or, for an undated
+//!   event after a move, once the window after it passed
+//!   ([`RouteGuard::admits`]). Between the routing (a read) and the
+//!   insert, a WABA can move to another tenant, or its tenant be deleted,
+//!   created again under the same id and bound again; the row is then
 //!   operator-only, never the new holder's.
 
 use std::time::Duration;
@@ -86,15 +89,27 @@ impl std::fmt::Debug for NewEvent {
 ///   [`GuardedBinding::Number`], the number is bound to the tenant under
 ///   that WABA; for [`GuardedBinding::Waba`], the WABA is bound to the
 ///   tenant;
-/// - and, when the event is dated ([`Self::not_after`]), that WABA's
-///   binding began in a second before the event's (its `attached_at`,
-///   truncated to the second, is less than `not_after`'s): Meta dates in
-///   whole seconds, so an event of the second the binding began in may be
-///   the previous holder's, and a binding made after Meta dated the event
-///   is another holder's, even under the same tenant id (the security
-///   review of roadmap S2, L3). Such an event is operator-only, the first
-///   holder's included: a WABA's first second after an attach delivers to
-///   no tenant.
+/// - and that WABA's binding, as it is then (its `attached_at` and its
+///   `previous_tenant_unbound_at`: [`crate::model::WabaBinding`]), is one
+///   this event may reach ([`Self::admits`]):
+///   - **a dated event** ([`Self::not_after`]): its binding began by the
+///     event's second. Meta dates in whole seconds, so after a move an
+///     event of the second the binding began in may be the previous
+///     holder's, and a binding made after Meta dated the event is another
+///     holder's, even under the same tenant id (the security review of
+///     roadmap S2, L3). So, when the WABA had a previous tenant, the
+///     binding must have begun in a second before the event's, by
+///     [`AfterMove::skew_margin`] more (whole seconds); a first onboarding
+///     (no previous tenant: roadmap S2b) keeps the events of its first
+///     second (its `attached_at`'s second at most the event's), and no
+///     margin applies to it.
+///   - **an undated event** (an error, a history chunk, a group update
+///     without a date): when the WABA had a previous tenant and
+///     [`AfterMove::undated_moved_by`] is set (design D36's
+///     `OperatorOnly`), only once that tenant left by then: within the
+///     window after a move, the previous holder's undated events that
+///     Meta redelivers (for up to 7 days) are operator-only. A first
+///     onboarding's reach it, so its history sync does.
 ///
 /// Otherwise the row is recorded operator-only (no tenant).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,14 +118,90 @@ pub struct RouteGuard {
     pub binding: GuardedBinding,
     /// When Meta dated the event (`crate::events::meta_time`); `None` for
     /// an undated event (an error, a history chunk, a group update without
-    /// a date), whose binding's start is not checked: it reaches whoever
-    /// holds the binding when it arrives. After a WABA moved to another
-    /// tenant, that is the new holder, for the previous holder's undated
-    /// events that Meta redelivers within its 7-day retry window (and in
-    /// the race of a tenant deleted, created again under the same id and
-    /// bound again, the new tenant): an open gap until roadmap S2b, which
-    /// makes them operator-only for a window after a move.
+    /// a date), which [`Self::after_move`]'s window decides after a move.
     pub not_after: Option<OffsetDateTime>,
+    /// The rules for a binding whose WABA had a previous tenant.
+    pub after_move: AfterMove,
+}
+
+/// What changes for an event of a WABA that moved between tenants
+/// ([`RouteGuard`]): set by the routing from the service's settings
+/// (`crate::events::MoveRules`), so that every backend applies the same.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AfterMove {
+    /// A dated event reaches a binding with a previous tenant only when
+    /// Meta dated it this much after the second the binding began in, and
+    /// more (counted in whole seconds, a fraction rounded up: Meta dates in
+    /// whole seconds). Zero: the second after the binding's.
+    pub skew_margin: Duration,
+    /// An undated event reaches a binding with a previous tenant only when
+    /// that tenant left at or before this instant (the event's arrival,
+    /// less the window: `UndatedAfterMove::OperatorOnly`); `None`: always
+    /// (`UndatedAfterMove::CurrentHolder`, the rule before roadmap S2b).
+    pub undated_moved_by: Option<OffsetDateTime>,
+}
+
+impl AfterMove {
+    /// [`Self::skew_margin`] in whole seconds, a fraction rounded up.
+    pub fn margin_seconds(&self) -> i64 {
+        let whole = self
+            .skew_margin
+            .as_secs()
+            .saturating_add(u64::from(self.skew_margin.subsec_nanos() > 0));
+        i64::try_from(whole).unwrap_or(i64::MAX)
+    }
+}
+
+/// For a dated event, the Unix second its binding must have begun before
+/// (`attached_at < to_timestamp(s)`), depending on whether the WABA had a
+/// previous tenant ([`RouteGuard::dated_bounds`]): a backend that compares
+/// in its database's language binds these two and picks one by the
+/// binding's `previous_tenant_unbound_at`, so that it redoes no rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DatedBounds {
+    /// No previous tenant (a first onboarding): the second after the
+    /// event's, so a binding of the event's own second holds.
+    pub first_onboarding: i64,
+    /// A previous tenant: the event's second, less the skew margin, so a
+    /// binding of the event's own second (or of the margin before it) does
+    /// not hold.
+    pub after_move: i64,
+}
+
+impl RouteGuard {
+    /// The bounds of a dated event ([`DatedBounds`]); `None` for an undated
+    /// one.
+    pub fn dated_bounds(&self) -> Option<DatedBounds> {
+        self.not_after.map(|at| {
+            let second = at.unix_timestamp();
+            DatedBounds {
+                first_onboarding: second.saturating_add(1),
+                after_move: second.saturating_sub(self.after_move.margin_seconds()),
+            }
+        })
+    }
+
+    /// Whether the guarded WABA's binding, which began at `attached_at`
+    /// and whose WABA was last unbound from another tenant at
+    /// `previous_tenant_unbound_at` (`None`: never), may receive this
+    /// event: the rule of [`RouteGuard`], for a backend that compares in
+    /// Rust, and the routing's (`crate::events::owner`). Its tenant is
+    /// checked apart.
+    pub fn admits(
+        &self,
+        attached_at: OffsetDateTime,
+        previous_tenant_unbound_at: Option<OffsetDateTime>,
+    ) -> bool {
+        match (self.dated_bounds(), previous_tenant_unbound_at) {
+            (Some(bounds), None) => attached_at.unix_timestamp() < bounds.first_onboarding,
+            (Some(bounds), Some(_)) => attached_at.unix_timestamp() < bounds.after_move,
+            (None, Some(left)) => self
+                .after_move
+                .undated_moved_by
+                .is_none_or(|moved_by| left <= moved_by),
+            (None, None) => true,
+        }
+    }
 }
 
 /// Which binding an event was routed by ([`RouteGuard::binding`]).
@@ -137,15 +228,6 @@ impl GuardedBinding {
             Self::Number { waba_id, .. } | Self::Waba(waba_id) => waba_id,
         }
     }
-}
-
-/// Whether a binding that began at `attached_at` began in a second before
-/// the second of `not_after` (`None`: undated, always): the rule of
-/// [`RouteGuard::not_after`], the same as the routing's
-/// (`crate::events::owner`), for a backend that compares in Rust. A
-/// binding that began in the event's own second did not begin by it.
-pub fn began_by(attached_at: OffsetDateTime, not_after: Option<OffsetDateTime>) -> bool {
-    not_after.is_none_or(|at| attached_at.unix_timestamp() < at.unix_timestamp())
 }
 
 /// A keyless event's dedup window, on the webhook pipeline's clock (both
@@ -285,25 +367,104 @@ pub trait Outbox: Send + Sync + 'static {
 mod tests {
     use super::*;
 
-    /// A binding that began in a second before the event's is the
-    /// event's; one that began in the event's own second (its first
-    /// instant included) or later is not: Meta's dates are whole seconds,
-    /// so an event of that second may be the previous holder's (the
-    /// security review of roadmap S2, L3; until then a binding of the
-    /// event's own second was the event's). An undated event's is.
-    /// Decisive: the strict comparison of seconds, both ways.
+    fn guard(not_after: Option<OffsetDateTime>, after_move: AfterMove) -> RouteGuard {
+        RouteGuard {
+            binding: GuardedBinding::Waba(WabaId::new("102290129340398").unwrap()),
+            not_after,
+            after_move,
+        }
+    }
+
+    /// After a move (the WABA had a previous tenant), a binding that began
+    /// in a second before the event's is the event's; one that began in the
+    /// event's own second (its first instant included) or later is not:
+    /// Meta's dates are whole seconds, so an event of that second may be
+    /// the previous holder's (the security review of roadmap S2, L3). A
+    /// first onboarding's binding keeps the events of its own second
+    /// (roadmap S2b), never those dated before it. Decisive: the strict
+    /// comparison of seconds after a move, the relaxed one without.
     #[test]
-    fn a_binding_began_in_a_second_before_the_events() {
+    fn a_binding_began_in_a_second_before_the_events_after_a_move_only() {
         let t = time::macros::datetime!(2026-09-26 12:00:00.5 UTC);
         let at = |secs: f64| t + time::Duration::seconds_f64(secs);
-        assert!(began_by(at(-10.0), Some(t)));
-        assert!(began_by(at(-0.6), Some(t)), "the second before's end");
+        let moved = Some(t - time::Duration::days(30));
+        let g = guard(Some(t), AfterMove::default());
+        for previous in [moved, None] {
+            assert!(g.admits(at(-10.0), previous), "{previous:?}");
+            assert!(g.admits(at(-0.6), previous), "the second before's end");
+            assert!(!g.admits(at(0.5), previous), "the next second");
+            assert!(!g.admits(at(3600.0), previous), "an hour later");
+        }
         assert!(
-            !began_by(at(-0.5), Some(t)),
-            "the event's second's first instant"
+            !g.admits(at(-0.5), moved),
+            "after a move: the event's second's first instant"
         );
-        assert!(!began_by(at(0.4), Some(t)), "later in the same second");
-        assert!(!began_by(at(0.5), Some(t)), "the next second");
-        assert!(began_by(at(3600.0), None), "undated");
+        assert!(!g.admits(at(0.4), moved), "after a move: the same second");
+        assert!(
+            g.admits(at(-0.5), None),
+            "a first onboarding: the event's second's first instant"
+        );
+        assert!(
+            g.admits(at(0.4), None),
+            "a first onboarding: the same second"
+        );
+    }
+
+    /// The skew margin widens the strict rule after a move, in whole
+    /// seconds (a fraction rounded up), and never applies to a first
+    /// onboarding. Decisive: the margin in `dated_bounds`, and its
+    /// application to the binding with a previous tenant only.
+    #[test]
+    fn the_skew_margin_applies_after_a_move_only() {
+        let t = time::macros::datetime!(2026-09-26 12:00:00 UTC);
+        let margin = |secs: f64| AfterMove {
+            skew_margin: std::time::Duration::from_secs_f64(secs),
+            undated_moved_by: None,
+        };
+        let moved = Some(t - time::Duration::days(30));
+        let began = |secs: i64| t - time::Duration::seconds(secs);
+        let g = guard(Some(t), margin(5.0));
+        assert!(!g.admits(began(5), moved), "5 s before: within the margin");
+        assert!(g.admits(began(6), moved), "6 s before: past it");
+        assert!(g.admits(began(0), None), "a first onboarding: no margin");
+        let g = guard(Some(t), margin(4.2));
+        assert_eq!(g.after_move.margin_seconds(), 5, "rounded up");
+        assert!(!g.admits(began(5), moved));
+        assert!(g.admits(began(6), moved));
+        assert_eq!(margin(0.0).margin_seconds(), 0);
+    }
+
+    /// An undated event reaches a binding with a previous tenant only once
+    /// that tenant left by `undated_moved_by` (`OperatorOnly`), always
+    /// with no such instant (`CurrentHolder`), and a first onboarding's
+    /// always. Its binding's start is not compared. Decisive: the window
+    /// check in `admits`, and the first-onboarding exemption.
+    #[test]
+    fn an_undated_event_waits_out_the_window_after_a_move_only() {
+        let t = time::macros::datetime!(2026-09-26 12:00:00 UTC);
+        let left = t - time::Duration::days(3);
+        let within = guard(
+            None,
+            AfterMove {
+                undated_moved_by: Some(left - time::Duration::MICROSECOND),
+                ..AfterMove::default()
+            },
+        );
+        let at_its_end = guard(
+            None,
+            AfterMove {
+                undated_moved_by: Some(left),
+                ..AfterMove::default()
+            },
+        );
+        let current_holder = guard(None, AfterMove::default());
+        assert!(!within.admits(t, Some(left)), "within the window");
+        assert!(at_its_end.admits(t, Some(left)), "the window's end");
+        assert!(current_holder.admits(t, Some(left)), "CurrentHolder");
+        assert!(within.admits(t, None), "a first onboarding");
+        assert!(
+            within.admits(t + time::Duration::days(400), None),
+            "its binding's start is not compared"
+        );
     }
 }

@@ -19,7 +19,7 @@ use time::OffsetDateTime;
 use super::capabilities::{Act, racing_a_reattach};
 use crate::backend::Backend;
 use crate::model::{BindOutcome, DeleteTenantOutcome, TenantId};
-use crate::outbox::{EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard};
+use crate::outbox::{AfterMove, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard};
 
 /// The rounds [`run`] races an insert against a move, and a binding
 /// against a deletion.
@@ -177,6 +177,7 @@ pub async fn an_insert_racing_a_move_never_reaches_the_new_holder(
             route_guard: Some(RouteGuard {
                 binding,
                 not_after: Some(began_at + time::Duration::SECOND),
+                after_move: AfterMove::default(),
             }),
             phone_number_id: Some(pn.clone()),
             waba_id: Some(waba.clone()),

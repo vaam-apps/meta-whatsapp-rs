@@ -22,8 +22,8 @@ pub use meta_whatsapp_server_core::store::{
 /// section 2.3): the core's port ([`Outbox`]) and what it carries.
 pub mod events {
     pub use meta_whatsapp_server_core::outbox::{
-        DedupWindow, EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard,
-        StoredEvent, began_by,
+        AfterMove, DatedBounds, DedupWindow, EventPage, EventQuery, GuardedBinding, NewEvent,
+        Outbox, RouteGuard, StoredEvent,
     };
 }
 

@@ -291,6 +291,53 @@ pub async fn failed_leaves_a_waba_attached_again(backend: &dyn Backend) {
     }
 }
 
+/// Roadmap S2b (S2's sabotage review): an `OwnedNumber` or an `OwnedWaba`
+/// made before its binding was refreshed for its own tenant (attached
+/// again without an unbind, a new token: an operator's reconnect or a
+/// token rotation), whose call Meta then answers `190` (the old token
+/// revoked), leaves the refreshed binding's numbers `connected`; one made
+/// after the refresh marks them. Decisive: the bind generation in
+/// `RecordStore::set_waba_status_if` (and `bind_waba` moving it on a
+/// refresh).
+pub async fn failed_before_a_refresh_marks_nothing(backend: &dyn Backend) {
+    let (store, kv) = (backend.records(), backend.kv());
+    let s = Setup::new(store, kv).await;
+    for through_number in [true, false] {
+        let case = format!("refreshed-{through_number}");
+        let (waba, pn) = ids(&case);
+        s.attach(A, &waba, &pn, Some("TOKEN-OLD")).await;
+        let failed = if through_number {
+            let owned = s.authz.owned_number(&s.caller, pn.clone()).await.unwrap();
+            s.attach(A, &waba, &pn, Some("TOKEN-NEW")).await;
+            owned.failed(&s.authz, &refused_token()).await
+        } else {
+            let owned = s.authz.owned_waba(&s.caller, waba.clone()).await.unwrap();
+            s.attach(A, &waba, &pn, Some("TOKEN-NEW")).await;
+            owned.failed(&s.authz, &refused_token()).await
+        };
+        assert_eq!(failed.code(), "reconnect_required", "{case}");
+        assert_eq!(
+            s.status(&pn).await,
+            Some(NumberStatus::Connected),
+            "{case}: a 190 to a capability made before the refresh marked the refreshed binding"
+        );
+        // Made after the refresh: marked.
+        let failed = if through_number {
+            let owned = s.authz.owned_number(&s.caller, pn.clone()).await.unwrap();
+            owned.failed(&s.authz, &refused_token()).await
+        } else {
+            let owned = s.authz.owned_waba(&s.caller, waba.clone()).await.unwrap();
+            owned.failed(&s.authz, &refused_token()).await
+        };
+        assert_eq!(failed.code(), "reconnect_required", "{case}");
+        assert_eq!(
+            s.status(&pn).await,
+            Some(NumberStatus::ReconnectRequired),
+            "{case}: after the refresh"
+        );
+    }
+}
+
 /// What a capability does, raced against its WABA being unbound and
 /// attached again ([`racing_a_reattach`]).
 #[derive(Debug, Clone, Copy)]
@@ -934,6 +981,7 @@ pub async fn an_admins_vault_writes_take_an_admitted_admin(backend: &dyn Backend
 pub async fn run(backend: &dyn Backend) {
     forget_leaves_a_waba_attached_again(backend).await;
     failed_leaves_a_waba_attached_again(backend).await;
+    failed_before_a_refresh_marks_nothing(backend).await;
     a_capability_made_before_the_new_token_is_stored_is_refused(backend).await;
     a_vault_failure_while_its_waba_moves_is_answered_as_the_move(backend).await;
     a_capability_made_while_its_waba_moves_is_refused(backend).await;

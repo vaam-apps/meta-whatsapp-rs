@@ -65,6 +65,11 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
         include_str!("../migrations/0002_idempotency.sql"),
     ),
     (3, "events", include_str!("../migrations/0003_events.sql")),
+    (
+        4,
+        "waba moves",
+        include_str!("../migrations/0004_waba_moves.sql"),
+    ),
 ];
 
 /// The advisory lock a housekeeping round runs under: the key of the
@@ -232,13 +237,43 @@ fn key_row(row: &PgRow) -> StoreResult<ApiKeyRecord> {
     })
 }
 
+/// The columns of a WABA's binding, as [`waba_row`] reads them.
+const WABA_COLUMNS: &str = "waba_id, tenant_id, credit_allocation_id, attached_at, generation, \
+     previous_tenant_unbound_at";
+
 fn waba_row(row: &PgRow) -> StoreResult<WabaBinding> {
     Ok(WabaBinding {
         waba_id: WabaId::new_unchecked(get::<String>(row, "waba_id")?),
         tenant_id: tenant_id(&get::<String>(row, "tenant_id")?, "tenant_id")?,
         credit_allocation_id: get(row, "credit_allocation_id")?,
         attached_at: get(row, "attached_at")?,
+        generation: get(row, "generation")?,
+        previous_tenant_unbound_at: get(row, "previous_tenant_unbound_at")?,
     })
+}
+
+/// Delete the binding of the WABA `$1` matching `condition` (over its
+/// columns, the WABA's `$1` and further parameters), its numbers with it
+/// (ON DELETE CASCADE), and leave its tombstone in the same statement:
+/// the tenant it was unbound from, now, and the binding's
+/// `previous_tenant_unbound_at` (roadmap S2b). Answers how many bindings
+/// went (0 or 1).
+fn unbind_sql(condition: &str) -> String {
+    format!(
+        "WITH gone AS ( \
+           DELETE FROM wa_server_wabas WHERE waba_id = $1 {condition} \
+           RETURNING waba_id, tenant_id, previous_tenant_unbound_at \
+         ), kept AS ( \
+           INSERT INTO wa_server_waba_tombstones \
+             (waba_id, tenant_id, unbound_at, previous_tenant_unbound_at) \
+           SELECT waba_id, tenant_id, now(), previous_tenant_unbound_at FROM gone \
+           ON CONFLICT (waba_id) DO UPDATE SET tenant_id = EXCLUDED.tenant_id, \
+             unbound_at = EXCLUDED.unbound_at, \
+             previous_tenant_unbound_at = EXCLUDED.previous_tenant_unbound_at \
+           RETURNING 1 \
+         ) \
+         SELECT count(*) FROM gone"
+    )
 }
 
 fn number_row(row: &PgRow) -> StoreResult<NumberBinding> {
@@ -357,7 +392,9 @@ impl RecordStore for PgStore {
             return Ok(DeleteTenantOutcome::HasWabas);
         }
         // Keys, idempotency records and events go with it (ON DELETE
-        // CASCADE); its event stream
+        // CASCADE), and the tombstones of the WABAs it was unbound from
+        // forget it (ON DELETE SET NULL: a tenant created again under its
+        // id is another tenant to them, roadmap S2b); its event stream
         // records them purged, so a tenant created later with the same id
         // goes on after them and an old cursor is `410 cursor_expired`; and
         // a platform key allowed it does not carry the allowance over to
@@ -497,13 +534,15 @@ impl RecordStore for PgStore {
             tx.rollback().await.map_err(backend)?;
             return Ok(BindOutcome::NoSuchTenant);
         }
-        // Insert, or lock the existing row and read its tenant: two tenants
-        // racing for a new WABA serialize here, and the second sees the
-        // first's binding.
-        let owner: String = sqlx::query_scalar(
-            "INSERT INTO wa_server_wabas (waba_id, tenant_id) VALUES ($1, $2) \
-             ON CONFLICT (waba_id) DO UPDATE SET waba_id = EXCLUDED.waba_id \
-             RETURNING tenant_id",
+        // Insert, or lock the existing row, move its generation (a refresh:
+        // rolled back below when the row is another tenant's) and read its
+        // tenant: two tenants racing for a new WABA serialize here, and the
+        // second sees the first's binding.
+        let (owner, generation): (String, i64) = sqlx::query_as(
+            "INSERT INTO wa_server_wabas (waba_id, tenant_id, previous_tenant_unbound_at) \
+             VALUES ($1, $2, NULL) \
+             ON CONFLICT (waba_id) DO UPDATE SET generation = wa_server_wabas.generation + 1 \
+             RETURNING tenant_id, generation",
         )
         .bind(waba_id.as_str())
         .bind(tenant.as_str())
@@ -513,6 +552,24 @@ impl RecordStore for PgStore {
         if owner != tenant.as_str() {
             tx.rollback().await.map_err(backend)?;
             return Ok(BindOutcome::OwnedByAnotherTenant);
+        }
+        if generation == 1 {
+            // A new binding: when the WABA was last unbound from another
+            // tenant, from its tombstone. A statement of its own, after the
+            // insert: an unbinding the insert waited for (the row it
+            // conflicted with, deleted meanwhile) committed before this
+            // statement's snapshot, so its tombstone is seen.
+            sqlx::query(
+                "UPDATE wa_server_wabas w SET previous_tenant_unbound_at = ( \
+                   SELECT CASE WHEN t.tenant_id IS NOT DISTINCT FROM w.tenant_id \
+                               THEN t.previous_tenant_unbound_at ELSE t.unbound_at END \
+                   FROM wa_server_waba_tombstones t WHERE t.waba_id = w.waba_id) \
+                 WHERE w.waba_id = $1",
+            )
+            .bind(waba_id.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
         }
         let ids: Vec<&str> = numbers.iter().map(PhoneNumberId::as_str).collect();
         sqlx::query(
@@ -550,41 +607,40 @@ impl RecordStore for PgStore {
     }
 
     async fn unbind_waba(&self, waba_id: &WabaId) -> StoreResult<bool> {
-        // Its numbers go with it (ON DELETE CASCADE).
-        let done = sqlx::query("DELETE FROM wa_server_wabas WHERE waba_id = $1")
+        // Its numbers go with it (ON DELETE CASCADE), its tombstone stays.
+        let gone: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(unbind_sql("")))
             .bind(waba_id.as_str())
-            .execute(&self.pool)
+            .fetch_one(&self.pool)
             .await
             .map_err(backend)?;
-        Ok(done.rows_affected() > 0)
+        Ok(gone > 0)
     }
 
     async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool> {
         // One statement: the row is deleted only as `epoch` read it (its
-        // numbers with it, ON DELETE CASCADE); a binding made since has
-        // another `attached_at`.
-        let done = sqlx::query(
-            "DELETE FROM wa_server_wabas \
-             WHERE waba_id = $1 AND tenant_id = $2 AND attached_at = $3",
-        )
+        // numbers with it, ON DELETE CASCADE, and its tombstone left); a
+        // binding made since has another `attached_at`, one refreshed since
+        // another `generation`.
+        let gone: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(unbind_sql(
+            "AND tenant_id = $2 AND attached_at = $3 AND generation = $4",
+        )))
         .bind(epoch.waba_id.as_str())
         .bind(epoch.tenant_id.as_str())
         .bind(epoch.attached_at)
-        .execute(&self.pool)
+        .bind(epoch.generation)
+        .fetch_one(&self.pool)
         .await
         .map_err(busy_or_backend)?;
-        Ok(done.rows_affected() > 0)
+        Ok(gone > 0)
     }
 
     async fn waba(&self, waba_id: &WabaId) -> StoreResult<Option<WabaBinding>> {
-        let row = sqlx::query(
-            "SELECT waba_id, tenant_id, credit_allocation_id, attached_at \
-             FROM wa_server_wabas WHERE waba_id = $1",
-        )
-        .bind(waba_id.as_str())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(backend)?;
+        let sql = format!("SELECT {WABA_COLUMNS} FROM wa_server_wabas WHERE waba_id = $1");
+        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(waba_id.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
         row.as_ref().map(waba_row).transpose()
     }
 
@@ -601,15 +657,16 @@ impl RecordStore for PgStore {
     }
 
     async fn all_wabas(&self, page: &PageRequest) -> StoreResult<Listing<WabaBinding>> {
-        let rows = sqlx::query(
-            "SELECT waba_id, tenant_id, credit_allocation_id, attached_at FROM wa_server_wabas \
-             WHERE ($1::text IS NULL OR waba_id > $1) ORDER BY waba_id LIMIT $2",
-        )
-        .bind(page.after.as_deref())
-        .bind(fetch_limit(page))
-        .fetch_all(&self.pool)
-        .await
-        .map_err(backend)?;
+        let sql = format!(
+            "SELECT {WABA_COLUMNS} FROM wa_server_wabas \
+             WHERE ($1::text IS NULL OR waba_id > $1) ORDER BY waba_id LIMIT $2"
+        );
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(page.after.as_deref())
+            .bind(fetch_limit(page))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
         let items = rows.iter().map(waba_row).collect::<StoreResult<Vec<_>>>()?;
         Ok(listing(items, page.limit, |w| {
             w.waba_id.as_str().to_owned()
@@ -621,16 +678,17 @@ impl RecordStore for PgStore {
         tenant: &TenantId,
         page: &PageRequest,
     ) -> StoreResult<Listing<WabaBinding>> {
-        let rows = sqlx::query(
-            "SELECT waba_id, tenant_id, credit_allocation_id, attached_at FROM wa_server_wabas \
-             WHERE tenant_id = $1 AND ($2::text IS NULL OR waba_id > $2) ORDER BY waba_id LIMIT $3",
-        )
-        .bind(tenant.as_str())
-        .bind(page.after.as_deref())
-        .bind(fetch_limit(page))
-        .fetch_all(&self.pool)
-        .await
-        .map_err(backend)?;
+        let sql = format!(
+            "SELECT {WABA_COLUMNS} FROM wa_server_wabas \
+             WHERE tenant_id = $1 AND ($2::text IS NULL OR waba_id > $2) ORDER BY waba_id LIMIT $3"
+        );
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(tenant.as_str())
+            .bind(page.after.as_deref())
+            .bind(fetch_limit(page))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
         let items = rows.iter().map(waba_row).collect::<StoreResult<Vec<_>>>()?;
         Ok(listing(items, page.limit, |w| {
             w.waba_id.as_str().to_owned()
@@ -698,7 +756,7 @@ impl RecordStore for PgStore {
         let held: bool = sqlx::query_scalar(
             "WITH held AS ( \
                SELECT waba_id FROM wa_server_wabas \
-               WHERE waba_id = $1 AND tenant_id = $2 AND attached_at = $3 \
+               WHERE waba_id = $1 AND tenant_id = $2 AND attached_at = $3 AND generation = $5 \
                FOR KEY SHARE \
              ), marked AS ( \
                UPDATE wa_server_numbers n SET status = $4, updated_at = now() \
@@ -711,6 +769,7 @@ impl RecordStore for PgStore {
         .bind(epoch.tenant_id.as_str())
         .bind(epoch.attached_at)
         .bind(status.as_str())
+        .bind(epoch.generation)
         .fetch_one(&self.pool)
         .await
         .map_err(busy_or_backend)?;
@@ -1046,7 +1105,7 @@ mod tests {
     /// `(version, SHA-384 hex)` of every service migration, as sqlx records
     /// it. A new migration adds a line; an existing line never changes (an
     /// edited migration makes `migrate` refuse every database it ran on).
-    const PINNED_CHECKSUMS: [(i64, &str); 3] = [
+    const PINNED_CHECKSUMS: [(i64, &str); 4] = [
         (
             1,
             "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
@@ -1058,6 +1117,10 @@ mod tests {
         (
             3,
             "ca0cec491b00af0a22afff8e45913f1f4f1e59d08250804c1eb1f85306d33ae577c050208ad6a0c67ab8e3066296a1cd",
+        ),
+        (
+            4,
+            "4d58bbd6f98c7f98f52cad4856ac4220e2cc299a5860597681e2452b129956a5b49def8ab02a152087b5f976a35767ec",
         ),
     ];
 
@@ -1076,6 +1139,20 @@ mod tests {
         assert_eq!(
             recorded,
             PINNED_CHECKSUMS.map(|(v, h)| (v, h.to_owned())).to_vec()
+        );
+        // sqlx records each description too, beside its version.
+        let descriptions: Vec<String> = migrations()
+            .iter()
+            .map(|m| m.description.to_string())
+            .collect();
+        assert_eq!(
+            descriptions,
+            [
+                "tenants keys bindings",
+                "idempotency",
+                "events",
+                "waba moves"
+            ]
         );
         // `\x77` is `w`: spelled so that a search-and-replace of the table
         // prefix cannot rewrite this pin along with the code.

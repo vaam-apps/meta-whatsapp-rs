@@ -496,3 +496,86 @@ fn the_service_limits_default_to_the_designs_and_parse() {
         }
     }
 }
+
+/// Roadmap S2b (design D36): the routing of a moved WABA's events. Unset,
+/// `operator_only` with 7 days and an hour and no skew margin (fail
+/// closed); `current_holder`, a window and a margin parse; a window with
+/// `current_holder`, a zero window, an unknown mode and an unparsable
+/// duration are refused, naming the variable and quoting nothing.
+/// Decisive: each default, each mode, each refusal.
+#[test]
+fn the_routing_after_a_move_is_set_by_three_variables() {
+    use meta_whatsapp_server::events::{MoveRules, UndatedAfterMove};
+    use std::time::Duration;
+    let defaults = Config::from_env(&production()).unwrap().move_rules;
+    assert_eq!(
+        defaults,
+        MoveRules {
+            undated_after_move: UndatedAfterMove::OperatorOnly {
+                window: Duration::from_hours(7 * 24 + 1)
+            },
+            skew_margin: Duration::ZERO,
+        }
+    );
+    let set = Config::from_env(
+        &production()
+            .set("WA_SERVER_UNDATED_AFTER_MOVE", "operator_only")
+            .set("WA_SERVER_UNDATED_AFTER_MOVE_WINDOW", "10d")
+            .set("WA_SERVER_MOVE_SKEW_MARGIN", "5s"),
+    )
+    .unwrap()
+    .move_rules;
+    assert_eq!(
+        set,
+        MoveRules {
+            undated_after_move: UndatedAfterMove::OperatorOnly {
+                window: Duration::from_hours(240)
+            },
+            skew_margin: Duration::from_secs(5),
+        }
+    );
+    let current =
+        Config::from_env(&production().set("WA_SERVER_UNDATED_AFTER_MOVE", "current_holder"))
+            .unwrap()
+            .move_rules;
+    assert_eq!(current.undated_after_move, UndatedAfterMove::CurrentHolder);
+    for (vars, name, value) in [
+        (
+            production()
+                .set("WA_SERVER_UNDATED_AFTER_MOVE", "current_holder")
+                .set("WA_SERVER_UNDATED_AFTER_MOVE_WINDOW", "7d"),
+            "WA_SERVER_UNDATED_AFTER_MOVE_WINDOW",
+            "7d",
+        ),
+        (
+            production().set("WA_SERVER_UNDATED_AFTER_MOVE_WINDOW", "0h"),
+            "WA_SERVER_UNDATED_AFTER_MOVE_WINDOW",
+            "0h",
+        ),
+        (
+            production().set("WA_SERVER_UNDATED_AFTER_MOVE_WINDOW", "a week"),
+            "WA_SERVER_UNDATED_AFTER_MOVE_WINDOW",
+            "a week",
+        ),
+        (
+            production().set("WA_SERVER_UNDATED_AFTER_MOVE", "nobody"),
+            "WA_SERVER_UNDATED_AFTER_MOVE",
+            "nobody",
+        ),
+        (
+            production().set("WA_SERVER_MOVE_SKEW_MARGIN", "a little"),
+            "WA_SERVER_MOVE_SKEW_MARGIN",
+            "a little",
+        ),
+    ] {
+        let error = refused(&vars);
+        assert!(
+            matches!(error, ConfigError::Invalid { name: n, .. } if n == name),
+            "{name}={value}: {error:?}"
+        );
+        assert!(
+            !error.to_string().contains(value),
+            "{error} quotes the value"
+        );
+    }
+}

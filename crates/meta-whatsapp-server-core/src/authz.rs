@@ -688,7 +688,8 @@ impl Authorizer {
     /// tenant's token) would otherwise pair this binding with the new
     /// holder's token, which the capability would call Meta with and
     /// [`OwnedWaba::forget`] would delete; a binding made since begins
-    /// later, so an unchanged [`BindingEpoch`] means no unbinding came in
+    /// later, and a refresh for its own tenant moves its generation, so an
+    /// unchanged [`BindingEpoch`] means no unbinding and no attach came in
     /// between. Moved: `503 storage_unavailable` (retryable), and a repeat
     /// acts on what is there now.
     async fn still_bound(&self, binding: &WabaBinding) -> Result<(), ServiceError> {
@@ -913,7 +914,9 @@ impl OwnedNumber {
     /// (through `authz`, which made it): a `190` (or `0`) marks the WABA's
     /// numbers `reconnect_required`, if the WABA is still bound as it was
     /// when this was made; a WABA unbound and attached again since (to
-    /// this tenant or another) keeps its numbers' status. Through an
+    /// this tenant or another), or attached again to its tenant without an
+    /// unbind (a refresh: another generation, roadmap S2b), keeps its
+    /// numbers' status. Through an
     /// `authz` that did not make it: `403 forbidden`, and nothing is
     /// marked.
     pub async fn failed(&self, authz: &Authorizer, error: &Error) -> ServiceError {
