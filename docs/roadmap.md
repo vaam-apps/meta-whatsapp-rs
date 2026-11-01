@@ -2560,30 +2560,87 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     test, the ladder-wide timeout, or setting the sticker limit to the
     animated one fails a test (the first-bytes check only in the
     adapters' tests: for a GIF, the whitelist is a second wall). Not
-    done: animated stickers (a GIF or an animated PNG is refused;
+    done: animated stickers (L19c; a GIF or an animated PNG is refused;
     ffmpeg 6.1.1 cannot read an APNG from a pipe at all), WebP or HEIC
     as an input, and a photo of more than 32 Mi pixels (a 48-megapixel
     one), which has to be scaled down before it comes here.
-  - **Proposed** (implementer, for the coordinator; each swappable by
-    another `MediaConverter`, or a literal of this one):
-    - Meta's "100 KB" and "5 MB" read as decimal (100 000 and
-      5 000 000) for what a converter makes, under the upload check's
-      binary reading: a converted file then fits whichever Meta means.
-      `AUDIO_MAX_BYTES` keeps its binary reading (16 MiB), as L19
-      decided: a voice note is far under either.
-    - Inputs: PNG and JPEG only, the formats of Meta's image table; no
-      GIF, WebP, HEIC or animation.
-    - Static stickers only (no `AnimatedSticker` target): the inputs
-      allowed are still images.
-    - No sticker dimensions imposed (Meta gives none): a sticker that
-      fits keeps its size; the ladder's sizes (1024, 512, 256) are where
-      it steps down, not a requirement.
-    - Bounds: 32 Mi pixels, 256 MiB a single allocation, the existing
-      64 MiB of input and 60 s, now for the whole ladder.
-    - The ladders above; a result over the limit after every attempt is
-      a `ValidationError` on `input`, as L19's result over the limit is.
-    - Row 48 done on the library's side (animated stickers named as not
-      made), the service's still M5c1's.
+  - **Decided 2026-11-01** (coordinator, under the owner's delegation,
+    AGENTS.md § Decisions; each swappable by another `MediaConverter`,
+    or a literal of this one):
+    1. Meta's "100 KB" and "5 MB" read as decimal (100 000 and
+       5 000 000) for what a converter makes, under the upload check's
+       binary reading: a converted file then fits whichever Meta means.
+       `AUDIO_MAX_BYTES` keeps its binary reading (16 MiB), as L19
+       decided: a voice note is far under either.
+    2. Inputs: PNG and JPEG only, the formats of Meta's image table; no
+       GIF, WebP, HEIC or animation.
+    3. Static stickers only: no `AnimatedSticker` target here (L19c).
+    4. No sticker dimensions imposed (Meta gives none): a sticker that
+       fits keeps its size; the ladder's sizes (1024, 512, 256) are where
+       it steps down, not a requirement.
+    5. Bounds: 32 Mi pixels, 256 MiB a single allocation, the existing
+       64 MiB of input and 60 s, the timeout covering the whole ladder.
+    6. The ladders as built; a result over the limit after every attempt
+       is a `ValidationError` on `input`, as L19's result over the limit
+       is.
+    7. Row 48 stays partial on the library's side: L19b's text names
+       Meta's 500 KB animated limit and the row's capability is "stickers
+       from images", which Zaileys makes animated too; animated stickers
+       are L19c. The service's side stays M5c1's.
+  - **Review** (adversarial, 2026-11-01, against ffmpeg 6.1.1): a PNG's
+    `zTXt` chunks were a memory bomb inside every bound (ffmpeg inflates
+    each and keeps the text until the frame is decoded: four 100 KB
+    chunks inflating to 100 MiB each took 1.6 GB for a 16 × 16 image).
+    The converter now walks a PNG's chunks before ffmpeg starts, refuses
+    one cut short of `IEND`, and passes it on without `tEXt`, `zTXt`,
+    `iTXt` and `eXIf` and without anything after `IEND`
+    (`a_png_reaches_ffmpeg_without_its_text_and_nothing_after_its_end`,
+    `ffmpeg_gets_the_png_without_its_text_and_the_limit_is_inclusive`);
+    the PNG output check wants one image ending the file. Also found and
+    tested: the allocation bound refuses a 16-bit RGBA PNG of exactly
+    32 Mi pixels (ffmpeg's padding; the docs said it fits;
+    `ffmpeg_refuses_a_frame_over_the_allocation_bound`, its first
+    behavioural test on images), a result of exactly the limit is taken,
+    and only the first of two images in a row comes out. Three guards
+    survived their mutation and now have a test: the kill of an attempt
+    over the limit (`kill_on_drop` and SIGPIPE hid its removal;
+    `an_attempt_over_the_limit_is_killed_and_reaped`, a stand-in deaf to
+    SIGPIPE, each attempt reaped before the conversion returns), a failed
+    attempt ending the ladder (`a_failed_attempt_ends_the_ladder`) and the
+    encoder's kind in `check_for`
+    (`check_for_wants_the_encoder_s_kind_too`). `-map_metadata -1`
+    survives in behaviour (the `image2pipe` muxer and these encoders
+    write no tags) and is pinned by the arguments' literal test. Probed and
+    holding: a JPEG-LS image with an `APP0` segment first, or a `SOF0`
+    copy before its own frame header, still never reaches `jpeg_pipe`
+    (ffmpeg's probe lands on `mjpeg` or nothing, both off the list); an
+    animated PNG reaches only its default image at worst; the ladder's
+    last attempts stay far under their limits on noise with noisy
+    transparency (42 774 bytes for a sticker, 3.8 MB for a PNG); killed
+    attempts are reaped (`Child::kill` waits). Left as they are,
+    documented: the colour profile (ICC) passes into a JPEG or PNG
+    result; a truncated JPEG decodes partly, grey below the cut; the
+    first sticker attempt of a 24-megapixel photo takes about 18 s on a
+    4-core machine, encoding a WebP far over the limit, so a timeout
+    under the default can fail a large photo; an image over 256:1 can
+    fail at a smaller attempt (a side scaled to nothing).
+- [ ] **L19c. Animated stickers** (`meta-whatsapp-core`: an
+  `AnimatedSticker` `TargetFormat`; `meta-whatsapp-adapters`: its
+  conversion behind the `ffmpeg` feature, or another converter; row 48):
+  an animation (an animated GIF, PNG or WebP) into an animated WebP
+  sticker within Meta's 500 KB (`messages/sticker-messages`), through
+  the same port and the same safety rules as L19 and L19b (fixed
+  arguments, input formats restricted, bounded in pixels, frames and
+  time, diagnostics withheld). The input formats it adds are a decision
+  of its own (AGENTS.md § Decisions).
+  - **Kind:** additive.
+  - **After:** L19b.
+  - **Decisive:** an animated GIF comes out as a WebP whose `VP8X`
+    header has the animation flag and whose `ANIM` and `ANMF` chunks are
+    read apart from the converter, within 500 KB, which `Media::upload`'s
+    type check accepts as a sticker, against a real converter in CI; an
+    animation over the frame bound is refused, and removing that bound
+    fails a test.
 - [ ] **L20a. One catch-all shape for open enums** (`meta-whatsapp-core`
   and every crate with an open enum; OPEN_QUESTIONS #27): `Other(String)`,
   generated by one macro in core.

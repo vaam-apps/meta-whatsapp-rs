@@ -238,13 +238,20 @@ stored data, the owner's).
   never enlarged, the whole ladder within `with_timeout`; an image no
   attempt brings under is `Error::Validation` on `input`), the result's
   header checked (a WebP whose RIFF size is its length and that is not
-  animated, an 8-bit colour JPEG, an 8-bit RGB or RGBA PNG). Meta gives
-  no sticker dimensions, and none is imposed. New:
+  animated, an 8-bit colour JPEG, an 8-bit RGB or RGBA PNG ending with
+  its end chunk). A PNG is walked chunk by chunk before ffmpeg reads it:
+  one cut short of `IEND` is `InputRejected`, and ffmpeg gets it without
+  its text and EXIF chunks (`tEXt`, `zTXt`, `iTXt`, `eXIf`) and without
+  anything after `IEND` (ffmpeg 6.1 inflates every `zTXt` and keeps the
+  text: four 100 KB chunks took it 1.6 GB). The colour profile is kept
+  in a JPEG or PNG result. Meta gives no sticker dimensions, and none
+  is imposed. New:
   `FfmpegConverter::check_for(&[TargetFormat])`, which checks each
   format's encoder (libopus, libwebp, mjpeg, png); `check()` is
   `check_for(&[TargetFormat::OggOpus])`, as before. `with_timeout` now
-  bounds a whole conversion, every attempt of an image's ladder together.
-  Animated stickers are not made.
+  bounds a whole conversion, every attempt of an image's ladder together
+  (a voice note's single run, as before). Animated stickers are not made
+  yet (roadmap L19c).
 - **A token-expiry signal** (`meta_whatsapp_client::embedded_signup`,
   roadmap L11e, parity row 6; OPEN_QUESTIONS #8; the service's event is
   M3e). `TokenVault::token_expiry(&waba_id, lead)` answers, on the

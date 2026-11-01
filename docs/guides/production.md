@@ -491,8 +491,12 @@ notification queue on top must be idempotent itself: tag each message with
   `exec`s `ffmpeg` (`exec`, so that a timeout kills `ffmpeg` itself). The
   process inherits no environment but `PATH`; a build that needs
   `LD_LIBRARY_PATH` sets it in such a wrapper.
-  Its input and run time are bounded (64 MiB and 60 s by default), the
-  result to the 16 MiB upload limit, and `ffmpeg`'s own diagnostics are
+  Its input and run time are bounded (64 MiB and 60 s by default; a
+  sticker from a large photo spends most of it on a first attempt at the
+  photo's own size, about 18 s for 24 megapixels on 4 cores, so do not
+  lower it for stickers), the result to its format's limit (16 MiB for
+  voice, 100 000 bytes for a sticker, 5 000 000 for an image), and
+  `ffmpeg`'s own diagnostics are
   never logged: they name files and URLs. Its failures are
   `Error::Conversion` (retry only `Timeout`; none was sent to Meta).
   CI proves it against a real `ffmpeg` (docs/dev-environment.md).

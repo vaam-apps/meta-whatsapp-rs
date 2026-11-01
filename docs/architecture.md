@@ -979,7 +979,10 @@ Logs carry sizes, digests and field names only — never payload values.
   output is checked to be mono Ogg Opus. Images (a static WebP sticker,
   a JPEG, a PNG; roadmap L19b) are made from a PNG or a JPEG only:
   checked by the input's first bytes before ffmpeg starts, and by
-  ffmpeg's own detection (`-format_whitelist png_pipe,jpeg_pipe`); the
+  ffmpeg's own detection (`-format_whitelist png_pipe,jpeg_pipe`); a
+  PNG walked chunk by chunk first (one cut short refused, its text and
+  EXIF chunks and anything after its end not passed on: ffmpeg inflates
+  every `zTXt` and keeps the text); the
   first frame, no metadata, at most 32 Mi pixels (`-max_pixels`) and
   256 MiB a single allocation; brought under the format's limit by a
   fixed ladder of sizes and qualities (each attempt killed once past
