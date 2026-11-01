@@ -1066,16 +1066,23 @@ async fn history(
     .unwrap()
 }
 
-/// Roadmap S7's continuity: a database `main`'s binary migrated (the
-/// service's migrations moved to `meta-whatsapp-server-store-postgres`)
-/// starts this binary with no migration run again and no checksum error.
-/// `migrate`, then `serve`, both migrating by default
-/// (`WA_SERVER_MIGRATE=auto`), succeed, `/readyz` answers 200, and both
-/// history tables (the service's and the library's) are row for row what
-/// `main` left, `installed_on` included. Decisive: an edited migration
-/// file (`VersionMismatch`), a renamed history table (its migrations run
-/// again, on tables that exist), or a renumbered migration fails it; the
-/// lock key and the table name are compared to `main`'s too.
+/// Roadmap S7's continuity, and S2b's migration forward: a database
+/// `main`'s binary migrated (the service's migrations 1 to 3, moved to
+/// `meta-whatsapp-server-store-postgres`), holding a binding `main` made,
+/// is migrated forward by this binary's `migrate` with no checksum error:
+/// migrations 1 to 3 row for row what `main` left (`installed_on`
+/// included), migration 4 (S2b's, additive) added once, and `serve` then
+/// runs none (both migrating by default, `WA_SERVER_MIGRATE=auto`;
+/// `/readyz` answers 200); the library's history is unchanged. `main`'s
+/// binding keeps its semantics: its start, generation 1, and a previous
+/// tenant recorded as unknown (`UNRECORDED_MOVE`), so an event of its own
+/// second stays operator-only and its undated events reach it, as before;
+/// unbound and bound to another tenant, it is a recorded move. Decisive: an
+/// edited migration file (`VersionMismatch`), a renamed history table (its
+/// migrations run again, on tables that exist), a renumbered migration, or
+/// migration 4's defaults (a NULL `previous_tenant_unbound_at` would give
+/// the binding its first second) fail it; the lock key and the table name
+/// are compared to `main`'s too.
 #[test]
 #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 fn live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration() {
@@ -1112,6 +1119,39 @@ fn live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migrat
         "every migration succeeded"
     );
     assert!(!before.1.is_empty(), "the library's migrations ran too");
+    // A tenant, its WABA and a number, as `main`'s binary wrote them (its
+    // `bind_waba`'s insert: no column of migration 4's), and another tenant.
+    let main_attached_at = runtime.block_on(async {
+        use meta_whatsapp_rs::adapters::store::postgres::sqlx;
+        for tenant in ["legacy-a", "legacy-b"] {
+            sqlx::query("INSERT INTO wa_server_tenants (id, name) VALUES ($1, '')")
+                .bind(tenant)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let attached_at: time::OffsetDateTime = sqlx::query_scalar(
+            "INSERT INTO wa_server_wabas (waba_id, tenant_id) VALUES ($1, $2) \
+             ON CONFLICT (waba_id) DO UPDATE SET waba_id = EXCLUDED.waba_id \
+             RETURNING attached_at",
+        )
+        .bind(LEGACY_WABA)
+        .bind("legacy-a")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO wa_server_numbers (phone_number_id, waba_id, tenant_id, status) \
+             VALUES ($1, $2, $3, 'connected')",
+        )
+        .bind(LEGACY_PN)
+        .bind(LEGACY_WABA)
+        .bind("legacy-a")
+        .execute(&pool)
+        .await
+        .unwrap();
+        attached_at
+    });
 
     let separator = if url.contains('?') { '&' } else { '?' };
     let url = format!("{url}{separator}options=-c%20search_path%3D{}", db.schema);
@@ -1134,6 +1174,31 @@ fn live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migrat
         "`migrate` on main's database: {}",
         String::from_utf8_lossy(&migrated.stderr)
     );
+    let forward = runtime.block_on(async {
+        (
+            history(&pool, MAIN_MIGRATIONS_TABLE).await,
+            history(&pool, "wa_sqlx_migrations").await,
+        )
+    });
+    assert_eq!(
+        forward.0[..3],
+        before.0[..],
+        "main's migrations ran again, or changed"
+    );
+    assert_eq!(forward.1, before.1, "the library's history changed");
+    let added: Vec<(i64, &str, bool, String)> = forward.0[3..]
+        .iter()
+        .map(|row| (row.0, row.1.as_str(), row.2, row.3.clone()))
+        .collect();
+    let fourth = meta_whatsapp_server::store::migrations()
+        .into_iter()
+        .find(|m| m.version == 4)
+        .unwrap();
+    assert_eq!(
+        added,
+        [(4, "waba moves", true, hex::encode(&*fourth.checksum))],
+        "migration 4, once"
+    );
     let mut serving = Command::new(BIN);
     with_db(&mut serving);
     let mut server = serve(serving.arg("serve"), ports);
@@ -1151,6 +1216,107 @@ fn live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migrat
             history(&pool, "wa_sqlx_migrations").await,
         )
     });
-    assert_eq!(after, before, "a migration ran again, or a new one ran");
+    assert_eq!(
+        after, forward,
+        "`serve` ran a migration again, or a new one"
+    );
+    runtime.block_on(main_binding_keeps_its_semantics(&pool, main_attached_at));
     runtime.block_on(pool.close());
+}
+
+/// `main`'s binding in [`live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration`].
+const LEGACY_WABA: &str = "102290129340501";
+/// Its number.
+const LEGACY_PN: &str = "106540352243501";
+
+/// The binding `main` made, after migration 4, read and routed through
+/// this build's Postgres backend: its start kept, generation 1, a previous
+/// tenant unknown (`UNRECORDED_MOVE`), so an event dated in its own second
+/// stays operator-only (S2's rule), one of the next second is its tenant's,
+/// and an undated one reaches it under the default `OperatorOnly` (the
+/// unknown move is past every window): its behaviour before S2b. A
+/// capability's epoch read now unbinds it, leaving a tombstone, and another
+/// tenant's binding then records the move.
+async fn main_binding_keeps_its_semantics(
+    pool: &meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool,
+    main_attached_at: time::OffsetDateTime,
+) {
+    use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+    use meta_whatsapp_server::events::MoveRules;
+    use meta_whatsapp_server::model::{BindOutcome, TenantId, UNRECORDED_MOVE};
+    use meta_whatsapp_server::store::events::{GuardedBinding, NewEvent, RouteGuard};
+    use meta_whatsapp_server::store::{Backend as _, PgBackend};
+    let backend = PgBackend::new(pool.clone());
+    let records = backend.records();
+    let outbox = backend.outbox();
+    let waba = WabaId::new(LEGACY_WABA).unwrap();
+    let binding = records.waba(&waba).await.unwrap().unwrap();
+    assert_eq!(binding.tenant_id.as_str(), "legacy-a");
+    assert_eq!(binding.attached_at, main_attached_at, "its start, kept");
+    assert_eq!(binding.generation, 1);
+    assert_eq!(
+        binding.previous_tenant_unbound_at,
+        Some(UNRECORDED_MOVE),
+        "a previous tenant, unknown"
+    );
+    let second = main_attached_at.unix_timestamp();
+    let now = time::OffsetDateTime::now_utc();
+    let row = |n: usize, not_after: Option<i64>| NewEvent {
+        id: format!("evt_legacy_{n}"),
+        dedup_key: Some(format!("legacy-{n}")),
+        dedup_window: None,
+        tenant: Some(TenantId::parse("legacy-a").unwrap()),
+        route_guard: Some(RouteGuard {
+            binding: GuardedBinding::Number {
+                phone_number_id: PhoneNumberId::new(LEGACY_PN).unwrap(),
+                waba_id: waba.clone(),
+            },
+            not_after: not_after.map(|at| time::OffsetDateTime::from_unix_timestamp(at).unwrap()),
+            after_move: MoveRules::default().after_move(now),
+        }),
+        phone_number_id: Some(PhoneNumberId::new(LEGACY_PN).unwrap()),
+        waba_id: Some(waba.clone()),
+        event_type: "message_received".to_owned(),
+        data: "{}".to_owned(),
+    };
+    let own_second = row(0, Some(second));
+    let next_second = row(1, Some(second + 1));
+    let undated = row(2, None);
+    for event in [&own_second, &next_second, &undated] {
+        outbox.insert(event).await.unwrap().unwrap();
+    }
+    let page = outbox
+        .page(&meta_whatsapp_server::store::events::EventQuery {
+            tenant: TenantId::parse("legacy-a").unwrap(),
+            after: None,
+            types: None,
+            phone_number_id: None,
+            limit: 10,
+            max_bytes: 1024 * 1024,
+        })
+        .await
+        .unwrap();
+    let ids: Vec<&str> = page.events.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        [next_second.id.as_str(), undated.id.as_str()],
+        "main's binding: its own second operator-only, the next second and undated events its own"
+    );
+    // A move from it is recorded.
+    assert!(records.unbind_waba_if(&binding.epoch()).await.unwrap());
+    let to = TenantId::parse("legacy-b").unwrap();
+    assert_eq!(
+        records
+            .bind_waba(&to, &waba, &[PhoneNumberId::new(LEGACY_PN).unwrap()])
+            .await
+            .unwrap(),
+        BindOutcome::Bound
+    );
+    let moved = records.waba(&waba).await.unwrap().unwrap();
+    assert!(
+        moved
+            .previous_tenant_unbound_at
+            .is_some_and(|left| left > main_attached_at),
+        "the move from main's binding: {moved:?}"
+    );
 }

@@ -18,8 +18,9 @@ use time::OffsetDateTime;
 
 use super::capabilities::{Act, racing_a_reattach};
 use crate::backend::Backend;
+use crate::events::MoveRules;
 use crate::model::{BindOutcome, DeleteTenantOutcome, TenantId};
-use crate::outbox::{EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard};
+use crate::outbox::{AfterMove, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard};
 
 /// The rounds [`run`] races an insert against a move, and a binding
 /// against a deletion.
@@ -37,18 +38,26 @@ pub struct Report {
     pub moves: MoveRaces,
     /// A binding against its tenant's deletion.
     pub binds: BindRaces,
+    /// Another tenant's binding against an unbind (roadmap S2b).
+    pub unbinds: UnbindRaces,
 }
 
 /// Every race, on `backend`: [`ROUNDS`] rounds of an insert against a
-/// move and of a binding against a deletion, then [`REATTACH_ROUNDS`] of
-/// each capability's conditioned write against a re-attach.
+/// move, of a binding against a deletion and of another tenant's binding
+/// against an unbind, then [`REATTACH_ROUNDS`] of each capability's
+/// conditioned write against a re-attach.
 pub async fn run(backend: &dyn Backend) -> Report {
     let moves = an_insert_racing_a_move_never_reaches_the_new_holder(backend, ROUNDS).await;
     let binds = a_binding_racing_a_deletion_serializes(backend, ROUNDS).await;
+    let unbinds = a_binding_racing_an_unbind_records_the_move(backend, ROUNDS).await;
     for act in [Act::Forget, Act::NumberFailed, Act::WabaFailed] {
         racing_a_reattach(backend, act, REATTACH_ROUNDS).await;
     }
-    Report { moves, binds }
+    Report {
+        moves,
+        binds,
+        unbinds,
+    }
 }
 
 fn tenant(id: &str) -> TenantId {
@@ -114,8 +123,11 @@ pub struct MoveRaces {
 /// insert that started once the move had returned is no tenant's; one that
 /// returned before the move started is the old holder's (until the
 /// deletion, when there is one). Guarded by the number, then by the WABA,
-/// round by round. Decisive (with the deterministic tests): the insert's
-/// re-check, and on Postgres its locks.
+/// round by round; dated, then undated under the default rules after a
+/// move (roadmap S2b: `UndatedAfterMove::OperatorOnly`, its window from
+/// the unbind the round makes), for which the tenant created again under
+/// the same id is kept out by the window alone. Decisive (with the
+/// deterministic tests): the insert's re-check, and on Postgres its locks.
 #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 pub async fn an_insert_racing_a_move_never_reaches_the_new_holder(
     backend: &dyn Backend,
@@ -161,6 +173,7 @@ pub async fn an_insert_racing_a_move_never_reaches_the_new_holder(
     for (round, began_at) in began.into_iter().enumerate() {
         let (holder, waba, pn) = ids(round);
         let recreated = round % 2 == 1;
+        let undated = (round / 4) % 2 == 1;
         let binding = if (round / 2) % 2 == 0 {
             GuardedBinding::Number {
                 phone_number_id: pn.clone(),
@@ -174,9 +187,18 @@ pub async fn an_insert_racing_a_move_never_reaches_the_new_holder(
             dedup_key: Some(format!("race-{run}-{round}")),
             dedup_window: None,
             tenant: Some(tenant(&holder)),
-            route_guard: Some(RouteGuard {
-                binding,
-                not_after: Some(began_at + time::Duration::SECOND),
+            route_guard: Some(if undated {
+                RouteGuard {
+                    binding,
+                    not_after: None,
+                    after_move: MoveRules::default().after_move(OffsetDateTime::now_utc()),
+                }
+            } else {
+                RouteGuard {
+                    binding,
+                    not_after: Some(began_at + time::Duration::SECOND),
+                    after_move: AfterMove::default(),
+                }
             }),
             phone_number_id: Some(pn.clone()),
             waba_id: Some(waba.clone()),
@@ -228,7 +250,12 @@ pub async fn an_insert_racing_a_move_never_reaches_the_new_holder(
         let (inserted, moved) = tokio::join!(inserted, moved);
         let (move_started, move_ended) = moved.unwrap();
         let (insert_started, sequence, insert_ended) = inserted.unwrap();
-        let what = if recreated { "created again" } else { "moved" };
+        let what = match (recreated, undated) {
+            (true, false) => "created again",
+            (true, true) => "created again, undated",
+            (false, false) => "moved",
+            (false, true) => "moved, undated",
+        };
         let sequence = sequence.unwrap_or_else(|e| panic!("round {round} ({what}): {e}"));
         assert!(sequence.is_some(), "round {round}: deduplicated");
         let new_holder = if recreated { &holder } else { &other };
@@ -257,6 +284,113 @@ pub async fn an_insert_racing_a_move_never_reaches_the_new_holder(
         } else {
             races.nobodys += 1;
         }
+    }
+    races
+}
+
+/// How the rounds of [`a_binding_racing_an_unbind_records_the_move`]
+/// ended.
+#[derive(Debug, Default)]
+pub struct UnbindRaces {
+    /// The other tenant's binding landed after the unbind.
+    pub bound: usize,
+    /// It came first and was refused (the WABA still the first tenant's,
+    /// D4), and bound once the unbind returned.
+    pub refused: usize,
+}
+
+/// Roadmap S2b: a tenant's WABA unbound while another tenant binds it,
+/// raced on two tasks. Whatever the order, the other tenant's binding,
+/// once it holds (at once, or bound again after a refusal), reads the
+/// move (`previous_tenant_unbound_at`, the unbinding's time, from the
+/// tombstone the unbind left in the same step), begins no earlier than
+/// that unbinding (so an event Meta dated while the first tenant still
+/// held the WABA is in a second the new binding did not begin before) and
+/// is at generation 1. Never an error, never a binding that reads as a
+/// first onboarding. Decisive (when a round lands the binding while the
+/// unbind commits): on Postgres, the tombstone written in the unbinding
+/// statement and read by a statement of the binding's after its insert
+/// waited, and the new binding's start moved past the unbinding.
+pub async fn a_binding_racing_an_unbind_records_the_move(
+    backend: &dyn Backend,
+    rounds: usize,
+) -> UnbindRaces {
+    let store = backend.records();
+    let run = super::unique();
+    let digits = super::unique_digits();
+    let (from, to) = (
+        tenant(&format!("ub-a-{run}")),
+        tenant(&format!("ub-b-{run}")),
+    );
+    store.create_tenant(&from, "").await.unwrap().unwrap();
+    store.create_tenant(&to, "").await.unwrap().unwrap();
+    let mut races = UnbindRaces::default();
+    for round in 0..rounds {
+        let waba = WabaId::new(format!("{digits}{round:06}3")).unwrap();
+        let pn = PhoneNumberId::new(format!("{digits}{round:06}4")).unwrap();
+        assert_eq!(
+            store
+                .bind_waba(&from, &waba, std::slice::from_ref(&pn))
+                .await
+                .unwrap(),
+            BindOutcome::Bound
+        );
+        let began = store.waba(&waba).await.unwrap().unwrap().attached_at;
+        let unbound = {
+            let (store, waba) = (store.clone(), waba.clone());
+            tokio::spawn(async move {
+                jitter(round, 0).await;
+                store.unbind_waba(&waba).await
+            })
+        };
+        let bound = {
+            let (store, to, waba, pn) = (store.clone(), to.clone(), waba.clone(), pn.clone());
+            tokio::spawn(async move {
+                jitter(round, 1).await;
+                store.bind_waba(&to, &waba, &[pn]).await
+            })
+        };
+        let (unbound, bound) = tokio::join!(unbound, bound);
+        let unbound = unbound
+            .unwrap()
+            .unwrap_or_else(|e| panic!("round {round}: unbind_waba failed: {e}"));
+        assert!(unbound, "round {round}: the unbind found no binding");
+        let bound = bound
+            .unwrap()
+            .unwrap_or_else(|e| panic!("round {round}: bind_waba failed: {e}"));
+        match &bound {
+            BindOutcome::Bound => races.bound += 1,
+            BindOutcome::OwnedByAnotherTenant => {
+                races.refused += 1;
+                assert_eq!(
+                    store
+                        .bind_waba(&to, &waba, std::slice::from_ref(&pn))
+                        .await
+                        .unwrap(),
+                    BindOutcome::Bound,
+                    "round {round}: bound once the unbind returned"
+                );
+            }
+            BindOutcome::NoSuchTenant => panic!("round {round}: {bound:?}"),
+        }
+        let binding = store.waba(&waba).await.unwrap().unwrap();
+        assert_eq!(binding.tenant_id, to, "round {round}");
+        assert_eq!(binding.generation, 1, "round {round}: a new binding");
+        let left = binding.previous_tenant_unbound_at.unwrap_or_else(|| {
+            panic!(
+                "round {round} ({bound:?}): a move from another tenant read as a first onboarding"
+            )
+        });
+        assert!(
+            began <= left,
+            "round {round} ({bound:?}): the move recorded before the first binding began"
+        );
+        assert!(
+            left <= binding.attached_at,
+            "round {round} ({bound:?}): the new binding began at {} before the unbinding it \
+             follows, at {left}",
+            binding.attached_at
+        );
     }
     races
 }

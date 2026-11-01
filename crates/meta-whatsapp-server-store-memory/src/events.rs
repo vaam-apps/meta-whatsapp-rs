@@ -14,7 +14,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use meta_whatsapp_server_core::model::TenantId;
 use meta_whatsapp_server_core::outbox::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent, began_by,
+    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
 };
 use meta_whatsapp_server_core::store::StoreResult;
 use time::OffsetDateTime;
@@ -97,10 +97,9 @@ fn holds(records: &State, tenant: &TenantId, guard: &RouteGuard) -> bool {
         GuardedBinding::Waba(_) => true,
     };
     number_holds
-        && records
-            .wabas
-            .get(waba.as_str())
-            .is_some_and(|w| &w.tenant_id == tenant && began_by(w.attached_at, guard.not_after))
+        && records.wabas.get(waba.as_str()).is_some_and(|w| {
+            &w.tenant_id == tenant && guard.admits(w.attached_at, w.previous_tenant_unbound_at)
+        })
 }
 
 impl MemoryEventStore {

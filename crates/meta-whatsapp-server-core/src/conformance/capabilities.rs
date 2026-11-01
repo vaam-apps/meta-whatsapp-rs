@@ -291,6 +291,53 @@ pub async fn failed_leaves_a_waba_attached_again(backend: &dyn Backend) {
     }
 }
 
+/// Roadmap S2b (S2's sabotage review): an `OwnedNumber` or an `OwnedWaba`
+/// made before its binding was refreshed for its own tenant (attached
+/// again without an unbind, a new token: an operator's reconnect or a
+/// token rotation), whose call Meta then answers `190` (the old token
+/// revoked), leaves the refreshed binding's numbers `connected`; one made
+/// after the refresh marks them. Decisive: the bind generation in
+/// `RecordStore::set_waba_status_if` (and `bind_waba` moving it on a
+/// refresh).
+pub async fn failed_before_a_refresh_marks_nothing(backend: &dyn Backend) {
+    let (store, kv) = (backend.records(), backend.kv());
+    let s = Setup::new(store, kv).await;
+    for through_number in [true, false] {
+        let case = format!("refreshed-{through_number}");
+        let (waba, pn) = ids(&case);
+        s.attach(A, &waba, &pn, Some("TOKEN-OLD")).await;
+        let failed = if through_number {
+            let owned = s.authz.owned_number(&s.caller, pn.clone()).await.unwrap();
+            s.attach(A, &waba, &pn, Some("TOKEN-NEW")).await;
+            owned.failed(&s.authz, &refused_token()).await
+        } else {
+            let owned = s.authz.owned_waba(&s.caller, waba.clone()).await.unwrap();
+            s.attach(A, &waba, &pn, Some("TOKEN-NEW")).await;
+            owned.failed(&s.authz, &refused_token()).await
+        };
+        assert_eq!(failed.code(), "reconnect_required", "{case}");
+        assert_eq!(
+            s.status(&pn).await,
+            Some(NumberStatus::Connected),
+            "{case}: a 190 to a capability made before the refresh marked the refreshed binding"
+        );
+        // Made after the refresh: marked.
+        let failed = if through_number {
+            let owned = s.authz.owned_number(&s.caller, pn.clone()).await.unwrap();
+            owned.failed(&s.authz, &refused_token()).await
+        } else {
+            let owned = s.authz.owned_waba(&s.caller, waba.clone()).await.unwrap();
+            owned.failed(&s.authz, &refused_token()).await
+        };
+        assert_eq!(failed.code(), "reconnect_required", "{case}");
+        assert_eq!(
+            s.status(&pn).await,
+            Some(NumberStatus::ReconnectRequired),
+            "{case}: after the refresh"
+        );
+    }
+}
+
 /// What a capability does, raced against its WABA being unbound and
 /// attached again ([`racing_a_reattach`]).
 #[derive(Debug, Clone, Copy)]
@@ -642,6 +689,215 @@ pub async fn a_capability_made_while_its_waba_moves_is_refused(backend: &dyn Bac
     }
 }
 
+/// Roadmap S2b: a binding refreshed for its own tenant (attached again
+/// without an unbind, a new token: the next generation) between a
+/// capability's read of the binding and its read of the vault makes no
+/// capability: `503 storage_unavailable` (retryable), as for a move, for
+/// an `OwnedWaba`, an `OwnedNumber` and an admin's `OwnedWaba` made from a
+/// binding read before the refresh, so that no capability pairs the epoch
+/// before the refresh with the token after it. The refreshed binding keeps
+/// its tenant, its start, its new token and its number's status; a
+/// capability made again is of the refreshed binding. Decisive: the
+/// generation in `Authorizer::still_bound`'s comparison of epochs.
+pub async fn a_capability_made_while_its_binding_is_refreshed_is_refused(backend: &dyn Backend) {
+    let (store, kv) = (backend.records(), backend.kv());
+    let s = Arc::new(Setup::new(store.clone(), kv).await);
+    let moving = Arc::new(MovesAfterRead {
+        inner: store.clone(),
+        hook: std::sync::Mutex::new(None),
+        after_number: std::sync::Mutex::new(None),
+    });
+    let records: Arc<dyn RecordStore> = moving.clone();
+    let authz = Authorizer::new(
+        records,
+        s.vault.clone(),
+        Client::builder()
+            .transport(ScriptedTransport::new())
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+    let bearer = |owner: KeyOwner, scopes: Vec<Scope>| {
+        let store = store.clone();
+        async move {
+            let (key, _) = mint(store.as_ref(), owner, scopes, String::new(), None)
+                .await
+                .unwrap();
+            format!("Bearer {}", key.expose_key())
+        }
+    };
+    let tenant_key = bearer(
+        KeyOwner::Tenant(TenantId::parse(A).unwrap()),
+        vec![Scope::Numbers],
+    )
+    .await;
+    let caller = authz
+        .tenant_caller(Some(&tenant_key), None, Scope::Numbers)
+        .await
+        .unwrap();
+    let admin_key = bearer(KeyOwner::Admin, vec![]).await;
+    let admin = authz.admin_caller(Some(&admin_key)).await.unwrap();
+    let refresh = |waba: &WabaId, pn: &PhoneNumberId| -> Hook {
+        let (s, waba, pn) = (s.clone(), waba.clone(), pn.clone());
+        Box::pin(async move { s.attach(A, &waba, &pn, Some("TOKEN-REFRESHED")).await })
+    };
+    for how in ["owned_waba", "owned_number", "waba_for_admin"] {
+        let case = format!("made-while-refreshing-{how}");
+        let (waba, pn) = ids(&case);
+        s.attach(A, &waba, &pn, Some("TOKEN-BEFORE")).await;
+        let before = store.waba(&waba).await.unwrap().unwrap();
+        let made = match how {
+            "owned_waba" => {
+                moving.arm(refresh(&waba, &pn));
+                authz
+                    .owned_waba(&caller, waba.clone())
+                    .await
+                    .map(|owned| owned.client().token().map(|t| t.expose_secret().to_owned()))
+            }
+            "owned_number" => {
+                moving.arm(refresh(&waba, &pn));
+                authz
+                    .owned_number(&caller, pn.clone())
+                    .await
+                    .map(|owned| owned.client().token().map(|t| t.expose_secret().to_owned()))
+            }
+            _ => {
+                refresh(&waba, &pn).await;
+                authz
+                    .waba_for_admin(&admin, &before)
+                    .await
+                    .map(|owned| owned.client().token().map(|t| t.expose_secret().to_owned()))
+            }
+        };
+        match made {
+            Err(error) => assert_eq!(error.code(), "storage_unavailable", "{case}"),
+            Ok(token) => panic!(
+                "{case}: made a capability of the binding before its refresh with the token \
+                 {token:?}"
+            ),
+        }
+        let after = store.waba(&waba).await.unwrap().unwrap();
+        assert_eq!(after.tenant_id.as_str(), A, "{case}");
+        assert_eq!(after.attached_at, before.attached_at, "{case}: its start");
+        assert_eq!(after.generation, before.generation + 1, "{case}");
+        assert_eq!(
+            s.token(&waba).await.as_deref(),
+            Some("TOKEN-REFRESHED"),
+            "{case}"
+        );
+        assert_eq!(s.status(&pn).await, Some(NumberStatus::Connected), "{case}");
+        // Made again, from the refreshed binding: its token.
+        let token = authz
+            .owned_waba(&caller, waba.clone())
+            .await
+            .unwrap()
+            .client()
+            .token()
+            .map(|t| t.expose_secret().to_owned());
+        assert_eq!(
+            token.as_deref(),
+            Some("TOKEN-REFRESHED"),
+            "{case}: made again"
+        );
+    }
+}
+
+/// Roadmap S2b's sabotage review: two attaches of one WABA to its own
+/// tenant at once (an operator's reconnect sent twice, a token rotation
+/// beside it), the second landing whole between the first's read of its
+/// binding and its store: it refreshes the binding (the next generation)
+/// and stores its token, and the first then overwrites that token. The
+/// first's confirmation finds the binding refreshed, not moved: it answers
+/// `503 storage_unavailable` (retryable, decision 7 of 2026-11-01) and
+/// keeps its write, a token of the binding's own tenant, instead of taking
+/// it back and leaving the binding with no token while the second attach
+/// answered success. A move to another tenant still takes it back
+/// (`a_capability_made_while_its_waba_moves_is_refused` and the service's
+/// `an_attach_whose_waba_moves_takes_back_its_token`). Decisive: the
+/// tenant and start compared apart from the generation in
+/// `Authorizer::store_token`'s confirmation.
+pub async fn an_attach_meeting_a_refresh_keeps_its_tenants_token(backend: &dyn Backend) {
+    let (store, kv) = (backend.records(), backend.kv());
+    let s = Arc::new(Setup::new(store.clone(), kv).await);
+    let moving = Arc::new(MovesAfterRead {
+        inner: store.clone(),
+        hook: std::sync::Mutex::new(None),
+        after_number: std::sync::Mutex::new(None),
+    });
+    let records: Arc<dyn RecordStore> = moving.clone();
+    let authz = Authorizer::new(
+        records,
+        s.vault.clone(),
+        Client::builder()
+            .transport(ScriptedTransport::new())
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+    let (key, _) = mint(
+        store.as_ref(),
+        KeyOwner::Admin,
+        Vec::new(),
+        String::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    let admin = authz
+        .admin_caller(Some(&format!("Bearer {}", key.expose_key())))
+        .await
+        .unwrap();
+    let (waba, pn) = ids("attach-meets-a-refresh");
+    s.attach(A, &waba, &pn, Some("TOKEN-HELD")).await;
+    // The first attach's binding (a refresh of A's), then the second
+    // attach whole, right after the first reads its binding back.
+    assert_eq!(
+        store
+            .bind_waba(
+                &TenantId::parse(A).unwrap(),
+                &waba,
+                std::slice::from_ref(&pn)
+            )
+            .await
+            .unwrap(),
+        BindOutcome::Bound
+    );
+    let before = store.waba(&waba).await.unwrap().unwrap();
+    moving.arm({
+        let (s, waba, pn) = (s.clone(), waba.clone(), pn.clone());
+        Box::pin(async move { s.attach(A, &waba, &pn, Some("TOKEN-SECOND")).await })
+    });
+    let stored = authz
+        .store_token(
+            &admin,
+            &TenantId::parse(A).unwrap(),
+            &StoredBusinessToken::new(waba.clone(), AccessToken::new("TOKEN-FIRST"))
+                .phone_number_ids([pn.clone()]),
+        )
+        .await;
+    assert_eq!(
+        stored.map_err(|e| e.code()),
+        Err("storage_unavailable"),
+        "the first attach, its binding refreshed since"
+    );
+    let after = store.waba(&waba).await.unwrap().unwrap();
+    assert_eq!(after.tenant_id.as_str(), A);
+    assert_eq!(after.attached_at, before.attached_at);
+    assert_eq!(after.generation, before.generation + 1, "the second attach");
+    assert_eq!(
+        s.token(&waba).await.as_deref(),
+        Some("TOKEN-FIRST"),
+        "the binding left with no token of its tenant's"
+    );
+    let by_number = s
+        .vault
+        .get_by_phone_number(&pn)
+        .await
+        .unwrap()
+        .map(|t| t.token.expose_secret().to_owned());
+    assert_eq!(by_number.as_deref(), Some("TOKEN-FIRST"), "its number's");
+}
+
 /// M1 (the security review of S2), before the new holder's token is
 /// stored: the WABA moves as the service moves one (the old token deleted,
 /// then the binding; bound to another tenant, whose attach has not stored
@@ -934,8 +1190,11 @@ pub async fn an_admins_vault_writes_take_an_admitted_admin(backend: &dyn Backend
 pub async fn run(backend: &dyn Backend) {
     forget_leaves_a_waba_attached_again(backend).await;
     failed_leaves_a_waba_attached_again(backend).await;
+    failed_before_a_refresh_marks_nothing(backend).await;
     a_capability_made_before_the_new_token_is_stored_is_refused(backend).await;
     a_vault_failure_while_its_waba_moves_is_answered_as_the_move(backend).await;
     a_capability_made_while_its_waba_moves_is_refused(backend).await;
+    a_capability_made_while_its_binding_is_refreshed_is_refused(backend).await;
+    an_attach_meeting_a_refresh_keeps_its_tenants_token(backend).await;
     an_admins_vault_writes_take_an_admitted_admin(backend).await;
 }

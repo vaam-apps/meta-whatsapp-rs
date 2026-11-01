@@ -116,6 +116,9 @@ read yet: set, it stops the start.
 | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | `20`, `40` | requests a second per tenant and replica for writes (sends, read receipts, media, profile) |
 | `WA_SERVER_RATE_READ`, `WA_SERVER_RATE_READ_BURST` | `50`, `50` | the same for reads |
 | `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | `2`, `2` | the same for template management |
+| `WA_SERVER_UNDATED_AFTER_MOVE` | `operator_only` | after a WABA moved to its tenant from another one, who gets its undated events (errors, history chunks, group updates without a date), which may be the previous tenant's that Meta redelivers: nobody within the window (`operator_only`, the operator still sees them), or the new holder (`current_holder`, the behaviour before this setting). A WABA no other tenant held is never concerned (design D36) |
+| `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` | `169h` (7 days and an hour) | that window, from when the previous tenant's binding was removed; a positive duration, with `operator_only` only (set with `current_holder`, the start is refused) |
+| `WA_SERVER_MOVE_SKEW_MARGIN` | `0s` | after a move only: how far past the second the new binding began an event Meta dated must be to reach the new holder (widen it if Meta's clock may run ahead of the database's) |
 
 **The service refuses to start** rather than run unsafely: on a missing
 or blank app secret or verify token, a missing vault key or a pepper
@@ -151,14 +154,30 @@ Postgres holds everything: the library's tables (`wa_kv`, the inbox's
 `wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`,
 `wa_synced_contacts` and `wa_identity_links`) and the service's (`wa_server_tenants`,
 `wa_server_api_keys`, `wa_server_wabas`, `wa_server_numbers`,
-`wa_server_idempotency`, the event outbox `wa_server_events` and its
-per-tenant `wa_server_event_streams`), each with its own migration
-history. `serve` and `migrate` run both under an
+`wa_server_waba_tombstones` (each WABA's last unbinding, which tells a
+move from a first onboarding), `wa_server_idempotency`, the event outbox
+`wa_server_events` and its per-tenant `wa_server_event_streams`), each
+with its own migration history. `serve` and `migrate` run both under an
 advisory lock, so replicas starting together never interleave them.
 Service migrations only ever add (expand, then contract in a later
 release), so replicas of two versions can share the database during a
 rolling deploy. Back up the database and, separately, the vault key: a
 backup without the key cannot decrypt a single token.
+
+Service migration 4 (roadmap S2b) adds a binding's generation and the
+record of a WABA's moves: a database an earlier binary migrated is
+migrated forward on the next `serve` or `migrate`, adding columns and a
+table and rewriting nothing. The WABAs bound before it keep the routing
+they had (an event of their binding's own second stays operator-only,
+their undated events reach their tenant): the service does not know
+whether another tenant held them. A WABA unbound by an earlier release
+leaves no record, before the upgrade as during its rolling deploy: bound
+afterwards to another tenant, it counts as a first onboarding, and its
+previous holder's undated events that Meta still redelivers reach the
+new holder (as they did before this release); a WABA moved wholly before
+the upgrade keeps the earlier rules, with the same result. Do not move
+WABAs between tenants in the 7 days and an hour before the deploy, nor
+during it.
 
 The inbox tables are kept forever for now: the service sets no
 retention on them (roadmap M2a wires one into housekeeping) and has no
@@ -582,14 +601,20 @@ tenant's deliveries: whoever holds it can forge any tenant's events.
   goes to the tenant that number is bound to (and only when Meta names the
   WABA the service bound it under); one naming only a WABA (template
   reviews, account and quality updates) to the WABA's tenant; and only
-  if Meta dated it in a later second than the one the WABA was attached
-  in, so a WABA moved to another tenant does not bring the first one's
-  late dated events along (an event of the attaching's own second goes
-  to no tenant). Errors, history chunks and group updates without a date
-  go to whoever holds the number or WABA when they arrive: after a WABA
-  moved to another tenant, the first one's undated events that Meta
-  redelivers reach the second, for up to 7 days, until roadmap S2b.
-  It is recorded in the inbox first, then in the event outbox.
+  if Meta dated it no earlier than the second the WABA was attached in,
+  so a WABA moved to another tenant does not bring the first one's late
+  dated events along. After such a move, an event of the attaching's own
+  second (and of `WA_SERVER_MOVE_SKEW_MARGIN` after it) goes to no
+  tenant, as it may be the first one's; a WABA attached for the first
+  time keeps the events of its first second. Errors, history chunks and
+  group updates without a date carry no date to compare: after a WABA
+  moved to another tenant, they go to no tenant for 7 days and an hour
+  after the move (`WA_SERVER_UNDATED_AFTER_MOVE`), since Meta may be
+  redelivering the first one's; otherwise they go to whoever holds the
+  number or WABA when they arrive (a WABA attached for the first time
+  gets its history sync). A tenant deleted and created again under the
+  same id counts as another tenant. It is recorded in the inbox first,
+  then in the event outbox.
 - **Operator-only events** are recorded without a tenant, never shown to
   one, logged with their size and digest and counted
   (`wa_server_webhook_events_total{audience="operator"}`): events of a
@@ -599,8 +624,9 @@ tenant's deliveries: whoever holds it can forge any tenant's events.
   (today Conversation Routing's `standby_observed` and
   `thread_control_changed`, and `user_action_reported`, a marketing
   message's click, which M2 makes visible to their tenant),
-  events Meta dated before the WABA's attaching or in its second, and
-  replays (dated more than 7 days and an hour ago, what the dedup
+  events Meta dated before the WABA's attaching (or, after a move from
+  another tenant, in its second), undated events within the window
+  after such a move, and replays (dated more than 7 days and an hour ago, what the dedup
   markers remember). A rising
   count usually means a WABA is subscribed but not attached.
 - `200` once every event is recorded; `500` when recording failed: Meta

@@ -187,6 +187,8 @@ impl Records {
                 tenant_id: victim(),
                 credit_allocation_id: None,
                 attached_at: now,
+                generation: 1,
+                previous_tenant_unbound_at: None,
             },
             calls: Mutex::new(Vec::new()),
         }
