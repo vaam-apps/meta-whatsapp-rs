@@ -843,7 +843,8 @@ pub struct OrderItem {
     pub sale_amount: Option<Amount>,
     /// How many.
     pub quantity: u32,
-    /// Required without a `catalog_id` (India).
+    /// Required without a `catalog_id` (India; optional with the older
+    /// `payment_configuration` alone).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub country_of_origin: Option<String>,
     /// Required without a `catalog_id` (India).
@@ -906,7 +907,7 @@ impl OrderItem {
         self
     }
 
-    fn validate(&self, field: &str, currency: Currency, has_catalog: bool) -> Check {
+    fn validate(&self, field: &str, currency: Currency, needs_import: bool) -> Check {
         validate::text(&format!("{field}.name"), &self.name, ITEM_NAME_MAX)?;
         if let Some(id) = &self.retailer_id {
             validate::non_empty(&format!("{field}.retailer_id"), id)?;
@@ -924,9 +925,9 @@ impl OrderItem {
         if let Some(sale) = self.sale_amount {
             sale.validate(&format!("{field}.sale_amount"), currency)?;
         }
-        if !has_catalog {
+        if needs_import {
             // dynamic-vpa, payment-links, pg: "Required if `catalog_id` is
-            // not present."
+            // not present." (upi-intent, the older method: "Optional".)
             let country = format!("{field}.country_of_origin");
             validate::non_empty(&country, self.country_of_origin.as_deref().unwrap_or(""))?;
             let importer = format!("{field}.importer_name");
@@ -1047,7 +1048,8 @@ impl Order {
         self
     }
 
-    /// `subtotal + tax + shipping - discount`, or `None` below zero.
+    /// `subtotal + tax + shipping - discount`, or `None` below zero or
+    /// above `u64::MAX` (computed in `u128`: it never overflows).
     pub fn total(&self) -> Option<u64> {
         let plus = u128::from(self.subtotal.value)
             + u128::from(self.tax.amount.value)
@@ -1062,7 +1064,10 @@ impl Order {
         plus.checked_sub(minus).and_then(|t| u64::try_from(t).ok())
     }
 
-    fn validate(&self, field: &str, currency: Currency) -> Check {
+    /// `legacy`: paid through the older `payment_configuration`
+    /// (`payments-in/upi-intent`), whose page makes the items' origin and
+    /// importer optional without a `catalog_id`.
+    fn validate(&self, field: &str, currency: Currency, legacy: bool) -> Check {
         let items = format!("{field}.items");
         validate::count(&items, self.items.len(), 1, usize::MAX)?;
         let has_catalog = self.catalog_id.is_some();
@@ -1082,7 +1087,7 @@ impl Order {
             }
         }
         for (i, item) in self.items.iter().enumerate() {
-            item.validate(&format!("{items}[{i}]"), currency, has_catalog)?;
+            item.validate(&format!("{items}[{i}]"), currency, !has_catalog && !legacy)?;
         }
         self.subtotal
             .validate(&format!("{field}.subtotal"), currency)?;
@@ -1263,7 +1268,10 @@ impl OrderDetailsParameters {
                 "is required for INR",
             ));
         };
-        order.validate(&format!("{PARAMS}.order"), currency)?;
+        // Without a payment setting, the order is paid through the older
+        // `payment_configuration` alone.
+        let legacy = self.payment_settings.is_empty();
+        order.validate(&format!("{PARAMS}.order"), currency, legacy)?;
         // Every page: "`total_amount.value` must be equal to
         // `order.subtotal.value` + `order.tax.value` +
         // `order.shipping.value` - `order.discount.value`."
@@ -1273,9 +1281,10 @@ impl OrderDetailsParameters {
                 format!(
                     "is {}; it must equal subtotal + tax + shipping - discount ({})",
                     self.total_amount.value,
-                    order
-                        .total()
-                        .map_or_else(|| "negative".to_owned(), |t| t.to_string()),
+                    order.total().map_or_else(
+                        || "below zero or above u64::MAX".to_owned(),
+                        |t| t.to_string()
+                    ),
                 ),
             ));
         }
@@ -1380,9 +1389,13 @@ impl OrderDetails {
     /// positive total equal to `subtotal + tax + shipping - discount`; the
     /// order (required in India), with at least one item, names of 1 to 60
     /// characters, an item's origin and importer when there is no
-    /// `catalog_id`, custom images on at most 10 items, without
-    /// `retailer_id` or `catalog_id`, and descriptions (60, expiration
-    /// 120).
+    /// `catalog_id` (unless paid through the older `payment_configuration`
+    /// alone, whose page makes them optional), custom images on at most 10
+    /// items, without `retailer_id` or `catalog_id`, and descriptions (60,
+    /// expiration 120). What is optional is, when set, not empty: the
+    /// header's id or link, a payment link's success and cancel URLs, an
+    /// unknown gateway's `type`, a `retailer_id`, the `catalog_id`, an
+    /// item image's link.
     ///
     /// [`Messages::send`](super::Messages::send) calls it first.
     ///
@@ -1451,7 +1464,9 @@ string_enum! {
     /// themselves or to a final one. Another move is refused with error
     /// `2046` in an error webhook, and canceling a paid order with `2047`.
     pub enum OrderStatusValue {
-        /// `pending`: not paid yet.
+        /// `pending`: not paid yet. Every order starts there; an
+        /// `order_status` message cannot send it
+        /// ([`OrderStatus::validate`]).
         Pending => "pending",
         /// `processing`: paid, being fulfilled.
         Processing => "processing",
@@ -1544,9 +1559,14 @@ impl OrderStatus {
     }
 
     /// Check what the pages require, without sending: the body (1 to 1024
-    /// characters) and footer (1 to 60), a `reference_id`, and the order's
-    /// update (required in India) with a description of 1 to 120
-    /// characters.
+    /// characters) and footer (1 to 60), the `reference_id` (as an
+    /// `order_details` message's: 1 to 35 characters among letters,
+    /// digits, `_`, `-`, `.`), and the order's update (required in India):
+    /// a new status other than `pending` (`payments-in/pg`: "Must be one
+    /// of `processing`, `partially_shipped`, `shipped`, `completed`,
+    /// `canceled`", as every India example lists; Brazil's table has
+    /// `pending` too, roadmap P1b; a value this version does not know is
+    /// sent if not empty) and a description of 1 to 120 characters.
     ///
     /// # Errors
     ///
@@ -1559,13 +1579,24 @@ impl OrderStatus {
             self.footer.as_deref(),
             FOOTER_MAX,
         )?;
-        validate::non_empty(&format!("{PARAMS}.reference_id"), &self.reference_id)?;
+        check_reference_id(&self.reference_id, REFERENCE_ID_MAX_INR)?;
         let Some(order) = &self.order else {
             return Err(ValidationError::new(
                 format!("{PARAMS}.order"),
                 "is required",
             ));
         };
+        let status = format!("{PARAMS}.order.status");
+        match &order.status {
+            OrderStatusValue::Pending => {
+                return Err(ValidationError::new(
+                    status,
+                    "cannot be `pending`: an order starts there, and moves on from it",
+                ));
+            }
+            OrderStatusValue::Other(s) => validate::non_empty(&status, s)?,
+            _ => {}
+        }
         validate::opt_text(
             &format!("{PARAMS}.order.description"),
             order.description.as_deref(),

@@ -1045,6 +1045,149 @@ fn the_total_is_subtotal_plus_tax_plus_shipping_minus_discount() {
     assert_eq!(below_zero.total(), None);
 }
 
+/// `n` characters of two bytes each: a limit counted in bytes would
+/// refuse it at half its length.
+fn chars(n: usize) -> String {
+    "é".repeat(n)
+}
+
+/// Every documented limit is inclusive, and counted in characters, not
+/// bytes: a value exactly at it passes (the tests above refuse one more).
+#[test]
+fn every_limit_is_inclusive_and_counts_characters() {
+    let item = OrderItem::new(chars(60), Amount::inr(10000), 1).import(
+        "India",
+        "Bread Co",
+        ImporterAddress::new("1 Road", "Pune", "411001", "IN"),
+    );
+    let order = Order::new(
+        [item.clone(), item],
+        Amount::inr(20000),
+        DescribedAmount::new(Amount::inr(1000)).description(chars(60)),
+    )
+    .shipping(DescribedAmount::new(Amount::inr(1000)).description(chars(60)))
+    .discount(
+        Discount::new(Amount::inr(1000))
+            .description(chars(60))
+            .program_name(chars(60)),
+    )
+    .expiration(OrderExpiration::new(EXPIRES, chars(120)));
+    let gateways = [
+        GatewayProvider::Billdesk(BilldeskFields {
+            additional_info1: Some(chars(120)),
+            additional_info7: Some(chars(120)),
+            ..BilldeskFields::default()
+        }),
+        GatewayProvider::Razorpay(RazorpayFields {
+            receipt: Some(chars(40)),
+            notes: (0..15).map(|i| (format!("k{i}"), chars(256))).collect(),
+        }),
+        GatewayProvider::Payu(PayuFields {
+            udf1: Some(chars(255)),
+            udf4: Some(chars(255)),
+            ..PayuFields::default()
+        }),
+        GatewayProvider::Zaakpay(ZaakpayFields {
+            extra1: Some(chars(180)),
+            extra2: Some(chars(180)),
+        }),
+    ];
+    let mut params = OrderDetailsParameters::inr(
+        "x".repeat(35),
+        GoodsType::Physical,
+        PaymentSetting::upi_intent_link("upi://pay?pa=a@b"),
+        order,
+    )
+    .beneficiary(
+        Beneficiary::new(chars(200), chars(100), "Pune", "Maharashtra", "411001")
+            .address_line2(chars(100)),
+    );
+    for provider in gateways {
+        params = params.payment_setting(PaymentGateway::new(provider, chars(60)));
+    }
+    let msg = OrderDetails::new(chars(1024), params).footer(chars(60));
+    assert_eq!(msg.validate(), Ok(()));
+
+    // Ten items with custom images, the most an order with one takes.
+    let pictured = OrderItem::new("Bread", Amount::inr(100), 1)
+        .image_link("https://x/i.png")
+        .import(
+            "India",
+            "Bread Co",
+            ImporterAddress::new("1 Road", "Pune", "411001", "IN"),
+        );
+    let order = Order::new(
+        vec![pictured; 10],
+        Amount::inr(1000),
+        DescribedAmount::new(Amount::inr(0)),
+    );
+    let msg = details(PaymentSetting::upi_intent_link("upi://pay?pa=a@b"), order);
+    assert_eq!(msg.validate(), Ok(()));
+
+    // The older payment configuration's name, at 60.
+    let mut msg = valid();
+    msg.parameters.payment_settings.clear();
+    msg.parameters.payment_configuration = Some(chars(60));
+    msg.parameters.payment_type = Some(PaymentType::Upi);
+    assert_eq!(msg.validate(), Ok(()));
+    // The configuration API takes the same names.
+    assert_eq!(
+        CreatePaymentConfiguration::new(chars(60), PaymentProvider::Razorpay).validate(),
+        Ok(())
+    );
+}
+
+/// Amounts near `u64::MAX` neither overflow nor wrap: the total is
+/// computed in `u128`, and one beyond `u64::MAX` is refused.
+#[test]
+fn totals_beyond_u64_are_refused_without_overflowing() {
+    let max = Amount::inr(u64::MAX);
+    let item = OrderItem::new("Gold", max, u32::MAX).retailer_id("G");
+    let at_max = Order::new([item.clone()], max, DescribedAmount::new(Amount::inr(0)))
+        .catalog_id(CatalogId::new(CATALOG));
+    assert_eq!(at_max.total(), Some(u64::MAX));
+    let msg = details(PaymentSetting::upi_intent_link("upi://pay?pa=a@b"), at_max);
+    assert_eq!(msg.parameters.total_amount, max);
+    assert_eq!(msg.validate(), Ok(()));
+
+    let beyond = Order::new([item], max, DescribedAmount::new(max))
+        .shipping(DescribedAmount::new(max))
+        .discount(Discount::new(Amount::inr(1)))
+        .catalog_id(CatalogId::new(CATALOG));
+    assert_eq!(beyond.total(), None);
+    let mut msg = details(PaymentSetting::upi_intent_link("upi://pay?pa=a@b"), beyond);
+    // The constructor cannot compute it: it sends no total, refused.
+    assert_eq!(msg.parameters.total_amount, Amount::inr(0));
+    assert_eq!(refused(&msg), format!("{P}.total_amount.value"));
+    msg.parameters.total_amount = max;
+    let err = msg.validate().unwrap_err();
+    assert_eq!(err.field, format!("{P}.total_amount.value"));
+    assert!(err.to_string().contains("above u64::MAX"), "{err}");
+}
+
+/// `payments-in/upi-intent` (the older `payment_configuration` alone)
+/// makes the items' origin and importer optional without a catalog; the
+/// `payment_settings` pages require them.
+#[test]
+fn the_older_configuration_needs_no_importer() {
+    let bare = || {
+        Order::new(
+            [OrderItem::new("Bread", Amount::inr(100), 1)],
+            Amount::inr(100),
+            DescribedAmount::new(Amount::inr(0)),
+        )
+    };
+    let mut msg = details(PaymentSetting::upi_intent_link("upi://pay?pa=a@b"), bare());
+    assert_eq!(
+        refused(&msg),
+        format!("{P}.order.items[0].country_of_origin")
+    );
+    msg.parameters.payment_settings.clear();
+    msg.parameters.payment_configuration = Some("pc".into());
+    msg.parameters.payment_type = Some(PaymentType::Upi);
+    assert_eq!(msg.validate(), Ok(()));
+}
+
 // ─── order_status ────────────────────────────────────────────────────────
 
 /// `payments-in/pg`, step 6 (and the same example on the UPI intent and
@@ -1109,7 +1252,23 @@ fn order_status_rules_are_checked() {
             |m| m.reference_id = String::new(),
             "interactive.action.parameters.reference_id",
         ),
+        (
+            |m| m.reference_id = "x".repeat(36),
+            "interactive.action.parameters.reference_id",
+        ),
+        (
+            |m| m.reference_id = "BM 345".into(),
+            "interactive.action.parameters.reference_id",
+        ),
         (|m| m.order = None, "interactive.action.parameters.order"),
+        (
+            |m| m.order = Some(OrderUpdate::new(OrderStatusValue::Pending)),
+            "interactive.action.parameters.order.status",
+        ),
+        (
+            |m| m.order = Some(OrderUpdate::new(OrderStatusValue::Other(String::new()))),
+            "interactive.action.parameters.order.status",
+        ),
         (
             |m| {
                 m.order =
@@ -1123,6 +1282,24 @@ fn order_status_rules_are_checked() {
         edit(&mut msg);
         let message = OutboundMessage::new(Recipient::phone(TO), msg);
         assert_eq!(message.validate().unwrap_err().field, *field);
+    }
+    // At the limits, in characters; every status the table allows, and
+    // one this version does not know.
+    for status in [
+        OrderStatusValue::Processing,
+        OrderStatusValue::PartiallyShipped,
+        OrderStatusValue::Shipped,
+        OrderStatusValue::Completed,
+        OrderStatusValue::Canceled,
+        OrderStatusValue::Other("returned".into()),
+    ] {
+        let msg = OrderStatus::new(
+            chars(1024),
+            "B.m_3-4".repeat(5),
+            OrderUpdate::new(status).description(chars(120)),
+        )
+        .footer(chars(60));
+        assert_eq!(msg.validate(), Ok(()));
     }
 }
 
@@ -1355,14 +1532,48 @@ async fn lookup_names_are_one_segment_each() {
         t.last_request().unwrap().path(),
         format!("/v25.0/{PHONE_ID}/payments/config%2F..%2Fx/ref%3Fa=1")
     );
-    let err = client(&t)
-        .payments(PhoneNumberId::new(PHONE_ID).unwrap())
-        .lookup("", "ref")
-        .await
-        .unwrap_err();
-    assert!(matches!(err, Error::Validation(_)));
+    for (config, reference) in [("", "ref"), ("pc", ""), ("..", "ref"), ("pc", ".")] {
+        let err = client(&t)
+            .payments(PhoneNumberId::new(PHONE_ID).unwrap())
+            .lookup(config, reference)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::Validation(_)),
+            "{config:?} {reference:?}"
+        );
+    }
     assert_eq!(t.remaining(), 0);
     assert_eq!(t.requests().len(), 1);
+}
+
+/// `payments-in/pg`, step 5: the lookup's "generic error", not Graph's
+/// envelope, is an `Error::Http` (and a GET, replayed).
+#[tokio::test]
+async fn the_lookup_error_example_is_an_http_error() {
+    let generic = json!({
+      "errors": [{"code": 500, "title": "Generic error", "details": "System error. Please try again."}]
+    });
+    let t = ScriptedTransport::new();
+    t.push_json(500, generic.clone());
+    t.push_json(500, generic.clone());
+    t.push_json(500, generic);
+    let err = retrying_client(&t)
+        .payments(PhoneNumberId::new(PHONE_ID).unwrap())
+        .lookup("pc", "ref")
+        .await
+        .unwrap_err();
+    let Error::Http {
+        status,
+        body_snippet,
+    } = &err
+    else {
+        panic!("expected Error::Http, got {err:?}");
+    };
+    assert_eq!(*status, 500);
+    assert!(body_snippet.contains("Generic error"));
+    assert_eq!(t.requests().len(), 3, "a read is replayed");
+    assert_eq!(t.remaining(), 0);
 }
 
 #[tokio::test]
@@ -1432,6 +1643,28 @@ async fn refund_example() {
         }))
     );
     assert_eq!(t.remaining(), 0);
+
+    // The example's value and offset are both 100: a partial refund of
+    // ₹12.34, without a speed, tells them apart.
+    t.push_json(
+        200,
+        json!({"id": "refund-id", "status": "completed", "speed_processed": "instant"}),
+    );
+    let created = client(&t)
+        .payments(PhoneNumberId::new(PHONE_ID).unwrap())
+        .refund(&RefundRequest::inr("BM345A-12", "pc", Amount::inr(1234)))
+        .await
+        .unwrap();
+    assert_eq!(created.status, TransactionStatus::Completed);
+    assert_eq!(
+        t.last_request().unwrap().json(),
+        Some(json!({
+          "reference_id": "BM345A-12",
+          "payment_config_id": "pc",
+          "amount": {"currency": "INR", "value": "1234", "offset": "100"}
+        }))
+    );
+    assert_eq!(t.remaining(), 0);
 }
 
 #[tokio::test]
@@ -1445,6 +1678,23 @@ async fn refund_is_never_replayed() {
         .unwrap_err();
     assert!(matches!(err, Error::Transport(TransportError::Timeout)));
     assert_eq!(t.requests().len(), 1, "a replay could refund twice");
+    assert_eq!(t.remaining(), 0);
+
+    // Nor on a server error: the refund may have been made.
+    t.push_json(
+        503,
+        json!({"error": {"message": "x", "code": 2, "is_transient": true}}),
+    );
+    let err = retrying_client(&t)
+        .payments(PhoneNumberId::new(PHONE_ID).unwrap())
+        .refund(&RefundRequest::inr("r", "pc", Amount::inr(100)))
+        .await
+        .unwrap_err();
+    assert!(
+        err.is_retryable(),
+        "a transient error, not replayed all the same"
+    );
+    assert_eq!(t.requests().len(), 2);
     assert_eq!(t.remaining(), 0);
 }
 
@@ -1686,6 +1936,58 @@ async fn the_oauth_link_is_kept_out_of_debug_and_errors() {
         .unwrap_err();
     assert!(matches!(err, Error::Decode { .. }));
     assert!(!format!("{err} {err:?}").contains("SENTINEL"));
+
+    // No page says where the credential sits: the path is hidden too.
+    let link: PaymentOauthLink = serde_json::from_value(json!({
+      "oauth_url": "https://www.facebook.com/payment/onboarding/init/SENTINEL/?state=SENTINEL",
+      "expiration": 1721687287
+    }))
+    .unwrap();
+    let shown = format!("{link:?}");
+    assert!(!shown.contains("SENTINEL"), "{shown}");
+    assert!(shown.contains("https://www.facebook.com"), "{shown}");
+    assert!(shown.contains("expiration"), "{shown}");
+}
+
+/// A refusal that is not Meta's envelope (a proxy's page, a cut-off
+/// answer) may still hold the link: its body is withheld, from both
+/// endpoints that answer one. Meta's envelope is kept.
+#[tokio::test]
+async fn an_oauth_endpoints_http_error_withholds_its_body() {
+    let leaky = || {
+        bytes::Bytes::from_static(
+            br#"{"oauth_url": "https://www.facebook.com/payment/onboarding/init/?t=SENTINEL", "success"#,
+        )
+    };
+    let t = ScriptedTransport::new();
+    t.push_bytes(502, "application/json", leaky());
+    t.push_bytes(502, "application/json", leaky());
+    let errors = [
+        configurations(&t)
+            .create(&CreatePaymentConfiguration::new("c", PaymentProvider::Payu))
+            .await
+            .unwrap_err(),
+        configurations(&t)
+            .regenerate_oauth_link("c", None)
+            .await
+            .unwrap_err(),
+    ];
+    for err in errors {
+        assert!(matches!(err, Error::Http { status: 502, .. }), "{err:?}");
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("SENTINEL"), "{shown}");
+        assert!(shown.contains("withheld"), "{shown}");
+    }
+    t.push_json(
+        400,
+        json!({"error": {"message": "(#100) Invalid parameter", "code": 100}}),
+    );
+    let err = configurations(&t)
+        .regenerate_oauth_link("c", None)
+        .await
+        .unwrap_err();
+    assert_eq!(err.graph().map(|g| g.code), Some(100));
+    assert_eq!(t.remaining(), 0);
 }
 
 #[tokio::test]

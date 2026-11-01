@@ -65,25 +65,30 @@
 //! Every limit the pages state as a rule ("required", "must", "cannot
 //! exceed", "only supported value"), before any request:
 //! [`OrderDetails::validate`] and [`OrderStatus::validate`] list them.
-//! Two rules are not checked: `subtotal` equal to the sum of the items'
+//! Three rules are not checked: `subtotal` equal to the sum of the items'
 //! prices (every India example that has a `sale_amount` breaks it, and
-//! the pages disagree on whether `sale_amount` counts), and the
-//! expiration's 300-second minimum (it is relative to the time Meta
-//! receives the message).
+//! the pages disagree on whether `sale_amount` counts), the expiration's
+//! 300-second minimum (it is relative to the time Meta receives the
+//! message), and beneficiaries for physical goods, which only shipped
+//! goods need (the client cannot tell them from goods collected).
 //!
 //! # Retries
 //!
 //! A message, a refund, a configuration created or an OAuth link
-//! regenerated is never replayed after a timeout ([`crate::RetryPolicy`]):
-//! each would happen twice. Reads and the deletion are.
+//! regenerated is never replayed after a timeout or a server error
+//! ([`crate::RetryPolicy`]): each would happen twice. Only a refusal that
+//! provably did nothing (throttling, an HTTP 429) is sent again. Reads and
+//! the deletion are replayed.
 //!
 //! # No legal act here
 //!
 //! Sending is refused with error `134011`
 //! ([`ErrorKind::Payment`](meta_whatsapp_core::ErrorKind::Payment)) until
 //! the WABA has accepted the WhatsApp Payments terms of service, through a
-//! link in the error's details that the business opens. No call of this
-//! library accepts them.
+//! link in the error's details that the business opens; the onboarding
+//! calls ([`PaymentConfigurations`]) are refused with `131005`, "Access
+//! denied" ([`ErrorKind::Permission`](meta_whatsapp_core::ErrorKind::Permission)),
+//! and the same link. No call of this library accepts them.
 //!
 //! ```no_run
 //! # async fn demo(client: meta_whatsapp_client::Client) -> meta_whatsapp_core::Result<()> {
@@ -123,6 +128,7 @@ use std::fmt;
 
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_core::secret::RedactedPath;
 use meta_whatsapp_core::{Error, Result};
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -148,9 +154,27 @@ mod tests;
 /// Body snippet of a payment response that does not decode: the fields a
 /// merchant passed on (notes, UDFs) can name the buyer.
 const PAYMENT_WITHHELD: &[u8] = b"(withheld: the payment may carry the merchant's notes)";
-/// Body snippet of an OAuth link response that does not decode: the link
-/// is a credential.
-const OAUTH_WITHHELD: &[u8] = b"(withheld: the response carries an OAuth link)";
+/// Body snippet of an OAuth link response that does not decode, or of a
+/// refusal that is not Meta's error envelope: the link is a credential.
+const OAUTH_WITHHELD_TEXT: &str = "(withheld: the response carries an OAuth link)";
+/// [`OAUTH_WITHHELD_TEXT`] as bytes, the decode error's placeholder.
+const OAUTH_WITHHELD: &[u8] = OAUTH_WITHHELD_TEXT.as_bytes();
+
+/// A refusal of an OAuth link's endpoint that is not Meta's error
+/// envelope (a proxy's page, an answer cut short) keeps its status, never
+/// its body: the crate's own rule (`safe_snippet`) withholds only bodies
+/// naming `paging` or `access_token`, and this body may hold the link.
+/// Meta's envelope ([`Error::Api`]) carries Meta's message, not the body,
+/// and is kept.
+fn withhold_http_body(error: Error) -> Error {
+    match error {
+        Error::Http { status, .. } => Error::Http {
+            status,
+            body_snippet: OAUTH_WITHHELD_TEXT.to_owned(),
+        },
+        other => other,
+    }
+}
 
 // ─── Payments: lookup and refunds ────────────────────────────────────────
 
@@ -500,9 +524,11 @@ impl Payments {
 
     /// `POST /{PHONE_NUMBER_ID}/payments_refund`: refund an order paid
     /// through a payment gateway, in full or in part. Checked first
-    /// ([`RefundRequest::validate`]). **Never replayed** on a timeout or a
-    /// transient error: a replay could refund twice; look the payment up
-    /// to see whether it went through.
+    /// ([`RefundRequest::validate`]): the amount is positive, but not
+    /// compared with what was paid, which the client does not know (look
+    /// the payment up, with its earlier refunds, first). **Never replayed**
+    /// on a timeout or a server error: a replay could refund twice; look
+    /// the payment up to see whether it went through.
     pub async fn refund(&self, request: &RefundRequest) -> Result<RefundCreated> {
         request.validate()?;
         self.client
@@ -751,8 +777,12 @@ impl CreatePaymentConfiguration {
 /// configuration) and [`PaymentConfigurations::regenerate_oauth_link`].
 ///
 /// The link is a [`SecretUrl`]: it links whatever account opens it, so it
-/// goes to the merchant only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// goes to the merchant only. No page says where its credential sits, so
+/// this type's `Debug` hides the link's path too, not only its query
+/// ([`RedactedPath`]: scheme, host and port shown); the field's own
+/// `Debug` ([`SecretUrl`]'s) shows the path. A refusal that is not Meta's
+/// error envelope reaches the caller without its body.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct PaymentOauthLink {
     /// The link (absent for a `upi_vpa` configuration).
@@ -765,6 +795,21 @@ pub struct PaymentOauthLink {
         skip_serializing_if = "Option::is_none"
     )]
     pub expiration: Option<OffsetDateTime>,
+}
+
+impl fmt::Debug for PaymentOauthLink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PaymentOauthLink")
+            .field(
+                "oauth_url",
+                &self
+                    .oauth_url
+                    .as_ref()
+                    .map(|u| RedactedPath(u.expose_secret())),
+            )
+            .field("expiration", &self.expiration)
+            .finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -847,8 +892,9 @@ impl PaymentConfigurations {
     /// link their account; a `upi_vpa` configuration has none.
     ///
     /// Checked first ([`CreatePaymentConfiguration::validate`]). An answer
-    /// of `"success": false` is an [`Error::Http`]. **Never replayed** on a
-    /// timeout or a transient error.
+    /// of `"success": false` is an [`Error::Http`], and so is a refusal
+    /// that is not Meta's error envelope, its body withheld (it may hold
+    /// the link). **Never replayed** on a timeout or a server error.
     pub async fn create(&self, request: &CreatePaymentConfiguration) -> Result<PaymentOauthLink> {
         request.validate()?;
         let created: Created = self
@@ -858,7 +904,8 @@ impl PaymentConfigurations {
             .idempotent(false)
             .context("payment configuration creation response")
             .send_withheld(OAUTH_WITHHELD)
-            .await?;
+            .await
+            .map_err(withhold_http_body)?;
         if !created.success {
             return Err(Error::Http {
                 status: 200,
@@ -871,7 +918,8 @@ impl PaymentConfigurations {
     /// `POST /{WABA_ID}/generate_payment_configuration_oauth_link`: a new
     /// OAuth link for a gateway configuration, which lands the merchant on
     /// `redirect_url` once linked. **Never replayed** on a timeout or a
-    /// transient error (a replay would issue another link).
+    /// server error (a replay would issue another link). A refusal that is
+    /// not Meta's error envelope is an [`Error::Http`] without its body.
     pub async fn regenerate_oauth_link(
         &self,
         configuration_name: &str,
@@ -892,12 +940,15 @@ impl PaymentConfigurations {
             .context("payment configuration OAuth link response")
             .send_withheld(OAUTH_WITHHELD)
             .await
+            .map_err(withhold_http_body)
     }
 
     /// `DELETE /{WABA_ID}/payment_configuration`, the name in the JSON
     /// body: remove a configuration. Send no more orders naming it first:
-    /// their buyers could not pay. Replayed on transient errors (a second
-    /// deletion removes nothing more).
+    /// their buyers could not pay. Replayed on transient errors: a second
+    /// deletion removes nothing more, but when the first one went through
+    /// unanswered, the replay can answer an error (the configuration is
+    /// gone); [`Self::get`] tells.
     pub async fn delete(&self, configuration_name: &str) -> Result<()> {
         check_name(configuration_name)?;
         self.client

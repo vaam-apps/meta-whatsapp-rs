@@ -234,10 +234,13 @@ stored data, the owner's).
   lengths (body 1024, footer 60, `reference_id` 35 of letters, digits,
   `_`, `-`, `.`, item names 60, descriptions 60 and 120, the gateways'
   fields), `offset` 100 for INR, a positive total equal to `subtotal +
-  tax + shipping - discount`, at least one item, an item's origin and
-  importer without a `catalog_id`, custom images on at most 10 items
-  and never with a `retailer_id` or `catalog_id`, beneficiaries (India,
-  a 6-digit PIN code). The subtotal is not checked: every India example
+  tax + shipping - discount` (summed in `u128`, never overflowing), at
+  least one item, an item's origin and importer without a `catalog_id`
+  (except with the older `payment_configuration` alone, whose page
+  makes them optional), custom images on at most 10 items and never
+  with a `retailer_id` or `catalog_id`, beneficiaries (India, a 6-digit
+  PIN code), and an `order_status` message's `reference_id` and new
+  status (never `pending`). The subtotal is not checked: every India example
   with a `sale_amount` breaks the rule. Where the pages disagree
   (`payment_settings` an array, `importer_address` an object,
   `partially_shipped`, `parameters` an object), the examples win; the
@@ -249,10 +252,13 @@ stored data, the owner's).
   `Client::payment_configurations(waba_id)` lists, gets, creates
   (`CreatePaymentConfiguration`), regenerates the OAuth link of, and
   deletes payment configurations; the OAuth link is a `SecretUrl`, kept
-  out of `Debug` and decode errors, and neither creation nor
+  out of `Debug` (`PaymentOauthLink`'s hides its path too), decode
+  errors and the body of a refusal that is not Meta's envelope, and
+  neither creation nor
   regeneration is replayed after a timeout. The WhatsApp Payments terms
   of service stay the business's to accept, through the link in Meta's
-  `134011` error: no call accepts them.
+  `134011` error (`131005` from the onboarding calls): no call accepts
+  them.
 - **A pacer shared by replicas** in `meta-whatsapp-bot` (roadmap B2b,
   parity row 89; for the service's broadcasts, M5k). Opt-in:
   `KvRateLimiter` (module `pacer`) is a `RateLimiter` whose per-number
