@@ -5,7 +5,7 @@ description: "WhatsApp one-time passcodes (login codes, password resets) through
 
 # meta-whatsapp-rs-server-otp
 
-> **Verified against meta-whatsapp-rs 3d1116d019a358bae8ebc0c7a0d154a89747bd78 (2026-11-01).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs ef70c19d7ab4905b78eb9b108fa98dad2a43b4c3 (2026-11-01).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/otp.ts](examples/otp.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
