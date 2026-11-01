@@ -909,7 +909,14 @@ fn the_animation_output_check_reads_the_chunks() {
         check_output(a, &riff(&[vp8x(0x12), anim(), (*b"ANMF", vec![0; 8])])),
         Err("a truncated WebP frame")
     );
-    // The RIFF size, and chunks that run past the file.
+}
+
+/// The animated sticker's check reads the RIFF size and where the chunks
+/// end; anything but a WebP is refused, and the static sticker's check
+/// refuses an animated one.
+#[test]
+fn the_animation_output_check_reads_the_riff_size_and_where_chunks_end() {
+    let a = TargetFormat::AnimatedSticker;
     let file = animated_webp();
     assert_eq!(
         check_output(a, &file[..file.len() - 1]),
