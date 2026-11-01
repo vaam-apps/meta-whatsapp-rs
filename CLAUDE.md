@@ -61,7 +61,9 @@ capability table) and `docs/categories.md` (Meta's platform categories).
 - `live_*` adapter, inbox (`live_postgres_*` in the facade's
   `tests/inbox_events.rs`) and service tests need real services: `just test-live` (or set
   `META_WHATSAPP_RS_TEST_POSTGRES_URL` / `META_WHATSAPP_RS_TEST_REDIS_URL`
-  and `META_WHATSAPP_RS_REQUIRE_LIVE=1`).
+  / `META_WHATSAPP_RS_TEST_MONGODB_URL`, the last a single-node replica
+  set's with `directConnection=true`, and `META_WHATSAPP_RS_REQUIRE_LIVE=1`);
+  `just test-live-clean` drops what killed runs left on all of them.
 
 A filtered run is feedback, not verification — `just ci` still has to pass.
 

@@ -118,6 +118,13 @@ rustls = { workspace = true, features = ["ring", "aws_lc_rs", "std", "tls12"] }
 # tests/redis_tls_handshake.rs: its servers' certificates, made per test on
 # aws-lc-rs (none is committed).
 rcgen = { workspace = true, features = ["aws_lc_rs", "pem"] }
+# tests/live_mongodb.rs (roadmap S8): a multi-document transaction against
+# the test replica set. A dev-dependency only, until S17's `mongodb` feature.
+# The driver requires a TLS feature: `rustls-tls-aws-lc` builds its rustls
+# configuration with an explicit aws-lc-rs provider (not `rustls-tls`, which
+# is `ring`); the test server itself is plain. `compat-3-3-0` is required by
+# the driver; `bson-3` picks the current bson.
+mongodb = { workspace = true, features = ["compat-3-3-0", "bson-3", "rustls-tls-aws-lc"] }
 
 [lints]
 workspace = true

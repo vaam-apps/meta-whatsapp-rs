@@ -957,7 +957,9 @@ third-party licences of what it contains (M4); it contains no `ffmpeg`
 - `meta-whatsapp-server serve` validates the configuration, runs the
   backend's `SchemaMigrator` (on Postgres, the library's `postgres::migrate`
   and the service's migrations; unless `skip`), opens both listeners.
-  Also: `migrate`, `openapi`, `healthcheck`, `admin …`, `vault rotate`.
+  Also: `migrate`, `openapi`, `healthcheck`, `admin …`, `vault rotate`,
+  `doctor` (roadmap L22a: the configuration, migrations, webhook
+  subscription and tokens checked read-only, non-zero on a failure).
 - Logs: `tracing` JSON, a span per request (request id, route template,
   tenant, status, duration); library events keep their levels
   ([production guide](../guides/production.md)); optional OpenTelemetry.

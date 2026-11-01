@@ -66,6 +66,18 @@ inbox
     .await?;
 ```
 
+Which of the three calls are open to you is set by the roles the
+merchant's business gave yours on the number, not by who owns a thread:
+read them with `ThreadControl::routing_roles` (a GET of the number's
+`routing_roles`). `RoutingRoles::roles` lists them
+(`take` needs `RoutingRole::Escalation`; an empty list is a success, and
+means no message is routed to you and no pass can reach you), and
+`is_standby` says whether the business granted you standby copies (you
+still subscribe to `standby`). A number without Conversation Routing
+answers Meta's error `100` instead. Read it after onboarding, at
+start-up and now and then, never before each reply or call: Meta rate
+limits it per number and per app.
+
 `inbox.thread_owner(&key)` is `None` when nothing was ever recorded (no
 routing). A handover names the customer by phone number only; it is
 recorded under the conversation that number leads to

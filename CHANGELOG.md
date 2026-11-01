@@ -263,6 +263,118 @@ stored data, the owner's).
   (`meta_whatsapp_adapters::store`, roadmap L8): today's rule for message
   ids (`OPEN_QUESTIONS.md` #33, still open), outside `run`; the memory,
   Postgres, SQLite and Redis stores pass it.
+- **MongoDB in the dev container and CI** (roadmap S8, for S9, S17 and
+  S18): a `mongodb` service in `compose.test.yaml` (`127.0.0.1:57017`) and
+  a `mongodb` sidecar in the devcontainer, both `mongo:7.0.45-jammy` run
+  as a single-node replica set (`--replSet rs0`; multi-document
+  transactions need a replica set), initiated by its healthcheck on the
+  first run and healthy once primary. `META_WHATSAPP_RS_TEST_MONGODB_URL`
+  (with `directConnection=true`: the set's member address is the
+  container's own `localhost`) is exported by `just test-live` and set in
+  the devcontainer, whose image gains `mongosh` for `just
+  test-live-clean`, which now drops `wa_test_*` databases on MongoDB too.
+  The smoke test, `live_mongodb_replica_set_commits_a_multi_document_transaction`
+  in meta-whatsapp-adapters' `tests/live_mongodb.rs`, commits a
+  transaction across two collections and aborts another; under
+  `META_WHATSAPP_RS_REQUIRE_LIVE=1` a missing URL fails it. The `mongodb`
+  driver (Apache-2.0) is a dev-dependency of meta-whatsapp-adapters only,
+  without default features and with `rustls-tls-aws-lc` (an explicit
+  aws-lc-rs provider, not `ring`): no library build links it. The server
+  image is under the SSPL and only runs as a test service.
+- **The coexistence sync inside onboarding**
+  (`meta_whatsapp_client::embedded_signup`, roadmap L11d, parity rows
+  124 and 69; OPEN_QUESTIONS #7; the service's side is M3b). After a
+  coexistence onboarding (`FinishKind::WhatsappBusinessAppOnboarding`),
+  `onboard`, `onboard_with_approval` and `resume` end with two new steps,
+  `steps::SYNC_CONTACTS` (`sync_contacts`:
+  `POST /{PHONE_NUMBER_ID}/smb_app_data`, `sync_type`
+  `smb_app_state_sync`) and `steps::SYNC_HISTORY` (`sync_history`,
+  `history`), with the business token, after the subscription and a
+  Solution Partner's credit line, in the order of
+  `embedded-signup/onboarding-business-app-users`. On by default; a new
+  field and setter, `OnboardingRequest::coexistence_sync` /
+  `coexistence_sync(false)`, turns them off, and
+  `Onboarded::needs_coexistence_sync()` is unchanged. Meta's answers are
+  in a new field, `Onboarded::coexistence_sync`
+  (`Option<CoexistenceSync>`: per request, `SyncOutcome::Requested` with
+  its `request_id`, or `Refused` with `2593107` or `2593108`, recorded
+  and reported, not a failure). Meta allows each request once per
+  number within 24 hours, so each is claimed before it is posted in a
+  plain JSON record (new namespace `COEXISTENCE_NAMESPACE`,
+  `wa.es.coexistence`, keyed by phone number id, scoped to the stored
+  token record; pending the owner's confirmation as a stable
+  identifier), and a `resume` never posts one that was answered or
+  whose answer was lost (it fails at that step with a `ValidationError`
+  on `coexistence_sync` until the request turns the sync off); one Meta
+  refused before doing anything is asked again; a record of a later
+  onboarding of the number is never taken over (the step fails, posting
+  nothing). At most once, not exactly once: a process stopped between a
+  claim and its answer leaves the number to the documented manual way
+  out (a call that clears a claim is a follow-up). Hosted signup syncs
+  nothing (Cloud API only). Additive, but a default change for
+  coexistence onboardings: they now send two more requests, and a
+  scripted test of one needs their answers.
+- **Dead letters for webhook events a sink refuses permanently**
+  (`meta_whatsapp_webhooks::deadletter`, roadmap L21a,
+  `OPEN_QUESTIONS.md` #30). A sink says an event will never go through
+  with the new `SinkError::Permanent` (`SinkError::permanent`,
+  `is_permanent`; `meta-whatsapp-core`); every other error, and every
+  error a sink does not classify, stays transient, so nothing changes
+  for a sink that does not opt in. With
+  `WebhookHandlerBuilder::dead_letters(DeadLetters::new(kv))`, such an
+  event is written to a typed store on `KvStore`, its dedup claim marked
+  done, and the rest of the batch delivered and acknowledged
+  (`DeliveryReport::dead_lettered`, a `tracing::error!` with the letter,
+  kind and number only); a failed write releases the claim and answers
+  `500`, and without a store a permanent error answers `500` as before.
+  The store is bounded by count (a ring of 1000 by default, the oldest
+  overwritten), age (14 days: its retention of the personal data an
+  event holds) and size (256 KiB per event, a larger one kept without
+  its content); `get`, `list`, `remove`, `replay(id, sink)` and
+  `replay_all(sink)` (past the dedup guard; a letter whose event no
+  longer decodes is counted as failed, not fatal) handle the letters, and
+  `erase(phone_number_id, contacts)` removes a person's through a
+  per-contact index (every identifier the event gives: BSUIDs, parent
+  BSUIDs, phone numbers). The facade's
+  new `meta_whatsapp_rs::erasure::Eraser` erases a person from the
+  conversation store and the dead letters together (`Erasure`).
+  `FanoutSink` now returns a transient error before a permanent one.
+  New store namespaces, **pending the owner's confirmation before the
+  first release**: `wa.webhook.deadletter` and
+  `wa.webhook.deadletter.contact` (docs/architecture.md § Stable
+  identifiers). Tests:
+  `a_batch_with_one_permanent_failure_delivers_the_others_and_dead_letters_it`,
+  `post_is_200_when_a_permanent_failure_is_dead_lettered`,
+  `erasing_a_contact_removes_their_dead_letters`,
+  `every_person_a_fixture_event_names_is_indexed`,
+  `the_keys_are_pinned_and_hashed`, `the_record_bytes_are_pinned`.
+- **`llms.txt` and `meta-whatsapp-server doctor`** (roadmap L22a,
+  parity row 117, now done in the service; from `webhooks/overview`,
+  `webhooks/create-webhook-endpoint`, `solution-providers/manage-webhooks`
+  and the Graph API reference's `app/subscriptions` and
+  `webhooks/subscriptions-edge`, read on 2026-11-01).
+  `docs/public/llms.txt` indexes the guides, the design and planning
+  docs and every consumer skill in the llms.txt convention, each link
+  the file's Markdown on `main`; the docs site serves it at its root,
+  and `crates/meta-whatsapp-rs/tests/llms_txt.rs` refuses a link to a
+  missing file and an unlisted guide or skill. The service's
+  `doctor` command (`meta_whatsapp_server::doctor`: `Doctor`, `Report`,
+  `Check`, `Status`) prints one line per check, `OK`, `WARN`, `FAIL` or
+  `SKIP`, and exits non-zero on a `FAIL`: every configuration refusal
+  by variable (not only the first), the backend `serve` would open and,
+  on Postgres, its migration histories read by `SELECT` (pending
+  service migrations fail with `WA_SERVER_MIGRATE=skip`, warn with
+  `auto`), the app's `whatsapp_business_account` subscription and its
+  fields (`GET /{app-id}/subscriptions` with the app token; `messages`
+  and `account_update` required, `REQUIRED_FIELDS`, eleven more
+  recommended, `RECOMMENDED_FIELDS`), each bound WABA's token
+  (`debug_token`: valid, this app's, not expired, both WhatsApp
+  permissions, a grant naming the WABA; up to `MAX_WABAS`) and the app's
+  subscription to it (`GET /{waba-id}/subscribed_apps`), and the
+  Solution Partner's system token. It only reads (no migration, the
+  vault opened without re-encryption on read, `GET`s only, through the
+  library's client) and prints no secret. The server crate depends on
+  `serde` for the subscriptions answer.
 - **A token-expiry signal** (`meta_whatsapp_client::embedded_signup`,
   roadmap L11e, parity row 6; OPEN_QUESTIONS #8; the service's event is
   M3e). `TokenVault::token_expiry(&waba_id, lead)` answers, on the
@@ -515,6 +627,18 @@ stored data, the owner's).
   non-empty target role. None of the three is replayed after a timeout.
   The `meta-whatsapp-rs-cms-inbox` skill's example now makes the pass
   before recording it.
+- **Routing roles** (`meta_whatsapp_client::thread_control`, roadmap
+  L15a, parity row 139, from `conversation-routing/routing-roles`):
+  `ThreadControl::routing_roles()`, a `GET
+  /{phone-number-id}/routing_roles`, answers `RoutingRoles`: the
+  `roles` the caller's business holds on the number (`RoutingRole`:
+  `calls`, `ctwa`, `customer_service`, `escalation`, `marketing`,
+  `utility`, and `Other(String)` for any other value) and `is_standby`,
+  its standby grant; `RoutingRoles::holds` tests one role. An empty
+  `roles` is a success; a number without Conversation Routing is Meta's
+  error `100` (`ErrorKind::InvalidParameter`). Both fields are required:
+  a response without either fails to decode. A read, retried like any
+  GET. Row 139 is done for the library.
 - **A pacer shared by replicas** in `meta-whatsapp-bot` (roadmap B2b,
   parity row 89; for the service's broadcasts, M5k). Opt-in:
   `KvRateLimiter` (module `pacer`) is a `RateLimiter` whose per-number
@@ -1817,6 +1941,14 @@ stored data, the owner's).
   through the `postgres` feature only (they were on the dependency), so
   `sqlite` alone links none of them; nothing changes for a build with
   `postgres`.
+- **`FanoutSink` returns the first transient error before any permanent
+  one** (`meta-whatsapp-adapters`, roadmap L21a): it returned the first
+  error in the order the sinks were added. A fan-out is permanent only
+  when every failing sink was, so a dead-letter store never acknowledges
+  an event another sink could still take. Test:
+  `a_transient_error_wins_over_a_permanent_one`.
+- **`DeliveryReport` has a `dead_lettered` count** (`#[non_exhaustive]`
+  already, so additive).
 - **Graph error `131070` is `ThreadOwnedElsewhere`**
   (`meta_whatsapp_core::ErrorKind::from_code`, roadmap L15; see Added,
   "Thread control"). `conversation-routing/thread-control` § Errors gives

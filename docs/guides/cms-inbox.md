@@ -482,6 +482,15 @@ let ids: Vec<String> = inbox.identities(&key).await?.into_iter().collect();
 let erased = inbox.erase_all(&ids).await?; // `Erased`: counts only; log those, never the ids
 ```
 
+If your webhook handler keeps dead letters
+([webhooks.md § 9](webhooks.md#9-dead-letters)), they hold the
+customer's events too, in a store the conversation store cannot reach.
+Erase both with the facade's `meta_whatsapp_rs::erasure::Eraser`, over
+the same conversation store and dead-letter store, behind the same
+ownership check (it trusts the number it is given):
+`Eraser::new(conversations).with_dead_letters(dead_letters)`, then
+`eraser.erase_all(&phone_number_id, &ids)`, whose `Erasure` counts both.
+
 `identities` follows the synced address book contacts (a contact's key,
 BSUID, parent BSUID and phone number are one person) and the identity
 links (`ConversationStore::link_identity`), which `InboxSink` records:
@@ -530,7 +539,8 @@ What the erasure does not reach, and what you do about it:
   them, they stop Meta's redeliveries from recording the customer
   again), OTP challenges (hashed, expiring), what your sinks forwarded
   (the service's event outbox and its 24-hour idempotency answers,
-  roadmap M2f; a dead-letter store, L21a; SSE clients), your own copies
+  roadmap M2f; the webhook dead letters unless erased with `Eraser`, above,
+  L21a; SSE clients), your own copies
   (media you downloaded, section 4), logs, and Meta's side (the
   business's contact book: `PhoneNumber::delete_contact_book_entry` for
   each BSUID, through the merchant's client (`with_token`) on any number

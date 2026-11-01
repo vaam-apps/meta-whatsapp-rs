@@ -77,6 +77,7 @@ The commands:
 | `meta-whatsapp-server migrate` | creates or upgrades the tables, then exits (for a one-off job) |
 | `meta-whatsapp-server openapi` | prints the OpenAPI 3.1 document |
 | `meta-whatsapp-server healthcheck` | exits 0 when the internal listener's `/livez` answers 200 |
+| `meta-whatsapp-server doctor` | checks the configuration, the database, the app's webhook subscription and the tokens, read-only; exits non-zero on a failure ([below](#check-a-deployment-doctor)) |
 | `meta-whatsapp-server admin create-admin-key [--expires-at …]` | mints an admin key and prints it once |
 | `meta-whatsapp-server admin create-platform-key --tenants '*' --scopes numbers [--expires-at …]` | mints a platform key and prints it once |
 | `meta-whatsapp-server admin list-keys [--tenant <id>]` | lists the admin and platform keys (or a tenant's), never a secret |
@@ -549,7 +550,8 @@ tenant that owns its number.
 (WhatsApp, Configuration), set the callback URL to
 `https://<your public host>/webhooks/meta` and the verify token to
 `WA_VERIFY_TOKEN`'s value; Meta's check (`GET /webhooks/meta`) answers
-the challenge. Subscribe the fields you need (`messages` at least).
+the challenge. Subscribe the fields you need (`messages` and `account_update` at least;
+`meta-whatsapp-server doctor` names the ones missing).
 Attaching a WABA subscribes the app to it (Embedded Signup will too, M3):
 without that, Meta sends nothing for its numbers.
 
@@ -608,8 +610,9 @@ tenant's deliveries: whoever holds it can forge any tenant's events.
   records one twice. An event that fails every time (a permanent sink
   error) holds its whole batch back for those 7 days, after which Meta
   drops it: the events after it in the same body are lost with it
-  ([OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) #30: dead-lettering is
-  decided, not built yet; watch
+  ([OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) #30: the library's dead
+  letters, roadmap L21a, take only an error a sink classifies as
+  permanent, and the service's classifies none; watch
   `wa_server_webhook_sink_failures_total`).
 - Errors and bodies that are not webhooks carry no id: they are told
   apart by the body they came in and their place in it, for an hour
@@ -717,6 +720,46 @@ Every error answers one body:
   the same answer). It is `409` on a route naming a media or template id
   too: a dead token is never taken for a missing object, and neither is
   Meta failing (a `5xx` stays `502`).
+
+## Check a deployment: doctor
+
+`meta-whatsapp-server doctor` reads the environment as `serve` does and
+reports what would stop the service, or stop Meta's events and the
+tokens from reaching it: one line per check, `OK`, `WARN`, `FAIL` or
+`SKIP` (not checked, and why), then the counts. It exits non-zero when a
+check failed, so a deploy job can run it before `serve`. It only reads:
+no migration runs, the vault re-encrypts nothing, every Graph call is a
+`GET`, and no secret is printed (variables are named, URLs shown
+without their credentials, Meta's failures by code).
+
+| Check | Fails when |
+| --- | --- |
+| `config.<VARIABLE>` | `serve` would refuse the variable. Every refusal is listed, not only the first: doctor replaces the refused variable with an accepted value and reads again (a replacement can hide a problem only the value you meant would show) |
+| `config`, `config.WA_APP_SECRET`, `config.binds`, … | never: what was read, without a secret's value; warnings for a throwaway vault key, a `WA_GRAPH_ENDPOINT` that is not Meta's, no `WA_APP_ID` |
+| `database` | the build lacks the backend's feature, or the database does not answer |
+| `database.migrations` | (Postgres) a service migration is pending with `WA_SERVER_MIGRATE=skip` (a warning with `auto`, as `serve` applies it), a recorded one differs from this binary's, or one was left half-applied. Read with `SELECT`s; the library's history is counted, its versions not compared |
+| `webhooks.subscription` | `GET /{app-id}/subscriptions` (with the app token) shows no active `whatsapp_business_account` subscription |
+| `webhooks.fields` | `messages` or `account_update` is not subscribed; the other fields behind the service's event types (`account_alerts`, `account_review_update`, `business_capability_update`, the template and number updates, `security`, `user_preferences`) warn when missing |
+| `token.partner` | (Solution Partner mode) `debug_token` says `WA_PARTNER_SYSTEM_TOKEN` is invalid, expired or another app's |
+| `token.waba.<id>` | a bound WABA has no token in the vault, one the vault keys cannot open, or one `debug_token` says is invalid, expired (a warning within 7 days), another app's, without `whatsapp_business_management` or `whatsapp_business_messaging`, or granted for other WABAs |
+| `webhooks.waba.<id>` | the app is not among the WABA's `subscribed_apps`: Meta sends nothing for its numbers (attach it again) |
+
+The Graph checks need `WA_APP_ID` (they skip without it) and an accepted
+configuration. The WABA checks walk the first 100 bound WABAs, two calls
+each, and skip on memory storage (the running service's records are in
+its own process). A refused configuration still checks the database when
+`DATABASE_URL` reads.
+
+```text
+$ meta-whatsapp-server doctor
+FAIL config.WA_APP_SECRET: WA_APP_SECRET is required
+FAIL config.WA_OTP_PEPPER: WA_OTP_PEPPER must be at least 32 bytes
+OK   database: Postgres reachable
+WARN database.migrations: service migrations 3 are pending: `serve` applies them at start (WA_SERVER_MIGRATE=auto)
+SKIP webhooks.subscription: the configuration is refused
+SKIP token.wabas: the configuration is refused
+2 failed, 1 warnings, 1 ok, 2 skipped
+```
 
 ## Operations
 

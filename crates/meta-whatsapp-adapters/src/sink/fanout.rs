@@ -10,10 +10,15 @@ use meta_whatsapp_core::sink::EventSink;
 /// Delivers each event to every inner sink, concurrently.
 ///
 /// **Partial failure:** every sink is attempted even when another fails;
-/// `deliver` then returns the first error in the order the sinks were added.
-/// Sinks that succeeded keep the event (nothing is rolled back), and since
-/// the error makes Meta redeliver the batch, they will see it again — make
-/// them idempotent, or put a dedup guard in front of the fan-out.
+/// `deliver` then returns the first transient error in the order the sinks
+/// were added, else the first permanent one
+/// ([`SinkError::Permanent`]): the fan-out refuses an event permanently
+/// only when every sink that failed did, so a webhook handler with a
+/// dead-letter store never acknowledges an event a sink could still take
+/// on a redelivery. Sinks that succeeded keep the event (nothing is rolled
+/// back), and since an error makes Meta redeliver the batch (or a
+/// dead letter is replayed to the whole fan-out), they will see it again —
+/// make them idempotent, or put a dedup guard in front of the fan-out.
 ///
 /// With no sinks, delivery succeeds and does nothing.
 pub struct FanoutSink<E> {
@@ -88,11 +93,17 @@ impl<E: Clone + Send + 'static> EventSink<E> for FanoutSink<E> {
         }
         deliveries.push(last.deliver(event));
         // join_all keeps input order, so "first" means first added.
-        futures::future::join_all(deliveries)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<()>, SinkError>>()
-            .map(drop)
+        let mut permanent = None;
+        for result in futures::future::join_all(deliveries).await {
+            match result {
+                Ok(()) => {}
+                Err(error) if error.is_permanent() => {
+                    permanent.get_or_insert(error);
+                }
+                Err(transient) => return Err(transient),
+            }
+        }
+        permanent.map_or(Ok(()), Err)
     }
 }
 
@@ -154,6 +165,34 @@ mod tests {
         for s in [&ok_before, &full, &ok_between, &closed, &ok_after] {
             assert_eq!(*s.seen.lock().unwrap(), [9], "every sink was attempted");
         }
+    }
+
+    fn permanent() -> SinkError {
+        SinkError::permanent(std::io::Error::other("refused for good"))
+    }
+
+    /// A transient error wins over a permanent one, whatever their order:
+    /// a dead-letter store must not acknowledge an event another sink
+    /// could still take (roadmap L21a). Only when every failure is
+    /// permanent is the fan-out's.
+    #[tokio::test]
+    async fn a_transient_error_wins_over_a_permanent_one() {
+        let refused = recorder(Some(permanent));
+        let full = recorder(Some(|| SinkError::Full));
+        let ok = recorder(None);
+        let mut sink = FanoutSink::new();
+        for s in [&refused, &ok, &full] {
+            sink.push_arc(Arc::clone(s) as Arc<dyn EventSink<u32>>);
+        }
+        let err = sink.deliver(1).await.unwrap_err();
+        assert!(matches!(err, SinkError::Full), "{err:?}");
+
+        let only_permanent = FanoutSink::new()
+            .with(recorder(None))
+            .with(recorder(Some(permanent)))
+            .with(recorder(Some(permanent)));
+        let err = only_permanent.deliver(2).await.unwrap_err();
+        assert!(err.is_permanent(), "{err:?}");
     }
 
     #[tokio::test]

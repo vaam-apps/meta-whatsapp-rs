@@ -37,6 +37,7 @@
 //! | [`telemetry`], [`metrics`] | request logs and Prometheus metrics (the HTTP crate's) |
 //! | [`state`] | what every route shares (the HTTP crate's) |
 //! | [`serve`], [`listen`], [`cli`] | the process, its listeners' accept loop, the command line |
+//! | [`doctor`] | `meta-whatsapp-server doctor`: the configuration, the database, Meta's webhook subscription and the tokens' reach, checked read-only |
 
 #[cfg(not(feature = "api-axum"))]
 compile_error!(
@@ -46,6 +47,7 @@ compile_error!(
 
 pub mod cli;
 pub mod config;
+pub mod doctor;
 pub mod serve;
 pub mod store;
 

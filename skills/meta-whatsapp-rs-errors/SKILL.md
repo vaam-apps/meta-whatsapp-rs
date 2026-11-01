@@ -147,8 +147,8 @@ pub fn after_failed_send(e: &Error) -> Resend {
 - No retry scheduler, outbox or dead-letter queue for sends: a job queue
   on top is yours, and it must be idempotent (tag sends with
   `callback_data`).
-- Webhook sink errors fail the whole batch; dead-lettering was decided
-  on 2026-09-26 and is not built yet
+- Webhook sink errors fail the whole batch, except `SinkError::Permanent`
+  with a dead-letter store, which keeps that event and delivers the rest
   ([OPEN_QUESTIONS.md #30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates),
   roadmap L21a).
 

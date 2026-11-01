@@ -49,6 +49,8 @@ meta-whatsapp-server-store-memory = { workspace = true, optional = true }
 meta-whatsapp-server-store-postgres = { workspace = true, optional = true }
 
 anyhow.workspace = true
+# `doctor`: the app subscriptions answer (`GET /{app-id}/subscriptions`).
+serde.workspace = true
 async-trait.workspace = true
 futures.workspace = true
 thiserror.workspace = true

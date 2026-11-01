@@ -112,8 +112,8 @@ Err(e) if is_thread_owned_elsewhere(&e) => Ok(None),
 ```
 
 The escalation partner turns it off: `ReplyChecks::ALL.thread_owner(false)`. Your own `pass` or `take`
-(`ThreadControl::pass`, `ThreadControl::take` on `client.thread_control(number)`): then
-`inbox.record_thread_owner`. Who owns the thread, and why: [references/routing.md](references/routing.md).
+(`ThreadControl::pass`, `ThreadControl::take` on `client.thread_control(number)`): then `inbox.record_thread_owner`.
+Your business's roles on the number, not who owns a thread: `ThreadControl::routing_roles`. Who owns the thread, and why: [references/routing.md](references/routing.md).
 
 ## Conversation keys
 
@@ -134,9 +134,9 @@ let ids: Vec<String> = inbox.identities(&key).await?.into_iter().collect();
 inbox.erase_all(&ids).await // `Erased` holds counts only: log those, never the ids
 ```
 
-Group messages are redacted in place (`ErasureMode::Delete` deletes them); `Inbox::erase` and
-`Inbox::identities` refuse another number's key. Procedure and limits: [references/erasure.md](references/erasure.md).
-History is kept unless the store has `with_retention` and you schedule `apply_retention`.
+Group messages are redacted in place (`ErasureMode::Delete` deletes them); `Inbox::erase` and `Inbox::identities`
+refuse another number's key. Webhook dead letters need `meta_whatsapp_rs::erasure::Eraser` instead. Procedure and limits:
+[references/erasure.md](references/erasure.md). History is kept unless the store has `with_retention` and you schedule `apply_retention`.
 
 ## Pitfalls
 
