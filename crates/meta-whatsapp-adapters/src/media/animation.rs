@@ -264,8 +264,8 @@ pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
     if at > data.len() {
         return Err(GIF_TRUNCATED);
     }
-    let mut kept: Vec<Range<usize>> = Vec::with_capacity(8);
-    kept.push(0..at);
+    let mut kept: Vec<image::Piece> = Vec::with_capacity(8);
+    image::keep(&mut kept, 0..at);
     let mut frames = 0usize;
     let mut pixels = 0u64;
     let mut duration = 0u64;

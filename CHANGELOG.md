@@ -498,8 +498,11 @@ stored data, the owner's).
   one cut short of `IEND` is `InputRejected`, and ffmpeg gets it without
   its text and EXIF chunks (`tEXt`, `zTXt`, `iTXt`, `eXIf`) and without
   anything after `IEND` (ffmpeg 6.1 inflates every `zTXt` and keeps the
-  text: four 100 KB chunks took it 1.6 GB). The colour profile is kept
-  in a JPEG or PNG result. Meta gives no sticker dimensions, and none
+  text: four 100 KB chunks took it 1.6 GB). The input's colour profile,
+  one of at most 16 KiB (a JPEG's in a single chunk), is kept in a JPEG
+  or PNG result; any other is dropped before ffmpeg reads it (see
+  Security).
+  Meta gives no sticker dimensions, and none
   is imposed. New:
   `FfmpegConverter::check_for(&[TargetFormat])`, which checks each
   format's encoder (libopus, libwebp, mjpeg, png); `check()` is
@@ -3699,6 +3702,40 @@ are marked `internal`, so `npx skills add vaam-apps/wa-rs` no longer offers
 them.
 
 ### Security
+
+**`FfmpegConverter`: a small JPEG or PNG could take `ffmpeg` to
+gigabytes of memory** (roadmap L19b, fixed before any release; measured
+against ffmpeg 6.1.1). The JPEG path passed a photo's EXIF through for
+its orientation, and ffmpeg's EXIF reader copies a value once for every
+IFD entry pointing at it, over every `APP1` segment it meets: a 67 KB
+JPEG of one crafted segment took 916 MB, a 264 KB one of four 3.6 GB,
+a 658 KB one of ten 8.4 GB in 53 s, all far inside the 64 MiB input
+bound and each allocation under `-max_alloc`. A PNG's colour profile
+(`iCCP`) was passed through too, and ffmpeg inflates it whole: one
+200 KB chunk inflating to 200 MiB took 660 MB. The converter now walks
+a JPEG's segments before ffmpeg starts and passes on only those ffmpeg
+reads whole: the tables, the frame header, the scans and their data,
+the first JFIF and Adobe segments rewritten to their fixed fields, the
+first colour profile segment (`APP2`, `ICC_PROFILE`) when it holds a
+whole profile of at most 16 KiB in one chunk, and, in place of the
+first EXIF segment, a minimal EXIF of 36 bytes carrying its Orientation
+alone (1 to 8; none without a valid one), which ffmpeg still applies.
+Every other `APP1` (EXIF, XMP), every other `APP2` (so a profile split
+over several chunks is dropped whole, and that image loses its colour
+profile), `APP13`, comments, the other application segments, markers
+ffmpeg does not decode, and anything after the end of image are
+dropped; a JPEG cut short, with a segment running past the end, or with
+a table, frame or scan header whose length is not its content, is
+`ConversionError::InputRejected` (a truncated JPEG was decoded partly
+before). A PNG keeps its first `iCCP` chunk only if it is at most
+16 KiB, and no other: a JPEG and a PNG both keep one profile of at
+most 16 KiB. Through the converter, the crafted EXIF JPEG now
+peaks at about 50 MB and the profile PNG at about 48 MB
+(`ffmpeg_applies_the_orientation_of_a_jpeg_whose_exif_is_a_bomb`,
+`ffmpeg_keeps_a_small_colour_profile_and_drops_a_large_one`, each with
+the unstripped file as its control;
+`ffmpeg_keeps_a_jpeg_s_small_colour_profile_in_one_chunk` shows a
+JPEG's profile still reaching a JPEG and a PNG result).
 
 `pulldown-cmark` (the bot's Markdown parser) is locked at 0.13.5 for
 RUSTSEC-2026-0414, exponential event growth from wikilinks with empty

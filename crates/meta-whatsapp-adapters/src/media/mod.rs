@@ -81,16 +81,49 @@
 //! detects the format again itself and may read nothing but a single PNG
 //! or JPEG (`-format_whitelist png_pipe,jpeg_pipe`): a JPEG-LS image or
 //! an animated PNG, which begin as a JPEG and a PNG do, are refused
-//! there. A PNG is walked chunk by chunk before `ffmpeg` sees it: one
-//! whose chunks stop before its end chunk (a truncated file) is
-//! [`ConversionError::InputRejected`], and `ffmpeg` gets it without its
-//! text and EXIF chunks (`tEXt`, `zTXt`, `iTXt`, `eXIf`) and without
-//! anything after its end chunk. That is a memory bound, not a nicety:
-//! `ffmpeg` 6.1 inflates every `zTXt` chunk and keeps the text until the
-//! frame is decoded, each under the allocation bound but not all of them
-//! together (four chunks of 100 KB, each inflating to 100 MiB, took
-//! 1.6 GB). Each attempt runs these arguments, the filter and the encoder
-//! from a fixed table:
+//! there. Before `ffmpeg` sees it, the image is walked, and what `ffmpeg`
+//! is given of it is a memory bound, not a nicety: `ffmpeg` 6.1 keeps
+//! some of an image's metadata many times over, each copy under the
+//! allocation bound but not all of them together (measured against
+//! ffmpeg 6.1.1):
+//!
+//! - **A PNG**, chunk by chunk: one whose chunks stop before its end
+//!   chunk (a truncated file) is [`ConversionError::InputRejected`];
+//!   `ffmpeg` gets it without its text and EXIF chunks (`tEXt`, `zTXt`,
+//!   `iTXt`, `eXIf`), with its first colour profile chunk (`iCCP`) only
+//!   if that is at most 16 KiB and no other, and without anything after
+//!   its end chunk. `ffmpeg` inflates every `zTXt` chunk and keeps the
+//!   text until the frame is decoded (four chunks of 100 KB, each
+//!   inflating to 100 MiB, took 1.6 GB), and inflates a profile whole
+//!   (one of 200 KB inflating to 200 MiB took 660 MB; a real one is a
+//!   few kilobytes).
+//! - **A JPEG**, segment by segment: one cut short before its end of
+//!   image, with a segment whose length runs past the end (or is under
+//!   two bytes), with a table, frame or scan header whose length is not
+//!   its content (libjpeg refuses one too), or with a second start of
+//!   image, is [`ConversionError::InputRejected`]. `ffmpeg` gets only
+//!   what it reads whole: the quantization and Huffman tables, the frame
+//!   header (baseline, extended, progressive or lossless; JPEG-LS's, for
+//!   the format whitelist to refuse), the restart interval, the scans and
+//!   their entropy-coded data, the first JFIF and Adobe segments
+//!   rewritten to their fixed fields (no thumbnail), the first colour
+//!   profile segment (`APP2`, `ICC_PROFILE`) when it holds a whole profile
+//!   in one chunk (1 of 1) of at most 16 KiB, in place of the first EXIF
+//!   segment a minimal EXIF of its Orientation alone (1 to 8; no EXIF
+//!   without a valid one), and the end of image. Every other `APP1`
+//!   (EXIF, XMP), every other `APP2` (so a profile split over several
+//!   chunks is dropped whole, and that image loses its colour profile),
+//!   `APP13`, comments, the other application segments, the markers `ffmpeg` does not decode,
+//!   bytes between segments and anything after the end of image are
+//!   dropped. `ffmpeg` copies an EXIF value once for every IFD entry
+//!   pointing at it, over every `APP1` it reads (a 67 KB JPEG of one
+//!   crafted segment took 916 MB, a 658 KB one of ten 8.4 GB), and moves
+//!   on by the bytes it read rather than by a segment's length, so a
+//!   segment it reads only in part could hide another from the walk:
+//!   each segment it is given is one it reads whole.
+//!
+//! Each attempt runs these arguments, the filter and the encoder from a
+//! fixed table:
 //!
 //! ```text
 //! ffmpeg -hide_banner -nostdin -nostats -loglevel error
@@ -112,11 +145,14 @@
 //! - **The first frame, nothing else**: no metadata (EXIF can carry a
 //!   place and a camera owner's name). A JPEG's EXIF orientation is
 //!   applied to the pixels before it is dropped (ffmpeg 6.1 rotates a
-//!   frame by it), so a photo taken upright stays upright. The colour
-//!   profile (ICC) is not metadata to `ffmpeg`: a JPEG or a PNG result
-//!   keeps the input's, so that its colours stay what they were (a WebP
-//!   result has none). A truncated JPEG is not refused: `ffmpeg` decodes
-//!   what there is of it, the rest grey.
+//!   frame by the minimal EXIF above), so a photo taken upright stays
+//!   upright. The colour profile (ICC) is not metadata to `ffmpeg`: a
+//!   JPEG or a PNG result keeps the input's, so that its colours stay
+//!   what they were (a WebP result has none), when it is the one profile
+//!   the walk above keeps, at most 16 KiB for a JPEG and a PNG alike (a
+//!   JPEG's in a single chunk). An image whose profile is larger, or a
+//!   JPEG's in several chunks, comes out without one, and a wide-gamut
+//!   photo (Display P3) is then shown as sRGB.
 //! - **Under the limit by a ladder**, since a size cannot be asked of an
 //!   encoder: the attempts below run in turn until one's result is within
 //!   [`TargetFormat::max_bytes`] (an attempt past it is killed as soon as
@@ -242,7 +278,8 @@
 //! | a result over the format's limit ([`TargetFormat::max_bytes`]: 16 MiB for audio) | — | [`Error::Validation`] on `input`; `ffmpeg` is killed (for an image or an animation, the next attempt runs, and only the last one's overflow is this error) |
 //! | `ffmpeg` missing or not executable | — | [`ConversionError::BinaryMissing`] |
 //! | no `libopus`, `libwebp`, `libwebp_anim`, `mjpeg` or `png` encoder ([`FfmpegConverter::check_for`]) | — | [`ConversionError::EncoderMissing`] |
-//! | an image whose first bytes are not a PNG's or a JPEG's, or a PNG whose chunks stop before its end chunk | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
+//! | an image whose first bytes are not a PNG's or a JPEG's; a PNG whose chunks stop before its end chunk; a JPEG that stops before its end of image, whose segment's length runs past the end or is not its header's content, or with a second start of image | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
+//! | an image's metadata (a PNG's text and EXIF chunks, a JPEG's application segments and comments, any colour profile but one of at most 16 KiB, a JPEG's in one chunk; [Images](#images)) | — | not passed to `ffmpeg`: a JPEG's EXIF becomes its Orientation alone |
 //! | an animation whose first bytes are not a GIF's; a GIF cut short of its trailer, with a block GIF does not define, of a canvas over 2 Mi pixels, of fewer than 2 frames or more than 500, of more than 100 frames of 512 × 512 or more (frames times pixels), or longer than 10 s | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
 //! | an animation whose frames are all alike (`libwebp` makes a still image of it) | — | [`ConversionError::InputRejected`] |
 //! | `ffmpeg` fails (input it cannot read, a format off the list, an image over 32 Mi pixels) | — | [`ConversionError::InputRejected`] |
@@ -725,9 +762,11 @@ impl FfmpegConverter {
             ))
             .into());
         }
-        // A PNG without its text and EXIF chunks, nothing after its end; a
-        // GIF without its comments and application extensions, nothing
-        // after its trailer, and within the animation's bounds.
+        // A PNG without its text, EXIF and large colour profile; a JPEG
+        // with only the segments ffmpeg reads whole, its EXIF reduced to
+        // the orientation; nothing after either's end. A GIF without its
+        // comments and application extensions, nothing after its trailer,
+        // and within the animation's bounds.
         let prepared = if animated {
             animation::prepared(&data)
         } else {

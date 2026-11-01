@@ -503,7 +503,17 @@ notification queue on top must be idempotent itself: tag each message with
   pixels, 500 frames (100 of 512 × 512 or larger) and 10 s, which took
   some 170 MB at worst) but not the process's total memory: give it a cgroup, or point
   `with_program` at a wrapper script that sets `ulimit -v` and then
-  `exec`s `ffmpeg` (`exec`, so that a timeout kills `ffmpeg` itself). The
+  `exec`s `ffmpeg` (`exec`, so that a timeout kills `ffmpeg` itself).
+  Before `ffmpeg` reads an image, the converter takes out what `ffmpeg`
+  would multiply in memory: a PNG's text chunks, a JPEG's metadata
+  segments (its EXIF reduced to the orientation, which is still
+  applied; XMP and comments dropped), and any colour profile but one of
+  at most 16 KiB (a JPEG's in a single chunk: a profile split over
+  several chunks is dropped, and that image loses its colour profile),
+  so that an image of a few hundred kilobytes cannot
+  take gigabytes (a 658 KB JPEG of ten crafted EXIF segments took ffmpeg
+  6.1 to 8.4 GB). A JPEG or PNG cut short is refused before `ffmpeg`
+  starts. The
   process inherits no environment but `PATH`; a build that needs
   `LD_LIBRARY_PATH` sets it in such a wrapper.
   Its input and run time are bounded (64 MiB and 60 s by default; a
