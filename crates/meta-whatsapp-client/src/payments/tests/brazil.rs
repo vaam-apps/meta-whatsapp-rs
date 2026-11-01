@@ -413,6 +413,36 @@ fn india_fields_are_refused_in_a_brl_order() {
     ]);
 }
 
+/// India's item image is refused in a BRL order as India's, not only
+/// because Brazil's required `retailer_id` conflicts with it: the reason
+/// says so, and a catalog or an eleventh item does not change the field.
+#[test]
+fn an_item_image_is_refused_in_a_brl_order_as_indias() {
+    let image = || ItemImage {
+        link: "https://x/i.png".into(),
+    };
+    let reason = |msg: &OrderDetails| msg.validate().unwrap_err().reason;
+    let mut msg = brl_valid();
+    order_of(&mut msg).items[0].image = Some(image());
+    assert_eq!(refused(&msg), format!("{P}.order.items[0].image"));
+    assert_eq!(reason(&msg), "is documented for INR only");
+    // India's image rules (at most 10 items, no `catalog_id`) are not
+    // Brazil's: the image itself is what is refused.
+    let mut msg = brl_valid();
+    let order = order_of(&mut msg);
+    order.catalog_id = Some(CatalogId::new("1234567890"));
+    order.items[0].image = Some(image());
+    assert_eq!(refused(&msg), format!("{P}.order.items[0].image"));
+    let mut msg = brl_valid();
+    let order = order_of(&mut msg);
+    let item = order.items[0].clone();
+    order.items = vec![item; 11];
+    order.items[0].image = Some(image());
+    order.subtotal = Amount::brl(550_000);
+    msg.parameters.total_amount = Amount::brl(550_000);
+    assert_eq!(refused(&msg), format!("{P}.order.items[0].image"));
+}
+
 /// The simplified order's header refusal is Brazil's: an INR message
 /// without an order is refused for the order, header or not; a BRL one by
 /// link with an order passes.
