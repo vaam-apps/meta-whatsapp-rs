@@ -60,10 +60,12 @@ async fn live_postgres_backend_passes_the_conformance_suite() {
 /// constant default, and a default set for the rows to come), so a
 /// database with many numbers migrates without holding its numbers table
 /// for a copy; and a number bound before it reads its WABA's start and a
-/// previous tenant unknown (`UNRECORDED_MOVE`). Decisive: a volatile
-/// default or a column's type changed in the migration (either rewrites
-/// the table into a new file). An update of the existing rows would not
-/// change the file; the migration has none.
+/// previous tenant unknown (`UNRECORDED_MOVE`), and keeps that start when
+/// a binding of its tenant's other WABA takes it (it would read the new
+/// WABA's otherwise). Decisive: a volatile default or a column's type
+/// changed in the migration (either rewrites the table into a new file);
+/// for the start, the refresh's `COALESCE` of it. An update of the
+/// existing rows would not change the file; the migration has none.
 #[tokio::test]
 async fn live_postgres_migration_5_rewrites_no_table() {
     use meta_whatsapp_rs::adapters::store::postgres::sqlx::migrate::Migrator;
@@ -125,6 +127,198 @@ async fn live_postgres_migration_5_rewrites_no_table() {
         .unwrap();
     assert_eq!(number.attached_at, attached_at, "its WABA's start");
     assert_eq!(number.previous_tenant_released_at, Some(UNRECORDED_MOVE));
+
+    // The tenant's other WABA, bound later, takes the number: its start
+    // stays its first WABA's.
+    let store = PgStore::new(pool.clone());
+    let legacy = TenantId::parse("legacy").unwrap();
+    let pn = PhoneNumberId::new("6001").unwrap();
+    store
+        .bind_waba(
+            &legacy,
+            &meta_whatsapp_rs::core::ids::WabaId::new("5002").unwrap(),
+            std::slice::from_ref(&pn),
+        )
+        .await
+        .unwrap();
+    let moved = store.number(&pn).await.unwrap().unwrap();
+    assert_eq!(moved.waba_id.as_str(), "5002");
+    assert_eq!(
+        moved.attached_at, attached_at,
+        "its first WABA's start, not the second's"
+    );
+    assert_eq!(moved.previous_tenant_released_at, Some(UNRECORDED_MOVE));
+}
+
+/// Roadmap M2a and M2h: a WABA unbound from one tenant before migration 5
+/// (migration 4 recorded the WABA's move, nothing recorded its numbers')
+/// and bound to another tenant after it, with its number: the number
+/// reads as never released, so the WABA's cut alone hides the previous
+/// tenant's history on it (`authz::history_from`: its binding's start).
+/// Decisive: the WABA's cut in `history_from` (the number's is `None`).
+#[tokio::test]
+async fn live_postgres_a_waba_moved_before_migration_5_still_cuts_its_numbers() {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx::migrate::Migrator;
+    use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+    use meta_whatsapp_server_core::authz::history_from;
+    use meta_whatsapp_server_core::store::RecordStore as _;
+    use meta_whatsapp_server_store_postgres::migrations;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(3).await;
+    meta_whatsapp_rs::adapters::store::postgres::migrate(&pool)
+        .await
+        .unwrap();
+    let mut migrator =
+        Migrator::with_migrations(migrations().into_iter().filter(|m| m.version < 5).collect());
+    migrator.dangerous_set_table_name(MIGRATIONS_TABLE);
+    migrator.run(&pool).await.unwrap();
+    for tenant in ["before-5-a", "before-5-b"] {
+        sqlx::query("INSERT INTO wa_server_tenants (id, name) VALUES ($1, '')")
+            .bind(tenant)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO wa_server_wabas (waba_id, tenant_id, previous_tenant_unbound_at) \
+         VALUES ('5301', 'before-5-a', NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO wa_server_numbers (phone_number_id, waba_id, tenant_id) \
+         VALUES ('6301', '5301', 'before-5-a')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // The unbind of the release before migration 5: the WABA's row and
+    // its tombstone, its numbers by the cascade.
+    sqlx::query(
+        "WITH gone AS (DELETE FROM wa_server_wabas WHERE waba_id = '5301' \
+           RETURNING waba_id, tenant_id, previous_tenant_unbound_at) \
+         INSERT INTO wa_server_waba_tombstones \
+           (waba_id, tenant_id, unbound_at, previous_tenant_unbound_at) \
+         SELECT waba_id, tenant_id, now(), previous_tenant_unbound_at FROM gone",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    migrate(&pool).await.unwrap();
+    let store = PgStore::new(pool.clone());
+    let (waba_id, pn) = (
+        WabaId::new("5301").unwrap(),
+        PhoneNumberId::new("6301").unwrap(),
+    );
+    store
+        .bind_waba(
+            &TenantId::parse("before-5-b").unwrap(),
+            &waba_id,
+            std::slice::from_ref(&pn),
+        )
+        .await
+        .unwrap();
+    let waba = store.waba(&waba_id).await.unwrap().unwrap();
+    let number = store.number(&pn).await.unwrap().unwrap();
+    assert!(waba.previous_tenant_unbound_at.is_some(), "a recorded move");
+    assert_eq!(
+        number.previous_tenant_released_at, None,
+        "no release recorded before migration 5"
+    );
+    assert_eq!(
+        history_from(&waba, &number),
+        Some(waba.attached_at),
+        "the WABA's cut"
+    );
+}
+
+/// Roadmap M2h, a rolling deploy: a replica of the previous release
+/// releases numbers with its own statements (a refresh's `DELETE` of the
+/// numbers its list lacks, an unbind's cascade), which know nothing of the
+/// tombstones; migration 5's trigger records the release all the same, so
+/// a binding of this release to another tenant reads a move, its start
+/// after the release. Decisive: the trigger (without it, the number reads
+/// as never held, and the inbox shows the new tenant the previous one's
+/// history).
+#[tokio::test]
+async fn live_postgres_a_release_by_the_previous_release_is_recorded() {
+    use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+    use meta_whatsapp_server_core::store::RecordStore as _;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(3).await;
+    migrate(&pool).await.unwrap();
+    let store = PgStore::new(pool.clone());
+    let (a, b) = (
+        TenantId::parse("rolling-a").unwrap(),
+        TenantId::parse("rolling-b").unwrap(),
+    );
+    store.create_tenant(&a, "").await.unwrap();
+    store.create_tenant(&b, "").await.unwrap();
+    let (pn1, pn2) = (
+        PhoneNumberId::new("6101").unwrap(),
+        PhoneNumberId::new("6102").unwrap(),
+    );
+    store
+        .bind_waba(
+            &a,
+            &WabaId::new("5101").unwrap(),
+            std::slice::from_ref(&pn1),
+        )
+        .await
+        .unwrap();
+    store
+        .bind_waba(
+            &a,
+            &WabaId::new("5102").unwrap(),
+            std::slice::from_ref(&pn2),
+        )
+        .await
+        .unwrap();
+    // The previous release's refresh of 5101 listing no number, and its
+    // unbind of 5102 (the WABA's row, its numbers by the cascade).
+    sqlx::query(
+        "DELETE FROM wa_server_numbers WHERE waba_id = $1 AND NOT (phone_number_id = ANY($2))",
+    )
+    .bind("5101")
+    .bind(Vec::<String>::new())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM wa_server_wabas WHERE waba_id = '5102'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for (pn, released_by) in [(&pn1, "5201"), (&pn2, "5202")] {
+        let (tenant, released_at): (Option<String>, time::OffsetDateTime) = sqlx::query_as(
+            "SELECT tenant_id, released_at FROM wa_server_number_tombstones              WHERE phone_number_id = $1",
+        )
+        .bind(pn.as_str())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(tenant.as_deref(), Some("rolling-a"), "{pn}");
+        store
+            .bind_waba(
+                &b,
+                &WabaId::new(released_by).unwrap(),
+                std::slice::from_ref(pn),
+            )
+            .await
+            .unwrap();
+        let number = store.number(pn).await.unwrap().unwrap();
+        assert_eq!(number.tenant_id, b);
+        assert_eq!(
+            number.previous_tenant_released_at,
+            Some(released_at),
+            "{pn}: a move"
+        );
+        assert!(number.attached_at >= released_at, "{pn}");
+    }
 }
 
 /// Two instances starting at once on an empty database both migrate, and
