@@ -244,6 +244,31 @@ stored data, the owner's).
   `an_undated_event_after_a_move_waits_out_the_window`),
   `capabilities::failed_before_a_refresh_marks_nothing`, and the
   `webhooks` cases through the pipeline.
+- **Hosted Embedded Signup** (`meta_whatsapp_client::embedded_signup`,
+  roadmap L11a, parity row 121; OPEN_QUESTIONS #11; the service's side
+  is M3f). `HostedSignup::new(waba_id, owner_business_id)`, from the
+  `account_update` `PARTNER_ADDED` webhook's `waba_info`, and
+  `EmbeddedSignup::onboard_hosted(&signup, &system_token, &request,
+  &vault)` (and `onboard_hosted_with_approval`, required for a Solution
+  Partner): step `fetch_token` (new, in `steps`) asks
+  `POST /{owner_business_id}/system_user_access_tokens` for the business
+  token with your system user token and its `appsecret_proof` under the
+  app secret, in a form body with `fetch_only=true`
+  (`Business::system_user_access_token`; `HostedSignup::token_request`
+  swaps the request, a generation never replayed), then runs the code
+  flow's steps, now shared with `onboard`: `debug_token`,
+  `verify_assets` (which also refuses a WABA whose owner, as Meta
+  reports it, is another business than the webhook's), `approve`,
+  `store_token` (the same `wa.token` record), `subscribe_app`, the
+  credit line steps of a Solution Partner, `register_phone`.
+  `OnboardingRequest::for_hosted` builds the request (no code; the
+  session info of `HostedSignup::session`), and `resume` takes it after
+  a failure past `store_token`; before it, nothing is spent and the call
+  can be made again. `PARTNER_ADDED` also comes for the code flow's and
+  coexistence's onboardings, and may be delivered again: `onboard_hosted`
+  refuses a WABA the vault already holds, before any request, rather
+  than replace its token (delete the record first to onboard it again).
+  Additive: `onboard` and `resume` are unchanged.
 - **Media conversion** (roadmap L19, parity row 48, from
   `business-phone-numbers/media` and `messages/audio-messages`): a new
   port, `meta_whatsapp_core::media::MediaConverter`, an object-safe

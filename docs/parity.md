@@ -56,7 +56,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 116 | 15 | 0 | 1 |
+| Library | 117 | 14 | 0 | 1 |
 | Service | 41 | 23 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -64,7 +64,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 15 partial or gap rows is cited by a
+- Each of the library's 14 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 90 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, L 1 (L22a, tooling), P 2 (payments).
@@ -374,7 +374,7 @@ The owner's definition (2026-09-26):
 | # | Area | Capability | Zaileys (Web) | Zaileys (Cloud) | Meta Cloud API | Library | Service | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 120 | Onboarding | Embedded Signup v4: launch options, session events, code exchange, token checks, the encrypted vault, an approval gate, resume | — | — | `embedded-signup/overview`, `embedded-signup/implementation`, `access-tokens` | `client::embedded_signup::EmbeddedSignup`, `onboard_with_approval`, `resume`; `client::embedded_signup::LaunchOptions`; `client::embedded_signup::SignupSessions` | M3 (`/v1/signup/*`) | done / gap (M3a) |
-| 121 | Onboarding | Hosted Embedded Signup, app-only install | — | — | `embedded-signup/hosted-es`, `embedded-signup/app-only-install` | the `app_only_install` launch feature (`client::embedded_signup::FeatureName::AppOnlyInstall`, refused with coexistence); hosted Embedded Signup not integrated: it starts from a `PARTNER_ADDED` webhook and gets its business token from `system_user_access_tokens`, not from a code (OPEN_QUESTIONS #11, decided: integrate, L11a) | — | partial / gap (M3f) |
+| 121 | Onboarding | Hosted Embedded Signup, app-only install | — | — | `embedded-signup/hosted-es`, `embedded-signup/app-only-install`, `webhooks/reference/account_update` | the `app_only_install` launch feature (`client::embedded_signup::FeatureName::AppOnlyInstall`, refused with coexistence); hosted Embedded Signup (L11a; OPEN_QUESTIONS #11): `client::embedded_signup::HostedSignup` (the `PARTNER_ADDED` webhook's `waba_info.waba_id` and `owner_business_id`) and `client::embedded_signup::EmbeddedSignup::onboard_hosted`, `onboard_hosted_with_approval`: the business token from `system_user_access_tokens` on the customer's portfolio with the `appsecret_proof` of your system token in a form body (`client::waba::Business::system_user_access_token`; a `fetch_only` read, step `fetch_token`), then the code flow's steps (the WABA's owner checked against the webhook's) and the same vault record, resumed by `EmbeddedSignup::resume` | — | done / gap (M3f) |
 | 122 | Onboarding | Several WABAs in one signup | — | — | `embedded-signup/overview` | only the claimed WABA is onboarded (OPEN_QUESTIONS #5, decided: opt-in onboarding of every granted WABA, L11b) | inherits it (M3f) | partial / gap (M3f) |
 | 123 | Onboarding | Pre-verified numbers: pools, adding, codes, sharing, partners | — | — | `embedded-signup/pre-verified-numbers`; `reference/business/whatsapp-business-pre-verified-phone-numbers-api.md`, `reference/business/whatsapp-business-pre-verified-phone-number-sharing-api.md`, `reference/business/add-phone-numbers-api.md`, `reference/whatsapp-business-pre-verified-phone-number/whatsapp-business-pre-verified-phone-number-api.md` | only the launch option (`LaunchOptions::pre_verified_phone_ids`) and `client::waba::NewPhoneNumber::preverified_id`; the endpoints are not wrapped (L11c) | — | partial / gap (M3f) |
 | 124 | Onboarding | Coexistence (WhatsApp Business app users): onboarding, contacts and history sync, echoes | — | — | `embedded-signup/onboarding-business-app-users`; `webhooks/reference/history.md`, `webhooks/reference/smb_message_echoes.md`, `webhooks/reference/smb_app_state_sync.md` | `LaunchOptions::coexistence`; `client::phone_numbers::PhoneNumber::sync_smb_app_data`; `webhooks::WebhookEvent::HistorySynced`, `MessageEchoed`; recorded by the inbox (coverage row 21) | echoes and history recorded and delivered as events since M1c; onboarding and the automatic sync (D7) in M3b | done / partial (M3b) |

@@ -137,6 +137,31 @@ of its own, after an HTML comment; keep that when you add one.
     are the existing ones (verify, store, subscribe, register). Swappable:
     both are opt-in, and the code-exchange flow is unchanged. Roadmap L11a.
 
+    **Landed with roadmap L11a (2026-11-01), the library's side, its
+    choices the coordinator's (owner's delegation):**
+    `EmbeddedSignup::onboard_hosted` (and `_with_approval`) takes a `HostedSignup` (the webhook's
+    `waba_info.waba_id` and `owner_business_id`) and the system user
+    token as an explicit argument; the app secret is the
+    `AppCredentials`' one. The token request is `fetch_only=true`, as
+    `hosted-es` step 5 sends it (a fetch is replayed as a read, a
+    generation never is); a WABA whose owner, as Meta reports it, is
+    another business than the webhook's is refused (when Meta reports
+    none, none is stored, as in the code flow); `debug_token` runs on
+    the fetched token, assuming hosted signup's business tokens carry
+    `granular_scopes` naming the WABA (one that does not fails closed);
+    a WABA the vault already holds is refused before any request,
+    because `PARTNER_ADDED` also comes for code-flow and coexistence
+    onboardings and redeliveries, and storing again would replace the
+    held token unasked. The integrator's, documented: re-onboarding a
+    held WABA (delete it first), the tenant binding (in the approval:
+    the webhook names no tenant) and the PIN (the hosted page asks for
+    none; as #4 keeps, nothing generates or stores it). Hosted signup
+    reuses the code flow's steps and vault record, so nothing new is
+    stored. Swappable by `HostedSignup::token_request` (the request) and
+    by not calling `onboard_hosted` (the code flow is unchanged); the
+    held-WABA refusal by deleting the record first. Roadmap L11a
+    (landed); the service's side, M3f.
+
 12. **Launch option shape.** `pre-filled-data` shows
     `whatsAppBusinessAccount` both as `{ids: …}` and `{id: [...]}`; the code
     uses the worked example (`{id: [...]}`) and sends `business.id` as a
