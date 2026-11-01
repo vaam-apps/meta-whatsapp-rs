@@ -248,7 +248,17 @@ stored data, the owner's).
   without a timestamp or a usable id is skipped. `Inbox::contacts` and
   `Inbox::contact` read them back. A new switch,
   `RecordingSwitches::contacts`, on in `RecordingSwitches::ALL`: a sink
-  built with `ALL` (the default) now records contacts too.
+  built with `ALL` (the default) now records contacts too. The service
+  does not, until roadmap M3b (design D38): its pipeline's inbox runs
+  `meta_whatsapp_server_core::inbound::INBOX_RECORDING` (`ALL` with
+  `contacts(false)`); the `app_state_synced` events still reach their
+  tenant.
+- **`conversation_conformance::erase_one_person_of_every_record` and
+  `purge_one_person_of_every_record`** (`meta_whatsapp_adapters::store`,
+  roadmap L8's review): one person's records of every kind, erased or
+  purged, and what an adapter's test must then find nowhere in its
+  storage; the SQLite, Postgres and Redis adapters' tests scan for it.
+  `run` gains `an_unbounded_limit_reads_everything`.
 - **`conversation_conformance::ids_are_stored_once_per_store`**
   (`meta_whatsapp_adapters::store`, roadmap L8): today's rule for message
   ids (`OPEN_QUESTIONS.md` #33, still open), outside `run`; the memory,

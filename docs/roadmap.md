@@ -1723,50 +1723,71 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     examples back through `Inbox::contacts` and `Inbox::contact` on
     memory and SQLite (it fails when a removal is applied under one key
     only). Rows 69 and 111 are done in the library (the service's sides
-    stay with M3b and M2a); categories 30 and 39 too. Decisions this
-    item proposes, for the coordinator:
-    - **SQLite through sqlx's driver**, the library compiled in
-      (`sqlite-bundled`: MIT, no TLS); sqlx's Postgres driver, its TLS
-      and its macros move from the dependency to the `postgres` feature,
-      so `sqlite` alone links neither (`just features` checks both
-      alone). Its migrations are embedded with `include_str!` from
-      `migrations-sqlite/`, templates under the same `TablePrefix`, now
-      `store::TablePrefix` (still `store::postgres::TablePrefix`), and
-      each prefix keeps its own history (`<prefix>sqlx_migrations`).
-      Swappable: another `ConversationStore` or `KvStore` behind the
-      same ports.
-    - **SQLite concurrency is SQLite's write lock**: every write one
-      `BEGIN IMMEDIATE` transaction (read, decide in Rust, write), the
-      busy timeout `store::sqlite::open` sets (30 s) the wait; times are
-      `INTEGER` microseconds, identifiers `TEXT` refusing U+0000 (as on
-      Postgres), content `BLOB`; the key/value store's expiry is the
-      application's clock (injectable, `SqliteKvStore::with_clock`), its
-      versions one counter row, so a deleted record's row goes at once.
-      Swappable by building the pool yourself (`store::sqlite::sqlx`).
-    - **One hash tag per Redis conversation store**
-      (`<prefix>{conversations:<prefix>}`): every write one Lua script over keys
-      of one slot, so a whole inbox lives on one shard; spread inboxes
-      with one store per prefix (`with_prefix`). Status updates are a
-      compare-and-swap decided in Rust (`DeliveryStatus::supersedes`), a
-      purge of every number one script per number over the store's set
-      of numbers (kept, it names businesses only). Times are 16 hex
-      digits that sort as they compare.
-    - **The inbox's contact rules**: a new switch,
-      `RecordingSwitches::contacts` (on in `ALL`); an `add` stored under
-      `inbox::synced_contact_key` (the BSUID, else the phone number
-      without `+`, which is also the phone number stored, so that
-      `identities` meets the conversations' keys); a `remove` under each
-      key it names (the BSUID and the phone number), so that an entry
-      keyed by the phone number before Meta sent the BSUID does not
-      keep the person's names; a change without `metadata.timestamp`,
-      without a usable id or with U+0000 in one is skipped, logged
-      without content (Meta's order is the timestamp, and the sink's
-      clock would let a late redelivery win).
-    - New stored names, **pending the owner's confirmation before the
-      first release** (architecture § Stable identifiers): SQLite
-      migration 1 (`wa_kv_version`, the SQLite tables and their
-      columns, its checksum pinned) and the Redis conversation layout
-      (keys, fields, the time encoding).
+    stay with M3b and M2a); categories 30 and 39 too. The sabotage
+    review added `conversation_conformance::erase_one_person_of_every_record`
+    and `purge_one_person_of_every_record` (outside `run`), after which
+    each adapter scans its own storage for what must be gone (Redis
+    kept a redacted group message's sender and index members naming the
+    person, with every port read passing), and `run`'s
+    `an_unbounded_limit_reads_everything` (Redis refused `usize::MAX`).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable behind the
+    `KvStore` and `ConversationStore` ports, or a switch):
+    1. **SQLite through sqlx's driver**, the library compiled in
+       (`sqlite-bundled`: MIT, no TLS); sqlx's Postgres driver, its TLS
+       and its macros move from the dependency to the `postgres`
+       feature, so `sqlite` alone links neither (`just features` checks
+       both alone). Its migrations are embedded with `include_str!` from
+       `migrations-sqlite/`, templates under the same `TablePrefix`, now
+       `store::TablePrefix` (still `store::postgres::TablePrefix`), and
+       each prefix keeps its own migration history
+       (`<prefix>sqlx_migrations`). Swappable: another store behind the
+       same ports.
+    2. **SQLite concurrency is SQLite's write lock**: every write one
+       `BEGIN IMMEDIATE` transaction (read, decide in Rust, write), the
+       busy timeout `store::sqlite::open` sets (30 s) the wait; times
+       `INTEGER` microseconds, identifiers `TEXT` refusing U+0000 (as on
+       Postgres), content `BLOB`; the key/value store's expiry on the
+       application's injectable clock (`SqliteKvStore::with_clock`), its
+       versions from one counter row, so a deleted record's row goes at
+       once. Swappable by building the pool yourself
+       (`store::sqlite::sqlx`).
+    3. **One Redis hash tag per conversation store**
+       (`<prefix>{conversations:<prefix>}`, so stores of other prefixes
+       hash to other slots: inboxes spread with one store per prefix,
+       `with_prefix`): every write one Lua script over keys of one slot.
+       Status updates are a compare-and-swap decided in Rust
+       (`DeliveryStatus::supersedes`); a purge of every number is one
+       script per number over the store's set of numbers, which never
+       shrinks (it names businesses only). Times are 16 hex digits that
+       sort as they compare.
+    4. **The inbox's contact rules, as built**: a switch,
+       `RecordingSwitches::contacts`, on in the library's
+       `RecordingSwitches::ALL`; an `add` stored under
+       `inbox::synced_contact_key` (the BSUID, else the phone number
+       without `+`, which is also the phone number stored, so that
+       `identities` meets the conversations' keys); a `remove` under
+       each key it names (the BSUID and the phone number), so that an
+       entry keyed by the phone number before Meta sent the BSUID does
+       not keep the person's names; a change without
+       `metadata.timestamp`, without a usable id or with U+0000 in one
+       is skipped with a warning, without content (Meta's order is the
+       timestamp; the sink's clock would let a late redelivery win). A
+       `remove` naming only a phone number leaves an entry keyed by the
+       BSUID (Meta's reference shows a removal with both).
+    5. **Category 39's library side is done**; MongoDB adapters stay
+       with S17.
+    6. **The service records no synced contacts until M3b**:
+       `meta-whatsapp-server-core`'s `inbound::INBOX_RECORDING` is the
+       library's switches with `contacts(false)`, the events still
+       reaching their tenant (decisive:
+       `conformance::webhooks::an_address_book_change_reaches_its_tenant_and_no_inbox`);
+       M3b turns it on with the routes that read them.
+  - **Pending the owner's confirmation before the first release**
+    (architecture § Stable identifiers): the new stored names, SQLite
+    migration 1 (`wa_kv_version`, the SQLite tables and their columns,
+    its checksum pinned) and the Redis conversation layout (keys,
+    fields, the hash tag, the time encoding).
 - [x] **L9. Phone numbers** (`meta-whatsapp-client`,
   `client::phone_numbers`; rows 66, 129–133, 151): the business
   username calls, deleting a contact book entry, search visibility,
@@ -3060,7 +3081,11 @@ design's (§9).
   - **After:** S7, L4.
   - **Decisive:** M3.1–M3.4.
 - [ ] **M3b. Coexistence** (rows 69, 124): onboarding, the automatic
-  sync (D7), the synced contacts stored and readable by their tenant.
+  sync (D7), the synced contacts stored and readable by their tenant:
+  M3b turns the inbox's contacts recording on
+  (`meta-whatsapp-server-core`'s `inbound::INBOX_RECORDING`, off since
+  L8: the library's `RecordingSwitches::ALL` with `contacts(false)`),
+  with the routes that read them and their erasure.
   - **After:** M3a, L8, L11d.
   - **Decisive:** a coexistence onboarding over HTTP starts the sync
     exactly once, and a second onboarding of the number does not;

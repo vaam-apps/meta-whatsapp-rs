@@ -23,7 +23,8 @@
 //!      it; a duplicate skipped) ─► the service's sink:
 //!        a. route: the tenant owning the number, else the WABA, since before the
 //!           event, by the backend's records (crate::events::route)
-//!        b. the inbox (the facade's InboxSink), when a tenant owns it
+//!        b. the inbox (the facade's InboxSink, INBOX_RECORDING: no synced
+//!           contacts before roadmap M3b), when a tenant owns it
 //!        c. the outbox row: that tenant, or none (operator-only); the outbox
 //!           checks the routing again, atomically with the insert
 //!      then the lease marked done (released when the sink failed)
@@ -77,7 +78,7 @@ use meta_whatsapp_rs::core::clock::{Clock, SystemClock};
 use meta_whatsapp_rs::core::error::{ConfigError, SinkError, StorageError, WebhookError};
 use meta_whatsapp_rs::core::secret::{AppSecret, VerifyToken};
 use meta_whatsapp_rs::core::sink::EventSink;
-use meta_whatsapp_rs::inbox::InboxSink;
+use meta_whatsapp_rs::inbox::{InboxSink, RecordingSwitches};
 use meta_whatsapp_rs::webhooks::{
     DEFAULT_MAX_BODY_BYTES, DedupGuard, DeliveryReport, SignatureVerifier, WebhookEvent,
     WebhookHandler,
@@ -251,6 +252,14 @@ impl Refused {
 /// (beside [`Refused::outcome`]'s).
 pub const DELIVERED: &str = "delivered";
 
+/// What the service's inbox records: everything the library's
+/// [`InboxSink`] does, but the coexistence address book
+/// (`smb_app_state_sync`): the service exposes no synced contacts before
+/// roadmap M3b, which turns this switch on (with their API and erasure),
+/// so it keeps none of that personal data meanwhile. The events still
+/// reach their tenant's outbox.
+pub const INBOX_RECORDING: RecordingSwitches = RecordingSwitches::ALL.contacts(false);
+
 /// The webhook pipeline over one backend's stores: Meta's deliveries
 /// verified, deduplicated, routed and recorded ([module](self)).
 pub struct Pipeline {
@@ -283,7 +292,7 @@ impl Pipeline {
         let dedup = DedupGuard::new(backend.kv());
         let sink = ServiceSink {
             store: backend.records(),
-            inbox: InboxSink::new(backend.conversations()),
+            inbox: InboxSink::new(backend.conversations()).with_recording(INBOX_RECORDING),
             outbox: outbox.clone(),
             observer: observer.clone(),
             ids: inbound.ids,

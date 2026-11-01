@@ -137,6 +137,12 @@ const MOVED_ALONE: Holder = Holder {
     waba: "102290129340417",
     pn: "106540352242937",
 };
+/// The tenant of the address book case.
+const ADDRESS_BOOK: Holder = Holder {
+    id: "wh-address-book",
+    waba: "102290129340419",
+    pn: "106540352242938",
+};
 /// The tenant the move case's numbers move to while their events record.
 const MOVED_TO: &str = "wh-moved-to";
 /// The WABA of [`MOVED_TO`]'s that [`MOVED_ALONE`]'s number moves under.
@@ -164,6 +170,7 @@ pub async fn run(backend: &dyn Backend) {
     an_event_is_recorded_once_under_its_dedup_lease(backend).await;
     the_answer_comes_only_once_every_event_is_recorded(backend).await;
     unknown_and_unparsed_bodies_are_acknowledged_as_operator_only_rows(backend).await;
+    an_address_book_change_reaches_its_tenant_and_no_inbox(backend).await;
 }
 
 /// Roadmap S5e, decisive: M1.2's routing cases, through the core's
@@ -690,6 +697,96 @@ pub async fn unknown_and_unparsed_bodies_are_acknowledged_as_operator_only_rows(
     );
     assert_eq!(told.take_webhook_duplicates(), [("outbox", 1)]);
     assert!(told.take_webhook_events().is_empty());
+}
+
+/// The coexistence address book (`smb_app_state_sync`) reaches its
+/// tenant's outbox, as `app_state_synced`, and the inbox keeps no synced
+/// contact of it ([`INBOX_RECORDING`](crate::inbound::INBOX_RECORDING)):
+/// the service exposes and erases no synced contacts before roadmap M3b,
+/// which turns recording on. The same delivery's message is recorded, so
+/// the inbox is on. Decisive: the library's default switches
+/// (`RecordingSwitches::ALL`, contacts on) in the pipeline.
+pub async fn an_address_book_change_reaches_its_tenant_and_no_inbox(backend: &dyn Backend) {
+    hold(backend.records().as_ref(), ADDRESS_BOOK).await;
+    let watched = Watched::of(backend);
+    let told = Arc::new(Told::default());
+    let pipeline = pipeline(&watched, &told);
+    let phone = PhoneNumberId::new(ADDRESS_BOOK.pn).unwrap();
+    // business-scoped-user-ids, smb_app_state_sync: its example, sent now.
+    let payload = json!({
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "id": ADDRESS_BOOK.waba,
+            "changes": [{
+                "value": {
+                    "messaging_product": "whatsapp",
+                    "metadata": {
+                        "display_phone_number": "15550783881",
+                        "phone_number_id": ADDRESS_BOOK.pn
+                    },
+                    "state_sync": [{
+                        "type": "contact",
+                        "contact": {
+                            "full_name": "Pablo Morales",
+                            "first_name": "Pablo",
+                            "phone_number": "16505551234",
+                            "user_id": "US.13491208655302741918",
+                            "parent_user_id": "US.ENT.11815799212886844830",
+                            "username": "pablomorales"
+                        },
+                        "action": "add",
+                        "metadata": {"timestamp": sent_now().to_string()}
+                    }]
+                },
+                "field": "smb_app_state_sync"
+            }]
+        }]
+    });
+    let report = deliver(&pipeline, &body(&payload)).await.unwrap();
+    assert_eq!(report.delivered, 1);
+    let report = deliver(
+        &pipeline,
+        &body(&text(
+            ADDRESS_BOOK.waba,
+            ADDRESS_BOOK.pn,
+            "wamid.address-book.1",
+        )),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.delivered, 1);
+    assert_eq!(
+        types(&polled(backend, ADDRESS_BOOK.id).await),
+        ["app_state_synced", "message_received"]
+    );
+    assert_eq!(
+        inbox(backend, ADDRESS_BOOK.pn).await,
+        1,
+        "the inbox records"
+    );
+    let conversations = backend.conversations();
+    assert_eq!(
+        conversations.contacts(&phone, None, 10).await.unwrap(),
+        [],
+        "no synced contact"
+    );
+    for contact in ["US.13491208655302741918", "16505551234"] {
+        assert_eq!(
+            conversations
+                .contact(&ConversationKey::new(phone.clone(), contact))
+                .await
+                .unwrap(),
+            None,
+            "{contact}"
+        );
+    }
+    assert_eq!(
+        told.take_webhook_events(),
+        [
+            ("app_state_synced", "tenant"),
+            ("message_received", "tenant")
+        ]
+    );
 }
 
 /// An event reaches its holder only when Meta dated it after the binding
