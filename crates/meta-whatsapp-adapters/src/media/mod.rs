@@ -162,10 +162,16 @@
 //!   1024, or 1920 × 1080), which `-max_pixels` refuses again;
 //! - **frames**: fewer than two (no animation) or more than 500
 //!   (`-frames:v 500` stops `ffmpeg` at as many again);
-//! - **time**: longer than 30 s, each frame counted for its delay, or a
-//!   tenth of a second when it gives none or one under two hundredths (as
-//!   browsers and ffmpeg do): a lower frame rate repeats a slow frame to
-//!   fill its time, so the length bounds what each attempt encodes.
+//! - **frames times pixels**: more than 100 frames of a canvas of
+//!   512 × 512 or larger, each frame counted for its canvas's pixels up
+//!   to 512 × 512 (25 Mi, 26 214 400, in all: 400 frames of 256 × 256),
+//!   since an attempt costs its frames times the pixels it encodes and
+//!   every attempt decodes every frame again;
+//! - **time**: longer than 10 s (WhatsApp's own rule for an animated
+//!   sticker), each frame counted for its delay, or a tenth of a second
+//!   when it gives none or one under two hundredths (as browsers and
+//!   ffmpeg do): a lower frame rate repeats a slow frame to fill its
+//!   time, so the length bounds what the later attempts encode.
 //!
 //! `ffmpeg` gets the GIF without its comments, plain text and
 //! application extensions (a loop count, XMP, an ICC profile) and without
@@ -192,7 +198,7 @@
 //! Each frame keeps its own time (`-fps_mode vfr`) until an attempt
 //! lowers the frame rate. `libwebp_anim` hands over the whole file at the
 //! end, so an attempt over the limit is found then; a single allocation
-//! may be 256 MiB, for that one packet (some 110 MB for 500 frames of
+//! may be 256 MiB, for that one packet (26 MB for 100 frames of
 //! 512 × 512 that compress badly; a smaller bound fails the attempt as
 //! out of memory instead of trying the next). The result loops forever
 //! (libwebp's default; a GIF's own loop count is not kept).
@@ -217,14 +223,16 @@
 //! length, its chunks ending with it, the first an extended header
 //! (`VP8X`) with the animation flag, an `ANIM` chunk before the frames, at
 //! least two `ANMF` chunks (one is a still image labelled animated), and
-//! no image outside them. Converting an
-//! animation is slower than an image, each attempt encoding every frame
-//! again (on a 4-core machine, against ffmpeg 6.1.1): a 10 s, 512 × 512
-//! GIF of 250 busy frames took about 15 s, four attempts; 500 frames of a
-//! fine moving pattern (a 1 MB GIF that compresses badly as WebP) 17 s,
-//! three attempts, and 130 MB at the first; 30 s of noise at 15 frames a
-//! second (a 51 MB GIF) 34 s, five attempts. Keep the timeout at its
-//! default, or above it on a slower host.
+//! no image outside them. Converting an animation is slower than an
+//! image, each attempt decoding and encoding every frame again (on a
+//! 4-core machine, against ffmpeg 6.1.1): the worst measured within the
+//! bounds, 100 frames of 1024 × 1024 noise with noisy transparency, took
+//! 44 s for the six attempts, none of them within the limit, and 136 MB
+//! at the first; 100 frames of 2048 × 1024 noise 36 s; a 5 s, 480 × 360
+//! GIF of 100 busy frames 3.7 s, two attempts. Before the frame-pixel
+//! bound, 500 frames of 512 × 512 noise took 59 s over 10 s of play, and
+//! 66 s over 30 s.
+//! Keep the timeout at its default, or above it on a slower host.
 //!
 //! # Bounds and errors
 //!
@@ -235,7 +243,7 @@
 //! | `ffmpeg` missing or not executable | — | [`ConversionError::BinaryMissing`] |
 //! | no `libopus`, `libwebp`, `libwebp_anim`, `mjpeg` or `png` encoder ([`FfmpegConverter::check_for`]) | — | [`ConversionError::EncoderMissing`] |
 //! | an image whose first bytes are not a PNG's or a JPEG's, or a PNG whose chunks stop before its end chunk | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
-//! | an animation whose first bytes are not a GIF's; a GIF cut short of its trailer, with a block GIF does not define, of a canvas over 2 Mi pixels, of fewer than 2 frames or more than 500, or longer than 30 s | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
+//! | an animation whose first bytes are not a GIF's; a GIF cut short of its trailer, with a block GIF does not define, of a canvas over 2 Mi pixels, of fewer than 2 frames or more than 500, of more than 100 frames of 512 × 512 or more (frames times pixels), or longer than 10 s | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
 //! | an animation whose frames are all alike (`libwebp` makes a still image of it) | — | [`ConversionError::InputRejected`] |
 //! | `ffmpeg` fails (input it cannot read, a format off the list, an image over 32 Mi pixels) | — | [`ConversionError::InputRejected`] |
 //! | the output is not the format asked for (a binary that is not the `ffmpeg` it should be) | — | [`ConversionError::OutputInvalid`] |
@@ -253,8 +261,8 @@
 //! queued: bound how many run at once yourself (each one is a process
 //! using about a CPU core, for up to the timeout, and memory this crate
 //! does not cap beyond `-max_alloc`'s per allocation, and an image at the
-//! pixel bound takes several frames of it, an animation a few hundred
-//! megabytes at worst: a cgroup, or `ulimit -v` in a wrapper script,
+//! pixel bound takes several frames of it, an animation some 170 MB at
+//! the worst measured (padding in one frame's data): a cgroup, or `ulimit -v` in a wrapper script,
 //! bounds it). Run it on a tokio runtime with I/O enabled (what
 //! `#[tokio::main]` builds): child processes need tokio's I/O driver.
 //!

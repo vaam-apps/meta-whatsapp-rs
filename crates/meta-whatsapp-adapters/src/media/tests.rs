@@ -395,7 +395,9 @@ fn the_animation_arguments_are_fixed_literals() {
     assert_eq!(animation::MAX_PIXELS, 2048 * 1024);
     assert_eq!(animation::MAX_FRAMES_ARG, animation::MAX_FRAMES.to_string());
     assert_eq!(animation::MAX_FRAMES, 500);
-    assert_eq!(animation::MAX_DURATION_CS, 3000);
+    assert_eq!(animation::MAX_DURATION_CS, 1000);
+    assert_eq!(animation::FRAME_PIXELS_COUNTED, 512 * 512);
+    assert_eq!(animation::MAX_FRAME_PIXELS, 100 * 512 * 512);
 
     let ladder = animation::ladder(TargetFormat::AnimatedSticker).unwrap();
     assert_eq!(ladder, animation::LADDER);
@@ -673,47 +675,95 @@ fn a_gif_over_the_frame_bound_is_refused() {
     );
 }
 
-/// The time bound: 30 s pass, a hundredth more is refused; a frame
+/// The time bound: 10 s pass, a hundredth more is refused; a frame
 /// without a delay, or with one under two hundredths, counts a tenth of a
-/// second; a delay counts for the one frame after it.
+/// second; a delay counts for the one frame after it, and of two delays
+/// before a frame the second.
 #[test]
 fn a_gif_over_the_time_bound_is_refused() {
-    let too_long = Err("an animation longer than 30 seconds");
-    assert!(animation::prepared(&Bytes::from(gif_of(2, 1500))).is_ok());
+    let too_long = Err("an animation longer than 10 seconds");
+    assert!(animation::prepared(&Bytes::from(gif_of(2, 500))).is_ok());
     let over = gif(
         16,
         16,
         &[
-            gif_delay(1500),
+            gif_delay(500),
             gif_frame(),
-            gif_delay(1501),
+            gif_delay(501),
             gif_frame(),
             GIF_TRAILER.to_vec(),
         ],
     );
     assert_eq!(animation::prepared(&Bytes::from(over)), too_long);
-    // 300 frames of a hundredth (or none) are 30 s; 301 are over.
+    // 100 frames of a hundredth (or none) are 10 s; 101 are over.
     for delay in [0, 1] {
-        assert!(animation::prepared(&Bytes::from(gif_of(300, delay))).is_ok());
+        assert!(animation::prepared(&Bytes::from(gif_of(100, delay))).is_ok());
         assert_eq!(
-            animation::prepared(&Bytes::from(gif_of(301, delay))),
+            animation::prepared(&Bytes::from(gif_of(101, delay))),
             too_long
         );
     }
-    let mut undelayed = vec![gif_frame(); 301];
+    let mut undelayed = vec![gif_frame(); 101];
     undelayed.push(GIF_TRAILER.to_vec());
     assert_eq!(
         animation::prepared(&Bytes::from(gif(16, 16, &undelayed))),
         too_long
     );
-    // 29.9 s, then a frame without its own delay: 30 s.
-    let mut blocks = vec![gif_delay(2990), gif_frame(), gif_frame()];
+    // The second of two delays counts, the first not at all.
+    let twice = |first: u16, second: u16| {
+        gif(
+            16,
+            16,
+            &[
+                gif_delay(first),
+                gif_delay(second),
+                gif_frame(),
+                gif_delay(500),
+                gif_frame(),
+                GIF_TRAILER.to_vec(),
+            ],
+        )
+    };
+    assert!(animation::prepared(&Bytes::from(twice(900, 500))).is_ok());
+    assert_eq!(animation::prepared(&Bytes::from(twice(500, 501))), too_long);
+    // 9.9 s, then a frame without its own delay: 10 s.
+    let mut blocks = vec![gif_delay(990), gif_frame(), gif_frame()];
     blocks.push(GIF_TRAILER.to_vec());
     assert!(animation::prepared(&Bytes::from(gif(16, 16, &blocks))).is_ok());
     blocks.insert(2, gif_frame());
     assert_eq!(
         animation::prepared(&Bytes::from(gif(16, 16, &blocks))),
         too_long
+    );
+}
+
+/// The bound on frames times pixels: 100 frames of a canvas of 512 × 512
+/// or more pass, 101 are refused; a smaller canvas counts its own pixels
+/// (400 frames of 256 × 256 pass, 401 are refused), and a tiny one meets
+/// the frame bound first.
+#[test]
+fn a_gif_over_the_frame_pixel_bound_is_refused() {
+    let too_many = Err(
+        "an animation of more frames than its size allows (100 of 512 x 512 pixels or more, 26214400 pixels in all)",
+    );
+    // `n` frames of two hundredths each (500 within 10 s).
+    let frames = |width: u16, height: u16, n: usize| {
+        let mut blocks: Vec<Vec<u8>> = (0..n).flat_map(|_| [gif_delay(2), gif_frame()]).collect();
+        blocks.push(GIF_TRAILER.to_vec());
+        Bytes::from(gif(width, height, &blocks))
+    };
+    for (w, h) in [(512, 512), (2048, 1024), (1920, 1080), (513, 512)] {
+        assert!(animation::prepared(&frames(w, h, 100)).is_ok(), "{w}x{h}");
+        assert_eq!(animation::prepared(&frames(w, h, 101)), too_many, "{w}x{h}");
+    }
+    assert!(animation::prepared(&frames(256, 256, 400)).is_ok());
+    assert_eq!(animation::prepared(&frames(256, 256, 401)), too_many);
+    // 511 × 512: 100 frames and a few more.
+    assert!(animation::prepared(&frames(511, 512, 100)).is_ok());
+    assert_eq!(animation::prepared(&frames(511, 512, 101)), too_many);
+    assert_eq!(
+        animation::prepared(&frames(128, 128, 501)),
+        Err("an animation of more than 500 frames")
     );
 }
 
@@ -1685,9 +1735,12 @@ mod processes {
             gif_frame(),
             GIF_TRAILER.to_vec(),
         ];
+        let mut large: Vec<Vec<u8>> = (0..101).flat_map(|_| [gif_delay(2), gif_frame()]).collect();
+        large.push(GIF_TRAILER.to_vec());
         for (input, why) in [
             (gif_of(501, 2), "more than 500 frames"),
-            (gif_of(301, 0), "longer than 30 seconds"),
+            (gif_of(101, 0), "longer than 10 seconds"),
+            (gif(512, 512, &large), "more frames than its size allows"),
             (gif_of(1, 10), "fewer than two frames"),
             (gif(2048, 1025, &blocks), "over 2097152 pixels"),
             (gif_of(2, 10)[..40].to_vec(), "truncated"),

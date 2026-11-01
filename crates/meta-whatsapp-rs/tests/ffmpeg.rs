@@ -1621,14 +1621,14 @@ async fn ffmpeg_refuses_an_animation_over_the_frame_bound() {
     assert!(animated_webp(&sticker.data).frames >= 2);
 }
 
-/// The time bound: 31 frames of a second each are refused; 30 convert.
+/// The time bound: 11 frames of a second each are refused; 10 convert.
 #[tokio::test]
 async fn ffmpeg_refuses_an_animation_over_the_time_bound() {
     let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
         return;
     };
     let ffmpeg = converter.program().to_path_buf();
-    let over = gif(&ffmpeg, "testsrc2=s=32x32:r=1", 31);
+    let over = gif(&ffmpeg, "testsrc2=s=32x32:r=1", 11);
     let err = converter
         .convert(MediaInput::new(over), TargetFormat::AnimatedSticker)
         .await
@@ -1637,17 +1637,61 @@ async fn ffmpeg_refuses_an_animation_over_the_time_bound() {
         matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
         "{err:?}"
     );
-    assert!(err.to_string().contains("longer than 30 seconds"), "{err}");
-    let at_bound = gif(&ffmpeg, "testsrc2=s=32x32:r=1", 30);
+    assert!(err.to_string().contains("longer than 10 seconds"), "{err}");
+    let at_bound = gif(&ffmpeg, "testsrc2=s=32x32:r=1", 10);
     let sticker = converter
         .convert(MediaInput::new(at_bound), TargetFormat::AnimatedSticker)
         .await
         .unwrap();
     let w = animated_webp(&sticker.data);
     assert!(
-        (29_000..=30_000).contains(&w.duration_ms),
+        (9_000..=10_000).contains(&w.duration_ms),
         "plays {} ms",
         w.duration_ms
+    );
+}
+
+/// The bound on frames times pixels: 101 frames of 512 × 512 (within the
+/// frame, time and pixel bounds) are refused, before ffmpeg reads them.
+/// The control: ffmpeg alone converts them.
+#[tokio::test]
+async fn ffmpeg_refuses_an_animation_over_the_frame_pixel_bound() {
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let over = gif(&ffmpeg, "testsrc2=s=512x512:r=25", 101);
+    let direct = run(
+        &ffmpeg,
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            "-vf",
+            "scale=64:64",
+            "-c:v",
+            "libwebp_anim",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+        ],
+        &over,
+    )
+    .expect("ffmpeg did not convert it");
+    assert!(animated_webp(&direct).frames >= 2);
+    let err = converter
+        .convert(MediaInput::new(over), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
+    assert!(
+        err.to_string().contains("more frames than its size allows"),
+        "{err}"
     );
 }
 

@@ -35,9 +35,28 @@ pub(super) const MAX_FRAMES: usize = 500;
 pub(super) const MAX_FRAMES_ARG: &str = "500";
 
 /// The longest an animation may play, in hundredths of a second (a GIF's
-/// unit): 30 s. A lower frame rate (`fps`) repeats a frame to fill its
-/// time, so the length bounds what each attempt encodes.
-pub(super) const MAX_DURATION_CS: u64 = 3000;
+/// unit): 10 s, what WhatsApp's own rules for animated stickers allow
+/// (its sticker app guide: "less than or equal to 10 seconds total").
+/// A lower frame rate (`fps`) repeats a frame to fill its time, so the
+/// length bounds what the later attempts encode.
+pub(super) const MAX_DURATION_CS: u64 = 1000;
+
+/// The most pixels a frame counts for against [`MAX_FRAME_PIXELS`]: the
+/// first attempt's square (512 × 512), which a larger canvas is scaled
+/// down into before it is encoded.
+pub(super) const FRAME_PIXELS_COUNTED: u32 = 512 * 512;
+
+/// The most pixels an animation's frames may come to together, each
+/// counted for its canvas's pixels up to [`FRAME_PIXELS_COUNTED`]:
+/// 25 Mi (26 214 400), 100 frames of 512 × 512 or larger, 400 of
+/// 256 × 256 ([`MAX_FRAMES`] stops a smaller canvas first). What an
+/// attempt costs is its frames times the pixels it encodes, every
+/// attempt decodes every frame again, and the attempts run one after
+/// another within one timeout: at 500 frames of 512 × 512, noise with
+/// noisy transparency took 35 s at the first attempt and 59 s for the
+/// ladder (4 cores, ffmpeg 6.1.1); at this bound, the worst measured
+/// took 44 s.
+pub(super) const MAX_FRAME_PIXELS: u64 = 26_214_400;
 
 /// What a GIF frame shows for when it gives no delay, or one under
 /// [`MIN_DELAY_CS`]: 10 hundredths, as browsers do and ffmpeg's default
@@ -50,10 +69,11 @@ const MIN_DELAY_CS: u16 = 2;
 
 /// The largest single allocation `ffmpeg` may make on an animation
 /// (`-max_alloc`), in bytes: 256 MiB. `libwebp_anim` hands over the whole
-/// animated file as one packet when it ends: up to some 110 MB for 500
-/// frames of 512 × 512 that compress badly (about 220 KB each), which a
-/// smaller bound would refuse as out of memory instead of trying the next,
-/// smaller attempt.
+/// animated file as one packet when it ends: 26 MB for 100 frames of
+/// 512 × 512 that compress badly (about 260 KB each, the most
+/// [`MAX_FRAME_PIXELS`] lets through), 70 MB for the 500 it let through
+/// before, which a smaller bound would refuse as out of memory instead of
+/// trying the next, smaller attempt.
 pub(super) const MAX_ALLOC: &str = "268435456";
 
 /// Everything up to the filter, the same for every attempt: the bounds,
@@ -224,7 +244,7 @@ const GRAPHIC_CONTROL: u8 = 0xF9;
 /// in words: a GIF cut short of its trailer, a block it does not know, a
 /// graphic control extension of the wrong size, a canvas of no pixels or
 /// over [`MAX_PIXELS`], fewer than two frames (no animation), more than
-/// [`MAX_FRAMES`], or longer than
+/// [`MAX_FRAMES`] or than [`MAX_FRAME_PIXELS`] allows, or longer than
 /// [`MAX_DURATION_CS`] (each frame for its delay, or
 /// [`DEFAULT_DELAY_CS`] when it gives none or one under
 /// [`MIN_DELAY_CS`]).
@@ -239,6 +259,7 @@ pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
     if width * height > MAX_PIXELS {
         return Err("a GIF whose canvas is over 2097152 pixels (2 Mi)");
     }
+    let frame_pixels = u64::from((width * height).min(FRAME_PIXELS_COUNTED));
     let mut at = 13 + colour_table(screen[4]);
     if at > data.len() {
         return Err(GIF_TRUNCATED);
@@ -246,6 +267,7 @@ pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
     let mut kept: Vec<Range<usize>> = Vec::with_capacity(8);
     kept.push(0..at);
     let mut frames = 0usize;
+    let mut pixels = 0u64;
     let mut duration = 0u64;
     // The last graphic control extension since the last image, and the
     // delay it gives: kept, and counted, only when an image follows.
@@ -285,12 +307,18 @@ pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
                 if frames > MAX_FRAMES {
                     return Err("an animation of more than 500 frames");
                 }
+                pixels += frame_pixels;
+                if pixels > MAX_FRAME_PIXELS {
+                    return Err(
+                        "an animation of more frames than its size allows (100 of 512 x 512 pixels or more, 26214400 pixels in all)",
+                    );
+                }
                 duration += match delay {
                     Some(given) if given >= MIN_DELAY_CS => u64::from(given),
                     _ => DEFAULT_DELAY_CS,
                 };
                 if duration > MAX_DURATION_CS {
-                    return Err("an animation longer than 30 seconds");
+                    return Err("an animation longer than 10 seconds");
                 }
                 at = end;
             }
