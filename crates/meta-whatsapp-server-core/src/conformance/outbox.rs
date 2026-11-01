@@ -13,7 +13,7 @@ use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use crate::backend::Backend;
 use crate::model::TenantId;
 use crate::outbox::{
-    DedupWindow, EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard,
+    AfterMove, DedupWindow, EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard,
 };
 use crate::store::RecordStore;
 
@@ -60,6 +60,7 @@ pub fn row(tenant_id: Option<&str>, event_type: &str, pn: &str, dedup: Option<&s
                 waba_id: WabaId::new(waba_of(pn)).unwrap(),
             },
             not_after: None,
+            after_move: AfterMove::default(),
         }),
         phone_number_id: Some(PhoneNumberId::new(pn).unwrap()),
         waba_id: Some(WabaId::new(waba_of(pn)).unwrap()),
