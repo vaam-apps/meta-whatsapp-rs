@@ -862,8 +862,9 @@ neither pauses the pacer nor puts off a retry.
 ## 10. Scheduled and durable jobs
 
 A `Job` is one message or a broadcast from one number, due at a time:
-`KvJobs` keeps it in your `KvStore` (namespaces `wa.bot.jobs*`, no new
-port), and a `JobRunner` in each replica sends it when due. Nothing
+a `JobStore` keeps it (by default `KvJobs`, in your `KvStore`:
+namespaces `wa.bot.jobs*`, no new port), and a `JobRunner` in each
+replica sends it when due. Nothing
 about the message is stored but your JSON payload: the runner's composer
 makes each recipient's message from the job when it sends, so give every
 replica, and every release after a restart, the same composer.
@@ -895,15 +896,18 @@ runner
 ```
 
 (The snippet is the `jobs` module's rustdoc example, which the gate
-compiles.) A job's id is yours (a campaign's name, an order's reminder):
+compiles; `schedule`, `cancel`, `rerun`, `get` and `observe` are the
+`JobStore` trait's, so bring it into scope: `use
+meta_whatsapp_rs::bot::JobStore`.) A job's id is yours (a campaign's name, an order's reminder):
 scheduling the same job again, after an error or a crash, is safe; a
 different job under a used id is refused. Its recipients are kept each
 person once, by the broadcast's rule.
 
-**How a job runs.** `JobRunner::tick` reads the due index from the
-oldest minute still to read up to now, and for each job due:
+**How a job runs.** `JobRunner::tick` asks the store for the jobs due
+(`JobStore::claim_due`; `KvJobs` reads its due index from the oldest
+minute still to read up to now), and for each:
 
-1. claims it by compare-and-swap, with a lease naming the runner
+1. claims it atomically (`KvJobs`: by compare-and-swap), with a lease naming the runner
    (`JobRunnerBuilder::lease`, 2 minutes by default, renewed before a
    send when half is gone): of two replicas that read the same job, one
    claim succeeds; a replica that crashes holds the job until its lease
@@ -918,7 +922,8 @@ oldest minute still to read up to now, and for each job due:
    replicas, as for any broadcast),
    each send after a check that the job is still the runner's and not
    cancelled, and after the recipient's marker is created
-   (`put_if_absent`): another runner never sends to them too. With the
+   (`JobStore::mark_sending`; `put_if_absent` in `KvJobs`): another
+   runner never sends to them too. With the
    marker in place the job is read once more, and a cancel or a re-run
    that landed meanwhile gets no request;
 4. settles it: done when every recipient is marked or skipped; when
@@ -941,18 +946,18 @@ clock: one whose clock runs ahead, or a replica paused past its lease,
 sees the job taken over, which costs a pass but never a duplicate (the
 marker decides who sends to whom).
 
-**Cancel and re-run.** `KvJobs::cancel` moves a pending or running job
+**Cancel and re-run.** `JobStore::cancel` moves a pending or running job
 to cancelled; a runner running it stops before its next send (a send
-already past its second check, its marker in place, goes out). `KvJobs::rerun` runs a settled job
+already past its second check, its marker in place, goes out). `JobStore::rerun` runs a settled job
 again at a time: a new run, everyone sent to again, except the
-recipients marked limited. `KvJobs::get` reads a job: its state, run,
+recipients marked limited. `JobStore::get` reads a job: its state, run,
 retries, recipients, payload and, once settled, its `JobSummary`.
 
 **The per-user marketing limit.** Meta may accept a marketing message
 and fail it later with `131049`, in a status webhook; resending within
 24 hours only fails again (`templates/marketing-templates/per-user-limits`).
 The runner keeps each message's id for 7 days (`KvJobs::message_ttl`).
-Hand status webhooks to `KvJobs::observe`, or wire `KvJobs::feedback` in
+Hand status webhooks to `JobStore::observe`, or wire `KvJobs::feedback` in
 as a listener (`.listen(Listen::event("status_updated"), jobs.feedback())`)
 or as a sink next to the bot: a `131049` for a message a job sent marks
 that recipient for 24 hours from its arrival, and a re-run of that job
@@ -974,6 +979,32 @@ recipient sent again, an evicted index page a job never found).
 **Stable names.** The five namespaces, their keys and their records are
 stable identifiers once released, pending the owner's confirmation
 ([architecture.md](../architecture.md#stable-identifiers)).
+
+**A job store of your own.** The runner reaches its jobs only through
+the `JobStore` trait, so a queue you already run (a table, a broker)
+can keep them instead of `KvJobs`: implement it and pass the job suite,
+`meta_whatsapp_rs::bot::jobs::conformance::run`, which `KvJobs` and
+`MemoryJobs` pass too. The trait's rustdoc is the contract under
+concurrency: a claim is one atomic step (of two runners, one claims;
+nobody claims a job whose lease holds, or a settled one), and every
+later write of the claim checks it still holds the job; a recipient's
+marker is created atomically and durably before the send, completed or
+removed only by its runner, and a "sending" nobody completed reads as
+an outcome unknown; a cancel wins or loses whole against a claim, a
+settle or a retry; the `131049` skip is per job; each job is handed to
+the runner once a call, with no lock held while it sends. The suite
+races runners at every call they make to the store and runs another
+runner at chosen points (mid-send, between the check and the marker),
+on a `ManualClock` the store must read its time from. It cannot reach
+two threads inside one call: test that with runners on a
+multi-threaded runtime, as `crates/meta-whatsapp-bot/tests/jobs.rs`
+does. Give the runner your store with `JobRunner::builder` (or
+`JobRunner::builder_shared` for an `Arc<dyn JobStore>`), and wire
+`JobFeedback::new(store)` for the `131049`s.
+
+`MemoryJobs` keeps jobs in this process behind one mutex, for tests and
+for a single process whose jobs need not survive a restart: nothing
+expires but the `131049` skips and the message ids.
 
 ## 11. Retention and auto-delete
 
@@ -1053,8 +1084,9 @@ exact requests (see the skill's example and
 Or implement `Outbound` to record what the bot sends. A bot or broadcast
 with a pacer on a `ManualClock` never waits for real. For jobs, give the
 `MemoryKvStore` (`with_clock`), the `KvJobs` and the pacer one
-`ManualClock` and call `JobRunner::tick` yourself; a restart is a new
-`KvJobs` and runner on the same store.
+`ManualClock` (or a `MemoryJobs` and the pacer) and call
+`JobRunner::tick` yourself; a restart is a new `KvJobs` and runner on
+the same store.
 
 A handler is a function of its context, so it can be tested without a
 bot: `Ctx::new(event, outbound, renderer)`, then
@@ -1065,9 +1097,7 @@ reads flags; `.with_subcommand(sub)` for a subcommand), and
 
 ## Not here yet
 
-Recurring schedules (a job runs once, then again only when re-run); a
-job store behind a trait of its own (swap the `KvStore` adapter
-instead). A rich reply's
+Recurring schedules (a job runs once, then again only when re-run). A rich reply's
 image goes by link only (an uploaded media id: build the message and use
 `Ctx::send`), and Markdown's own `![alt](url)` stays text (`alt (url)`):
 images are their own part. Subcommands nest one level, and flags have no

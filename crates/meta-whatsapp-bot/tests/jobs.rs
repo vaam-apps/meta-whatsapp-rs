@@ -1,41 +1,48 @@
-//! Durable scheduling (roadmap B3): two runners on one store send a due job
-//! once, a job scheduled before a restart is sent after it, a resumed
-//! broadcast never resends a recipient recorded as sent, a `131049` status
-//! webhook makes a re-run within 24 hours skip that recipient, a crashed
-//! runner's lease holds the job until it expires, a timed-out send is never
-//! resent, retries back off and count, and a cancel stops the next send.
-//! Time is a `ManualClock` shared by the store, the jobs and the pacer;
-//! concurrent runners are interleaved by a gate in the store, not by
-//! thread timing.
+//! Durable scheduling (roadmap B3, B3b). The job suite
+//! (`meta_whatsapp_bot::jobs::conformance`, the `JobStore` contract: two
+//! runners racing one job send it once, a resumed broadcast never resends
+//! a recipient recorded as sent, a crashed runner's lease holds the job
+//! until it expires, a `131049` status webhook makes a re-run within 24
+//! hours skip that recipient, a timed-out send is never resent, retries
+//! back off and count, a cancel stops the next send) runs against both
+//! stores: `KvJobs` (on a `MemoryKvStore`, and on one that yields at every
+//! call, so its claims and markers are raced inside the store too) and
+//! `MemoryJobs`; and on a multi-threaded runtime, runners on threads send
+//! each recipient once from either. The rest is `KvJobs`'s own: its
+//! compare-and-swap claim against two runners reading one version, a
+//! restart on the same `KvStore`, its due index (pages, the cursor and its
+//! second read), its unreadable records, a store that fails, and the exact
+//! request through the client. Time is a `ManualClock` shared by the
+//! store, the jobs and the pacer; concurrent runners are interleaved by a
+//! gate in the store, not by thread timing, except in the threaded test.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
 
-use std::collections::{HashMap, VecDeque};
-use std::pin::pin;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use common::{NUMBER, client, events_of, fixture_json, send_response};
-use futures::future::{BoxFuture, Either, select};
+use futures::future::BoxFuture;
 use meta_whatsapp_adapters::store::MemoryKvStore;
+use meta_whatsapp_bot::jobs::conformance;
 use meta_whatsapp_bot::jobs::{JOBS_NAMESPACE, JOBS_SENT_NAMESPACE};
 use meta_whatsapp_bot::{
-    Backoff, Bot, Job, JobEnd, JobId, JobRunner, JobState, JobSummary, KvJobs, KvRateLimiter,
-    Listen, Outbound, Pacer, Rate, ScheduledJob, TokenBucket,
+    Bot, Job, JobEnd, JobId, JobRunner, JobState, JobStore, JobSummary, KvJobs, KvRateLimiter,
+    Listen, MemoryJobs, Outbound, Pacer, Rate, ScheduledJob, TokenBucket,
 };
 use meta_whatsapp_client::messages::{OutboundMessage, SendResponse};
 use meta_whatsapp_core::clock::{Clock, ManualClock};
-use meta_whatsapp_core::error::{StorageError, TransportError};
+use meta_whatsapp_core::error::StorageError;
 use meta_whatsapp_core::ids::{MessageId, PhoneNumberId, UserId};
 use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::sink::EventSink;
 use meta_whatsapp_core::store::{Expiry, KvStore, StoreKey, Versioned};
 use meta_whatsapp_core::testing::ScriptedTransport;
-use meta_whatsapp_core::{Error, GraphApiError};
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -129,28 +136,13 @@ impl World {
     }
 }
 
-type Failure = Box<dyn FnOnce() -> Error + Send>;
-
-/// Which send cancels which job.
-type CancelOn = (usize, KvJobs, JobId);
-
-/// Which send never returns, and who is told it started.
-type HangOn = (usize, Arc<Notify>);
-
-/// The failures to answer, by recipient, in order.
-type Failures = HashMap<String, VecDeque<Failure>>;
-
 /// An `Outbound` that records every send it is handed (in order, by
-/// recipient), answers Meta's example response with a message id of its
-/// own per send, fails the sends it is told to, and can hang forever on
-/// one send (a crash mid-send) or cancel a job during one.
+/// recipient) and answers Meta's example response with a message id of
+/// its own per send. (The suite's own fails, hangs and cancels.)
 #[derive(Clone, Default)]
 struct Fake {
     attempts: Arc<Mutex<Vec<String>>>,
     ids: Arc<Mutex<HashMap<String, Vec<String>>>>,
-    failures: Arc<Mutex<Failures>>,
-    hang_on: Arc<Mutex<Option<HangOn>>>,
-    cancel_on: Arc<Mutex<Option<CancelOn>>>,
 }
 
 impl std::fmt::Debug for Fake {
@@ -164,34 +156,12 @@ impl Fake {
         self.attempts.lock().unwrap().clone()
     }
 
-    fn fail(&self, recipient: &Recipient, error: impl FnOnce() -> Error + Send + 'static) {
-        self.failures
-            .lock()
-            .unwrap()
-            .entry(label(recipient))
-            .or_default()
-            .push_back(Box::new(error));
-    }
-
     /// The id of the last message sent to `recipient`.
     fn message_id(&self, recipient: &Recipient) -> String {
         self.ids.lock().unwrap()[&label(recipient)]
             .last()
             .unwrap()
             .clone()
-    }
-
-    /// The `n`-th send (1-based) never returns; `notify` is told when it
-    /// starts.
-    fn hang_on(&self, n: usize) -> Arc<Notify> {
-        let notify = Arc::new(Notify::new());
-        *self.hang_on.lock().unwrap() = Some((n, notify.clone()));
-        notify
-    }
-
-    /// The `n`-th send cancels the job `id` before it answers.
-    fn cancel_on(&self, n: usize, jobs: KvJobs, id: JobId) {
-        *self.cancel_on.lock().unwrap() = Some((n, jobs, id));
     }
 }
 
@@ -209,30 +179,6 @@ impl Outbound for Fake {
             attempts.push(to.clone());
             attempts.len()
         };
-        let hang = self.hang_on.lock().unwrap().clone();
-        if let Some((at, notify)) = hang
-            && at == n
-        {
-            notify.notify_one();
-            futures::future::pending::<()>().await;
-        }
-        let cancel = self.cancel_on.lock().unwrap().take();
-        if let Some((at, jobs, id)) = cancel {
-            if at == n {
-                assert!(jobs.cancel(&id).await.unwrap());
-            } else {
-                *self.cancel_on.lock().unwrap() = Some((at, jobs, id));
-            }
-        }
-        let failure = self
-            .failures
-            .lock()
-            .unwrap()
-            .get_mut(&to)
-            .and_then(VecDeque::pop_front);
-        if let Some(failure) = failure {
-            return Err(failure());
-        }
         let message_id = format!("wamid.job.{n}");
         self.ids
             .lock()
@@ -260,13 +206,6 @@ impl Outbound for Fake {
     }
 }
 
-/// A Graph error as the client reports it on a 400.
-fn graph(code: i64) -> Error {
-    let mut error = GraphApiError::new(code, format!("(#{code})"));
-    error.http_status = Some(400);
-    error.into()
-}
-
 /// A `KvStore` over the memory store that interleaves runners
 /// deterministically: once armed, the first two reads of a job record
 /// each wait for the other, so both runners read the same version before
@@ -286,9 +225,6 @@ struct Gate {
     /// Refuse every read once the cursor has moved forward (a runner that
     /// fails, or crashes, right after moving it).
     fail_reads_after_cursor_moves: AtomicBool,
-    /// Runs on every read, after it (the clock moving while a runner
-    /// reads, another runner ticking meanwhile).
-    on_get: Mutex<Option<KeyHook>>,
     /// Runs on every `put_if_absent`, before it.
     on_put_if_absent: Mutex<Option<KeyHook>>,
     /// Reads made.
@@ -327,14 +263,9 @@ impl Gate {
             fail_markers: AtomicBool::new(false),
             fail_reads: AtomicBool::new(false),
             fail_reads_after_cursor_moves: AtomicBool::new(false),
-            on_get: Mutex::new(None),
             on_put_if_absent: Mutex::new(None),
             gets: AtomicUsize::new(0),
         })
-    }
-
-    fn on_get(&self, hook: impl Fn(&StoreKey) -> BoxFuture<'static, ()> + Send + Sync + 'static) {
-        *self.on_get.lock().unwrap() = Some(KeyHook(Arc::new(hook)));
     }
 
     fn on_put_if_absent(
@@ -359,10 +290,6 @@ impl KvStore for Gate {
         // Read first, then wait: both runners hold the same version when
         // either goes on to claim.
         let read = self.inner.get(key).await;
-        let hook = self.on_get.lock().unwrap().clone();
-        if let Some(KeyHook(hook)) = hook {
-            hook(key).await;
-        }
         if key.namespace() == JOBS_NAMESPACE
             && self.armed.load(Ordering::SeqCst)
             && self.waits.fetch_add(1, Ordering::SeqCst) < 2
@@ -431,6 +358,155 @@ fn summary_of(end: &JobEnd) -> &JobSummary {
             summary
         }
         other => panic!("no summary: {other:?}"),
+    }
+}
+
+// ─── The job suite, on both stores ───────────────────────────────────────
+
+/// A `KvStore` that yields before every call: runners joined on one task
+/// interleave inside `KvJobs`'s own steps (between a read and its
+/// compare-and-swap), so the suite's races reach them.
+#[derive(Debug)]
+struct Yielding(Arc<MemoryKvStore>);
+
+#[async_trait]
+impl KvStore for Yielding {
+    async fn get(&self, key: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+        tokio::task::yield_now().await;
+        self.0.get(key).await
+    }
+    async fn put(
+        &self,
+        key: &StoreKey,
+        value: Vec<u8>,
+        expiry: Expiry,
+    ) -> Result<u64, StorageError> {
+        tokio::task::yield_now().await;
+        self.0.put(key, value, expiry).await
+    }
+    async fn put_if_absent(
+        &self,
+        key: &StoreKey,
+        value: Vec<u8>,
+        expiry: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        tokio::task::yield_now().await;
+        self.0.put_if_absent(key, value, expiry).await
+    }
+    async fn compare_and_swap(
+        &self,
+        key: &StoreKey,
+        expected: u64,
+        new: Option<Vec<u8>>,
+        expiry: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        tokio::task::yield_now().await;
+        self.0.compare_and_swap(key, expected, new, expiry).await
+    }
+    async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+        tokio::task::yield_now().await;
+        self.0.delete(key).await
+    }
+}
+
+/// Makes an empty store on a clock.
+type NewStore = fn(ManualClock) -> Arc<dyn JobStore>;
+
+fn kv_jobs(clock: ManualClock) -> Arc<dyn JobStore> {
+    let clock: Arc<dyn Clock> = Arc::new(clock);
+    Arc::new(KvJobs::new(
+        Arc::new(MemoryKvStore::with_clock(clock.clone())),
+        clock,
+    ))
+}
+
+fn kv_jobs_yielding(clock: ManualClock) -> Arc<dyn JobStore> {
+    let clock: Arc<dyn Clock> = Arc::new(clock);
+    Arc::new(KvJobs::new(
+        Arc::new(Yielding(Arc::new(MemoryKvStore::with_clock(clock.clone())))),
+        clock,
+    ))
+}
+
+fn memory_jobs(clock: ManualClock) -> Arc<dyn JobStore> {
+    Arc::new(MemoryJobs::new(Arc::new(clock)))
+}
+
+/// The decisive test of B3b, with its twin below: `KvJobs` passes the job
+/// suite.
+#[tokio::test]
+async fn kv_jobs_pass_the_job_suite() {
+    conformance::run(&kv_jobs).await;
+}
+
+/// `KvJobs` on a store that yields at every call passes it too: the
+/// suite's races reach between its reads and its compare-and-swaps.
+#[tokio::test]
+async fn kv_jobs_pass_the_job_suite_raced_inside_the_store() {
+    conformance::run(&kv_jobs_yielding).await;
+}
+
+/// The decisive test of B3b: a second implementation, independent of
+/// `KvStore`, passes the same suite.
+#[tokio::test]
+async fn memory_jobs_pass_the_job_suite() {
+    conformance::run(&memory_jobs).await;
+}
+
+/// Runners on threads, all ticking at once over jobs due now, round after
+/// round: every job run once and every recipient sent once, from either
+/// store. What the suite cannot reach on one task: two threads inside one
+/// call of the store.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn runners_on_threads_send_each_recipient_once() {
+    let stores: [(&str, NewStore); 2] = [("KvJobs", kv_jobs), ("MemoryJobs", memory_jobs)];
+    for (name, new_store) in stores {
+        for round in 0..20 {
+            let clock = ManualClock::new(T0);
+            let jobs = new_store(clock.clone());
+            let mut expected = Vec::new();
+            for j in 0..8 {
+                let recipients = [phone(3 * j), user(3 * j + 1), phone(3 * j + 2)];
+                expected.extend(labels(&recipients));
+                jobs.schedule(Job::new(id(&format!("job-{j}")), number(), T0).to(recipients))
+                    .await
+                    .unwrap();
+            }
+            expected.sort();
+            let outbound = Fake::default();
+            let start = Arc::new(Barrier::new(6));
+            let tasks: Vec<_> = (0..6)
+                .map(|i| {
+                    let pacer =
+                        Pacer::new(TokenBucket::new(Rate::per_second(80).unwrap()).adaptive(false))
+                            .with_timer(clock.clone());
+                    let runner = JobRunner::builder_shared(jobs.clone())
+                        .outbound(outbound.clone())
+                        .pacer(pacer)
+                        .compose(text)
+                        .concurrency(2)
+                        .runner_id(format!("replica-{i}"))
+                        .build()
+                        .unwrap();
+                    let start = start.clone();
+                    tokio::spawn(async move {
+                        start.wait().await;
+                        runner.tick().await.unwrap().runs.len()
+                    })
+                })
+                .collect();
+            let mut runs = 0;
+            for task in tasks {
+                runs += task.await.unwrap();
+            }
+            assert_eq!(runs, 8, "{name}, round {round}: each job run once");
+            let mut attempts = outbound.attempts();
+            attempts.sort();
+            assert_eq!(
+                attempts, expected,
+                "{name}, round {round}: each recipient once"
+            );
+        }
     }
 }
 
@@ -517,82 +593,7 @@ async fn a_job_scheduled_before_a_restart_is_sent_by_a_new_runner() {
     assert_eq!(job.summary.unwrap().sent, 1);
 }
 
-// ─── Decisive: resume after a crash mid-broadcast ────────────────────────
-
-/// Five recipients; the runner crashes during the third send (its future
-/// dropped while the request is in flight). Returns the world, the jobs
-/// and the outbound.
-async fn crash_mid_broadcast() -> (World, KvJobs, Fake, Vec<Recipient>) {
-    let world = World::new();
-    let jobs = world.jobs();
-    let recipients = vec![phone(1), user(2), phone(3), user(4), phone(5)];
-    jobs.schedule(
-        Job::new(id("spring-sale"), number(), T0)
-            .to(recipients.clone())
-            .payload(json!({"text": "Spring sale: 20% off"})),
-    )
-    .await
-    .unwrap();
-    let outbound = Fake::default();
-    let crashed = outbound.hang_on(3);
-    let a = world.runner(jobs.clone(), &outbound, "replica-a");
-    {
-        let tick = pin!(a.tick());
-        let crash = pin!(crashed.notified());
-        let Either::Right(_) = select(tick, crash).await else {
-            panic!("the tick ended before the crash");
-        };
-    }
-    drop(a);
-    assert_eq!(outbound.attempts(), labels(&recipients[..3]));
-    (world, jobs, outbound, recipients)
-}
-
-/// The runner that resumes the job skips the recipients recorded as sent
-/// and the one whose send was in flight (its outcome unknown), and sends
-/// the rest. Removing the per-recipient marker fails this (the first three
-/// are sent again).
-#[tokio::test]
-async fn a_resumed_broadcast_never_resends_a_recipient_recorded_as_sent() {
-    let (world, jobs, outbound, recipients) = crash_mid_broadcast().await;
-    world.advance(Duration::from_secs(121));
-    let b = world.runner(jobs.clone(), &outbound, "replica-b");
-    let report = b.tick().await.unwrap();
-
-    assert_eq!(report.runs.len(), 1);
-    let summary = summary_of(&report.runs[0].ended);
-    assert_eq!(summary.sent, 4);
-    assert_eq!(summary.unknown, [2], "the send in flight is never resent");
-    assert_eq!(summary.unsent, 0);
-    let mut expected = labels(&recipients[..3]);
-    expected.extend(labels(&recipients[3..]));
-    assert_eq!(outbound.attempts(), expected);
-    assert_eq!(
-        jobs.get(&id("spring-sale")).await.unwrap().unwrap().state,
-        JobState::Done
-    );
-}
-
-/// Until the crashed runner's lease expires, nobody else claims the job;
-/// after, one does. Ignoring the lease fails this (the job is resumed
-/// at once).
-#[tokio::test]
-async fn a_crashed_runners_lease_holds_the_job_until_it_expires() {
-    let (world, jobs, outbound, _) = crash_mid_broadcast().await;
-    let b = world.runner(jobs.clone(), &outbound, "replica-b");
-    world.advance(Duration::from_secs(119));
-    assert!(b.tick().await.unwrap().runs.is_empty());
-    assert_eq!(outbound.attempts().len(), 3);
-    assert_eq!(
-        jobs.get(&id("spring-sale")).await.unwrap().unwrap().state,
-        JobState::Claimed
-    );
-    world.advance(Duration::from_secs(2));
-    assert_eq!(b.tick().await.unwrap().runs.len(), 1);
-    assert_eq!(outbound.attempts().len(), 5);
-}
-
-// ─── Decisive: 131049 from a status webhook ──────────────────────────────
+// ─── The 131049 feedback as a listener ───────────────────────────────────
 
 /// Meta's failed-status fixture (`131049`, "healthy ecosystem
 /// engagement") for the message `message_id`.
@@ -604,314 +605,53 @@ fn marketing_limited(message_id: &str) -> meta_whatsapp_webhooks::WebhookEvent {
     events.remove(0)
 }
 
-/// The job keeps each message's id; a `131049` status for one marks its
-/// recipient, and a re-run within 24 hours skips them and sends everyone
-/// else. After 24 hours a re-run sends to them again. Removing the
-/// limited check fails this.
-#[tokio::test]
-async fn a_131049_status_makes_a_rerun_within_24_hours_skip_that_recipient() {
-    let world = World::new();
-    let jobs = world.jobs();
-    let recipients = vec![user(1), phone(2), user(3)];
-    jobs.schedule(
-        Job::new(id("weekly-deals"), number(), T0)
-            .to(recipients.clone())
-            .payload(json!({"text": "This week's deals"})),
-    )
-    .await
-    .unwrap();
-    let outbound = Fake::default();
-    let runner = world.runner(jobs.clone(), &outbound, "replica-a");
-    let first = runner.tick().await.unwrap();
-    assert_eq!(summary_of(&first.runs[0].ended).sent, 3);
-
-    // Meta accepted all three; then a failed status with 131049 for the
-    // second, delivered to the feedback sink.
-    let limited = outbound.message_id(&recipients[1]);
-    jobs.feedback()
-        .deliver(marketing_limited(&limited))
-        .await
-        .unwrap();
-    // A status for a message no job sent is not recorded.
-    assert!(
-        !jobs
-            .observe(&marketing_limited("wamid.not-ours"))
-            .await
-            .unwrap()
-    );
-
-    world.advance(Duration::from_secs(3600));
-    assert!(
-        jobs.rerun(&id("weekly-deals"), world.clock.now())
-            .await
-            .unwrap()
-    );
-    let second = runner.tick().await.unwrap();
-    assert_eq!(second.runs.len(), 1);
-    assert_eq!(second.runs[0].run, 2);
-    let summary = summary_of(&second.runs[0].ended);
-    assert_eq!(summary.limited, [1]);
-    assert_eq!(summary.sent, 2);
-    let mut expected = labels(&recipients);
-    expected.extend(labels(&[recipients[0].clone(), recipients[2].clone()]));
-    assert_eq!(outbound.attempts(), expected);
-
-    // Two minutes short of 24 hours after the status, still limited.
-    world.advance(Duration::from_mins(22 * 60 + 58));
-    assert!(
-        jobs.rerun(&id("weekly-deals"), world.clock.now())
-            .await
-            .unwrap()
-    );
-    let third = runner.tick().await.unwrap();
-    assert_eq!(summary_of(&third.runs[0].ended).limited, [1]);
-    assert_eq!(outbound.attempts().len(), 7);
-
-    // 24 hours after the status, the limit is over.
-    world.advance(Duration::from_mins(3));
-    assert!(
-        jobs.rerun(&id("weekly-deals"), world.clock.now())
-            .await
-            .unwrap()
-    );
-    let fourth = runner.tick().await.unwrap();
-    let summary = summary_of(&fourth.runs[0].ended);
-    assert!(summary.limited.is_empty());
-    assert_eq!(summary.sent, 3);
-    assert_eq!(outbound.attempts().len(), 10);
-}
-
 /// The feedback as a bot's listener of `status_updated`: the bot hears
-/// the status webhook, and the re-run skips that recipient.
+/// the status webhook, and the re-run skips that recipient; for both
+/// stores.
 #[tokio::test]
 async fn the_feedback_works_as_a_bot_listener() {
-    let world = World::new();
-    let jobs = world.jobs();
-    jobs.schedule(Job::new(id("j"), number(), T0).to([user(1), user(2)]))
-        .await
-        .unwrap();
-    let outbound = Fake::default();
-    let runner = world.runner(jobs.clone(), &outbound, "r");
-    runner.tick().await.unwrap();
-    let bot = Bot::builder()
-        .outbound(common::Recording::default())
-        .listen(Listen::event("status_updated"), jobs.feedback())
-        .build()
-        .await
-        .unwrap();
-    bot.deliver(marketing_limited(&outbound.message_id(&user(2))))
-        .await
-        .unwrap();
-    assert!(jobs.rerun(&id("j"), world.clock.now()).await.unwrap());
-    let report = runner.tick().await.unwrap();
-    assert_eq!(summary_of(&report.runs[0].ended).limited, [1]);
-    assert_eq!(outbound.attempts(), labels(&[user(1), user(2), user(1)]));
-}
-
-/// Only a status carrying `131049` is recorded: a `delivered` status, or a
-/// failure with another code, is not.
-#[tokio::test]
-async fn only_a_131049_status_marks_a_recipient() {
-    let world = World::new();
-    let jobs = world.jobs();
-    jobs.schedule(Job::new(id("j"), number(), T0).to([phone(1)]))
-        .await
-        .unwrap();
-    let outbound = Fake::default();
-    world
-        .runner(jobs.clone(), &outbound, "r")
-        .tick()
-        .await
-        .unwrap();
-    let sent = outbound.message_id(&phone(1));
-    let mut other = fixture_json("messages/status_failed.json");
-    let status = &mut other["entry"][0]["changes"][0]["value"]["statuses"][0];
-    status["id"] = json!(sent);
-    status["errors"][0]["code"] = json!(131026);
-    assert!(!jobs.observe(&events_of(&other)[0]).await.unwrap());
-    let mut delivered = fixture_json("messages/status_failed.json");
-    let status = &mut delivered["entry"][0]["changes"][0]["value"]["statuses"][0];
-    status["id"] = json!(sent);
-    status["status"] = json!("delivered");
-    status.as_object_mut().unwrap().remove("errors");
-    assert!(!jobs.observe(&events_of(&delivered)[0]).await.unwrap());
-    assert!(jobs.observe(&marketing_limited(&sent)).await.unwrap());
-}
-
-/// A `131049` the send itself returns marks the recipient too.
-#[tokio::test]
-async fn a_131049_refusal_marks_the_recipient_for_the_rerun() {
-    let world = World::new();
-    let jobs = world.jobs();
-    jobs.schedule(Job::new(id("j"), number(), T0).to([phone(1), phone(2)]))
-        .await
-        .unwrap();
-    let outbound = Fake::default();
-    outbound.fail(&phone(1), || graph(131049));
-    let runner = world.runner(jobs.clone(), &outbound, "r");
-    let first = runner.tick().await.unwrap();
-    let summary = summary_of(&first.runs[0].ended);
-    assert_eq!((summary.sent, summary.failed), (1, 1));
-    assert!(jobs.rerun(&id("j"), world.clock.now()).await.unwrap());
-    let second = runner.tick().await.unwrap();
-    assert_eq!(summary_of(&second.runs[0].ended).limited, [0]);
-    assert_eq!(outbound.attempts(), labels(&[phone(1), phone(2), phone(2)]));
-}
-
-// ─── At most once, retries, cancel ───────────────────────────────────────
-
-/// A timed-out send may have gone out: its marker says unknown and it is
-/// never sent again, not even by the job's retry (which a throttled
-/// recipient causes here). The retry backs off and is counted.
-#[tokio::test]
-async fn a_timed_out_send_is_marked_unknown_and_never_resent() {
-    let world = World::new();
-    let jobs = world.jobs();
-    let recipients = vec![phone(1), phone(2), phone(3)];
-    jobs.schedule(Job::new(id("j"), number(), T0).to(recipients.clone()))
-        .await
-        .unwrap();
-    let outbound = Fake::default();
-    outbound.fail(&phone(1), || TransportError::Timeout.into());
-    outbound.fail(&phone(2), || graph(130429));
-    let runner = JobRunner::builder(jobs.clone())
-        .outbound(outbound.clone())
-        .pacer(world.pacer())
-        .compose(text)
-        .concurrency(1)
-        // One send per recipient and pass: the throttled one waits for the
-        // job's retry.
-        .policy(Backoff::new().max_attempts(1).unwrap())
-        .build()
-        .unwrap();
-
-    let first = runner.tick().await.unwrap();
-    let JobEnd::Retrying { at, summary } = &first.runs[0].ended else {
-        panic!("{:?}", first.runs[0].ended);
-    };
-    assert_eq!(summary.unknown, [0]);
-    assert_eq!((summary.sent, summary.unsent), (1, 1));
-    let job = jobs.get(&id("j")).await.unwrap().unwrap();
-    assert_eq!((job.state, job.retries), (JobState::Pending, 1));
-    assert_eq!(job.due_at, *at);
-    let first_retry = *at - world.clock.now();
-    assert!(
-        first_retry >= time::Duration::seconds(29) && first_retry <= time::Duration::seconds(30),
-        "{first_retry}"
-    );
-
-    assert!(runner.tick().await.unwrap().runs.is_empty(), "not due yet");
-    world.clock.set(*at);
-    let second = runner.tick().await.unwrap();
-    let JobEnd::Done(summary) = &second.runs[0].ended else {
-        panic!("{:?}", second.runs[0].ended);
-    };
-    assert_eq!(summary.sent, 2);
-    assert_eq!(summary.unknown, [0]);
-    assert_eq!(
-        outbound.attempts(),
-        labels(&[phone(1), phone(2), phone(3), phone(2)])
-    );
-    let job = jobs.get(&id("j")).await.unwrap().unwrap();
-    assert_eq!(job.summary.unwrap().unknown, [0]);
-}
-
-/// Every pass throttled: the job is retried with a doubling delay, then
-/// stopped after its last retry, its recipient provably unsent.
-#[tokio::test]
-async fn retries_back_off_then_the_job_stops() {
-    let world = World::new();
-    let jobs = world.jobs();
-    jobs.schedule(Job::new(id("j"), number(), T0).to([phone(1)]))
-        .await
-        .unwrap();
-    let outbound = Fake::default();
-    for _ in 0..3 {
-        outbound.fail(&phone(1), || graph(130429));
-    }
-    let runner = JobRunner::builder(jobs.clone())
-        .outbound(outbound.clone())
-        .pacer(world.pacer())
-        .compose(text)
-        .policy(Backoff::new().max_attempts(1).unwrap())
-        .retries(2)
-        .retry_delay(Duration::from_secs(10), Duration::from_secs(15))
-        .build()
-        .unwrap();
-    let mut delays = Vec::new();
-    loop {
-        let before = world.clock.now();
-        let report = runner.tick().await.unwrap();
-        match &report.runs[0].ended {
-            JobEnd::Retrying { at, .. } => {
-                delays.push((*at - before).whole_seconds());
-                world.clock.set(*at);
-            }
-            JobEnd::Stopped(summary) => {
-                assert_eq!(summary.unsent, 1);
-                break;
-            }
-            other => panic!("{other:?}"),
-        }
-    }
-    assert_eq!(delays, [10, 15], "10 s, then doubled up to the longest");
-    let job = jobs.get(&id("j")).await.unwrap().unwrap();
-    assert_eq!((job.state, job.retries), (JobState::Stopped, 2));
-    assert_eq!(outbound.attempts().len(), 3);
-}
-
-/// Cancelled before it is due: nothing is sent, ever.
-#[tokio::test]
-async fn a_job_cancelled_before_it_is_due_is_never_sent() {
-    let world = World::new();
-    let jobs = world.jobs();
-    jobs.schedule(Job::new(id("j"), number(), T0 + Duration::from_secs(60)).to([phone(1)]))
-        .await
-        .unwrap();
-    assert!(jobs.cancel(&id("j")).await.unwrap());
-    assert!(!jobs.cancel(&id("j")).await.unwrap(), "once");
-    world.advance(Duration::from_secs(120));
-    let outbound = Fake::default();
-    assert!(
-        world
-            .runner(jobs.clone(), &outbound, "r")
-            .tick()
+    for memory in [false, true] {
+        let world = World::new();
+        let (jobs, feedback): (Arc<dyn JobStore>, _) = if memory {
+            let jobs = MemoryJobs::new(Arc::new(world.clock.clone()));
+            (Arc::new(jobs.clone()), jobs.feedback())
+        } else {
+            let jobs = world.jobs();
+            (Arc::new(jobs.clone()), jobs.feedback())
+        };
+        jobs.schedule(Job::new(id("j"), number(), T0).to([user(1), user(2)]))
             .await
-            .unwrap()
-            .runs
-            .is_empty()
-    );
-    assert!(outbound.attempts().is_empty());
-    assert_eq!(
-        jobs.get(&id("j")).await.unwrap().unwrap().state,
-        JobState::Cancelled
-    );
+            .unwrap();
+        let outbound = Fake::default();
+        let runner = JobRunner::builder_shared(jobs.clone())
+            .outbound(outbound.clone())
+            .pacer(world.pacer())
+            .compose(text)
+            .concurrency(1)
+            .build()
+            .unwrap();
+        runner.tick().await.unwrap();
+        let bot = Bot::builder()
+            .outbound(common::Recording::default())
+            .listen(Listen::event("status_updated"), feedback)
+            .build()
+            .await
+            .unwrap();
+        bot.deliver(marketing_limited(&outbound.message_id(&user(2))))
+            .await
+            .unwrap();
+        assert!(jobs.rerun(&id("j"), world.clock.now()).await.unwrap());
+        let report = runner.tick().await.unwrap();
+        assert_eq!(
+            summary_of(&report.runs[0].ended).limited,
+            [1],
+            "memory: {memory}"
+        );
+        assert_eq!(outbound.attempts(), labels(&[user(1), user(2), user(1)]));
+    }
 }
 
-/// Cancelled while it runs (during its second send): the send in flight
-/// finishes, and the next is never made.
-#[tokio::test]
-async fn a_job_cancelled_while_it_runs_stops_before_its_next_send() {
-    let world = World::new();
-    let jobs = world.jobs();
-    let recipients = vec![phone(1), phone(2), phone(3), phone(4)];
-    jobs.schedule(Job::new(id("j"), number(), T0).to(recipients.clone()))
-        .await
-        .unwrap();
-    let outbound = Fake::default();
-    outbound.cancel_on(2, jobs.clone(), id("j"));
-    let runner = world.runner(jobs.clone(), &outbound, "r");
-    let report = runner.tick().await.unwrap();
-    assert!(matches!(report.runs[0].ended, JobEnd::Cancelled));
-    assert_eq!(outbound.attempts(), labels(&recipients[..2]));
-    assert!(runner.tick().await.unwrap().runs.is_empty());
-    assert_eq!(
-        jobs.get(&id("j")).await.unwrap().unwrap().state,
-        JobState::Cancelled
-    );
-}
-
-// ─── The store ───────────────────────────────────────────────────────────
+// ─── KvJobs on its KvStore ───────────────────────────────────────────────
 
 /// Fail closed: a store that cannot write a recipient's marker gets no
 /// send for them (the job is retried later), and a store that cannot be
@@ -1021,38 +761,6 @@ async fn a_rerun_into_the_minute_it_ran_in_is_not_lost() {
     assert_eq!(second.runs.len(), 1, "the re-run is found");
     assert_eq!(second.runs[0].run, 2);
     assert_eq!(outbound.attempts(), labels(&[phone(1), phone(1)]));
-}
-
-/// Scheduling is idempotent for the same job (a retried call) and refuses
-/// another under the same id; each person once.
-#[tokio::test]
-async fn scheduling_is_idempotent_and_keeps_each_person_once() {
-    let world = World::new();
-    let jobs = world.jobs();
-    let job = Job::new(id("j"), number(), T0)
-        .to([phone(1), Recipient::phone("16505550001"), user(2)])
-        .payload(json!({"text": "hi"}));
-    jobs.schedule(job.clone()).await.unwrap();
-    jobs.schedule(job).await.unwrap();
-    let other = Job::new(id("j"), number(), T0).to([phone(9)]);
-    assert!(matches!(
-        jobs.schedule(other).await,
-        Err(Error::Validation(_))
-    ));
-    assert!(matches!(
-        jobs.schedule(Job::new(id("empty"), number(), T0)).await,
-        Err(Error::Validation(_))
-    ));
-    let stored = jobs.get(&id("j")).await.unwrap().unwrap();
-    assert_eq!(stored.recipients, [phone(1), user(2)]);
-    let outbound = Fake::default();
-    let report = world
-        .runner(jobs.clone(), &outbound, "r")
-        .tick()
-        .await
-        .unwrap();
-    assert_eq!(report.runs.len(), 1);
-    assert_eq!(outbound.attempts(), labels(&[phone(1), user(2)]));
 }
 
 /// Through the client: the request is Meta's send, exactly, with the
@@ -1250,55 +958,6 @@ async fn a_runner_whose_lease_expired_mid_send_never_sends_after_the_new_claim()
     );
 }
 
-/// A cancel and a re-run land between a runner's check and its marker;
-/// the re-run's runner sends to that recipient. The first runner, whose
-/// marker is its old run's (so no marker stops it), checks the job again
-/// with its marker in place, finds it no longer its own, and never sends.
-/// Without that second check the recipient is sent twice.
-#[tokio::test]
-async fn a_send_checked_before_a_cancel_and_a_rerun_is_not_made() {
-    let world = World::new();
-    let gate = Gate::new(world.kv.clone());
-    let jobs = world.jobs_on(gate.clone());
-    jobs.schedule(Job::new(id("j"), number(), T0).to([user(1)]))
-        .await
-        .unwrap();
-    let outbound = Fake::default();
-    let a = world.runner(jobs.clone(), &outbound, "replica-a");
-    let b = Arc::new(world.runner(world.jobs(), &outbound, "replica-b"));
-    let reports = Reports::default();
-    let (runner, kept, plain, clock) = (
-        b.clone(),
-        reports.clone(),
-        world.jobs(),
-        world.clock.clone(),
-    );
-    gate.on_put_if_absent(once_in(
-        JOBS_SENT_NAMESPACE,
-        &world.clock,
-        Duration::ZERO,
-        move || {
-            let (plain, clock, tick) = (plain.clone(), clock.clone(), tick_into(&runner, &kept));
-            Box::pin(async move {
-                assert!(plain.cancel(&id("j")).await.unwrap());
-                assert!(plain.rerun(&id("j"), clock.now()).await.unwrap());
-                tick.await;
-            })
-        },
-    ));
-
-    let ta = a.tick().await.unwrap();
-    let tb = reports.lock().unwrap().pop().unwrap();
-    assert_eq!(
-        outbound.attempts(),
-        labels(&[user(1)]),
-        "sent once, by run 2"
-    );
-    assert_eq!(tb.runs[0].run, 2);
-    assert!(matches!(tb.runs[0].ended, JobEnd::Done(_)), "{tb:?}");
-    assert!(matches!(ta.runs[0].ended, JobEnd::LeaseLost), "{ta:?}");
-}
-
 /// The runner moves the cursor past a minute, then fails before reading
 /// that minute again (a store error; a crash is the same), while a job was
 /// indexed into it by a writer that read the cursor before it moved (so
@@ -1449,87 +1108,6 @@ async fn an_unreadable_marker_is_an_outcome_unknown_not_a_stuck_runner() {
     assert_eq!(outbound.attempts(), labels(&[phone(2), phone(3)]));
 }
 
-/// A job of many recipients on a slow store (a second a read): reading
-/// their markers takes longer than the lease, which the runner renews as
-/// it reads, so another runner ticking meanwhile leaves the job alone.
-/// Without that renewal the second runner takes the job over and sends to
-/// everyone while the first is still reading (the first's pass wasted;
-/// with more replicas, the job can be taken over and over).
-#[tokio::test]
-async fn a_long_marker_scan_keeps_the_lease() {
-    let world = World::new();
-    let gate = Gate::new(world.kv.clone());
-    let jobs = world.jobs_on(gate.clone());
-    let recipients: Vec<Recipient> = (0..200).map(phone).collect();
-    jobs.schedule(Job::new(id("j"), number(), T0).to(recipients.clone()))
-        .await
-        .unwrap();
-    let outbound = Fake::default();
-    let a = world.runner(jobs.clone(), &outbound, "replica-a");
-    let b = Arc::new(world.runner(world.jobs(), &outbound, "replica-b"));
-    let reports = Reports::default();
-    let reads = Arc::new(AtomicUsize::new(0));
-    let (clock, runner, kept) = (world.clock.clone(), b.clone(), reports.clone());
-    gate.on_get(move |key| {
-        let n = (key.namespace() == JOBS_SENT_NAMESPACE)
-            .then(|| reads.fetch_add(1, Ordering::SeqCst) + 1);
-        if n.is_some() {
-            clock.advance(Duration::from_secs(1));
-        }
-        if n == Some(150) {
-            tick_into(&runner, &kept)
-        } else {
-            Box::pin(async {})
-        }
-    });
-
-    let ta = a.tick().await.unwrap();
-    let tb = reports.lock().unwrap().pop().unwrap();
-    assert!(tb.runs.is_empty(), "b took the job over: {tb:?}");
-    assert_eq!(summary_of(&ta.runs[0].ended).sent, 200);
-    assert_eq!(outbound.attempts(), labels(&recipients));
-}
-
-/// Sends that take long (50 s each, here): the runner renews its lease
-/// before a send once half of it is gone, so another runner ticking past
-/// the first lease's end leaves the job alone. Without the renewal, the
-/// second runner takes it over mid-broadcast.
-#[tokio::test]
-async fn a_runner_renews_its_lease_between_sends() {
-    let world = World::new();
-    let gate = Gate::new(world.kv.clone());
-    let jobs = world.jobs_on(gate.clone());
-    let recipients: Vec<Recipient> = (1..=4).map(phone).collect();
-    jobs.schedule(Job::new(id("j"), number(), T0).to(recipients.clone()))
-        .await
-        .unwrap();
-    let outbound = Fake::default();
-    let a = world.runner(jobs.clone(), &outbound, "replica-a");
-    let b = Arc::new(world.runner(world.jobs(), &outbound, "replica-b"));
-    let reports = Reports::default();
-    let markers = Arc::new(AtomicUsize::new(0));
-    let (clock, runner, kept) = (world.clock.clone(), b.clone(), reports.clone());
-    gate.on_put_if_absent(move |key| {
-        if key.namespace() != JOBS_SENT_NAMESPACE {
-            return Box::pin(async {});
-        }
-        clock.advance(Duration::from_secs(50));
-        // The fourth send starts 200 s after the claim, past its first
-        // lease (120 s), within the one renewed at the third (100 s).
-        if markers.fetch_add(1, Ordering::SeqCst) + 1 == 4 {
-            tick_into(&runner, &kept)
-        } else {
-            Box::pin(async {})
-        }
-    });
-
-    let ta = a.tick().await.unwrap();
-    let tb = reports.lock().unwrap().pop().unwrap();
-    assert!(tb.runs.is_empty(), "b took the job over: {tb:?}");
-    assert_eq!(summary_of(&ta.runs[0].ended).sent, 4);
-    assert_eq!(outbound.attempts(), labels(&recipients));
-}
-
 /// A cancel racing a claim, both reading the job at one version. The
 /// cancel's compare-and-swap first: the claim fails, nothing is sent. The
 /// claim's first: the cancel, its compare-and-swap failing on the version
@@ -1589,37 +1167,4 @@ async fn a_cancel_racing_a_claim_sends_nothing() {
             JobState::Cancelled
         );
     }
-}
-
-/// The `131049` skip is the job's: another job to the same person, in the
-/// same 24 hours, sends to them.
-#[tokio::test]
-async fn a_131049_skip_is_scoped_to_its_job() {
-    let world = World::new();
-    let jobs = world.jobs();
-    jobs.schedule(Job::new(id("weekly"), number(), T0).to([user(1)]))
-        .await
-        .unwrap();
-    let outbound = Fake::default();
-    let runner = world.runner(jobs.clone(), &outbound, "r");
-    runner.tick().await.unwrap();
-    assert!(
-        jobs.observe(&marketing_limited(&outbound.message_id(&user(1))))
-            .await
-            .unwrap()
-    );
-    jobs.schedule(Job::new(id("order-1042"), number(), world.clock.now()).to([user(1)]))
-        .await
-        .unwrap();
-    assert!(jobs.rerun(&id("weekly"), world.clock.now()).await.unwrap());
-    let report = runner.tick().await.unwrap();
-    let by_id: HashMap<_, _> = report
-        .runs
-        .iter()
-        .map(|run| (run.id.as_str().to_owned(), summary_of(&run.ended).clone()))
-        .collect();
-    assert_eq!(by_id["weekly"].limited, [0]);
-    assert_eq!(by_id["order-1042"].sent, 1);
-    assert!(by_id["order-1042"].limited.is_empty());
-    assert_eq!(outbound.attempts(), labels(&[user(1), user(1)]));
 }
