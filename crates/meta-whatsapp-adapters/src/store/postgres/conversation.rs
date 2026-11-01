@@ -89,12 +89,13 @@
 //!     contact's: the lock is per number, so that a history chunk takes one
 //!     lock per number rather than one per contact).
 //!   - the **purge lock**, `('wa_conversations'::regclass::oid::int4, 0)`:
-//!     `purge_before` takes it exclusive, `erase_all` shared, before the number
-//!     lock. Two purges, or a purge and an erasure, would otherwise take
-//!     the same rows' locks in the orders of their plans (the `ts` index
+//!     `purge_before` and `trim_conversations` take it exclusive,
+//!     `erase_all` shared, before the number lock. Two purges, or a purge
+//!     and an erasure (or a trim and either), would otherwise take the
+//!     same rows' locks in the orders of their plans (the `ts` index
 //!     oldest first, the conversation's index newest first, a sequential
-//!     scan by position), and deadlock. Purges run one at a time;
-//!     erasures of different numbers beside each other.
+//!     scan by position), and deadlock. Purges and trims run one at a
+//!     time; erasures of different numbers beside each other.
 //!
 //!   Under both locks, `erase_all` first fills in the sender of the
 //!   number's rows that have none (above), then deletes. The deletion
@@ -124,6 +125,19 @@
 //!   updates a chunk's summaries in, so the two never deadlock.
 //!   `wa_messages(ts)` and `wa_conversations(last_message_at)` are indexed
 //!   for it (migration `0004`).
+//! - `trim_conversations` is one statement too, under the purge lock: it
+//!   ranks each conversation's rows newest first by `(ts, id)` (the
+//!   history's order, on `messages_conversation_idx`, migration `0002`:
+//!   no index of its own) and deletes those ranked beyond the cap, by id,
+//!   so only rows of its snapshot: a message an append records meanwhile
+//!   is never deleted by it. A summary goes when its latest message did,
+//!   matched on `last_message_id` and locked (`FOR UPDATE`, in key order
+//!   as the purge's) once every message is deleted, so it waits for an
+//!   append updating the summary and reads it again: a summary the append
+//!   moved to its newer message no longer matches, and stays. It takes no
+//!   number lock (appends never wait for it), so a message older than the
+//!   rows kept, recorded during the trim, may stay without its summary
+//!   until the next trim, as for a purge.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -155,9 +169,10 @@ const MAX_STATUS_ROUNDS: usize = 16;
 ///
 /// Retention is kept by default; [`with_retention`](Self::with_retention)
 /// sets what [`ConversationStore::apply_retention`] purges. Nothing purges
-/// on its own: schedule `apply_retention`. Runs from several replicas at
-/// once are safe: purges take turns (see the module docs), and an erasure
-/// waits for a purge in progress. An erasure redacts an erased person's
+/// on its own: schedule `apply_retention` (and `trim_conversations`, for a
+/// cap on each conversation's history). Runs from several replicas at
+/// once are safe: purges and trims take turns (see the module docs), and
+/// an erasure waits for one in progress. An erasure redacts an erased person's
 /// messages in other conversations (a group's) by default;
 /// [`with_erasure_mode`](Self::with_erasure_mode) deletes them instead.
 #[derive(Clone)]
@@ -214,6 +229,8 @@ struct Sql {
     purge_lock: Arc<str>,
     purge_all: Arc<str>,
     purge_number: Arc<str>,
+    trim_all: Arc<str>,
+    trim_number: Arc<str>,
 }
 
 const MESSAGE_COLUMNS: &str = "id, phone_number_id, contact, direction, kind_utf8, text_utf8, \
@@ -321,6 +338,41 @@ fn purge_sql(prefix: &TablePrefix, scope: &str) -> String {
          r AS (DELETE FROM {contacts} WHERE removed AND synced_at < $1{scope} RETURNING 1) \
          SELECT (SELECT count(*) FROM m), (SELECT count(*) FROM c), \
            (SELECT count(*) FROM w), (SELECT count(*) FROM o), (SELECT count(*) FROM r)"
+    )
+}
+
+/// The `trim_conversations` statement: `$1` the rows each conversation
+/// keeps, `scope` restricts the ranking to one business number (`$2`), or
+/// is empty. The rows are ranked newest first by `(ts, id)` per
+/// conversation (the history's order, which
+/// `messages_conversation_idx` holds), and those ranked beyond `$1` are
+/// deleted by id: rows of the statement's snapshot only, so a message
+/// appended meanwhile is never one of them. A summary goes when its
+/// latest message did: matched on `last_message_id` under `FOR UPDATE`,
+/// which reads the summary again once a concurrent append's update of it
+/// commits, so a summary an append moved to its newer message no longer
+/// matches and stays. The summaries are locked in key order, as
+/// `purge_sql`'s are.
+fn trim_sql(prefix: &TablePrefix, scope: &str) -> String {
+    let messages = prefix.table("messages");
+    let conversations = prefix.table("conversations");
+    format!(
+        "WITH ranked AS ( \
+           SELECT id, row_number() OVER ( \
+             PARTITION BY phone_number_id, contact ORDER BY ts DESC, id DESC \
+           ) AS n \
+           FROM {messages}{scope} \
+         ), m AS ( \
+           DELETE FROM {messages} AS t USING ranked AS r \
+           WHERE t.id = r.id AND r.n > $1 \
+           RETURNING t.id, t.phone_number_id, t.contact \
+         ), c AS (DELETE FROM {conversations} WHERE (phone_number_id, contact) IN ( \
+           SELECT s.phone_number_id, s.contact FROM {conversations} AS s \
+           JOIN m ON s.phone_number_id = m.phone_number_id AND s.contact = m.contact \
+             AND s.last_message_id = m.id \
+           ORDER BY s.phone_number_id, s.contact FOR UPDATE OF s \
+         ) RETURNING 1) \
+         SELECT (SELECT count(*) FROM m), (SELECT count(*) FROM c)"
     )
 }
 
@@ -663,6 +715,8 @@ impl Sql {
             )),
             purge_all: arc(purge_sql(prefix, "")),
             purge_number: arc(purge_sql(prefix, " AND phone_number_id = $2")),
+            trim_all: arc(trim_sql(prefix, "")),
+            trim_number: arc(trim_sql(prefix, " WHERE phone_number_id = $2")),
         }
     }
 }
@@ -1488,6 +1542,36 @@ impl ConversationStore for PostgresConversationStore {
 
     fn retention(&self) -> Retention {
         self.retention
+    }
+
+    async fn trim_conversations(
+        &self,
+        phone_number_id: Option<&PhoneNumberId>,
+        keep_last: usize,
+    ) -> Result<Purged, StorageError> {
+        // The purge lock, exclusive: a trim takes its rows' locks in the
+        // order of its plan, like a purge, so trims, purges and erasures
+        // take turns (see the module docs).
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.purge_lock)))
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
+        let query = match phone_number_id {
+            None => {
+                sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.trim_all))).bind(to_i64(keep_last))
+            }
+            Some(number) => sqlx::query(AssertSqlSafe(Arc::clone(&self.sql.trim_number)))
+                .bind(to_i64(keep_last))
+                .bind(number.as_str()),
+        };
+        let row = query.fetch_one(&mut *tx).await.map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
+        Ok(Purged {
+            messages: count(&row, 0)?,
+            conversations: count(&row, 1)?,
+            ..Purged::default()
+        })
     }
 }
 

@@ -2,8 +2,9 @@
 //! prefixes, aliases, subcommands, `--flags`, guards, cooldowns and a
 //! generated help, middleware, compile-time plugins, Markdown replies in
 //! WhatsApp formatting, rich replies (images, suggestions as reply buttons
-//! or a list, product carousels: [`rich`]), and paced broadcasts
-//! ([`broadcast`], [`pacer`]).
+//! or a list, product carousels: [`rich`]), paced broadcasts
+//! ([`broadcast`], [`pacer`]), and retention of the stored history
+//! ([`retention`]).
 //!
 //! Each event goes through these steps, in this order:
 //!
@@ -95,7 +96,10 @@
 //! A [`Broadcast`] sends one message to many recipients from one number,
 //! paced by a [`Pacer`] shared with the bot, and reports on each (see
 //! [`broadcast`]). Meta's throughput upgrade of a number can raise its
-//! rate in the pacer, opt-in ([`throughput`]). Not here (yet): scheduling,
+//! rate in the pacer, opt-in ([`throughput`]). The stored chat history
+//! is deleted by age and by a cap per chat, through its
+//! `ConversationStore`, by a [`RetentionPolicy`], once or on a schedule
+//! ([`RetentionSweeper`]; see [`retention`]). Not here (yet): scheduling,
 //! and broadcasts that survive a restart (roadmap B3).
 
 pub mod bot;
@@ -112,6 +116,7 @@ pub mod outbound;
 pub mod pacer;
 pub mod parse;
 pub mod plugin;
+pub mod retention;
 pub mod rich;
 pub mod throughput;
 
@@ -143,5 +148,6 @@ pub use pacer::{
 };
 pub use parse::{CommandParser, ParsedCommand, PrefixParser};
 pub use plugin::{DEFAULT_CATEGORY, Listen, Plugin, Registrar};
+pub use retention::{RetentionPolicy, RetentionSweeper, Swept};
 pub use rich::{RichReply, Suggestion};
 pub use throughput::{KnownNumbers, NumberDirectory, ThroughputUpgrades};
