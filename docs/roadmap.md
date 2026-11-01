@@ -1193,7 +1193,7 @@ and `store-postgres`.
     server is run, never linked or shipped, as the test service for the
     database the owner named (design §10); the owner may still rule on
     it, and the final report lists it.
-- [ ] **S9. An `Outbox` spike on MongoDB**
+- [x] **S9. An `Outbox` spike on MongoDB**
   (`meta-whatsapp-server-store-mongodb`, the `Outbox` only, not composed
   into the binary), before the port shapes freeze: per-tenant commit
   order, the routing re-check, the stream purge, against a replica set.
@@ -1203,6 +1203,132 @@ and `store-postgres`.
     set. If a case cannot pass, the port changes first (memory and
     Postgres with it, through S3's suite), and the spike passes after
     that change.
+  - **Landed:** the crate (`publish = false`, a workspace member but not
+    a default one, composed into no binary), whose `MongoOutbox`
+    implements `Outbox` with the `mongodb` driver 3.9 (no default
+    features; `compat-3-3-0`, `bson-3`, `rustls-tls-aws-lc`: `cargo tree`
+    shows no `ring` from it). Every write is a multi-document transaction
+    (snapshot reads, majority writes), tried again from the start on a
+    write conflict. An insert reads the dedup key, then the guarded
+    binding's document *and writes it* (`insert_checks` incremented: the
+    port's own prescription for a database whose snapshot transactions
+    see write-write conflicts only), decides with the core's
+    `RouteGuard::admits`, then draws its sequence by incrementing its
+    stream's document and stores the event, `created_at` the server's
+    `$currentDate`. Two transactions writing one document cannot both
+    commit, so a stream's sequence `n + 1` is drawn only once `n`
+    committed (per-tenant commit order, gap-free), and an unbinding waits
+    for an insert that checked its binding, or makes it start over. A
+    page reads in one snapshot transaction, sizes first, then only the
+    kept rows' data. Retention (`purge`) cuts each stream's prefix up to
+    its newest event older than the cutoff (the server's `localTime`), in
+    transactions of at most 1,000 events that delete and move
+    `purged_through` (`$max`) together, with no lock of its own: two
+    purges write the same stream document, so one starts over and counts
+    only what it deleted. A deleted tenant's stream is purged by
+    `MongoOutbox::forget_tenant`, in one transaction that writes the
+    stream's document (creating it for a tenant with no event yet), so a
+    first insert in flight conflicts with it too. Contention past 2
+    seconds (`BUSY_AFTER`, `with_busy_after`) is `StorageError::Busy`.
+    **How the cross-port invariants get their binding:** the records
+    are S18's, so the outbox reads a projection, `wa_server_wabas` (a
+    WABA's tenant, `attached_at`, `previous_tenant_unbound_at`, its
+    numbers), which the records' owner writes with
+    `MongoOutbox::record_binding` and `forget_binding`; in the crate's
+    tests the bundle (`tests/support`, `SpikeBackend`) is the memory
+    backend's ports with this outbox, its records wrapped
+    (`MirroredRecords`) to write every binding they change, and to
+    purge a deleted tenant's stream, before they return, under one lock.
+    The decisive tests, live against the S8 replica set (MongoDB
+    7.0.45, in `tests/live_mongodb.rs`, which `just test-live` runs):
+    `live_mongodb_outbox_passes_the_outbox_cases`
+    (`conformance::outbox::run`, every case),
+    `live_mongodb_outbox_passes_the_cross_port_invariants`
+    (`conformance::invariants::run`, every case: the same data, a
+    deleted tenant's stream purged, the six route-guard cases of S2 and
+    S2b, commit order under eight writers),
+    `live_mongodb_an_insert_racing_a_move_never_reaches_the_new_holder`
+    (the race, 200 rounds, 167 to 196 of them overlapping in four runs) and
+    `live_mongodb_outbox_in_a_bundle_passes_the_conformance_suite`
+    (`conformance::run` whole, the webhook pipeline recording into it);
+    no case failed, so **no port changed**. MongoDB's own:
+    `live_mongodb_an_unbinding_waits_for_the_insert_in_flight` (feature
+    `test-hooks`: an insert held after its check; the unbinding returns
+    only once it committed),
+    `live_mongodb_write_conflicts_past_the_budget_are_busy`,
+    `live_mongodb_two_purges_at_once_count_each_event_once` (two clients,
+    1,400 events in two streams, one past a purge step) and
+    `live_mongodb_migrate_makes_the_named_collections_and_indexes_once`;
+    the stored names pinned by `schema::tests::the_stored_names_are_pinned`.
+    By mutation, live: the re-check dropped (the routed tenant kept), and
+    `RouteGuard::admits` dropped (the binding's tenant and numbers still
+    matched), each fail the invariants (`only the rows whose guard held`)
+    and the race (the new holder polls the old holder's event); the
+    sequence drawn outside the transaction fails the commit-order case (a
+    poll skipped and reordered events); no transaction at all fails the
+    commit-order case and the in-flight case (the race failed it in one
+    run of two); the binding's write dropped (a read only) fails the
+    in-flight case (the unbinding returned while the insert was held) and
+    passes the race, the invariants and the whole suite, so the in-flight
+    case is the fence's decisive test; before `forget_tenant` wrote the
+    stream's document it failed the race too (a tenant created again
+    polled an event whose first insert created the stream after the
+    deletion's purge), which is why that write was added: dropped alone it
+    fails nothing (the fence covers it), dropped with the fence it fails
+    the race; the deletion's mark dropped fails
+    `deleting_a_tenant_purges_its_stream`; a purge step's mark dropped
+    fails the outbox's purge case and the two purges; `Busy` mapped to a
+    backend error fails the budget case. Every one of these failures is
+    the case's own assertion.
+  - **Proposed** (for the coordinator, AGENTS.md § Decisions; each
+    swappable, the bundle and the conformance suite being the seam):
+    the bindings the spike checks as a projection collection its records'
+    owner writes (`record_binding`, `forget_binding`), until S18's
+    `RecordStore` writes the same documents in its own transactions; the
+    fence as an increment of the WABA document's `insert_checks` (rather
+    than, say, a version the binding moves); the write-conflict budget of
+    2 seconds (Postgres' `lock_timeout`) with a random pause of 0.1 to 64
+    ms between attempts; purge steps of 1,000 events; the database's
+    clock (`$currentDate`, `hello`'s `localTime`); instants at MongoDB's
+    millisecond, a binding's start rounded down (its second kept) and a
+    dedup window's end rounded up (a key held longer, never shorter); an
+    event's `_id` its public id and a stream's its tenant's id (`""` for
+    the operator-only rows), the event's JSON a BSON string beside its
+    size; the hook behind a `test-hooks` feature, test code only; the
+    driver a direct dependency (the facade re-exports none until S17).
+    **Pending the owner** (stored names, before the first release): the
+    collections `wa_server_events`, `wa_server_event_streams` and
+    `wa_server_wabas`, their fields and the index names
+    (docs/architecture.md § Stable identifiers). **And a licence, which
+    blocks the merge:** `cargo deny check` fails on this branch (licenses
+    only; advisories, bans and sources pass). The driver depends, through
+    `mongodb-internal-macros`, `macro_magic`, `const-random` and the
+    proc-macro `const-random-macro`, on `tiny-keccak` 2.0.2, under
+    CC0-1.0, which `deny.toml` does not allow. Since S8 that chain was a
+    dev-dependency's (meta-whatsapp-adapters' tests), whose licences
+    cargo-deny does not check; this crate makes the driver a normal
+    dependency, so it is checked now (S17's `mongodb` feature will meet the
+    same). Allowing CC0-1.0, or an exception scoped to `tiny-keccak`, is a
+    licence choice: the owner's (§ Owner touchpoints), not made here.
+  - **Left, and why:** the bindings are the fixture's mirror, consistent
+    with the records only between two binding calls, and a deleted
+    tenant's stream is purged after the records' deletion, not in its
+    transaction (S18 does both in one); a stream's inserts serialize by
+    aborting and trying again, not by queueing on a lock as on Postgres,
+    so a hot stream (the operator-only one is shared by every WABA)
+    answers `Busy` sooner under load, and every admitted insert writes
+    its WABA's document too (measured: eight writers of one stream pass
+    the commit-order case; no load test); `forget_tenant` deletes a
+    stream in one transaction, unbounded; an instant written from a
+    clock finer than a millisecond (the fixture's memory records) is
+    floored, so the window after a move may admit an undated event less
+    than a millisecond early there (S18's records write the database's
+    milliseconds, which the routing reads too); `migrate` is not a
+    `SchemaMigrator` under a lock (idempotent, and safe on two replicas
+    at once); a commit whose result stays unknown past the budget is a
+    backend error, not `Busy` (it may have committed; Meta's redelivery
+    then meets the dedup key); one MongoDB version, one node, no sharded
+    cluster.
 - [ ] **U1. Domain errors in CrateStack** (D16; the owner's cratestack
   repository, a PR there with its own parity declaration): a domain
   error carrying our code, status and body, statuses 410, 413, 502 and
@@ -3676,10 +3802,22 @@ everything else goes into the parity-completion report.
   and the table `wa_server_waba_tombstones` with its columns and its
   `ON DELETE SET NULL` rule, added and awaiting confirmation; L11d's
   `wa.es.coexistence` and its record layout, added and awaiting
-  confirmation; and L21a's
+  confirmation; L21a's
   `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
   keys' derivations and their records' shapes, added and awaiting
-  confirmation before the first release), for the same reason as L5's.
+  confirmation before the first release; and S9's MongoDB outbox
+  collections `wa_server_events`, `wa_server_event_streams` and
+  `wa_server_wabas`, their fields and their index names, added by a spike
+  composed into no binary and awaiting confirmation, which S18 may still
+  change before then), for the same reason as L5's.
+- **CC0-1.0 for the MongoDB driver** (S9, then S17 and S18): the
+  `mongodb` crate reaches `tiny-keccak` (CC0-1.0, a public-domain
+  dedication, compiled into a proc-macro that runs at build time)
+  through `macro_magic` and `const-random`; `deny.toml` allows no
+  CC0-1.0, so `just deny` fails once the driver is a normal dependency
+  (S9's crate). One yes or no: CC0-1.0 allowed (everywhere, or for
+  `tiny-keccak` alone). After a refusal, MongoDB waits for a driver
+  release without that chain.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored

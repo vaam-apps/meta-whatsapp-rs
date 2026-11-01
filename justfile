@@ -54,6 +54,7 @@ test-live:
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-adapters --all-features live_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-rs --all-features live_postgres_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server-store-postgres --all-features live_ -- --test-threads=4
+    META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server-store-mongodb --all-features live_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server --all-features live_ -- --test-threads=4
 
 # Stop the compose.test.yaml services
@@ -64,7 +65,8 @@ test-live-down:
 # `wa_test_*` / `wa_server_test_*` schemas on Postgres, `wa-test:*` keys on
 # Redis and the TLS Redis, `wa_test_*` databases on MongoDB. The live tests delete their own, when they panic too (the
 # adapters' tests/common PgCleanup and RedisCleanup, tests/redis_tls.rs's
-# RedissCleanup, tests/live_mongodb.rs's MongoCleanup, the server's TestDb);
+# RedissCleanup, tests/live_mongodb.rs's MongoCleanup, the server's TestDb,
+# the MongoDB outbox spike's DropDatabase);
 # this clears older runs and killed ones (SIGKILL and abort skip Drop). Uses META_WHATSAPP_RS_TEST_POSTGRES_URL,
 # META_WHATSAPP_RS_TEST_REDIS_URL, META_WHATSAPP_RS_TEST_REDISS_URL (with
 # its CA and client files) and META_WHATSAPP_RS_TEST_MONGODB_URL when set (the devcontainer's sidecars),
@@ -199,7 +201,9 @@ doc:
 # (roadmap S6). The crates the service's binary composes (roadmap S7) are
 # each checked alone, all targets, so none borrows a facade feature from
 # another; and the binary is built with `api-axum` and each backend alone:
-# a `#[cfg(feature = "store-…")]` gate it forgot fails one of them.
+# a `#[cfg(feature = "store-…")]` gate it forgot fails one of them. The
+# MongoDB outbox spike (roadmap S9), which the binary does not compose, is
+# checked alone too, with and without its `test-hooks`.
 #
 # Each feature on its own, so a missing cfg gate cannot hide behind --all-features
 features:
@@ -236,6 +240,8 @@ features:
     cargo check -p meta-whatsapp-server-store-postgres --all-targets
     cargo check -p meta-whatsapp-server-http --all-targets
     cargo check -p meta-whatsapp-server-api-axum --all-targets
+    cargo check -p meta-whatsapp-server-store-mongodb --all-targets
+    cargo check -p meta-whatsapp-server-store-mongodb --all-targets --features test-hooks
     cargo check -p meta-whatsapp-server --no-default-features --features api-axum,store-memory
     cargo check -p meta-whatsapp-server --no-default-features --features api-axum,store-postgres
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude meta-whatsapp-server --exclude meta-whatsapp-server-http --exclude meta-whatsapp-server-api-axum --exclude meta-whatsapp-server-store-memory --exclude meta-whatsapp-server-store-postgres --no-default-features --no-deps

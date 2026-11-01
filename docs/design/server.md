@@ -121,6 +121,11 @@ covers them) but not default ones:
   is the only API adapter), with the facade's `reqwest`. The committed
   `openapi/v1.json` stays here, beside the command that prints it.
 
+Beside them, `crates/meta-whatsapp-server-store-mongodb`, a spike
+(roadmap S9): the `Outbox` port alone on a MongoDB replica set, through
+the `mongodb` driver (which the facade does not re-export before S17),
+composed into no binary ([§8.2](#82-the-backend-bundle-is-the-unit-of-swapping)).
+
 They depend on the `meta-whatsapp-rs` facade and on each other, never on
 another crate of the library, and no library crate depends on them: the
 API an outside integrator has, which proves the facade suffices.
@@ -1670,7 +1675,7 @@ Postgres pool the service used as its "memory?" flag: that is
 | `meta-whatsapp-server-store-cratestack` (the default once the owner accepts D20 (a); until then `meta-whatsapp-server-store-postgres`) | Postgres: CrateStack models for the records tables (tenants, API keys, WABAs, numbers); the outbox, idempotency, locks, janitor and migrations reuse store-postgres's SQL on the same pool, and the library's stores are `PostgresKvStore` and `PostgresConversationStore` on it | planned |
 | `meta-whatsapp-server-store-postgres` | Postgres through sqlx: today's code and migrations | built (a crate since S7); kept and conformance-tested, live |
 | `meta-whatsapp-server-store-memory` | memory, development only | built (a crate since S7); kept and conformance-tested |
-| `meta-whatsapp-server-store-mongodb` | MongoDB, a replica set | later: first an `Outbox` spike against the conformance suite, before the port shapes freeze (roadmap S9), then the library's MongoDB adapters (S17) and the whole bundle (S18) |
+| `meta-whatsapp-server-store-mongodb` | MongoDB, a replica set | a spike (roadmap S9): its `MongoOutbox` implements the `Outbox` alone, each write a multi-document transaction (the insert writes the guarded binding's document, so an unbinding conflicts with it, and draws its sequence from its stream's document, so a stream commits in order), and passes the conformance suites live, as a bundle's outbox beside the memory backend's other ports, its bindings a projection the records' owner writes (the test fixture until S18); not composed into the binary. No port changed. Then the library's MongoDB adapters (S17) and the whole bundle (S18) |
 
 ### 8.3 API adapters
 

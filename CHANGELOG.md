@@ -263,6 +263,34 @@ stored data, the owner's).
   without default features and with `rustls-tls-aws-lc` (an explicit
   aws-lc-rs provider, not `ring`): no library build links it. The server
   image is under the SSPL and only runs as a test service.
+- **An `Outbox` spike on MongoDB** (roadmap S9, design §8.2): a new
+  service crate, `meta-whatsapp-server-store-mongodb` (`publish = false`,
+  a workspace member but not a default one, not composed into the
+  binary), whose `MongoOutbox` implements the core's `Outbox` port on a
+  replica set, with the `mongodb` driver (3.9, `rustls-tls-aws-lc`, no
+  `ring`). Each insert is one multi-document transaction that writes the
+  guarded binding's document (so that an unbinding conflicts with it:
+  MongoDB's snapshot transactions see write-write conflicts only) and
+  draws its sequence from its stream's document (so a stream's inserts
+  commit in sequence order), tried again on a write conflict for 2
+  seconds, then `StorageError::Busy`; the route guard is the core's
+  `RouteGuard::admits`. Retention cuts each stream's prefix in
+  transactions of at most 1,000 events that record their mark, with no
+  lock of its own; a deleted tenant's stream is purged by
+  `MongoOutbox::forget_tenant`. The core's conformance suites pass live
+  against the S8 replica set with it as a bundle's outbox (the outbox
+  cases, the cross-port invariants, the insert raced against a move, and
+  `conformance::run` whole), the bundle's other ports being the memory
+  backend's and its bindings mirrored into the outbox's database by the
+  test fixture (the records are S18). `just test-live` runs its
+  `tests/live_mongodb.rs`. Its collections (`wa_server_events`,
+  `wa_server_event_streams`, `wa_server_wabas`), fields and index names
+  are new stored names, pending the owner's confirmation before the first
+  release (docs/architecture.md § Stable identifiers). No port changed.
+  Not mergeable as it stands: with the driver a normal dependency,
+  `cargo deny check` rejects `tiny-keccak`'s CC0-1.0 licence (reached
+  through the driver's `macro_magic`), a licence question for the owner
+  (roadmap § Owner touchpoints).
 - **The coexistence sync inside onboarding**
   (`meta_whatsapp_client::embedded_signup`, roadmap L11d, parity rows
   124 and 69; OPEN_QUESTIONS #7; the service's side is M3b). After a

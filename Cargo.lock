@@ -2724,6 +2724,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "meta-whatsapp-server-store-mongodb"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "meta-whatsapp-rs",
+ "meta-whatsapp-server-core",
+ "meta-whatsapp-server-store-memory",
+ "mongodb",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "meta-whatsapp-server-store-postgres"
 version = "0.1.0"
 dependencies = [

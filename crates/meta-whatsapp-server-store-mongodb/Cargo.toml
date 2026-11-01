@@ -1,0 +1,58 @@
+[package]
+name = "meta-whatsapp-server-store-mongodb"
+description = "The meta-whatsapp-rs service's MongoDB backend, a spike: the core's Outbox port on a MongoDB replica set (roadmap S9)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# Part of the service, never a library dependency: no crate of the library
+# depends on it. A spike (roadmap S9): the binary does not compose it, and
+# it is no default member of the workspace.
+publish = false
+
+[lib]
+name = "meta_whatsapp_server_store_mongodb"
+
+[features]
+# `MongoOutbox::with_insert_hook`: a pause inside an insert's transaction,
+# after its routing check and before its sequence is drawn, for this crate's
+# live tests (`tests/live_mongodb.rs`: an unbinding waits for the insert in
+# flight). Test code: never enabled by a build that serves.
+test-hooks = []
+
+[dependencies]
+# The library's error tree and ids, through the facade, without its
+# adapters.
+meta-whatsapp-rs.workspace = true
+# The port this crate implements (`Outbox`), and the model it speaks.
+meta-whatsapp-server-core.workspace = true
+# The driver, as meta-whatsapp-adapters' tests take it (roadmap S8): no
+# default features (`rustls-tls` is rustls on `ring`), `rustls-tls-aws-lc`
+# (an explicit aws-lc-rs provider, never the process default) and the BSON 3
+# API. The facade re-exports no MongoDB driver until roadmap S17. As a
+# normal dependency it brings `tiny-keccak` (CC0-1.0, through the driver's
+# `macro_magic` and `const-random`) into `cargo deny`'s licence check,
+# which deny.toml does not allow: the owner's question (docs/roadmap.md,
+# § Owner touchpoints).
+mongodb = { workspace = true, features = ["compat-3-3-0", "bson-3", "rustls-tls-aws-lc"] }
+
+# A storage failure's opaque leaf (`StorageError::Backend`).
+anyhow.workspace = true
+async-trait.workspace = true
+time.workspace = true
+# The pause between two attempts of a transaction a write conflict aborted.
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+# tests/live_mongodb.rs: the core's conformance suites with this outbox,
+# live, in a bundle whose other ports are the memory backend's
+# (`meta_whatsapp_server_core::conformance`).
+meta-whatsapp-server-core = { workspace = true, features = ["conformance"] }
+meta-whatsapp-server-store-memory.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+
+[lints]
+workspace = true
