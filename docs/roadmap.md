@@ -2227,7 +2227,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `TargetRole` and `ThreadControlResponse` only, not on `Pass`, a
     request type (OPEN_QUESTIONS #28); and L15a kept as its own item,
     with row 139 partial until it lands.
-- [ ] **L15a. The Routing Roles API** (`meta-whatsapp-client`, next to
+- [x] **L15a. The Routing Roles API** (`meta-whatsapp-client`, next to
   `client::thread_control`; row 139): `GET
   /{phone-number-id}/routing_roles`, the roles the caller's business
   holds on a number (`roles`, `is_standby`), which say which thread
@@ -2238,6 +2238,48 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** exact response JSON from
     `conversation-routing/routing-roles` (both examples, the empty
     `roles` among them).
+  - **Landed:** `ThreadControl::routing_roles()` on
+    `client.thread_control(phone_number_id)`, a `GET
+    /{phone-number-id}/routing_roles` with no query and no body,
+    answering `RoutingRoles` (`roles: Vec<RoutingRole>`, `is_standby:
+    bool`, and `RoutingRoles::holds`, which compares wire names).
+    `RoutingRole` is the page's six values (`calls`, `ctwa`,
+    `customer_service`, `escalation`, `marketing`, `utility`) with
+    `Other(String)` keeping any other verbatim, `ai_agent` among them
+    (the page: never returned to a partner). Row 139 is done for the
+    library; the service's side stays M2d and M5l. Decisive tests
+    (`thread_control::tests`): both of the page's responses as exact
+    JSON, with the request's method, path, absent query and body, and
+    token (`routing_roles_match_docs_example`,
+    `empty_routing_roles_match_docs_example`: an empty `roles` is a
+    success), every role's wire name (`every_routing_role_has_its_wire_name`),
+    a response missing either field refused
+    (`routing_roles_tolerate_new_fields_and_require_both`), the page's
+    two errors, both code `100`, as `ErrorKind::InvalidParameter`
+    (`routing_not_enabled_is_an_invalid_parameter`,
+    `an_unreadable_number_is_an_invalid_parameter`: no kind of their
+    own, which would be a core change and could not split one code), a
+    retry after a timeout (`routing_roles_are_retried_after_a_timeout`)
+    and the id kept one segment. Mutated by hand: the path segment, GET
+    to POST, either field's name, a default on either field, `calls`'s
+    wire name, refusing an empty `roles`, `holds` by equality, and the
+    catch-all removed; each fails a test.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable as noted): a
+    method on `ThreadControl` rather than a module and accessor of its
+    own (`client.routing_roles(id)` would be an additive accessor);
+    `RoutingRole` its own enum, not `TargetRole` (`calls` is no pass
+    target, `ai_agent` never a held role; a conversion between the two
+    is additive), with `#[non_exhaustive]` and the `Other(String)`
+    catch-all like `TargetRole`; both fields required, with no serde
+    default (the page says both are always present, and a default would
+    read as "no role" or "not standby"; relaxing it is a one-line
+    change); `roles` a `Vec` in Meta's order rather than a set (the
+    page calls it unordered; `holds` is the set test); the read retried
+    as every GET is; no local cache or rate limiting (Meta rate limits
+    the endpoint per number and per app and asks for periodic reads:
+    the caller schedules them); M5l, not this item, decides whether
+    the service exposes the roles.
 - [x] **L16a. The Messaging Account a send bills**
   (`meta-whatsapp-client`, `client::messages`; row 140). Meta's account
   model evolution (`account-model-evolution`) is generally available
@@ -2652,7 +2694,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     (tests) had two cards. OPEN_QUESTIONS #22 is closed and deleted
     (CHANGELOG). No parity row changes: rows 51 and 99 already counted
     product-card carousels.
-- [ ] **L21a. Dead-lettering a permanently failing event**
+- [x] **L21a. Dead-lettering a permanently failing event**
   (`meta-whatsapp-webhooks`, `meta-whatsapp-adapters`; OPEN_QUESTIONS
   #30): sink errors classified transient or permanent (unclassified
   stays transient, today's behaviour); a permanent one written to a
@@ -2671,6 +2713,79 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     facade-level erasure of the contact removes their dead-lettered
     events (removing the dead-letter store's `erase` from it fails the
     test).
+  - **Landed:** the signal is a sink's own: `SinkError::Permanent`
+    (`SinkError::permanent`, `is_permanent`; every other variant stays
+    transient), added to core's existing leaf, with `FanoutSink`
+    returning a transient error before a permanent one. The store is
+    `meta_whatsapp_webhooks::deadletter::DeadLetters` on `KvStore`,
+    wired by `WebhookHandlerBuilder::dead_letters`: a permanent error is
+    written there, the event's dedup claim marked done, the rest of the
+    batch delivered and the delivery acknowledged, counted in
+    `DeliveryReport::dead_lettered` and alerted by a `tracing::error!`
+    naming the letter, kind and number only; a failed write releases the
+    claim and answers `500`, and without a store a permanent error
+    answers `500` as before. Bounds: a ring of 1000 slots (letter `id` in
+    slot `id % capacity`, the oldest overwritten without a scan), 14 days
+    per record and index, 256 KiB per stored event (a larger one kept
+    without its content). Replay (`replay`, `replay_all`) goes past the
+    dedup guard. Erasure: a per-contact index (every identifier the
+    event gives, BSUIDs, parent BSUIDs and phone numbers, since an
+    erasure may know the person by one only; keyed by business number
+    and contact, an event with no number under the empty one, which every
+    number's erasure reads) and `DeadLetters::erase`, called by the new
+    facade `meta_whatsapp_rs::erasure::Eraser` beside
+    `ConversationStore::erase_all`. The namespaces `wa.webhook.deadletter`
+    and `wa.webhook.deadletter.contact` and the records are pinned
+    (`the_keys_are_pinned_and_hashed`, `the_record_bytes_are_pinned`) and
+    pending the owner's confirmation (§ Owner touchpoints). The decisive
+    tests are
+    `a_batch_with_one_permanent_failure_delivers_the_others_and_dead_letters_it`
+    (`webhooks/tests/deadletter.rs`; with
+    `post_is_200_when_a_permanent_failure_is_dead_lettered` in
+    `tests/router.rs` for the status) and
+    `erasing_a_contact_removes_their_dead_letters`
+    (`meta-whatsapp-rs/src/erasure.rs`). Removing the dead-letter write
+    fails the first two, removing `erase` from the eraser the third;
+    treating a permanent error as transient fails the first, dropping
+    the count bound fails `the_count_bound_evicts_the_oldest`, and not
+    updating the index fails the erasure tests. Not done: no sink of the
+    library classifies an error as permanent yet (the inbox's U+0000 in
+    a Meta-assigned id on Postgres still answers `500`); the service
+    does not wire a store (its sink classifies nothing). No parity row
+    changes status: row 8 already counted delivery semantics as done.
+    The sabotage review indexed every identifier (the draft took the
+    BSUID alone when an object had one and missed `phone_number`,
+    `input`, `participant_recipient_id` and parent BSUIDs:
+    `every_person_a_fixture_event_names_is_indexed` walks every fixture),
+    pinned the write-before-index order and the erasure/append race
+    (`an_erasure_that_reads_an_index_entry_finds_its_letter`,
+    `an_erasure_racing_an_append_leaves_it_to_the_next_erasure`), the
+    head's compare-and-swap (`racing_appends_take_distinct_ids_and_keep_every_letter`)
+    and the take-back of an unindexed letter
+    (`a_letter_that_cannot_be_indexed_is_taken_back_and_fails_the_delivery`).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable as noted): the
+    core change, `SinkError::Permanent` with `SinkError::permanent` and
+    `is_permanent` (additive, the enum `#[non_exhaustive]`; a sink
+    classifies its own errors); a new `meta_whatsapp_rs::erasure::Eraser`
+    rather than a change to `Inbox::erase_all`, whose rustdoc says it does
+    not reach the dead letters, and the guides and the cms-inbox skill
+    point to it; the defaults of 1000 letters, 14 days and 256 KiB, an
+    oversized event kept without its content (`with_capacity`,
+    `with_max_age`, `with_max_event_bytes`); a dead-lettered event's claim
+    marked done, and replay past the dedup guard (at least once); an event
+    naming no business number erased by any number's erasure of the
+    contact (over-deleting diagnostic copies is the safe direction for an
+    erasure); `FanoutSink` returning a transient error before a permanent
+    one; and the known limits, documented in the `deadletter` module
+    (an erasure racing an append leaves that letter to the next erasure;
+    a replay racing an erasure hands the event back to the sink; more than
+    `capacity` appends at once may evict a newer letter; a capacity change
+    strands letters from `get`, `list` and `replay` until they age out;
+    a letter naming nobody is reached by the bounds only). The namespaces
+    `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, their
+    keys' derivations and their records' shapes stay pending the owner's
+    confirmation before the first release (§ Owner touchpoints).
 - [x] **L21b. Live events shared, not cloned** (`meta-whatsapp-webhooks`
   `sse`, `meta-whatsapp-adapters` `BroadcastSink`; OPEN_QUESTIONS #31):
   both over `Arc<WebhookEvent>`.
@@ -3392,8 +3507,10 @@ everything else goes into the parity-completion report.
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
   with their keys' derivations and their records' shapes, added and
-  awaiting confirmation before the first release; and those L21a adds),
-  for the same reason as L5's.
+  awaiting confirmation before the first release; and L21a's
+  `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
+  keys' derivations and their records' shapes, added and awaiting
+  confirmation before the first release), for the same reason as L5's.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored
