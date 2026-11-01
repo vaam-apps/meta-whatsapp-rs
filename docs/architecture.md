@@ -803,6 +803,16 @@ token a solution gives is an `AccessToken`, decoded so that a body that
 fails to parse reaches no error; no call there is replayed after a
 timeout but the reads.
 
+Payments (India so far, roadmap P1a) are `meta_whatsapp_client::payments`:
+the `order_details` and `order_status` messages are `Interactive`
+variants of `messages` (re-exported there), checked against every rule
+the pages state, with amounts as `{value, offset}`; the payment lookup
+and refunds hang off the phone number (`Client::payments`), the payment
+configurations off the WABA (`Client::payment_configurations`). A refund,
+a configuration's creation and an OAuth link are never replayed after a
+timeout; the OAuth link is a `SecretUrl`. No call accepts the WhatsApp
+Payments terms of service.
+
 `EsVersion`'s v2, v3 and their public previews are `#[deprecated]`: Meta
 deprecates them on 2026-10-15.
 

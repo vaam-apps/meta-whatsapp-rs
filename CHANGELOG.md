@@ -217,6 +217,42 @@ stored data, the owner's).
 
 ### Added
 
+- **Payments in India** (`meta_whatsapp_client::payments`, roadmap P1a,
+  parity rows 38 and 141; Brazil is P1b, the templates' payment buttons
+  and the payment webhooks P1c, the service's routes P2). The
+  `order_details` and `order_status` interactive messages are typed:
+  `Interactive::OrderDetails` (boxed) and `Interactive::OrderStatus`,
+  built from `OrderDetails` and `OrderStatus` (`OutboundMessage::new(to,
+  details)`), instead of `MessageContent::Raw`. Payment settings: a UPI
+  intent link, a payment link (with `payment_type` `upi`) or a payment
+  gateway (`PaymentGateway`: `BillDesk`, Razorpay, `PayU` or Zaakpay and
+  their own fields, a preferred UPI app, the enabled payment options),
+  or the older `payment_configuration`. Amounts are `Amount { value,
+  offset }` (`Amount::inr(paise)`), and `OrderDetailsParameters::inr`
+  computes the total from the order (`Order::total`). Every rule the
+  pages state is checked before any request, naming the JSON path:
+  lengths (body 1024, footer 60, `reference_id` 35 of letters, digits,
+  `_`, `-`, `.`, item names 60, descriptions 60 and 120, the gateways'
+  fields), `offset` 100 for INR, a positive total equal to `subtotal +
+  tax + shipping - discount`, at least one item, an item's origin and
+  importer without a `catalog_id`, custom images on at most 10 items
+  and never with a `retailer_id` or `catalog_id`, beneficiaries (India,
+  a 6-digit PIN code). The subtotal is not checked: every India example
+  with a `sale_amount` breaks the rule. Where the pages disagree
+  (`payment_settings` an array, `importer_address` an object,
+  `partially_shipped`, `parameters` an object), the examples win; the
+  module docs list each case. `Client::payments(phone_number_id)` reads
+  a payment (`lookup`: its transactions, refunds and the gateway fields
+  sent, the lookup's error envelope reaching the caller as
+  `Error::Http`) and refunds one (`refund`: `value` and `offset` sent as
+  strings, as documented; never replayed after a timeout).
+  `Client::payment_configurations(waba_id)` lists, gets, creates
+  (`CreatePaymentConfiguration`), regenerates the OAuth link of, and
+  deletes payment configurations; the OAuth link is a `SecretUrl`, kept
+  out of `Debug` and decode errors, and neither creation nor
+  regeneration is replayed after a timeout. The WhatsApp Payments terms
+  of service stay the business's to accept, through the link in Meta's
+  `134011` error: no call accepts them.
 - **A pacer shared by replicas** in `meta-whatsapp-bot` (roadmap B2b,
   parity row 89; for the service's broadcasts, M5k). Opt-in:
   `KvRateLimiter` (module `pacer`) is a `RateLimiter` whose per-number
