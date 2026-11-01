@@ -8,8 +8,9 @@
 //! records (since roadmap S5b the core's `idempotency::run`, which admits
 //! the `Caller` it is given). An API adapter reaches them through the
 //! state's `Grant`, which only composing the state makes
-//! (`grant_from_state.rs`, roadmap S7). The API adapter's handlers are
-//! pinned in their own crate
+//! (`grant_from_state.rs`; no `From` or `FromRef` conversion of a state
+//! makes one either, `grant_from_conversions.rs`: roadmap S7). The API
+//! adapter's handlers are pinned in their own crate
 //! (`crates/meta-whatsapp-server-api-axum/tests/visibility.rs`), the
 //! core's in `crates/meta-whatsapp-server-core/tests/visibility.rs`.
 //! `tests/visibility/pass/` is the control: it names every path those

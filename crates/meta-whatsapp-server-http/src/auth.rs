@@ -368,8 +368,16 @@ impl OwnedNumber {
 
     /// The core's capability, for the core's services
     /// (`meta_whatsapp_server_core::messages::Messages`), to the holder of
-    /// the state's [`Grant`] (an API adapter's handlers), as the handlers
-    /// that hand it on are its own.
+    /// a [`Grant`] (an API adapter's handlers), as the handlers that hand
+    /// it on are its own.
+    ///
+    /// The grant is not checked to be the state's this number was opened
+    /// on: anyone may compose a state of their own, and so hold a grant.
+    /// That opens nothing. The capability carries the [`Authorizer`] that
+    /// made it, and every core service taking it admits it with the one it
+    /// is given ([`Authorizer::admit_number`]): another state's grant
+    /// reaches no record of this one's, and its token's client is
+    /// [`Self::client`] already.
     pub fn capability(&self, _granted: &Grant) -> &core_authz::OwnedNumber {
         &self.0
     }
@@ -438,8 +446,10 @@ impl OwnedWaba {
 
     /// The core's capability, for the core's services
     /// (`meta_whatsapp_server_core::templates::Templates`,
-    /// `meta_whatsapp_server_core::numbers::Waba`), to the holder of the
-    /// state's [`Grant`], as [`OwnedNumber::capability`].
+    /// `meta_whatsapp_server_core::numbers::Waba`), to the holder of a
+    /// [`Grant`], as [`OwnedNumber::capability`] (whose grant is not
+    /// checked either: the core's services admit the capability with
+    /// their own [`Authorizer`], [`Authorizer::admit_waba`]).
     pub fn capability(&self, _granted: &Grant) -> &core_authz::OwnedWaba {
         &self.0
     }
