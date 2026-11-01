@@ -12,11 +12,13 @@
 //!
 //! - **Numeric ids** ([`AppId`], [`BusinessId`], [`WabaId`],
 //!   [`PhoneNumberId`], [`MediaId`], [`TemplateId`], [`ProductItemId`],
-//!   [`ProductSetId`], [`SolutionId`]): Meta's ids for these objects are
-//!   numeric strings (the WABA reference's own error example: "must be a
-//!   valid numeric string", and the Solution Details API's: "`solution_id`
-//!   must be a valid numeric string"; the Catalog API's field tables for
-//!   products and product sets). Their constructors
+//!   [`ProductSetId`], [`SolutionId`], [`PreVerifiedPhoneNumberId`]):
+//!   Meta's ids for these objects are numeric strings (the WABA
+//!   reference's own error example: "must be a valid numeric string", the
+//!   Solution Details API's: "`solution_id` must be a valid numeric
+//!   string", and the Pre-Verified Phone Number Partners API's:
+//!   "`pre_verified_phone_number_id` must be a valid numeric string"; the
+//!   Catalog API's field tables for products and product sets). Their constructors
 //!   ([`WabaId::new`], [`FromStr`](std::str::FromStr), [`TryFrom`]) refuse
 //!   anything but 1 to [`MAX_NUMERIC_ID_LEN`] ASCII digits with a
 //!   [`ValidationError`] on the id's field (`waba_id`, `phone_number_id`,
@@ -396,6 +398,21 @@ numeric_id_type!(
     SolutionId,
     "solution_id"
 );
+numeric_id_type!(
+    /// A pre-verified business phone number id: the `id` that
+    /// `POST /{Business-ID}/add_phone_numbers` returns, addressed by
+    /// `GET`/`DELETE /{Pre-Verified-Phone-Number-ID}`, its `request_code`,
+    /// `verify_code` and `partners` edges, and taken by
+    /// `share_preverified_numbers`, Embedded Signup's
+    /// `extras.setup.preVerifiedPhone.ids` and a new number's
+    /// `preverified_id` (`embedded-signup/pre-verified-numbers`,
+    /// `reference/whatsapp-business-pre-verified-phone-number/*`). Not a
+    /// [`PhoneNumberId`]: once a business claims the number in Embedded
+    /// Signup, Meta replaces this temporary object with a phone number of
+    /// another id.
+    PreVerifiedPhoneNumberId,
+    "pre_verified_phone_number_id"
+);
 id_type!(
     /// A WABA migration intent id: the `id` that
     /// `POST /{WABA_ID}/set_solution_migration_intent` returns, read back
@@ -489,6 +506,7 @@ mod tests {
         check::<ProductItemId>("product_item_id");
         check::<ProductSetId>("product_set_id");
         check::<SolutionId>("solution_id");
+        check::<PreVerifiedPhoneNumberId>("pre_verified_phone_number_id");
         assert_eq!(WabaId::new("1/2").unwrap_err().field, WabaId::FIELD);
         assert!(is_numeric_id("1") && !is_numeric_id("1/2"));
     }
@@ -505,6 +523,8 @@ mod tests {
             assert_eq!(media.as_str(), sent);
             let product: ProductItemId = serde_json::from_str(&json).unwrap();
             assert_eq!(product.as_str(), sent);
+            let pre_verified: PreVerifiedPhoneNumberId = serde_json::from_str(&json).unwrap();
+            assert_eq!(pre_verified.as_str(), sent);
         }
     }
 
