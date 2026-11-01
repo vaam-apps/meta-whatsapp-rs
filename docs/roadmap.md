@@ -51,7 +51,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
-| last | P1, P2 (payments) |
+| last | P1a–P1c, P2 (payments) |
 
 ## 1. The service's modular split (design §8, D26)
 
@@ -1463,7 +1463,7 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     never moves back; the name `KvRateLimiter`. **Pending the owner**
     (a stable identifier): the namespace `wa.bot.pacer` and the version
     1 record layout.
-- [ ] **B3. Durable scheduling** (`meta-whatsapp-bot`; row 90; D29): jobs
+- [x] **B3. Durable scheduling** (`meta-whatsapp-bot`; row 90; D29): jobs
   as a typed store on `KvStore` (a bucketed due-time index, claims by
   compare-and-swap with a lease; no new port), send at a time, cancel,
   retry, survive a restart. Companion: architecture.md § Stable
@@ -1477,6 +1477,113 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     recorded from a status webhook (the job keeps each message's id)
     makes a re-run within 24 hours skip that recipient and send everyone
     else.
+  - **Landed:** row 90 done in the library (with Meta's own campaign
+    schedules, L10b). The module `jobs`: `KvJobs` (`KvJobs::schedule`,
+    `KvJobs::cancel`, `KvJobs::rerun`, `KvJobs::get`, `KvJobs::observe`,
+    `KvJobs::feedback`), `Job`, `JobId`, `ScheduledJob`, `JobState`,
+    `JobSummary`, `JobRunner` (`JobRunner::tick`, `JobRunner::run_until`)
+    and its builder, `JobFeedback` (the `131049` path as a bot listener or
+    an event sink), `TickReport`, `JobRun`, `JobEnd`; five store
+    namespaces under `wa.bot.jobs`, pending the owner's confirmation
+    (architecture.md § Stable identifiers, § Owner touchpoints below). A
+    job's message is not stored: a composer of the runner makes it from
+    the job's JSON payload at each send, so every replica and every
+    release after a restart registers the same one. The decisive tests,
+    in `crates/meta-whatsapp-bot/tests/jobs.rs`:
+    `two_runners_on_one_store_send_a_due_job_once` (both runners read the
+    job at one version through a gate in the store; with the claim's
+    compare-and-swap replaced by a plain put both claim and it fails; the
+    send itself is guarded a second time by the recipient's marker),
+    `a_job_scheduled_before_a_restart_is_sent_by_a_new_runner`,
+    `a_resumed_broadcast_never_resends_a_recipient_recorded_as_sent`
+    (fails without the per-recipient marker, written or read) and
+    `a_131049_status_makes_a_rerun_within_24_hours_skip_that_recipient`
+    (Meta's failed-status fixture; fails without the limited skip). Each
+    of these fails a test too:
+    `a_crashed_runners_lease_holds_the_job_until_it_expires` (the lease
+    ignored), `a_timed_out_send_is_marked_unknown_and_never_resent` (a
+    timed-out send resent), `a_job_cancelled_while_it_runs_stops_before_its_next_send`
+    (no cancel check), `a_job_indexed_while_the_cursor_moves_is_not_lost`
+    and `a_rerun_into_the_minute_it_ran_in_is_not_lost` (the cursor's
+    second read, the page written again). The runner paces through any
+    `Pacer`, B2b's `KvRateLimiter` included
+    (`jobs_pace_through_a_pacer_shared_by_replicas`). Not in it: a
+    job-store trait (B3b; here the swap is the `KvStore` adapter, and the
+    runner's outbound, pacer, policy and composer), recurring schedules,
+    a job's lines per recipient beyond its summary, and live runs on
+    Postgres and Redis (the jobs use only the port the store conformance
+    suite checks).
+  - **Sabotage review** (concurrency, at-most-once, crash safety), each
+    fixed with a test that fails without the fix:
+    `a_runner_failing_right_after_moving_the_cursor_loses_no_job` (a
+    runner failing, or crashing, between moving the cursor and reading
+    the minute again lost a job indexed meanwhile, for good: the cursor
+    now keeps the minute's page versions and every tick reads it again
+    first); `a_job_due_long_ago_is_run_without_reading_every_minute_since`
+    (a due time a month past moved the cursor back a month, 86 410 reads
+    for one job, the Unix epoch some 56 million: a due time already past
+    is indexed under the current minute, its due time kept);
+    `an_unreadable_marker_is_an_outcome_unknown_not_a_stuck_runner` (one
+    unreadable marker failed every tick at that job, every later job
+    waiting behind it: it is now an outcome unknown, never resent);
+    `a_long_marker_scan_keeps_the_lease` (reading many markers outlasted
+    the lease, and another replica took the job over, again and again
+    with more replicas: the scan renews it);
+    `a_send_checked_before_a_cancel_and_a_rerun_is_not_made` (a cancel
+    and a re-run between a runner's check and its marker let the old
+    run's runner send to someone the re-run had sent to, its marker
+    being the old run's: the job is read again with the marker in place).
+    Tests added for what held: a lease that expires mid-send while
+    another runner claims the job, the marker stopping the second send
+    (`a_runner_whose_lease_expired_mid_send_never_sends_after_the_new_claim`),
+    the lease renewed between long sends
+    (`a_runner_renews_its_lease_between_sends`), the cursor's second read
+    before a tick moves on through more minutes, against a writer whose
+    clock lags
+    (`a_job_indexed_behind_a_cursor_moving_on_through_minutes_is_not_lost`;
+    the first tick's own re-read covers only the minute just behind the
+    cursor), a cancel racing a claim
+    in both orders (`a_cancel_racing_a_claim_sends_nothing`), the 131049
+    skip still on two minutes short of 24 hours, and scoped to its job
+    (`a_131049_skip_is_scoped_to_its_job`); the key pins are known
+    answers computed outside the crate. Documented: at most once, not
+    exactly once (a crash after the marker and before the request leaves
+    that recipient unsent, reported unknown); leases read each runner's
+    clock (skew, or a pause past the lease, costs a takeover, never a
+    duplicate). Not changed: a tick runs its jobs one after the other
+    (a long broadcast delays the jobs due after it) and `run_until`
+    stops between ticks only; a job left unrun past its index pages'
+    retention stays pending, never found (decided below).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a setting, or swappable
+    through the `KvStore` adapter until B3b): the namespaces
+    `wa.bot.jobs`, `wa.bot.jobs.due`, `wa.bot.jobs.sent`,
+    `wa.bot.jobs.message` and `wa.bot.jobs.limited`; minute buckets of
+    256 ids a page (`BUCKET_SECONDS`, `BUCKET_PAGE_CAPACITY`); a
+    2-minute lease renewed at half (`JobRunnerBuilder::lease`); the
+    `131049` skip scoped to the job, its 24 hours counted from the
+    webhook's arrival (`MARKETING_LIMIT_WAIT`); retention of 7 days for
+    message ids (`KvJobs::message_ttl`) and 30 days for settled jobs,
+    markers and index pages (`KvJobs::retention`), **a job left unrun
+    past 30 days no longer found**; job retries 5 × (30 s doubling to
+    30 min) (`JobRunnerBuilder::retries`, `JobRunnerBuilder::retry_delay`);
+    8 sends in flight per job (`JobRunnerBuilder::concurrency`); the
+    default runner id of the process id, the time and a counter, each
+    replica setting its own (`JobRunnerBuilder::runner_id`); D29's
+    "the job store is a trait" met for now by the concrete `KvJobs`,
+    swappable through its `KvStore` adapter, the trait itself B3b
+    (design D29 amended); row 90 done in the library. **Pending the
+    owner** (stable identifiers, before the first release): the five
+    namespaces, their keys' derivations and their records' layouts
+    (architecture.md § Stable identifiers, § Owner touchpoints below).
+- [ ] **B3b. A `JobStore` trait** (`meta-whatsapp-bot`; D29): the job
+  store's operations (schedule, cancel, re-run, get, the 131049
+  feedback, and the runner's claim, markers and due index) behind a
+  trait the runner takes, `KvJobs` its default, so a job queue of the
+  integrator's own can stand in.
+  - **After:** B3.
+  - **Decisive:** `KvJobs` implements it, and a second, in-memory
+    implementation passes the same job suite.
 - [x] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
   age and a cap per chat, through `ConversationStore`'s erasure.
   - **After:** B1, L5.
@@ -1774,7 +1881,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     Business node documents, not from the WABA the guide's request prints
     (its prose asks for a business id); a non-2xx answer to the token
     request never quotes its body.
-- [ ] **L11a. Hosted Embedded Signup** (`meta-whatsapp-client`,
+- [x] **L11a. Hosted Embedded Signup** (`meta-whatsapp-client`,
   `client::embedded_signup`; row 121; OPEN_QUESTIONS #11): started by the
   `PARTNER_ADDED` webhook, its business token from
   `system_user_access_tokens` with an `appsecret_proof`, then the
@@ -1785,6 +1892,62 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     carrying the `appsecret_proof` of the app secret (a wrong proof fails
     the test's request assertion), and to the same stored record the
     code flow writes.
+  - **Landed:** row 121 done in the library (the service's side stays
+    with M3f). `HostedSignup` (the webhook's `waba_info.waba_id` and
+    `owner_business_id`, and the token request, `fetch_only` by
+    default) and `EmbeddedSignup::onboard_hosted` /
+    `onboard_hosted_with_approval`: step `fetch_token`
+    (`Business::system_user_access_token` on the customer's portfolio,
+    with the system token passed in and the app secret of
+    `AppCredentials`, borrowed) in place of `exchange_code`, then the
+    code flow's steps, shared with it (`onboard_granted`); `verify_assets`
+    also refuses a WABA whose owner, as Meta reports it, is another
+    business than the webhook's. Resumed by `resume` with
+    `OnboardingRequest::for_hosted`. The decisive tests, in
+    `embedded_signup::hosted`:
+    `a_partner_added_fetches_the_token_with_the_proof_and_onboards`
+    (the form body exactly, the proof both a fixed vector computed with
+    `openssl dgst -sha256 -hmac` and an HMAC the test computes),
+    `a_wrong_app_secret_sends_another_proof`,
+    `the_stored_record_is_the_code_flows` (the same keys, clear fields
+    and sealed record but the random nonce), a failure at each step
+    before `store_token` re-run and after it resumed,
+    `a_fetch_is_replayed_and_a_generation_is_not`; and through the
+    webhook parser, the skill's `hosted_signup.rs` (Meta's
+    `PARTNER_ADDED` example, verbatim). Found on the way: the webhook
+    names no tenant and also comes for code-flow onboardings, and the
+    hosted page asks for no PIN; both are the integrator's, documented
+    in the guide. Found in review: `PARTNER_ADDED` comes for every WABA
+    shared with the app (the code flow's and coexistence's onboardings
+    too) and may be delivered again, and `store_token` replaces a
+    record (as the code flow's re-onboarding must), so a hosted run
+    after a code-flow onboarding would have replaced its token and
+    `created_at` (and with it a Solution Partner's recorded approval)
+    unasked; `onboard_hosted` now refuses a WABA the vault holds,
+    before any request (a presence read, an unreadable record counting
+    as held; `a_waba_the_vault_holds_is_refused_before_any_request`),
+    and re-onboarding one is deleting it first. A read, not a lock: a
+    code-flow onboarding still running when the webhook arrives can
+    store after it; the approval's atomic reservation closes that
+    window, and the rustdoc says so.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): the token
+    request is `fetch_only=true` by default, swapped per signup by
+    `HostedSignup::token_request` (a fetch is replayed as a read, a
+    generation never is); the system user token is an explicit argument
+    of `onboard_hosted`, not held by `EmbeddedSignup`; a WABA whose
+    owner, as Meta reports it, is another business than the webhook's
+    is refused, and when Meta reports no owner none is stored, as in
+    the code flow; `debug_token` runs on the fetched token, on the
+    assumption that hosted signup's business tokens carry
+    `granular_scopes` naming the WABA, as the code exchange's do (one
+    that does not fails `verify_assets` on `granular_scopes`, closed);
+    the integrator's, documented: re-onboarding a WABA already held
+    (delete it first; the library refuses it otherwise), the tenant
+    binding (in the approval) and the PIN; no facade helper (the glue
+    stays in the skill's `hosted_signup.rs`); the skill not re-stamped.
+    The library's side of OPEN_QUESTIONS #11 is decided; the service's
+    is M3f.
 - [ ] **L11b. Several WABAs in one signup** (`client::embedded_signup`;
   row 122; OPEN_QUESTIONS #5): opt-in onboarding of every granted WABA,
   each bound and resumable on its own.
@@ -1880,7 +2043,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Follow-up:** `LaunchOptions::solution_id` stays a `String`; typing
     it as `SolutionId` is a breaking change to the Embedded Signup
     builder, left for its own item.
-- [ ] **L13. Marketing** (`meta-whatsapp-client`, `client::marketing`;
+- [x] **L13. Marketing** (`meta-whatsapp-client`, `client::marketing`;
   rows 137, 138, 154; OPEN_QUESTIONS #45): max price (its agreement, the
   partner allow list, duplicating a template at another price), reach
   estimates and CTWA welcome message sequences, and a typed send-time
@@ -1891,9 +2054,101 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   act (AGENTS.md § Decisions).
   - **Kind:** additive.
   - **After:** nothing.
-  - **Decisive:** exact JSON per endpoint; the 15-entry allow-list cap
-    is checked locally; a max-price send makes no agreement request
-    (a transport scripted for the send alone fails on any other call).
+  - **Decisive:** exact JSON per endpoint; a max-price send makes no
+    agreement request (a transport scripted for the send alone fails on
+    any other call). As first written it also checked the 15-entry
+    allow-list cap locally; that test cannot hold: Meta's
+    `marketing-messages/changelog` of 2026-10-01 removed partner
+    allowlisting with the open beta, so there is no allow list and no
+    cap (the local cap checked instead is the 240 country multipliers,
+    below).
+  - **Landed:** rows 137 and 138 done for the library, against Meta's
+    pages of 2026-11-01 (`marketing-messages/pricing`,
+    `marketing-messages/pricing/enroll-max-price`,
+    `marketing-messages/pricing/duplicate-templates`,
+    `marketing-messages/changelog`, `ctwa/welcome-message-sequences`). In
+    `client::marketing`: the agreement on `MarketingBusiness`
+    (`sign_max_price_agreement`, `max_price_agreement`), duplicating a
+    template (`MarketingAccount::duplicate_template`, a
+    `DuplicateTemplate` with a `MaxPrice`, answering a
+    `DuplicatedTemplate` with the `source_template_id` the guide says
+    the response carries), reach estimates
+    (`MarketingAccount::reach_estimate`), a template's max price
+    (`Client::marketing_template`: `MarketingTemplate::max_price`,
+    `set_max_price`, `clear_max_price`) and the welcome message sequences
+    (`Client::welcome_sequences`: `WelcomeSequences::create`, `update`,
+    `list`, `get`, `delete`); core gains `ids::WelcomeSequenceId`
+    (opaque). **The allow list is gone:** Meta's changelog raised the
+    partner cap from 15 to 100 (2026-07-31) and 500 (2026-09-07), then
+    removed allowlisting with the open beta (2026-10-01): a partner's
+    agreement covers the client WABAs shared with or managed by it, and
+    no current page shows the allow list's request, so it is not
+    wrapped and there is no cap to check; the cap checked locally is
+    `optimization_spec`'s 240 country multipliers
+    (`marketing::MAX_COUNTRY_MULTIPLIERS`). The agreement is isolated:
+    `sign_max_price_agreement` is the one call that sends its `POST`,
+    never replayed (whatever the client's `RetryPolicy`: not after a
+    timeout, nor on Meta's HTTP 429 within 5 minutes or a throttling
+    error, which the policy resends for other calls), and an error naming
+    the missing agreement (`100`, a duplicate's 403) is returned, not
+    answered by signing. Its errors keep the signer out: a decode error
+    carries no body, and an `Error::Http` (an answer that is not Meta's
+    envelope) a placeholder (a 429 is `ErrorKind::RateLimited`; Meta's
+    wait is 5 minutes from the last email).
+    Decisive tests (`marketing::tests_max_price`):
+    `a_max_price_send_makes_no_agreement_request` (one scripted
+    response, the send's), `no_other_max_price_call_signs_the_agreement`,
+    `only_the_agreement_module_names_the_agreement` (no code line of the
+    client's, the facade's or the bot's sources but this module's names
+    the call or its path, called or not),
+    `signing_the_agreement_posts_the_documented_body`,
+    `signing_is_not_replayed_after_a_timeout`,
+    `signing_is_not_replayed_on_a_429`,
+    `a_failed_agreement_answer_never_quotes_the_signer`,
+    `duplicate_matches_the_documented_example`,
+    `set_max_price_matches_the_documented_update`,
+    `clear_max_price_sends_exactly_the_two_nulls`,
+    `template_max_price_reads_the_documented_list_shape`,
+    `reach_estimate_matches_the_documented_example`,
+    `a_max_price_is_checked_against_the_documented_limits` (240 entries
+    pass, 241 do not; multipliers in (0, 10]; alpha-2 keys; `bid_amount`
+    1 to `i32::MAX`); in `marketing::tests_welcome`, the guide's create,
+    update, list, get and delete examples and
+    `create_is_not_replayed_after_a_timeout`. Row 154 stays partial: no
+    page of 2026-11-01 (`templates/components`, `templates/template-media`,
+    `marketing-messages/features`, `marketing-messages/send-marketing-messages`,
+    the MM API and Messages API references) shows a GIF header's
+    send-time parameter, so none is typed (`templates::Parameter::Other`
+    carries one verbatim).
+  - **Not wrapped:** the allow list (withdrawn, above); the WhatsApp
+    Manager visibility switch
+    (`whatsapp_manager_marketing_messages_max_price_enroll_status`,
+    `marketing-messages/pricing/whatsapp-manager-visibility`, read in
+    review on 2026-11-01: a field of the WABA, read with `fields=` and
+    set by `POST /{WABA_ID}`, `OPT_IN` or `OPT_OUT`, which shows or
+    hides the max price screens in WhatsApp Manager and changes neither
+    eligibility nor API settings; no legal act, outside row 137's
+    definition, left for a follow-up); `optimization_spec` on `templates::TemplateDefinition` at
+    creation (a template takes its max price after creation with
+    `MarketingTemplate::set_max_price`, or as a duplicate); an
+    `ErrorKind` for `131061`, `131065` and the welcome sequences'
+    `4027xxx` codes (core's error tree, not this item).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation; each swappable, the agreement's isolation aside, which
+    is AGENTS.md's rule for legal acts and OPEN_QUESTIONS #45's
+    decision): a `bid_amount` of `0` is refused; country keys are
+    checked for shape only (two capital letters), whether the code
+    exists is Meta's check; the welcome sequences' form sends plain
+    values (curl strips `-F 'name="…"'`'s quotes); the welcome list
+    reads a bare array or `{"data": […]}`; `WelcomeSequences::update` is
+    idempotent (it sets the values it names), while create, a duplicate,
+    `set_max_price`, `clear_max_price` and the agreement are not; blank
+    sequence ids are refused; the signer's email is not checked for
+    shape and `MaxPriceAgreementSigner`'s `Debug` is not redacted
+    (personal data, not a secret), but neither the name nor the email
+    reaches an error (above); a duplicate may carry country
+    multipliers; the names as landed; `Client::marketing_template`'s
+    max price API stays.
 - [x] **L14. Call recording and transcription** (`meta-whatsapp-client`,
   `client::calling`; row 135): the per-call `recording` and
   `transcription` objects on connect and accept (`calling/call-recording`,
@@ -2173,7 +2428,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     resolved (references, payload schemas, `__example__` types, form
     names), component types per Flow JSON version, and the limits the
     docs call soft (`NavigationList` content truncated or not rendered).
-- [ ] **L19. Media conversion** (`meta-whatsapp-client`: a
+- [x] **L19. Media conversion** (`meta-whatsapp-client`: a
   `MediaConverter` trait; `meta-whatsapp-adapters`: an implementation
   behind an `ffmpeg` feature, off by default; row 48): the
   implementation runs an `ffmpeg` the integrator installs, or calls a
@@ -2186,6 +2441,104 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a WAV input comes out as Ogg with Opus that
     `Media::upload`'s type check accepts; a missing `ffmpeg` is a typed
     error, not a panic.
+  - **Landed:** the port `meta_whatsapp_core::media::MediaConverter`,
+    an object-safe async trait, `convert(MediaInput, TargetFormat) ->
+    Result<ConvertedMedia>`, with `TargetFormat::OggOpus` (mono Ogg
+    Opus, uploaded as `audio/ogg`: Meta's media page reads "OPUS codecs
+    only; base audio/ogg not supported; mono input only", read on
+    2026-11-01) and its limit, core's `media::AUDIO_MAX_BYTES` (16 MiB);
+    `meta_whatsapp_client::media` re-exports them and uploads a result
+    with `Media::upload_converted` (its format's type and extension,
+    through `validate_upload`); and `meta_whatsapp_adapters::media::FfmpegConverter`
+    behind the adapters' `ffmpeg` feature (forwarded by the facade's;
+    off by default; in `full`). The converter starts the `ffmpeg` binary
+    with `tokio::process`, never a shell, with fixed literal arguments:
+    the input on stdin and the result on stdout, `-protocol_whitelist
+    pipe` and a `-format_whitelist` of recording formats (WAV, MP3, Ogg,
+    FLAC, AAC, MP4/M4A/3GP, AMR, Matroska/WebM) before `-i`, the first
+    audio stream only, tags and chapters dropped, `-ac 1`, libopus at
+    32 kb/s. The input (64 MiB) and the run (60 s, killed past it) are
+    bounded, and the result to the 16 MiB upload limit (killed past it);
+    stderr is drained and withheld; the output is checked to be mono Ogg
+    Opus. Failures are a new node, `Error::Conversion(ConversionError)`
+    (`BinaryMissing`, `EncoderMissing`, `Timeout`, `InputRejected`,
+    `OutputInvalid`, `Killed`; architecture.md § Error tree), never
+    `may_have_been_sent`, retryable only on `Timeout`; an empty or
+    oversized input (or result) is a `ValidationError` on `input`.
+    `FfmpegConverter::check` finds a missing binary or libopus at
+    startup. Decisive: `ffmpeg_turns_wav_into_ogg_opus_that_upload_accepts`
+    (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`, in the facade, where the
+    adapters and the client meet: a stereo 44.1 kHz WAV comes out as Ogg
+    whose first packet is an `OpusHead` for one channel, ffprobe
+    agreeing, and goes through `Media::upload_converted` as `audio/ogg`,
+    its exact request asserted) and `a_missing_ffmpeg_is_a_typed_error`
+    (`ConversionError::BinaryMissing`). The real-`ffmpeg` tests use
+    `META_WHATSAPP_RS_TEST_FFMPEG`, else `ffmpeg` on `PATH`, and skip
+    without one unless `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`; CI installs
+    `ffmpeg` on its runner and sets that variable
+    (`.github/workflows/ci.yml`, docs/dev-environment.md), so they count
+    there; no image or dev container carries one. They ran against
+    ffmpeg 6.1.1 when this landed. Removing the protocol or format
+    whitelist, mono, the timeout, the kill on timeout, an input or
+    output bound or the output check, or withholding stderr, changing
+    the codec, or a timeout that says `may_have_been_sent`, fails a test
+    (the protocol whitelist only the fixed-argument one: with these
+    formats, ffmpeg 6.1.1 opens nothing else from a pipe even without
+    it, so it is a second wall, not the first). The security review
+    added: the child's environment reduced to `PATH` (no `FFREPORT` log
+    file), `-max_alloc 16777216` (a 16 KiB WAV declaring 1 Hz otherwise
+    took 1.7 GB and a minute), `-abort_on empty_output` (an input
+    without audio came back as an empty voice note), an MP4 whose index
+    follows its media data moved index first in memory (from a pipe,
+    ffmpeg read next to nothing of one longer than a few seconds, and
+    the converter returned it as success), and real-`ffmpeg` tests for
+    each, one of them an MP4 whose data reference names a host file,
+    never read.
+    Not done: images into stickers and resizing (L19b), a conversion
+    sidecar over HTTP, and a limit on conversions at once (the caller's).
+  - **Decided** (coordinator, under the owner's delegation, 2026-11-01;
+    each swappable):
+    - The trait lives in `meta-whatsapp-core`, beside the other ports,
+      not in the client as planned: the adapters then depend on core
+      alone, with no dependency cycle through the client's tests. Core
+      carries the MIME type, the extension and the size limit of each
+      format; the client re-exports the port from `client::media`, and a
+      client test keeps core's limit equal to its upload table.
+    - The upload MIME type is `audio/ogg`, the literal of Meta's table,
+      not `audio/ogg; codecs=opus` (the upload check takes both).
+    - Failures get a typed node, `Error::Conversion(ConversionError)`,
+      with existing kinds (no new `ErrorKind`: the service's error codes
+      and OpenAPI document are unchanged); a missing binary is
+      `ConversionError::BinaryMissing`, not a `ConfigError`, so every
+      converter failure is handled in one place; an empty or oversized
+      input stays a `ValidationError` on `input`.
+    - Defaults: 64 MiB of input, 60 s, 32 kb/s at 48 kHz in `voip` mode,
+      the recording formats above (each a setting or a literal of the
+      converter, swapped by another `MediaConverter`).
+    - The facade's `ffmpeg` feature is in `full`; the gate variables are
+      `META_WHATSAPP_RS_REQUIRE_FFMPEG`, `META_WHATSAPP_RS_TEST_FFMPEG`
+      and `META_WHATSAPP_RS_TEST_FFPROBE`, apart from
+      `META_WHATSAPP_RS_REQUIRE_LIVE` (no `live_` test name).
+    - Row 48 stays partial, its rest planned in L19b.
+    - CI proves the conversion: its runner installs `ffmpeg`, which no
+      image or dev container does.
+- [ ] **L19b. Stickers and image resizing** (`meta-whatsapp-core`: new
+  `TargetFormat`s; `meta-whatsapp-adapters`: their conversion behind the
+  `ffmpeg` feature, or another converter; row 48): an image into a WebP
+  sticker within Meta's limits (`image/webp`, 100 KB static, 500 KB
+  animated: `messages/sticker-messages`, which gives no dimensions, so
+  none is assumed), and a JPEG or PNG resized or
+  re-encoded under the 5 MB image limit, through the same port and the
+  same safety rules as L19 (fixed arguments, input formats restricted,
+  bounded, diagnostics withheld).
+  - **Kind:** additive.
+  - **After:** L19.
+  - **Decisive:** a PNG comes out as a static WebP (its `RIFF`/`WEBP`
+    header read apart from the converter) within 100 KB that
+    `Media::upload`'s type check accepts as a sticker, and a JPEG over
+    5 MB comes out under it, both against a real
+    converter in CI; a GIF or a crafted file off the format list is a
+    `ConversionError::InputRejected`.
 - [ ] **L20a. One catch-all shape for open enums** (`meta-whatsapp-core`
   and every crate with an open enum; OPEN_QUESTIONS #27): `Other(String)`,
   generated by one macro in core.
@@ -2773,18 +3126,95 @@ or WABA fails the family's own cross-tenant test).
 
 ## 5. Payments (last)
 
-- [ ] **P1. A `payments` client module** (`meta-whatsapp-client`; rows
-  38, 141): India (UPI, payment links, order details and order status,
-  onboarding) and Brazil (Pix, Boleto, payment links, one-click), typed,
-  instead of `MessageContent::Raw`; the payment buttons of templates
-  (`order_details`, `payment_request`).
+A `payments` client module (`meta-whatsapp-client`; rows 38, 141):
+India (UPI, payment links, order details and order status, onboarding)
+and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
+`MessageContent::Raw`; the payment buttons of templates (`order_details`,
+`payment_request`). Too large for one pull request, it lands in three:
+
+- [x] **P1a. India: the order messages, the lookup, refunds and
+  onboarding** (`meta-whatsapp-client`; rows 38, 141, partly).
+  `client::messages::Interactive::OrderDetails` and `OrderStatus`
+  (UPI intent links, payment links, payment gateways and the older
+  payment configuration, every documented rule checked first), all
+  re-exported from `client::payments`, with `Client::payments` (the
+  payment lookup, refunds) and `Client::payment_configurations` (list,
+  get, create, regenerate the OAuth link, delete).
   - **After:** nothing.
-  - **Decisive:** exact JSON from `payments/payments-in/*` and
-    `payments/payments-br/*`; the payments pages' webhook examples join
-    the conformance sweep (their manifest status moves from `OutOfScope`
-    to `Typed`).
+  - **Kind:** additive.
+  - **Decisive:** exact JSON, both ways, from
+    `payments/payments-in/upi-intent/dynamic-vpa`,
+    `payments-in/payment-links`, `payments-in/pg`,
+    `payments-in/upi-intent` and `payments-in/onboarding-apis`; a
+    refund, a configuration's creation and an OAuth link are never
+    replayed after a timeout.
+  - **Landed:** `client::payments` (the messages in
+    `client::messages::payments`, re-exported), every example of the
+    five pages an exact-JSON test (`payments/tests.rs`), every rule
+    the pages state checked first. Not checked locally: the subtotal,
+    the expiration's 300-second minimum and the beneficiaries of
+    shipped goods (the module docs say why).
+  - **Review (money, wire format, secrets):** an `order_status`
+    message refuses `pending`, which the `payments-in/pg` parameters
+    table excludes, and checks its `reference_id` as an
+    `order_details` message's; the items' origin and importer are not
+    required with the older `payment_configuration` alone (its page
+    makes them optional); a total above `u64::MAX` is refused as such
+    (`Order::total` sums in `u128`, so nothing overflows; the message
+    no longer says "negative"); a refusal of the two OAuth link
+    endpoints that is not Meta's envelope keeps its status, never its
+    body, and `PaymentOauthLink`'s `Debug` hides the link's path as
+    well as its query (no page says where its credential sits). Tests
+    added for what no test caught: every limit exactly reached, in
+    two-byte characters (`every_limit_is_inclusive_and_counts_characters`),
+    amounts at and beyond `u64::MAX`, the lookup's error example, `.`
+    and `..` as lookup names, a refund not replayed on a server error.
+    Documented: a replayed deletion can answer an error when the first
+    went through, a refund's amount is not compared with what was
+    paid, and the onboarding calls are refused with `131005`.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions): where the pages contradict
+    themselves, the examples win (`payment_settings` an array,
+    `importer_address` an object, `partially_shipped`, `parameters` an
+    object); the subtotal is not checked locally, the total equation
+    is; the header image's `provider` is not modelled; the
+    `order_details` header is an image only; the answers' fields the
+    tables call required but some example leaves out, or another table
+    calls optional, are optional (`merchant_category_code`,
+    `purpose_code`, a transaction's `pg_transaction_id`);
+    `purpose_code` is sent as a string, as both examples do, and a
+    configuration's name has at most 60 characters, an order's limit;
+    the tests put numeric ids where the examples print placeholder
+    names (`the-catalog_id`, `your-media-id`).
+- [ ] **P1b. Brazil** (`meta-whatsapp-client`; rows 38, 141): `BRL`
+  orders (`payment_type` `br`, the `order` object optional, a
+  `reference_id` of 60), the payment settings `pix_dynamic_code`,
+  `payment_link`, `boleto` and `offsite_card_pay`, and the `payment`
+  object of an `order_status` message (whose status may be `pending`
+  in Brazil, which India's check refuses), on P1a's types
+  (`payments/payments-br/orders`, `offsite-pix`, `payment-links`,
+  `boleto`, `one-click-payments`).
+  - **After:** P1a.
+  - **Kind:** additive.
+  - **Decisive:** exact JSON from `payments/payments-br/*`; a `BRL`
+    order checked by Brazil's rules, an `INR` one by India's.
+- [ ] **P1c. The payment template buttons and the payment webhooks**
+  (`meta-whatsapp-client`, `meta-whatsapp-webhooks`; rows 38, 141): a
+  template's `order_details` button and `order_status` component
+  (`payments-in/orderdetailstemplate`, `orderstatustemplate`,
+  `payments-br/orderdetailstemplate`), its `payment_request` button
+  (`payments-br/payment-request-cta`), the creation of these templates
+  (which the service refuses until then), and the status of type
+  `payment` (`payments-in/pg`) and the `payment_method` reply
+  (`payments-br/one-click-payments`) typed.
+  - **After:** P1a, P1b.
+  - **Kind:** additive.
+  - **Decisive:** the payments pages' webhook examples join the
+    conformance sweep (their manifest status moves from `OutOfScope` to
+    `Typed`), with new event data snapshots only (no changed one); exact
+    JSON of the template pages' examples.
 - [ ] **P2. Payment routes in the service** (rows 38, 141).
-  - **After:** P1.
+  - **After:** P1a, P1b, P1c.
   - **Decisive:** M1.3 over the new routes; an order-details send
     carries the tenant's token.
 
@@ -2833,7 +3263,11 @@ everything else goes into the parity-completion report.
   store namespace or stored name an item adds after the table in
   architecture.md § Stable identifiers was last confirmed (B2b's
   `wa.bot.pacer` and its record layout, added and awaiting
-  confirmation, and those B3 and L21a add), for the same reason as L5's.
+  confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
+  `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
+  with their keys' derivations and their records' shapes, added and
+  awaiting confirmation before the first release; and those L21a adds),
+  for the same reason as L5's.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored

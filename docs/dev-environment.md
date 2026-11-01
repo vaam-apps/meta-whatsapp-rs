@@ -113,6 +113,21 @@ secrets you mount into the container.
 See [CONTRIBUTING.md](../CONTRIBUTING.md#environment). The only extra step is
 Docker for `just test-live`.
 
+## ffmpeg (media conversion tests)
+
+The media conversion tests (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`,
+roadmap L19) run `adapters::media::FfmpegConverter` against a real
+`ffmpeg` with libopus. Neither the dev container nor the service's image
+carries one, on purpose (its licence is the deployer's choice): without
+one the tests print why and skip. CI installs `ffmpeg` on its runner
+(`.github/workflows/ci.yml`, before `just ci`) and sets
+`META_WHATSAPP_RS_REQUIRE_FFMPEG=1`, which turns that skip into a
+failure, so CI is where they count. To run them locally, install `ffmpeg`
+on the host (Debian and Ubuntu: `apt-get install ffmpeg`), or name one
+with `META_WHATSAPP_RS_TEST_FFMPEG` (and `META_WHATSAPP_RS_TEST_FFPROBE`),
+and set `META_WHATSAPP_RS_REQUIRE_FFMPEG=1` to be sure they ran:
+`META_WHATSAPP_RS_REQUIRE_FFMPEG=1 cargo test -p meta-whatsapp-rs --all-features --test ffmpeg`.
+
 ## Recipes
 
 | Recipe | Does |

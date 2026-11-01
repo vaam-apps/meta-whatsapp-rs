@@ -578,7 +578,7 @@ An append at the same time is never lost, and on Postgres trims take
 turns with purges and erasures. To run either on a schedule, the bot
 framework's `RetentionPolicy` and `RetentionSweeper`
 (`meta_whatsapp_rs::bot::retention`, feature `bot`;
-[bots.md § 10](bots.md#10-retention-and-auto-delete)) apply an age and a
+[bots.md § 11](bots.md#11-retention-and-auto-delete)) apply an age and a
 cap together.
 
 ## Pitfalls

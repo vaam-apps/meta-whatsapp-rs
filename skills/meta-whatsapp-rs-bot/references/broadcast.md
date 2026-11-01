@@ -167,7 +167,15 @@ recipient, in order (`index`, `attempts`, `outcome`), its counts
 `BroadcastBuilder::report_to(tx)` sends each line to a `ReportSink` (a
 `tokio::sync::mpsc::Sender`) as it settles and keeps none: the run waits
 for the sink, and one that fails stops the run. A restart loses a run in
-progress: durable broadcasts and scheduling are planned, not built.
+progress. For one that survives it, or a send at a time, schedule a `Job`
+in `KvJobs` (a typed store on `KvStore`) and run a `JobRunner` per
+replica: a job is claimed by compare-and-swap under a lease, sent through
+a paced broadcast, and each recipient is marked before its send, so a
+resumed job sends nobody twice and never resends an outcome unknown
+(`JobSummary::unknown`). The message is made from the job's JSON payload
+by the runner's composer at each send. A `131049` status webhook handed to
+`KvJobs::observe` (or `KvJobs::feedback` as a listener) makes a re-run
+(`KvJobs::rerun`) skip that recipient for 24 hours. Guide, section 10.
 
 ## Testing
 

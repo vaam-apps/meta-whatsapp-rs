@@ -140,9 +140,15 @@ let delivered = analytics
   the deployer's decision
   ([open question 26](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details),
   decided on that basis).
-- MM API max-price agreement, partner allowlist and reach estimates are
-  not wrapped. Signing the agreement is a legal act too: once wrapped,
-  it is its own explicit call, never made by a send (open question 45).
+- It never signs Meta's max price beta agreement for you (a legal act
+  too): `MarketingBusiness::sign_max_price_agreement` signs it on the
+  business's behalf, and nothing else does (no send, duplicate, reach
+  estimate or template update; Meta's refusal for want of it is
+  returned to you). Signing is the deployer's decision
+  ([open question 45](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#product-details));
+  `MarketingBusiness::max_price_agreement` reads its state. Meta
+  withdrew the partner allow list with the open beta (2026-10-01).
+- No GIF header send-time parameter is typed: Meta's pages show none.
 
 ## Related skills
 

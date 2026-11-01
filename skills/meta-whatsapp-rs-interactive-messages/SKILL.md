@@ -125,8 +125,10 @@ cards 2–10, card body 160 with at most 2 line breaks.
 - It does not remember what you asked: correlate replies yourself, by the
   button or row id, the Flow token, or the quoted message
   (`InboundMessage::context`).
-- Payment messages are not modelled (`MessageContent::Raw` is the escape
-  hatch); `AddressMessage` is typed but Meta offers it in India only.
+- Payment messages are typed for India only (`OrderDetails`,
+  `OrderStatus` in `meta_whatsapp_rs::client::payments`); Brazil's go
+  through `MessageContent::Raw`. `AddressMessage` is typed but Meta offers
+  it in India only.
 
 ## Related skills
 

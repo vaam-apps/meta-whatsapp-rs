@@ -137,6 +137,31 @@ of its own, after an HTML comment; keep that when you add one.
     are the existing ones (verify, store, subscribe, register). Swappable:
     both are opt-in, and the code-exchange flow is unchanged. Roadmap L11a.
 
+    **Landed with roadmap L11a (2026-11-01), the library's side, its
+    choices the coordinator's (owner's delegation):**
+    `EmbeddedSignup::onboard_hosted` (and `_with_approval`) takes a `HostedSignup` (the webhook's
+    `waba_info.waba_id` and `owner_business_id`) and the system user
+    token as an explicit argument; the app secret is the
+    `AppCredentials`' one. The token request is `fetch_only=true`, as
+    `hosted-es` step 5 sends it (a fetch is replayed as a read, a
+    generation never is); a WABA whose owner, as Meta reports it, is
+    another business than the webhook's is refused (when Meta reports
+    none, none is stored, as in the code flow); `debug_token` runs on
+    the fetched token, assuming hosted signup's business tokens carry
+    `granular_scopes` naming the WABA (one that does not fails closed);
+    a WABA the vault already holds is refused before any request,
+    because `PARTNER_ADDED` also comes for code-flow and coexistence
+    onboardings and redeliveries, and storing again would replace the
+    held token unasked. The integrator's, documented: re-onboarding a
+    held WABA (delete it first), the tenant binding (in the approval:
+    the webhook names no tenant) and the PIN (the hosted page asks for
+    none; as #4 keeps, nothing generates or stores it). Hosted signup
+    reuses the code flow's steps and vault record, so nothing new is
+    stored. Swappable by `HostedSignup::token_request` (the request) and
+    by not calling `onboard_hosted` (the code flow is unchanged); the
+    held-WABA refusal by deleting the record first. Roadmap L11a
+    (landed); the service's side, M3f.
+
 12. **Launch option shape.** `pre-filled-data` shows
     `whatsAppBusinessAccount` both as `{ids: …}` and `{id: [...]}`; the code
     uses the worked example (`{id: [...]}`) and sends `business.id` as a
@@ -249,7 +274,8 @@ of its own, after an HTML comment; keep that when you add one.
 45. **The Marketing Messages API's max-price agreement.** Max price
     (`marketing-messages/pricing/enroll-max-price`) is a beta a WABA
     joins by signing Meta's beta agreement through the API: a legal act
-    on the business's behalf. Nothing wraps it today (parity row 137).
+    on the business's behalf. Nothing wrapped it before roadmap L13
+    (parity row 137).
 
     **Decided 2026-09-26 (coordinator, owner's delegation):** the code
     decides nothing legal. The library exposes the agreement as its own
@@ -258,6 +284,27 @@ of its own, after an HTML comment; keep that when you add one.
     until the deployment enables it. Signing is the deployer's act, for
     their own deployment. Swappable: nothing signs unless a deployment
     calls it. Roadmap L13 and M5h.
+
+    **Confirmed 2026-11-01 (coordinator, owner's delegation; roadmap L13
+    landed):** decided for the library, the service's side carried by
+    M5h. The library
+    exposes the agreement only as the explicit
+    `MarketingBusiness::sign_max_price_agreement` (`POST
+    /{BUSINESS_ID}/max_price_agreements` with `signer_name` and
+    `signer_email`), sent once whatever the retry policy, which no
+    other call makes: no send, duplicate, reach estimate, template
+    update or builder signs, and Meta's refusals for want of the
+    agreement (`100`, a duplicate's HTTP 403) are returned, not
+    answered by signing (`MarketingBusiness::max_price_agreement` only
+    reads its state). The partner allow list no longer exists: Meta's
+    changelog of 2026-10-01 removed it with the open beta (a partner's
+    accepted agreement covers the client WABAs shared with or managed by
+    it), so no per-client act remains to expose. M5h exposes signing as
+    an explicit, audited operator action, off by default. Why: AGENTS.md
+    § Decisions, "Legal acts": the code decides nothing legal, and
+    signing is the deployer's act, for their own deployment. Swappable
+    by not calling it: nothing signs unless a deployment calls it.
+    Roadmap L13 (landed) and M5h.
 
 ## API conventions
 

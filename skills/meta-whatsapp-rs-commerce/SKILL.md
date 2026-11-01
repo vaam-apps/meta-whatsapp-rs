@@ -148,10 +148,10 @@ key the order by the message id.
 
 ## What meta-whatsapp-rs does not do
 
-- No catalog upload or inventory management, no payment collection
-  (payments are out of scope, see
-  [coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md)),
-  no order state machine.
+- No catalog upload or inventory management, no order state machine.
+  Payment collection is `meta_whatsapp_rs::client::payments` (India
+  only so far, see
+  [coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md)).
 
 ## Related skills
 

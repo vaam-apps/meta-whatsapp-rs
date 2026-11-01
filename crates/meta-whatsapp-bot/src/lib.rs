@@ -3,7 +3,8 @@
 //! generated help, middleware, compile-time plugins, Markdown replies in
 //! WhatsApp formatting, rich replies (images, suggestions as reply buttons
 //! or a list, product carousels: [`rich`]), paced broadcasts
-//! ([`broadcast`], [`pacer`]), and retention of the stored history
+//! ([`broadcast`], [`pacer`]), durable jobs that send at a time and
+//! survive a restart ([`jobs`]), and retention of the stored history
 //! ([`retention`]).
 //!
 //! Each event goes through these steps, in this order:
@@ -44,7 +45,7 @@
 //! | which errors slow a number's pacer down (a broadcast's sends, a paced bot's replies) | [`SlowDownRule`] | [`ThrottlingErrors`] |
 //! | what "now" is for the pacer, and how it waits | [`Timer`] | `SystemClock` (Tokio's sleep) |
 //! | which number a throughput upgrade names (opt-in: [`ThroughputUpgrades`], [`BotBuilder::follow_throughput_upgrades`]) | [`NumberDirectory`] | [`KnownNumbers`] (the numbers you register, by WABA and display number) |
-//! | what a failed broadcast send becomes | [`BroadcastPolicy`] | [`Backoff`] |
+//! | what a failed broadcast send becomes (a job's too: [`jobs::JobRunnerBuilder::policy`]) | [`BroadcastPolicy`] | [`Backoff`] |
 //! | where a broadcast's lines go when not kept in its report | [`ReportSink`] | none: kept in the [`BroadcastReport`] |
 //!
 //! Each of these traits also has an `Arc<T>` implementation, so one
@@ -96,11 +97,18 @@
 //! A [`Broadcast`] sends one message to many recipients from one number,
 //! paced by a [`Pacer`] shared with the bot, and reports on each (see
 //! [`broadcast`]). Meta's throughput upgrade of a number can raise its
-//! rate in the pacer, opt-in ([`throughput`]). The stored chat history
-//! is deleted by age and by a cap per chat, through its
-//! `ConversationStore`, by a [`RetentionPolicy`], once or on a schedule
-//! ([`RetentionSweeper`]; see [`retention`]). Not here (yet): scheduling,
-//! and broadcasts that survive a restart (roadmap B3).
+//! rate in the pacer, opt-in ([`throughput`]).
+//!
+//! A [`Job`] is a message or a broadcast scheduled for a time, kept by
+//! [`KvJobs`] (a typed store on `KvStore`, namespaces `wa.bot.jobs*`) and
+//! sent by a [`JobRunner`] (one per process; any number share a store),
+//! which claims each job by compare-and-swap with a lease, sends through a
+//! paced broadcast, and records each recipient before its send, so a job
+//! resumed after a crash or a restart sends nobody twice (see [`jobs`]).
+//!
+//! The stored chat history is deleted by age and by a cap per chat,
+//! through its `ConversationStore`, by a [`RetentionPolicy`], once or on a
+//! schedule ([`RetentionSweeper`]; see [`retention`]).
 
 pub mod bot;
 pub mod broadcast;
@@ -110,6 +118,7 @@ pub mod errors;
 pub mod groups;
 pub mod guard;
 pub mod help;
+pub mod jobs;
 pub mod markdown;
 pub mod middleware;
 pub mod outbound;
@@ -139,6 +148,10 @@ pub use guard::{
     CooldownOutcome, Cooldowns, KvCooldowns, Refusal, Refusals, ReplyRefusals, SilentRefusals,
 };
 pub use help::{CategoryHelp, HelpFormatter, HelpSection};
+pub use jobs::{
+    Job, JobEnd, JobFeedback, JobId, JobRun, JobRunner, JobRunnerBuilder, JobState, JobSummary,
+    KvJobs, ScheduledJob, TickReport,
+};
 pub use markdown::MarkdownRenderer;
 pub use middleware::{Logging, MarkRead, Middleware, Next};
 pub use outbound::{ClientOutbound, Outbound};

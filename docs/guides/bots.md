@@ -5,8 +5,9 @@ on reply buttons and list rows, and free text, with formatted replies
 (images, reply buttons, lists and product carousels among them);
 built from plugins, one feature each, on the webhook endpoint you already
 run; that sends one message to many customers at the pace Meta
-allows (section 9); and that deletes the stored chat history by age and
-by a cap per chat (section 10).
+allows (section 9); that sends at a time, surviving a restart
+(section 10); and that deletes the stored chat history by age and by a
+cap per chat (section 11).
 
 Crate: `meta-whatsapp-bot`, re-exported as `meta_whatsapp_rs::bot`
 (feature `bot`, off by default; `full` includes it). Agent skill:
@@ -845,9 +846,8 @@ instead (a `select!` it loses, an aborted task) abandons the sends in
 flight and the report: cancel, then let `run` return.
 
 **Not durable.** A run lives in memory: a restart loses it, and the
-report is its only record. Broadcasts that survive a restart, and
-scheduled sends, are [roadmap](../roadmap.md) item B3 (a typed store on
-`KvStore`).
+report is its only record. A broadcast that survives a restart, or a
+message sent at a time, is a job (section 10).
 
 **Time** comes from the pacer's `Timer`, a `Clock` that can wait until a
 deadline (`Timer::sleep_until`): `SystemClock` sleeps on Tokio; a
@@ -859,7 +859,123 @@ A send takes no time on it: to test slow sends overlapping, implement
 `#[tokio::test(start_paused = true)]`). A wall clock stepping back
 neither pauses the pacer nor puts off a retry.
 
-## 10. Retention and auto-delete
+## 10. Scheduled and durable jobs
+
+A `Job` is one message or a broadcast from one number, due at a time:
+`KvJobs` keeps it in your `KvStore` (namespaces `wa.bot.jobs*`, no new
+port), and a `JobRunner` in each replica sends it when due. Nothing
+about the message is stored but your JSON payload: the runner's composer
+makes each recipient's message from the job when it sends, so give every
+replica, and every release after a restart, the same composer.
+
+```rust
+let jobs = KvJobs::new(kv, Arc::new(SystemClock));
+let at = time::OffsetDateTime::now_utc() + Duration::from_secs(3600);
+jobs.schedule(
+    Job::new(JobId::new("spring-sale")?, PhoneNumberId::new("106540352242922")?, at)
+        .to([Recipient::user("US.13491208655302741918")])
+        .payload(json!({"template": "spring_sale", "language": "en_US"})),
+)
+.await?;
+
+// In every replica: the same composer, a runner id of its own.
+let runner = JobRunner::builder(jobs.clone())
+    .client(client)
+    .pacer(Pacer::default())
+    .compose(|job, to| {
+        let name = job.payload["template"].as_str().unwrap_or_default();
+        let language = job.payload["language"].as_str().unwrap_or("en_US");
+        Ok(OutboundMessage::template(to.clone(), TemplateMessage::new(name, language)))
+    })
+    .runner_id("replica-1")
+    .build()?;
+runner
+    .run_until(Duration::from_secs(10), std::future::pending())
+    .await;
+```
+
+(The snippet is the `jobs` module's rustdoc example, which the gate
+compiles.) A job's id is yours (a campaign's name, an order's reminder):
+scheduling the same job again, after an error or a crash, is safe; a
+different job under a used id is refused. Its recipients are kept each
+person once, by the broadcast's rule.
+
+**How a job runs.** `JobRunner::tick` reads the due index from the
+oldest minute still to read up to now, and for each job due:
+
+1. claims it by compare-and-swap, with a lease naming the runner
+   (`JobRunnerBuilder::lease`, 2 minutes by default, renewed before a
+   send when half is gone): of two replicas that read the same job, one
+   claim succeeds; a replica that crashes holds the job until its lease
+   expires, then any replica resumes it;
+2. skips every recipient already marked for this run (an unreadable
+   marker counts as an outcome unknown), and every one Meta refused with
+   `131049` in the last 24 hours (below), renewing the lease as it reads
+   them;
+3. sends to the others through a paced `Broadcast` (its pacer, its
+   `BroadcastPolicy`, its retries only when `Error::may_resend` holds;
+   a pacer over a `KvRateLimiter` shares the number's budget across
+   replicas, as for any broadcast),
+   each send after a check that the job is still the runner's and not
+   cancelled, and after the recipient's marker is created
+   (`put_if_absent`): another runner never sends to them too. With the
+   marker in place the job is read once more, and a cancel or a re-run
+   that landed meanwhile gets no request;
+4. settles it: done when every recipient is marked or skipped; when
+   some are provably unsent (a throttled send out of retries, a stop,
+   the rate limiter or the store failing), the job is due again later,
+   with backoff (`JobRunnerBuilder::retries`, `JobRunnerBuilder::retry_delay`:
+   5 retries from 30 s, doubling to 30 min), and stopped after the last
+   (`JobState::Stopped`, `JobSummary::unsent`).
+
+**At most once, not exactly once.** The marker says "sending" before
+the request, then sent (with the message id), failed (Meta refused it),
+or unknown (a timeout, a 5xx: it may have gone out). A runner that
+crashes mid-send leaves "sending", which whoever resumes the job reads
+as unknown: it is never sent again (`JobSummary::unknown`; reconcile
+with the status webhooks), and neither is a timed-out send. A crash
+after the marker but before the request left is read the same way:
+that recipient is never sent. A store that fails fails closed: no send
+without a claim and a marker. Leases are read against each replica's
+clock: one whose clock runs ahead, or a replica paused past its lease,
+sees the job taken over, which costs a pass but never a duplicate (the
+marker decides who sends to whom).
+
+**Cancel and re-run.** `KvJobs::cancel` moves a pending or running job
+to cancelled; a runner running it stops before its next send (a send
+already past its second check, its marker in place, goes out). `KvJobs::rerun` runs a settled job
+again at a time: a new run, everyone sent to again, except the
+recipients marked limited. `KvJobs::get` reads a job: its state, run,
+retries, recipients, payload and, once settled, its `JobSummary`.
+
+**The per-user marketing limit.** Meta may accept a marketing message
+and fail it later with `131049`, in a status webhook; resending within
+24 hours only fails again (`templates/marketing-templates/per-user-limits`).
+The runner keeps each message's id for 7 days (`KvJobs::message_ttl`).
+Hand status webhooks to `KvJobs::observe`, or wire `KvJobs::feedback` in
+as a listener (`.listen(Listen::event("status_updated"), jobs.feedback())`)
+or as a sink next to the bot: a `131049` for a message a job sent marks
+that recipient for 24 hours from its arrival, and a re-run of that job
+skips them (`JobSummary::limited`) and sends everyone else. A `131049`
+the send itself returns marks them too. The mark is per job: another
+job may still send to them.
+
+**Retention.** Settled jobs, markers and index pages expire after 30
+days (`KvJobs::retention`); a pending or running job never does. Resume
+a job within that time, or its recipients are sent again. **A job left
+unrun for 30 days after its due time** (no runner all that time) **is
+no longer found**: its index pages have expired, and its record stays
+pending, never sent. A due time already past is due now: the job is
+indexed under the current minute (its 30 days count from then). With
+the memory or Postgres store, call `purge_expired` now and then; on
+Redis, run `maxmemory-policy noeviction` (an evicted marker is a
+recipient sent again, an evicted index page a job never found).
+
+**Stable names.** The five namespaces, their keys and their records are
+stable identifiers once released, pending the owner's confirmation
+([architecture.md](../architecture.md#stable-identifiers)).
+
+## 11. Retention and auto-delete
 
 The bot keeps no history of its own: the chats it answers are in the
 `ConversationStore` your inbox records them in (`InboxSink`, section 6).
@@ -928,14 +1044,17 @@ Which retention you need is your privacy obligations' call (design D10):
 the default policy keeps everything, and nothing deletes until you apply
 one.
 
-## 11. Testing
+## 12. Testing
 
 Build the bot on a client with a `ScriptedTransport` (feature `testing`)
 and deliver events parsed from Meta's documented payloads; assert the
 exact requests (see the skill's example and
 [`meta-whatsapp-rs-testing`](../../skills/meta-whatsapp-rs-testing/SKILL.md)).
 Or implement `Outbound` to record what the bot sends. A bot or broadcast
-with a pacer on a `ManualClock` never waits for real.
+with a pacer on a `ManualClock` never waits for real. For jobs, give the
+`MemoryKvStore` (`with_clock`), the `KvJobs` and the pacer one
+`ManualClock` and call `JobRunner::tick` yourself; a restart is a new
+`KvJobs` and runner on the same store.
 
 A handler is a function of its context, so it can be tested without a
 bot: `Ctx::new(event, outbound, renderer)`, then
@@ -946,8 +1065,9 @@ reads flags; `.with_subcommand(sub)` for a subcommand), and
 
 ## Not here yet
 
-Scheduling and broadcasts that survive a restart
-([roadmap](../roadmap.md) B3). A rich reply's
+Recurring schedules (a job runs once, then again only when re-run); a
+job store behind a trait of its own (swap the `KvStore` adapter
+instead). A rich reply's
 image goes by link only (an uploaded media id: build the message and use
 `Ctx::send`), and Markdown's own `![alt](url)` stays text (`alt (url)`):
 images are their own part. Subcommands nest one level, and flags have no
