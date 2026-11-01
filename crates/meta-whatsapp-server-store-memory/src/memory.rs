@@ -11,6 +11,7 @@ use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use time::{Duration, OffsetDateTime};
 
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
+use meta_whatsapp_server_core::notify::{EventNotifier, LocalNotifier};
 use meta_whatsapp_server_core::outbox::Outbox;
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, LeaderTurn, RecordStore, SchemaMigrator, StoreResult,
@@ -696,6 +697,7 @@ impl SchemaMigrator for Nothing {
 pub struct MemoryBackend {
     store: Arc<MemoryStore>,
     outbox: Arc<MemoryEventStore>,
+    notifier: Arc<LocalNotifier>,
     leader: Arc<MemoryLeaderLock>,
     kv: Arc<MemoryKvStore>,
     conversations: Arc<MemoryConversationStore>,
@@ -714,6 +716,7 @@ impl MemoryBackend {
         Self {
             outbox: store.outbox(),
             store: Arc::new(store),
+            notifier: Arc::new(LocalNotifier::new()),
             leader: Arc::new(MemoryLeaderLock::new()),
             kv: Arc::new(MemoryKvStore::new()),
             conversations: Arc::new(MemoryConversationStore::new()),
@@ -737,6 +740,10 @@ impl Backend for MemoryBackend {
 
     fn outbox(&self) -> Arc<dyn Outbox> {
         self.outbox.clone()
+    }
+
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.notifier.clone()
     }
 
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {

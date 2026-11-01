@@ -36,6 +36,7 @@ use meta_whatsapp_server::api::admin::mint;
 use meta_whatsapp_server::config::{Config, Env, NotUnicode};
 use meta_whatsapp_server::model::{KeyOwner, Scope, TenantId};
 use meta_whatsapp_server::serve::{serve_until, serve_with};
+use meta_whatsapp_server::store::EventNotifier;
 use meta_whatsapp_server::store::events::EventQuery;
 use meta_whatsapp_server::store::{
     Backend, BackendKind, IdempotencyRecords, Janitor, LeaderLock, MemoryBackend, Outbox,
@@ -160,6 +161,9 @@ impl Backend for Integrators {
     }
     fn outbox(&self) -> Arc<dyn Outbox> {
         self.memory.outbox()
+    }
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.memory.notifier()
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         self.memory.leader_lock()

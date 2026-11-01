@@ -218,6 +218,42 @@ stored data, the owner's).
 
 ### Added
 
+- **Live updates in the service** (roadmap M2b; design §4.5, D39–D42
+  proposed; parity row 10, categories 19 and 39, coverage row 33).
+  Routes, additive in `openapi/v1.json`: `GET /v1/events/stream` and
+  `GET /v1/numbers/{pn}/events/stream` (scope `events`,
+  `text/event-stream`: `event: whatsapp` frames whose `id` is the
+  event's sequence and whose `data` is the envelope `GET /v1/events`
+  answers, a `: keepalive` comment every 15 s, and as a last frame
+  `event: lagged` or `event: shutdown` with `{"after": n}`;
+  `Last-Event-ID`, or `?after=`, resumes exactly after on any replica,
+  `410 cursor_expired` and `422` on the cursor before the stream starts,
+  `429 too_many_streams` past 20 streams of a tenant or 1,000 on a
+  replica, `503 shutting_down`), and `GET /v1/events/{id}` (one of the
+  tenant's events, whole; another tenant's id, an operator-only row's,
+  a purged or malformed one `404 not_found`, alike). Operations
+  `get_event`, `stream_events` and `stream_number_events`, rate class
+  `read`. Settings: `WA_SERVER_STREAMS_PER_TENANT` (20) and
+  `WA_SERVER_STREAMS_PER_REPLICA` (1000). In the core: the port
+  `notify::EventNotifier` (`notify`, `subscribe`; `Hub`, `Subscription`,
+  `Wakeup`, `LocalNotifier`) and `Backend::notifier`, a required method
+  (a `Backend` of yours adds it: a `LocalNotifier` built once for one
+  process, its database's notifications for several replicas);
+  `Outbox::get`, with a default that pages; `live::Streams` and
+  `live::LiveSettings`; `events::get_event` and `is_event_id`;
+  `Authorizer::tenant_number` (step 4 alone); the conformance suite
+  `conformance::live`, in `conformance::run`. Postgres: `PgNotifier`
+  (`NOTIFY` on `EVENTS_CHANNEL`, `wa_server_events`, payload `<sequence>
+  <tenant>`: stable identifiers pending the owner; one `LISTEN`
+  connection per replica, outside the pool), no migration. The HTTP
+  crate: `api::events` (`stream_routes`, and the event envelope and its
+  schemas, moved from the axum adapter, which re-exports them; the
+  document is unchanged for them), `AppState::open_streams`, and
+  `begin_shutdown` ending every stream. Notifications are a wake-up
+  only: each stream reads the outbox after its cursor when woken and
+  every 15 s whatever it heard, so a lost one loses nothing.
+  **Upgrade:** none for callers; a `Backend` implemented outside this
+  repository gains `notifier()`.
 - **Pre-verified phone numbers** (`meta_whatsapp_client::waba`, roadmap
   L11c, parity row 123, from `embedded-signup/pre-verified-numbers` and
   Meta's pre-verified number reference pages, read on 2026-11-01; the

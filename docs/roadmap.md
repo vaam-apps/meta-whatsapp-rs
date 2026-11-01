@@ -3858,11 +3858,72 @@ design's (§9).
     S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. If M2a lands before the first
     release, the next item of the service's to land after it carries
     this line.
-- [ ] **M2b. Live updates** (row 10): SSE through an `EventNotifier`
+- [x] **M2b. Live updates** (row 10): SSE through an `EventNotifier`
   port (Postgres `LISTEN/NOTIFY`, memory broadcast; resume by
   `Last-Event-ID`); `GET /v1/events/{id}`.
   - **After:** S7.
   - **Decisive:** M2.2, M2.3, M2.5.
+  - **Landed:** the core's port `notify::EventNotifier` (object-safe:
+    `notify(&Wakeup)`, `subscribe(&TenantId)` to a `Subscription`; a
+    replica's wake-ups through a `Hub`, a channel per tenant from its
+    first subscription to its last), in the `Backend` bundle
+    (`Backend::notifier`): memory's `LocalNotifier`, the process's hub;
+    Postgres' `PgNotifier`, `NOTIFY` on the channel `wa_server_events`
+    with `<sequence> <tenant>` and one `LISTEN` connection per replica,
+    of its own outside the pool, which wakes every stream of the replica
+    when it listens again. The webhook pipeline notifies once a row it
+    routed to a tenant committed (a failure logged, the delivery still
+    `200`). The streams are the core's `live::Streams`: a stream is a
+    cursor in its tenant's stream, reading the outbox after it, with
+    polling's filters, when woken and every 15 s whatever it heard (the
+    re-poll), so a notification is a wake-up and nothing else and a lost
+    one loses nothing; bounded per tenant and replica
+    (`WA_SERVER_STREAMS_PER_TENANT`, 20, `WA_SERVER_STREAMS_PER_REPLICA`,
+    1,000, `429 too_many_streams`), 1 MiB and 64 frames held per stream,
+    a client taking nothing for 30 s dropped with `event: lagged`
+    (`{"after": n}`), as is a stream behind a purge, a heartbeat every
+    15 s, and `event: shutdown` for every stream when the replica stops
+    (`AppState::begin_shutdown`). Routes (additive in `openapi/v1.json`):
+    `GET /v1/events/stream` and `GET /v1/numbers/{pn}/events/stream`
+    (the HTTP crate's `api::events::stream_routes`, behind scope
+    `events`; `Last-Event-ID` or `?after=`, `410`/`422` on the cursor
+    before the stream, `503 shutting_down`; the number's stream step 4
+    only, no vault) and `GET /v1/events/{id}` (the axum adapter's
+    `get_event`, over `Outbox::get` and `events::get_event`: the
+    tenant's own only, `404` alike for another's, an operator-only row's,
+    a purged or malformed id); operations `get_event`, `stream_events`,
+    `stream_number_events`, rate class `read`; the event envelope moved
+    to the HTTP crate (`api::events::EventEnvelope`, schema unchanged).
+    Conformance: `conformance::live` in `conformance::run` (memory and,
+    live, Postgres), and
+    `live::an_event_through_one_replica_wakes_a_stream_on_another` over
+    two Postgres pools. Decisive: M2.2 live over HTTP on two replicas
+    (`live_postgres_a_webhook_into_one_replica_reaches_a_stream_on_another`:
+    within 2 s, `Last-Event-ID` replaying exactly the missed events,
+    another tenant's number's stream seeing none); M2.3 through the core's
+    pipeline and over HTTP (`no_unknown_or_unparsed_event_reaches_a_stream`);
+    M2.5 on memory and live (200 streams, half never read, 100 events a
+    second for 3 s: every read stream gets its tenant's events in order,
+    the data held never past each stream's budget, 0.9 MB at peak live);
+    a lost notification still delivers (`a_lost_notification_still_delivers`,
+    core and HTTP, with its control); `Last-Event-ID` resumes exactly
+    after (`last_event_id_resumes_exactly_after_it`). Kept as tests: a
+    notifier new on each call, or waking every tenant, fails
+    `conformance::run`, and an outbox whose pages leave the tenant out
+    fails the tenant case (the memory crate's `tests/conformance.rs`).
+    Proposed, for the coordinator: D39–D42 (each stream reads, not one
+    shared read per replica; the channel and payload, which are stable
+    identifiers pending the owner; a stream without a cursor starts at the
+    newest sequence, `Last-Event-ID` wins, a malformed id is `404`; the
+    buffer, slow-client and re-poll numbers). Left, and why: the open
+    streams are not a metric yet (design §7.3 lists one); a client
+    stalled on a full TCP window is dropped from its stream, but its
+    connection, and its place among the 20, last until the operating
+    system gives up on it; the listener's reconnect is covered by the
+    re-poll, not by a live test (killing the `LISTEN` session would
+    disturb the other live tests of the database); webhooks-out (M2c)
+    will need the notifier's wake-ups too, and gets them through the same
+    port.
 - [ ] **M2c. Webhooks out** (row 10): endpoints, dispatcher and retries
   (Standard Webhooks, a destination allow list).
   - **After:** M2b.
@@ -4263,7 +4324,10 @@ everything else goes into the parity-completion report.
   Redis conversation layout, added and awaiting confirmation; and L21a's
   `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
   keys' derivations and their records' shapes, added and awaiting
-  confirmation before the first release), for the same reason as L5's.
+  confirmation before the first release; M2b's Postgres channel
+  `wa_server_events` and its payload `<sequence> <tenant>`, not stored
+  but what replicas of two releases must agree on, added and awaiting
+  confirmation, design D40), for the same reason as L5's.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored

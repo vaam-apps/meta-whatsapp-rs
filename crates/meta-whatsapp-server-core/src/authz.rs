@@ -571,6 +571,31 @@ impl Authorizer {
         })
     }
 
+    /// Step 4 alone for the number `pn`: bound to `caller`'s tenant, else
+    /// `404 not_found` (it does not exist for them). For an operation that
+    /// reads only the service's own records of the number (its live event
+    /// stream, [`crate::live::Streams::open_number_stream`]) and needs no
+    /// token: the vault is not read, and the number's connection status
+    /// does not matter. A `caller` another [`Authorizer`] made is `403
+    /// forbidden`.
+    ///
+    /// # Errors
+    ///
+    /// `403 forbidden`, `404 not_found`, `503 storage_unavailable`.
+    pub async fn tenant_number(
+        &self,
+        caller: &Caller,
+        pn: &PhoneNumberId,
+    ) -> Result<(), ServiceError> {
+        self.check(&caller.issuer, "tenant_number")?;
+        self.records
+            .number(pn)
+            .await?
+            .filter(|binding| binding.tenant_id == caller.tenant)
+            .map(|_| ())
+            .ok_or_else(ServiceError::not_found)
+    }
+
     /// Steps 4 and 5 for the number `pn`: bound to `caller`'s tenant (else
     /// it does not exist), connected, with a usable token. A `caller`
     /// another [`Authorizer`] made is `403 forbidden`.

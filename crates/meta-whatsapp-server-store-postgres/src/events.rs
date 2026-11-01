@@ -364,6 +364,23 @@ impl Outbox for PgEventStore {
         })
     }
 
+    async fn get(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<StoredEvent>> {
+        // By the unique `id`, and in the tenant's own stream only: another
+        // tenant's row, or an operator-only one (`tenant_id` NULL), is not
+        // read.
+        let row = sqlx::query(
+            "SELECT sequence, id, tenant_id, phone_number_id, waba_id, event_type, \
+                    data::text AS data, created_at \
+             FROM wa_server_events WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(id)
+        .bind(tenant.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        row.as_ref().map(event_row).transpose().map(Option::flatten)
+    }
+
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
         // No lock of its own (housekeeping holds its turn): two purges at
         // once delete a row once (the second finds it gone), and

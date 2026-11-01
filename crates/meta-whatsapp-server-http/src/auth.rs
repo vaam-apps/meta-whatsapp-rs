@@ -231,12 +231,21 @@ impl Operations {
     /// extractor then refuses the empty number). A stricter match than the
     /// router's would leave a routed request with no operation: `500`,
     /// and charged nothing.
+    ///
+    /// Of two templates a path matches, the one with a literal segment
+    /// where the other has a parameter, at the first segment where they
+    /// differ, is the path's, as axum's router decides
+    /// (`/v1/events/stream` before `/v1/events/{id}`):
+    /// [`crate::telemetry::most_specific`].
     pub fn of(&self, method: &str, path: &str) -> Option<Operation> {
         let method = if method == "HEAD" { "GET" } else { method };
-        self.0
-            .iter()
-            .find(|(m, template, _)| m == method && routed(template, path))
-            .map(|(_, _, operation)| *operation)
+        crate::telemetry::most_specific(
+            self.0
+                .iter()
+                .filter(|(m, template, _)| m == method && routed(template, path)),
+            |(_, template, _)| template,
+        )
+        .map(|(_, _, operation)| *operation)
     }
 
     /// Every `(method, route template, operation)`.

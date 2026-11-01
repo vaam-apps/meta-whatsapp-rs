@@ -29,6 +29,8 @@
 //! | `WA_SERVER_MEDIA_MAX_BYTES` | 104857600 (100 MiB) | largest upload, and largest streamed download |
 //! | `WA_SERVER_MEDIA_CONCURRENCY` | 4 | uploads and whole-file downloads held in memory at once, per replica (half of them at most for one tenant) |
 //! | `WA_SERVER_MEDIA_STREAMS` | 16 | streamed downloads at once, per replica (half of them at most for one tenant) |
+//! | `WA_SERVER_STREAMS_PER_TENANT` | 20 | live event streams (`GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream`) one tenant holds open at once, per replica (the next is `429 too_many_streams`) |
+//! | `WA_SERVER_STREAMS_PER_REPLICA` | 1000 | live event streams open at once on a replica, every tenant's |
 //! | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | 20, 40 | per tenant and replica, a second ([`crate::ratelimit`]) |
 //! | `WA_SERVER_RATE_READ`, `WA_SERVER_RATE_READ_BURST` | 50, 50 | the same, for reads |
 //! | `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | 2, 2 | the same, for template management |
@@ -63,6 +65,7 @@ use crate::events::{
 };
 use crate::ratelimit::{Rate, RateLimits};
 use crate::state::Settings;
+use meta_whatsapp_server_core::live::LiveSettings;
 
 /// Why the service refuses to start. Never holds a value it read.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -565,7 +568,9 @@ fn rate(
 }
 
 /// `WA_SERVER_IDEMPOTENCY_TTL`, `WA_SERVER_MEDIA_MAX_BYTES`,
-/// `WA_SERVER_MEDIA_CONCURRENCY` and the rate limits.
+/// `WA_SERVER_MEDIA_CONCURRENCY`, `WA_SERVER_MEDIA_STREAMS`, the live
+/// event streams' bounds (`WA_SERVER_STREAMS_PER_TENANT`,
+/// `WA_SERVER_STREAMS_PER_REPLICA`) and the rate limits.
 fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
     let defaults = Settings::default();
     let idempotency_ttl = match r.plain("WA_SERVER_IDEMPOTENCY_TTL")? {
@@ -597,6 +602,20 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
             reason: "expected a smaller number",
         })?,
     };
+    let streams = |name: &'static str, default: usize| -> Result<usize, ConfigError> {
+        match positive(r, name)? {
+            None => Ok(default),
+            Some(n) => usize::try_from(n).map_err(|_| ConfigError::Invalid {
+                name,
+                reason: "expected a smaller number",
+            }),
+        }
+    };
+    let live = LiveSettings {
+        per_tenant: streams("WA_SERVER_STREAMS_PER_TENANT", defaults.live.per_tenant)?,
+        per_replica: streams("WA_SERVER_STREAMS_PER_REPLICA", defaults.live.per_replica)?,
+        ..defaults.live
+    };
     let limits = RateLimits::default();
     Ok(Settings {
         rate_limits: RateLimits {
@@ -624,6 +643,7 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
             .unwrap_or(defaults.media_max_bytes),
         media_concurrency,
         media_streams,
+        live,
         ..defaults
     })
 }

@@ -14,9 +14,10 @@ its reasons and the owner's decisions, is
 > rotation, sending messages (with idempotency keys), read receipts,
 > media upload, verified download and delete, template listing, creation
 > and deletion, per-tenant rate limits, Meta's webhooks into the inbox
-> and the event outbox, polling events (`GET /v1/events`), health,
-> metrics and the OpenAPI document. **Not yet**: the inbox routes, live
-> events (SSE) and webhooks to your backend (M2), Embedded Signup, OTP
+> and the event outbox, polling events (`GET /v1/events`), one event by
+> id and live events as Server-Sent Events (roadmap M2b), health,
+> metrics and the OpenAPI document. **Not yet**: the inbox routes and
+> webhooks to your backend (M2), Embedded Signup, OTP
 > and authentication templates (M3), the Docker image and the TypeScript
 > client (M4).
 > [coverage.md](../coverage.md) tracks it.
@@ -119,6 +120,8 @@ read yet: set, it stops the start.
 | `WA_SERVER_UNDATED_AFTER_MOVE` | `operator_only` | after a WABA moved to its tenant from another one, who gets its undated events (errors, history chunks, group updates without a date), which may be the previous tenant's that Meta redelivers: nobody within the window (`operator_only`, the operator still sees them), or the new holder (`current_holder`, the behaviour before this setting). A WABA no other tenant held is never concerned (design D36) |
 | `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` | `169h` (7 days and an hour) | that window, from when the previous tenant's binding was removed; a positive duration, with `operator_only` only (set with `current_holder`, the start is refused) |
 | `WA_SERVER_MOVE_SKEW_MARGIN` | `0s` | after a move only: how far past the second the new binding began an event Meta dated must be to reach the new holder (widen it if Meta's clock may run ahead of the database's) |
+| `WA_SERVER_STREAMS_PER_TENANT` | `20` | live event streams one tenant holds open at once on a replica, its number streams included (the next is `429 too_many_streams`) |
+| `WA_SERVER_STREAMS_PER_REPLICA` | `1000` | live event streams open at once on a replica, every tenant's (keep it under the internal listener's 4,096 connections) |
 
 **The service refuses to start** rather than run unsafely: on a missing
 or blank app secret or verify token, a missing vault key or a pepper
@@ -691,6 +694,69 @@ same id, is `410 cursor_expired`: resynchronise (from the inbox, when it
 lands in M2) and start again without `after`. A cursor past the tenant's
 newest sequence (a restored database) is `422` on `after`.
 
+**4. One event by id.** `GET /v1/events/{id}` answers one of the
+tenant's events, whole, as polling does: what a webhook delivery that
+left a large `data` out (`truncated: true`, M2c) refers to. Another
+tenant's id, an operator-only event's, one past retention and an id
+that is no event's (`evt_` and 32 hex digits) are all `404 not_found`,
+alike.
+
+**5. Or follow them live** (Server-Sent Events, roadmap M2b), with the
+same key and scope:
+
+```bash
+curl -sSN "http://127.0.0.1:8081/v1/events/stream?types=message_received" \
+  -H "Authorization: Bearer $KEY" -H "Last-Event-ID: 18342"
+curl -sSN "http://127.0.0.1:8081/v1/numbers/106540352242922/events/stream" \
+  -H "Authorization: Bearer $KEY"
+```
+
+```text
+event: whatsapp
+id: 18343
+data: {"id":"evt_…","sequence":18343,"type":"message_received",…}
+
+: keepalive
+```
+
+- Each `whatsapp` frame's `id` is the event's `sequence` and its `data`
+  the envelope above. A `: keepalive` comment comes every 15 s while
+  nothing happens.
+- **Resume** with `Last-Event-ID: <the last id you got>` (an
+  `EventSource` sends it on its own when it reconnects) or `?after=`;
+  the header wins. The stream sends exactly the events after it, on any
+  replica, then the new ones. Without either it starts with the next
+  event: catch up on history with `GET /v1/events` first, then stream
+  from its `next_after`. The cursor is checked before the stream starts:
+  below what was purged, `410 cursor_expired` (resynchronise, start
+  again without one); past the tenant's newest sequence, `422` on
+  `Last-Event-ID` or `after`.
+- The filters are polling's: `types`, `phone_number_id` (or the
+  number's own route, `/v1/numbers/{pn}/events/stream`, `404` for a
+  number the tenant does not hold). Operator-only events are never
+  streamed.
+- **The stream can end** with one last frame, both with
+  `data: {"after": <the last sequence it sent>}`: `event: lagged` when
+  your client took nothing for 30 s while 1 MiB (or 64 frames) waited
+  for it, or when events after its cursor were purged before it got
+  them; `event: shutdown` when the replica stops. Reconnect with
+  `Last-Event-ID` set to that `after` (after `lagged` on a purge, the
+  reconnection answers `410`: reload).
+- At most 20 streams per tenant on a replica (number streams included)
+  and 1,000 in all (`WA_SERVER_STREAMS_PER_TENANT`,
+  `WA_SERVER_STREAMS_PER_REPLICA`): the next is `429 too_many_streams`.
+  Opening one counts once against the tenant's `read` budget.
+- Browsers cannot send the key (`EventSource` sends no `Authorization`):
+  relay the stream through your backend (design D3).
+- Several replicas: each holds one `LISTEN` connection of its own on
+  the database (outside its pool), and an event recorded by any replica
+  wakes every replica's streams through Postgres `NOTIFY` on the channel
+  `wa_server_events`. A wake-up is only that: every stream also reads
+  the outbox every 15 s, so a notification lost (a connection dropped, a
+  replica restarting) delays an event by 15 s at most and loses none.
+  Two deployments sharing one database hear each other's wake-ups,
+  which only cost a read.
+
 **Restoring the database.** A point-in-time restore rolls the tenants'
 sequences back: the events recorded after it are numbered again from
 the restore point, so a sequence an integrator already saw can name
@@ -826,12 +892,14 @@ SKIP token.wabas: the configuration is refused
   secrets. Nobody can reverse one, but whoever can write the database's
   keys table can plant a key: guard write access to it.
 - `SIGTERM` fails `/readyz`, stops both listeners from accepting and gives
-  open requests `WA_SERVER_SHUTDOWN_GRACE`.
+  open requests `WA_SERVER_SHUTDOWN_GRACE`; every live event stream ends
+  at once with `event: shutdown`, so its client resumes on another
+  replica.
 
 ## Not yet
 
-The inbox routes, `GET /v1/events/{id}`, SSE, webhooks-out and the
-service's own number events (M2); Embedded Signup,
+The inbox routes, webhooks-out and the service's own number events
+(M2); the open live streams as a metric; Embedded Signup,
 disconnection by Meta's webhooks, coexistence sync and OTP (M3); the
 Docker image, a Compose file, the documents route and the TypeScript
 client (M4). Tenant settings (OTP sender and template, limits) in `PATCH

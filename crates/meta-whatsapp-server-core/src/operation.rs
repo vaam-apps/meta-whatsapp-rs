@@ -55,11 +55,18 @@ pub enum Operation {
     GetTemplate,
     /// `list_events`: the tenant's events, polled.
     ListEvents,
+    /// `get_event`: one of the tenant's events, by id (roadmap M2b).
+    GetEvent,
+    /// `stream_events`: the tenant's events, live (Server-Sent Events,
+    /// roadmap M2b).
+    StreamEvents,
+    /// `stream_number_events`: one of the tenant's numbers' events, live.
+    StreamNumberEvents,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 19] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -76,6 +83,9 @@ impl Operation {
         Self::DeleteTemplates,
         Self::GetTemplate,
         Self::ListEvents,
+        Self::GetEvent,
+        Self::StreamEvents,
+        Self::StreamNumberEvents,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -97,6 +107,9 @@ impl Operation {
             Self::DeleteTemplates => "delete_templates",
             Self::GetTemplate => "get_template",
             Self::ListEvents => "list_events",
+            Self::GetEvent => "get_event",
+            Self::StreamEvents => "stream_events",
+            Self::StreamNumberEvents => "stream_number_events",
         }
     }
 
@@ -120,7 +133,9 @@ impl Operation {
             | Self::CreateTemplate
             | Self::DeleteTemplates
             | Self::GetTemplate => Scope::Templates,
-            Self::ListEvents => Scope::Events,
+            Self::ListEvents | Self::GetEvent | Self::StreamEvents | Self::StreamNumberEvents => {
+                Scope::Events
+            }
         }
     }
 }

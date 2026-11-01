@@ -7,6 +7,7 @@ pub mod capture;
 pub mod meta;
 pub mod moving;
 pub mod scenarios;
+pub mod sse;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -37,8 +38,8 @@ use meta_whatsapp_server::ratelimit::{Rate, RateLimits};
 use meta_whatsapp_server::state::{AppState, Grant, Settings};
 use meta_whatsapp_server::store::events::{EventPage, EventQuery, NewEvent};
 use meta_whatsapp_server::store::{
-    Backend, BackendKind, IdempotencyRecords, Janitor, LeaderLock, MemoryBackend, MemoryStore,
-    Outbox as EventStore, RecordStore, SchemaMigrator, Store,
+    Backend, BackendKind, EventNotifier, IdempotencyRecords, Janitor, LeaderLock, LocalNotifier,
+    MemoryBackend, MemoryStore, Outbox as EventStore, RecordStore, SchemaMigrator, Store,
 };
 use serde_json::Value;
 use tower::ServiceExt;
@@ -229,6 +230,14 @@ impl EventStore for RecordingEvents {
         self.inner.page(query).await
     }
 
+    async fn get(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+    ) -> Result<Option<meta_whatsapp_server::store::events::StoredEvent>, StorageError> {
+        self.inner.get(tenant, id).await
+    }
+
     async fn purge(&self, older_than: std::time::Duration) -> Result<u64, StorageError> {
         self.inner.purge(older_than).await
     }
@@ -244,6 +253,7 @@ pub struct HarnessBackend {
     kv: Arc<CountingKv>,
     conversations: Arc<dyn ConversationStore>,
     outbox: Arc<RecordingEvents>,
+    notifier: Arc<dyn EventNotifier>,
     memory: MemoryBackend,
 }
 
@@ -260,6 +270,9 @@ impl Backend for HarnessBackend {
     }
     fn outbox(&self) -> Arc<dyn EventStore> {
         self.outbox.clone()
+    }
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.notifier.clone()
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         self.memory.leader_lock()
@@ -314,6 +327,10 @@ pub struct Stores {
     pub kv: Arc<dyn KvStore>,
     pub conversations: Arc<dyn ConversationStore>,
     pub events: Arc<dyn EventStore>,
+    /// The live streams' wake-ups: the process's broadcast, or Postgres'
+    /// `NOTIFY` on the database (two harnesses on one database are two
+    /// replicas).
+    pub notifier: Arc<dyn EventNotifier>,
 }
 
 impl Stores {
@@ -325,14 +342,16 @@ impl Stores {
             store: Arc::new(store),
             kv: Arc::new(MemoryKvStore::new()),
             conversations: Arc::new(MemoryConversationStore::new()),
+            notifier: Arc::new(LocalNotifier::new()),
         }
     }
 
     /// Everything on Postgres, on `pool` (migrated).
     pub fn postgres(pool: &meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool) -> Self {
         use meta_whatsapp_rs::adapters::store::{PostgresConversationStore, PostgresKvStore};
-        use meta_whatsapp_server::store::{PgEventStore, PgStore};
+        use meta_whatsapp_server::store::{PgEventStore, PgNotifier, PgStore};
         Self {
+            notifier: Arc::new(PgNotifier::new(pool.clone())),
             store: Arc::new(PgStore::new(pool.clone())),
             kv: Arc::new(PostgresKvStore::new(pool.clone())),
             conversations: Arc::new(PostgresConversationStore::new(pool.clone())),
@@ -471,7 +490,26 @@ pub async fn send(router: &Router, request: Request<Body>) -> Reply {
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let headers = response.headers().clone();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let live = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/event-stream"));
+    let bytes = if live {
+        // A live event stream never ends: what it sent within a moment,
+        // then it is dropped (the client went away).
+        let mut body = response.into_body();
+        let mut bytes = Vec::new();
+        while let Ok(Some(Ok(frame))) =
+            tokio::time::timeout(std::time::Duration::from_millis(100), body.frame()).await
+        {
+            if let Ok(data) = frame.into_data() {
+                bytes.extend_from_slice(&data);
+            }
+        }
+        bytes.into()
+    } else {
+        response.into_body().collect().await.unwrap().to_bytes()
+    };
     Reply {
         status,
         headers,
@@ -532,6 +570,13 @@ impl Harness {
         })
     }
 
+    /// On `stores`, with `settings`.
+    pub fn with_stores_and_settings(stores: Stores, settings: Settings) -> Self {
+        Self::build(stores, settings, DEFAULT_APP_SECRETS, |graph| {
+            Arc::new(graph)
+        })
+    }
+
     /// On `stores`, verifying deliveries against [`APP_SECRET`] and
     /// [`PREVIOUS_APP_SECRET`].
     pub fn with(stores: Stores) -> Self {
@@ -567,6 +612,7 @@ impl Harness {
             kv,
             conversations,
             events,
+            notifier,
         } = stores;
         let kv = Arc::new(CountingKv::new(kv));
         let outbox = Arc::new(RecordingEvents::new(events));
@@ -591,6 +637,7 @@ impl Harness {
             kv: kv.clone(),
             conversations: conversations.clone(),
             outbox: outbox.clone(),
+            notifier,
             memory: MemoryBackend::new(),
         };
         // The state and its grant, which the internal router is served

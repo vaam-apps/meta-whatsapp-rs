@@ -676,6 +676,39 @@ pub async fn poll(outbox: &dyn Outbox, query: &EventQuery) -> Result<Polled, Ser
     })
 }
 
+/// Whether `id` has the shape of an event id: `evt_` and 32 lowercase hex
+/// digits ([`EventIdKey::event_id`]).
+pub fn is_event_id(id: &str) -> bool {
+    id.strip_prefix("evt_").is_some_and(|hex| {
+        hex.len() == 32 && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
+/// `tenant`'s event of id `id` (`GET /v1/events/{id}`, roadmap M2b): the
+/// whole event, as polling answers it, however large.
+///
+/// # Errors
+///
+/// `404 not_found` for an id that is not an event's ([`is_event_id`],
+/// before the outbox is read), for another tenant's event or an
+/// operator-only row (the outbox looks the id up in `tenant`'s stream
+/// only, so nothing of another tenant's is read), and for a purged or
+/// unknown one, all alike; `503 storage_unavailable`.
+pub async fn get_event(
+    outbox: &dyn Outbox,
+    tenant: &TenantId,
+    id: &str,
+) -> Result<StoredEvent, ServiceError> {
+    if !is_event_id(id) {
+        return Err(ServiceError::not_found());
+    }
+    outbox
+        .get(tenant, id)
+        .await?
+        .filter(|event| event.tenant.as_ref() == Some(tenant))
+        .ok_or_else(ServiceError::not_found)
+}
+
 /// Housekeeping's outbox purge: the events past `retention`, how many
 /// went. It takes no lock: housekeeping runs it under its `LeaderLock`
 /// turn, and two at once are safe ([`Outbox::purge`]).

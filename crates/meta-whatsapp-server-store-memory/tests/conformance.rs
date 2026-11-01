@@ -17,6 +17,8 @@ use meta_whatsapp_rs::adapters::store::MemoryKvStore;
 use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::conformance;
+use meta_whatsapp_server_core::model::TenantId;
+use meta_whatsapp_server_core::notify::{EventNotifier, Hub, LocalNotifier, Subscription, Wakeup};
 use meta_whatsapp_server_core::outbox::{
     AfterMove, EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
 };
@@ -42,6 +44,11 @@ struct Altered {
     fresh_kv: bool,
     /// The outbox, instead of the memory store's own.
     outbox: Option<Arc<dyn Outbox>>,
+    /// `notifier()` builds a new notifier on each call (a subscription
+    /// through one handle never hears a notification through another).
+    fresh_notifier: bool,
+    /// The notifier, instead of the backend's own.
+    notifier: Option<Arc<dyn EventNotifier>>,
 }
 
 #[async_trait]
@@ -57,6 +64,14 @@ impl Backend for Altered {
     }
     fn outbox(&self) -> Arc<dyn Outbox> {
         self.outbox.clone().unwrap_or_else(|| self.inner.outbox())
+    }
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        if self.fresh_notifier {
+            return Arc::new(LocalNotifier::new());
+        }
+        self.notifier
+            .clone()
+            .unwrap_or_else(|| self.inner.notifier())
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         self.inner.leader_lock()
@@ -113,6 +128,8 @@ async fn a_backend_whose_kv_is_new_on_each_call_fails_the_same_data_case() {
         inner: MemoryBackend::new(),
         fresh_kv: true,
         outbox: None,
+        fresh_notifier: false,
+        notifier: None,
     };
     let failed =
         failure(conformance::invariants::every_accessor_hands_out_the_same_data(&backend)).await;
@@ -127,6 +144,8 @@ async fn a_backend_whose_kv_is_new_on_each_call_fails_the_same_data_case() {
             inner: MemoryBackend::new(),
             fresh_kv: true,
             outbox: None,
+            fresh_notifier: false,
+            notifier: None,
         }) as Arc<dyn Backend>
     })
     .await;
@@ -141,6 +160,8 @@ async fn a_backend_whose_kv_is_new_on_each_call_fails_the_same_data_case() {
         inner: MemoryBackend::new(),
         fresh_kv: false,
         outbox: None,
+        fresh_notifier: false,
+        notifier: None,
     };
     assert_eq!(
         failure(conformance::invariants::every_accessor_hands_out_the_same_data(&backend)).await,
@@ -212,6 +233,8 @@ async fn an_outbox_that_ignores_the_route_guard_fails_the_suite() {
         inner: MemoryBackend::new(),
         fresh_kv: false,
         outbox: Some(Arc::new(IgnoresTheGuard::default())),
+        fresh_notifier: false,
+        notifier: None,
     };
     let failed =
         failure(conformance::invariants::the_route_guard_is_checked_with_the_insert(&backend))
@@ -276,6 +299,8 @@ async fn an_outbox_that_ignores_the_route_guard_fails_the_suite() {
         inner: MemoryBackend::new(),
         fresh_kv: false,
         outbox: Some(Arc::new(IgnoresTheGuard::default())),
+        fresh_notifier: false,
+        notifier: None,
     };
     let failed = failure(conformance::invariants::run(&backend)).await;
     assert!(
@@ -392,6 +417,8 @@ async fn an_outbox_that_bends_the_guards_date_fails_the_whole_suite() {
                 inner,
                 fresh_kv: false,
                 outbox: Some(outbox),
+                fresh_notifier: false,
+                notifier: None,
             }) as Arc<dyn Backend>
         })
         .await;
@@ -400,4 +427,174 @@ async fn an_outbox_that_bends_the_guards_date_fails_the_whole_suite() {
             "{how}: {failed:?}"
         );
     }
+}
+
+/// A notifier that wakes every subscription on any notification: one
+/// channel for every tenant.
+#[derive(Default)]
+struct WakesEveryone {
+    hub: Hub,
+}
+
+#[async_trait]
+impl EventNotifier for WakesEveryone {
+    async fn notify(&self, _: &Wakeup) -> StoreResult<()> {
+        self.hub.wake_all();
+        Ok(())
+    }
+
+    async fn subscribe(&self, tenant: &TenantId) -> StoreResult<Subscription> {
+        Ok(self.hub.subscribe(tenant))
+    }
+}
+
+/// Roadmap M2b: the notifier case refuses a backend whose `notifier()` is
+/// new on each call (a subscription through one handle never hears a
+/// notification through another: nothing would wake a stream on the
+/// webhook pipeline's notifications) and one whose notifier wakes every
+/// tenant; each fails `conformance::run` too, and the backend's own
+/// passes. Decisive: the case in `live::run`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_notifier_new_on_each_call_or_waking_every_tenant_fails_the_suite() {
+    let fresh = || Altered {
+        inner: MemoryBackend::new(),
+        fresh_kv: false,
+        outbox: None,
+        fresh_notifier: true,
+        notifier: None,
+    };
+    let failed =
+        failure(conformance::live::the_notifier_wakes_its_tenants_subscriptions_only(&fresh()))
+            .await;
+    assert!(
+        failed
+            .as_deref()
+            .is_some_and(|m| m.contains("subscription to a's stream was not woken")),
+        "{failed:?}"
+    );
+    let everyone = || Altered {
+        inner: MemoryBackend::new(),
+        fresh_kv: false,
+        outbox: None,
+        fresh_notifier: false,
+        notifier: Some(Arc::new(WakesEveryone::default())),
+    };
+    let failed =
+        failure(conformance::live::the_notifier_wakes_its_tenants_subscriptions_only(&everyone()))
+            .await;
+    assert!(
+        failed
+            .as_deref()
+            .is_some_and(|m| m.contains("woken by a's event")),
+        "{failed:?}"
+    );
+    let failed = whole_suite_failure(async || Arc::new(fresh()) as Arc<dyn Backend>).await;
+    assert!(
+        failed.is_some(),
+        "the whole suite passed a notifier new on each call"
+    );
+    let failed = whole_suite_failure(async || Arc::new(everyone()) as Arc<dyn Backend>).await;
+    assert!(
+        failed.is_some(),
+        "the whole suite passed a notifier waking every tenant"
+    );
+    assert_eq!(
+        failure(
+            conformance::live::the_notifier_wakes_its_tenants_subscriptions_only(
+                &MemoryBackend::new()
+            )
+        )
+        .await,
+        None,
+        "the control"
+    );
+}
+
+/// An outbox whose pages leave the tenant out: the asked tenant's page
+/// with the other tenants' events after the same cursor mixed in.
+struct IgnoresTheTenant {
+    inner: Arc<dyn Outbox>,
+    others: Vec<TenantId>,
+}
+
+#[async_trait]
+impl Outbox for IgnoresTheTenant {
+    async fn insert(&self, event: &NewEvent) -> StoreResult<Option<i64>> {
+        self.inner.insert(event).await
+    }
+
+    async fn page(&self, query: &EventQuery) -> StoreResult<EventPage> {
+        let mut page = self.inner.page(query).await?;
+        for other in self.others.iter().filter(|other| **other != query.tenant) {
+            let theirs = self
+                .inner
+                .page(&EventQuery {
+                    tenant: other.clone(),
+                    ..query.clone()
+                })
+                .await?;
+            page.events.extend(theirs.events);
+            page.high_water = page.high_water.max(theirs.high_water);
+        }
+        page.events.sort_by_key(|event| event.sequence);
+        Ok(page)
+    }
+
+    async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
+        self.inner.purge(older_than).await
+    }
+}
+
+/// Roadmap M2b's decisive case for the tenant filter: an outbox whose
+/// pages leave the tenant out hands tenant B's stream tenant A's events,
+/// and the live suite's tenant case fails on it; the backend's own
+/// passes. Decisive: the tenant in every read of a stream.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn removing_the_tenant_filter_on_the_stream_fails_the_tenant_case() {
+    let inner = MemoryBackend::new();
+    let backend = Altered {
+        outbox: Some(Arc::new(IgnoresTheTenant {
+            inner: inner.outbox(),
+            others: ["live-tenant-a", "live-tenant-b"]
+                .map(|t| TenantId::parse(t).unwrap())
+                .to_vec(),
+        })),
+        inner,
+        fresh_kv: false,
+        fresh_notifier: false,
+        notifier: None,
+    };
+    let failed = failure(conformance::live::a_stream_sends_only_its_tenants_events(
+        &backend,
+    ))
+    .await;
+    assert!(
+        failed.is_some(),
+        "a stream without its tenant filter passed"
+    );
+    assert_eq!(
+        failure(conformance::live::a_stream_sends_only_its_tenants_events(
+            &MemoryBackend::new()
+        ))
+        .await,
+        None,
+        "the control"
+    );
+}
+
+/// M2.5 on memory: 200 open streams (ten tenants of 20, half of them never
+/// read) at 100 events a second for 3 seconds: every read stream gets
+/// every event of its tenant in order, the unread ones are dropped as
+/// slow, and the data held for clients never passes each stream's budget.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_hundred_streams_at_a_hundred_events_a_second_hold_bounded_memory() {
+    let backend = MemoryBackend::new();
+    let load =
+        conformance::live::many_streams_at_a_steady_rate_hold_bounded_memory(&backend, 200, 100, 3)
+            .await;
+    eprintln!("memory, M2.5: {load:?}");
+    assert_eq!((load.streams, load.events), (200, 300));
+    // Each event reaches its tenant's ten read streams.
+    assert_eq!(load.delivered, load.events * 10);
+    assert!(load.peak_buffered_bytes <= load.streams * load.budget_per_stream);
 }

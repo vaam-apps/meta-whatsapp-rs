@@ -34,11 +34,13 @@ use meta_whatsapp_server_core::store::{
 };
 
 use crate::events::{PgEventStore, busy_or_backend};
+use crate::notify::PgNotifier;
 use meta_whatsapp_server_core::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
     NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus, WabaBinding,
 };
+use meta_whatsapp_server_core::notify::EventNotifier;
 
 /// The service's migration history table, apart from the library's
 /// (`wa_sqlx_migrations`) and from any of the application's own.
@@ -1027,7 +1029,8 @@ impl SchemaMigrator for PgMigrator {
 }
 
 /// Every port on one Postgres database, through one pool: [`PgStore`],
-/// [`PgEventStore`], [`PgLeaderLock`], [`PgJanitor`], [`PgMigrator`], and
+/// [`PgEventStore`], [`PgNotifier`] (its `LISTEN` session a connection of
+/// its own), [`PgLeaderLock`], [`PgJanitor`], [`PgMigrator`], and
 /// the library's `PostgresKvStore` and `PostgresConversationStore` (the
 /// default `wa_` prefix). Cheap to clone.
 #[derive(Clone)]
@@ -1035,6 +1038,7 @@ pub struct PgBackend {
     pool: PgPool,
     store: Arc<PgStore>,
     outbox: Arc<PgEventStore>,
+    notifier: Arc<PgNotifier>,
     kv: Arc<PostgresKvStore>,
     conversations: Arc<PostgresConversationStore>,
 }
@@ -1053,6 +1057,7 @@ impl PgBackend {
         Self {
             store: Arc::new(PgStore::new(pool.clone())),
             outbox: Arc::new(PgEventStore::new(pool.clone())),
+            notifier: Arc::new(PgNotifier::new(pool.clone())),
             kv: Arc::new(PostgresKvStore::new(pool.clone())),
             conversations: Arc::new(PostgresConversationStore::new(pool.clone())),
             pool,
@@ -1078,6 +1083,10 @@ impl Backend for PgBackend {
         self.outbox.clone()
     }
 
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.notifier.clone()
+    }
+
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         Arc::new(PgLeaderLock::new(self.pool.clone()))
     }
@@ -1099,6 +1108,7 @@ impl Backend for PgBackend {
     }
 
     async fn close(&self) {
+        self.notifier.close().await;
         self.pool.close().await;
     }
 }

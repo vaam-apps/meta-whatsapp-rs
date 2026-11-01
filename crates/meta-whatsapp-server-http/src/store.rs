@@ -9,9 +9,11 @@
 //! The library's records (the token vault, OTP challenges, signup
 //! sessions, webhook dedup) stay in its `KvStore`; these are the tables
 //! the design adds (`wa_server_*`, docs/design/server.md, section 2.2).
-//! The event outbox has a port of its own: [`Outbox`].
+//! The event outbox has a port of its own: [`Outbox`], and its wake-ups
+//! another: [`EventNotifier`] (roadmap M2b).
 
 pub use meta_whatsapp_server_core::backend::{Backend, BackendKind};
+pub use meta_whatsapp_server_core::notify::{EventNotifier, LocalNotifier};
 pub use meta_whatsapp_server_core::outbox::Outbox;
 pub use meta_whatsapp_server_core::store::{
     HOUSEKEEPING, HOUSEKEEPING_LEASE, IdempotencyRecords, Janitor, LeaderLock, LeaderTurn,
