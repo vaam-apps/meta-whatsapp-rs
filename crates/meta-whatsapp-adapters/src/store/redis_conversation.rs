@@ -20,6 +20,7 @@
 //! | `B:m:lp(pn)<id>` | hash | a message: `c` contact, `d` direction, `k` kind, `t` text, `p` payload (JSON), `s` status, `ts`, `sa` status time, `e` error (JSON), `snd` sender |
 //! | `B:h:lp(pn)<contact>` | sorted set | a conversation's history, `ts16 + id` |
 //! | `B:mt:<pn>` | sorted set | a number's messages, `ts16 + id` (purge by age) |
+//! | `B:c:<pn>` | set | the contacts of a number's conversations with a history (trims) |
 //! | `B:s:lp(pn)<contact>` | hash | a summary: `at`, `id` (the latest message), `t` preview, `in` last inbound, `u` unread |
 //! | `B:l:<pn>` | sorted set | a number's conversations, `ts16(at) + contact` |
 //! | `B:snd:lp(pn)<sender>` | set | the ids of the messages a sender sent on a number (erasure) |
@@ -43,7 +44,9 @@
 //! status, decide with [`DeliveryStatus::supersedes`] in Rust (the rule
 //! lives in `meta-whatsapp-core`), then a script that applies it only if the
 //! status is still the one read. A purge of every number runs one script
-//! per number. Lua compares strings with the C library's `strcoll`, which
+//! per number; a trim, one script per conversation and at most
+//! `TRIM_PER_SCRIPT` (1024) rows (a larger excess takes several, each deleting
+//! the oldest rows beyond the cap as they stand then). Lua compares strings with the C library's `strcoll`, which
 //! follows the server's locale: the scripts never order strings with `<`,
 //! only byte by byte (`before`).
 //!
@@ -79,6 +82,10 @@ const MAX_STATUS_ROUNDS: usize = 16;
 /// history chunk of thousands is a few scripts, none blocking Redis long.
 const SYNCED_PER_SCRIPT: usize = 256;
 
+/// The most rows one trim script deletes: a conversation further over its
+/// cap takes several scripts, so that none blocks Redis long.
+const TRIM_PER_SCRIPT: usize = 1024;
+
 /// The fields each message takes in an append script's arguments.
 const MESSAGE_ARGS: usize = 13;
 
@@ -94,6 +101,7 @@ local function k_id(id) return B .. ':id:' .. id end
 local function k_m(pn, id) return B .. ':m:' .. lp(pn) .. id end
 local function k_h(pn, c) return B .. ':h:' .. lp(pn) .. c end
 local function k_mt(pn) return B .. ':mt:' .. pn end
+local function k_c(pn) return B .. ':c:' .. pn end
 local function k_s(pn, c) return B .. ':s:' .. lp(pn) .. c end
 local function k_l(pn) return B .. ':l:' .. pn end
 local function k_snd(pn, s) return B .. ':snd:' .. lp(pn) .. s end
@@ -144,6 +152,7 @@ local function insert_row(pn, id, c, d, k, t, p, s, ts, sa, e, snd)
   end
   redis.call('ZADD', k_h(pn, c), 0, ts .. id)
   redis.call('ZADD', k_mt(pn), 0, ts .. id)
+  redis.call('SADD', k_c(pn), c)
   return true
 end
 
@@ -156,6 +165,7 @@ local function drop_message(pn, id)
   redis.call('DEL', mk)
   if redis.call('GET', k_id(id)) == pn then redis.call('DEL', k_id(id)) end
   redis.call('ZREM', k_h(pn, f[1]), f[2] .. id)
+  if redis.call('EXISTS', k_h(pn, f[1])) == 0 then redis.call('SREM', k_c(pn), f[1]) end
   redis.call('ZREM', k_mt(pn), f[2] .. id)
   if f[3] then redis.call('SREM', k_snd(pn, f[3]), id) end
   return f[1]
@@ -504,6 +514,7 @@ for _, id in ipairs(ids) do
     if drop_message(pn, string.sub(member, 17)) then counts[1] = counts[1] + 1 end
   end
   redis.call('DEL', hk)
+  redis.call('SREM', k_c(pn), id)
   local sk = k_s(pn, id)
   local at = redis.call('HGET', sk, 'at')
   if at then
@@ -612,6 +623,45 @@ return counts
     )
 });
 
+/// `trim_conversations` on one conversation: `ARGV[2]` the number,
+/// `ARGV[3]` the contact, `ARGV[4]` the rows it keeps, `ARGV[5]` the most
+/// it deletes ([`TRIM_PER_SCRIPT`]). Deletes the oldest rows beyond the
+/// newest `ARGV[4]` by `(time, id)` (every row: tombstones and redacted
+/// messages too), and the summary when its latest message is one of them.
+/// Returns the messages and summaries deleted, and how many rows are still
+/// beyond the cap.
+static TRIM: LazyLock<Script> = LazyLock::new(|| {
+    script(
+        r"
+local pn, c, keep, most = ARGV[2], ARGV[3], tonumber(ARGV[4]), tonumber(ARGV[5])
+local hk = k_h(pn, c)
+local over = redis.call('ZCARD', hk) - keep
+if over <= 0 then return {0, 0, 0} end
+local n = math.min(over, most)
+local sk = k_s(pn, c)
+local latest = redis.call('HGET', sk, 'id')
+local counts = {0, 0, over - n}
+local summary_goes = false
+for _, member in ipairs(redis.call('ZRANGE', hk, 0, n - 1)) do
+  local id = string.sub(member, 17)
+  if id == latest then summary_goes = true end
+  if drop_message(pn, id) then
+    counts[1] = counts[1] + 1
+  else
+    -- An index member without its record: never left to count again.
+    redis.call('ZREM', hk, member)
+  end
+end
+if summary_goes then
+  redis.call('ZREM', k_l(pn), redis.call('HGET', sk, 'at') .. c)
+  redis.call('DEL', sk)
+  counts[2] = 1
+end
+return counts
+",
+    )
+});
+
 /// A page of a sorted set, each member's record with it: `ARGV[3]` the
 /// sorted set's kind (`h`, `l`, `wi`, `pl`), `ARGV[4]` its contact (unused
 /// for `l` and `pl`), `ARGV[5]`/`[6]` the bounds, `ARGV[7]` the limit,
@@ -688,10 +738,13 @@ return out
 ///   they are given (as job queues on Redis commonly do): a proxy that
 ///   refuses undeclared keys refuses them.
 /// - **Cost.** Each call is one script (a purge of every number, one per
-///   number). An erasure or a purge reads and deletes in one script what it
+///   number; a trim, one per conversation and at most 1024 rows, several
+///   for a conversation further over its cap).
+///   An erasure or a purge reads and deletes in one script what it
 ///   reaches, and Redis serves nothing else meanwhile: schedule
-///   [`apply_retention`](ConversationStore::apply_retention) for quiet
-///   hours on a large inbox.
+///   [`apply_retention`](ConversationStore::apply_retention) and
+///   [`trim_conversations`](ConversationStore::trim_conversations) for
+///   quiet hours on a large inbox.
 #[derive(Clone)]
 pub struct RedisConversationStore<C = ConnectionManager> {
     conn: C,
@@ -1633,6 +1686,60 @@ where
     fn retention(&self) -> Retention {
         self.retention
     }
+
+    async fn trim_conversations(
+        &self,
+        phone_number_id: Option<&PhoneNumberId>,
+        keep_last: usize,
+    ) -> Result<Purged, StorageError> {
+        let numbers = match phone_number_id {
+            Some(number) => vec![number.clone()],
+            None => self.numbers().await?,
+        };
+        // Lua's numbers are doubles: anything past i64::MAX keeps everything
+        // all the same.
+        let keep = i64::try_from(keep_last).unwrap_or(i64::MAX).to_string();
+        let most = TRIM_PER_SCRIPT.to_string();
+        let mut purged = Purged::default();
+        for number in numbers {
+            let mut conn = self.conn.clone();
+            let contacts: Vec<Vec<u8>> = redis::cmd("SMEMBERS")
+                .arg(format!("{}:c:{}", self.base(), number.as_str()))
+                .query_async(&mut conn)
+                .await
+                .map_err(backend)?;
+            for contact in contacts {
+                // One script per conversation, each atomic with the appends:
+                // a message appended between two is either ranked by the
+                // next or kept.
+                loop {
+                    let counts: Vec<u64> = self
+                        .run(
+                            &TRIM,
+                            &[
+                                number.as_str().as_bytes(),
+                                &contact,
+                                keep.as_bytes(),
+                                most.as_bytes(),
+                            ],
+                        )
+                        .await?;
+                    let [messages, conversations, left] =
+                        <[u64; 3]>::try_from(counts).map_err(|_| {
+                            StorageError::Backend(anyhow::anyhow!(
+                                "the trim script answered no three counts"
+                            ))
+                        })?;
+                    purged.messages += messages;
+                    purged.conversations += conversations;
+                    if left == 0 || messages == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(purged)
+    }
 }
 
 #[cfg(test)]
@@ -1700,6 +1807,7 @@ mod tests {
                 .chain(
                     [
                         "numbers",
+                        "c:1",
                         "id:wamid.1",
                         "mt:1",
                         "l:1",

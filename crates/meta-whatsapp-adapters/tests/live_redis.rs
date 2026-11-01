@@ -347,7 +347,7 @@ async fn traces(
 /// An erasure leaves nothing of the person in any key, field or member (a
 /// redacted group message's sender, the indexes of their window events,
 /// thread owner and contact removal included), in both erasure modes; a
-/// purge leaves nothing of what it purged.
+/// purge or a trim leaves nothing of what it deleted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_redis_an_erasure_or_a_purge_leaves_no_trace() {
     let Some(client) = client() else { return };
@@ -371,5 +371,62 @@ async fn live_redis_an_erasure_or_a_purge_leaves_no_trace() {
     assert_eq!(
         traces(&mut conn, &prefix, &needles).await,
         Vec::<String>::new()
+    );
+    let needles = conversation_conformance::trim_one_number_of_every_row(&store).await;
+    assert_eq!(
+        traces(&mut conn, &prefix, &needles).await,
+        Vec::<String>::new(),
+        "trim"
+    );
+}
+
+/// A conversation further over its cap than one trim script deletes (1024
+/// rows) is trimmed in several, to the cap, the newest rows kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_redis_a_trim_beyond_one_script_takes_several() {
+    let Some(client) = client() else { return };
+    let (prefix, _cleanup) = prefix(&client);
+    let conn = client.get_multiplexed_async_connection().await.unwrap();
+    let store = RedisConversationStore::new(conn).with_prefix(prefix.clone());
+    let pn = PhoneNumberId::new("106540352242922").unwrap();
+    let key = ConversationKey::new(pn.clone(), "US.1");
+    let t0 = time::macros::datetime!(2026-09-24 12:00 UTC);
+    let messages: Vec<StoredMessage> = (0..2_100_i64)
+        .map(|i| StoredMessage {
+            id: MessageId::new(format!("wamid.{i:05}")),
+            conversation: key.clone(),
+            direction: Direction::Inbound,
+            kind: "text".to_owned(),
+            text: Some(format!("m{i}")),
+            payload: serde_json::json!({}),
+            status: DeliveryStatus::Received,
+            timestamp: t0 + time::Duration::seconds(i),
+            status_at: None,
+            error: None,
+        })
+        .collect();
+    assert!(
+        store
+            .append_synced(messages)
+            .await
+            .unwrap()
+            .into_iter()
+            .all(|stored| stored)
+    );
+    let trimmed = store.trim_conversations(Some(&pn), 10).await.unwrap();
+    assert_eq!((trimmed.messages, trimmed.conversations), (2_090, 0));
+    let kept: Vec<String> = store
+        .messages(&key, None, usize::MAX)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        kept,
+        (2_090..2_100)
+            .rev()
+            .map(|i| format!("wamid.{i:05}"))
+            .collect::<Vec<_>>()
     );
 }

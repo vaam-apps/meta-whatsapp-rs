@@ -919,6 +919,8 @@ mod tests {
         }
         conversation_conformance::purge_one_person_of_every_record(&MemoryConversationStore::new())
             .await;
+        conversation_conformance::trim_one_number_of_every_row(&MemoryConversationStore::new())
+            .await;
     }
 
     #[tokio::test]

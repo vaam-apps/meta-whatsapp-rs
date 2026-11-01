@@ -588,8 +588,10 @@ or `n` is 0), and with it the customer service window it holds, open or
 not, until the customer's next message; window events, ownership records, contacts and links stay,
 and a conversation keeping its latest message keeps its summary as it
 was (its unread count may include deleted messages until `mark_read`).
-An append at the same time is never lost, and on Postgres trims take
-turns with purges and erasures. To run either on a schedule, the bot
+An append at the same time is never lost on any of the in-tree stores:
+on Postgres trims take turns with purges and erasures, on SQLite a trim
+is one write transaction, and on Redis one script per conversation (at
+most 1024 rows each, several for a conversation further over its cap). To run either on a schedule, the bot
 framework's `RetentionPolicy` and `RetentionSweeper`
 (`meta_whatsapp_rs::bot::retention`, feature `bot`;
 [bots.md § 11](bots.md#11-retention-and-auto-delete)) apply an age and a

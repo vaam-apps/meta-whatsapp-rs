@@ -1773,6 +1773,13 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     `live_postgres_the_locks_are_the_documented_ones`. Not caught: the
     key order of the summaries' locks (the ranking already yields them
     in key order); in memory a trim cannot race an append (one lock).
+    SQLite and Redis implement it since L8's merge of B4: SQLite in one
+    `BEGIN IMMEDIATE` transaction (summaries, then rows, on one
+    ranking), Redis in one script per conversation of at most 1024 rows
+    (several for a conversation further over its cap), over a new set of
+    each number's conversations with a history (`B:c:<pn>`); both pass
+    the trim cases, and `live_redis_a_trim_beyond_one_script_takes_several`
+    fails a trim stopping after one script.
     The server compiles and passes unchanged (it implements no
     `ConversationStore`); retention over HTTP is M5k. The sabotage
     review added what three surviving mutations showed missing: a cap

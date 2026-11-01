@@ -206,7 +206,7 @@ async fn traces(pool: &PgPool, needles: &[String]) -> Vec<String> {
 }
 
 /// An erasure leaves nothing of the person in any row, in both erasure
-/// modes; a purge leaves nothing of what it purged.
+/// modes; a purge or a trim leaves nothing of what it deleted.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_postgres_an_erasure_or_a_purge_leaves_no_trace() {
     let Some(db) = TestDb::new().await else {
@@ -225,6 +225,12 @@ async fn live_postgres_an_erasure_or_a_purge_leaves_no_trace() {
     let store = PostgresConversationStore::new(db.pool.clone());
     let needles = conversation_conformance::purge_one_person_of_every_record(&store).await;
     assert_eq!(traces(&db.pool, &needles).await, Vec::<String>::new());
+    let needles = conversation_conformance::trim_one_number_of_every_row(&store).await;
+    assert_eq!(
+        traces(&db.pool, &needles).await,
+        Vec::<String>::new(),
+        "trim"
+    );
 }
 
 /// The search recipe of `store::postgres`' module docs finds a row holding a

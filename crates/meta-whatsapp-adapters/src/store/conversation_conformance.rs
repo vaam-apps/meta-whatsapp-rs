@@ -559,6 +559,95 @@ pub async fn purge_one_person_of_every_record<S: ConversationStore + ?Sized>(
     needles
 }
 
+/// One number's conversations trimmed to their newest row
+/// (`trim_conversations` on that number, `keep_last` 1): what the
+/// adapter's own test must then find nowhere in its storage, as for
+/// [`erase_one_person_of_every_record`]. The conversations: one of three
+/// messages (a synced one, a live one, a newer live one), which keeps its
+/// newest and its summary; one whose newest row is a tombstone, which loses
+/// its message and its summary (the summary held that message's preview);
+/// one of a single message, untouched. Returns the strings that must be
+/// gone: the deleted messages' ids and texts.
+///
+/// Not part of [`run`], for the same reason.
+///
+/// # Panics
+///
+/// When the trim does not do so through the port — this is a test helper.
+pub async fn trim_one_number_of_every_row<S: ConversationStore + ?Sized>(store: &S) -> Vec<String> {
+    let r = Run::new("trimmed");
+    let doomed = |c: &str, local: &str, secs: i64| {
+        let text = format!("trimmed-text-{local}-{}", r.tag);
+        StoredMessage {
+            payload: serde_json::json!({"text": {"body": text}}),
+            ..r.msg(
+                c,
+                &format!("trimmed-{local}"),
+                Direction::Inbound,
+                secs,
+                &text,
+            )
+        }
+    };
+    assert_eq!(
+        store
+            .append_synced(vec![doomed("a", "synced", 1)])
+            .await
+            .unwrap(),
+        [true]
+    );
+    assert!(store.append(doomed("a", "live", 2)).await.unwrap());
+    let kept = r.msg("a", "kept", Direction::Inbound, 3, "kept");
+    assert!(store.append(kept.clone()).await.unwrap());
+    assert!(
+        store
+            .append(doomed("b", "under-tombstone", 1))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .revoke(&r.key("b"), &r.id("revoked"), Direction::Inbound, at(2))
+            .await
+            .unwrap()
+    );
+    let alone = r.msg("c", "alone", Direction::Inbound, 1, "alone");
+    assert!(store.append(alone.clone()).await.unwrap());
+
+    let trimmed = store.trim_conversations(Some(&r.pn), 1).await.unwrap();
+    assert_eq!(
+        trimmed,
+        Purged {
+            messages: 3,
+            conversations: 1,
+            ..Purged::default()
+        }
+    );
+    assert_eq!(only_message(store, &r.key("a")).await, kept);
+    assert_eq!(
+        only_message(store, &r.key("b")).await.kind,
+        StoredMessage::REVOKED
+    );
+    assert_eq!(only_message(store, &r.key("c")).await, alone);
+    let listed: Vec<String> = store
+        .conversations(&r.pn, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|s| s.key.contact)
+        .collect();
+    assert_eq!(listed, ["a", "c"], "b's summary went with its message");
+    ["synced", "live", "under-tombstone"]
+        .into_iter()
+        .flat_map(|local| {
+            [
+                r.id(&format!("trimmed-{local}")).as_str().to_owned(),
+                format!("trimmed-text-{local}-{}", r.tag),
+            ]
+        })
+        .collect()
+}
+
 const T0: OffsetDateTime = datetime!(2026-09-24 12:00 UTC);
 
 fn at(secs: i64) -> OffsetDateTime {

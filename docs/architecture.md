@@ -1029,6 +1029,10 @@ keyed by business number and contact, and
   injectable `Clock`) and draws versions from one counter row
   (`wa_kv_version`) under the write lock. `store::sqlite::memory` is a
   private in-memory database on one connection the pool never closes.
+  `trim_conversations` (roadmap B4) is one write transaction too: it
+  ranks each conversation's rows on the conversation index, deletes the
+  summaries whose latest message ranks beyond the cap, then those rows;
+  appends wait for the write lock, so none is ranked half-way or lost.
 - `store::RedisConversationStore` (feature `redis`, roadmap L8): every
   key under `<prefix>{conversations:<prefix>}`, one hash tag per store
   (it names the prefix), so a store's inbox is one slot (one shard on
@@ -1038,8 +1042,13 @@ keyed by business number and contact, and
   `ZRANGEBYLEX` over sorted sets of 16-hex-digit times and ids (byte
   order is time order); the scripts compare strings byte by byte, never
   with Lua's locale-dependent `<`. A purge of every number runs one
-  script per number. Needs `noeviction` and persistence (AOF or
-  snapshots): the history is data.
+  script per number. `trim_conversations` (roadmap B4) runs one script
+  per conversation (from a set of each number's conversations with a
+  history, `B:c:<pn>`), each deleting at most 1024 of its oldest rows
+  beyond the cap (and the summary when its latest message is one of
+  them), so a conversation further over takes several; each is atomic
+  with the appends, so an append is never lost. Needs `noeviction` and
+  persistence (AOF or snapshots): the history is data.
 - `media::FfmpegConverter` (feature `ffmpeg`): core's
   `media::MediaConverter` port over an `ffmpeg` binary the integrator
   installs, run with `tokio::process` (no shell) and fixed literal
@@ -1326,7 +1335,7 @@ for every event, after the ban and the match.
   cooldown, and only the refusal that creates it tells the user, so
   repeated attempts get one notice per period. Records expire in place:
   invisible at once, deleted by Redis itself or by `purge_expired` on the
-  memory and Postgres stores.
+  memory, Postgres and SQLite stores.
 - **Errors**: a handler's error is logged (kinds only) and acknowledged
   by default, because an error answers `500` and Meta redelivers the
   whole batch, repeating replies already sent; a transient failure is

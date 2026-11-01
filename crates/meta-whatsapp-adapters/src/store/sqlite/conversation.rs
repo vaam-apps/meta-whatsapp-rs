@@ -21,6 +21,12 @@
 //!   an erasure reaches is the memory and Postgres stores' (the person's
 //!   records, the synced contacts and links naming them, their group
 //!   messages by [`StoredMessage::sender`], written with each message).
+//! - `trim_conversations` ranks each conversation's rows newest first by
+//!   `(ts, id)` (the history's order, on `wa_messages_conversation_idx`)
+//!   and, in one `BEGIN IMMEDIATE` transaction, deletes the summaries whose
+//!   latest message ranks beyond the cap, then those messages: no append
+//!   runs meanwhile (they wait for the write lock), so one ranking serves
+//!   both statements and an append is either ranked or kept.
 //! - `identities` walks the synced contacts and the links of one number in
 //!   one read transaction, a snapshot of the store.
 
@@ -132,6 +138,9 @@ struct Sql {
     resummarize: Arc<str>,
     drop_summary: Arc<str>,
     purge: [Arc<str>; 5],
+    /// `trim_conversations`: the summaries, then the messages, of every
+    /// number (`[0]`) or of one (`[1]`).
+    trim: [[Arc<str>; 2]; 2],
 }
 
 impl Sql {
@@ -362,6 +371,10 @@ impl Sql {
             drop_summary: arc(format!(
                 "DELETE FROM {conversations} WHERE phone_number_id = ?1 AND contact = ?2"
             )),
+            trim: [
+                trim_sql(&messages, &conversations, "?2 IS NULL"),
+                trim_sql(&messages, &conversations, "phone_number_id = ?2"),
+            ],
             purge: [
                 arc(format!("DELETE FROM {messages} WHERE ts < ?1 AND {scope}")),
                 arc(format!(
@@ -377,6 +390,33 @@ impl Sql {
             ],
         }
     }
+}
+
+/// `trim_conversations`' two statements over the rows `scope` selects
+/// (`?2` the number, or NULL for every number), `?1` the rows each
+/// conversation keeps: each conversation's rows ranked newest first by
+/// `(ts, id)`, the history's order (`wa_messages_conversation_idx`), then
+/// the summaries whose latest message ranks beyond the cap deleted, then
+/// those messages. Summaries first: their ranking must see the rows before
+/// they go. One number's scope reads that number's range of the index.
+fn trim_sql(messages: &str, conversations: &str, scope: &str) -> [Arc<str>; 2] {
+    let ranked = format!(
+        "ranked AS (SELECT phone_number_id, contact, id, row_number() OVER ( \
+           PARTITION BY phone_number_id, contact ORDER BY ts DESC, id DESC) AS n \
+         FROM {messages} WHERE {scope})"
+    );
+    [
+        Arc::from(format!(
+            "WITH {ranked} DELETE FROM {conversations} \
+             WHERE (phone_number_id, contact, last_message_id) IN \
+               (SELECT phone_number_id, contact, id FROM ranked WHERE n > ?1)"
+        )),
+        Arc::from(format!(
+            "WITH {ranked} DELETE FROM {messages} \
+             WHERE (phone_number_id, id) IN \
+               (SELECT phone_number_id, id FROM ranked WHERE n > ?1)"
+        )),
+    ]
 }
 
 impl SqliteConversationStore {
@@ -1301,6 +1341,34 @@ impl ConversationStore for SqliteConversationStore {
     fn retention(&self) -> Retention {
         self.retention
     }
+
+    async fn trim_conversations(
+        &self,
+        phone_number_id: Option<&PhoneNumberId>,
+        keep_last: usize,
+    ) -> Result<Purged, StorageError> {
+        // Under the write lock: no append between the two statements, so
+        // both rank the same rows.
+        let mut tx = self.begin().await?;
+        let mut counts = [0_u64; 2];
+        let statements = &self.sql.trim[usize::from(phone_number_id.is_some())];
+        for (sql, count) in statements.iter().zip(&mut counts) {
+            let done = Self::query(sql)
+                .bind(to_i64(keep_last))
+                .bind(phone_number_id.map(PhoneNumberId::as_str))
+                .execute(&mut *tx)
+                .await
+                .map_err(backend)?;
+            *count = done.rows_affected();
+        }
+        tx.commit().await.map_err(backend)?;
+        let [conversations, messages] = counts;
+        Ok(Purged {
+            messages,
+            conversations,
+            ..Purged::default()
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1411,8 +1479,8 @@ mod tests {
     }
 
     /// An erasure leaves nothing of the person in any table (a redacted
-    /// group message's sender included), in both erasure modes; a purge
-    /// leaves nothing of what it purged.
+    /// group message's sender included), in both erasure modes; a purge or
+    /// a trim leaves nothing of what it deleted.
     #[tokio::test]
     async fn an_erasure_or_a_purge_leaves_no_trace_in_any_table() {
         for mode in [ErasureMode::Redact, ErasureMode::Delete] {
@@ -1427,6 +1495,8 @@ mod tests {
         let store = store().await;
         let needles = conversation_conformance::purge_one_person_of_every_record(&store).await;
         assert_eq!(traces(&store, &needles).await, Vec::<String>::new());
+        let needles = conversation_conformance::trim_one_number_of_every_row(&store).await;
+        assert_eq!(traces(&store, &needles).await, Vec::<String>::new(), "trim");
     }
 
     /// Every write method refuses an identifier holding U+0000 and stores

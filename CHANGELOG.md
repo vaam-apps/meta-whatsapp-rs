@@ -253,6 +253,16 @@ stored data, the owner's).
   `meta_whatsapp_server_core::inbound::INBOX_RECORDING` (`ALL` with
   `contacts(false)`); the `app_state_synced` events still reach their
   tenant.
+- **`trim_conversations` on the SQLite and Redis conversation stores**
+  (roadmap L8, after B4). SQLite: one `BEGIN IMMEDIATE` transaction,
+  ranking each conversation's rows on its conversation index, then the
+  summaries whose latest message ranks beyond the cap deleted, then
+  those rows. Redis: one script per conversation, at most 1024 rows each
+  (a conversation further over its cap takes several), atomic with the
+  appends; the layout gains `B:c:<pn>`, each number's conversations with
+  a history (pending the owner's confirmation with the rest).
+  `conversation_conformance::trim_one_number_of_every_row` gives the
+  trace scans a trim's deleted rows.
 - **`conversation_conformance::erase_one_person_of_every_record` and
   `purge_one_person_of_every_record`** (`meta_whatsapp_adapters::store`,
   roadmap L8's review): one person's records of every kind, erased or
@@ -282,7 +292,8 @@ stored data, the owner's).
   or the store's age filter, fails it).
 - **A cap on each conversation's history**:
   `ConversationStore::trim_conversations(phone_number_id, keep_last)`
-  (`meta-whatsapp-core`, roadmap B4), on both adapters. Each
+  (`meta-whatsapp-core`, roadmap B4), on every in-tree adapter (memory
+  and Postgres in B4; SQLite and Redis with L8, below). Each
   conversation keeps its newest `keep_last` rows by `(timestamp, id)`,
   every row counting (live and synced messages, revokes' tombstones,
   messages an erasure redacted in a group), and the others are deleted,
