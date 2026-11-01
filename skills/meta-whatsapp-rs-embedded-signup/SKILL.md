@@ -151,7 +151,7 @@ token, its `appsecret_proof` in the form body) replaces `exchange_code`, then th
 ## What meta-whatsapp-rs does not do
 
 - ~~Only the Tech Provider flow~~ (before 581f9b1); ~~no hosted Embedded Signup~~ (until L11a). No pre-verified number pools or
-  multi-WABA onboarding; no token refresh (an expired token means running the flow again), no PIN policy ([OPEN_QUESTIONS.md #4–#9 and #12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants), all decided: roadmap L11b–L11e, L25).
+  multi-WABA onboarding; no token refresh (an expired token means running the flow again; `TokenVault::token_expiry` warns a lead time ahead, nothing decrypted), no PIN policy ([OPEN_QUESTIONS.md #4–#9 and #12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants), all decided: roadmap L11b–L11e, L25).
 - No tenant model: which of your merchants owns a WABA is your table.
 
 ## Related skills
