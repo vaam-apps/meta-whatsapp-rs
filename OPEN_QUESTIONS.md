@@ -380,6 +380,26 @@ Found by the security review of 8ee6fab.
     errors, and the store is a typed store like the others. Roadmap
     L21a.
 
+    **Proposed with L21a (implementer's draft; the coordinator decides
+    the choices, the owner the stored names):** the sink signals with
+    `SinkError::Permanent` (a variant of core's existing leaf, not an
+    `ErrorKind`: those classify Graph codes); `FanoutSink` is permanent
+    only when every failing sink was. The handler marks a dead-lettered
+    event's dedup claim done (a redelivery of the body is a duplicate,
+    not a second letter), and replay goes past the guard. Bounds: 1000
+    letters (a ring, the oldest overwritten), 14 days (the retention to
+    document), 256 KiB per stored event (a larger one kept without its
+    content). The contact index is keyed by business number and contact
+    (BSUID first, else the phone number), and an event naming no number
+    is erased by every number's erasure of the contact. The facade's
+    eraser is a new `meta_whatsapp_rs::erasure::Eraser` rather than a
+    change to `Inbox::erase_all`. The namespaces `wa.webhook.deadletter`
+    and `wa.webhook.deadletter.contact` wait for the owner's confirmation
+    before the first release (roadmap § Owner touchpoints). Each choice
+    is a setting (`with_capacity`, `with_max_age`,
+    `with_max_event_bytes`) or the integrator's (whether to wire the
+    store, which errors a sink classifies).
+
 ## CMS inbox
 
 Found while writing the integrator guides and checking them against

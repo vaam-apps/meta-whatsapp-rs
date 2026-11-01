@@ -9,12 +9,13 @@
 //! | Module | Crate | What |
 //! | --- | --- | --- |
 //! | [`mod@client`] | `meta-whatsapp-client` | Graph API client, one module per endpoint family |
-//! | [`webhooks`] | `meta-whatsapp-webhooks` | signature and verify-token checks, typed events, dedup, axum router + SSE |
+//! | [`webhooks`] | `meta-whatsapp-webhooks` | signature and verify-token checks, typed events, dedup, dead letters, axum router + SSE |
 //! | [`adapters`] | `meta-whatsapp-adapters` | reqwest transport; memory, Postgres, Redis stores; sinks |
 //! | [`core`] | `meta-whatsapp-core` | error tree, ids, secrets, the ports (`HttpTransport`, `KvStore`, `ConversationStore`, `EventSink`, `Clock`) |
 //! | `typst` (feature `typst`) | `meta-whatsapp-typst` | invoices, receipts, vouchers → PDF/PNG |
 //! | `bot` (feature `bot`) | `meta-whatsapp-bot` | commands, guards, cooldowns, middleware, compile-time plugins, Markdown replies, paced broadcasts, durable scheduled jobs |
 //! | [`inbox`] | here | webhook events → conversation history; window-checked replies with a merchant's token |
+//! | [`erasure`] | here | erase a person from the conversation store and the webhook dead letters together |
 //!
 //! # Which module for which product
 //!
@@ -163,6 +164,7 @@
 //! What is implemented, and what is not, is in `docs/coverage.md`; the
 //! design is `docs/architecture.md`.
 
+pub mod erasure;
 pub mod inbox;
 pub mod prelude;
 

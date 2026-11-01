@@ -17,8 +17,8 @@ use http_body_util::BodyExt;
 use meta_whatsapp_adapters::store::MemoryKvStore;
 use meta_whatsapp_core::secret::{AppSecret, VerifyToken};
 use meta_whatsapp_webhooks::{
-    Claim, DedupGuard, SignatureVerifier, WebhookEvent, WebhookHandler, WebhookPayload, router,
-    server::SIGNATURE_HEADER, sign, sse,
+    Claim, DeadLetters, DedupGuard, SignatureVerifier, WebhookEvent, WebhookHandler,
+    WebhookPayload, router, server::SIGNATURE_HEADER, sign, sse,
 };
 use tower::ServiceExt;
 
@@ -277,6 +277,34 @@ async fn post_is_500_when_the_sink_fails() {
     let signature = sign(&secret(), &body);
     let (status, _, _) = send(app(sink, None), post(body, Some(signature))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+/// A permanent sink error answers `500` without a dead-letter store, and
+/// `200` with one, once the event is dead-lettered (roadmap L21a).
+#[tokio::test]
+async fn post_is_200_when_a_permanent_failure_is_dead_lettered() {
+    let body = common::fixture_bytes("messages/text.json");
+    let signature = sign(&secret(), &body);
+    let without = Arc::new(RecordingSink::failing_permanently_on(0));
+    let (status, _, _) = send(
+        app(without, None),
+        post(body.clone(), Some(signature.clone())),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+    let kv = Arc::new(MemoryKvStore::new());
+    let store = DeadLetters::new(kv);
+    let handler = WebhookHandler::builder(
+        SignatureVerifier::new(vec![secret()]).unwrap(),
+        VerifyToken::new("vibecoding"),
+        Arc::new(RecordingSink::failing_permanently_on(0)),
+    )
+    .dead_letters(store.clone())
+    .build();
+    let (status, _, _) = send(router(Arc::new(handler)), post(body, Some(signature))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(store.list().await.unwrap().len(), 1);
 }
 
 #[tokio::test]

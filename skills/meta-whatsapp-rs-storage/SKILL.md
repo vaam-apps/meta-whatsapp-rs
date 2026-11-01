@@ -7,13 +7,12 @@ description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token
 
 > **Verified against meta-whatsapp-rs 3573e219656d17a21ddbab4277b2b83c69b5c3f2 (2026-09-27).** On another revision, trust the code over this page.
 
-Reference code: [examples/stores.rs](examples/stores.rs), compiled by meta-whatsapp-rs's own gate;
-its tests run the conformance suites on the memory stores.
+Reference code: [examples/stores.rs](examples/stores.rs), compiled by meta-whatsapp-rs's own gate; its tests run the conformance suites on the memory stores.
 
 ## When to use
 
 Before production: everything stateful in meta-whatsapp-rs sits on two ports, and the typed
-stores (vault, OTP, dedup, sessions, bot cooldowns and jobs) are built on `KvStore`, so one adapter serves them all.
+stores (vault, OTP, dedup, dead letters, sessions, bot cooldowns and jobs) are built on `KvStore`, so one adapter serves them all.
 
 | Data | Port | Namespace | Lose it and |
 | --- | --- | --- | --- |
@@ -21,6 +20,7 @@ stores (vault, OTP, dedup, sessions, bot cooldowns and jobs) are built on `KvSto
 | signup attempts (`SignupSessions`) | `KvStore` | `wa.es.session` | attempts in flight fail |
 | OTP challenges and limits (`OtpService`) | `KvStore` | `wa.otp`, `wa.otp.rate` | codes fail; limits reset |
 | webhook dedup (`DedupGuard`) | `KvStore` | `wa.webhook.dedup` | Meta's retries delivered again |
+| webhook dead letters (`DeadLetters`; names pending the owner) | `KvStore` | `wa.webhook.deadletter`, `wa.webhook.deadletter.contact` | events a sink refused for good; holds personal data, 14 days |
 | bot cooldowns (`KvCooldowns`) | `KvStore` | `wa.bot.cooldown` | running cooldowns reset |
 | shared pacer (`KvRateLimiter`) | `KvStore` | `wa.bot.pacer` | schedules, slow-downs, raised rates reset |
 | bot jobs (`KvJobs`; names pending the owner) | `KvStore` | `wa.bot.jobs`, `wa.bot.jobs.due`, `.sent`, `.message`, `.limited` | scheduled jobs; resumed ones resend |
@@ -76,7 +76,7 @@ Erasing a customer is a procedure (`meta-whatsapp-rs-cms-inbox`): (1) collect ev
 (`identities` on each of the merchant's numbers, and yours); (2) `erase_all(number, &ids)` on each,
 behind your ownership check (it deletes their records, contacts and links, the appends in flight
 included, and redacts their group messages, which keep their ids, a `wamid` encoding the phone number,
-or deletes them with `with_erasure_mode`); (3) delete your media copies, outbox rows and dead letters;
+or deletes them with `with_erasure_mode`; `Eraser::with_dead_letters` adds the dead letters); (3) delete media copies, outbox rows;
 (4) delete Meta's contact-book entry, BSUIDs only (`UserId::is_bsuid`, `delete_contact_book_entry`);
 (5) journal it (an HMAC of `phone_number_id|contact`, and the time) and replay the journal after any
 restore; (6) erase again after Meta's 7-day redelivery window, keeping the dedup markers meanwhile.

@@ -2472,7 +2472,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     (tests) had two cards. OPEN_QUESTIONS #22 is closed and deleted
     (CHANGELOG). No parity row changes: rows 51 and 99 already counted
     product-card carousels.
-- [ ] **L21a. Dead-lettering a permanently failing event**
+- [x] **L21a. Dead-lettering a permanently failing event**
   (`meta-whatsapp-webhooks`, `meta-whatsapp-adapters`; OPEN_QUESTIONS
   #30): sink errors classified transient or permanent (unclassified
   stays transient, today's behaviour); a permanent one written to a
@@ -2491,6 +2491,45 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     facade-level erasure of the contact removes their dead-lettered
     events (removing the dead-letter store's `erase` from it fails the
     test).
+  - **Landed:** the signal is a sink's own: `SinkError::Permanent`
+    (`SinkError::permanent`, `is_permanent`; every other variant stays
+    transient), added to core's existing leaf, with `FanoutSink`
+    returning a transient error before a permanent one. The store is
+    `meta_whatsapp_webhooks::deadletter::DeadLetters` on `KvStore`,
+    wired by `WebhookHandlerBuilder::dead_letters`: a permanent error is
+    written there, the event's dedup claim marked done, the rest of the
+    batch delivered and the delivery acknowledged, counted in
+    `DeliveryReport::dead_lettered` and alerted by a `tracing::error!`
+    naming the letter, kind and number only; a failed write releases the
+    claim and answers `500`, and without a store a permanent error
+    answers `500` as before. Bounds: a ring of 1000 slots (letter `id` in
+    slot `id % capacity`, the oldest overwritten without a scan), 14 days
+    per record and index, 256 KiB per stored event (a larger one kept
+    without its content). Replay (`replay`, `replay_all`) goes past the
+    dedup guard. Erasure: a per-contact index (BSUID first, else the
+    phone number, per object of the event; keyed by business number and
+    contact, an event with no number under the empty one, which every
+    number's erasure reads) and `DeadLetters::erase`, called by the new
+    facade `meta_whatsapp_rs::erasure::Eraser` beside
+    `ConversationStore::erase_all`. The namespaces `wa.webhook.deadletter`
+    and `wa.webhook.deadletter.contact` and the records are pinned
+    (`the_keys_are_pinned_and_hashed`, `the_record_bytes_are_pinned`) and
+    pending the owner's confirmation (§ Owner touchpoints). The decisive
+    tests are
+    `a_batch_with_one_permanent_failure_delivers_the_others_and_dead_letters_it`
+    (`webhooks/tests/deadletter.rs`; with
+    `post_is_200_when_a_permanent_failure_is_dead_lettered` in
+    `tests/router.rs` for the status) and
+    `erasing_a_contact_removes_their_dead_letters`
+    (`meta-whatsapp-rs/src/erasure.rs`). Removing the dead-letter write
+    fails the first two, removing `erase` from the eraser the third;
+    treating a permanent error as transient fails the first, dropping
+    the count bound fails `the_count_bound_evicts_the_oldest`, and not
+    updating the index fails the erasure tests. Not done: no sink of the
+    library classifies an error as permanent yet (the inbox's U+0000 in
+    a Meta-assigned id on Postgres still answers `500`); the service
+    does not wire a store (its sink classifies nothing). No parity row
+    changes status: row 8 already counted delivery semantics as done.
 - [x] **L21b. Live events shared, not cloned** (`meta-whatsapp-webhooks`
   `sse`, `meta-whatsapp-adapters` `BroadcastSink`; OPEN_QUESTIONS #31):
   both over `Arc<WebhookEvent>`.
@@ -2975,8 +3014,10 @@ everything else goes into the parity-completion report.
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
   with their keys' derivations and their records' shapes, added and
-  awaiting confirmation before the first release; and those L21a adds),
-  for the same reason as L5's.
+  awaiting confirmation before the first release; and L21a's
+  `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
+  keys' derivations and their records' shapes, added and awaiting
+  confirmation before the first release), for the same reason as L5's.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored

@@ -21,7 +21,7 @@ BSUID after a number change. `erase` reaches one key; erase the person.
    before the store is called. A raw `ConversationStore::erase_all`
    trusts the number it is given.
 3. **Delete your own copies**: media you downloaded, exports, the
-   service's outbox rows (roadmap M2f) and your dead letters (L21a).
+   service's outbox rows (roadmap M2f); your dead letters (L21a) go with step 2 through the facade's `Eraser`.
 4. **Delete the customer from Meta's contact book**:
    `PhoneNumber::delete_contact_book_entry(&bsuid)` for each of their
    BSUIDs, with the merchant's client (`with_token`) on any number of the

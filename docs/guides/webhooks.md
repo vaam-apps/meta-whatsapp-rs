@@ -15,7 +15,7 @@ table is its [references/events.md](../../skills/meta-whatsapp-rs-webhook-events
 POST ─► X-Hub-Signature-256 present and well-formed? (else 401 before the body is read)
      ─► body limit (3 MiB) ─► signature over the raw bytes (any of N app secrets)
      ─► parse ─► Vec<WebhookEvent> ─► per event: dedup claim ─► your EventSink ─► dedup done
-     ─► 200 only when every event was delivered or was a duplicate
+     ─► 200 only when every event was delivered, was a duplicate, or was dead-lettered (§ 9)
 ```
 
 ## 1. On Meta's side
@@ -172,8 +172,9 @@ let sink = FanoutSink::new()
   redelivers the whole body (the events after the failing one too) for 7
   days, then drops it. Keep permanent failures out of the sink path
   (`InboxSink` records content exactly, and the stores keep it, U+0000
-  included, for that reason); dead-lettering is
-  [decided](../../OPEN_QUESTIONS.md#webhooks-and-live-updates) (30) and not built yet (roadmap L21a).
+  included, for that reason), and for the rest return
+  `SinkError::permanent(e)` from your sink and give the handler a
+  dead-letter store: [section 9](#9-dead-letters).
 - **At least once.** The dedup guard removes Meta's retries, but a sink call
   that outlasts the lease, or a batch redelivered after one fanned-out sink
   failed, reaches the others again. Make every sink idempotent (key by
@@ -284,6 +285,58 @@ Add it to the `FanoutSink`. Also watch `TemplateQualityUpdated`
 template is billed differently), `PhoneNumberQualityUpdated` and
 `BusinessCapabilityUpdated` (messaging limits), and the rate of `Unknown`:
 a rising count usually means Meta shipped a field worth typing.
+
+## 9. Dead letters
+
+A sink that knows an event will never go through (a value its database
+refuses for good, a shape its code cannot handle) says so with
+`SinkError::permanent(e)` (`SinkError::Permanent`). Every other error,
+and every error a sink does not classify, stays transient: `500`, Meta
+redelivers. With a dead-letter store, the handler writes a permanently
+refused event there, marks its dedup claim done, and delivers the rest
+of the batch:
+
+```rust
+use meta_whatsapp_rs::webhooks::DeadLetters;
+
+let dead_letters = DeadLetters::new(kv.clone()); // the same KvStore as the dedup guard is fine
+let handler = WebhookHandler::builder(verifier, verify_token, sink)
+    .dedup(DedupGuard::new(kv.clone()))
+    .dead_letters(dead_letters.clone())
+    .build();
+```
+
+- **Acknowledged only once written.** If the dead-letter write fails, the
+  claim is released and the handler answers `500`: the event is never
+  dropped silently. Without a store, a permanent error answers `500`
+  like any other.
+- **Keep the dedup guard.** A redelivery of the same body (after another
+  of its events failed transiently) is then a duplicate; without it, the
+  event is dead-lettered again.
+- **Alert** on the `tracing::error!` "webhook event dead-lettered" (the
+  letter's id, the event's kind and the business number; never the
+  content or the sink's error text) or on `DeliveryReport::dead_lettered`.
+- **Bounds.** 1000 letters (`with_capacity`; the oldest is overwritten,
+  with a warning), 14 days per letter (`with_max_age`), 256 KiB per stored
+  event (`with_max_event_bytes`; a larger one is kept without its content
+  and cannot be replayed).
+- **Replay** once the sink is fixed: `dead_letters.replay(id, &sink)` or
+  `replay_all(&sink)`. It goes past the dedup guard; delivered, the letter
+  is removed; refused permanently again, it stays with one more attempt.
+  Two replays at once may both deliver: keep the sink idempotent.
+  `list()` and `get(id)` read the letters; `remove(id)` deletes one.
+- **Personal data.** A letter holds the event (a customer's message,
+  their phone number) for up to the age bound: that is its retention.
+  Erase a person's letters with the facade's eraser,
+  `meta_whatsapp_rs::erasure::Eraser::new(conversations).with_dead_letters(dead_letters)`,
+  whose `erase_all(&phone_number_id, &identities)` erases the
+  conversation store and the letters together
+  ([cms-inbox.md § 8](cms-inbox.md#8-erasing-a-customer-and-retention)).
+  The letters keep their own index (`KvStore` has no scan), by business
+  number and contact: BSUID first, else the phone number.
+- **Fan-out.** `FanoutSink` returns a transient error before a permanent
+  one: a batch is dead-lettered only when every failing sink refused it
+  for good.
 
 ## Not handled
 

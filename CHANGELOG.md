@@ -217,6 +217,37 @@ stored data, the owner's).
 
 ### Added
 
+- **Dead letters for webhook events a sink refuses permanently**
+  (`meta_whatsapp_webhooks::deadletter`, roadmap L21a,
+  `OPEN_QUESTIONS.md` #30). A sink says an event will never go through
+  with the new `SinkError::Permanent` (`SinkError::permanent`,
+  `is_permanent`; `meta-whatsapp-core`); every other error, and every
+  error a sink does not classify, stays transient, so nothing changes
+  for a sink that does not opt in. With
+  `WebhookHandlerBuilder::dead_letters(DeadLetters::new(kv))`, such an
+  event is written to a typed store on `KvStore`, its dedup claim marked
+  done, and the rest of the batch delivered and acknowledged
+  (`DeliveryReport::dead_lettered`, a `tracing::error!` with the letter,
+  kind and number only); a failed write releases the claim and answers
+  `500`, and without a store a permanent error answers `500` as before.
+  The store is bounded by count (a ring of 1000 by default, the oldest
+  overwritten), age (14 days: its retention of the personal data an
+  event holds) and size (256 KiB per event, a larger one kept without
+  its content); `get`, `list`, `remove`, `replay(id, sink)` and
+  `replay_all(sink)` (past the dedup guard) handle the letters, and
+  `erase(phone_number_id, contacts)` removes a person's through a
+  per-contact index (BSUID first, else the phone number). The facade's
+  new `meta_whatsapp_rs::erasure::Eraser` erases a person from the
+  conversation store and the dead letters together (`Erasure`).
+  `FanoutSink` now returns a transient error before a permanent one.
+  New store namespaces, **pending the owner's confirmation before the
+  first release**: `wa.webhook.deadletter` and
+  `wa.webhook.deadletter.contact` (docs/architecture.md § Stable
+  identifiers). Tests:
+  `a_batch_with_one_permanent_failure_delivers_the_others_and_dead_letters_it`,
+  `post_is_200_when_a_permanent_failure_is_dead_lettered`,
+  `erasing_a_contact_removes_their_dead_letters`,
+  `the_keys_are_pinned_and_hashed`, `the_record_bytes_are_pinned`.
 - **Max price, reach estimates and welcome message sequences**
   (`meta_whatsapp_client::marketing`, roadmap L13, parity rows 137 and
   138, from `marketing-messages/pricing`,
@@ -1616,6 +1647,14 @@ stored data, the owner's).
 
 ### Changed
 
+- **`FanoutSink` returns the first transient error before any permanent
+  one** (`meta-whatsapp-adapters`, roadmap L21a): it returned the first
+  error in the order the sinks were added. A fan-out is permanent only
+  when every failing sink was, so a dead-letter store never acknowledges
+  an event another sink could still take. Test:
+  `a_transient_error_wins_over_a_permanent_one`.
+- **`DeliveryReport` has a `dead_lettered` count** (`#[non_exhaustive]`
+  already, so additive).
 - **Graph error `131070` is `ThreadOwnedElsewhere`**
   (`meta_whatsapp_core::ErrorKind::from_code`, roadmap L15; see Added,
   "Thread control"). `conversation-routing/thread-control` § Errors gives

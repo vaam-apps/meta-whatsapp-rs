@@ -608,8 +608,9 @@ tenant's deliveries: whoever holds it can forge any tenant's events.
   records one twice. An event that fails every time (a permanent sink
   error) holds its whole batch back for those 7 days, after which Meta
   drops it: the events after it in the same body are lost with it
-  ([OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) #30: dead-lettering is
-  decided, not built yet; watch
+  ([OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) #30: the library's dead
+  letters, roadmap L21a, take only an error a sink classifies as
+  permanent, and the service's classifies none; watch
   `wa_server_webhook_sink_failures_total`).
 - Errors and bodies that are not webhooks carry no id: they are told
   apart by the body they came in and their place in it, for an hour
