@@ -310,6 +310,21 @@ ignored.)
 - `TokenVault::store` trusts its input: every phone number id in the record
   is routed to that WABA. Only `onboard` (which checked the ids with Meta)
   should write it.
+- **Expiry:** a business token from Embedded Signup defaults to never
+  expiring (Meta's `facebook-login/facebook-login-for-business`); one
+  generated to expire lasts 60 days, and nothing refreshes it
+  (OPEN_QUESTIONS #8). `vault.token_expiry(&waba_id, DEFAULT_EXPIRY_LEAD)`
+  answers on the vault's clock with a `TokenExpiry`: `Never` (no expiry
+  recorded), `Fresh`, `ExpiresSoon { expires_at, remaining }` or
+  `Expired`; `is_due()` is the last two. The lead is yours per call
+  (`DEFAULT_EXPIRY_LEAD` is 7 days), and `expires_at == now + lead` is
+  already due. It reads the record's clear `expires_at` and decrypts
+  nothing: no key needed, no token in memory, no write. That copy is not
+  authenticated; for the sealed one, `vault.get(&waba_id)` and then
+  `stored.expiry(lead, now)`. The vault cannot list its records, so walk
+  your merchant table (as for rotation) on a schedule, and notify once
+  per `(waba_id, expires_at)`: a token stays due on every walk until the
+  merchant connects again.
 
 ## 8. Route inbound webhooks to merchants
 
@@ -361,8 +376,8 @@ always go to the app's callback
   delivery whose signature was checked.
 - **The token stops working:** `ErrorKind::Authentication` (190) on a
   merchant's calls. Nothing refreshes tokens; the merchant runs Embedded
-  Signup again. `StoredBusinessToken::is_expired(now)` tells you ahead of
-  time when Meta reported an expiry.
+  Signup again. When Meta reported an expiry, the vault tells you ahead of
+  time ([§ 7](#7-the-token-vault): `TokenVault::token_expiry`).
 
 ## Solution Partner mode
 
@@ -812,7 +827,7 @@ share, and to keep marking a business on offboarding, all above):
 | 5 | Multi-WABA signups | only the claimed (or first, or newest granted) WABA is onboarded | the default stays; every granted WABA as an option (roadmap L11b) |
 | 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins unless your `onboard_with_approval` refuses it (required for a Solution Partner, whose approval is recorded; the policy is still yours) | keep it so: no tenant policy in the library |
 | 7 | Coexistence sync | flagged by `needs_coexistence_sync()`, not triggered | automatic after a coexistence onboarding, with an option to turn it off (roadmap L11d) |
-| 8 | Token expiry and refresh | expiry recorded, nothing refreshes | no refresh; the expiry surfaced before it lapses (roadmap L11e) |
+| 8 | Token expiry and refresh | expiry recorded and reported a lead time ahead (`TokenVault::token_expiry`, roadmap L11e); nothing refreshes | no refresh; the expiry surfaced before it lapses (roadmap L11e, landed; the service's event, M3e) |
 | 9 | Vault key custody and rotation cadence | you supply keys; rotation supported, not scheduled | custody yours; rotation on demand, at least yearly |
 | 11 | App-only install, Hosted Embedded Signup | both integrated: the `app_only_install` launch feature, and `onboard_hosted` from the `PARTNER_ADDED` webhook (L11a) | integrate both, opt-in (roadmap L11a) |
 | 12 | Pre-fill shape | follows Meta's worked example; confirm in the Integration Helper | keep the worked example's shape |
