@@ -168,7 +168,8 @@ stored data, the owner's).
     code);
   - #7, the coexistence sync runs inside onboarding by default, an
     option turns it off (L11d);
-  - #8, no refresh: the expiry is surfaced before it lapses (L11e, M3e);
+  - #8, no refresh: the expiry is surfaced before it lapses (L11e,
+    landed: `TokenVault::token_expiry`, see Added; M3e);
   - #9, key custody stays the integrator's, rotation on demand, the
     cadence documented (M3a);
   - #10, a code-less `OnboardingRequest` for `resume`, additive (L4,
@@ -258,6 +259,23 @@ stored data, the owner's).
   `live_postgres_trims_racing_appends_keep_every_new_message`,
   `live_postgres_a_trim_and_a_history_chunk_never_deadlock`, and the
   trims added to `live_postgres_the_locks_are_the_documented_ones`.
+- **A token-expiry signal** (`meta_whatsapp_client::embedded_signup`,
+  roadmap L11e, parity row 6; OPEN_QUESTIONS #8; the service's event is
+  M3e). `TokenVault::token_expiry(&waba_id, lead)` answers, on the
+  vault's clock, with a `TokenExpiry` (`Copy`, times only, no secret):
+  `Never` when no expiry is recorded, `Fresh`, `ExpiresSoon { expires_at,
+  remaining }` when `expires_at - now` is at most `lead` (`now + lead`
+  included), `Expired` when `expires_at <= now` (as
+  `StoredBusinessToken::is_expired`); `is_due()` (the last two) and
+  `expires_at()`. `DEFAULT_EXPIRY_LEAD` is 7 days. It reads the record's
+  clear `expires_at` and decrypts nothing (no key needed, no write, no
+  re-encryption on read); a record naming another WABA, or of another
+  record version, is refused (`CryptoError::Malformed`). The clear copy
+  is not authenticated: `StoredBusinessToken::expiry(lead, now)` gives
+  the same answer on a token `get` decrypted, and `TokenExpiry::at` is
+  the classification on its own. The vault cannot list its records:
+  call it for each WABA you hold. Additive: the stored format
+  (`wa-rs/token-vault/v1`) is unchanged.
 - **`rediss://` for the Redis store** (`meta_whatsapp_adapters::store::RedisTls`,
   feature `redis`; roadmap L21c, OPEN_QUESTIONS #19): `RedisTls::builder()`
   builds a rustls `ClientConfig` on an explicit aws-lc-rs provider, never
