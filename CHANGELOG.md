@@ -233,15 +233,19 @@ stored data, the owner's).
   - `Business::system_user_access_token(&AppSecret,
     &SystemUserTokenRequest)` (`POST /{BUSINESS_ID}/system_user_access_tokens`):
     a client business's token, asked for with the partner's system user
-    token. The `appsecret_proof` (hex HMAC-SHA256 of the client's token
-    under the app secret) is computed here and sent in a form body with
+    token. The `appsecret_proof` (hex HMAC-SHA256 of the token the request
+    carries, the partner's, under the app secret) is computed here and sent in a form body with
     `fetch_only`, `system_user_id`, `scope`, `asset` (both
     comma-separated) and `set_token_expires_in_60_days`, never in the
     URL. The answer, a `SystemUserAccessToken`, holds an `AccessToken`
-    (redacted in `Debug`), is decoded without quoting the body, and a
-    blank token is refused. A `fetch_only` request, read-only by Meta's
+    (redacted in `Debug`); no error quotes the answer's body (one that
+    does not decode, or a non-2xx one that is not Meta's error envelope),
+    and a blank token is refused. A `fetch_only` request, read-only by Meta's
     page, is replayed as a read; a generation is not.
-  - `Waba::system_users` (and `_stream`; `SystemUser`, `SystemUserRole`),
+  - `Business::system_users` (and `_stream`; `SystemUser`,
+    `SystemUserRole`): on the business portfolio, as the Marketing API's
+    Business node documents the edge and the guide's prose says, not on
+    the WABA its request prints (`manage-system-users`);
     `Waba::activities` and `Waba::solutions` (and `_stream`s, taking a
     `ListWabaRecords`; `WabaActivity` with `ActivityCategory` and the 51
     `ActivityEventType`s, `WabaSolution` with `SolutionStatus`,

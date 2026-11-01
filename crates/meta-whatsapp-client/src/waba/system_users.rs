@@ -1,7 +1,8 @@
-//! System users: a WABA's system users
-//! (`solution-providers/manage-system-users`), the system user token of a
-//! client business (`system_user_access_tokens`), and the WABAs assigned to
-//! a user (`reference/user/assigned-whatsapp-business-accounts-api`).
+//! System users: a business portfolio's system users
+//! (`solution-providers/manage-system-users`, the Marketing API's
+//! `reference/business/system_users`), the system user token of a client
+//! business (`system_user_access_tokens`), and the WABAs assigned to a user
+//! (`reference/user/assigned-whatsapp-business-accounts-api`).
 
 use futures::Stream;
 use hmac::{Hmac, Mac};
@@ -14,26 +15,32 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 use super::types::WabaInfo;
-use super::{Business, Waba, check_limit, fields_query};
+use super::{Business, check_limit, fields_query};
 use crate::request::{paginate_or_error, reject_cursors};
 use crate::templates::macros::string_enum;
 use crate::{Client, GraphRequest};
 
 string_enum! {
-    /// A system user's `role`. `manage-system-users` shows `EMPLOYEE`; the
-    /// access token guide describes admin and employee system users but
-    /// prints no other wire value, so anything else is kept verbatim.
+    /// A system user's `role`. The Marketing API's
+    /// `reference/business/system_users` says the list carries base roles
+    /// only, "Admin and Employee" (`ADMIN` and `EMPLOYEE` among the roles it
+    /// lists for creating one); `manage-system-users` shows `EMPLOYEE`.
+    /// Anything else is kept verbatim.
     pub enum SystemUserRole {
+        /// An admin system user: access to every account of the portfolio
+        /// by default (`access-tokens`).
+        Admin => "ADMIN",
         /// An employee system user: granted access account by account.
         Employee => "EMPLOYEE",
     }
 }
 
-/// One of a WABA's system users (`GET /{WABA_ID}/system_users`).
+/// One of a business portfolio's system users
+/// (`GET /{BUSINESS_ID}/system_users`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[non_exhaustive]
 pub struct SystemUser {
-    /// The system user's id: what [`Waba::assign_user`] takes.
+    /// The system user's id: what [`Waba::assign_user`](super::Waba::assign_user) takes.
     pub id: SystemUserId,
     /// Its name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -43,14 +50,20 @@ pub struct SystemUser {
     pub role: Option<SystemUserRole>,
 }
 
-impl Waba {
-    /// `GET /{WABA_ID}/system_users` (`solution-providers/manage-system-users`,
-    /// § Retrieve system user IDs): the system users, e.g. to find the id
-    /// to pass to [`Self::assign_user`].
+impl Business {
+    /// `GET /{BUSINESS_ID}/system_users` (`solution-providers/manage-system-users`,
+    /// § Retrieve system user IDs; the Marketing API's
+    /// `reference/business/system_users`): the portfolio's system users, e.g.
+    /// to find the id to pass to [`Waba::assign_user`](super::Waba::assign_user).
     ///
-    /// The guide documents neither a cursor nor a `paging` object, so this
-    /// takes none (as [`Self::subscribed_apps`]); should Meta page it,
-    /// [`Self::system_users_stream`] follows the cursors.
+    /// On the business portfolio, not the WABA: the guide's request prints a
+    /// WABA id, but its own next line says to look up the *business*'s id,
+    /// and the edge is the Business node's (see
+    /// [the module docs](crate::waba#where-metas-pages-disagree)).
+    ///
+    /// Neither page documents a parameter, so this takes none (as
+    /// [`Waba::subscribed_apps`](super::Waba::subscribed_apps)); [`Self::system_users_stream`] follows the
+    /// cursors of a paged answer.
     pub async fn system_users(&self) -> Result<Page<SystemUser>> {
         self.system_users_request().send().await
     }
@@ -64,7 +77,7 @@ impl Waba {
 
     fn system_users_request(&self) -> GraphRequest {
         self.client
-            .get_at(&[self.waba_id.as_str(), "system_users"])
+            .get_at(&[self.business_id.as_str(), "system_users"])
             .context("system users")
     }
 }
@@ -233,8 +246,25 @@ fn non_empty_token<'de, D: serde::Deserializer<'de>>(
     }
 }
 
-/// The body snippet of a decode error for an answer that carries a token.
-const TOKEN_WITHHELD: &[u8] = b"(withheld: the response carries an access token)";
+/// The body snippet of an error for an answer that carries a token.
+const TOKEN_WITHHELD_TEXT: &str = "(withheld: the response carries an access token)";
+
+/// [`TOKEN_WITHHELD_TEXT`] as bytes, the decode error's placeholder.
+const TOKEN_WITHHELD: &[u8] = TOKEN_WITHHELD_TEXT.as_bytes();
+
+/// A failed token request keeps its class and status, never the body: a
+/// non-2xx answer that is not Meta's error envelope (a proxy's page, an
+/// answer cut short) could still hold the token, whatever key it is under,
+/// which the markers of `request::safe_snippet` would not see.
+fn withhold_token_body(e: Error) -> Error {
+    match e {
+        Error::Http { status, .. } => Error::Http {
+            status,
+            body_snippet: TOKEN_WITHHELD_TEXT.to_owned(),
+        },
+        other => other,
+    }
+}
 
 /// `appsecret_proof`: the hex HMAC-SHA256 of `token` keyed with the app
 /// secret (`embedded-signup/hosted-es`, step 4; Graph's secure requests).
@@ -263,8 +293,9 @@ impl Business {
     /// The request carries the `appsecret_proof` of that token, computed
     /// here from `app_secret`, in a form body with the request's fields (as
     /// `hosted-es` sends it), never in the URL; the token goes in the
-    /// `Authorization` header. The answer is decoded without quoting the
-    /// body in an error, and a blank `access_token` is refused.
+    /// `Authorization` header. No error quotes the answer's body, whether
+    /// it fails to decode or comes with a non-2xx status that is not Meta's
+    /// error envelope, and a blank `access_token` is refused.
     ///
     /// Refused before any request when the client has no token, the app
     /// secret is blank or the request does not validate
@@ -294,6 +325,7 @@ impl Business {
             .context("system user access token response")
             .send_withheld(TOKEN_WITHHELD)
             .await
+            .map_err(withhold_token_body)
     }
 }
 
@@ -354,7 +386,7 @@ impl ListAssignedWabas {
 }
 
 /// Entry point, see [`Client::business_user`]: a user of a business (a
-/// system user, e.g. the one [`Waba::system_users`] lists).
+/// system user, e.g. the one [`Business::system_users`] lists).
 #[derive(Debug, Clone)]
 pub struct BusinessUser {
     client: Client,
@@ -422,7 +454,7 @@ mod tests {
     use http::Method;
     use meta_whatsapp_core::ErrorKind;
     use meta_whatsapp_core::error::TransportError;
-    use meta_whatsapp_core::ids::{BusinessId, WabaId};
+    use meta_whatsapp_core::ids::BusinessId;
     use meta_whatsapp_core::testing::{RecordedBody, RecordedRequest, ScriptedTransport};
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -478,6 +510,9 @@ mod tests {
         );
     }
 
+    /// The guide's response example; the request on the business
+    /// portfolio, as the Business node's `system_users` edge and the guide's
+    /// own "find the ID of a business" have it.
     #[tokio::test]
     async fn system_users_parse_the_guides_example() {
         // solution-providers/manage-system-users, § Retrieve system user IDs.
@@ -487,7 +522,7 @@ mod tests {
             json!({"data": [{"id": "1972555232742222", "name": "My System User", "role": "EMPLOYEE"}]}),
         );
         let page = client(&t)
-            .waba(WabaId::new("102290129340398").unwrap())
+            .business(BusinessId::new("2780023991704").unwrap())
             .system_users()
             .await
             .unwrap();
@@ -497,7 +532,7 @@ mod tests {
         assert_eq!(page.data[0].role, Some(SystemUserRole::Employee));
         let req = t.last_request().unwrap();
         assert_eq!(req.method, Method::GET);
-        assert_eq!(req.path(), "/v25.0/102290129340398/system_users");
+        assert_eq!(req.path(), "/v25.0/2780023991704/system_users");
         assert_eq!(req.url.query(), None);
         assert_eq!(req.bearer(), Some(SYSTEM_TOKEN));
         assert_eq!(t.remaining(), 0);
@@ -510,16 +545,26 @@ mod tests {
             200,
             json!({"data": [{"id": "1", "role": "ADMIN"}], "paging": {"cursors": {"after": "a"}, "next": "https://graph.facebook.com/x"}}),
         );
-        t.push_json(200, json!({"data": [{"id": "2"}]}));
+        t.push_json(
+            200,
+            json!({"data": [{"id": "2", "role": "FINANCE_EDITOR"}]}),
+        );
         let users: Vec<SystemUser> = client(&t)
-            .waba(WabaId::new("102290129340398").unwrap())
+            .business(BusinessId::new("2780023991704").unwrap())
             .system_users_stream()
             .map(Result::unwrap)
             .collect()
             .await;
-        assert_eq!(users[0].role, Some(SystemUserRole::Other("ADMIN".into())));
+        assert_eq!(users[0].role, Some(SystemUserRole::Admin));
+        assert_eq!(
+            users[1].role,
+            Some(SystemUserRole::Other("FINANCE_EDITOR".into()))
+        );
         assert_eq!(users[1].id.as_str(), "2");
-        assert_eq!(t.requests()[1].query("after").as_deref(), Some("a"));
+        let reqs = t.requests();
+        assert_eq!(reqs[0].path(), "/v25.0/2780023991704/system_users");
+        assert_eq!(reqs[1].path(), "/v25.0/2780023991704/system_users");
+        assert_eq!(reqs[1].query("after").as_deref(), Some("a"));
         assert_eq!(t.remaining(), 0);
     }
 
@@ -641,6 +686,10 @@ mod tests {
         t.push_json(200, json!({"access_token": [BUSINESS_TOKEN]}));
         t.push_json(200, json!({"token": BUSINESS_TOKEN}));
         t.push_json(200, json!({"access_token": " "}));
+        // A non-2xx answer that is not Meta's envelope, holding the token
+        // under a key no marker names, and one under `access_token`.
+        t.push_json(502, json!({"token": BUSINESS_TOKEN}));
+        t.push_json(500, json!({"access_token": BUSINESS_TOKEN}));
         let b = client(&t).business(BusinessId::new("2780023991704").unwrap());
         let secret = AppSecret::new(APP_SECRET);
         let request = SystemUserTokenRequest::fetch_only();
@@ -653,6 +702,17 @@ mod tests {
                 .unwrap_err();
             assert!(
                 matches!(&err, Error::Decode { body_snippet, .. } if body_snippet.as_bytes() == TOKEN_WITHHELD),
+                "{err:?}"
+            );
+            shown.push(format!("{err} {err:?}"));
+        }
+        for status in [502, 500] {
+            let err = b
+                .system_user_access_token(&secret, &request)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, Error::Http { status: s, body_snippet } if *s == status && body_snippet == TOKEN_WITHHELD_TEXT),
                 "{err:?}"
             );
             shown.push(format!("{err} {err:?}"));

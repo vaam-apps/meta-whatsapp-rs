@@ -13,8 +13,8 @@
 //! - creating a WABA under a portfolio
 //!   ([`Business::create_whatsapp_business_account`]);
 //! - a client business's system user token, with the `appsecret_proof` of
-//!   yours ([`Business::system_user_access_token`]); a WABA's system users
-//!   ([`Waba::system_users`]); the WABAs assigned to a user
+//!   yours ([`Business::system_user_access_token`]); a portfolio's system
+//!   users ([`Business::system_users`]); the WABAs assigned to a user
 //!   ([`BusinessUser::assigned_whatsapp_business_accounts`]);
 //! - a WABA's activity history ([`Waba::activities`]) and its Multi-Partner
 //!   Solutions ([`Waba::solutions`]);
@@ -116,9 +116,15 @@
 //!   (`manage-accounts`), `creation_time.asc` or
 //!   `last_onboarded_time_ascending` for phone numbers; phone number sorting
 //!   is therefore a raw string.
-//! - System users: `manage-system-users` reads them from
-//!   `GET /{WABA_ID}/system_users`, while its prose tells you to look up a
-//!   *business* id. This client follows the request it prints.
+//! - System users: `manage-system-users` prints
+//!   `GET /{WABA_ID}/system_users`, while the line after it tells you to
+//!   look up a *business* id (each of that guide's other requests is
+//!   followed by how to find the id in its own path). The Marketing API's
+//!   `reference/business/system_users` documents the edge on the Business
+//!   node, `GET /{business-id}/system_users`, and the WABA reference lists
+//!   no such edge; system users belong to a portfolio, which creates them
+//!   (`POST /{business_id}/system_users`). This client reads them from the
+//!   business ([`Business::system_users`]).
 //! - The system user token: `hosted-es` sends `appsecret_proof` and
 //!   `fetch_only` in a form body with the token as bearer,
 //!   `onboard-business-customers` in the query string with the token. This

@@ -2440,7 +2440,10 @@ mod paging_withheld_tests {
             c.waba(waba())
                 .assigned_users(&ListAssignedUsers::new(business()))
         );
-        read!("waba.system_users", c.waba(waba()).system_users());
+        read!(
+            "business.system_users",
+            c.business(business()).system_users()
+        );
         read!(
             "waba.activities",
             c.waba(waba()).activities(&ListWabaRecords::new())

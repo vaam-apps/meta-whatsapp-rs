@@ -368,7 +368,7 @@ id_type!(
     FundingId
 );
 id_type!(
-    /// A business system user id (`GET /{WABA_ID}/system_users`), e.g. the
+    /// A business system user id (`GET /{BUSINESS_ID}/system_users`), e.g. the
     /// Solution Partner's system user added to each customer's WABA. Not a
     /// [`UserId`] (a WhatsApp user).
     SystemUserId

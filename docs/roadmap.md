@@ -1551,7 +1551,22 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     its `business_type` array has no shown encoding); where a message
     history id or a schedule's `audience_id` comes from (no page says).
     Message history, migration, schedule and solution ids are strings:
-    core has no type for them yet.
+    core has no type for them yet. Decided by the coordinator
+    (2026-11-01): the billing migration is not a legal act in AGENTS.md's
+    sense (it accepts no terms), so it stays two explicit calls and no
+    operator gate; a `fetch_only` token read is replayed
+    (`facebook-login-for-business`: "The operation is read-only"); the
+    token request goes in a form body, never the query; the new ids stay
+    `String`; business users are keyed by `SystemUserId`; the Line of
+    Credit id goes with the intent (`extended_credit_id`), as the
+    requests show; row 90 is partial; the overlap with L12 (migration
+    status and solution types) is reconciled by whichever of the two
+    lands second. Found in review: system users are read from the
+    business portfolio (`Business::system_users`,
+    `GET /{BUSINESS_ID}/system_users`), the edge the Marketing API's
+    Business node documents, not from the WABA the guide's request prints
+    (its prose asks for a business id); a non-2xx answer to the token
+    request never quotes its body.
 - [ ] **L11a. Hosted Embedded Signup** (`meta-whatsapp-client`,
   `client::embedded_signup`; row 121; OPEN_QUESTIONS #11): started by the
   `PARTNER_ADDED` webhook, its business token from
