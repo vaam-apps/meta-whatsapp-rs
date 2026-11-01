@@ -903,33 +903,65 @@ async fn an_event_dated_before_its_binding_is_nobodys() {
     assert_eq!(inbox(&h, PN_A, "16505551234").await, 1);
 }
 
-/// Roadmap S2, the security review's L3, through the whole pipeline on
-/// memory: an event Meta dated in the second its WABA's binding began may
-/// be the previous holder's, so it reaches neither the tenant's stream nor
-/// its inbox (the routing and the inbox follow the outbox's rule); dated
-/// the next second, it reaches both. Decisive: the strict comparison in
-/// the routing (`events::owner`, through `outbox::began_by`), which the
-/// inbox write follows (a routing of `<=` fills the inbox with an event
-/// the outbox keeps from the tenant).
+/// Roadmap S2, the security review's L3, and S2b, through the whole
+/// pipeline on memory: after a move (WABA W unbound from A, bound to B),
+/// an event Meta dated in the second B's binding began may be A's, so it
+/// reaches neither B's stream nor its inbox (the routing and the inbox
+/// follow the outbox's rule); dated the next second, it reaches both. A
+/// first onboarding (A's own binding, no previous tenant) keeps the events
+/// of its first second, in its stream and its inbox. Decisive: the strict
+/// comparison after a move in the routing (`events::owner`, through
+/// `RouteGuard::admits`), which the inbox write follows (a routing of
+/// `<=` after a move fills the inbox with an event the outbox keeps from
+/// the tenant), and the relaxed one for a first onboarding.
 #[tokio::test]
-async fn an_event_of_its_bindings_own_second_reaches_no_tenant_nor_inbox() {
+async fn an_event_of_its_bindings_own_second_reaches_a_first_onboarding_only() {
+    let began = |h: &Harness| {
+        let store = h.store.clone();
+        async move {
+            store
+                .waba(&meta_whatsapp_rs::core::ids::WabaId::new(WABA_A).unwrap())
+                .await
+                .unwrap()
+                .unwrap()
+                .attached_at
+                .unix_timestamp()
+        }
+    };
+    // A first onboarding: its first second is its own.
     let h = two_tenants().await;
-    let began = h
-        .store
-        .waba(&meta_whatsapp_rs::core::ids::WabaId::new(WABA_A).unwrap())
-        .await
-        .unwrap()
-        .unwrap()
-        .attached_at
-        .unix_timestamp();
-    let same = common::meta::dated(text(WABA_A, PN_A, "wamid.SAME-SECOND"), began);
+    let first = began(&h).await;
+    let same = common::meta::dated(text(WABA_A, PN_A, "wamid.FIRST-SECOND"), first);
+    assert_eq!(h.webhook(&bytes(&same)).await.status, StatusCode::OK);
+    assert_eq!(tenants_of(&h.outbox.rows()), [Some(A.to_owned())]);
+    assert_eq!(polled(&h, A).await.len(), 1);
+    assert_eq!(
+        inbox(&h, PN_A, "16505551234").await,
+        1,
+        "a first onboarding"
+    );
+
+    // After a move: nobody's, then B's from the next second.
+    let h = Harness::new();
+    h.tenant(A).await;
+    h.tenant(B).await;
+    h.connect(A, WABA_A, &[PN_A], "TOKEN-OF-A").await;
+    assert!(
+        h.store
+            .unbind_waba(&meta_whatsapp_rs::core::ids::WabaId::new(WABA_A).unwrap())
+            .await
+            .unwrap()
+    );
+    h.connect(B, WABA_A, &[PN_A], "TOKEN-OF-B").await;
+    let moved = began(&h).await;
+    let same = common::meta::dated(text(WABA_A, PN_A, "wamid.SAME-SECOND"), moved);
     assert_eq!(h.webhook(&bytes(&same)).await.status, StatusCode::OK);
     assert_eq!(tenants_of(&h.outbox.rows()), [None]);
-    assert!(polled(&h, A).await.is_empty());
+    assert!(polled(&h, B).await.is_empty());
     assert_eq!(inbox(&h, PN_A, "16505551234").await, 0, "no inbox write");
-    let next = common::meta::dated(text(WABA_A, PN_A, "wamid.NEXT-SECOND"), began + 1);
+    let next = common::meta::dated(text(WABA_A, PN_A, "wamid.NEXT-SECOND"), moved + 1);
     assert_eq!(h.webhook(&bytes(&next)).await.status, StatusCode::OK);
-    assert_eq!(polled(&h, A).await.len(), 1);
+    assert_eq!(polled(&h, B).await.len(), 1);
     assert_eq!(inbox(&h, PN_A, "16505551234").await, 1);
 }
 
@@ -1034,11 +1066,15 @@ async fn event_ids_are_keyed_by_the_first_app_secret() {
 /// as usual.
 #[tokio::test]
 async fn an_event_dated_before_the_replay_window_is_nobodys() {
-    use meta_whatsapp_server::events::route;
+    use meta_whatsapp_server::events::{MoveRules, Routing, route};
     use time::{Duration, OffsetDateTime};
     let h = two_tenants().await;
     let now = OffsetDateTime::now_utc();
-    let not_before = now - Duration::days(7);
+    let routing = Routing {
+        now,
+        not_before: now - Duration::days(7),
+        moves: MoveRules::default(),
+    };
     let event_at = |at: OffsetDateTime| {
         let body = bytes(&common::meta::dated(
             text(WABA_A, PN_A, "wamid.dated"),
@@ -1050,7 +1086,7 @@ async fn an_event_dated_before_the_replay_window_is_nobodys() {
     let replay = route(
         h.store.as_ref(),
         &event_at(now - Duration::days(8)),
-        not_before,
+        &routing,
     )
     .await
     .unwrap();
@@ -1063,7 +1099,7 @@ async fn an_event_dated_before_the_replay_window_is_nobodys() {
     let fresh = route(
         h.store.as_ref(),
         &event_at(now + Duration::SECOND),
-        not_before,
+        &routing,
     )
     .await
     .unwrap();

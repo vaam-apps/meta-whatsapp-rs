@@ -223,7 +223,7 @@ and `store-postgres`.
     after attaching, stay unconditioned (no capability was made from a
     binding); the memory stores read the system clock, not the injected
     one (one process).
-- [ ] **S2b. Undated events after a move, and the bind generation**
+- [x] **S2b. Undated events after a move, and the bind generation**
   (`meta-whatsapp-server-core` and both in-tree backends; one PR with
   both schema changes, on both backends, and an additive migration: a
   new migration file, never an edit to one on `main`). S2's security
@@ -261,6 +261,114 @@ and `store-postgres`.
     reaches the tenant of a first onboarding, and no tenant after a
     move; a `190` from a capability made before a same-tenant refresh
     does not mark the numbers `reconnect_required`.
+  - **Landed:** every bullet, in the core and both in-tree backends,
+    with the decisive tests on memory and live on Postgres. The
+    tombstone is `model::WabaTombstone` (its tenant, `None` once that
+    tenant is deleted, when, and the unbound binding's own record),
+    written with every unbind in the same step and read by a new
+    binding into `WabaBinding::previous_tenant_unbound_at` (the
+    unbinding's time when another tenant left, else the time it
+    carried; a refresh keeps it), the window measured from it. The
+    settings are `events::MoveRules` and `events::UndatedAfterMove`
+    (`Inbound::with_move_rules`; the service's
+    `WA_SERVER_UNDATED_AFTER_MOVE`, `…_WINDOW`, 169 h, and
+    `WA_SERVER_MOVE_SKEW_MARGIN`, 0 s by default). The rules are one
+    function, `outbox::RouteGuard::admits`, which the routing
+    (`events::owner`, `after_move` its new reason for an undated event
+    held back) and the memory outboxes apply, and whose bounds
+    (`RouteGuard::dated_bounds`, `AfterMove`) the Postgres insert binds:
+    it picks between them by the binding's row, under the same `FOR KEY
+    SHARE` lock. The generation is `WabaBinding::generation`, compared by
+    `BindingEpoch` in every conditioned write and capability check.
+    Postgres: migration 4 (`0004_waba_moves.sql`, additive), whose
+    defaults give the rows written before it generation 1 and a move
+    recorded as unknown (`UNRECORDED_MOVE`, the Unix epoch), so they
+    keep S2's rules; its names are stable identifiers pending the
+    owner's confirmation (§ Owner touchpoints). The decisive tests:
+    `conformance::webhooks::undated_events_after_a_move_reach_no_tenant_within_the_window`
+    (a history chunk, an error and an undated group update: no tenant
+    within the window, B under `CurrentHolder` and past it, a first
+    onboarding always) and
+    `an_event_of_its_bindings_first_second_reaches_a_first_onboarding_only`,
+    the service's `an_event_of_its_bindings_own_second_reaches_a_first_onboarding_only`
+    over HTTP, and `capabilities::failed_before_a_refresh_marks_nothing`;
+    the records suite's `a_move_is_recorded` and
+    `a_refresh_moves_the_generation`, and the invariants' guard cases
+    (`a_first_onboarding_keeps_its_first_second`,
+    `the_skew_margin_applies_after_a_move_only`,
+    `an_undated_event_after_a_move_waits_out_the_window`), which the
+    memory crate also shows an outbox bending the guard fails. S7's
+    continuity test now migrates `main`'s database forward (migrations
+    1 to 3 unchanged, 4 added once, none on `serve`) and routes `main`'s
+    binding as before. By mutation: the window check removed from
+    `RouteGuard::admits` fails its unit test, the webhooks case (a
+    history chunk within the window reaches B) and the invariants'
+    undated case on memory, and removed from the Postgres insert, that
+    case live; the first onboarding's exemption removed, dated, fails
+    the unit tests, the first-second cases through the core's pipeline
+    and over HTTP, and `a_first_onboarding_keeps_its_first_second` on
+    memory and live; undated, the routing suite's error of a first
+    onboarding and the invariants' undated case, on memory and live; the
+    generation not moved on a refresh fails `a_refresh_moves_the_generation`
+    on memory and live, and `failed_before_a_refresh_marks_nothing` run
+    alone; the skew margin applied without a previous tenant fails its
+    unit test and the margin case on memory and live.
+    `openapi/v1.json` and the event data snapshots are unchanged.
+    Left, and why: an unbind made by a binary of an earlier release
+    leaves no tombstone, before the upgrade as during its rolling
+    deploy, so a WABA unbound that way and bound afterwards to another
+    tenant reads as a first onboarding, and its previous holder's
+    undated events reach the new holder for what remains of the window
+    (as before S2b); a move made wholly before migration 4 keeps S2's
+    rules, which give them to the new holder too; and a replica of the
+    earlier release unbinding after a tombstone was written leaves that
+    older tombstone in place, so the window runs from an earlier
+    unbinding (the guide says not to move WABAs between tenants in the 7
+    days and an hour before the deploy, nor during it); the window runs from the previous tenant's
+    unbinding, not from the new attach, so an undated event of the
+    interval between them is the new holder's once the window from the
+    unbinding passed; a moved WABA's new holder loses its own undated
+    events within the window (its history sync among them, when it
+    onboarded within it: D36's cost); a binding made before migration 4
+    keeps S2's strict first second for good, until it is unbound; the
+    window and the margin are per deployment, not per tenant.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a setting, or behind the
+    `RecordStore` port and its conformance suite; recorded in design
+    D36): the window runs from the previous tenant's unbinding, not from
+    the new attach; the skew margin defaults to `0s`; a binding made
+    before migration 4 reads the Unix epoch (`UNRECORDED_MOVE`), not
+    NULL, so it keeps S2's rules; a tenant deleted and created again
+    under its id counts as another tenant; the generation starts at 1
+    for every binding; the undated check sits in `events::owner` and
+    `RouteGuard::admits` and covers every undated event; a capability
+    or an attach meeting a refresh answers `503 storage_unavailable`,
+    retryable; tombstones are never purged (one row per WABA ever
+    unbound). **Pending the owner** (stable identifiers): the names of
+    migration 4's columns and table, its description, and the epoch
+    default's meaning (§ Owner touchpoints).
+  - **Sabotage review** (isolation, the migration, the routing rules):
+    on Postgres a new binding's `attached_at` was its transaction's
+    start, which can precede the previous tenant's unbinding when that
+    commits while the bind runs, so an event Meta dated while the
+    previous tenant still held the WABA fell in a second the new binding
+    began before (the memory backend never did): the bind now moves it
+    past `clock_timestamp()` and the tombstone's time, and the race
+    suite's `a_binding_racing_an_unbind_records_the_move` (which failed
+    3 live runs of 3 before) holds every backend to it. An attach
+    meeting a refresh of its own tenant took back the token it stored,
+    which could leave the binding with none while the other attach
+    answered success: it now keeps it (`503` still,
+    `capabilities::an_attach_meeting_a_refresh_keeps_its_tenants_token`).
+    A skew margin reaching before the Unix epoch failed every dated
+    insert on Postgres (`to_timestamp` out of range, folded at plan
+    time): `RouteGuard::dated_bounds` stops at the epoch. Added to the
+    suites: undated rounds in the insert-against-a-move race (a tenant
+    created again under its id kept out by the window alone),
+    `capabilities::a_capability_made_while_its_binding_is_refreshed_is_refused`,
+    a WABA moved twice in `records::a_move_is_recorded`. The rolling
+    deploy's gap is wider than first written (an unbind by an earlier
+    release before the upgrade is not recorded either): Left, above.
 - [x] **S3. Conformance into core** (`meta-whatsapp-server-core`,
   `meta_whatsapp_server_core::conformance`, a feature, like the
   library's `store::conformance`, run over a `&dyn Backend`): the store
@@ -3603,7 +3711,12 @@ everything else goes into the parity-completion report.
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
   with their keys' derivations and their records' shapes, added and
-  awaiting confirmation before the first release; L11d's
+  awaiting confirmation before the first release; S2b's Postgres
+  migration 4, "waba moves": the columns `wa_server_wabas.generation` and
+  `wa_server_wabas.previous_tenant_unbound_at` with its default, the Unix
+  epoch read as "a move before the records began" (`UNRECORDED_MOVE`),
+  and the table `wa_server_waba_tombstones` with its columns and its
+  `ON DELETE SET NULL` rule, added and awaiting confirmation; L11d's
   `wa.es.coexistence` and its record layout, added and awaiting
   confirmation; and L21a's
   `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their

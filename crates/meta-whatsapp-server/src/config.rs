@@ -33,6 +33,15 @@
 //! | `WA_SERVER_RATE_READ`, `WA_SERVER_RATE_READ_BURST` | 50, 50 | the same, for reads |
 //! | `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | 2, 2 | the same, for template management |
 //!
+//! And the routing of a moved WABA's events ([`MoveRules`], roadmap S2b,
+//! design D36; none applies to a WABA no other tenant held):
+//!
+//! | Variable | Default | What |
+//! | --- | --- | --- |
+//! | `WA_SERVER_UNDATED_AFTER_MOVE` | `operator_only` | who gets an undated event (an error, a history chunk, an undated group update) after the WABA moved from another tenant: nobody (`operator_only`, within the window) or the holder (`current_holder`, the behaviour before S2b) |
+//! | `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` | `169h` (7 days and an hour) | how long after the move, with `operator_only` (a positive duration) |
+//! | `WA_SERVER_MOVE_SKEW_MARGIN` | `0s` | how much later than the second its binding began an event of a moved WABA must be dated to reach the holder |
+//!
 //! A rate set without its burst keeps the default's proportion (twice the
 //! rate for sends, the rate itself for the others).
 //! `WA_SERVER_CONFIG` (the TOML file of non-secrets) is not read yet: set,
@@ -49,6 +58,9 @@ use meta_whatsapp_rs::core::config::{ApiVersion, GraphEndpoint};
 use meta_whatsapp_rs::core::ids::AppId;
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, VerifyToken};
 
+use crate::events::{
+    DEFAULT_MOVE_SKEW_MARGIN, DEFAULT_UNDATED_AFTER_MOVE_WINDOW, MoveRules, UndatedAfterMove,
+};
 use crate::ratelimit::{Rate, RateLimits};
 use crate::state::Settings;
 
@@ -253,6 +265,10 @@ pub struct Config {
     pub log_filter: String,
     /// `WA_SERVER_IDEMPOTENCY_TTL`, `WA_SERVER_MEDIA_*`, `WA_SERVER_RATE_*`.
     pub settings: Settings,
+    /// `WA_SERVER_UNDATED_AFTER_MOVE`, `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW`
+    /// and `WA_SERVER_MOVE_SKEW_MARGIN`: the routing of a moved WABA's
+    /// events (roadmap S2b, design D36; [`MoveRules::default`] unset).
+    pub move_rules: MoveRules,
 }
 
 impl fmt::Debug for Config {
@@ -271,6 +287,7 @@ impl fmt::Debug for Config {
             .field("migrate", &self.migrate)
             .field("outbox_retention", &self.outbox_retention)
             .field("settings", &self.settings)
+            .field("move_rules", &self.move_rules)
             .finish_non_exhaustive()
     }
 }
@@ -430,6 +447,7 @@ impl Config {
         let graph_endpoint = graph_endpoint(&r, environment)?;
         let runtime = runtime(&r)?;
         let settings = settings(&r)?;
+        let move_rules = move_rules(&r)?;
         Ok(Self {
             environment,
             public_bind,
@@ -450,8 +468,57 @@ impl Config {
             log_format: runtime.log_format,
             log_filter: runtime.log_filter,
             settings,
+            move_rules,
         })
     }
+}
+
+/// `WA_SERVER_UNDATED_AFTER_MOVE` (`operator_only`, the default, or
+/// `current_holder`), `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` (a positive
+/// duration, `169h` by default: 7 days and an hour; only with
+/// `operator_only`, refused with `current_holder` rather than ignored) and
+/// `WA_SERVER_MOVE_SKEW_MARGIN` (a duration, `0s` by default).
+fn move_rules(r: &Reader<'_>) -> Result<MoveRules, ConfigError> {
+    let window = match r.plain("WA_SERVER_UNDATED_AFTER_MOVE_WINDOW")? {
+        None => None,
+        Some(value) => match duration("WA_SERVER_UNDATED_AFTER_MOVE_WINDOW", &value)? {
+            // Zero would be `current_holder` under another name.
+            zero if zero.is_zero() => {
+                return Err(ConfigError::Invalid {
+                    name: "WA_SERVER_UNDATED_AFTER_MOVE_WINDOW",
+                    reason: "expected a positive duration such as 169h (or set \
+                             WA_SERVER_UNDATED_AFTER_MOVE=current_holder)",
+                });
+            }
+            window => Some(window),
+        },
+    };
+    let undated_after_move = match r.plain("WA_SERVER_UNDATED_AFTER_MOVE")?.as_deref() {
+        None | Some("operator_only") => UndatedAfterMove::OperatorOnly {
+            window: window.unwrap_or(DEFAULT_UNDATED_AFTER_MOVE_WINDOW),
+        },
+        Some("current_holder") if window.is_some() => {
+            return Err(ConfigError::Invalid {
+                name: "WA_SERVER_UNDATED_AFTER_MOVE_WINDOW",
+                reason: "a window applies to WA_SERVER_UNDATED_AFTER_MOVE=operator_only only",
+            });
+        }
+        Some("current_holder") => UndatedAfterMove::CurrentHolder,
+        Some(_) => {
+            return Err(ConfigError::Invalid {
+                name: "WA_SERVER_UNDATED_AFTER_MOVE",
+                reason: "expected operator_only or current_holder",
+            });
+        }
+    };
+    let skew_margin = match r.plain("WA_SERVER_MOVE_SKEW_MARGIN")? {
+        None => DEFAULT_MOVE_SKEW_MARGIN,
+        Some(value) => duration("WA_SERVER_MOVE_SKEW_MARGIN", &value)?,
+    };
+    Ok(MoveRules {
+        undated_after_move,
+        skew_margin,
+    })
 }
 
 /// A positive whole number.

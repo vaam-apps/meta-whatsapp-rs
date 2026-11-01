@@ -26,10 +26,10 @@ use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
     IdempotencyRecord, IdempotencyState, KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus,
-    PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
+    PageRequest, Tenant, TenantId, TenantStatus, WabaBinding, WabaTombstone,
 };
 use meta_whatsapp_server_core::outbox::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent, began_by,
+    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
 };
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult, listing,
@@ -44,6 +44,22 @@ pub struct State {
     keys: BTreeMap<String, ApiKeyRecord>,
     wabas: BTreeMap<String, WabaBinding>,
     numbers: BTreeMap<String, NumberBinding>,
+    /// Each WABA's last unbinding (roadmap S2b: the webhooks suite's moves).
+    tombstones: BTreeMap<String, WabaTombstone>,
+}
+
+/// Remove `waba_id`'s binding and its numbers, leaving its tombstone, in
+/// one step; whether it was bound.
+fn unbind(state: &mut State, waba_id: &WabaId) -> bool {
+    let Some(binding) = state.wabas.remove(waba_id.as_str()) else {
+        return false;
+    };
+    state.numbers.retain(|_, n| &n.waba_id != waba_id);
+    state.tombstones.insert(
+        waba_id.as_str().to_owned(),
+        WabaTombstone::of(&binding, OffsetDateTime::now_utc()),
+    );
+    true
 }
 
 /// Records in memory, as far as the suites this backend runs reach them:
@@ -153,19 +169,27 @@ impl RecordStore for Records {
             return Ok(BindOutcome::OwnedByAnotherTenant);
         }
         let now = OffsetDateTime::now_utc();
-        let attached_at = state
-            .wabas
-            .get(waba_id.as_str())
-            .map_or(now, |w| w.attached_at);
-        state.wabas.insert(
-            waba_id.as_str().to_owned(),
-            WabaBinding {
+        // A refresh keeps the binding's start and its previous tenant and
+        // moves its generation; a new binding reads the WABA's tombstone
+        // (roadmap S2b, the port's contract).
+        let binding = match state.wabas.get(waba_id.as_str()) {
+            Some(w) => WabaBinding {
+                generation: w.generation + 1,
+                ..w.clone()
+            },
+            None => WabaBinding {
                 waba_id: waba_id.clone(),
                 tenant_id: tenant.clone(),
                 credit_allocation_id: None,
-                attached_at,
+                attached_at: now,
+                generation: 1,
+                previous_tenant_unbound_at: state
+                    .tombstones
+                    .get(waba_id.as_str())
+                    .and_then(|t| t.previous_for(tenant)),
             },
-        );
+        };
+        state.wabas.insert(waba_id.as_str().to_owned(), binding);
         // Exactly `numbers`: those the WABA had and the list lacks are
         // unbound (the port's contract).
         state
@@ -189,10 +213,7 @@ impl RecordStore for Records {
         // An admin's unbind of a WABA whose token was not opened
         // (`conformance::capabilities`' vault writes): the binding and its
         // numbers.
-        let mut state = self.state();
-        let removed = state.wabas.remove(waba_id.as_str()).is_some();
-        state.numbers.retain(|_, n| &n.waba_id != waba_id);
-        Ok(removed)
+        Ok(unbind(&mut self.state(), waba_id))
     }
     async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool> {
         // The numbers suite's disconnection: the binding and its numbers,
@@ -202,12 +223,7 @@ impl RecordStore for Records {
             .wabas
             .get(epoch.waba_id.as_str())
             .is_some_and(|w| w.epoch() == *epoch);
-        if !held {
-            return Ok(false);
-        }
-        state.wabas.remove(epoch.waba_id.as_str());
-        state.numbers.retain(|_, n| n.waba_id != epoch.waba_id);
-        Ok(true)
+        Ok(held && unbind(&mut state, &epoch.waba_id))
     }
     async fn waba(&self, waba_id: &WabaId) -> StoreResult<Option<WabaBinding>> {
         Ok(self.state().wabas.get(waba_id.as_str()).cloned())
@@ -453,7 +469,7 @@ impl Events {
 }
 
 /// Whether `guard` still names `tenant` in `records`, and its WABA's
-/// binding began in a second before the event's.
+/// binding is one the event may reach (`RouteGuard::admits`).
 fn holds(records: &State, tenant: &TenantId, guard: &RouteGuard) -> bool {
     let waba = guard.binding.waba_id();
     let number_holds = match &guard.binding {
@@ -467,10 +483,9 @@ fn holds(records: &State, tenant: &TenantId, guard: &RouteGuard) -> bool {
         GuardedBinding::Waba(_) => true,
     };
     number_holds
-        && records
-            .wabas
-            .get(waba.as_str())
-            .is_some_and(|w| &w.tenant_id == tenant && began_by(w.attached_at, guard.not_after))
+        && records.wabas.get(waba.as_str()).is_some_and(|w| {
+            &w.tenant_id == tenant && guard.admits(w.attached_at, w.previous_tenant_unbound_at)
+        })
 }
 
 #[async_trait]

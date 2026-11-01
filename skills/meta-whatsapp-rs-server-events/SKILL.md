@@ -146,8 +146,8 @@ per filter set.
 
 - It pushes nothing to your backend yet: poll. Live streams (SSE),
   signed webhooks to your URL and one event by its id come with M2.
-- It never shows you operator-only events, nor another tenant's (until
-  roadmap S2b, save undated ones redelivered after a WABA moved to you).
+- It never shows you operator-only events, nor another tenant's: a WABA moved
+  to you gets no undated event (error, history) for 7 days and an hour.
 - It does not resynchronise you after `cursor_expired`, and keeps events
   7 days by default (design D10, decided on 2026-09-26: set per store).
 - Meta's own retries, deduplication and signature are its business: you

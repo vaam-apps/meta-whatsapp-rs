@@ -40,10 +40,11 @@ use meta_whatsapp_rs::core::secret::VerifyToken;
 use meta_whatsapp_rs::webhooks::axum::body::Bytes;
 use meta_whatsapp_server_core::backend::Backend;
 pub use meta_whatsapp_server_core::events::{
-    DEFAULT_OUTBOX_RETENTION, EventIdKey, EventKey, HOUSEKEEPING_INTERVAL, KEYLESS_DEDUP_WINDOW,
-    MAX_PAGE_DATA_BYTES, OPERATOR_EVENT_TYPES, Polled, Route, RowError, TENANT_EVENT_TYPES,
-    event_data, event_number, meta_time, outbox_key, outbox_row, owner, poll, purge_outbox, route,
-    tenant_visible,
+    DEFAULT_MOVE_SKEW_MARGIN, DEFAULT_OUTBOX_RETENTION, DEFAULT_UNDATED_AFTER_MOVE_WINDOW,
+    EventIdKey, EventKey, HOUSEKEEPING_INTERVAL, KEYLESS_DEDUP_WINDOW, MAX_PAGE_DATA_BYTES,
+    MoveRules, OPERATOR_EVENT_TYPES, Polled, Route, Routing, RowError, TENANT_EVENT_TYPES,
+    UndatedAfterMove, event_data, event_number, meta_time, outbox_key, outbox_row, owner, poll,
+    purge_outbox, route, tenant_visible,
 };
 use meta_whatsapp_server_core::inbound::{Delivered, Pipeline, Refused};
 pub use meta_whatsapp_server_core::inbound::{
@@ -227,5 +228,28 @@ mod tests {
         assert_eq!(DEFAULT_OUTBOX_RETENTION, Duration::from_hours(7 * 24));
         assert_eq!(HOUSEKEEPING_INTERVAL, Duration::from_mins(10));
         assert_eq!(MAX_PAGE_DATA_BYTES, 8 * 1024 * 1024, "8 MiB");
+        // Design D36: undated events operator-only for 7 days and an hour
+        // after a move (the dedup lease's memory), no skew margin beyond
+        // the strict second.
+        assert_eq!(
+            DEFAULT_UNDATED_AFTER_MOVE_WINDOW,
+            meta_whatsapp_rs::webhooks::DEFAULT_DEDUP_TTL
+        );
+        assert_eq!(
+            DEFAULT_UNDATED_AFTER_MOVE_WINDOW,
+            Duration::from_hours(7 * 24 + 1),
+            "7 days and an hour"
+        );
+        assert_eq!(DEFAULT_MOVE_SKEW_MARGIN, Duration::ZERO);
+        assert_eq!(
+            MoveRules::default(),
+            MoveRules {
+                undated_after_move: UndatedAfterMove::OperatorOnly {
+                    window: DEFAULT_UNDATED_AFTER_MOVE_WINDOW
+                },
+                skew_margin: DEFAULT_MOVE_SKEW_MARGIN,
+            },
+            "fail closed by default"
+        );
     }
 }
