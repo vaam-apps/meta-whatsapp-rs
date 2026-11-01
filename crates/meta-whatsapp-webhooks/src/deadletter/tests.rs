@@ -210,6 +210,12 @@ fn contacts_are_every_identifier_without_the_business_number() {
         contacts_of(&others),
         ["16505551237", "16505551238", "BR.6", "US.5"]
     );
+
+    // Any field ending in `user_id` or `wa_id`, whatever its value's shape
+    // (the names Meta gives a person's ids: `recipient_parent_user_id`,
+    // `user_wa_id`, …).
+    let suffixed = json!({"recipient_parent_user_id": "opaque-7", "user_wa_id": "16505551239"});
+    assert_eq!(contacts_of(&suffixed), ["16505551239", "opaque-7"]);
 }
 
 /// The count bound: with room for two, a third letter evicts the oldest,
