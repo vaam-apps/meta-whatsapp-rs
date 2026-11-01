@@ -150,7 +150,7 @@ carousels, all checked before the first send, sent until one fails (guide, secti
 
 ## What meta-whatsapp-rs does not do
 
-- No scheduling or restart-proof broadcast (planned), or conversation state: keep it in your store, keyed by `BotSender::key`.
+- No recurring schedules (a `Job` runs once; `KvJobs::rerun` runs it again), or conversation state: keep it in your store, keyed by `BotSender::key`.
 - Per-tenant tokens: implement `Outbound` (`meta-whatsapp-rs-token-vault`).
 - Guide: [docs/guides/bots.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/bots.md).
 

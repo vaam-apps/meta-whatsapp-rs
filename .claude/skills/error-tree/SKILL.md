@@ -16,6 +16,9 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
       ─ Webhook / Storage / Sink / Crypto / Config
       ─ Credit(CreditError)                       Solution Partner credit line: refused, busy,
                                                   reconcile, or a revocation part-way (with report)
+      ─ Conversion(ConversionError)               a media converter failed: binary or encoder missing,
+                                                  timeout (the one retryable), input rejected, bad output, killed;
+                                                  never sent
       ─ Step{step, source}                        multi-step flow failed at `step`
       ─ Other(anyhow::Error)                      integrator code
 ```
@@ -69,13 +72,14 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   `Error::kind`, and a test in the style of
   `a_local_window_refusal_has_the_same_kind_as_131047`. The two today:
   `CUSTOMER_SERVICE_WINDOW` → `CustomerServiceWindowClosed` (Meta's
-  131047 too) and `THREAD_OWNER` → `ThreadOwnedElsewhere` (no Graph code
-  yet: when Meta documents one, `from_code` maps it there). A kind with no
-  Graph code goes in the service test's `local_only` list
-  (`crates/meta-whatsapp-server/tests/errors.rs`) instead of
-  `REPRESENTATIVE` (the test fails once `from_code` maps a code to a kind
-  still listed there: move it then), and the service's `classify` gives
-  it its code. A
+  131047 too) and `THREAD_OWNER` → `ThreadOwnedElsewhere` (Meta's
+  131070 too, from `conversation-routing/thread-control` § Errors). Both
+  are in the service test's `local_refusals` list
+  (`crates/meta-whatsapp-server/tests/errors.rs`), and the service's
+  `classify` gives each its code. A kind with no Graph code goes in its
+  `local_only` list instead of `REPRESENTATIVE` (the test fails once
+  `from_code` maps a code to a kind still listed there: move it then;
+  none is left). A
   helper that recognizes the refusal looks through `Step`
   (`meta_whatsapp_rs::inbox::is_thread_owned_elsewhere`).
 - New leaf variants need a reason in `docs/architecture.md`. Prefer an
@@ -93,7 +97,10 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   whose `RevocationIncomplete` carries the partial report instead of
   leaving it in a log line. Reach it through a helper that looks through
   `Step` (`Error::credit()`, like `Error::graph()`), and document the
-  helpers in `docs/architecture.md` § Error tree.
+  helpers in `docs/architecture.md` § Error tree. The second is
+  `Error::Conversion(ConversionError)` (`Error::conversion()`): a media
+  converter's failures, each with an existing kind, `Timeout` the only
+  retryable one, none ever `may_have_been_sent`.
 - `anyhow` only wraps errors from code we don't own
   (`TransportError::Backend`, `StorageError::Backend`, `SinkError::Delivery`,
   `Error::Other`).

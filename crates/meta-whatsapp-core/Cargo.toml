@@ -1,6 +1,6 @@
 [package]
 name = "meta-whatsapp-core"
-description = "Error tree, identifiers and ports (transport, storage, sink, clock) shared by every meta-whatsapp-rs crate."
+description = "Error tree, identifiers and ports (transport, storage, sink, clock, media conversion) shared by every meta-whatsapp-rs crate."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

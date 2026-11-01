@@ -72,10 +72,12 @@ leaks its library's types through a port.
 | `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at`; `message` (the lookup, scoped: `phone_number_id, id`, never another number's); `record_window_event`, `window_events` (a call or a standby message that reopens the window: never history, never the summary); `set_thread_owner`, `thread_owner` (Conversation Routing: the latest record wins); `put_contact`, `remove_contact`, `contact`, `contacts` (the coexistence address book; a removal is kept, key and time only, so an older sync arriving after it is refused); `link_identity`, `identity_links` (two identities of one person on one number, as Meta reports a BSUID or number change); `identities` (a person's keys on one number: the closure over the synced contacts and the links, read only); `erase_all` (a person on one number, deleted: every record under their keys, the contacts and links naming them, and their messages in groups redacted or deleted per the store's `ErasureMode`); `purge_before` (by age, one number or all); `erase` (one key), `erasure_mode`, `retention`, `apply_retention` (provided: redact group messages and keep everything unless the adapter is configured) | `meta_whatsapp_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
+| `media::MediaConverter` | `convert` (a `MediaInput` into a `TargetFormat`, today `OggOpus`: a voice message's mono Ogg Opus, uploaded as `audio/ogg`; `TargetFormat::max_bytes` is core's own `media::AUDIO_MAX_BYTES`, kept equal to the client's upload table by `every_target_format_is_what_the_upload_check_takes`) | rustdoc; `meta-whatsapp-client` re-exports it from `client::media` (`Media::upload_converted`) |
 
 Typed stores are built **on `KvStore`**, never as new ports: token vault,
-OTP challenges, webhook dedup, Embedded Signup sessions, bot cooldowns. An
-adapter author implements five methods once and every feature works.
+OTP challenges, webhook dedup, Embedded Signup sessions, bot cooldowns,
+the bot's durable jobs. An adapter author implements five methods once
+and every feature works.
 
 What the inbox keeps about a conversation beside its messages (window
 events, thread ownership, the coexistence address book, the links
@@ -147,11 +149,15 @@ rewrite them along with the code.
 | `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server-core/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
 | `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key; for a subcommand, the command part is its path, `order status`). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed`, `a_subcommands_cooldown_key_is_over_its_path` |
 | `wa.bot.pacer` (added by roadmap B2b; the namespace and the record layout **pending the owner's confirmation**, roadmap § Owner touchpoints) | `PACER_NAMESPACE`, `meta-whatsapp-bot/src/pacer/kv.rs` | store namespace of `KvRateLimiter`'s per-number schedules (key: SHA-256 hex of the length-prefixed phone number id, `<len>:<id>,`; value: the 49-byte version 1 record, its first byte the version). **Ephemeral**: changing it forgets each number's schedule, slow-down and raised rate (records expire 24 hours after their last slot by default), so while replicas of two releases run side by side they book from two budgets; no data is stranded | `the_pacer_key_is_pinned_and_hashed` (known answer), `the_pacer_record_is_pinned` |
+| `wa.bot.jobs`, `wa.bot.jobs.due`, `wa.bot.jobs.sent`, `wa.bot.jobs.message`, `wa.bot.jobs.limited` (**pending the owner's confirmation before the first release**, roadmap § Owner touchpoints; added by B3) | `JOBS_NAMESPACE`, `JOBS_DUE_NAMESPACE`, `JOBS_SENT_NAMESPACE`, `JOBS_MESSAGE_NAMESPACE`, `JOBS_LIMITED_NAMESPACE`, `BUCKET_SECONDS`, `meta-whatsapp-bot/src/jobs/mod.rs`; the records, `meta-whatsapp-bot/src/jobs/store.rs` | store namespaces of the durable jobs: the job records (key: SHA-256 hex of the length-prefixed job id), the due index (pages `<minute start, unix seconds>:<page>` of job ids, and its `cursor`, with the page versions of the minute behind it once moved forward), the per-recipient markers (digest of the job id, the run and the recipient's key: `user:<BSUID>` first, else `phone:<digits>`, or `group:<id>`), the sent messages' ids (digest of the `wamid`) and the marketing-limited markers (digest of the job id and the recipient's key); every record JSON with `"v":1`, in a pinned field order. **Not ephemeral**: changing a name, a key's derivation or a record's shape strands the jobs scheduled, or makes a resumed job send again to recipients it sent to | `the_job_keys_are_pinned_and_hashed`, `a_recipient_is_keyed_by_bsuid_first`, `buckets_are_minutes_in_unix_seconds` (key bytes, known answers); `the_job_records_are_pinned`, `the_index_and_marker_records_are_pinned` (record bytes, written and read back) |
 
 Library store namespaces are `wa.<module>[.<purpose>]` (`wa.token`,
 `wa.otp.rate`, `wa.webhook.dedup`, `wa.bot.cooldown`): a new typed store
 takes one under its module, and an integrator who keeps their own
-records in the same `KvStore` stays clear of `wa.`.
+records in the same `KvStore` stays clear of `wa.`. A row marked pending
+was added after the table was last confirmed: the owner confirms it
+before the first release, and until then it may still change without a
+data migration.
 
 Not ours to rename either: Meta's names (`wa_id`, `wamid`, `waba_id`,
 `wa.me`, `WA_EMBEDDED_SIGNUP`, …), and the `WA_` environment variables
@@ -183,8 +189,9 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   `CustomerServiceWindowClosed`, like Meta's `131047`, so one condition has
   one kind; a thread another app owns under Conversation Routing
   (`ValidationError::thread_owned_elsewhere()`) is `ThreadOwnedElsewhere`,
-  which no Graph code maps to yet (Meta documents none; `from_code` maps
-  one there when it does). `Error::kind` looks through `Step`, and so does
+  like Meta's `131070` (a service message without owning the thread,
+  `conversation-routing/thread-control` § Errors). `Error::kind` looks
+  through `Step`, and so does
   `meta_whatsapp_rs::inbox::is_thread_owned_elsewhere`. The service answers
   both `409`.
 - Two questions about a failed send, two methods.
@@ -201,7 +208,7 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   automatically, although `may_have_been_sent` is `false`.
 - Multi-step flows (Embedded Signup onboarding) wrap failures with
   `Error::in_step("stable_step_name")` so callers know how far they got.
-- **`Error::Credit(CreditError)`**, the one leaf added for a feature
+- **`Error::Credit(CreditError)`**, the first leaf added for a feature
   module, and why: a Solution Partner credit line is money (the partner
   pays for every message on a shared line, and an attached line cannot be
   taken back), and its steps stop in ways no existing leaf describes. A
@@ -233,6 +240,24 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   `Error::credit()` (looks through `Step`, like `graph()`),
   `CreditError::revocation()`, and `EmbeddedSignup::is_credit_line_revoked`
   / `is_credit_step_busy`.
+- **`Error::Conversion(ConversionError)`**, the second leaf added for a
+  feature, and why: a `media::MediaConverter` (roadmap L19) fails in ways
+  that are not input errors alone. A converter that is not installed
+  (`BinaryMissing`) or lacks an encoder (`EncoderMissing`) is the
+  deployment's to fix (`FeatureNotAvailable`); a run past its time limit
+  (`Timeout`, `ServiceUnavailable`) is the one worth retrying; an input
+  it cannot read (`InputRejected`) is `InvalidParameter`; an output of
+  the wrong format (`OutputInvalid`) or a process killed (`Killed`) is
+  `Unknown`. A `ValidationError` would make the first two the caller's
+  fault and the timeout final; a `TransportError::Timeout` would say a
+  conversion may have reached Meta. None of them was sent:
+  `may_have_been_sent` is `false` for every variant. An empty input, or
+  one too large before or after conversion, stays a `ValidationError` on
+  `input`. A missing binary is this node, not a `ConfigError`, so that a
+  caller handles every converter failure in one place. It adds no
+  `ErrorKind`, so the service's error codes are unchanged (its
+  `classify` answers it `internal` until a route converts, M5c1). Helper:
+  `Error::conversion()` (looks through `Step`).
 - Examples and binaries use `anyhow::Result` at the edge.
 - No module adds a variant to the root for its own convenience; a new leaf
   needs a reason in this document.
@@ -814,7 +839,7 @@ deprecates them on 2026-10-15.
 
 Coexistence: `smb_app_data` sync (contacts, history) within 24h.
 
-### In-App Signup (`meta_whatsapp_client::signups`), WABA (`waba`), phone numbers (`phone_numbers`), business profile, QR codes, block users, commerce, analytics, marketing (MM API), flows, groups, calling
+### In-App Signup (`meta_whatsapp_client::signups`), WABA (`waba`), phone numbers (`phone_numbers`), business profile, QR codes, block users, commerce, analytics, marketing (MM API), flows, groups, calling, thread control (`thread_control`)
 
 Typed endpoint wrappers per the rules above. Flows additionally provides
 the data-endpoint crypto (feature `flows-endpoint`): decrypt
@@ -918,6 +943,25 @@ Logs carry sizes, digests and field names only — never payload values.
   redacts or deletes are the number's, so the number lock covers them;
   `set_thread_owner` and `put_contact` one upsert
   whose update applies only when the stored record is not later.
+- `media::FfmpegConverter` (feature `ffmpeg`): core's
+  `media::MediaConverter` port over an `ffmpeg` binary the integrator
+  installs, run with `tokio::process` (no shell) and fixed literal
+  arguments; nothing is linked. The input goes on stdin and the result
+  comes from stdout (no file); `-protocol_whitelist pipe` and a
+  `-format_whitelist` of recording formats keep a crafted input from
+  making ffmpeg open a file or a URL (MP4 data references, the one
+  reference those formats carry, are not followed: ffmpeg's defaults,
+  pinned by a test); the process gets no environment but `PATH` (no
+  `FFREPORT`); input, output (the upload limit), run time and any single
+  allocation in ffmpeg (`-max_alloc`, 16 MiB: a header declaring an
+  absurd sample rate) are bounded, the process killed past the output
+  and time bounds; an MP4 whose index follows its media data is put
+  index first in memory before ffmpeg reads it (a pipe cannot seek
+  back); its stderr is drained and never kept (it names files); an input
+  that decodes to no audio fails (`-abort_on empty_output`), and the
+  output is checked to be mono Ogg Opus. An empty or oversized input (or result)
+  is a `ValidationError` on `input`; every other failure an
+  `Error::Conversion` (see Error tree).
 - `store::RedisKvStore` (feature `redis`; CAS via Lua). Requires the
   `noeviction` policy: every key with a TTL here enforces a limit (OTP
   issue logs, dedup markers), and Redis evicts silently.
@@ -1234,8 +1278,35 @@ for every event, after the ban and the match.
   retry paced, instead of in the client); `Ctx::pacer` hands the pacer to
   handlers; `PacedGroups` and `PacedGroup` wrap the client's group
   operations the same way, and `Pacer::acquire` is the hook for any other
-  call. No new port and no persistence: a run lives in memory (durable
-  jobs are B3's typed store on `KvStore`).
+  call. No new port and no persistence: a run lives in memory.
+- **Durable jobs** (`jobs`, roadmap B3; design D29): `KvJobs` keeps
+  `Job`s (a number, a due time, the recipients each person once, a JSON
+  payload) as a typed store on `KvStore`, no port of its own. `KvStore`
+  has no range scan, so due times are bucketed by the minute: a job's id
+  is appended to its minute's page by compare-and-swap (256 ids a page,
+  then the next page; a due time already past, to the current minute's),
+  and a `cursor` record names the oldest minute still to read. A `JobRunner` reads from the cursor up to now, claims
+  each due job by compare-and-swap (pending, or claimed under an expired
+  lease, to claimed with a lease naming it), and sends through a paced
+  `Broadcast` whose outbound checks before each send that the job is
+  still its own and not cancelled (renewing the lease) and creates the
+  recipient's marker with `put_if_absent` before the request, then
+  reads the job once more (a cancel or a re-run meanwhile: no request):
+  a "sending" marker nobody completed is an outcome unknown, never
+  resent (at most once, not exactly once). It moves the cursor past a
+  minute whose jobs are all settled, keeping that minute's page
+  versions in it, reads that minute again and moves it back if it
+  changed meanwhile (every tick starts by the same second read, so a
+  runner failing between the two loses nothing), and indexing into a
+  minute behind the cursor moves the cursor back, so no job is skipped
+  by a race. A pass that leaves recipients provably unsent
+  (`Error::may_resend`, a stop, a store failure) is retried with backoff,
+  then stopped. A message's id is kept for its status webhooks: a
+  `131049` marks that recipient for 24 hours (`KvJobs::observe`,
+  `JobFeedback`), and a re-run (`KvJobs::rerun`) skips them. The job
+  store is not behind a trait yet (the `KvStore` adapter is what swaps;
+  a `JobStore` trait is roadmap B3b); the runner's outbound, pacer,
+  failure policy and composer are.
 
 ## Typst (`meta-whatsapp-typst`)
 

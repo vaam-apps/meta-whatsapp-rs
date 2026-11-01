@@ -13,6 +13,7 @@
 //! ├── Crypto(..)             encryption/decryption (token vault, Flows endpoint)
 //! ├── Config(..)             the client or a service was built with missing/invalid settings
 //! ├── Credit(..)             a Solution Partner credit line step stopped: refused, busy, to reconcile, or a revocation part-way
+//! ├── Conversion(..)         a media converter failed: not installed, no encoder, timed out, input refused, bad output, killed
 //! ├── Step { step, source }  a multi-step flow (onboarding) failed part-way; `step` says where
 //! └── Other(anyhow::Error)   anything an integrator raises that has no typed home
 //! ```
@@ -25,10 +26,12 @@
 //! Decide on behaviour with [`Error::kind`] and [`Error::is_retryable`], never
 //! by matching message strings.
 
+mod conversion;
 mod credit;
 mod graph;
 mod leaf;
 
+pub use conversion::ConversionError;
 pub use credit::{CreditError, CreditRevocation, RevocationIncomplete};
 
 pub use graph::{ErrorData, ErrorKind, GraphApiError, GraphErrorEnvelope};
@@ -104,6 +107,11 @@ pub enum Error {
     #[error(transparent)]
     Credit(#[from] CreditError),
 
+    /// A media conversion failed (see [`ConversionError`]): it decides
+    /// its kind and whether to retry; nothing was sent to Meta.
+    #[error(transparent)]
+    Conversion(#[from] ConversionError),
+
     /// A multi-step flow failed part-way through. Earlier steps took effect.
     #[error("step `{step}` failed: {source}")]
     Step {
@@ -163,6 +171,16 @@ impl Error {
         }
     }
 
+    /// The media conversion error, if this is (or wraps, through
+    /// [`Error::Step`]) one.
+    pub fn conversion(&self) -> Option<&ConversionError> {
+        match self {
+            Self::Conversion(e) => Some(e),
+            Self::Step { source, .. } => source.conversion(),
+            _ => None,
+        }
+    }
+
     /// Classification of the failure. Non-API errors map to the closest kind.
     pub fn kind(&self) -> ErrorKind {
         match self {
@@ -181,6 +199,7 @@ impl Error {
             Self::Validation(v) if v.is_thread_owned_elsewhere() => ErrorKind::ThreadOwnedElsewhere,
             Self::Validation(_) => ErrorKind::InvalidParameter,
             Self::Credit(e) => e.kind(),
+            Self::Conversion(e) => e.kind(),
             Self::Step { source, .. } => source.kind(),
             _ => ErrorKind::Unknown,
         }
@@ -201,6 +220,7 @@ impl Error {
             // Contention: the backend did nothing, and later it may.
             Self::Storage(e) => e.is_busy(),
             Self::Credit(e) => e.is_retryable(),
+            Self::Conversion(e) => e.is_retryable(),
             Self::Step { source, .. } => source.is_retryable(),
             _ => false,
         }
@@ -216,7 +236,7 @@ impl Error {
     /// status (the kinds for which
     /// [`ErrorKind::is_rejected_before_processing`] holds, which is also
     /// when the client replays a send), a local
-    /// validation/configuration/crypto error, or a request that was never
+    /// validation/configuration/crypto/conversion error, or a request that was never
     /// built or never connected — so it is safe to fix and resend. Storage,
     /// sink and webhook errors are `false` too: meta-whatsapp-rs raises them before a
     /// send, and after one it logs them instead of returning them (the
@@ -250,6 +270,7 @@ impl Error {
             },
             Self::Decode { .. } | Self::Other(_) => true,
             Self::Credit(e) => e.may_have_been_sent(),
+            Self::Conversion(e) => e.may_have_been_sent(),
             Self::Step { source, .. } => source.may_have_been_sent(),
             Self::Validation(_)
             | Self::Config(_)
@@ -385,10 +406,46 @@ mod tests {
             assert!(!v.is_thread_owned_elsewhere(), "{near}");
             assert_eq!(Error::from(v).kind(), ErrorKind::InvalidParameter, "{near}");
         }
-        // No Graph code maps to it yet (Meta documents none).
-        for code in [100, 131047, 131026, 2494191] {
-            assert_ne!(ErrorKind::from_code(code), ErrorKind::ThreadOwnedElsewhere);
+        // One Graph code maps to it, Meta's own refusal; its neighbours do
+        // not.
+        for code in [100, 131047, 131026, 131069, 131071, 2494191] {
+            assert_ne!(
+                ErrorKind::from_code(code),
+                ErrorKind::ThreadOwnedElsewhere,
+                "{code}"
+            );
         }
+    }
+
+    /// `131070` (`conversation-routing/thread-control` § Errors): a Service
+    /// message from a responder that does not own the thread. The same kind
+    /// as the inbox's local refusal, though an `Error::Api`, not a
+    /// `ValidationError`. Never retried (the thread must change hands
+    /// first); on a 4xx Meta sent nothing, and nothing resends it
+    /// automatically.
+    #[test]
+    fn metas_ownership_refusal_has_the_local_refusals_kind() {
+        let meta = || {
+            let mut graph = GraphApiError::new(
+                131_070,
+                "Message failed to send because another app is controlling this thread now.",
+            );
+            graph.http_status = Some(400);
+            Error::from(graph)
+        };
+        assert_eq!(meta().kind(), ErrorKind::ThreadOwnedElsewhere);
+        assert_eq!(
+            meta().kind(),
+            Error::from(ValidationError::thread_owned_elsewhere()).kind()
+        );
+        assert_eq!(
+            meta().in_step("reply").kind(),
+            ErrorKind::ThreadOwnedElsewhere
+        );
+        assert!(!matches!(meta(), Error::Validation(_)), "Meta's, not local");
+        assert!(!meta().is_retryable());
+        assert!(!meta().may_have_been_sent());
+        assert!(!meta().may_resend());
     }
 
     #[test]
@@ -464,6 +521,22 @@ mod tests {
             ),
             (SinkError::Closed.into(), false),
             (WebhookError::SignatureMismatch.into(), false),
+            // A conversion sends nothing, whatever stopped it: a timeout
+            // too, unlike a transport's.
+            (
+                ConversionError::Timeout(std::time::Duration::from_secs(60)).into(),
+                false,
+            ),
+            (
+                ConversionError::BinaryMissing("ffmpeg".into()).into(),
+                false,
+            ),
+            (ConversionError::Killed("signal".into()).into(), false),
+            (
+                Error::from(ConversionError::Timeout(std::time::Duration::from_secs(1)))
+                    .in_step("convert"),
+                false,
+            ),
         ] {
             assert_eq!(err.may_have_been_sent(), sent, "{err}");
         }
@@ -545,6 +618,12 @@ mod tests {
                 StorageError::Backend(anyhow::anyhow!("db down")).into(),
                 false,
             ),
+            // Retryable and never sent, but no send Meta refused: a
+            // conversion is retried by its caller, not resent.
+            (
+                ConversionError::Timeout(std::time::Duration::from_secs(1)).into(),
+                false,
+            ),
         ];
         for (err, resend) in &rows {
             assert_eq!(err.may_resend(), *resend, "{err}");
@@ -552,6 +631,48 @@ mod tests {
                 assert!(err.is_retryable() && !err.may_have_been_sent(), "{err}");
             }
         }
+    }
+
+    /// The conversion node through the root and through a step: its own
+    /// kind and retry, never sent, and `conversion()` finds it.
+    #[test]
+    fn conversion_errors_keep_their_kind_through_the_root_and_a_step() {
+        let timeout = ConversionError::Timeout(std::time::Duration::from_secs(1));
+        let rows = [
+            (timeout.clone(), ErrorKind::ServiceUnavailable, true),
+            (
+                ConversionError::BinaryMissing("ffmpeg".into()),
+                ErrorKind::FeatureNotAvailable,
+                false,
+            ),
+            (
+                ConversionError::InputRejected("exit status 1".into()),
+                ErrorKind::InvalidParameter,
+                false,
+            ),
+            (
+                ConversionError::OutputInvalid("x".into()),
+                ErrorKind::Unknown,
+                false,
+            ),
+        ];
+        for (e, kind, retryable) in rows {
+            for err in [
+                Error::from(e.clone()),
+                Error::from(e.clone()).in_step("convert"),
+            ] {
+                assert_eq!(err.kind(), kind, "{err}");
+                assert_eq!(err.is_retryable(), retryable, "{err}");
+                assert!(!err.may_have_been_sent(), "{err}");
+                assert!(!err.may_resend(), "{err}");
+                assert_eq!(err.conversion(), Some(&e), "{err}");
+            }
+        }
+        assert_eq!(Error::from(ConfigError::new("x")).conversion(), None);
+        assert_eq!(
+            Error::from(timeout).to_string(),
+            "media conversion ran past 1s and was stopped"
+        );
     }
 
     /// Credit line refusals: only a raced share, a share to reconcile, a
