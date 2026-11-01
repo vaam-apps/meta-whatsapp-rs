@@ -82,9 +82,10 @@ owner.
 While another app owns the thread, `reply` and `send` refuse a service
 message before any request: `Error::Validation` on field `thread_owner`
 (`ValidationError::thread_owned_elsewhere()`), whose `kind()` is
-`ErrorKind::ThreadOwnedElsewhere` (Meta has no code of its own for it
-yet); `meta_whatsapp_rs::inbox::is_thread_owned_elsewhere` also looks
-through `Error::Step`. A service answers it like the window's refusal:
+`ErrorKind::ThreadOwnedElsewhere`, like Meta's own refusal, `131070`
+(also on an idle thread). `meta_whatsapp_rs::inbox::is_thread_owned_elsewhere`
+matches the local refusal alone, also through `Error::Step`; branch on the
+kind to match both. A service answers it like the window's refusal:
 `409`. Templates and Direct Send `utility` and `authentication` need no
 ownership (a Direct Send `service` message does, and the window). An
 idle thread is not refused. The designated escalation partner, whose

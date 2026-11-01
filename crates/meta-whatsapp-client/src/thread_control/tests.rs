@@ -205,9 +205,11 @@ async fn take_metadata_is_sent_verbatim() {
 
 #[tokio::test]
 async fn metadata_is_at_most_2000_characters() {
+    // The page's number, not the constant: a changed constant fails here.
+    assert_eq!(METADATA_MAX_CHARS, 2000);
     let t = ScriptedTransport::new();
     let user = Recipient::phone(USER);
-    let too_long = "a".repeat(METADATA_MAX_CHARS + 1);
+    let too_long = "a".repeat(2001);
     let err = api(&t)
         .pass(&user, &Pass::to_escalation_partner().metadata(&too_long))
         .await
@@ -219,8 +221,8 @@ async fn metadata_is_at_most_2000_characters() {
 
     // 2,000 characters pass, counted as characters, not bytes: 2,000
     // two-byte characters are 4,000 bytes.
-    let at_most = "é".repeat(METADATA_MAX_CHARS);
-    assert_eq!(at_most.len(), 2 * METADATA_MAX_CHARS);
+    let at_most = "é".repeat(2000);
+    assert_eq!(at_most.len(), 4000);
     push_docs_response(&t);
     push_docs_response(&t);
     api(&t)
@@ -286,6 +288,7 @@ async fn exactly_one_user_identifier_is_required() {
         (Recipient::phone(""), "to"),
         (Recipient::phone("  "), "to"),
         (Recipient::user(""), "recipient"),
+        (Recipient::user(" "), "recipient"),
     ];
     for (user, field) in cases {
         let err = api
@@ -408,7 +411,10 @@ async fn pass_not_supported_is_an_invalid_parameter() {
 }
 
 /// `2494191`: `take` from a caller that is not the escalation partner.
-/// Its code reaches the caller; `ErrorKind` has no class for it yet.
+/// Its code reaches the caller, and its kind is deliberately `Unknown`,
+/// not `Permission`: the token's permissions are fine, the business lacks
+/// the escalation role (Meta's fix: `pass`, or have the business make you
+/// its escalation partner). Not retryable, nothing done.
 #[tokio::test]
 async fn take_by_a_non_escalation_partner_keeps_its_code() {
     let t = ScriptedTransport::new();
@@ -425,6 +431,8 @@ async fn take_by_a_non_escalation_partner_keeps_its_code() {
         .await
         .unwrap_err();
     assert_eq!(err.graph().map(|g| g.code), Some(2_494_191));
+    assert_eq!(err.kind(), ErrorKind::Unknown);
+    assert!(!err.is_retryable() && !err.may_have_been_sent());
     assert_eq!(t.remaining(), 0);
 }
 

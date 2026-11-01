@@ -1399,6 +1399,26 @@ stored data, the owner's).
 
 ### Changed
 
+- **Graph error `131070` is `ThreadOwnedElsewhere`**
+  (`meta_whatsapp_core::ErrorKind::from_code`, roadmap L15; see Added,
+  "Thread control"). `conversation-routing/thread-control` § Errors gives
+  it for a service message from a responder that does not own the thread
+  ("another app is controlling this thread now"), idle threads included;
+  it was `Unknown`. It now has the kind of the inbox's local refusal
+  (`ValidationError::thread_owned_elsewhere()`), so branching on
+  `ErrorKind::ThreadOwnedElsewhere` matches both; still not retryable,
+  and `meta_whatsapp_rs::inbox::is_thread_owned_elsewhere` still matches
+  the local refusal only. The same table's `2494191` (a `take` by a
+  caller that is not the escalation partner) stays `Unknown`: not
+  `Permission`, which is the token's permissions or asset access. Tests:
+  `metas_ownership_refusal_has_the_local_refusals_kind`,
+  `classification_table_spot_checks` (`meta-whatsapp-core`).
+- **Behaviour change (the service) — Graph error `131070` is answered
+  `409 thread_owned_elsewhere`** (`meta-whatsapp-server`, from the
+  library change above; it answered `502 unknown`), the code the inbox's
+  local refusal already had (`docs/design/server.md` §5.2 now names
+  `131070`). Tests: `each_kind_answers_its_code_and_no_meta_text`,
+  `a_local_refusal_answers_its_kinds_code_and_status`.
 - **Breaking — `ConnectCall` has two more fields**
   (`meta_whatsapp_client::calling`, roadmap L14; see Added, "Call
   recording and transcription"): `recording: Option<CallRecording>` and

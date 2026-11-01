@@ -1678,22 +1678,38 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     events were already typed (`ThreadControlChanged`, with fixtures of
     this page's examples); the inbox does not call the API itself (its
     callers record their own calls: the `meta-whatsapp-rs-cms-inbox`
-    example now makes the pass). Proposed with it, for the coordinator
-    to decide: the module and accessor names; `release` marked not
-    idempotent although Meta documents a release of an idle thread as a
-    success (a replay can release a thread a new message routed back in
-    between); `release` sending no `metadata` (Meta forwards it only on
-    a handover event, and a release has none); `PhoneAndUser` refused
-    rather than reduced to its BSUID (Meta's preferred identifier) or its
-    phone number; a group refused locally; `TargetRole` and
-    `ThreadControlResponse` `#[non_exhaustive]`, `Pass` not
-    (OPEN_QUESTIONS #28); and L15a.
+    example now makes the pass). With it, the page's error `131070` (a
+    service message without owning the thread, idle threads included)
+    maps to `ErrorKind::ThreadOwnedElsewhere`, the inbox's local
+    refusal's kind, so the service answers it `409
+    thread_owned_elsewhere` instead of `502 unknown`
+    (`metas_ownership_refusal_has_the_local_refusals_kind`,
+    `classification_table_spot_checks`, and the service's
+    `each_kind_answers_its_code_and_no_meta_text`); `2494191` (a `take`
+    by a caller that is not the escalation partner) stays `Unknown`, not
+    `Permission`, which names the token's permissions and asset access
+    while this is the business's routing role
+    (`take_by_a_non_escalation_partner_keeps_its_code`).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation; each swappable as noted): the module and accessor names,
+    `meta_whatsapp_client::thread_control` and `client.thread_control`;
+    `release` not idempotent although Meta documents a release of an
+    idle thread as a success (a replay can release a thread a new
+    message routed back in between; a caller that wants a replay calls
+    it again); `release` sends no `metadata` (Meta forwards it only on a
+    handover event, and a release has none; a parameter is an additive
+    change); `Recipient::PhoneAndUser` and groups refused locally,
+    rather than reduced to the BSUID or the phone number (the caller
+    picks its identifier; Meta refuses both); `#[non_exhaustive]` on
+    `TargetRole` and `ThreadControlResponse` only, not on `Pass`, a
+    request type (OPEN_QUESTIONS #28); and L15a kept as its own item,
+    with row 139 partial until it lands.
 - [ ] **L15a. The Routing Roles API** (`meta-whatsapp-client`, next to
   `client::thread_control`; row 139): `GET
   /{phone-number-id}/routing_roles`, the roles the caller's business
   holds on a number (`roles`, `is_standby`), which say which thread
   control actions it may take (`conversation-routing/routing-roles`).
-  Proposed by L15's implementation; not yet decided.
+  Proposed by L15's implementation; decided with it (2026-11-01).
   - **Kind:** additive.
   - **After:** L15.
   - **Decisive:** exact response JSON from

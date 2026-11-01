@@ -397,6 +397,7 @@ mod tests {
             .await
             .unwrap();
         let pass = transport.last_request().unwrap();
+        assert_eq!(pass.method, "POST");
         assert_eq!(pass.path(), format!("/v25.0/{NUMBER}/thread_control"));
         assert_eq!(pass.bearer(), Some("MERCHANT"));
         assert_eq!(

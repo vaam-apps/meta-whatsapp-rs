@@ -1861,8 +1861,8 @@ impl InboxSink {
 /// [`Error::kind`] is [`ErrorKind::ThreadOwnedElsewhere`](meta_whatsapp_core::ErrorKind::ThreadOwnedElsewhere)), also when a
 /// multi-step flow wrapped it ([`Error::in_step`]). Nothing was sent: send
 /// a template instead (it needs no ownership), or wait for the thread to
-/// come back. To also match Meta's own refusal once it has a code of its
-/// own, branch on the kind.
+/// come back. To also match Meta's own refusal (`131070`, an
+/// [`Error::Api`]), branch on the kind.
 pub fn is_thread_owned_elsewhere(error: &Error) -> bool {
     match error {
         Error::Validation(v) => v.is_thread_owned_elsewhere(),

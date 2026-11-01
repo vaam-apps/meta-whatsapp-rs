@@ -137,7 +137,9 @@ impl ThreadControl {
     ///
     /// Only the account's designated escalation partner may take a
     /// thread; any other caller gets Meta's `2494191` ("You are not
-    /// permitted to take thread control for this phone number"). The
+    /// permitted to take thread control for this phone number"), whose
+    /// [`ErrorKind`](meta_whatsapp_core::ErrorKind) is `Unknown`: branch on
+    /// [`GraphApiError::code`](meta_whatsapp_core::GraphApiError::code). The
     /// escalation partner also takes a thread implicitly by sending a
     /// Service message, with no call. The previous owner receives a
     /// `control_taken` event carrying `metadata` (at most
