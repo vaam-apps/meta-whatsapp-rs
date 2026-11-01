@@ -51,7 +51,9 @@ token-expiry signal (roadmap L11e), against its code and Meta's
 `access-tokens` and `facebook-login/facebook-login-for-business` pages
 of 2026-11-01; row 139 again with the Routing Roles API (roadmap
 L15a), against its code and Meta's `conversation-routing/routing-roles`
-page of 2026-11-01; row 123 with pre-verified numbers (roadmap L11c),
+page of 2026-11-01; row 117 again with the docs MCP server (roadmap L22b),
+against its code and tests and the MCP specification of 2026-11-01
+(§ Sources); row 123 with pre-verified numbers (roadmap L11c),
 against its code and Meta's `embedded-signup/pre-verified-numbers` and
 pre-verified number reference pages of 2026-11-01. Every cell
 about us was
@@ -64,12 +66,12 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**41 of the 132 counted rows are done on both sides.** Parity is not
+**42 of the 132 counted rows are done on both sides.** Parity is not
 reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 121 | 10 | 0 | 1 |
+| Library | 122 | 9 | 0 | 1 |
 | Service | 42 | 22 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -77,7 +79,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 10 partial or gap rows is cited by a
+- Each of the library's 9 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 89 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, P 2 (payments).
@@ -222,6 +224,15 @@ The owner's definition (2026-09-26):
   `fields` as `string[]`, `active`; reading needs the app token) and
   `graph-api/webhooks/subscriptions-edge` (its example answer gives each
   field as `{name, version}`; the doctor reads both shapes).
+- **The Model Context Protocol**, for row 117's docs server, outside
+  Meta's docs: the specification at `modelcontextprotocol.io`, read on
+  2026-11-01 as Markdown. Revision 2026-07-28, the current one
+  (`specification/versioning`): `changelog`, `basic/index` (`_meta`,
+  `resultType`, the error codes), `basic/versioning` (no handshake, the
+  dual-era rules), `basic/transports/stdio`, `server/discover`,
+  `server/tools` (protocol errors against `isError`) and
+  `server/utilities/caching`; and revision 2025-11-25's
+  `basic/lifecycle` (the `initialize` handshake).
 - **Us**: the code at b6fc893; for rows 17, 19 and 84–88, the bot
   framework's (B1).
 
@@ -273,7 +284,7 @@ The owner's definition (2026-09-26):
 | 35 | Messaging | Send to a group | Yes (groups) | No | `reference/whatsapp-business-phone-number/message-api.md` (`recipient_type` `group`) | `core::recipient::Recipient::Group` | a `{"group_id"}` recipient | done / done |
 | 36 | Messaging | Send by BSUID or parent BSUID | Partial (LID addresses) | No | `business-scoped-user-ids` | `core::recipient::Recipient::User` | a `{"user_id"}` recipient | done / done |
 | 37 | Messaging | Direct Send (beta: category, TTL, configuration) | — | — | `direct-send`, `direct-send/api-reference` | `OutboundMessage::category`, `ttl_seconds`, `direct_send_template_name` | refused today, `422 unsupported_message_type` (design §4.3) | done / gap (M5a) |
-| 38 | Messaging | Payment messages (order details, order status) | — | — | `payments/payments-in/orderdetailstemplate.md`, `payments/payments-in/orderstatustemplate.md`, `payments/payments-br/orders.md` | India typed (P1a): `client::messages::Interactive::OrderDetails` and `client::messages::Interactive::OrderStatus` (`client::payments::OrderDetails`, `client::payments::OrderStatus`: UPI intent links, payment links, payment gateways and the older `payment_configuration`, every documented rule checked before the request, amounts as `client::payments::Amount`); Brazil's orders (P1b) and the order templates' `order_details` button and `order_status` component (P1c) only through `client::messages::MessageContent::Raw` | — (a Graph passthrough stays a non-goal: typed routes come with payments) | partial / gap (P2) |
+| 38 | Messaging | Payment messages (order details, order status) | — | — | `payments/payments-in/orderdetailstemplate.md`, `payments/payments-in/orderstatustemplate.md`, `payments/payments-br/orders.md` | India typed (P1a): `client::messages::Interactive::OrderDetails` and `client::messages::Interactive::OrderStatus` (`client::payments::OrderDetails`, `client::payments::OrderStatus`: UPI intent links, payment links, payment gateways and the older `payment_configuration`, every documented rule checked before the request, amounts as `client::payments::Amount`); Brazil typed (P1b): `BRL` orders (`client::payments::OrderDetailsParameters::brl`, `client::payments::OrderDetailsParameters::brl_simplified`, the `order` optional, a `reference_id` of 60, `payment_type` `br`) paid by Pix, payment link, Boleto or one-click card (`client::payments::PixDynamicCode`, `client::payments::OffsiteCardPay`), and `order_status` with a `payment` update (`client::payments::OrderStatus::brl`, `client::payments::PaymentUpdate`; `pending` allowed), each currency checked by its own pages' rules; the order templates' `order_details` button and `order_status` component (P1c) only through `client::messages::MessageContent::Raw` | — (a Graph passthrough stays a non-goal: typed routes come with payments) | partial / gap (P2) |
 
 ### C. Media
 
@@ -391,7 +402,7 @@ The owner's definition (2026-09-26):
 | 114 | Ops | Logging without secrets or personal data; metrics | Partial (a custom logger) | Partial | none (ours) | `tracing`; secrets kept out of `Debug`; webhook log redaction (`webhooks::redact`) | request logs with the key id, Prometheus `/metrics` (`server_http::api::ops::metrics`) | done / done |
 | 115 | Ops | Runtimes and packaging | Yes (Node, Bun, Deno, Termux) | Yes | none | Rust with tokio; the crates are not published yet (publishing to crates.io is the owner's: roadmap § Owner touchpoints) | a binary today; the Docker image and the TypeScript client in M4 | n/a / gap (M4) |
 | 116 | Ops | Server sizing guidance | Yes (for WhatsApp Web) | — | `support/load-testing.md` | — | — | n/a — unofficial protocol (sizing for a WhatsApp Web session) |
-| 117 | Tooling | Agent skills, LLM-readable docs, a docs MCP server, a project doctor | Yes | Yes | `webhooks/overview` (§ Fields), `webhooks/create-webhook-endpoint`, `solution-providers/manage-webhooks`; outside the WhatsApp docs, the Graph API reference's `app/subscriptions` and `webhooks/subscriptions-edge` (§ Sources) | consumer skills under `skills/` (`npx skills add vaam-apps/meta-whatsapp-rs`); `docs/public/llms.txt`, served at the docs site's root and checked by `tests/llms_txt.rs`; the project doctor is the service's; no docs MCP server (L22b) | the `meta-whatsapp-rs-server*` skills; `meta-whatsapp-server doctor` (`server::doctor::Doctor`: every configuration refusal by variable, the backend and its migration histories read-only, the app's `whatsapp_business_account` subscription and fields, each bound WABA's token through `debug_token` and the app's subscription to it, the Solution Partner's system token) | partial / done |
+| 117 | Tooling | Agent skills, LLM-readable docs, a docs MCP server, a project doctor | Yes | Yes | `webhooks/overview` (§ Fields), `webhooks/create-webhook-endpoint`, `solution-providers/manage-webhooks`; outside the WhatsApp docs, the Graph API reference's `app/subscriptions` and `webhooks/subscriptions-edge` (§ Sources) | consumer skills under `skills/` (`npx skills add vaam-apps/meta-whatsapp-rs`); `docs/public/llms.txt`, served at the docs site's root and checked by `tests/llms_txt.rs`; the docs MCP server, `tools/docs-mcp` (`just docs-mcp`: the tools `list`, `search` and `read`, a page or one section by its heading, over MCP's stdio transport, revision 2026-07-28 and, after `initialize`, 2025-11-25; a tool, not a crate of the library; L22b); the project doctor is the service's | the `meta-whatsapp-rs-server*` skills; `meta-whatsapp-server doctor` (`server::doctor::Doctor`: every configuration refusal by variable, the backend and its migration histories read-only, the app's `whatsapp_business_account` subscription and fields, each bound WABA's token through `debug_token` and the app's subscription to it, the Solution Partner's system token) | done / done |
 | 118 | Documents | Invoices, receipts, vouchers rendered to PDF or PNG | — | — | none (ours) | `typst::Renderer`; `typst::Template::invoice`, `receipt`, `voucher` | `POST /v1/numbers/{pn}/documents` in M4 | done / gap (M4) |
 | 119 | Inbox | CMS inbox: store events, check the 24-hour window before a reply | — | — | `pricing.md` (the customer service window) | `inbox::InboxSink`; `inbox::Inbox::reply`; `core::store::CustomerServiceWindow`; the window counts the calls that reopen it and the customer's standby messages (window events, `inbox::Inbox::window`: L7), and a reply is refused locally while another app owns the thread (`inbox::Inbox::thread_owner`), each check turned off by `inbox::ReplyChecks` | recording since M1c; the inbox routes and the window check over HTTP in M2a | done / partial (M2a) |
 
@@ -420,7 +431,7 @@ The owner's definition (2026-09-26):
 | 138 | Marketing | Click-to-WhatsApp: the referral on inbound messages, automatic events, welcome message sequences | — | — | `ctwa/welcome-message-sequences`; `embedded-signup/automatic-events-api` | `webhooks::fields::Referral`; `webhooks::WebhookEvent::AutomaticEventDetected`; the sequences (`/{WABA_ID}/welcome_message_sequences`): `client::marketing::WelcomeSequences` (`create`, `update`, `list`, `get`, `delete`; L13; coverage row 31); naming a sequence in an ad creative is Meta's Marketing API, and reporting automatic events to Meta's Conversions API (optional) is outside the Cloud API: neither is part of this row | the referral in `message_received` events, `automatic_event_detected` events | done / partial (M5h) |
 | 139 | Routing | Conversation routing: thread control (pass, take, release), standby, conversation context | — | — | `conversation-routing/thread-control`, `conversation-routing/overview`, `conversation-routing/routing-roles`; `webhooks/reference/messaging-handovers` (nm), `webhooks/reference/standby` (nm) | typed webhooks `webhooks::WebhookEvent::ThreadControlChanged`, `StandbyObserved`; the port stores ownership and window events (`core::store::ConversationStore::set_thread_owner`, `record_window_event`: L5); the inbox records ownership from the handovers and standby copies and standby messages as window events, derives this app and idle (`inbox::Inbox::thread_owner`), records this app's release, pass and take (`inbox::Inbox::record_release`, `inbox::Inbox::record_thread_owner`) and refuses a reply locally while another app owns the thread (`core::ErrorKind::ThreadOwnedElsewhere`; OPEN_QUESTIONS #44: L7), without storing `conversation_context`; the thread control API: pass, take and release (`client::thread_control::ThreadControl::pass`, `take`, `release`; L15), each never replayed, which the inbox does not call itself (the caller records its own call); the Routing Roles API, the roles the business holds on a number and its standby grant (`client::thread_control::ThreadControl::routing_roles`, answering `client::thread_control::RoutingRoles`; L15a) | the two types are operator-only until M2d (D25); the API in M5l | done / gap (M2d, M5l) |
 | 140 | Accounts | Account model evolution: Messaging Accounts and WhatsApp accounts (WAAC); general availability from H2 2026 | — | — | `account-model-evolution`, `account-model-evolution/messaging`; `reference/whatsapp-account-number/whatsapp-account-number-api.md` | partial (coverage row 30): the Messaging Account a send bills, `client::messages::OutboundMessage::messaging_account_id` (L16a; a WABA id names its Messaging Account, so the WABA calls reach it unchanged); not the WAAC and Messaging Account endpoints, the WAAC id or the `whatsapp_account` webhook, which Meta publishes in its phase 2, H1 2027 (L16b) | — | partial / gap (M5c4, M5c5) |
-| 141 | Payments | Payments in India (UPI, payment links, order templates, onboarding) and Brazil (Pix, Boleto, payment links, one-click) | — | — | `payments/payments-in/overview.md`, `payments/payments-br/overview.md` and their pages | India (P1a): the order messages (row 38), the payment lookup and refunds (`client::payments::Payments::lookup`, `client::payments::Payments::refund`: never replayed after a timeout) and onboarding (`client::payments::PaymentConfigurations`: `list`, `get`, `create`, `regenerate_oauth_link`, `delete`; the OAuth link a `client::common::SecretUrl`); `webhooks::WebhookEvent::PaymentConfigurationUpdated`. Not yet: Brazil's Pix, Boleto, payment links and one-click (P1b); the payment status webhook of type `payment` and the `payment_method` reply, still marked out of scope in the webhooks' conformance manifest, and the templates' payment buttons (P1c); the data endpoint of `POST /{WABA_ID}/payment_configuration/{CONFIGURATION_NAME}` (for checkout button templates, its answer undocumented) and the alpha third-party validation | `payment_configuration_updated` events only | partial / partial (P2) |
+| 141 | Payments | Payments in India (UPI, payment links, order templates, onboarding) and Brazil (Pix, Boleto, payment links, one-click) | — | — | `payments/payments-in/overview.md`, `payments/payments-br/overview.md` and their pages | India (P1a): the order messages (row 38), the payment lookup and refunds (`client::payments::Payments::lookup`, `client::payments::Payments::refund`: never replayed after a timeout) and onboarding (`client::payments::PaymentConfigurations`: `list`, `get`, `create`, `regenerate_oauth_link`, `delete`; the OAuth link a `client::common::SecretUrl`); `webhooks::WebhookEvent::PaymentConfigurationUpdated`. Brazil (P1b): Pix (copy and paste, or Pix with redirect), payment links, Boleto and one-click payments in the order messages (row 38). Not yet: the payment status webhook of type `payment` and the `payment_method` reply, still marked out of scope in the webhooks' conformance manifest, and the templates' payment buttons (P1c); the data endpoint of `POST /{WABA_ID}/payment_configuration/{CONFIGURATION_NAME}` (for checkout button templates, its answer undocumented) and the alpha third-party validation | `payment_configuration_updated` events only | partial / partial (P2) |
 | 142 | Partners | Credit lines: share, attach, verify, revoke | — | — | `solution-providers/share-and-revoke-credit-lines.md`; `reference/whatsapp-business-account/extended-credits-api.md` | `client::credit_lines::CreditLines::list`, `share_and_attach`, `revoke`, `allocation_status` | M3a (Solution Partner mode) | done / gap (M3a) |
 | 143 | Partners | Partner-led business verification | — | — | `solution-providers/partner-led-business-verification.md` | `client::business_verification::BusinessVerification::submit`, `submissions`, `status` | not exposed | done / gap (M5j) |
 | 144 | Partners | Multi-Partner Solutions: create, accept or reject, deactivation, the solution token, an app's solutions and client businesses | — | — | `solution-providers/multi-partner-solutions.md`, `solution-providers/multi-partner-solution-embedded-creation.md`; `reference/whatsapp-business-solution/solution-details-api.md` and the pages beside it, `reference/application/application-solutions-api.md`, `reference/application/application-connected-client-businesses.md` | `client::partners::solutions::PartnerSolutions::create`, `accept`, `reject`, `send_deactivation_request`, `accept_deactivation_request`, `reject_deactivation_request`, `get`, `partners`, `app_solutions`, `connected_client_businesses` (each list with its `…_stream`), and the client's business token through a solution, `PartnerSolutions::access_token` (an `AccessToken`, withheld from decode errors); `webhooks::WebhookEvent::PartnerSolutionUpdated`; `LaunchOptions::solution_id` | `partner_solution_updated` is operator-only (no WABA to route it by) | done / gap (M5j) |
@@ -458,7 +469,8 @@ item, each naming its crate, what it comes after and its decisive test:
   (routes for the modules parity requires, the bot and broadcast APIs
   included).
 - **Payments** (India, Brazil; P1a–P1c, P2): in scope, last; India's
-  messages, lookup, refunds and onboarding landed (P1a).
+  messages, lookup, refunds and onboarding landed (P1a), and Brazil's
+  messages (P1b).
 
 ## How to keep this true
 

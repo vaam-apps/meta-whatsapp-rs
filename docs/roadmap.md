@@ -2165,8 +2165,8 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     registered, re-verification from 45 days before expiry) are
     documented, not enforced; tracking who claimed which number stays
     the integrator's, as Meta says.
-  - **Proposed** (for the coordinator, AGENTS.md § Decisions; each
-    swappable): the bodies are JSON, as the references define, not the
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): the bodies are JSON, as the references define, not the
     guide's query strings (the code and the phone number stay out of
     URLs, as `PhoneNumber::verify_code` does; swapped per call by
     moving a field to `.query`); a pre-verified id is numeric (one
@@ -3430,7 +3430,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     library's migration versions compared, not only counted (their list
     is private to the adapters crate: it needs a public accessor there);
     the subscriptions read moved into the client.
-- [ ] **L22b. A docs MCP server** (a tool under `tools/`, outside the
+- [x] **L22b. A docs MCP server** (a tool under `tools/`, outside the
   library; row 117): search and read the docs and skills over MCP's
   stdio transport.
   - **Kind:** additive.
@@ -3438,6 +3438,58 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a scripted MCP client lists the tools, searches
     `Idempotency-Key` and gets the server guide's section; a missing
     page is an MCP error, not a panic.
+  - **Landed:** row 117 done in the library too. `tools/docs-mcp`
+    (package and binary `meta-whatsapp-docs-mcp`, run by `just
+    docs-mcp`) serves three read-only tools over stdio: `list` (every
+    page, with its title and a skill's description), `search` (the
+    sections holding every term of a query, best first, each with its
+    heading, line and snippet) and `read` (a page, or one section by its
+    heading or anchor, to the next heading of its level). It speaks MCP
+    revision 2026-07-28, the current one on 2026-11-01 (no handshake:
+    `_meta` on every request, `server/discover`, `resultType`, the
+    caching hints, `-32022` for a version it does not speak) and, after
+    an `initialize`, 2025-11-25 and 2025-06-18, the revisions clients
+    shipped with until then (dual-era, as 2026-07-28's versioning page
+    defines it). A missing page, a missing section, a path outside the
+    corpus and bad arguments are tool execution errors (a result with
+    `isError: true`, as the tools page sorts them: the model can correct
+    them); an unknown tool or malformed params are JSON-RPC `-32602`.
+    `tools/docs-mcp/tests/stdio.rs` runs the binary as a subprocess:
+    a legacy client and a modern one each list the tools, search
+    `Idempotency-Key`, read `docs/guides/server.md`'s `Idempotency keys`
+    section and get a missing page as `isError: true` with the server
+    still answering; twelve escapes (`..`, absolute paths, repository
+    files outside the corpus, `.meta-docs/`, `\`) and symbolic links out
+    of a corpus tree are refused, and the corpus covers every Markdown
+    page `llms.txt` links. Each guard was removed in turn and a test
+    failed: the path syntax check, the listing membership, the
+    resolved-path check, the walk's refusal of links and of hidden
+    directories, the missing page's `isError`, the read and search
+    bounds.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a constant or a list in one
+    file of the tool, swapped by changing it): Rust, in the root workspace as a non-default member
+    (its tests, clippy, rustdoc and `cargo deny` run in `just ci`'s
+    `--workspace` recipes), a binary only so no crate can depend on it,
+    with no MCP SDK and no dependency but `serde_json` (no new crate in
+    `Cargo.lock`); dual-era rather than 2026-07-28 alone; the corpus
+    (`corpus::ROOT_FILES` and `corpus::TREES` in the tool): the root's
+    README, AGENTS, CONTRIBUTING, CHANGELOG and OPEN_QUESTIONS, `docs/`'s
+    Markdown and text, `skills/`'s Markdown and example sources, never
+    `.meta-docs/`, hidden directories, `node_modules/`, generated
+    `*.d.ts` or a symbolic link, read from disk on every call (no
+    state, no stale index); the bounds: 40 KiB a read (a longer one ends
+    with its `from_line` to continue and the page's headings), 10 hits
+    a search by default and 25 at most, 240-character snippets, files
+    over 1 MiB and messages over 1 MiB refused; search ASCII
+    case-insensitive, every term required, ranked by occurrences with a
+    bonus for the heading; no `.mcp.json` committed (registering the
+    server stays each developer's choice: docs/dev-environment.md shows
+    how).
+  - **Left:** MCP resources and prompts (the pages as `resources/read`
+    too); a search that folds Unicode case or ranks by more than counts;
+    `subscriptions/listen` for a changed page (the tool list never
+    changes).
 - [ ] **L23. Template groups and archiving** (`meta-whatsapp-client`,
   `client::templates`; rows 101, 153): template groups' create, read,
   update and delete, after reading the reference Meta's changelog links
@@ -3858,7 +3910,7 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     configuration's name has at most 60 characters, an order's limit;
     the tests put numeric ids where the examples print placeholder
     names (`the-catalog_id`, `your-media-id`).
-- [ ] **P1b. Brazil** (`meta-whatsapp-client`; rows 38, 141): `BRL`
+- [x] **P1b. Brazil** (`meta-whatsapp-client`; rows 38, 141): `BRL`
   orders (`payment_type` `br`, the `order` object optional, a
   `reference_id` of 60), the payment settings `pix_dynamic_code`,
   `payment_link`, `boleto` and `offsite_card_pay`, and the `payment`
@@ -3870,6 +3922,48 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
   - **Kind:** additive.
   - **Decisive:** exact JSON from `payments/payments-br/*`; a `BRL`
     order checked by Brazil's rules, an `INR` one by India's.
+  - **Landed:** `Currency::Brl` selects Brazil's rules
+    (`OrderDetailsParameters::brl`, `brl_simplified`,
+    `OrderStatus::brl` with a `PaymentUpdate`), India's unchanged; the
+    settings `PixDynamicCode` (with `PixFlowType`, Pix with redirect),
+    `PaymentSetting::boleto`, `OffsiteCardPay` and the `payment_link`'s
+    `uri` alone; every message example of the five pages an exact-JSON
+    test (`payments/tests/brazil.rs`; the one-click page's
+    `payment_method` webhook is P1c's), the decisive pair
+    (`a_brl_order_is_checked_by_brazils_rules_and_an_inr_one_by_indias`,
+    `an_order_status_is_checked_by_its_currencys_rules`).
+  - **Review (fields, limits, mutations):** a `BRL` header by media id
+    is refused (Brazil's image object has `link` alone, required; the id
+    is India's), and the item image's refusal is pinned by its reason
+    (`an_item_image_is_refused_in_a_brl_order_as_indias`: Brazil's
+    required `retailer_id` conflicts with an image anyway, so deleting
+    the refusal left every test green), as is the simplified order's
+    header refusal being Brazil's alone
+    (`the_header_rules_are_brazils_only`).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions):
+    1. A field documented for one currency only is refused in the
+       other's orders (India's `payment_configuration`, beneficiaries,
+       header by media id, item images, importers, `quick_pay`, a link's
+       success and cancel URLs and settings in `BRL`; Brazil's settings,
+       `payment_type` `br` and `payment` update in `INR`).
+    2. Brazil's subtotal is checked against `Order::items_sum` (its
+       page says the sale price counts, its examples keep the rule);
+       India's stays unchecked (P1a).
+    3. `payment_settings` are optional in `BRL`: every Brazil table
+       says Optional.
+    4. A `BRL` `order_status` with neither `order` nor `payment` is
+       accepted: no page requires either.
+    5. `last_four_digits` must be exactly four ASCII digits.
+    6. Pix codes and keys, Boleto digitable lines, a card's last four
+       digits and `credential_id` are payment data shown to the buyer
+       or echoed to the merchant, not secrets: no secret type, and
+       `Debug` shows them. Meta's page calls `credential_id` "the ID of
+       the credential" the merchant looks the card up by; the module
+       docs (not Meta's) say never to put a card number or PSP token
+       there.
+    7. The `header` Brazil's `order_status` table lists, with no fields
+       and no example, is not modelled (a gap).
 - [ ] **P1c. The payment template buttons and the payment webhooks**
   (`meta-whatsapp-client`, `meta-whatsapp-webhooks`; rows 38, 141): a
   template's `order_details` button and `order_status` component
