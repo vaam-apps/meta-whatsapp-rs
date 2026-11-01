@@ -1791,8 +1791,9 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     database's `now()`: the suite moves a `ManualClock`), and
     durability across processes (a restart in the suite is a new
     runner on the same store value).
-  - **Proposed** (for the coordinator to decide, AGENTS.md § Decisions;
-    each swappable by implementing the trait): the trait object-safe
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; design D29's amendment closed; each
+    swappable by implementing the trait): the trait object-safe
     and held as `Arc<dyn JobStore>` (not a generic `JobRunner<S>`);
     claims through a callback (`claim_due` with a `ClaimHandler`)
     rather than a list of due ids and a `claim(id)`, which keeps
