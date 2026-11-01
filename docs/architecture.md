@@ -865,10 +865,18 @@ token a solution gives is an `AccessToken`, decoded so that a body that
 fails to parse reaches no error; no call there is replayed after a
 timeout but the reads.
 
-Payments (India so far, roadmap P1a) are `meta_whatsapp_client::payments`:
-the `order_details` and `order_status` messages are `Interactive`
-variants of `messages` (re-exported there), checked against every rule
-the pages state, with amounts as `{value, offset}`; the payment lookup
+Payments (India and Brazil, roadmap P1a to P1c) are
+`meta_whatsapp_client::payments`: the `order_details` and `order_status`
+messages are `Interactive` variants of `messages` (re-exported there),
+checked against every rule the pages state for their currency (`INR`
+India's, `BRL` Brazil's), with amounts as `{value, offset}`; the payment
+templates' order details and payment request buttons and order status
+component are `templates` parts, checked by the same rules, and a
+payment object the client does not type is refused, never sent
+unchecked. The payment webhooks (India's status of type `payment`,
+Brazil's `payment_method` reply) are typed in
+`meta_whatsapp_webhooks::fields::payments`, and never fail their change.
+The payment lookup
 and refunds hang off the phone number (`Client::payments`), the payment
 configurations off the WABA (`Client::payment_configurations`). A refund,
 a configuration's creation and an OAuth link are never replayed after a

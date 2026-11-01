@@ -51,7 +51,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
-| last | P1a–P1c, P2 (payments) |
+| last | P1a–P1d, P2 (payments) |
 
 ## 1. The service's modular split (design §8, D26)
 
@@ -3936,12 +3936,35 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     (the buttons parsed as `Button::Other`), and is now checked
     (`request::tests::the_payment_templates_pass_with_no_key_dropped`,
     the service's `payment_templates_are_sent_as_metas_objects_and_checked`).
-    Not done, and planned by no item: India's checkout button templates
+    Not done here: India's checkout button templates
     (`payments-in/checkout-button-templates`, their checkout endpoint and
-    the configuration's undocumented data endpoint) and the alpha
-    third-party validation (row 141 stays partial in the library).
-  - **Proposed** (the implementer's, for the coordinator to decide,
-    AGENTS.md § Decisions):
+    the configuration's data endpoint) and the alpha third-party
+    validation, P1d's (row 141 stays partial in the library).
+  - **Review (fields, parsing, the send path, mutations):** a payment
+    object in a catch-all was sent unchecked: a component `type` spelled
+    `Button` or `Order_Status`, an `index` that is not a number, a
+    parameter `type` `ACTION` or `ORDER_STATUS` land in
+    `SendComponent::Other` or `Parameter::Other`, which reach Meta as
+    written, so an order in `USD` (or a `pending` order status) skipped
+    every rule, through the service too. One holding `order_details`,
+    `payment_request` or `order_status` at any depth is now refused, as
+    is a definition's `ORDER_DETAILS` or `PAYMENT_REQUEST` button that
+    did not parse typed
+    (`a_payment_object_in_a_catch_all_is_refused`; the service's
+    `payment_templates_are_sent_as_metas_objects_and_checked`). And a
+    payment webhook that failed its typed parse turned an event tenants
+    received before P1c (`status_updated`, `message_received`) into an
+    operator-only `unknown`: the `payment`, and its amount, method and
+    error, are `None` when they do not parse, the reply an unknown reply,
+    `refunds` may be `null` and `notes` `[]`
+    (`a_payment_that_does_not_parse_typed_never_fails_its_change`).
+    Three guards survived their deletion and are now pinned
+    (`a_payment_button_carries_its_own_object_in_a_known_currency`): a
+    payment button's `action` without its own object, and `Currency`
+    refusing an unknown code (the catch-all tests' `USD` order lacked
+    required fields, so it failed to parse whatever its currency).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions):
     1. No new event kind. India's payment status stays a
        `status_updated` event (tenants of the service receive it so
        today, as a status `captured` or `pending`: a new kind, which
@@ -3950,11 +3973,16 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
        message's); the `payment_method` reply stays a `message_received`
        event. Both already were tenant types.
     2. `MessageStatus` gains `Captured` and `Pending`, the payment
-       statuses; the inbox ignores them (no delivery status maps).
+       statuses; the inbox ignores them (no delivery status maps), the
+       bot's 131049 feedback needs an error code they never carry.
     3. The webhook types require only the identifiers (`reference_id`,
        a transaction's and a refund's `id`, the reply's
        `payment_method`); Razorpay's `notes` keep a non-string value as
-       its JSON text, as `open_enum!` does, rather than fail the change.
+       its JSON text, as `open_enum!` does. Tightened by the review: no
+       payment object can fail the change it arrives in (a `payment`, an
+       amount, a method or an error that does not parse typed is `None`,
+       a reply that does not is `InteractiveReply::Unknown`), so a new
+       field or value never costs the event.
     4. An order details template is `UTILITY` or `MARKETING` with a
        `TEXT`, `IMAGE` or `DOCUMENT` header, whatever its currency
        (Brazil's page says "must"; India's is silent and its examples
@@ -3971,9 +3999,29 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     7. A payment button or order status component whose parameter does
        not parse typed (a currency or payment method the client has no
        rules for, a required field missing) is refused by `validate`,
-       not sent unchecked as the catch-all.
+       not sent unchecked as the catch-all; so is a payment object in
+       any catch-all component or parameter, and, at creation, a payment
+       button that did not parse typed (the review's extension).
     8. The button `index` stays a string, as every template button's,
        though the order details pages print a number.
+- [ ] **P1d. India's checkout button templates** (`meta-whatsapp-client`;
+  row 141): the checkout button templates
+  (`payments/payments-in/checkout-button-templates`: one `order_details`
+  button labelled `Buy now` per product, in a single product template or
+  a carousel, each sent with its order), the checkout endpoint they call
+  (its `get_coupons`, `apply_coupon`, `remove_coupon` and
+  `apply_shipping` sub-actions, encrypted as a Flows endpoint is), the
+  link of that endpoint to a payment configuration
+  (`payments/payments-in/onboarding-apis`, "Link or update data
+  endpoint"), and the alpha third-party validation
+  (`payments/payments-in/pg`, "Third party validation": a Razorpay or
+  `PayU` setting's `encrypted_payment_gateway_data`).
+  - **After:** P1c.
+  - **Kind:** additive.
+  - **Decisive:** exact JSON of the checkout button page's creation and
+    send examples; each endpoint sample request decrypted and answered
+    with its sample response through the Flows endpoint's crypto; the
+    two third-party validation payloads of `pg` as exact JSON.
 - [ ] **P2. Payment routes in the service** (rows 38, 141).
   - **After:** P1a, P1b, P1c.
   - **Decisive:** M1.3 over the new routes; an order-details send
