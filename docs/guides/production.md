@@ -92,15 +92,22 @@ let kv = RedisKvStore::new(tls.connect(&std::env::var("REDIS_URL")?).await?);
 - **Trust**: the system's trust store by default, as the reqwest transport
   does (in a `scratch` or distroless image with no CA bundle, `build`
   fails: pass the CA). `root_certificates_pem` trusts those certificates
-  *instead of* the system's. There is no mode without verification: a URL
-  with `#insecure` is refused.
-- **The connection reconnects** on its own, as `ConnectionManager` does
-  for `redis://`: the command that meets a dropped connection fails (it is
-  not replayed) and the next one opens a new connection. Timeouts are
-  redis-rs's (1 s to connect, 500 ms per reply): `with_connection_timeout`,
-  `with_response_timeout`.
+  *instead of* the system's. The certificate must name the URL's host: an
+  IP address (`rediss://10.0.0.5`) needs an IP address in the certificate,
+  a DNS name never covers it. `RedisTls::builder()` has no mode without
+  verification: a URL with `#insecure` is refused.
+- **The connection reconnects** on its own: the command that meets a
+  dropped connection fails (it is not replayed, a compare-and-swap
+  included) and the next one opens a new connection, which authenticates
+  and selects the database again. Unlike `ConnectionManager`, it neither
+  retries nor backs off: one attempt per command that finds no
+  connection, bounded by the connection timeout. Timeouts are redis-rs's
+  (1 s to connect, the handshake included, 500 ms per reply):
+  `with_connection_timeout`, `with_response_timeout`.
 - **Your own TLS configuration** (another verifier, your own provider):
-  `RedisTls::from_client_config`. A connection you built yourself, with
+  `RedisTls::from_client_config`, used as it is: a verifier of yours that
+  accepts any certificate turns verification off, and that is your call.
+  A connection you built yourself, with
   redis's TLS features and a provider you installed, still goes to
   `RedisKvStore::new` as before.
 - Redis Cluster and Sentinel over TLS are not covered.

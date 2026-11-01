@@ -195,24 +195,32 @@ of its own, after an HTML comment; keep that when you add one.
     connections stay the way, documented. Swappable: an integrator can
     still pass its own connection. Roadmap L21c.
 
-    **Found with L21c (2026-11-01, implementer):** redis-rs 1.7 cannot
-    take an explicit provider: its rustls path (`tls-rustls`,
-    `tokio-rustls-comp`) always calls `rustls::ClientConfig::builder()`;
-    `Client::build_with_tls` takes PEM certificates only, `TlsConnParams`
-    has no public constructor, and nothing accepts a `ClientConfig` or a
-    connector. It does take any stream:
-    `MultiplexedConnection::new_with_config(&RedisConnectionInfo, stream,
-    AsyncConnectionConfig)`. **Proposed, for the coordinator to record:**
-    wire `rediss://` here anyway, without redis-rs's TLS features:
+    **Confirmed 2026-11-01 (coordinator, owner's delegation; roadmap
+    L21c landed):** redis-rs 1.7 cannot take an explicit provider (its
+    rustls path always calls `rustls::ClientConfig::builder()`, and
+    nothing of it accepts a `ClientConfig` or a connector), but it takes
+    any stream (`MultiplexedConnection::new_with_config`), so `rediss://`
+    is wired anyway rather than left to integrator-built connections:
     `store::RedisTls` builds the `ClientConfig` on
-    `rustls::crypto::aws_lc_rs::default_provider()` (the platform's trust
-    store through `rustls-platform-verifier` by default, as reqwest does;
-    a private CA or a client certificate as PEM), does the handshake with
-    tokio-rustls, and hands the stream to that constructor;
-    `RedisTlsConnection` reconnects as `ConnectionManager` does, never
-    replaying a command. Swappable: `RedisTls::from_client_config` takes
-    any `ClientConfig`, and an integrator-built connection still goes to
+    `rustls::crypto::aws_lc_rs::default_provider()`, does the handshake
+    with tokio-rustls and hands the stream to that constructor, none of
+    redis-rs's TLS features enabled. The platform's trust store
+    (`rustls-platform-verifier`, as reqwest does) is the default; a
+    private CA or a client certificate is given as PEM. It stays under
+    the existing `redis` feature. `ring` is linked into the workspace's
+    test builds only, through the adapters' rustls dev-dependency, so the
+    tests run in the binary where the process default panics; no library
+    build links it (`cargo tree -e normal -p meta-whatsapp-adapters
+    --features redis -i ring` finds nothing). The test Redis requires
+    client certificates, and its certificates are generated
+    (`tools/test-tls/generate.sh`, and rcgen in the in-process tests),
+    none committed. Why: the decision of 2026-09-26 asked for an explicit
+    provider handed to the connection, and handing redis-rs a stream
+    delivers exactly that without waiting on redis-rs. Swappable by
+    `RedisTls::from_client_config` (any `ClientConfig`: your provider,
+    your verifier) or by an integrator-built connection passed to
     `RedisKvStore::new`. Not covered: Cluster and Sentinel over TLS.
+    Roadmap L21c (landed).
 
 ## Security posture
 

@@ -20,8 +20,10 @@ test-live` (and `just ci`) use them instead of starting `compose.test.yaml`.
 
 ### The TLS Redis
 
-The `rediss://` live tests (roadmap L21c, `tests/redis_tls*.rs` in
-meta-whatsapp-adapters) need a Redis that speaks TLS and asks for a client
+The `rediss://` live tests (roadmap L21c, `tests/redis_tls.rs` and
+`tests/redis_tls_ring_default.rs` in meta-whatsapp-adapters; the name
+checks, timeouts and reconnects of `tests/redis_tls_handshake.rs` run
+in-process, against certificates each test makes) need a Redis that speaks TLS and asks for a client
 certificate, as a self-hosted Redis does by default. Its certificates are
 **test-only and generated, never committed**: `tools/test-tls/generate.sh`
 writes a CA, a server certificate (for `localhost`, `127.0.0.1` and

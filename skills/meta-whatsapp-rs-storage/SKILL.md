@@ -85,7 +85,7 @@ Deleted rows live on until VACUUM, in the WAL, replicas and backups; set `log_pa
 ## Redis
 
 ```rust
-let client = redis::Client::open(url)?; // `rediss://`: see the skill (your TLS feature and provider)
+let client = redis::Client::open(url)?; // `redis://`; `rediss://` goes through `RedisTls`
 let conn = client.get_connection_manager().await?;
 Ok(Arc::new(RedisKvStore::new(conn).with_prefix("shop:wa:")))
 ```
@@ -96,7 +96,7 @@ limit (OTP issue logs and cooldowns, dedup markers, sessions), and a `volatile-*
 silently. Size `maxmemory` for 7 days of dedup markers. No `ConversationStore` on Redis. `redis`
 here is meta-whatsapp-rs's re-export (`meta_whatsapp_rs::adapters::store::redis`, feature `redis`),
 so the connection types always match `RedisKvStore::new` — no redis dependency of your own. For
-`rediss://`, connect with `RedisTls` instead (the comment above predates it): `RedisTls::builder()`,
+`rediss://`, connect with `RedisTls` instead: `RedisTls::builder()`,
 `root_certificates_pem` for a private CA, `client_auth_pem` for a client certificate, then
 `build` and `connect(url)`, and hand that to `RedisKvStore::new`. It names aws-lc-rs itself: no redis
 TLS feature, no provider to install (redis-rs's own TLS panics when two rustls providers are linked).

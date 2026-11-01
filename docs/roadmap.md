@@ -2366,8 +2366,36 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `builder()` would install aws-lc-rs quietly and it fails. Also live:
     an untrusted server and a missing client certificate are refused, and
     a killed connection is replaced on the next command. Not covered:
-    Cluster and Sentinel over TLS; two callers sharing one failed
-    reconnect attempt is untested.
+    Cluster and Sentinel over TLS.
+  - **Review (2026-11-01):** the live tests share one Redis whose
+    certificate names every host they use, so a verifier that ignored
+    the name passed them all. `tests/redis_tls_handshake.rs` runs
+    `RedisTls` against an in-process TLS server (certificates made per
+    test by rcgen, a dev-dependency): a trusted certificate for another
+    name is refused, an IP host is checked against IP SANs only
+    (`an_ip_host_is_checked_against_ip_sans_only`), an untrusted issuer
+    is refused, the connection timeout bounds a stalled handshake and a
+    stalled setup, a reconnect sends `AUTH` and `SELECT` again and
+    replays nothing, and eight commands that find the connection gone
+    share one failed attempt
+    (`concurrent_commands_share_one_failed_reconnect_attempt`). PEM
+    errors no longer quote the offending line (a client chain can be a
+    combined file holding the key). Left untested: the generation check
+    that keeps a late error from an old connection from discarding its
+    replacement (no deterministic way to deliver that error late).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation; each swappable as noted): TLS through a stream handed to
+    `MultiplexedConnection::new_with_config`, rather than leaving
+    `rediss://` to integrator-built connections (an integrator's own
+    connection still goes to `RedisKvStore::new`); the platform's roots
+    by default (`root_certificates_pem` replaces them,
+    `from_client_config` takes any configuration); TLS under the
+    existing `redis` feature, not a feature of its own; `ring` allowed in
+    the workspace's test builds through the adapters' rustls
+    dev-dependency only, never in a library build (`cargo tree -e normal
+    -p meta-whatsapp-adapters --features redis -i ring` finds nothing);
+    the test Redis requires client certificates; its certificates are
+    generated, none committed (OPEN_QUESTIONS #19).
 - [ ] **L22a. `llms.txt` and a `doctor`** (docs; the service's CLI in
   `meta-whatsapp-server`; row 117): `llms.txt` for the docs, and a
   `doctor` command checking the configuration, the webhook subscription

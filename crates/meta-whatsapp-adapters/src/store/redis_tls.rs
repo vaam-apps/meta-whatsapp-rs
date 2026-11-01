@@ -75,18 +75,26 @@ const DEFAULT_RESPONSE_TIMEOUT: Duration = Duration::from_millis(500);
 ///   Redis asks for one by default (`tls-auth-clients yes`).
 /// - **Anything else** (another verifier, ALPN, a provider of your choosing):
 ///   build the `rustls::ClientConfig` yourself and pass it to
-///   [`from_client_config`](Self::from_client_config). Its provider is then
-///   yours.
+///   [`from_client_config`](Self::from_client_config). Its provider and its
+///   verifier are then yours.
 ///
-/// There is no mode that skips certificate verification: redis-rs's
-/// `#insecure` URL fragment is refused.
+/// The server's certificate must name the URL's host: a DNS name is matched
+/// against the certificate's DNS names, an IP address (`rediss://10.0.0.5`)
+/// against its IP addresses only, never against a DNS name or the subject's
+/// common name. [`builder`](Self::builder) has no mode that skips any of
+/// it, and redis-rs's `#insecure` URL fragment is refused. A configuration
+/// passed to [`from_client_config`](Self::from_client_config) is used as it
+/// is: one whose verifier (rustls' `dangerous()` API) accepts any
+/// certificate turns the check off, and that is its author's choice.
 ///
 /// # Connection
 ///
 /// [`connect`](Self::connect) returns a [`RedisTlsConnection`], which
-/// reconnects on its own, as `ConnectionManager` does for `redis://`.
-/// Integrators who build their own connection (any async redis connection
-/// that is `Clone`) can still hand it to `RedisKvStore::new`.
+/// replaces a lost connection on the next command (one attempt per
+/// command, no backoff and no retry: unlike `ConnectionManager`, it never
+/// waits between attempts, and an attempt is bounded by the connection
+/// timeout). Integrators who build their own connection (any async redis
+/// connection that is `Clone`) can still hand it to `RedisKvStore::new`.
 #[derive(Clone)]
 pub struct RedisTls {
     config: Arc<ClientConfig>,
@@ -114,9 +122,12 @@ impl RedisTls {
         }
     }
 
-    /// TLS with a configuration of your own. Its crypto provider is the one
-    /// you built it with: `rustls::ClientConfig::builder()` means the process
-    /// default, the case [`builder`](Self::builder) exists to avoid.
+    /// TLS with a configuration of your own, used as it is. Its crypto
+    /// provider is the one you built it with: `rustls::ClientConfig::builder()`
+    /// means the process default, the case [`builder`](Self::builder) exists
+    /// to avoid. So is its certificate verifier: a custom one
+    /// (`config.dangerous()`) that accepts any certificate, or ignores the
+    /// name, turns those checks off for every connection.
     pub fn from_client_config(config: Arc<ClientConfig>) -> Self {
         Self {
             config,
@@ -274,7 +285,7 @@ fn root_store(pem: &[u8]) -> RedisResult<RootCertStore> {
 fn certificates(pem: &[u8], what: &'static str) -> RedisResult<Vec<CertificateDer<'static>>> {
     let certs = CertificateDer::pem_slice_iter(pem)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| invalid_with(what, &e))?;
+        .map_err(|e| invalid_with(what, &pem_problem(&e)))?;
     if certs.is_empty() {
         return Err(RedisError::from((
             ErrorKind::InvalidClientConfig,
@@ -283,6 +294,19 @@ fn certificates(pem: &[u8], what: &'static str) -> RedisResult<Vec<CertificateDe
         )));
     }
     Ok(certs)
+}
+
+/// What is wrong with a PEM, never quoting it: rustls' own errors show the
+/// offending line or byte, and a certificate file can hold the private key
+/// too (a combined PEM), whose sections are decoded along with the rest.
+fn pem_problem(error: &rustls::pki_types::pem::Error) -> &'static str {
+    use rustls::pki_types::pem::Error;
+    match error {
+        Error::MissingSectionEnd { .. } => "a section has no END line",
+        Error::IllegalSectionStart { .. } => "a BEGIN line inside another section",
+        Error::Base64Decode(_) => "a section is not valid base64",
+        _ => "the PEM does not parse",
+    }
 }
 
 fn invalid(what: &'static str) -> RedisError {
@@ -297,12 +321,15 @@ fn invalid_with(what: &'static str, detail: &dyn fmt::Display) -> RedisError {
 /// redis-rs `MultiplexedConnection` over a TLS stream [`RedisTls`]
 /// configured. Cheap to clone; every clone shares one connection.
 ///
-/// **Reconnects** as `ConnectionManager` does: a command that fails because
-/// the connection is gone (`RedisError::is_unrecoverable_error`) returns its
-/// error, and the next command opens a new connection. A command is never
-/// replayed: a write whose reply was lost may or may not have happened, and
-/// the store's caller decides. Concurrent commands that find the connection
-/// gone share one attempt: when it fails, they all get its error.
+/// **Reconnects**: a command that fails because the connection is gone
+/// (`RedisError::is_unrecoverable_error`) returns its error, and the next
+/// command opens a new connection, which authenticates and selects the
+/// database again. A command is never replayed: a write whose reply was
+/// lost may or may not have happened (a compare-and-swap included), and the
+/// store's caller decides. Concurrent commands that find the connection
+/// gone share one attempt: when it fails, they all get its error. There is
+/// no backoff: each command that finds no connection after an attempt
+/// failed makes the next one, bounded by the connection timeout.
 #[derive(Clone)]
 pub struct RedisTlsConnection {
     shared: Arc<Shared>,
@@ -685,6 +712,59 @@ mod tests {
             "{error}"
         );
         assert!(!error.to_string().contains("hunter2"), "{error}");
+    }
+
+    #[test]
+    fn a_key_that_does_not_parse_is_not_quoted() {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let cert = rcgen::CertificateParams::new(vec!["localhost".to_owned()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+        let secret = "-----BEGIN PRIVATE KEY-----\nhunter2hunter2\n-----END PRIVATE KEY-----\n";
+        let nested = "-----BEGIN PRIVATE KEY-----\n-----BEGIN hunter2-----\n";
+        for bad in [secret, nested, "-----BEGIN PRIVATE KEY-----\nhunter2\n"] {
+            let error = RedisTls::builder()
+                .root_certificates_pem(cert.pem())
+                .client_auth_pem(cert.pem(), bad)
+                .build()
+                .unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidClientConfig);
+            let shown = format!("{error} {error:?}");
+            // Neither as text nor as bytes (`[104, 117, 110, …]`).
+            assert!(
+                !shown.contains("hunter2") && !shown.contains("104, 117, 110"),
+                "{shown}"
+            );
+        }
+        let error = RedisTls::builder()
+            .client_auth_pem(cert.pem(), nested)
+            .build()
+            .unwrap_err();
+        assert!(error.to_string().contains("client key"), "{error}");
+        assert_eq!(error.detail(), None, "{error}");
+        // A chain that holds a broken key section (a combined PEM): the
+        // error names the problem, not the line or byte.
+        let combined = format!("{}{nested}", cert.pem());
+        let error = RedisTls::builder()
+            .client_auth_pem(combined, key.serialize_pem())
+            .build()
+            .unwrap_err();
+        let shown = format!("{error} {error:?}");
+        assert!(
+            error.to_string().contains("client certificate chain"),
+            "{shown}"
+        );
+        assert!(
+            !shown.contains("hunter2") && !shown.contains("45, 45, 45"),
+            "{shown}"
+        );
+        // The key matching the certificate builds.
+        RedisTls::builder()
+            .root_certificates_pem(cert.pem())
+            .client_auth_pem(cert.pem(), key.serialize_pem())
+            .build()
+            .unwrap();
     }
 
     #[tokio::test]
