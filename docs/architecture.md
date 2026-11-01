@@ -29,7 +29,7 @@ crates/
   meta-whatsapp-core       error tree, ids, config, ports (traits). No I/O, no runtime.
   meta-whatsapp-client     Graph API client; one module per endpoint family.
   meta-whatsapp-webhooks   verify, parse, normalize, dedup, dispatch; axum router (feature).
-  meta-whatsapp-adapters   port implementations: reqwest, memory/Postgres/Redis stores, sinks.
+  meta-whatsapp-adapters   port implementations: reqwest, memory/Postgres/SQLite/Redis stores, sinks.
   meta-whatsapp-typst      Typst → PDF/PNG for document and image messages.
   meta-whatsapp-bot        bot framework over webhooks: commands, guards, cooldowns, middleware,
                            compile-time plugins, Markdown → WhatsApp formatting, paced broadcasts.
@@ -143,17 +143,20 @@ rewrite them along with the code.
 | `wa.es.session` | `SESSION_NAMESPACE`, `meta-whatsapp-client/src/embedded_signup/session.rs` | store namespace of signup sessions in flight | `the_session_namespace_is_pinned` |
 | `wa.es.coexistence` (added by roadmap L11d; the namespace and the record layout **pending the owner's confirmation**, roadmap § Owner touchpoints) | `COEXISTENCE_NAMESPACE`, `meta-whatsapp-client/src/embedded_signup/coexistence.rs` | store namespace of the coexistence sync records (key: the phone number id; value: plain JSON, `"v":1`, the WABA id, the stored token record's `created_at` in Unix seconds, and per request, `contacts` and `history`, its `state`, `pending`, `requested` with Meta's `request_id` or `refused` with its code, and `at`). **Not ephemeral**: changing it forgets which requests an onboarding made, and Meta allows each once per number, so a `resume` would post again one that was accepted, or whose answer was lost | `the_sync_record_is_pinned` |
 | `wa.webhook.dedup` | `DEDUP_NAMESPACE`, `meta-whatsapp-webhooks/src/dedup.rs` | store namespace of the dedup markers (key: SHA-256 hex of the event's dedup key) | `the_marker_key_is_pinned` |
-| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/postgres/mod.rs` | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_identity_links`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
+| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/table_prefix.rs` (in `store/postgres/mod.rs` until roadmap L8; the SQLite adapters share it) | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_identity_links`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
 | `customer_call`, `call_accepted`, `standby_message`; `this_app`, `another_app`, `idle`; `revoked`, `erased` | `WindowEventKind::as_str`, `ThreadOwner` (its serde names), `StoredMessage::REVOKED`, `StoredMessage::ERASED`, `meta-whatsapp-core/src/store/conversation.rs` | the names a conversation store keeps for a window event's kind, a thread's owner and this crate's own message kinds (`wa_window_events.kind`, `wa_thread_owners.owner`, `wa_messages.kind_utf8`) | `stored_names_are_pinned` |
 | the number lock `('wa_messages'::regclass::oid::int4, hashtext(<phone_number_id>))`, the purge lock `('wa_conversations'::regclass::oid::int4, 0)` | `number_lock`, `purge_lock`, `meta-whatsapp-adapters/src/store/postgres/conversation.rs` | Postgres advisory locks (the two-key form, the table's object id as class) that order `erase`, `purge_before` and `trim_conversations` (under the purge lock, like a purge) against appends and each other: replicas of two releases must take the same ones | `the_locks_are_pinned`, `live_postgres_the_locks_are_the_documented_ones` |
 | the migration files | `meta-whatsapp-adapters/migrations/*.sql` | sqlx records each file's checksum; an edit, a comment included, makes `migrate` refuse every database migrated before. So they keep naming `wa_adapters`, including in the hint migration 3 raises, and the columns and indexes they create keep their names (migration 4's `wa_messages.sender`, `wa_messages_sender_idx`, `wa_messages_unsent_idx`, `wa_identity_links_idx`, among others) | `the_default_tables_and_migration_checksums_are_pinned` |
 | a message's sender: the payload's `from_user_id`, else its `from`, of an inbound message (an empty value, or one holding U+0000, is none) | `StoredMessage::sender`, `meta-whatsapp-core/src/store/conversation.rs`; migration 4's back-fill | what a store keeps beside each message (`wa_messages.sender`) and an erasure matches a person's group messages on: a changed rule leaves the rows written before out of every erasure | `the_sender_is_the_bsuid_else_the_phone_number_of_an_inbound_message`, `live_postgres_migration_4_backfills_senders_by_the_rust_rule` |
 | `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
+| the SQLite migration files and tables (added by roadmap L8; **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `MIGRATIONS`, `meta-whatsapp-adapters/src/store/sqlite/mod.rs`; `meta-whatsapp-adapters/migrations-sqlite/*.sql` | the SQLite adapters' schema under the default prefix: `wa_kv`, `wa_kv_version` (the version counter), `wa_messages` (keyed by business number and id; `wa_messages_id_idx`, unique, keeps an id once per store, `OPEN_QUESTIONS.md` #33), `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_identity_links`, `wa_sqlx_migrations`, their columns (`kind_utf8`, `text_utf8`, `payload_json`, `ts` in unix microseconds, …) and the stored names the Postgres adapter keeps (statuses, directions, owners, kinds); sqlx records each file's checksum, so an edit, a comment included, makes `migrate` refuse a database migrated before | `the_default_tables_and_migration_checksums_are_pinned` (`store::sqlite`) |
+| `{conversations:<prefix>}` and the Redis conversation layout (added by roadmap L8; **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `RedisConversationStore::base`, `key`, `ts16`, `PRELUDE`, `meta-whatsapp-adapters/src/store/redis_conversation.rs` | the hash tag after the `wa:` prefix of every key of a conversation store (naming the prefix: one slot per store), the keys under it (`:m:`, `:id:`, `:h:`, `:s:`, `:l:`, … with length-prefixed parts), the fields of each record (`c`, `d`, `k`, `t`, `p`, `s`, `ts`, …) and the time encoding (16 hex digits of the unix microseconds, sign bit flipped) | `the_conversation_layout_is_pinned`, `each_prefix_has_its_own_hash_tag`, `live_redis_conversation_layout_and_erasure_leaves_nothing` |
 | `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server-core/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
 | `meta-whatsapp-server/event-id/v1`, `evt_` + 32 hex digits | `EventIdKey`, same file | HMAC label of the key event ids are derived with under the app secret, and the id's shape: stored as `wa_server_events.id` and what receivers deduplicate on | `event_ids_are_pinned` (known answers) |
 | `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `lock_key`, `meta-whatsapp-server-store-postgres/src/postgres.rs` (`meta-whatsapp-server/src/store/postgres.rs` until roadmap S7) | Postgres advisory lock keys (the first 8 bytes of their SHA-256; `lock_key` derives the leader lock's the same way, so its `housekeeping` turn is `HOUSEKEEPING_LOCK`): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented`, `the_leader_locks_keys_are_the_services_locks` |
 | the service's migration files, `wa_server_sqlx_migrations` | `meta-whatsapp-server-store-postgres/migrations/*.sql` (moved byte for byte from `meta-whatsapp-server/migrations/` in roadmap S7: sqlx knows a migration by its version and checksum, never its path), `MIGRATIONS_TABLE` | the service's `wa_server_*` tables (the operator-only event stream `''` included) and its migration history; an edited file makes `migrate` refuse every database migrated before | `the_migrations_and_their_checksums_are_pinned`, `live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration` |
 | `wa_server_wabas.generation`, `wa_server_wabas.previous_tenant_unbound_at` and its default `1970-01-01 00:00:00+00` (`UNRECORDED_MOVE`), `wa_server_waba_tombstones` (`waba_id`, `tenant_id` with `ON DELETE SET NULL`, `unbound_at`, `previous_tenant_unbound_at`), migration 4's description `waba moves` (added by roadmap S2b; the names, the default's meaning and the tombstone's rules **pending the owner's confirmation**, roadmap § Owner touchpoints) | `meta-whatsapp-server-store-postgres/migrations/0004_waba_moves.sql`, `WABA_COLUMNS` and `unbind_sql`, `meta-whatsapp-server-store-postgres/src/postgres.rs`; `WabaBinding`, `WabaTombstone`, `UNRECORDED_MOVE`, `meta-whatsapp-server-core/src/model.rs` | a binding's attach count (what a capability's conditioned writes compare beside `attached_at`) and when its WABA was last unbound from another tenant (`NULL`: never; the epoch: a binding made before migration 4, its history unknown), and each WABA's last unbinding, which a new binding reads: what decides whether an event is routed by the rules after a move (design D36). Renamed, the rows written before lose their history (every move forgotten, so the window after it fails open); the epoch default read otherwise would give `main`'s bindings the first-onboarding rules | `the_migrations_and_their_checksums_are_pinned` (checksum and description), `live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration` (the default's semantics on `main`'s rows), `records::a_move_is_recorded`, `records::a_refresh_moves_the_generation` (both backends) |
+| `wa_server_numbers.attached_at` (no default for the rows before it, read as their WABA's `attached_at`; `now()` for the rows inserted after), `wa_server_numbers.previous_tenant_released_at` and its default `1970-01-01 00:00:00+00` (`UNRECORDED_MOVE`), `wa_server_number_tombstones` (`phone_number_id`, `tenant_id` with `ON DELETE SET NULL`, `released_at`, `previous_tenant_released_at`), the trigger `wa_server_numbers_released` on `wa_server_numbers` and its function `wa_server_number_released()` (every deleted number row leaves its tombstone, a previous release's replica's deletions included), migration 5's description `number moves` (added by roadmap M2h, folded into M2a; the names, the defaults' meaning and the tombstone's rules **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `meta-whatsapp-server-store-postgres/migrations/0005_number_moves.sql`, `NUMBER_COLUMNS` and `unbind_sql`, `meta-whatsapp-server-store-postgres/src/postgres.rs`; `NumberBinding`, `NumberTombstone`, `UNRECORDED_MOVE`, `meta-whatsapp-server-core/src/model.rs` | when a number came under its tenant and when it was last released by another tenant (`NULL`: never; the epoch: a number bound before migration 5, its history unknown, read as a move), and each number's last release, which a new binding of it reads: what the inbox's binding epoch cuts a number's history at (`authz::history_from`, design D10). Renamed, the rows written before lose their history (every number's move forgotten: a migrated number's previous holder's history shown to its new tenant); the epoch default read otherwise would show `main`'s numbers everything | `the_migrations_and_their_checksums_are_pinned` (checksum and description), `live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration` and `live_postgres_migration_5_rewrites_no_table` (the defaults' semantics on rows written before), `live_postgres_a_release_by_the_previous_release_is_recorded` (the trigger), `records::a_numbers_moves_are_recorded`, `races::a_number_taken_while_released_records_the_move` (both backends) |
 | `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server-core/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
 | `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key; for a subcommand, the command part is its path, `order status`). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed`, `a_subcommands_cooldown_key_is_over_its_path` |
 | `wa.bot.pacer` (added by roadmap B2b; the namespace and the record layout **pending the owner's confirmation**, roadmap § Owner touchpoints) | `PACER_NAMESPACE`, `meta-whatsapp-bot/src/pacer/kv.rs` | store namespace of `KvRateLimiter`'s per-number schedules (key: SHA-256 hex of the length-prefixed phone number id, `<len>:<id>,`; value: the 49-byte version 1 record, its first byte the version). **Ephemeral**: changing it forgets each number's schedule, slow-down and raised rate (records expire 24 hours after their last slot by default), so while replicas of two releases run side by side they book from two budgets; no data is stranded | `the_pacer_key_is_pinned_and_hashed` (known answer), `the_pacer_record_is_pinned` |
@@ -411,8 +414,9 @@ Rules for every endpoint module:
    signups' `default_messaging_customer_base_id`; `OnboardingRequested::request_id`;
    the calling settings' `app_id`; `SubscribedAppData::id` and
    `AssignedUser::id`; `CommerceSettings::id`; `LibraryTemplate::id`; the
-   template's `ad_*_id`s; `preverified_id`; the phone number
-   `request_id`; the ids of an Embedded Signup session event
+   template's `ad_*_id`s; the phone number `request_id` (a new
+   number's `preverified_id` is a `PreVerifiedPhoneNumberId` since
+   roadmap L11c); the ids of an Embedded Signup session event
    (`ad_account_ids`, `page_ids`, `dataset_ids`, `catalog_ids`,
    `instagram_account_ids`, `session_id`), the launch's `solution_id` and
    the token's `user_id`; and `HealthEntity::id`, on purpose: a health
@@ -687,7 +691,21 @@ system token's `appsecret_proof` in a form body) in place of
 `exchange_code`, then the same steps, writing the same vault record; the
 WABA's owner as Meta reports it must be the webhook's, and a WABA the vault
 already holds is refused before any request (`PARTNER_ADDED` also comes for
-the code flow's onboardings). Each failure is
+the code flow's onboardings), and one stored after that read is not replaced
+(`store_token` stores only where none is, `put_if_absent`). Several WABAs in one signup (roadmap L11b,
+`OPEN_QUESTIONS.md` #5): with `OnboardingRequest::every_granted_waba(true)`
+(off by default), `onboard_wabas(&request, &vault) → WabasOnboarded` (and
+`onboard_wabas_with_approval`, its approval called once per WABA) exchanges
+the code and inspects the token once, refuses a signup whose session info
+names a WABA the token was not granted, then runs `verify_assets` to the end
+of the tail for each granted WABA on its own (its own vault record, phone
+index, approval, subscription and credit line), the claimed one first with
+the request as it is, the others registering and syncing nothing, refused
+unless Meta reports the claimed WABA's owner as theirs, left alone when the
+vault holds them and stored only where it still holds none (`put_if_absent`);
+a WABA that fails is reported in its
+`WabaOutcome`, the next one runs, and each is resumed on its own. `onboard`
+and `onboard_hosted` refuse the option. Nothing new is stored. Each failure is
 `Error::in_step("exchange_code" | "debug_token" | "verify_assets" |
 "approve" | "store_token" | "subscribe_app" | "assign_system_user" |
 "share_credit_line" | "register_phone")`; `offboard` adds
@@ -1022,6 +1040,42 @@ keyed by business number and contact, and
   redacts or deletes are the number's, so the number lock covers them;
   `set_thread_owner` and `put_contact` one upsert
   whose update applies only when the stored record is not later.
+- `store::{SqliteKvStore, SqliteConversationStore}` (feature `sqlite`,
+  roadmap L8; sqlx's SQLite driver with the library compiled in, no TLS;
+  embedded migrations of their own, `migrations-sqlite/`, under the same
+  `TablePrefix`). For one process on one machine (a CLI, an edge or
+  desktop deployment, a small single-instance service, tests); several
+  processes may share the file, never over a network file system. Every
+  write is one `BEGIN IMMEDIATE` transaction: SQLite's write lock is
+  taken first, so each write reads, decides in Rust and writes as one
+  step, across processes too (`store::sqlite::open` sets a 30-second busy
+  timeout). Times are `INTEGER` microseconds; identifiers `TEXT`
+  compared byte for byte, refusing U+0000 as on Postgres; content
+  `BLOB` (UTF-8 bytes) and payloads JSON text, so U+0000 round-trips.
+  The key/value store decides expiry with the application's clock (an
+  injectable `Clock`) and draws versions from one counter row
+  (`wa_kv_version`) under the write lock. `store::sqlite::memory` is a
+  private in-memory database on one connection the pool never closes.
+  `trim_conversations` (roadmap B4) is one write transaction too: it
+  ranks each conversation's rows on the conversation index, deletes the
+  summaries whose latest message ranks beyond the cap, then those rows;
+  appends wait for the write lock, so none is ranked half-way or lost.
+- `store::RedisConversationStore` (feature `redis`, roadmap L8): every
+  key under `<prefix>{conversations:<prefix>}`, one hash tag per store
+  (it names the prefix), so a store's inbox is one slot (one shard on
+  Cluster; stores of other prefixes hash elsewhere, which spreads inboxes) and every write is one Lua script over it; status updates are
+  a compare-and-swap decided in Rust, as on Postgres; history, the
+  conversation list, window events and contacts page with
+  `ZRANGEBYLEX` over sorted sets of 16-hex-digit times and ids (byte
+  order is time order); the scripts compare strings byte by byte, never
+  with Lua's locale-dependent `<`. A purge of every number runs one
+  script per number. `trim_conversations` (roadmap B4) runs one script
+  per conversation (from a set of each number's conversations with a
+  history, `B:c:<pn>`), each deleting at most 1024 of its oldest rows
+  beyond the cap (and the summary when its latest message is one of
+  them), so a conversation further over takes several; each is atomic
+  with the appends, so an append is never lost. Needs `noeviction` and
+  persistence (AOF or snapshots): the history is data.
 - `media::FfmpegConverter` (feature `ffmpeg`): core's
   `media::MediaConverter` port over an `ffmpeg` binary the integrator
   installs, run with `tokio::process` (no shell) and fixed literal
@@ -1087,7 +1141,13 @@ keyed by business number and contact, and
   `KvStore` values are `BYTEA`. `messages.id` is the primary key on its
   own, so
   a message id is stored once per store whatever the business number (the
-  memory store does the same; `OPEN_QUESTIONS.md` #33).
+  memory store does the same; `OPEN_QUESTIONS.md` #33). The SQLite and
+  Redis stores (roadmap L8) key a message by business number and id and
+  keep that rule with a separate index (`wa_messages_id_idx`, unique;
+  `{conversations:<prefix>}:id:<id>`), which ids unique per number would drop.
+  `conversation_conformance::ids_are_stored_once_per_store` (outside
+  `run`: the port allows either answer) pins today's rule; every adapter
+  passes it.
 - Redis: per-namespace version counter (a per-key counter would leak one key
   per dedup marker forever); every mutating op is one Lua script. **TLS**
   (`rediss://`, roadmap L21c) is `store::RedisTls`, not redis-rs's TLS:
@@ -1111,7 +1171,9 @@ keyed by business number and contact, and
   `META_WHATSAPP_RS_REQUIRE_LIVE=1` (`just test-live` sets it). Every `KvStore`
   adapter runs `store::conformance`, every `ConversationStore` adapter runs
   `store::conversation_conformance` (including concurrency, collation and
-  real-time expiry under load).
+  real-time expiry under load). The SQLite adapters run both in
+  process (`just test`); the Redis conversation store's suite is live
+  (`live_redis_conversation_*`).
 
 ## CMS inbox (`meta_whatsapp_rs::inbox`)
 
@@ -1212,6 +1274,18 @@ and the thread's owner, and sends replies.
   latest message, preview, window or unread count, and no summary of its
   own). A media placeholder revoked before its content arrives is never
   filled.
+- The coexistence address book (`smb_app_state_sync`, roadmap L8):
+  `InboxSink` stores an `add` (also how an edit arrives) as a synced
+  contact under `synced_contact_key` (the BSUID, else the phone number
+  without `+`, the form conversations are keyed by, also the phone number
+  stored) and applies a `remove` under each key it names, so that an
+  entry keyed by the phone number before Meta sent the BSUID goes too;
+  the store keeps the latest by the change's `metadata.timestamp`, a
+  removal kept (key and time) so that an older `add` is refused. A
+  change without a timestamp, without a usable id, or with U+0000 in
+  one is skipped and logged without content. `Inbox::contacts` and
+  `Inbox::contact` read them back; `RecordingSwitches::contacts` turns
+  the recording off.
 - Coexistence (a merchant who keeps the WhatsApp Business app): echoes
   (`MessageEchoed`, messages the merchant sent from the app) are recorded
   as `Outbound`, status `Sent` (the payload has none), in the customer's
@@ -1299,7 +1373,7 @@ for every event, after the ban and the match.
   cooldown, and only the refusal that creates it tells the user, so
   repeated attempts get one notice per period. Records expire in place:
   invisible at once, deleted by Redis itself or by `purge_expired` on the
-  memory and Postgres stores.
+  memory, Postgres and SQLite stores.
 - **Errors**: a handler's error is logged (kinds only) and acknowledged
   by default, because an error answers `500` and Meta redelivers the
   whole batch, repeating replies already sent; a transient failure is
@@ -1381,9 +1455,10 @@ for every event, after the ban and the match.
   handlers; `PacedGroups` and `PacedGroup` wrap the client's group
   operations the same way, and `Pacer::acquire` is the hook for any other
   call. No new port and no persistence: a run lives in memory.
-- **Durable jobs** (`jobs`, roadmap B3; design D29): `KvJobs` keeps
-  `Job`s (a number, a due time, the recipients each person once, a JSON
-  payload) as a typed store on `KvStore`, no port of its own. `KvStore`
+- **Durable jobs** (`jobs`, roadmap B3, B3b; design D29): a `JobStore`
+  keeps `Job`s (a number, a due time, the recipients each person once, a
+  JSON payload); by default `KvJobs`, a typed store on `KvStore`, no
+  port of its own. `KvStore`
   has no range scan, so due times are bucketed by the minute: a job's id
   is appended to its minute's page by compare-and-swap (256 ids a page,
   then the next page; a due time already past, to the current minute's),
@@ -1404,11 +1479,19 @@ for every event, after the ban and the match.
   by a race. A pass that leaves recipients provably unsent
   (`Error::may_resend`, a stop, a store failure) is retried with backoff,
   then stopped. A message's id is kept for its status webhooks: a
-  `131049` marks that recipient for 24 hours (`KvJobs::observe`,
-  `JobFeedback`), and a re-run (`KvJobs::rerun`) skips them. The job
-  store is not behind a trait yet (the `KvStore` adapter is what swaps;
-  a `JobStore` trait is roadmap B3b); the runner's outbound, pacer,
-  failure policy and composer are.
+  `131049` marks that recipient for 24 hours (`JobStore::observe`,
+  `JobFeedback`), and a re-run (`JobStore::rerun`) skips them. The job
+  store is a trait (`JobStore`, B3b), object-safe and held by the runner
+  as an `Arc<dyn JobStore>`: scheduling, cancel, re-run, reads, the
+  `131049` feedback, and the runner's own steps (claiming what is due,
+  holding the claim, each recipient's marker, settling), with the
+  contract under concurrency in its rustdoc (claims atomic under a
+  lease, a claim checked on every write, markers created atomically
+  before the send and only their runner's, cancels winning or losing
+  whole) and `jobs::conformance` its executable form, which `KvJobs`
+  and `MemoryJobs` (in memory behind one mutex, independent of
+  `KvStore`) pass. The runner's outbound, pacer, failure policy and
+  composer are traits too.
 
 ## Typst (`meta-whatsapp-typst`)
 

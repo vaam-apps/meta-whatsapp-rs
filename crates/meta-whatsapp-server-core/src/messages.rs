@@ -512,6 +512,104 @@ impl SendMessage {
     }
 }
 
+/// A reply to a conversation, as the request carried it (roadmap M2a): a
+/// [`SendMessage`] without `to`, as the conversation names its contact.
+/// `kind` (the request's `type`) names the one content object present.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplyMessage {
+    /// Which content object follows.
+    pub kind: MessageType,
+    /// For `text`.
+    pub text: Option<TextObject>,
+    /// For `image`.
+    pub image: Option<ImageObject>,
+    /// For `video`.
+    pub video: Option<VideoObject>,
+    /// For `audio`.
+    pub audio: Option<AudioObject>,
+    /// For `document`.
+    pub document: Option<DocumentObject>,
+    /// For `sticker`.
+    pub sticker: Option<StickerObject>,
+    /// For `location`.
+    pub location: Option<LocationObject>,
+    /// For `contacts`: 1 to 257 cards.
+    pub contacts: Option<Vec<ContactCard>>,
+    /// For `reaction`.
+    pub reaction: Option<ReactionObject>,
+    /// For `template`: Meta's template object (`name`, `language`,
+    /// `components`).
+    pub template: Option<Value>,
+    /// For `interactive`.
+    pub interactive: Option<InteractiveObject>,
+    /// Reply to this message of the conversation (`wamid.…`); not with
+    /// `reaction`.
+    pub reply_to: Option<String>,
+    /// Echoed in this message's status events (Meta's
+    /// `biz_opaque_callback_data`).
+    pub callback_data: Option<String>,
+}
+
+impl ReplyMessage {
+    /// A reply of `kind`, with no content object yet.
+    pub fn new(kind: MessageType) -> Self {
+        Self {
+            kind,
+            text: None,
+            image: None,
+            video: None,
+            audio: None,
+            document: None,
+            sticker: None,
+            location: None,
+            contacts: None,
+            reaction: None,
+            template: None,
+            interactive: None,
+            reply_to: None,
+            callback_data: None,
+        }
+    }
+
+    /// The same content as a send with no recipient (every field named, so
+    /// a field on one side only fails to compile).
+    fn into_send(self) -> SendMessage {
+        let Self {
+            kind,
+            text,
+            image,
+            video,
+            audio,
+            document,
+            sticker,
+            location,
+            contacts,
+            reaction,
+            template,
+            interactive,
+            reply_to,
+            callback_data,
+        } = self;
+        SendMessage {
+            to: RecipientObject::default(),
+            kind,
+            text,
+            image,
+            video,
+            audio,
+            document,
+            sticker,
+            location,
+            contacts,
+            reaction,
+            template,
+            interactive,
+            reply_to,
+            callback_data,
+        }
+    }
+}
+
 // ─── The answer ──────────────────────────────────────────────────────────
 
 /// Meta accepted the message; delivery comes later, as status events.
@@ -857,9 +955,34 @@ fn only_the_named_object(request: &SendMessage) -> Result<(), ServiceError> {
 /// # Errors
 ///
 /// `422 invalid_request` on the field at fault.
-pub fn message(request: SendMessage) -> Result<OutboundMessage, ServiceError> {
+pub fn message(mut request: SendMessage) -> Result<OutboundMessage, ServiceError> {
     only_the_named_object(&request)?;
-    let recipient = recipient(request.to)?;
+    let recipient = recipient(std::mem::take(&mut request.to))?;
+    build(recipient, request)
+}
+
+/// The library's message for a reply's `request`, addressed to
+/// `recipient` (the conversation's contact: the library's
+/// `Inbox::recipient`, never the request's word), checked as [`message`]
+/// checks a send: one content object, the one `type` names; the content
+/// object; then the library's checks, on the request's names for its
+/// fields (`reply_to`, `callback_data`).
+///
+/// # Errors
+///
+/// `422 invalid_request` on the field at fault.
+pub fn reply_message(
+    request: ReplyMessage,
+    recipient: Recipient,
+) -> Result<OutboundMessage, ServiceError> {
+    let request = request.into_send();
+    only_the_named_object(&request)?;
+    build(recipient, request)
+}
+
+/// The library's message of `request`'s content, to `recipient` (its `to`
+/// is not read: the caller read it into `recipient`, or has none).
+fn build(recipient: Recipient, request: SendMessage) -> Result<OutboundMessage, ServiceError> {
     let content: MessageContent = match request.kind {
         MessageType::Text => {
             let text = required("text", request.text)?;

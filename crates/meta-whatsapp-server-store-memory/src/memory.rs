@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use async_trait::async_trait;
 use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
-use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
+use meta_whatsapp_rs::core::store::{ConversationStore, KvStore, Retention};
 use time::{Duration, OffsetDateTime};
 
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
@@ -21,8 +21,8 @@ use crate::MemoryEventStore;
 use meta_whatsapp_server_core::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
-    NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
-    WabaTombstone,
+    NumberBinding, NumberStatus, NumberTombstone, PageRequest, Tenant, TenantId, TenantStatus,
+    WabaBinding, WabaTombstone,
 };
 
 /// In-memory [`RecordStore`] and [`IdempotencyRecords`]. Its event outbox is [`MemoryStore::outbox`]: one
@@ -86,6 +86,8 @@ pub(super) struct State {
     pub(super) numbers: BTreeMap<String, NumberBinding>,
     /// Each WABA's last unbinding, by WABA id (roadmap S2b).
     tombstones: BTreeMap<String, WabaTombstone>,
+    /// Each number's last release, by phone number id (roadmap M2h).
+    number_tombstones: BTreeMap<String, NumberTombstone>,
     /// Idempotency records by (tenant, key).
     idempotency: BTreeMap<(String, String), IdempotencyEntry>,
 }
@@ -241,6 +243,9 @@ impl RecordStore for MemoryStore {
         for tombstone in state.tombstones.values_mut() {
             tombstone.forget_tenant(id);
         }
+        for tombstone in state.number_tombstones.values_mut() {
+            tombstone.forget_tenant(id);
+        }
         // Its events: under the store's lock, as Postgres does it in the
         // deleting transaction.
         self.outbox.forget_tenant(id);
@@ -358,20 +363,34 @@ impl RecordStore for MemoryStore {
                 generation: 1,
                 previous_tenant_unbound_at: previous,
             });
-        state
+        // The numbers the WABA had and the list lacks are released, each
+        // leaving its tombstone (roadmap M2h).
+        let dropped: Vec<String> = state
             .numbers
-            .retain(|pn, b| &b.waba_id != waba_id || numbers.iter().any(|n| n.as_str() == pn));
+            .iter()
+            .filter(|(pn, b)| &b.waba_id == waba_id && !numbers.iter().any(|n| n.as_str() == *pn))
+            .map(|(pn, _)| pn.clone())
+            .collect();
+        release(&mut state, &dropped, now);
         for number in numbers {
-            state.numbers.insert(
-                number.as_str().to_owned(),
-                NumberBinding {
-                    phone_number_id: number.clone(),
+            let bound = match state.numbers.get(number.as_str()) {
+                // Already this tenant's (D4 refused another's): it keeps
+                // its start and its previous tenant.
+                Some(held) => NumberBinding {
                     waba_id: waba_id.clone(),
-                    tenant_id: tenant.clone(),
                     status: NumberStatus::Connected,
                     updated_at: now,
+                    ..held.clone()
                 },
-            );
+                None => NumberBinding::newly_bound(
+                    number.clone(),
+                    waba_id.clone(),
+                    tenant.clone(),
+                    now,
+                    state.number_tombstones.get(number.as_str()),
+                ),
+            };
+            state.numbers.insert(number.as_str().to_owned(), bound);
         }
         Ok(BindOutcome::Bound)
     }
@@ -487,12 +506,31 @@ fn unbind(state: &mut State, waba_id: &WabaId) -> bool {
     let Some(binding) = state.wabas.remove(waba_id.as_str()) else {
         return false;
     };
-    state.numbers.retain(|_, b| &b.waba_id != waba_id);
+    let now = OffsetDateTime::now_utc();
+    let numbers: Vec<String> = state
+        .numbers
+        .iter()
+        .filter(|(_, b)| &b.waba_id == waba_id)
+        .map(|(pn, _)| pn.clone())
+        .collect();
+    release(state, &numbers, now);
     state.tombstones.insert(
         waba_id.as_str().to_owned(),
-        WabaTombstone::of(&binding, OffsetDateTime::now_utc()),
+        WabaTombstone::of(&binding, now),
     );
     true
+}
+
+/// Release the numbers `numbers` (their bindings removed), each leaving its
+/// tombstone at `at` (roadmap M2h), in the same step.
+fn release(state: &mut State, numbers: &[String], at: OffsetDateTime) {
+    for pn in numbers {
+        if let Some(binding) = state.numbers.remove(pn) {
+            state
+                .number_tombstones
+                .insert(pn.clone(), NumberTombstone::of(&binding, at));
+        }
+    }
 }
 
 #[async_trait]
@@ -718,6 +756,17 @@ impl MemoryBackend {
             kv: Arc::new(MemoryKvStore::new()),
             conversations: Arc::new(MemoryConversationStore::new()),
         }
+    }
+
+    /// Its inbox built anew, empty, with `retention`
+    /// (`MemoryConversationStore::with_retention`: what housekeeping's
+    /// `ConversationStore::apply_retention` purges; the service's
+    /// `WA_SERVER_INBOX_RETENTION`, roadmap M2a). Call it while building:
+    /// the inbox it replaces is dropped with what it held.
+    #[must_use]
+    pub fn with_inbox_retention(mut self, retention: Retention) -> Self {
+        self.conversations = Arc::new(MemoryConversationStore::new().with_retention(retention));
+        self
     }
 }
 

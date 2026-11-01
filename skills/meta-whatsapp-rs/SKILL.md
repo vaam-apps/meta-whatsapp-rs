@@ -52,8 +52,8 @@ anyhow = "1"
 | `reqwest` | yes | `ReqwestTransport` and the `meta_whatsapp_rs::client(token)` / `meta_whatsapp_rs::client_builder()` shortcuts |
 | `memory` | yes | `MemoryKvStore`, `MemoryConversationStore` (tests, one instance) |
 | `sinks` | yes | channel, broadcast, fan-out, filter, fn and tracing sinks |
-| `postgres` | | `PostgresKvStore`, `PostgresConversationStore`, migrations |
-| `redis` | | `RedisKvStore` |
+| `postgres`, `sqlite` | | `PostgresKvStore`, `PostgresConversationStore`; `SqliteKvStore`, `SqliteConversationStore`; migrations |
+| `redis` | | `RedisKvStore`, `RedisConversationStore` |
 | `axum` | | `webhooks::router` (the endpoint) and `webhooks::sse` (live stream) |
 | `typst` | | `meta_whatsapp_rs::typst`: invoices, receipts, vouchers → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto |

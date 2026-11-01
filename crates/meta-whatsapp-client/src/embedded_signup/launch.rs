@@ -48,7 +48,7 @@
 
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
-use meta_whatsapp_core::ids::{BusinessId, PhoneNumberId, WabaId};
+use meta_whatsapp_core::ids::{BusinessId, PreVerifiedPhoneNumberId, WabaId, is_numeric_id};
 use serde::Serialize;
 use serde::ser::Serializer;
 
@@ -210,11 +210,16 @@ impl BusinessPhonePrefill {
 
 /// `setup.preVerifiedPhone`. Only the first id is shown on the WABA
 /// selection screen.
+///
+/// The ids are pre-verified numbers of your pool
+/// ([`crate::waba::Business::pre_verified_numbers`]), verified
+/// (`code_verification_status` `VERIFIED`): a claimed or expired one is not
+/// shown. Not business phone number ids.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct PreVerifiedPhone {
     /// Pre-verified phone number ids.
-    pub ids: Vec<PhoneNumberId>,
+    pub ids: Vec<PreVerifiedPhoneNumberId>,
 }
 
 /// `setup.phone`: the number's WhatsApp profile. All three fields are
@@ -436,11 +441,12 @@ impl LaunchOptions {
     }
 
     /// Offer pre-verified phone numbers (skips phone addition and
-    /// verification).
+    /// verification): ids of your pool's verified numbers
+    /// ([`crate::waba::Business::pre_verified_numbers`]).
     #[must_use]
     pub fn pre_verified_phone_ids(
         mut self,
-        ids: impl IntoIterator<Item = impl Into<PhoneNumberId>>,
+        ids: impl IntoIterator<Item = impl Into<PreVerifiedPhoneNumberId>>,
     ) -> Self {
         self.extras.setup.pre_verified_phone = Some(PreVerifiedPhone {
             ids: ids.into_iter().map(Into::into).collect(),
@@ -522,13 +528,21 @@ impl LaunchOptions {
                 ));
             }
         }
-        if let Some(p) = &setup.pre_verified_phone
-            && p.ids.is_empty()
-        {
-            return Err(ValidationError::new(
-                "extras.setup.preVerifiedPhone.ids",
-                "at least one id",
-            ));
+        if let Some(p) = &setup.pre_verified_phone {
+            if p.ids.is_empty() {
+                return Err(ValidationError::new(
+                    "extras.setup.preVerifiedPhone.ids",
+                    "at least one id",
+                ));
+            }
+            // An id built unchecked is checked here, before it reaches the
+            // page: Meta's pre-verified ids are numeric strings.
+            if !p.ids.iter().all(|id| is_numeric_id(id.as_str())) {
+                return Err(ValidationError::new(
+                    "extras.setup.preVerifiedPhone.ids",
+                    "each id must be a numeric pre-verified phone number id",
+                ));
+            }
         }
         if let Some(w) = &setup.whatsapp_business_account
             && w.ids.is_empty()
@@ -619,7 +633,7 @@ mod tests {
         business.timezone = Some("UTC-07:00".into());
         let v = LaunchOptions::new("31602279155865")
             .business(business)
-            .pre_verified_phone_ids([PhoneNumberId::new("106540352242922").unwrap()])
+            .pre_verified_phone_ids([PreVerifiedPhoneNumberId::new("106540352242922").unwrap()])
             .phone_profile(PhoneProfilePrefill::new(
                 "Wind & Wool",
                 "APPAREL",
@@ -667,6 +681,23 @@ mod tests {
     }
 
     #[test]
+    fn pre_verified_numbers_page_example() {
+        // embedded-signup/pre-verified-numbers, § Displaying pre-verified
+        // numbers in Embedded Signup: the `setup.preVerifiedPhone` object.
+        let v = LaunchOptions::new("C")
+            .pre_verified_phone_ids([
+                PreVerifiedPhoneNumberId::new("106540352242922").unwrap(),
+                PreVerifiedPhoneNumberId::new("105954558954427").unwrap(),
+            ])
+            .to_json()
+            .unwrap();
+        assert_eq!(
+            v["extras"]["setup"],
+            json!({"preVerifiedPhone": {"ids": ["106540352242922", "105954558954427"]}})
+        );
+    }
+
+    #[test]
     fn existing_portfolio_and_waba_prefill() {
         // pre-filled-data, "Existing business portfolio …" and the
         // whatsAppBusinessAccount example.
@@ -674,7 +705,7 @@ mod tests {
             .business(BusinessPrefill::existing(
                 BusinessId::new("2729063490586005").unwrap(),
             ))
-            .pre_verified_phone_ids([PhoneNumberId::new("106540352242922").unwrap()])
+            .pre_verified_phone_ids([PreVerifiedPhoneNumberId::new("106540352242922").unwrap()])
             .waba_ids([WabaId::new("432428883295692").unwrap()])
             .to_json()
             .unwrap();
@@ -798,8 +829,28 @@ mod tests {
             "extras.setup.phone.category"
         );
         assert_eq!(
-            field(LaunchOptions::new("c").pre_verified_phone_ids(Vec::<PhoneNumberId>::new())),
+            field(
+                LaunchOptions::new("c")
+                    .pre_verified_phone_ids(Vec::<PreVerifiedPhoneNumberId>::new())
+            ),
             "extras.setup.preVerifiedPhone.ids"
+        );
+        // An id built unchecked, holding a separator, is refused too.
+        assert_eq!(
+            field(LaunchOptions::new("c").pre_verified_phone_ids([
+                PreVerifiedPhoneNumberId::new("106540352242922").unwrap(),
+                PreVerifiedPhoneNumberId::new_unchecked("1/../x"),
+            ])),
+            "extras.setup.preVerifiedPhone.ids"
+        );
+        assert!(
+            LaunchOptions::new("c")
+                .pre_verified_phone_ids([
+                    PreVerifiedPhoneNumberId::new("106540352242922").unwrap(),
+                    PreVerifiedPhoneNumberId::new("105954558954427").unwrap(),
+                ])
+                .validate()
+                .is_ok()
         );
     }
 }

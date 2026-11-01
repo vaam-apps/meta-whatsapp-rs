@@ -68,6 +68,7 @@ use crate::store::IdempotencyRecords;
 /// | `send_message` ([`Self::send_message`]) | the number's id, as a [`PhoneNumberId`] (the path parameter decoded: `%31` and `1` are one number); the JSON body as the request carried it, parsed (an escape is the character it spells; of a key given twice, the last, as the operation reads it), its object keys sorted and its whitespace ignored; nothing else is folded (`1` and `1.0` are two bodies) |
 /// | `upload_media` ([`Self::upload_media`]) | the number's id; the checked [`Upload`]'s MIME type, the file name sent to Meta, and the file's SHA-256 |
 /// | `create_template` ([`Self::create_template`]) | the WABA's id, as a [`WabaId`]; the JSON body, canonical as above |
+/// | `reply_to_conversation` ([`Self::reply_to_conversation`]) | the number's id; the conversation's contact, as the path named it decoded; the JSON body, canonical as above |
 ///
 /// The same request always has the same fingerprint; another operation,
 /// another number or WABA, or another body has another. Fingerprints are
@@ -121,6 +122,22 @@ impl Fingerprint {
         Self::json(
             Operation::CreateTemplate,
             &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `reply_to_conversation` on `number`, to the conversation of
+    /// `contact` (as the path named it, decoded), with the JSON body the
+    /// request carried (roadmap M2a). A release before it had no such
+    /// operation, so there is no legacy fingerprint to match.
+    pub fn reply_to_conversation(
+        number: &PhoneNumberId,
+        contact: &str,
+        body: &serde_json::Value,
+    ) -> Self {
+        Self::json(
+            Operation::ReplyToConversation,
+            &[("pn", number.as_str()), ("contact", contact)],
             body,
         )
     }

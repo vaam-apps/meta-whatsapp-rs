@@ -47,7 +47,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
 | 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
-| 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2f |
+| 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2h |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
@@ -1314,7 +1314,7 @@ and `store-postgres`.
     replica set; removing the version check from compare-and-swap fails
     them.
 - [ ] **S18. `meta-whatsapp-server-store-mongodb`**, the whole bundle.
-  - **After:** S9, S17, M2a–M2f.
+  - **After:** S9, S17, M2a–M2h.
   - **Decisive:** the core conformance suite passes live; the service's
     M1–M2 acceptance tests pass on it.
 
@@ -1725,7 +1725,7 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     owner** (stable identifiers, before the first release): the five
     namespaces, their keys' derivations and their records' layouts
     (architecture.md § Stable identifiers, § Owner touchpoints below).
-- [ ] **B3b. A `JobStore` trait** (`meta-whatsapp-bot`; D29): the job
+- [x] **B3b. A `JobStore` trait** (`meta-whatsapp-bot`; D29): the job
   store's operations (schedule, cancel, re-run, get, the 131049
   feedback, and the runner's claim, markers and due index) behind a
   trait the runner takes, `KvJobs` its default, so a job queue of the
@@ -1733,6 +1733,82 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
   - **After:** B3.
   - **Decisive:** `KvJobs` implements it, and a second, in-memory
     implementation passes the same job suite.
+  - **Landed:** `JobStore` (module `jobs`), object-safe, the runner
+    holding an `Arc<dyn JobStore>` (`JobRunner::builder` takes any
+    `impl JobStore`, `JobRunner::builder_shared` an `Arc`; `Arc<T>`
+    forwards): `schedule`, `cancel`, `rerun`, `get`, the `131049`
+    feedback (`limit_message`, `observe` provided on top of it), and the
+    runner's steps: `claim_due` (the store claims each due job and hands
+    it, a `JobClaim`, to a `ClaimHandler`, the runner's pass, whose
+    `JobEnd` tells `KvJobs`'s due index whether to keep the minute),
+    `hold` (the claim still holds, renewed at half the lease),
+    `check_run` (the run unchanged, not cancelled), `recipient` (a
+    `RecipientMark`), `mark_sending`, `mark_outcome` (a `SendRecord`),
+    `unmark`, `limit_recipient`, `settle`, `retry` (each
+    `Option<JobHalt>`); `clock`, the time jobs are due and leases
+    expire by. Its rustdoc is the contract under concurrency (claims
+    atomic under a lease, a claim checked on every write, markers
+    created atomically and durably before the send and only their
+    runner's to complete or remove, a "sending" nobody completed an
+    outcome unknown, cancels winning or losing whole, the skip per job,
+    each job handed over once a call and no lock held while it sends).
+    `KvJobs` implements it with B3's code moved behind the trait (the
+    runner's cursor, claim, marker and settle steps now `KvJobs`'s; the
+    records, keys and namespaces unchanged). `MemoryJobs`, in memory
+    behind one mutex, independent of `KvStore`, is the second
+    implementation. `jobs::conformance::run` is the job suite, 24
+    checks: B3's tests that do not depend on `KvStore` (moved out of
+    `crates/meta-whatsapp-bot/tests/jobs.rs`, names kept) plus two
+    races (two to five runners on one job, four on twenty, interleaved
+    at every call they make to the store), a runner ticking during
+    another's send, a retry within a tick, and each method on its own
+    (`markers_are_exclusive_and_their_runners`,
+    `a_claim_is_checked_on_every_write`). In `tests/jobs.rs`:
+    `kv_jobs_pass_the_job_suite`, `memory_jobs_pass_the_job_suite` (the
+    decisive pair), `kv_jobs_pass_the_job_suite_raced_inside_the_store`
+    (on a `KvStore` that yields at every call: replacing the claim's
+    compare-and-swap by a plain put fails it, as it fails
+    `two_runners_on_one_store_send_a_due_job_once`), and
+    `runners_on_threads_send_each_recipient_once` (six runners on four
+    threads, twenty rounds, both stores); `KvJobs`'s own tests (the due
+    index, unreadable records, a failing store, the restart on one
+    `KvStore`) stay. Mutations of `MemoryJobs`, each failing the suite:
+    the claim checked, then an `.await`, then written
+    (`two_runners_racing_one_job_send_it_once`); the same without the
+    `.await` (only the threaded test, in three runs of four: the suite
+    runs on one task); no "sending" marker before the request
+    (`a_resumed_broadcast_never_resends_a_recipient_recorded_as_sent`),
+    a marker created over an existing one
+    (`a_runner_whose_lease_expired_mid_send_never_sends_after_the_new_claim`),
+    the `131049` skip ignored, or extended by a redelivery
+    (`a_131049_status_makes_a_rerun_within_24_hours_skip_that_recipient`),
+    the lease ignored, `check_run` blind to the run
+    (`a_send_checked_before_a_cancel_and_a_rerun_is_not_made`) or to a
+    cancel (`a_cancel_racing_a_claim_sends_nothing`), `hold` never
+    renewing (`a_long_marker_scan_keeps_the_lease`), `settle` not
+    checking the claim; and of the runner, the request made before the
+    marker. Not in it: a suite for a store on a clock of its own (a
+    database's `now()`: the suite moves a `ManualClock`), and
+    durability across processes (a restart in the suite is a new
+    runner on the same store value).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; design D29's amendment closed; each
+    swappable by implementing the trait): the trait object-safe
+    and held as `Arc<dyn JobStore>` (not a generic `JobRunner<S>`);
+    claims through a callback (`claim_due` with a `ClaimHandler`)
+    rather than a list of due ids and a `claim(id)`, which keeps
+    `KvJobs`'s cursor logic whole and fits a `FOR UPDATE SKIP LOCKED`
+    loop; recipients addressed by their index into the claimed job;
+    the store owning time (`JobStore::clock`) and the lease's
+    half-renewal rule written into `hold`'s contract; `KvJobs`
+    re-reading a marker before completing or removing it (one more
+    `KvStore` read per send) rather than carrying the marker's version
+    through the trait; the operations moved off `KvJobs` onto the trait
+    (callers import `JobStore`) rather than kept as inherent twins;
+    `MemoryJobs` public, nothing expiring in it but the `131049` skips
+    and the message ids; the suite in the library, always compiled, as
+    the adapters' `KvStore` suite is; design D29's amendment ("until
+    B3b") to be closed.
 - [x] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
   age and a cap per chat, through `ConversationStore`'s erasure.
   - **After:** B1, L5.
@@ -1773,6 +1849,13 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     `live_postgres_the_locks_are_the_documented_ones`. Not caught: the
     key order of the summaries' locks (the ranking already yields them
     in key order); in memory a trim cannot race an append (one lock).
+    SQLite and Redis implement it since L8's merge of B4: SQLite in one
+    `BEGIN IMMEDIATE` transaction (summaries, then rows, on one
+    ranking), Redis in one script per conversation of at most 1024 rows
+    (several for a conversation further over its cap), over a new set of
+    each number's conversations with a history (`B:c:<pn>`); both pass
+    the trim cases, and `live_redis_a_trim_beyond_one_script_takes_several`
+    fails a trim stopping after one script.
     The server compiles and passes unchanged (it implements no
     `ConversationStore`); retention over HTTP is M5k. The sabotage
     review added what three surviving mutations showed missing: a cap
@@ -1903,7 +1986,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     (`ReplyChecks::trust_handover`, OPEN_QUESTIONS #44); a
     `user_id_update`'s `wa_id` is linked too. Row 139 stays partial (the
     thread control API, L15); `conversation_context` is not stored.
-- [ ] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
+- [x] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
   features `redis` and a new `sqlite`; `meta_whatsapp_rs::inbox`; rows
   69, 111): a Redis `ConversationStore`, SQLite adapters for both ports,
   and `InboxSink` keeping the coexistence sync's contacts through L5's
@@ -1916,6 +1999,87 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** every adapter passes both conformance suites; a second
     `append` of one id on another number returns `false` on each, as the
     suite says today; the synced contacts are read back from the store.
+  - **Landed:** `store::{SqliteKvStore, SqliteConversationStore}`
+    (feature `sqlite`, `store::sqlite::{open, memory, migrate}`) pass
+    both suites in process, in `just test` (an in-memory database, and
+    a file shared by a pool of connections under another prefix);
+    `store::RedisConversationStore` passes the conversation suite live
+    (`live_redis_conversation_*`, both erasure modes and a retention).
+    The suite gains `conversation_conformance::ids_are_stored_once_per_store`,
+    outside `run` (the port allows either answer to OPEN_QUESTIONS #33,
+    which stays open): the memory store and both new stores pass it in
+    `just test`, Redis and Postgres live; it fails a SQLite store whose
+    id index is not unique, and a Redis store checking ids per number.
+    `InboxSink` records `smb_app_state_sync`, and
+    `crates/meta-whatsapp-rs/tests/synced_contacts.rs` reads Meta's
+    examples back through `Inbox::contacts` and `Inbox::contact` on
+    memory and SQLite (it fails when a removal is applied under one key
+    only). Rows 69 and 111 are done in the library (the service's sides
+    stay with M3b and M2a); categories 30 and 39 too. The sabotage
+    review added `conversation_conformance::erase_one_person_of_every_record`
+    and `purge_one_person_of_every_record` (outside `run`), after which
+    each adapter scans its own storage for what must be gone (Redis
+    kept a redacted group message's sender and index members naming the
+    person, with every port read passing), and `run`'s
+    `an_unbounded_limit_reads_everything` (Redis refused `usize::MAX`).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable behind the
+    `KvStore` and `ConversationStore` ports, or a switch):
+    1. **SQLite through sqlx's driver**, the library compiled in
+       (`sqlite-bundled`: MIT, no TLS); sqlx's Postgres driver, its TLS
+       and its macros move from the dependency to the `postgres`
+       feature, so `sqlite` alone links neither (`just features` checks
+       both alone). Its migrations are embedded with `include_str!` from
+       `migrations-sqlite/`, templates under the same `TablePrefix`, now
+       `store::TablePrefix` (still `store::postgres::TablePrefix`), and
+       each prefix keeps its own migration history
+       (`<prefix>sqlx_migrations`). Swappable: another store behind the
+       same ports.
+    2. **SQLite concurrency is SQLite's write lock**: every write one
+       `BEGIN IMMEDIATE` transaction (read, decide in Rust, write), the
+       busy timeout `store::sqlite::open` sets (30 s) the wait; times
+       `INTEGER` microseconds, identifiers `TEXT` refusing U+0000 (as on
+       Postgres), content `BLOB`; the key/value store's expiry on the
+       application's injectable clock (`SqliteKvStore::with_clock`), its
+       versions from one counter row, so a deleted record's row goes at
+       once. Swappable by building the pool yourself
+       (`store::sqlite::sqlx`).
+    3. **One Redis hash tag per conversation store**
+       (`<prefix>{conversations:<prefix>}`, so stores of other prefixes
+       hash to other slots: inboxes spread with one store per prefix,
+       `with_prefix`): every write one Lua script over keys of one slot.
+       Status updates are a compare-and-swap decided in Rust
+       (`DeliveryStatus::supersedes`); a purge of every number is one
+       script per number over the store's set of numbers, which never
+       shrinks (it names businesses only). Times are 16 hex digits that
+       sort as they compare.
+    4. **The inbox's contact rules, as built**: a switch,
+       `RecordingSwitches::contacts`, on in the library's
+       `RecordingSwitches::ALL`; an `add` stored under
+       `inbox::synced_contact_key` (the BSUID, else the phone number
+       without `+`, which is also the phone number stored, so that
+       `identities` meets the conversations' keys); a `remove` under
+       each key it names (the BSUID and the phone number), so that an
+       entry keyed by the phone number before Meta sent the BSUID does
+       not keep the person's names; a change without
+       `metadata.timestamp`, without a usable id or with U+0000 in one
+       is skipped with a warning, without content (Meta's order is the
+       timestamp; the sink's clock would let a late redelivery win). A
+       `remove` naming only a phone number leaves an entry keyed by the
+       BSUID (Meta's reference shows a removal with both).
+    5. **Category 39's library side is done**; MongoDB adapters stay
+       with S17.
+    6. **The service records no synced contacts until M3b**:
+       `meta-whatsapp-server-core`'s `inbound::INBOX_RECORDING` is the
+       library's switches with `contacts(false)`, the events still
+       reaching their tenant (decisive:
+       `conformance::webhooks::an_address_book_change_reaches_its_tenant_and_no_inbox`);
+       M3b turns it on with the routes that read them.
+  - **Pending the owner's confirmation before the first release**
+    (architecture § Stable identifiers): the new stored names, SQLite
+    migration 1 (`wa_kv_version`, the SQLite tables and their columns,
+    its checksum pinned) and the Redis conversation layout (keys,
+    fields, the hash tag, the time encoding).
 - [x] **L9. Phone numbers** (`meta-whatsapp-client`,
   `client::phone_numbers`; rows 66, 129–133, 151): the business
   username calls, deleting a contact book entry, search visibility,
@@ -2097,7 +2261,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     stays in the skill's `hosted_signup.rs`); the skill not re-stamped.
     The library's side of OPEN_QUESTIONS #11 is decided; the service's
     is M3f.
-- [ ] **L11b. Several WABAs in one signup** (`client::embedded_signup`;
+- [x] **L11b. Several WABAs in one signup** (`client::embedded_signup`;
   row 122; OPEN_QUESTIONS #5): opt-in onboarding of every granted WABA,
   each bound and resumable on its own.
   - **Kind:** additive.
@@ -2105,14 +2269,209 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** with the option off, a signup granting two WABAs
     onboards only the claimed one; with it on, both, and a failure on
     the second leaves the first stored and resumable.
-- [ ] **L11c. Pre-verified numbers** (`client::embedded_signup` and
+  - **Landed:** row 122 done in the library (the service's side stays
+    with M3f). `OnboardingRequest::every_granted_waba` (field and
+    setter, off by default) and `EmbeddedSignup::onboard_wabas` /
+    `onboard_wabas_with_approval` (module `embedded_signup::multi`):
+    `exchange_code` and `debug_token` once; with the option on, a
+    session info naming a WABA (`waba_id`, `waba_ids`) the token was not
+    granted fails the call at `verify_assets` before anything is read or
+    stored; then the claimed WABA (else the newest grant: what `onboard`
+    picks) with the request as it is, and every other grant of
+    `granular_scopes`' `whatsapp_business_management`, in Meta's order
+    (newest first), each through its own `verify_assets`, `approve`,
+    `store_token` and tail (its own vault record, phone index,
+    subscription, system user and credit line; the shared steps refactored
+    out of `onboard_granted` into `onboard_waba`, so `onboard` runs the
+    same code). The result is `WabasOnboarded` (`#[must_use]`), one
+    `WabaOnboarding` per WABA with a `WabaOutcome`: `Onboarded`, `Held`
+    or `Failed { error, steps_completed }` (an `Error::Step`;
+    `is_resumable` once `store_token` ran). Meta documents the
+    session info's `waba_ids` (`embedded-signup/implementation`) and the
+    grants, newest first (`solution-providers/manage-accounts`), and no
+    more: nothing on which grants a multi-WABA flow's token carries
+    beyond those, and no multi-WABA hosted flow. Nothing new is stored.
+    The decisive tests, in `embedded_signup::multi`:
+    `with_the_option_off_only_the_claimed_waba_is_onboarded` (through
+    `onboard` and `onboard_wabas`; the other grant never read),
+    `with_the_option_on_every_granted_waba_is_onboarded` (each request
+    exact: one exchange, one `debug_token`, the claimed WABA's owner,
+    numbers, subscription and registration, then the other's owner,
+    numbers and subscription, each record and phone index under its own
+    WABA), `a_failure_on_the_second_waba_leaves_the_first_and_both_resume`;
+    with `a_failure_on_the_claimed_waba_does_not_stop_the_others`,
+    `another_granted_waba_the_vault_holds_is_left_as_it_is`,
+    `a_claimed_waba_the_token_was_not_granted_refuses_the_signup`,
+    `one_waba_calls_refuse_the_option_before_any_request` (`onboard`,
+    `onboard_with_approval`, `onboard_hosted`),
+    `only_the_claimed_number_of_a_coexistence_signup_syncs`,
+    `a_solution_partner_approves_records_and_funds_each_waba` (one
+    approval per WABA, each recorded for its own token record, a share
+    for each though the business-wide lookup lists the first's
+    allocation, and a plain `resume` of the second sharing nothing
+    again) and `a_refused_approval_skips_that_waba_only`. Mutations that
+    each fail them: the option ignored, a WABA's failure returned as the
+    call's, a failure stopping the next WABAs, the other WABAs onboarded
+    without the approval, a held WABA replaced, the claimed session's
+    phone given to the others, an unbacked claim accepted, the others
+    registering or keeping the finish, `onboard` or `onboard_hosted`
+    accepting the option, `is_resumable` ignoring `store_token`.
+  - **Found in review** (sabotage review, security lens): a token's
+    `granular_scopes` list every WABA that granted the app, across
+    signups, and the token in Meta's own `debug_token` example is a
+    user's, whose grants may span businesses; the draft onboarded every
+    grant whoever owned it, under the request's credit settings (a
+    `reshare_after_revocation` meant for one business re-funding
+    another's revoked line). The other grants must now be the primary
+    WABA's business's: Meta must report, for each, the owner it reported
+    for the primary WABA, or the grant fails at `verify_assets` before
+    its numbers are read, approved or stored; when the primary's owner is
+    unknown (it failed before it was verified, or Meta reported none),
+    every other grant fails there with no request
+    (`a_grant_of_another_business_is_not_onboarded`,
+    `the_others_fail_closed_when_the_signup_business_is_unknown`). And
+    `Held` was a read followed, two Meta round trips and the approval
+    later, by a replacing `store`: another signup or a hosted
+    `PARTNER_ADDED` storing the WABA in that window was overwritten. The
+    other grants are now stored with `put_if_absent`
+    (`TokenVault::store_new`, crate-private, the phone index untouched
+    when it loses) and fail at `store_token` when the vault came to hold
+    them (`a_grant_stored_meanwhile_is_not_replaced`); `onboard_hosted`,
+    whose `holds` read had the same window the other way round (a
+    code-flow or multi-WABA onboarding storing after it was replaced),
+    now stores the same way and fails at `store_token`
+    (`a_hosted_signup_never_replaces_a_record_stored_meanwhile`). A read of the
+    vault that fails fails the grant closed
+    (`a_grant_whose_record_cannot_be_read_fails_closed`); the others keep
+    the request's subscription override
+    (`the_others_keep_the_subscription_override`) and a revoked
+    business is funded again for none of them
+    (`a_revoked_business_is_funded_again_for_no_waba`); with nothing
+    claimed the newest grant is the primary one, and every record carries
+    the code exchange's expiry
+    (`with_nothing_claimed_the_newest_grant_is_primary`). Mutations the
+    review added that each fail a test: the others' owner checked only
+    when reported, or not at all; the signup's owner taken from the
+    browser's `business_id`, or not recorded; the others stored with a
+    replacing `store` (or `store_new` with `put`); a failed vault read
+    taken as absent; the others' subscription override, or the token's
+    expiry, dropped. Three survive as equivalent: the `waba_id` claim
+    left out of the unbacked check (`verify_grant` already refuses it),
+    and the others' `currency` or `reshare_after_revocation` changed
+    (the credit plan is computed once, from the request, for every
+    WABA).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable):
+    1. the option is the request's (`OnboardingRequest::every_granted_waba`,
+       OPEN_QUESTIONS #5), and only the new calls, `onboard_wabas` and
+       `onboard_wabas_with_approval` (its approval an `FnMut`, called and,
+       for a Solution Partner, recorded once per WABA), act on it;
+    2. `onboard` and `onboard_hosted` refuse the option rather than drop
+       the other WABAs; `resume` ignores it (it resumes the WABA it is
+       given);
+    3. the token's grants decide what is onboarded, not the browser's
+       `waba_ids`: every WABA the session info names must be among them,
+       or the signup is refused before anything is stored; the claimed
+       WABA first, then the grants in Meta's order; tightened in review,
+       a grant other than the claimed WABA is onboarded only when Meta
+       reports the claimed WABA's owner as its owner too, and none is
+       when that owner is unknown;
+    4. the other WABAs register no number and request no coexistence
+       sync (the PIN, region and finish are the claimed number's;
+       registering counts against 10 per 72 hours, the sync is once per
+       number), and keep the request's subscription override and credit
+       settings;
+    5. another grant the vault holds is `Held` and left alone, and,
+       tightened in review, stored only where the vault still holds none
+       (`put_if_absent`): the read alone let a signup or a hosted
+       `PARTNER_ADDED` racing this one be overwritten; the claimed WABA is
+       replaced, as `onboard` replaces it;
+    6. per-WABA failures are outcomes in `WabasOnboarded` (`#[must_use]`),
+       not the call's error; only the shared steps fail the call;
+    7. hosted signup stays one WABA per `PARTNER_ADDED`;
+    8. `OnboardingRequest` carries an
+       `#[expect(clippy::struct_excessive_bools)]`: each bool is an
+       independent option of its own setter, not a state machine.
+
+    Swappable by the option (off: `onboard`'s behaviour), and by calling
+    `onboard` per signup instead. Not offered, a follow-up if wanted:
+    onboarding a WABA that failed before `store_token` from the token
+    another WABA of the same signup stored.
+- [x] **L11c. Pre-verified numbers** (`client::embedded_signup` and
   `client::waba`; row 123): pools, adding, codes, sharing, partners
   (`reference/business/*pre-verified*`,
   `reference/whatsapp-business-pre-verified-phone-number/*`).
-  - **Kind:** additive.
+  - **Kind:** additive, plus two breaking type changes before the first
+    release (CHANGELOG): `embedded_signup::PreVerifiedPhone::ids` and
+    `waba::NewPhoneNumber::preverified_id` take the new id type.
   - **After:** nothing.
   - **Decisive:** exact JSON per endpoint; a pre-verified phone id is
     checked as digits before any request.
+  - **Landed:** row 123 done in the library; the service's side stays
+    with M3f. Seven endpoints from Meta's seven pages (the guide, three
+    `reference/business/` pages and the four of
+    `reference/whatsapp-business-pre-verified-phone-number/`): the pool
+    on the partner's portfolio, `Business::add_pre_verified_number`
+    (`POST /{Business-ID}/add_phone_numbers`, a `CreatedPreVerifiedNumber`),
+    `Business::pre_verified_numbers` and `_stream`
+    (`GET …/preverified_numbers`, `ListPreVerifiedNumbers`: `fields`,
+    `phone_number`, `code_verification_status`, `limit`, cursors) and
+    `Business::share_pre_verified_number`
+    (`POST …/share_preverified_numbers`); each number through
+    `Client::pre_verified_phone_number` (`waba::PreVerifiedPhoneNumber`:
+    `get`, `request_code`, `verify_code`, `partners` and `_stream`, with
+    `ListPreVerifiedNumberPartners`, and `delete`), read as a
+    `PreVerifiedNumber` (the six fields of Meta's schema, the status the
+    phone numbers' `CodeVerificationStatus`). Its id is a new
+    `core::ids::PreVerifiedPhoneNumberId`, numeric (the node and
+    partners pages' own error examples: "must be a valid numeric
+    string"), checked when built and again as digits by every call
+    before its path or body is built, so an id built unchecked holding
+    `/` reaches nothing; the launch option and a WABA's new number
+    (`preverified_id`) take it and check it too. The code is the phone
+    numbers' secret `VerificationCode`, in the JSON body. The decisive
+    tests, in `waba::pre_verified`:
+    `a_pre_verified_id_that_is_not_digits_is_refused_before_any_request`
+    (five hostile ids, built unchecked, through each of the eight calls
+    that take one, every answer scripted: nothing is sent), one test per
+    endpoint asserting method, path, bearer, query and the exact body
+    (`adding_sends_the_number_in_the_body_and_parses_the_guides_answer`,
+    `the_pool_is_listed_with_every_documented_filter`,
+    `sharing_sends_both_ids_in_the_body`,
+    `a_code_request_sends_method_and_language`,
+    `verify_code_sends_the_code_in_the_body_only`,
+    `the_partners_are_listed_with_the_documented_parameters`,
+    `a_number_is_read_with_its_fields`,
+    `delete_addresses_the_number_and_maps_meta_errors`), with
+    `a_verification_code_reaches_no_debug_url_or_error` (a sentinel code
+    against a 403) and `no_post_is_replayed_after_a_timeout` (the four
+    POSTs, retries on); in core,
+    `ids::tests::a_numeric_id_is_one_to_sixty_four_ascii_digits` lists
+    the new type; the launch's `pre_verified_numbers_page_example`. Not
+    offered: unsharing (Meta documents its `DELETE` as removed) and the
+    reference's `IVR` code method (`CodeMethod` has `SMS` and `VOICE`,
+    the values both pages show). Meta's pages print no response example
+    for the pool list, a number or its partners: those tests parse
+    Meta's schemas with our values. No legal act: no endpoint accepts
+    terms. The time limits (30 days to verify, 90 to be claimed or
+    registered, re-verification from 45 days before expiry) are
+    documented, not enforced; tracking who claimed which number stays
+    the integrator's, as Meta says.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): the bodies are JSON, as the references define, not the
+    guide's query strings (the code and the phone number stay out of
+    URLs, as `PhoneNumber::verify_code` does; swapped per call by
+    moving a field to `.query`); a pre-verified id is numeric (one
+    `numeric_id_type!` line) and re-checked at request time, as
+    `commerce::catalog` does for its ids; the API lives in `client::waba`
+    (`Business` for the pool, a new accessor for the number) rather
+    than a new module, the launch option staying in
+    `client::embedded_signup`; the two breaking type changes above; the
+    status filter refuses `UNVERIFIED` and `Unknown`, which the
+    reference does not list; `delete` and `share_pre_verified_number`
+    are explicit calls no other call makes; `IVR` is left out until a
+    page shows it; the phone number to add is checked locally (digits,
+    with `+`, spaces, hyphens, parentheses: the reference's formats).
 - [x] **L11d. The coexistence sync inside onboarding**
   (`client::embedded_signup`; OPEN_QUESTIONS #7): a step right after a
   coexistence onboarding, on by default, that an option turns off. The
@@ -3552,7 +3911,7 @@ design's (§9).
 
 ### M2. Inbox, live updates, webhooks out
 
-- [ ] **M2a. Inbox routes** (rows 91, 111, 119): conversation list,
+- [x] **M2a. Inbox routes** (rows 91, 111, 119): conversation list,
   history, a reply checked against the window, all filtered by the
   number's binding epoch; retention per store (D10): the inbox store
   built `with_retention` from a setting, and `apply_retention` run by
@@ -3575,6 +3934,201 @@ design's (§9).
     S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. If M2a lands before the first
     release, the next item of the service's to land after it carries
     this line.
+  - **Landed:** three routes in `meta-whatsapp-server-api-axum`
+    (`api::inbox`, tag and scope `inbox`), each a core service
+    (`meta_whatsapp_server_core::inbox::Conversations`, opened on an
+    `OwnedNumber` its `Authorizer` admits, so key, tenant, scope,
+    ownership, then the vault, as every number route): `GET
+    /v1/numbers/{pn}/conversations` (`list_conversations`, read class)
+    and `GET /v1/numbers/{pn}/conversations/{contact}/messages`
+    (`list_conversation_messages`, read class), `?limit=&cursor=` and
+    `next_cursor` as every list but the events (the store's exclusive
+    `(time, id)` cursor, wrapped opaquely), and `POST
+    /v1/numbers/{pn}/conversations/{contact}/messages`
+    (`reply_to_conversation`, send class, `Idempotency-Key` over
+    `Fingerprint::reply_to_conversation`: the number, the contact decoded,
+    the canonical body; no legacy fingerprint), whose body is
+    `ReplyMessage` (a `SendMessage` without `to`) and whose answer is `202
+    MessageAccepted`. The reply goes through the library's `Inbox::send`
+    (what `Inbox::reply` calls, so `reply_to` and `callback_data` pass),
+    addressed to `Inbox::recipient`: a free-form reply outside the window
+    is `409 customer_service_window_closed`, one while another app owns
+    the thread `409 thread_owned_elsewhere` (`ErrorKind::ThreadOwnedElsewhere`,
+    already in §5.2), both before any request; a template is exempt. The
+    binding epoch is `authz::history_from` (a WABA with a previous
+    tenant shows its holder nothing dated before `attached_at`; `None`, all
+    of it, for a first onboarding, whose synced history predates its
+    binding), carried by the `OwnedNumber` from the binding it was made
+    from; a page is answered only if that binding still holds once read
+    (`503 storage_unavailable` otherwise); a conversation whose customer
+    last wrote before the cut shows no `last_inbound_at` and no `unread`.
+    Retention: `WA_SERVER_INBOX_RETENTION` (`keep` by default, or a
+    positive duration), the inbox store built with it
+    (`MemoryBackend::with_inbox_retention`, `PgBackend::with_inbox_retention`,
+    through `BackendFactory::open_with`, which `serve` calls), and
+    `housekeeping::round` runs `ConversationStore::apply_retention` under
+    its turn; `serve` refuses a backend whose inbox applies another
+    retention than the setting. `ReplyChecks` per number:
+    `WA_SERVER_INBOX_REPLY_CHECKS` (`inbox::ReplyChecksByNumber`). The
+    OpenAPI document is additive only (796 lines added, none removed:
+    two paths, the tag `inbox`, six schemas). Decisive tests:
+    `conformance::inbox` (in `conformance::run`: M2.1 with no HTTP layer,
+    the binding epoch, `control_taken`, the order's own number, the
+    retention) on the core's memory backend, the memory crate's (built
+    with a 30-day retention, and without one) and live on Postgres; over
+    HTTP, the service's `tests/inbox.rs` (M2.1, the epoch, the reply's
+    key, the ownership refusal and the setting, the scope, pages) and
+    `live_postgres_m2_1_an_inbound_message_is_listed_read_and_answered`
+    and `live_postgres_a_moved_numbers_history_is_hidden_from_its_new_tenant`;
+    the start's refusal (`composed.rs`), the settings (`config.rs`), the
+    M1.3 table, M1.5's sentinel and M1.7's log capture over the new
+    routes. By mutation: the epoch filter removed fails the memory and
+    core suites and the HTTP epoch test; the `apply_retention` call
+    removed fails the retention case on the memory backend and live on
+    Postgres; the window check, or the ownership refusal's mapping,
+    removed fails M2.1 and the ownership cases. **With M2h, in the same
+    pull request:** a number's own move record, so that a number Meta
+    migrated from one tenant's WABA to another tenant's, neither WABA
+    moving, is cut too. `NumberBinding` gains `attached_at` (when the
+    number came under its tenant: a refresh, and a move between the
+    tenant's own WABAs while bound, keep it) and
+    `previous_tenant_released_at` (when another tenant last released it,
+    from its `NumberTombstone`: a release is a binding that no longer
+    lists it, or an unbind of its WABA, recorded in the same step; a
+    deleted tenant counts as another), and `authz::history_from` is the
+    later of the WABA's cut and the number's (a number another tenant
+    released hides what is dated before its own `attached_at`; a first
+    binding of a number no other tenant held keeps everything). The port
+    rules are `RecordStore::bind_waba`'s and `unbind_waba`'s, applied by
+    `NumberBinding::newly_bound` and `NumberTombstone` in memory and in the
+    Postgres SQL. Postgres: migration 5, `number moves`
+    (`0005_number_moves.sql`, additive, metadata only on Postgres 16:
+    `wa_server_numbers.attached_at`, no default for the existing rows,
+    which read their WABA's `attached_at`, and `now()` for the rows a
+    replica of the previous release inserts;
+    `wa_server_numbers.previous_tenant_released_at`, the Unix epoch
+    (`UNRECORDED_MOVE`) by default, read as a move: fail closed; the table
+    `wa_server_number_tombstones`, and the trigger
+    `wa_server_numbers_released` with its function
+    `wa_server_number_released()`), checksums 1 to 4 unchanged; a released
+    number's tombstone is written in the releasing statement by the
+    trigger, for every deleted number row (an unbind's cascade, a binding
+    that no longer lists it, and the same deletions by a replica of the
+    previous release during a rolling deploy, which writes none of its
+    own), and a new
+    number binding reads it in a statement of its own after its insert,
+    its start `GREATEST(now(), clock_timestamp(), released_at)`, as S2b's
+    review had a WABA's. The event outbox's routing needs no per-number
+    rule: an event names the WABA of the entry Meta sent it under, and the
+    routing gives a number's event to its tenant only when that WABA is
+    the one the number is bound under, so the previous holder's events,
+    dated or not, redelivered or late, name its WABA and reach nobody
+    (S2b's window exists because a moved WABA keeps its id; a migrated
+    number does not keep its WABA). Decisive tests:
+    `conformance::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history`
+    (the core's memory backend, the memory crate's, live on Postgres) and
+    over HTTP `a_number_migrated_between_two_tenants_wabas_hides_its_history`
+    and `live_postgres_a_number_migrated_between_two_tenants_wabas_hides_its_history`;
+    `records::a_numbers_moves_are_recorded`,
+    `races::a_number_taken_while_released_records_the_move` (and the
+    number's assertions added to
+    `races::a_binding_racing_an_unbind_records_the_move`), on memory and
+    live; `live_postgres_migration_5_rewrites_no_table` (the numbers
+    table's file unchanged by migration 5, a number from before it read as
+    unrecorded, its start kept when another WABA of its tenant takes it);
+    `live_postgres_a_release_by_the_previous_release_is_recorded` (the
+    previous release's own deletions leave tombstones); the S7/S2b continuity test, which now adds migrations 4
+    and 5 to `main`'s database and reads `main`'s number as unrecorded,
+    its move then recorded. By mutation: the number's cut removed from
+    `history_from` fails the migration case on the core's memory backend,
+    the memory crate's and live on Postgres, and over HTTP on memory and
+    live; the read of the tombstone in a new number binding removed
+    (memory's `newly_bound` given none; Postgres's statement after the
+    insert skipped) fails `records::a_numbers_moves_are_recorded` and the
+    HTTP migration case, on memory and live; the trigger dropped fails
+    them too, live, and the rolling deploy's case. **The sabotage
+    review (2026-11-01), tenant isolation first,** added: a free-form
+    reply on a number with a cut needs a window opened from the cut on
+    (the customer's message, a call or a standby message dated from it,
+    or, with the handover trusted, a handover recorded since), else `409
+    customer_service_window_closed` with zero requests, so the new holder
+    neither continues the previous holder's conversation nor learns from
+    the answer that its customer wrote (`Conversations::reply`'s
+    `refuse_across_the_cut`; templates exempt; nothing on a number without
+    a cut or with the window check off); `unread` counts only the
+    customer's messages dated from the cut on (`inbox::UNREAD_SCAN`
+    latest messages read at most, only on a number with a cut); a page is
+    answered only if the number's own binding also holds (its tenant, WABA
+    and `attached_at`: a capability made before its number moved to
+    another WABA of its tenant and on to another tenant, its first WABA's
+    epoch unchanged, read the new holder's history);
+    migration 5's trigger (above) for the rolling deploy; and a refresh
+    that moves a number from before migration 5 to another WABA of its
+    tenant writes its start down (its first WABA's) before the move.
+    Decisive: `conformance::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history`
+    (the reply's refusal, `unread`) and
+    `a_capability_made_before_its_number_left_reads_nothing`, on memory
+    and live, the HTTP migration case, and the two live migration tests;
+    the WABA's cut, redundant with the number's for every move recorded
+    since migration 5, is decisive for a WABA moved before it
+    (`live_postgres_a_waba_moved_before_migration_5_still_cuts_its_numbers`).
+    Left, and why: a reply is dated by the service's clock, so one recorded in
+    the seconds after a move by a replica whose clock is behind the
+    database's could be hidden from its own tenant; the reads open an
+    `OwnedNumber`, so they read the vault and answer `409
+    reconnect_required` for a number whose token lapsed, although they
+    ask Meta nothing; the design's window and read routes, a message by
+    id, and the list's `window` are M2g's; `ReplyChecks` and the
+    retention are per deployment (by number id, and for every number),
+    not per tenant. No new stored identifier: the two settings are
+    environment variables.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable):
+    1. `ReplyChecks` per number as a deployment setting keyed by phone
+       number id, `WA_SERVER_INBOX_REPLY_CHECKS`, in the format as built,
+       not a field on the binding (no schema change; to swap, a column
+       read into `ReplyChecksByNumber`, which `Conversations::new` takes
+       as a value).
+    2. A binding made before migration 4 (and, with M2h, a number bound
+       before migration 5), which reads `UNRECORDED_MOVE`, counts as
+       moved: fail closed, hiding a pre-migration coexistence history
+       older than its binding (to swap, `authz::history_from`).
+    3. The inbox's reads go through the whole authorization order, the
+       vault included, so a number whose token lapsed answers `409
+       reconnect_required` (to swap, a token-less capability for reads).
+    4. `serve` refuses a backend whose inbox applies another retention
+       than `WA_SERVER_INBOX_RETENTION`, rather than warning.
+    5. M2g kept as an item of its own (the window and read routes, a
+       message by id).
+    6. A page read while the binding moved (the WABA's epoch, or, since
+       the review, the number's own binding) answers `503
+       storage_unavailable`, which is retryable (to swap,
+       `OwnedNumber::still_held`).
+    7. The reply goes through `Inbox::send` rather than `Inbox::reply`,
+       to carry `reply_to` and `callback_data`: the review confirmed that
+       `Inbox::reply` is `Inbox::send` on the conversation's recipient, so
+       every check (the window with its calls and standby messages, the
+       handover trust, the thread's owner, the template and Direct Send
+       exemptions, a recipient outside the conversation refused) runs the
+       same; the service never sets a Direct Send `category` (`422
+       unsupported_message_type`). The service adds its own check before
+       them on a number with a cut (the review's, above).
+    8. On a number with a cut, a free-form reply needs a window opened
+       since the cut (an inbound message or window event dated from the
+       cut on, or, with handover trust, a `ThisApp` handover recorded
+       since it); otherwise `409 customer_service_window_closed` with no
+       request, templates and Direct Send categories exempt. A previous
+       holder's window never opens one for the new holder, and the 409
+       cannot tell B whether A's customer wrote. The cost: the new holder
+       starts with a template. Swap: drop `Conversations::reply`'s
+       `refuse_across_the_cut` call.
+  - **Also, after the first release** (from S7, carried by M2a, which
+    landed before it): drop the legacy fingerprint (S6's window:
+    `Fingerprint::legacy_v1_json`, `legacy_v1_upload`, `or_legacy`, and
+    the handlers' `Uri`), once every deployment has run a release with
+    S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. The next item of the
+    service's to land after the first release carries this line if it
+    lands before it.
 - [ ] **M2b. Live updates** (row 10): SSE through an `EventNotifier`
   port (Postgres `LISTEN/NOTIFY`, memory broadcast; resume by
   `Last-Event-ID`); `GET /v1/events/{id}`.
@@ -3619,6 +4173,38 @@ design's (§9).
     fails it; the journal and the audit event hold no identity in
     clear; a tenant's key cannot erase on another tenant's number.
 
+- [ ] **M2g. The inbox's other routes** (row 111; added by M2a, kept as
+  an item by the coordinator's decision of 2026-11-01): the design's `GET
+  /v1/numbers/{pn}/conversations/{contact}/window` (`{open, closes_at}`,
+  `Inbox::check_reply`'s answer beside the recorded window) and `POST
+  …/{contact}/read` (unread reset, `notify_customer` marking the latest
+  inbound message read on Meta), the list's `window`, and a message by
+  id on the number (`ConversationStore::message`), each from the binding
+  epoch on.
+  - **After:** M2a.
+  - **Decisive:** a message of the number's previous holder is `404` by
+    id to the new holder (removing the epoch from the lookup fails it);
+    after the read route, `unread` is 0 and Meta got one read receipt for
+    the latest inbound message only with `notify_customer`.
+- [x] **M2h. A number's own move record** (row 111; added by M2a, and
+  folded into it by the coordinator: the inbox never ships with the leak):
+  the binding epoch for a number Meta migrated from
+  one tenant's WABA to another tenant's WABA, the WABA not moving (M2a
+  cuts by the WABA's move record only): a per-number record of the last
+  tenant that held it, written with every number a binding drops (an
+  unbind, a refresh that no longer lists it), read when a binding takes
+  it, on both backends; its names are stable identifiers, the owner's
+  to confirm (§ Owner touchpoints).
+  - **Kind:** port change (`RecordStore`, an additive migration).
+  - **After:** M2a.
+  - **Decisive:** a number dropped by tenant A's WABA and listed by
+    tenant B's WABA, bound long before, shows B none of A's history;
+    removing the number's record from the cut fails it, on memory and
+    live on Postgres.
+  - **Landed:** with M2a, in the same pull request: see M2a's Landed
+    note ("With M2h"). Migration 5's names are stable identifiers pending
+    the owner (§ Owner touchpoints).
+
 ### M3. Embedded Signup, OTP, coexistence
 
 - [ ] **M3a. Embedded Signup routes** (rows 120, 142): both partner
@@ -3631,7 +4217,11 @@ design's (§9).
   - **After:** S7, L4.
   - **Decisive:** M3.1–M3.4.
 - [ ] **M3b. Coexistence** (rows 69, 124): onboarding, the automatic
-  sync (D7), the synced contacts stored and readable by their tenant.
+  sync (D7), the synced contacts stored and readable by their tenant:
+  M3b turns the inbox's contacts recording on
+  (`meta-whatsapp-server-core`'s `inbound::INBOX_RECORDING`, off since
+  L8: the library's `RecordingSwitches::ALL` with `contacts(false)`),
+  with the routes that read them and their erasure.
   - **After:** M3a, L8, L11d.
   - **Decisive:** a coexistence onboarding over HTTP starts the sync
     exactly once, and a second onboarding of the number does not;
@@ -4075,14 +4665,24 @@ everything else goes into the parity-completion report.
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
   with their keys' derivations and their records' shapes, added and
-  awaiting confirmation before the first release; S2b's Postgres
+  awaiting confirmation before the first release; M2h's Postgres
+  migration 5, "number moves": the columns
+  `wa_server_numbers.attached_at` (a row from before it read as its
+  WABA's start) and `wa_server_numbers.previous_tenant_released_at` with
+  its default, the Unix epoch read as "a move before the records began"
+  (`UNRECORDED_MOVE`, failing closed), and the table
+  `wa_server_number_tombstones` with its columns and its `ON DELETE SET
+  NULL` rule, and the trigger `wa_server_numbers_released` with its
+  function `wa_server_number_released()` (added by M2a's review), added
+  and awaiting confirmation; S2b's Postgres
   migration 4, "waba moves": the columns `wa_server_wabas.generation` and
   `wa_server_wabas.previous_tenant_unbound_at` with its default, the Unix
   epoch read as "a move before the records began" (`UNRECORDED_MOVE`),
   and the table `wa_server_waba_tombstones` with its columns and its
   `ON DELETE SET NULL` rule, added and awaiting confirmation; L11d's
   `wa.es.coexistence` and its record layout, added and awaiting
-  confirmation; and L21a's
+  confirmation; L8's SQLite migration 1, its tables and columns, and its
+  Redis conversation layout, added and awaiting confirmation; and L21a's
   `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
   keys' derivations and their records' shapes, added and awaiting
   confirmation before the first release), for the same reason as L5's.

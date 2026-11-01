@@ -2333,8 +2333,8 @@ mod id_shape_tests {
 mod paging_withheld_tests {
     use futures::StreamExt;
     use meta_whatsapp_core::ids::{
-        AppId, BusinessId, FlowId, GroupId, PhoneNumberId, QrCodeId, SolutionId, TemplateGroupId,
-        TemplateId, UserId, WabaId,
+        AppId, BusinessId, FlowId, GroupId, PhoneNumberId, PreVerifiedPhoneNumberId, QrCodeId,
+        SolutionId, TemplateGroupId, TemplateId, UserId, WabaId,
     };
     use meta_whatsapp_core::paging::Page;
     use meta_whatsapp_core::testing::ScriptedTransport;
@@ -2358,8 +2358,9 @@ mod paging_withheld_tests {
     use crate::signups::ListSignups;
     use crate::templates::{LibraryQuery, TemplateListQuery};
     use crate::waba::{
-        ListAssignedUsers, ListAssignedWabas, ListMessageHistoryEvents, ListWabaRecords,
-        PhoneNumbersQuery, WabaListQuery,
+        ListAssignedUsers, ListAssignedWabas, ListMessageHistoryEvents,
+        ListPreVerifiedNumberPartners, ListPreVerifiedNumbers, ListWabaRecords, PhoneNumbersQuery,
+        WabaListQuery,
     };
 
     /// A `next` link holding the token, as Meta can send it. Values ours.
@@ -2478,6 +2479,16 @@ mod paging_withheld_tests {
             "business.owned_whatsapp_business_accounts",
             c.business(business())
                 .owned_whatsapp_business_accounts(&WabaListQuery::new())
+        );
+        read!(
+            "business.pre_verified_numbers",
+            c.business(business())
+                .pre_verified_numbers(&ListPreVerifiedNumbers::new())
+        );
+        read!(
+            "pre_verified_phone_number.partners",
+            c.pre_verified_phone_number(PreVerifiedPhoneNumberId::new("12").unwrap())
+                .partners(&ListPreVerifiedNumberPartners::new())
         );
         read!(
             "analytics.template",

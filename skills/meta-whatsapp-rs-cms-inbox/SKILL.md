@@ -149,9 +149,9 @@ refuse another number's key. Webhook dead letters need `meta_whatsapp_rs::erasur
 
 ## What meta-whatsapp-rs does not do
 
-- Not recorded by `InboxSink`: synced contacts (`smb_app_state_sync`, L8), media bytes (rows keep the
+- Not recorded by `InboxSink`: media bytes (rows keep the
   media id; download within 7 days), BSUID merges, `conversation_context`. The inbox never calls the thread control API: you do, then record it.
-- Message ids are unique per store, not per business number (open question 33). No Redis store.
+- Message ids are unique per store, not per business number (open question 33). Synced contacts: `Inbox::contacts`.
 
 ## Related skills
 

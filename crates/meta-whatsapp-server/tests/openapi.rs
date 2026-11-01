@@ -423,6 +423,7 @@ fn idempotent_operations_declare_their_key() {
     assert_eq!(
         declaring.into_iter().collect::<Vec<_>>(),
         [
+            "POST /v1/numbers/{pn}/conversations/{contact}/messages",
             "POST /v1/numbers/{pn}/media",
             "POST /v1/numbers/{pn}/messages",
             "POST /v1/wabas/{waba_id}/templates",

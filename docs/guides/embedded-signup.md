@@ -705,6 +705,48 @@ The skill's
 [`business_verification.rs`](../../skills/meta-whatsapp-rs-embedded-signup/examples/business_verification.rs)
 does all three: look, then submit; read the webhook; check the status.
 
+## Several WABAs in one signup
+
+A multi-WABA flow's session info lists the customer's WABAs in `waba_ids`
+(`embedded-signup/implementation`), and `debug_token` on the business
+token lists every WABA it was granted, newest first
+(`solution-providers/manage-accounts`). `onboard` onboards one: the
+claimed `waba_id`, else the first of `waba_ids`, else the newest grant.
+To onboard every grant (`OPEN_QUESTIONS.md` #5), opt in on the request
+and call `onboard_wabas` (`onboard_wabas_with_approval` in Solution
+Partner mode, where the approval is required):
+
+- the code is exchanged and the token inspected once; a WABA the session
+  info names that the token was not granted refuses the whole signup,
+  before anything is stored;
+- each granted WABA is then verified, approved (your closure runs once
+  per WABA: reserve each for the tenant), stored under its own vault
+  record and phone index, subscribed and, for a Solution Partner, funded
+  with its own credit line, **on its own**: a WABA that fails is reported
+  and the next one runs;
+- the claimed WABA gets the request as it is (its number registered with
+  the PIN, a coexistence sync); the others register no number and sync
+  nothing, and one your vault already holds is left as it is
+  (`WabaOutcome::Held`); one another onboarding stores while this one
+  runs is not replaced either: it fails at `store_token`, after your
+  approval ran, so release what the approval reserved for it;
+- the others must be the claimed WABA's business's: a token's grants
+  outlast one signup and, for a user's token, may span businesses, so a
+  grant Meta reports another owner for (or none) fails at
+  `verify_assets`, and when the claimed WABA's owner is unknown (it
+  failed before it was verified, or Meta reported none) every other
+  grant fails there, with no request.
+
+The call succeeds when the shared steps do, so read the result:
+`WabasOnboarded::is_complete()`, then each `WabaOnboarding`: record each
+onboarded `waba_id` against the tenant, and resume (§ 6) each one whose
+`WabaOutcome::is_resumable()`, with `OnboardingRequest::for_resume` of a
+session naming it (add `register_with_pin` to register its number). A
+WABA that failed before `store_token` was not stored and needs a new
+signup. `onboard` and `onboard_hosted` refuse a request with the option
+on; hosted signup sends one `PARTNER_ADDED` per WABA, each onboarded from
+its own webhook.
+
 ## Hosted Embedded Signup: no page code
 
 `embedded-signup/hosted-es`: instead of `FB.login` on your page, a link to
@@ -724,9 +766,14 @@ of credit).
 > one the vault holds, before any request (a `ValidationError` on
 > `waba_id`), rather than replace its token and record; to onboard such a
 > WABA again on purpose, delete it from the vault first
-> (`TokenVault::delete`, or `offboard`). The check is a read, not a lock:
-> a code-flow onboarding still running when the webhook arrives can store
-> after it, so reserve the WABA for a merchant atomically in the approval.
+> (`TokenVault::delete`, or `offboard`). The check is a read, and
+> `store_token` then stores only where the vault still holds no record: a
+> code-flow or multi-WABA onboarding that stores the WABA after the read
+> is never replaced, and `onboard_hosted` fails at `store_token` instead
+> (nothing stored by it; release what your approval reserved). The other
+> way round, a code-flow onboarding still running when the webhook
+> arrives can store after it and replace it, as re-onboarding does, so
+> reserve the WABA for a merchant atomically in the approval.
 
 ```text
 Meta's hosted page ──► account_update PARTNER_ADDED {waba_id, owner_business_id}
@@ -788,6 +835,73 @@ if let WebhookEvent::AccountUpdated { update, .. } = &event
   secret store, never one for every merchant.
 - Hosted signup onboards to Cloud API only, and the flow cannot be
   customized (no pre-fill, no coexistence launch).
+
+## Pre-verified numbers: no code for the merchant
+
+`embedded-signup/pre-verified-numbers`: as a Solution Partner or Tech
+Provider, you verify numbers of your own ahead of time, in a pool on
+your business portfolio, and offer them on Embedded Signup's number
+screen; the merchant picks one and never types a one-time code. Your
+token (user or system user, with `business_management`) works on your
+portfolio, not on the merchant's.
+
+```rust
+use meta_whatsapp_client::embedded_signup::LaunchOptions;
+use meta_whatsapp_client::phone_numbers::{CodeMethod, CodeVerificationStatus, VerificationCode};
+use meta_whatsapp_client::waba::ListPreVerifiedNumbers;
+
+let pool = partner_client.business(your_business_id);
+// 1. Add a number you control to the pool; Meta answers with its id.
+let created = pool.add_pre_verified_number("+1 555 078 3881").await?;
+let number = partner_client.pre_verified_phone_number(created.id.clone());
+// 2. Have the one-time code sent to it (you receive it, not a merchant)…
+number.request_code(CodeMethod::Sms, "en_US").await?;
+// 3. …and verify it within 30 days: it is VERIFIED for 90 days.
+number.verify_code(&VerificationCode::new(received_code)?).await?;
+
+// Offer the verified ones in the launch options.
+let verified = pool
+    .pre_verified_numbers(
+        &ListPreVerifiedNumbers::new().code_verification_status(CodeVerificationStatus::Verified),
+    )
+    .await?;
+let options = LaunchOptions::new("<CONFIGURATION_ID>")
+    .pre_verified_phone_ids(verified.data.into_iter().map(|n| n.id))
+    .to_json()?;
+```
+
+- **A pre-verified id is not a phone number id.** It is a
+  `PreVerifiedPhoneNumberId`, digits only, checked when you build it and
+  again before every request. Once a merchant claims the number, Meta
+  replaces it with a business phone number of **another** id: the
+  session event's `phone_number_id`, which `onboard` registers as usual.
+  Without session logging, find it in `Waba::phone_numbers` by its
+  `display_phone_number`.
+- **Register within 90 days of your verification**, not of the claim;
+  after that its `code_verification_status` is `EXPIRED` and the number
+  needs a new code.
+- **The pool expires on its own.** A number not verified within 30 days
+  leaves it; a verified one nobody claims within 90 days becomes
+  `EXPIRED` and leaves it too. An unclaimed number can be re-verified
+  only from 45 days before its `verification_expiry_time`: read it with
+  `PreVerifiedPhoneNumber::get(&["code_verification_time",
+  "verification_expiry_time"])` and re-verify in time. The library
+  enforces none of these limits, and who claimed which number is yours
+  to record.
+- **Sharing.** `Business::share_pre_verified_number(&id, &partner)`
+  shares a number with a partner of a Multi-Partner Solution you belong
+  to, who can then offer it; `PreVerifiedPhoneNumber::partners` lists
+  who has it. Meta removed unsharing, so share deliberately; a claimed
+  number simply stops appearing in the partners' flows.
+- **Deleting** (`PreVerifiedPhoneNumber::delete`) is irreversible; Meta
+  refuses a number in use. Nothing in the library deletes or shares on
+  its own.
+- **The code is a secret.** `VerificationCode` (the phone numbers' type)
+  keeps it out of `Debug` and errors, and the client sends it in the
+  JSON body, never in the URL.
+- **Bypassing the number screen**: add a pre-verified number to an
+  onboarded WABA with `Waba::create_phone_number(&NewPhoneNumber::new(…)
+  .preverified_id(id))`, then register the phone number id it returns.
 
 ## Coexistence (merchants keeping the WhatsApp Business app)
 
@@ -870,7 +984,7 @@ share, and to keep marking a business on offboarding, all above):
 | # | Question | Today | Decided |
 | --- | --- | --- | --- |
 | 4 | Two-step PIN policy | you pass a 6-digit PIN on every `onboard`/`resume`; nothing generates or stores it (the example asks the merchant each time) | keep it so |
-| 5 | Multi-WABA signups | only the claimed (or first, or newest granted) WABA is onboarded | the default stays; every granted WABA as an option (roadmap L11b) |
+| 5 | Multi-WABA signups | by default only the claimed (or first, or newest granted) WABA is onboarded; with `OnboardingRequest::every_granted_waba(true)`, `onboard_wabas` onboards every granted WABA, each on its own, reporting each in `WabasOnboarded` (L11b) | the default stays; every granted WABA as an option (roadmap L11b, landed) |
 | 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins unless your `onboard_with_approval` refuses it (required for a Solution Partner, whose approval is recorded; the policy is still yours) | keep it so: no tenant policy in the library |
 | 7 | Coexistence sync | the last two steps of a coexistence onboarding (`sync_contacts`, `sync_history`), each posted once; `OnboardingRequest::coexistence_sync(false)` turns them off (L11d) | automatic after a coexistence onboarding, with an option to turn it off (roadmap L11d) |
 | 8 | Token expiry and refresh | expiry recorded and reported a lead time ahead (`TokenVault::token_expiry`, roadmap L11e); nothing refreshes | no refresh; the expiry surfaced before it lapses (roadmap L11e, landed; the service's event, M3e) |
@@ -882,7 +996,8 @@ share, and to keep marking a business on offboarding, all above):
 
 Partner-led business verification, Multi-Partner Solutions and
 migration intents are their own client modules, outside this flow
-(`client::business_verification`, `client::partners`); not handled:
-pre-verified number pools, token refresh, PIN storage and recovery, your tenant model, and a
-Tech Provider merchant's billing setup ([coverage.md](../coverage.md) rows
-1 and 28).
+(`client::business_verification`, `client::partners`), and so is the
+pre-verified number pool (`client::waba`, [above](#pre-verified-numbers-no-code-for-the-merchant)).
+Not handled: token refresh, PIN storage and recovery, your tenant model,
+tracking who claimed which pre-verified number, and a Tech Provider
+merchant's billing setup ([coverage.md](../coverage.md) rows 1 and 28).

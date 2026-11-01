@@ -47,7 +47,8 @@ meta-whatsapp-adapters = { workspace = true, features = ["memory", "postgres"] }
 pretty_assertions.workspace = true
 # `test-util`: the pacing tests run on Tokio's paused clock, where concurrent
 # sleeps overlap as they do for real (a `ManualClock` adds them up).
-tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+# `rt-multi-thread`: runners on threads racing one store (`tests/jobs.rs`).
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 
 [lints]
 workspace = true

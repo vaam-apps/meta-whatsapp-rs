@@ -55,11 +55,19 @@ pub enum Operation {
     GetTemplate,
     /// `list_events`: the tenant's events, polled.
     ListEvents,
+    /// `list_conversations`: a number's inbox, newest activity first.
+    ListConversations,
+    /// `list_conversation_messages`: one conversation's history, newest
+    /// first.
+    ListConversationMessages,
+    /// `reply_to_conversation`: a reply to a conversation's contact,
+    /// checked against the window and the thread's owner first.
+    ReplyToConversation,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 19] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -76,6 +84,9 @@ impl Operation {
         Self::DeleteTemplates,
         Self::GetTemplate,
         Self::ListEvents,
+        Self::ListConversations,
+        Self::ListConversationMessages,
+        Self::ReplyToConversation,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -97,6 +108,9 @@ impl Operation {
             Self::DeleteTemplates => "delete_templates",
             Self::GetTemplate => "get_template",
             Self::ListEvents => "list_events",
+            Self::ListConversations => "list_conversations",
+            Self::ListConversationMessages => "list_conversation_messages",
+            Self::ReplyToConversation => "reply_to_conversation",
         }
     }
 
@@ -121,6 +135,9 @@ impl Operation {
             | Self::DeleteTemplates
             | Self::GetTemplate => Scope::Templates,
             Self::ListEvents => Scope::Events,
+            Self::ListConversations
+            | Self::ListConversationMessages
+            | Self::ReplyToConversation => Scope::Inbox,
         }
     }
 }
