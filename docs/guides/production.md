@@ -65,13 +65,52 @@ An upgrade across a migration that rewrites tables (migration 3, lossless
 message content) is the exception: run `migrate` once from a one-off job
 first ([section 7](#7-before-going-live)).
 
-Redis over TLS (`rediss://`): meta-whatsapp-rs enables no TLS feature of redis on
-purpose (two rustls crypto providers in one binary make the first TLS
-connection panic). Enable redis's `tokio-rustls-comp` in your own crate,
-install a provider at startup, and hand the connection to
-`RedisKvStore::new(conn)`; the type's rustdoc shows how
-([decided](../../OPEN_QUESTIONS.md#storage) 19: `rediss://` with an explicit
-provider, roadmap L21c, not built yet).
+Redis over TLS (`rediss://`) goes through `RedisTls` (feature `redis`),
+not through redis's own TLS features, which meta-whatsapp-rs leaves off:
+redis-rs builds its TLS configuration from rustls' process-wide default
+crypto provider, and when a binary links both of rustls' providers
+(aws-lc-rs, which reqwest and sqlx use here, and ring, which many other
+crates bring) with no default installed, the first TLS connection panics.
+`RedisTls` names aws-lc-rs itself, so it needs no default and ignores the
+one you installed:
+
+```rust
+use meta_whatsapp_rs::adapters::store::{RedisKvStore, RedisTls};
+
+let tls = RedisTls::builder()
+    // A private CA; leave it out to trust the system's roots.
+    .root_certificates_pem(std::fs::read("/run/secrets/redis-ca.crt")?)
+    // If your Redis asks for a client certificate (`tls-auth-clients yes`).
+    .client_auth_pem(
+        std::fs::read("/run/secrets/redis-client.crt")?,
+        std::fs::read("/run/secrets/redis-client.key")?,
+    )
+    .build()?;
+let kv = RedisKvStore::new(tls.connect(&std::env::var("REDIS_URL")?).await?);
+```
+
+- **Trust**: the system's trust store by default, as the reqwest transport
+  does (in a `scratch` or distroless image with no CA bundle, `build`
+  fails: pass the CA). `root_certificates_pem` trusts those certificates
+  *instead of* the system's. The certificate must name the URL's host: an
+  IP address (`rediss://10.0.0.5`) needs an IP address in the certificate,
+  a DNS name never covers it. `RedisTls::builder()` has no mode without
+  verification: a URL with `#insecure` is refused.
+- **The connection reconnects** on its own: the command that meets a
+  dropped connection fails (it is not replayed, a compare-and-swap
+  included) and the next one opens a new connection, which authenticates
+  and selects the database again. Unlike `ConnectionManager`, it neither
+  retries nor backs off: one attempt per command that finds no
+  connection, bounded by the connection timeout. Timeouts are redis-rs's
+  (1 s to connect, the handshake included, 500 ms per reply):
+  `with_connection_timeout`, `with_response_timeout`.
+- **Your own TLS configuration** (another verifier, your own provider):
+  `RedisTls::from_client_config`, used as it is: a verifier of yours that
+  accepts any certificate turns verification off, and that is your call.
+  A connection you built yourself, with
+  redis's TLS features and a provider you installed, still goes to
+  `RedisKvStore::new` as before.
+- Redis Cluster and Sentinel over TLS are not covered.
 
 Every store adapter runs an executable conformance suite; `just test-live`
 runs it against real Postgres and Redis.
@@ -340,8 +379,10 @@ notification queue on top must be idempotent itself: tag each message with
   ([cms-inbox.md](cms-inbox.md#8-erasing-a-customer-and-retention)).
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: its defaults (OTP
   issue limit, PIN policy, no token refresh) were decided on 2026-09-26,
-  and some decisions are not built yet (a dead-letter path for webhook
-  batches, Redis TLS). The OTP namespace is
+  and some decisions are not built yet (Redis TLS). Dead letters for
+  webhook events a sink refuses permanently are built (L21a) but off until
+  you give the handler a store
+  ([webhooks.md § 9](webhooks.md#9-dead-letters)). The OTP namespace is
   required since d67b3ac; a revoked message keeps its content in the inbox
   (decided on 2026-09-25).
 - Upgrading from an older meta-whatsapp-rs revision, per commit crossed:
@@ -513,7 +554,11 @@ The procedure, per erasure request:
    unless the store deletes them (`ErasureMode::Delete`).
 3. Delete your own copies (downloaded media, exports, SSE clients'
    caches), the service's outbox rows (roadmap M2f) and your dead
-   letters (L21a) for that customer.
+   letters for that customer: `meta_whatsapp_rs::erasure::Eraser` with
+   `with_dead_letters` does step 2 and the dead letters together (L21a;
+   [webhooks.md § 9](webhooks.md#9-dead-letters)). A dead letter is kept
+   14 days by default (`DeadLetters::with_max_age`): list that retention
+   with the inbox's.
 4. Delete the customer from Meta's contact book:
    `client.phone_number(pnid).delete_contact_book_entry(&bsuid)` for
    each of their BSUIDs, with the merchant's own client (`with_token`)

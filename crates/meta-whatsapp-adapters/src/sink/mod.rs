@@ -6,14 +6,19 @@
 //! | --- | --- | --- |
 //! | [`ChannelSink`] | a worker, through a bounded tokio `mpsc` channel | receiver dropped ([`Closed`](meta_whatsapp_core::error::SinkError::Closed)); full in [`ChannelMode::TryOrFail`] ([`Full`](meta_whatsapp_core::error::SinkError::Full)) |
 //! | [`BroadcastSink`] | every live [`BroadcastSubscription`] (SSE, WebSocket), each event one shared `Arc` | never: no subscriber is not an error |
-//! | [`FanoutSink`] | several sinks | tries all, returns the first error |
+//! | [`FanoutSink`] | several sinks | tries all, returns the first transient error, else the first [permanent](meta_whatsapp_core::error::SinkError::Permanent) one |
 //! | [`FilterSink`] | an inner sink, for events matching a predicate | when the inner sink fails |
 //! | [`FnSink`] | an async closure | when the closure fails |
 //! | [`TracingSink`] | `tracing` events | never |
 //!
 //! The webhook handler answers Meta non-`200` when its sink fails, and Meta
 //! then redelivers the whole batch — so keep sinks fast (queue slow work
-//! behind a [`ChannelSink`]) and idempotent.
+//! behind a [`ChannelSink`]) and idempotent. A sink of your own that will
+//! never accept an event returns
+//! [`SinkError::Permanent`](meta_whatsapp_core::error::SinkError::Permanent):
+//! a handler with a dead-letter store records that event and delivers the
+//! rest of the batch (`meta_whatsapp_webhooks::deadletter`). None of the
+//! sinks here raises it; the wrappers pass it through.
 //!
 //! ```
 //! # async fn demo() {

@@ -1,4 +1,5 @@
-//! Requests and responses from `conversation-routing/thread-control`.
+//! Requests and responses from `conversation-routing/thread-control` and
+//! `conversation-routing/routing-roles`.
 
 use std::time::Duration;
 
@@ -498,4 +499,211 @@ fn accessors_return_what_was_given() {
     let api = api(&t);
     assert_eq!(api.id().as_str(), PHONE);
     assert!(api.client().token().is_some());
+}
+
+// ─── Routing roles (`conversation-routing/routing-roles`) ─────────────────
+
+/// One `GET /v25.0/{PHONE}/routing_roles` with the token, no query and no
+/// body (the page: "The request takes no query or body parameters").
+fn assert_routing_roles_get(t: &ScriptedTransport) {
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::GET);
+    assert_eq!(req.path(), format!("/v25.0/{PHONE}/routing_roles"));
+    assert_eq!(req.url.query(), None);
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    assert_eq!(req.body, RecordedBody::Empty);
+}
+
+/// The page's response example (§ Response).
+#[tokio::test]
+async fn routing_roles_match_docs_example() {
+    let t = ScriptedTransport::new();
+    t.push_json(
+        200,
+        json!({"roles": ["customer_service", "escalation"], "is_standby": false}),
+    );
+    let roles = api(&t).routing_roles().await.unwrap();
+    assert_routing_roles_get(&t);
+    assert_eq!(
+        roles,
+        RoutingRoles {
+            roles: vec![RoutingRole::CustomerService, RoutingRole::Escalation],
+            is_standby: false,
+        }
+    );
+    assert!(roles.holds(&RoutingRole::Escalation));
+    assert!(roles.holds(&RoutingRole::CustomerService));
+    assert!(!roles.holds(&RoutingRole::Calls));
+    assert_eq!(t.remaining(), 0);
+}
+
+/// The page's second example (§ Empty roles): no role, standby granted.
+/// A success, not an error.
+#[tokio::test]
+async fn empty_routing_roles_match_docs_example() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"roles": [], "is_standby": true}));
+    let roles = api(&t).routing_roles().await.unwrap();
+    assert_routing_roles_get(&t);
+    assert_eq!(
+        roles,
+        RoutingRoles {
+            roles: vec![],
+            is_standby: true,
+        }
+    );
+    assert!(!roles.holds(&RoutingRole::Escalation));
+    assert_eq!(t.remaining(), 0);
+}
+
+/// The six values of the page's § Role values table, and the ones it
+/// never returns or Meta adds later, kept verbatim.
+#[tokio::test]
+async fn every_routing_role_has_its_wire_name() {
+    let roles = [
+        (RoutingRole::Calls, "calls"),
+        (RoutingRole::Ctwa, "ctwa"),
+        (RoutingRole::CustomerService, "customer_service"),
+        (RoutingRole::Escalation, "escalation"),
+        (RoutingRole::Marketing, "marketing"),
+        (RoutingRole::Utility, "utility"),
+        // "`ai_agent` is never returned": not a variant of its own.
+        (RoutingRole::Other("ai_agent".into()), "ai_agent"),
+        (RoutingRole::Other("future_role".into()), "future_role"),
+    ];
+    for (role, wire) in &roles {
+        assert_eq!(role.as_str(), *wire);
+        assert_eq!(role.to_string(), *wire);
+        assert_eq!(serde_json::to_value(role).unwrap(), json!(wire));
+        assert_eq!(
+            &serde_json::from_value::<RoutingRole>(json!(wire)).unwrap(),
+            role
+        );
+    }
+    let t = ScriptedTransport::new();
+    let wires: Vec<&str> = roles.iter().map(|(_, wire)| *wire).collect();
+    t.push_json(200, json!({"roles": wires, "is_standby": true}));
+    let got = api(&t).routing_roles().await.unwrap();
+    let expected: Vec<RoutingRole> = roles.iter().map(|(role, _)| role.clone()).collect();
+    assert_eq!(got.roles, expected);
+    assert!(got.is_standby);
+    assert_eq!(t.remaining(), 0);
+}
+
+/// `holds` compares wire names, so a role built as `Other` finds its
+/// typed variant.
+#[test]
+fn holds_compares_wire_names() {
+    let roles = RoutingRoles {
+        roles: vec![RoutingRole::Calls, RoutingRole::Other("future_role".into())],
+        is_standby: false,
+    };
+    assert!(roles.holds(&RoutingRole::Other("calls".into())));
+    assert!(roles.holds(&RoutingRole::Other("future_role".into())));
+    assert!(!roles.holds(&RoutingRole::Other("ctwa".into())));
+    assert!(!roles.holds(&RoutingRole::Ctwa));
+}
+
+/// A field Meta adds later parses; a missing or mistyped documented field
+/// does not (both are "always present": a default would read as "no role"
+/// or "not standby").
+#[tokio::test]
+async fn routing_roles_tolerate_new_fields_and_require_both() {
+    let t = ScriptedTransport::new();
+    t.push_json(
+        200,
+        json!({"roles": ["utility"], "is_standby": false, "new_field": {"x": 1}}),
+    );
+    t.push_json(200, json!({"is_standby": true}));
+    t.push_json(200, json!({"roles": []}));
+    t.push_json(200, json!({"roles": [], "is_standby": "yes"}));
+    let api = api(&t);
+    let roles = api.routing_roles().await.unwrap();
+    assert_eq!(roles.roles, vec![RoutingRole::Utility]);
+    for case in ["no roles", "no is_standby", "a string is_standby"] {
+        let err = api.routing_roles().await.unwrap_err();
+        assert!(matches!(&err, Error::Decode { .. }), "{case}: {err:?}");
+    }
+    assert_eq!(t.remaining(), 0);
+}
+
+/// The page's § Errors: routing not enabled on the number, code `100`.
+#[tokio::test]
+async fn routing_not_enabled_is_an_invalid_parameter() {
+    let t = ScriptedTransport::new();
+    t.push_json(
+        400,
+        json!({"error": {
+            "message": "Conversation routing is not enabled for this phone number.",
+            "code": 100,
+            "fbtrace_id": "<FBTRACE_ID>"
+        }}),
+    );
+    let err = api(&t).routing_roles().await.unwrap_err();
+    assert_routing_roles_get(&t);
+    assert_eq!(err.kind(), ErrorKind::InvalidParameter);
+    let graph = err.graph().unwrap();
+    assert_eq!(graph.code, 100);
+    assert_eq!(graph.fbtrace_id.as_deref(), Some("<FBTRACE_ID>"));
+    assert!(!err.is_retryable());
+    assert_eq!(t.remaining(), 0);
+}
+
+/// The page's other § Errors row: an id that does not exist or that the
+/// token cannot read, also code `100`, so also an invalid parameter.
+#[tokio::test]
+async fn an_unreadable_number_is_an_invalid_parameter() {
+    let t = ScriptedTransport::new();
+    t.push_json(
+        400,
+        json!({"error": {
+            "message": format!("Unsupported get request. Object with ID '{PHONE}' does not exist, cannot be loaded due to missing permissions, or does not support this operation."),
+            "code": 100
+        }}),
+    );
+    let err = api(&t).routing_roles().await.unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::InvalidParameter);
+    assert_eq!(err.graph().map(|g| g.code), Some(100));
+    assert_eq!(t.remaining(), 0);
+}
+
+/// A read: retried after a timeout, unlike the three actions.
+#[tokio::test]
+async fn routing_roles_are_retried_after_a_timeout() {
+    let ts = ScriptedTransport::new();
+    let api = Client::builder()
+        .transport(ts.clone())
+        .access_token("TOKEN")
+        .retry(RetryPolicy {
+            max_retries: 2,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+        })
+        .build()
+        .unwrap()
+        .thread_control(PhoneNumberId::new(PHONE).unwrap());
+    ts.push_error(|| TransportError::Timeout);
+    ts.push_json(200, json!({"roles": ["escalation"], "is_standby": false}));
+    let roles = api.routing_roles().await.unwrap();
+    assert_eq!(roles.roles, vec![RoutingRole::Escalation]);
+    assert_eq!(ts.requests().len(), 2);
+    assert_routing_roles_get(&ts);
+    assert_eq!(ts.remaining(), 0);
+}
+
+/// The phone number id stays one path segment on the read too.
+#[tokio::test]
+async fn the_phone_number_id_stays_one_segment_on_routing_roles() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"roles": [], "is_standby": false}));
+    client(&t)
+        .thread_control(PhoneNumberId::new_unchecked("123/messages"))
+        .routing_roles()
+        .await
+        .unwrap();
+    assert_eq!(
+        t.last_request().unwrap().path(),
+        "/v25.0/123%2Fmessages/routing_roles"
+    );
+    assert_eq!(t.remaining(), 0);
 }

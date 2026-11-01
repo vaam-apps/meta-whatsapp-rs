@@ -9,12 +9,13 @@
 //! | Module | Crate | What |
 //! | --- | --- | --- |
 //! | [`mod@client`] | `meta-whatsapp-client` | Graph API client, one module per endpoint family |
-//! | [`webhooks`] | `meta-whatsapp-webhooks` | signature and verify-token checks, typed events, dedup, axum router + SSE |
+//! | [`webhooks`] | `meta-whatsapp-webhooks` | signature and verify-token checks, typed events, dedup, dead letters, axum router + SSE |
 //! | [`adapters`] | `meta-whatsapp-adapters` | reqwest transport; memory, Postgres, Redis stores; sinks |
 //! | [`core`] | `meta-whatsapp-core` | error tree, ids, secrets, the ports (`HttpTransport`, `KvStore`, `ConversationStore`, `EventSink`, `Clock`) |
 //! | `typst` (feature `typst`) | `meta-whatsapp-typst` | invoices, receipts, vouchers → PDF/PNG |
 //! | `bot` (feature `bot`) | `meta-whatsapp-bot` | commands, guards, cooldowns, middleware, compile-time plugins, Markdown replies, paced broadcasts, durable scheduled jobs |
 //! | [`inbox`] | here | webhook events → conversation history; window-checked replies with a merchant's token |
+//! | [`erasure`] | here | erase a person from the conversation store and the webhook dead letters together |
 //!
 //! # Which module for which product
 //!
@@ -152,7 +153,7 @@
 //! | `memory` | yes | `adapters::store::{MemoryKvStore, MemoryConversationStore}`: tests, development, one instance |
 //! | `sinks` | yes | `adapters::sink`: channel, broadcast, fan-out, filter, fn and tracing sinks |
 //! | `postgres` | | `adapters::store::{PostgresKvStore, PostgresConversationStore}` and `adapters::store::postgres::migrate` (sqlx) |
-//! | `redis` | | `adapters::store::RedisKvStore` |
+//! | `redis` | | `adapters::store::RedisKvStore`, and `adapters::store::RedisTls` for `rediss://` (aws-lc-rs, never the process default) |
 //! | `axum` | | `webhooks::router` (`GET`/`POST` webhook endpoint) and `webhooks::sse` (live inbox stream) |
 //! | `typst` | | the `typst` module: invoice, receipt and voucher templates → PDF/PNG |
 //! | `flows-endpoint` | | `client::flows::endpoint`: WhatsApp Flows data-endpoint crypto (aws-lc-rs) |
@@ -164,6 +165,7 @@
 //! What is implemented, and what is not, is in `docs/coverage.md`; the
 //! design is `docs/architecture.md`.
 
+pub mod erasure;
 pub mod inbox;
 pub mod prelude;
 

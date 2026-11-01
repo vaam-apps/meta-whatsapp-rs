@@ -97,6 +97,56 @@ of its own, after an HTML comment; keep that when you add one.
    recover a missed one. Swappable by that option; until it lands,
    `needs_coexistence_sync()` stays the signal. Roadmap L11d.
 
+   **Landed with roadmap L11d (2026-11-01), the library's side:** two
+   steps, `sync_contacts` then
+   `sync_history` (Meta's steps 1 and 2 of
+   `onboarding-business-app-users`, each its own once-only call), the
+   last of the tail: after `subscribe_app`, a Solution Partner's credit
+   line and `register_phone` (which never runs for coexistence), because
+   Meta's page starts the sync once the onboarding steps are done.
+   They run when the request's `finish_kind` is coexistence and
+   `OnboardingRequest::coexistence_sync` is on (the default); its
+   setter, `coexistence_sync(false)`, turns them off, and
+   `needs_coexistence_sync()` is unchanged. Meta's answers come back in
+   `Onboarded::coexistence_sync` (`SyncOutcome::Requested` with the
+   `request_id` Meta asks partners to keep, or `Refused`). Meta's
+   errors page says a second request is refused (`2593107`, "exceeded
+   the maximum number of times") and so is one past 24 hours
+   (`2593108`); nothing documents a way to read whether a sync was
+   made. So each request is claimed, before it is posted, in a plain
+   JSON record (`wa.es.coexistence`, keyed by phone number id, scoped to
+   the stored token record's WABA and `created_at`, so a new signup
+   starts a new sync), and `resume` reads it: an accepted or refused
+   request is never posted again; a Meta refusal (`SyncNotAllowed`) is
+   reported, not failed (only a new signup changes it); a request Meta
+   refused before doing anything (`may_have_been_sent` false) releases
+   its claim and is asked again; one whose answer was lost keeps its
+   claim, and `resume` fails at that step, before any request, until
+   the integrator checks the webhooks and resumes with the sync off.
+   Hosted signup syncs nothing (`hosted-es` onboards to Cloud API only;
+   `for_hosted` names no finish). The new namespace is a stored
+   identifier, pending the owner's confirmation (`docs/architecture.md`
+   § Stable identifiers). M3b avoids a second call by building on these
+   steps rather than calling `smb_app_data` itself: the record already
+   refuses a repeat within one onboarding, and the service's own record
+   of a synced number can turn the option off for a later one. Swappable
+   by the option (and by calling `sync_smb_app_data` yourself). Roadmap
+   L11d (landed); the service's side, M3b.
+
+   **Confirmed 2026-11-01 (coordinator, owner's delegation; roadmap L11d
+   landed):** decided for the library, the service's side carried by
+   M3b, which builds on these steps rather than calling `smb_app_data`
+   itself. The choices, each swappable, are the ones above and in
+   roadmap L11d's Decided note: two steps after the credit-line steps,
+   in Meta's order; Meta's refusals reported as `SyncOutcome::Refused`;
+   a claim released only when `!may_have_been_sent()`; a lost answer's
+   way out manual and documented (a call clearing a pending claim is a
+   follow-up); the option `coexistence_sync(bool)`, on by default; the
+   record never expires. The record's namespace, `wa.es.coexistence`,
+   and its layout stay the owner's to confirm before the first release
+   (`docs/architecture.md` § Stable identifiers). Swappable by the
+   option. Roadmap L11d (landed), M3b.
+
 8. **Token expiry and refresh.** The expiry is recorded; nothing refreshes.
    Today the merchant redoes Embedded Signup.
 
@@ -109,6 +159,32 @@ of its own, after an HTML comment; keep that when you add one.
    still lapse is a grant the merchant removes or lets expire; should Meta
    add a refresh, a refresher behind a trait slots in. Roadmap L11e (the
    library's signal) and M3e (the service's event).
+
+   **Landed with roadmap L11e (2026-11-01), the library's side, its
+   choices proposed to the coordinator (owner's delegation):**
+   `TokenVault::token_expiry(waba_id, lead)` reports a stored token as
+   `TokenExpiry::Never` (no `expires_at`), `Fresh`, `ExpiresSoon`
+   (`now + lead` included: a boundary token is warned about, not missed)
+   or `Expired` (`expires_at <= now`, as `is_expired`), on the vault's
+   clock. The lead is the caller's, per call; `DEFAULT_EXPIRY_LEAD` is 7
+   days: business tokens default to never expiring
+   (`facebook-login/facebook-login-for-business`), and one generated to
+   expire lasts 60 days, so a week leaves time to run Embedded Signup
+   again. It reads the record's clear `expires_at`, not the sealed one:
+   no key, no token in memory, no write, and the stored format
+   unchanged; the clear copy is not authenticated (whoever writes the
+   store can change the answer, as they can delete the record), so
+   `StoredBusinessToken::expiry` answers on the decrypted record for a
+   caller who wants the authenticated copy. A per-record check, not a
+   listing: the vault cannot enumerate its records, so the caller walks
+   its own WABAs (the service, its bindings). The answer is stateless:
+   notifying once per `(waba_id, expires_at)` is the caller's (M3e's).
+   Not recorded, so not reported: `debug_token`'s
+   `data_access_expires_at` (0 for business tokens in Meta's examples);
+   adding it would change the stored record. Swappable: the lead per
+   call, and the classification is one function (`TokenExpiry::at`) a
+   caller can replace on `expires_at`. Roadmap L11e (landed); the
+   service's event, M3e.
 
 9. **Vault key custody and rotation cadence.** The integrator supplies the
    AES-256 key(s); rotation is supported but not scheduled.
@@ -219,6 +295,33 @@ of its own, after an HTML comment; keep that when you add one.
     redis-rs cannot take an explicit provider, integrator-built
     connections stay the way, documented. Swappable: an integrator can
     still pass its own connection. Roadmap L21c.
+
+    **Confirmed 2026-11-01 (coordinator, owner's delegation; roadmap
+    L21c landed):** redis-rs 1.7 cannot take an explicit provider (its
+    rustls path always calls `rustls::ClientConfig::builder()`, and
+    nothing of it accepts a `ClientConfig` or a connector), but it takes
+    any stream (`MultiplexedConnection::new_with_config`), so `rediss://`
+    is wired anyway rather than left to integrator-built connections:
+    `store::RedisTls` builds the `ClientConfig` on
+    `rustls::crypto::aws_lc_rs::default_provider()`, does the handshake
+    with tokio-rustls and hands the stream to that constructor, none of
+    redis-rs's TLS features enabled. The platform's trust store
+    (`rustls-platform-verifier`, as reqwest does) is the default; a
+    private CA or a client certificate is given as PEM. It stays under
+    the existing `redis` feature. `ring` is linked into the workspace's
+    test builds only, through the adapters' rustls dev-dependency, so the
+    tests run in the binary where the process default panics; no library
+    build links it (`cargo tree -e normal -p meta-whatsapp-adapters
+    --features redis -i ring` finds nothing). The test Redis requires
+    client certificates, and its certificates are generated
+    (`tools/test-tls/generate.sh`, and rcgen in the in-process tests),
+    none committed. Why: the decision of 2026-09-26 asked for an explicit
+    provider handed to the connection, and handing redis-rs a stream
+    delivers exactly that without waiting on redis-rs. Swappable by
+    `RedisTls::from_client_config` (any `ClientConfig`: your provider,
+    your verifier) or by an integrator-built connection passed to
+    `RedisKvStore::new`. Not covered: Cluster and Sentinel over TLS.
+    Roadmap L21c (landed).
 
 ## Security posture
 
@@ -404,6 +507,33 @@ Found by the security review of 8ee6fab.
     reaches it" could not hold). Swappable: the sink classifies its own
     errors, and the store is a typed store like the others. Roadmap
     L21a.
+
+    **Confirmed 2026-11-01 (coordinator, owner's delegation; roadmap
+    L21a landed):** a sink signals with `SinkError::Permanent`
+    (`SinkError::permanent`, `is_permanent`; a variant of core's existing
+    leaf, additive, the enum `#[non_exhaustive]`), and `FanoutSink` is
+    permanent only when every failing sink was. The handler acknowledges
+    a permanent error only after `DeadLetters::record` wrote the event and
+    indexed it (a failed write or index releases the claim and answers
+    `500`), then marks its dedup claim done; replay goes past the guard
+    (at least once). The event is stored in its serialized form, the one
+    replay reads back (the body itself for an unparsed one), rather than
+    the raw body. Bounds: 1000 letters (a ring, the oldest overwritten),
+    14 days, 256 KiB per stored event (a larger one kept without its
+    content, still indexed). The contact index takes every identifier the
+    event gives (BSUIDs, parent BSUIDs, phone numbers), keyed by business
+    number and contact; an event naming no number is erased by any
+    number's erasure of the contact (over-deleting diagnostic copies is
+    the safe direction for an erasure). The facade's erasure is a new
+    `meta_whatsapp_rs::erasure::Eraser` rather than a change to
+    `Inbox::erase_all` (whose rustdoc says it does not reach the
+    letters). Swappable: the bounds are settings (`with_capacity`,
+    `with_max_age`, `with_max_event_bytes`), the store is opt-in
+    (`WebhookHandlerBuilder::dead_letters`), and which errors are
+    permanent is each sink's choice. The namespaces `wa.webhook.deadletter`
+    and `wa.webhook.deadletter.contact`, their keys' derivations and their
+    records' shapes stay the owner's to confirm before the first release
+    (roadmap § Owner touchpoints). Roadmap L21a.
 
 ## CMS inbox
 

@@ -128,9 +128,11 @@ Keep sink calls well under the lease (`.with_lease(d)` to change it).
 
 ## What meta-whatsapp-rs does not do
 
-- No dead-letter queue yet: one permanently failing event fails its batch
-  ([OPEN_QUESTIONS.md #30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates),
-  decided on 2026-09-26: dead-lettering, roadmap L21a).
+- No dead letters unless you opt in: a sink error fails its batch (`500`)
+  unless the sink returns `SinkError::permanent(e)` and the handler has
+  `.dead_letters(DeadLetters::new(kv))`; then that event is stored (14 days,
+  1000 letters), alerted, replayable, erased with the facade's `Eraser`, and
+  the rest delivered (roadmap L21a, [OPEN_QUESTIONS.md #30](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#webhooks-and-live-updates)).
 - No API to fetch past webhooks: what your sink did not persist is gone
   after Meta's 7 days.
 - No mutual TLS setup (Meta offers it per app; configure it in front).
