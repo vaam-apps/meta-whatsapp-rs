@@ -458,6 +458,33 @@ Found by the security review of 8ee6fab.
     errors, and the store is a typed store like the others. Roadmap
     L21a.
 
+    **Confirmed 2026-11-01 (coordinator, owner's delegation; roadmap
+    L21a landed):** a sink signals with `SinkError::Permanent`
+    (`SinkError::permanent`, `is_permanent`; a variant of core's existing
+    leaf, additive, the enum `#[non_exhaustive]`), and `FanoutSink` is
+    permanent only when every failing sink was. The handler acknowledges
+    a permanent error only after `DeadLetters::record` wrote the event and
+    indexed it (a failed write or index releases the claim and answers
+    `500`), then marks its dedup claim done; replay goes past the guard
+    (at least once). The event is stored in its serialized form, the one
+    replay reads back (the body itself for an unparsed one), rather than
+    the raw body. Bounds: 1000 letters (a ring, the oldest overwritten),
+    14 days, 256 KiB per stored event (a larger one kept without its
+    content, still indexed). The contact index takes every identifier the
+    event gives (BSUIDs, parent BSUIDs, phone numbers), keyed by business
+    number and contact; an event naming no number is erased by any
+    number's erasure of the contact (over-deleting diagnostic copies is
+    the safe direction for an erasure). The facade's erasure is a new
+    `meta_whatsapp_rs::erasure::Eraser` rather than a change to
+    `Inbox::erase_all` (whose rustdoc says it does not reach the
+    letters). Swappable: the bounds are settings (`with_capacity`,
+    `with_max_age`, `with_max_event_bytes`), the store is opt-in
+    (`WebhookHandlerBuilder::dead_letters`), and which errors are
+    permanent is each sink's choice. The namespaces `wa.webhook.deadletter`
+    and `wa.webhook.deadletter.contact`, their keys' derivations and their
+    records' shapes stay the owner's to confirm before the first release
+    (roadmap § Owner touchpoints). Roadmap L21a.
+
 ## CMS inbox
 
 Found while writing the integrator guides and checking them against

@@ -520,6 +520,10 @@ mod tests {
                 false,
             ),
             (SinkError::Closed.into(), false),
+            (
+                SinkError::permanent(anyhow::anyhow!("NUL in an id")).into(),
+                false,
+            ),
             (WebhookError::SignatureMismatch.into(), false),
             // A conversion sends nothing, whatever stopped it: a timeout
             // too, unlike a transport's.
@@ -903,5 +907,18 @@ mod tests {
         assert!(!broken.is_retryable());
         assert!(!StorageError::Backend(anyhow::anyhow!("x")).is_busy());
         assert!(busy.in_step("record").is_retryable(), "through a step");
+    }
+
+    /// Only the sink's own classification is permanent: an error a sink
+    /// does not classify stays transient, today's behaviour (roadmap L21a).
+    #[test]
+    fn only_a_permanent_sink_error_is_permanent() {
+        assert!(SinkError::permanent(anyhow::anyhow!("NUL in an id")).is_permanent());
+        assert!(!SinkError::Closed.is_permanent());
+        assert!(!SinkError::Full.is_permanent());
+        assert!(!SinkError::Delivery(anyhow::anyhow!("db down")).is_permanent());
+        let err = Error::from(SinkError::permanent(anyhow::anyhow!("x")));
+        assert!(!err.is_retryable());
+        assert!(!err.may_have_been_sent());
     }
 }
