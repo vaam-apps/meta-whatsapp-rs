@@ -37,6 +37,7 @@ pub mod groups;
 pub mod marketing;
 pub mod media;
 pub mod messages;
+pub mod partners;
 pub mod phone_numbers;
 pub mod qr_codes;
 pub mod signups;

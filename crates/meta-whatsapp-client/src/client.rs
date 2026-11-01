@@ -53,6 +53,8 @@ pub(crate) struct Shared {
 /// | [`Client::block_users`] | block list |
 /// | [`Client::groups`] | Groups API |
 /// | [`Client::calling`] | Calling API signalling |
+/// | [`Client::partner_solutions`] | Multi-Partner Solutions, a client's business token |
+/// | [`Client::migration_intents`] | WABA migration intents |
 ///
 /// Anything not wrapped yet is reachable through [`Client::get`],
 /// [`Client::post`] and [`Client::delete`].

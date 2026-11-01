@@ -2333,8 +2333,8 @@ mod id_shape_tests {
 mod paging_withheld_tests {
     use futures::StreamExt;
     use meta_whatsapp_core::ids::{
-        BusinessId, FlowId, GroupId, PhoneNumberId, QrCodeId, TemplateGroupId, TemplateId, UserId,
-        WabaId,
+        AppId, BusinessId, FlowId, GroupId, PhoneNumberId, QrCodeId, SolutionId, TemplateGroupId,
+        TemplateId, UserId, WabaId,
     };
     use meta_whatsapp_core::paging::Page;
     use meta_whatsapp_core::testing::ScriptedTransport;
@@ -2350,6 +2350,9 @@ mod paging_withheld_tests {
     use crate::flows::{ListFlowAssets, ListFlows};
     use crate::groups::{ListGroups, ListJoinRequests};
     use crate::marketing::{ListClientWabas, OnboardingStatus};
+    use crate::partners::solutions::{
+        ListAppSolutions, ListConnectedClientBusinesses, ListSolutionPartners,
+    };
     use crate::qr_codes::{ListQrCodes, QrCodeFields};
     use crate::retry::RetryPolicy;
     use crate::signups::ListSignups;
@@ -2503,6 +2506,25 @@ mod paging_withheld_tests {
                 .client_wabas_with_status(&ListClientWabas::new([OnboardingStatus::Eligible]))
         );
         read!("credit_lines.list", c.credit_lines().list(&business(), &[]));
+        read!(
+            "partner_solutions.app_solutions",
+            c.partner_solutions()
+                .app_solutions(&AppId::new("10").unwrap(), &ListAppSolutions::new())
+        );
+        read!(
+            "partner_solutions.connected_client_businesses",
+            c.partner_solutions().connected_client_businesses(
+                &AppId::new("10").unwrap(),
+                &ListConnectedClientBusinesses::new()
+            )
+        );
+        read!(
+            "partner_solutions.partners",
+            c.partner_solutions().partners(
+                &SolutionId::new("11").unwrap(),
+                &ListSolutionPartners::new()
+            )
+        );
         read!(
             "business_verification.submissions",
             c.business_verification()
