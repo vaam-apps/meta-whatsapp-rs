@@ -1936,6 +1936,56 @@ stored data, the owner's).
   call its operations instead of the `Authorizer`'s vault writes; pass
   the guard its `Operations` (`api::tenant_operations()`, or your own
   router's).
+- **Breaking — the service is split into the crates its binary composes**
+  (roadmap S7, design §2.1 and §8; all `publish = false`, workspace
+  members but not default ones). `meta-whatsapp-server` keeps the
+  process (`config`, `serve`, `cli`) and composes, by its Cargo features
+  `api-axum`, `store-memory` and `store-postgres` (all three default):
+  - `meta-whatsapp-server-store-memory` (`MemoryBackend`, `MemoryStore`,
+    `MemoryEventStore`, `MemoryLeaderLock`) and
+    `meta-whatsapp-server-store-postgres` (`PgBackend`, `PgStore`,
+    `PgEventStore`, `PgLeaderLock`, `PgJanitor`, `PgMigrator`,
+    `migrate`, `migrations`, `lock_key`, `MIGRATION_LOCK`,
+    `MIGRATIONS_TABLE`, `HOUSEKEEPING_LOCK`, and the migration files),
+    each running the core's conformance suite in its own tests;
+  - `meta-whatsapp-server-http` (`state`, `auth`, `error`, `events`,
+    `idempotency`, `listen`, `metrics`, `ratelimit`, `telemetry`, a
+    `store` of the core's ports, and `api` with the public router, the
+    internal listener's layers, `api::common`, `api::media`, `api::ops`
+    and `api::webhooks`);
+  - `meta-whatsapp-server-api-axum` (`api`: the `/v1` routes, the
+    OpenAPI document and `internal_router`, re-exporting the HTTP
+    crate's shared routes).
+
+  `meta_whatsapp_server::{api, auth, error, events, idempotency, keys,
+  listen, metrics, model, ratelimit, state, store, telemetry}` are
+  re-exports of those, so code naming them still compiles, except:
+  `AppState::from_backend` returns `(AppState, Grant)` (it returned the
+  state), and `api::internal_router` takes the `&Grant` (it took the
+  state): the grant, `meta_whatsapp_server_http::state::Grant`, is what
+  an API adapter's routes are served with (the records, the
+  authorization order, `Grant::idempotent`), handed only to the state's
+  composer, and `OwnedNumber::capability` / `OwnedWaba::capability`
+  take it; the state no longer holds its backend (whoever composed it
+  closes it); `config::LogFormat` is the HTTP crate's
+  `telemetry::LogFormat`; `store`'s backends exist with their feature
+  only. Nothing an operator sees changes: `openapi/v1.json` is
+  byte-identical and stays at `crates/meta-whatsapp-server/openapi/v1.json`,
+  routes, statuses, bodies, metrics and every log line's target
+  (`meta_whatsapp_server::<module>`, now named explicitly) are as they
+  were, and the migrations moved byte for byte (same versions and
+  checksums in `wa_server_sqlx_migrations`, under the same lock), so a
+  database migrated by the binary before starts this one with no
+  migration run again. A build without `store-postgres` refuses
+  `DATABASE_URL` at start, one without `store-memory` refuses memory
+  storage, both naming the feature; one without `api-axum` does not
+  compile. S6's legacy idempotency fingerprint stays (its removal, after
+  the first release, is roadmap M2a's now). **Upgrade:** take the pair
+  (`let (state, grant) = AppState::from_backend(…)?;`) and serve
+  `internal_router(&grant)`; depend on the new crates directly if you
+  want one part (a backend, the HTTP layer) without the rest; for a
+  binary without memory storage, `--no-default-features --features
+  api-axum,store-postgres`.
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

@@ -38,17 +38,23 @@ capability table) and `docs/categories.md` (Meta's platform categories).
   `cargo test -p meta-whatsapp-server-core`; one module:
   `cargo test -p meta-whatsapp-server-core idempotency::`.
 - What must not compile outside the service's crates (the vault's
-  methods, capabilities, `AppState::store`, the API handlers,
-  `idempotency::run`) is pinned by `trybuild` UI
+  methods, capabilities, `AppState::store`, a `Grant` made from a state,
+  the API handlers, `idempotency::run`) is pinned by `trybuild` UI
   tests: `cargo test -p meta-whatsapp-server-core --test visibility`
-  (and `-p meta-whatsapp-server --all-features`). After changing a case
-  or the toolchain, regenerate the expected errors with
-  `TRYBUILD=overwrite` and review the `.stderr` diff: each case must
+  (and `-p meta-whatsapp-server-http --all-features --test visibility`,
+  `-p meta-whatsapp-server-api-axum --all-features --test visibility`).
+  After changing a case or the toolchain, regenerate the expected errors
+  with `TRYBUILD=overwrite` and review the `.stderr` diff: each case must
   still fail for its own reason.
-- Service tests: `cargo test -p meta-whatsapp-server --all-features`;
-  after changing a route, regenerate the spec with
+- Service tests, every crate the binary composes (roadmap S7):
+  `cargo test -p meta-whatsapp-server -p meta-whatsapp-server-http -p meta-whatsapp-server-api-axum -p meta-whatsapp-server-store-memory -p meta-whatsapp-server-store-postgres --all-features`
+  (one crate: its own `-p`; the backends' conformance runs are
+  `--test conformance` in store-memory and, live, `--test live_postgres`
+  in store-postgres). After changing a route, regenerate the spec with
   `cargo run -p meta-whatsapp-server -- openapi > crates/meta-whatsapp-server/openapi/v1.json`
-  and review the diff (within v1 a change must be additive).
+  and review the diff (within v1 a change must be additive). The
+  binary builds with `api-axum` and either backend alone
+  (`--no-default-features --features api-axum,store-memory`).
 - Event data snapshots (after a webhook change in the library):
   `META_WHATSAPP_SERVER_UPDATE_SNAPSHOTS=1 cargo test -p meta-whatsapp-server --all-features --test event_data`,
   then review what it wrote under `crates/meta-whatsapp-server/tests/snapshots/event_data/`.
@@ -66,7 +72,8 @@ secrets and the **ports** (`HttpTransport`, `KvStore`, `ConversationStore`,
 `EventSink`, `Clock`); it does no I/O. Dependency rule: everything depends
 on core; no crate of the library depends on the `meta-whatsapp-rs` facade
 (binaries may, and the service's crates do: the `meta-whatsapp-server`
-binary and its core library, `meta-whatsapp-server-core`); `client` and
+binary, its core library `meta-whatsapp-server-core`, and the crates the
+binary composes, `meta-whatsapp-server-{http,api-axum,store-memory,store-postgres}`); `client` and
 `webhooks` never depend on each other or on `adapters` (dev-deps aside);
 adapter library types (sqlx, reqwest, redis) never leak through a port.
 
@@ -106,11 +113,22 @@ flowchart LR
   authorization, error model as data, and the ports its memory and
   Postgres backends implement: `RecordStore`, `IdempotencyRecords`,
   `Outbox`, `LeaderLock`, `Janitor`, `SchemaMigrator`, bundled as a
-  `Backend`). The service's crates depend on the facade and on each
-  other; the library never depends on them. Workspace members but not
-  default ones; the OpenAPI document (`openapi/v1.json`) is generated from
-  code and committed (a test compares them); `tests/errors.rs` reads the
-  error table from the design doc's §5.2.
+  `Backend`). Since roadmap S7 the binary composes, by its features
+  `api-axum`, `store-memory` and `store-postgres`:
+  `meta-whatsapp-server-http` (state, listeners, auth, the §5 renderer,
+  `/webhooks/meta`, media, ops), `meta-whatsapp-server-api-axum` (the
+  `/v1` routes and the OpenAPI document; its handlers reach the records
+  only through the state's `Grant`, which `AppState::from_backend`
+  hands its caller), `meta-whatsapp-server-store-memory` and
+  `meta-whatsapp-server-store-postgres` (with the migrations). The
+  service's crates depend on the facade and on each other; the library
+  never depends on them. Workspace members but not default ones; the
+  OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`) is
+  generated from code and committed (a test compares them);
+  `tests/errors.rs` reads the error table from the design doc's §5.2.
+  Moved modules log under their old targets
+  (`meta_whatsapp_server::<module>`, explicit): keep new lines' targets
+  explicit too.
 - **Stable identifiers** (`wa-rs/token-vault/v1`, `wa.token`, `wa.otp.*`,
   `wa.es.session`, `wa.webhook.dedup`, table prefix `wa_`) predate the
   rename and are pinned by tests: they are encrypted/hashed into stored
