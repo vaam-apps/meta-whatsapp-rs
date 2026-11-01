@@ -1,0 +1,17 @@
+error[E0603]: function `run` is private
+ --> tests/visibility/fail/idempotency_run.rs:9:45
+  |
+9 | use meta_whatsapp_server_http::idempotency::run;
+  |                                             ^^^ private function
+  |
+note: the function `run` is defined here
+ --> src/idempotency.rs
+  |
+  | / pub(crate) async fn run(
+  | |     state: &AppState,
+  | |     caller: &Caller,
+  | |     key: Option<IdempotencyKey>,
+  | |     fingerprint: Fingerprint,
+  | |     operation: impl Future<Output = Result<Success, ApiError>>,
+  | | ) -> Response {
+  | |_____________^

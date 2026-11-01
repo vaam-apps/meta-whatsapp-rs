@@ -37,9 +37,14 @@ crates/
                            feature flags, runnable examples. What integrators depend on.
   meta-whatsapp-server-core  the service's framework-free core: its domain, authorization,
                            error model as data, and the ports its backends implement.
-  meta-whatsapp-server     the HTTP service (a binary on the facade and the core): tenants,
-                           keys, the /v1 API for apps not written in Rust, its backends.
-                           See "Service" below.
+  meta-whatsapp-server-store-memory    the service's memory backend (development).
+  meta-whatsapp-server-store-postgres  the service's Postgres backend and its migrations.
+  meta-whatsapp-server-http  the service's HTTP layer: listeners, authentication before
+                           the body, the error renderer, Meta's webhook, media, operations.
+  meta-whatsapp-server-api-axum  the service's /v1 routes on axum and their OpenAPI document.
+  meta-whatsapp-server     the HTTP service (a binary composing the four above by its Cargo
+                           features, on the facade and the core): tenants, keys, the /v1 API
+                           for apps not written in Rust. See "Service" below.
 .xtask                     repo automation (`cargo xtask meta-docs`): a workspace of its own,
                            with its own Cargo.lock, excluded from the root one, so its ureq
                            (rustls with `ring`) never enters a library or test build.
@@ -69,8 +74,9 @@ leaks its library's types through a port.
 | `clock::Clock` | `now` | — |
 
 Typed stores are built **on `KvStore`**, never as new ports: token vault,
-OTP challenges, webhook dedup, Embedded Signup sessions, bot cooldowns. An
-adapter author implements five methods once and every feature works.
+OTP challenges, webhook dedup, Embedded Signup sessions, bot cooldowns,
+the bot's durable jobs. An adapter author implements five methods once
+and every feature works.
 
 What the inbox keeps about a conversation beside its messages (window
 events, thread ownership, the coexistence address book, the links
@@ -136,16 +142,20 @@ rewrite them along with the code.
 | `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
 | `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server-core/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
 | `meta-whatsapp-server/event-id/v1`, `evt_` + 32 hex digits | `EventIdKey`, same file | HMAC label of the key event ids are derived with under the app secret, and the id's shape: stored as `wa_server_events.id` and what receivers deduplicate on | `event_ids_are_pinned` (known answers) |
-| `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `lock_key`, `meta-whatsapp-server/src/store/postgres.rs` | Postgres advisory lock keys (the first 8 bytes of their SHA-256; `lock_key` derives the leader lock's the same way, so its `housekeeping` turn is `HOUSEKEEPING_LOCK`): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented`, `the_leader_locks_keys_are_the_services_locks` |
-| the service's migration files, `wa_server_sqlx_migrations` | `meta-whatsapp-server/migrations/*.sql`, `MIGRATIONS_TABLE` | the service's `wa_server_*` tables (the operator-only event stream `''` included) and its migration history; an edited file makes `migrate` refuse every database migrated before | `the_migrations_and_their_checksums_are_pinned` |
+| `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `lock_key`, `meta-whatsapp-server-store-postgres/src/postgres.rs` (`meta-whatsapp-server/src/store/postgres.rs` until roadmap S7) | Postgres advisory lock keys (the first 8 bytes of their SHA-256; `lock_key` derives the leader lock's the same way, so its `housekeeping` turn is `HOUSEKEEPING_LOCK`): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented`, `the_leader_locks_keys_are_the_services_locks` |
+| the service's migration files, `wa_server_sqlx_migrations` | `meta-whatsapp-server-store-postgres/migrations/*.sql` (moved byte for byte from `meta-whatsapp-server/migrations/` in roadmap S7: sqlx knows a migration by its version and checksum, never its path), `MIGRATIONS_TABLE` | the service's `wa_server_*` tables (the operator-only event stream `''` included) and its migration history; an edited file makes `migrate` refuse every database migrated before | `the_migrations_and_their_checksums_are_pinned`, `live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration` |
 | `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server-core/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
 | `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key; for a subcommand, the command part is its path, `order status`). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed`, `a_subcommands_cooldown_key_is_over_its_path` |
 | `wa.bot.pacer` (added by roadmap B2b; the namespace and the record layout **pending the owner's confirmation**, roadmap § Owner touchpoints) | `PACER_NAMESPACE`, `meta-whatsapp-bot/src/pacer/kv.rs` | store namespace of `KvRateLimiter`'s per-number schedules (key: SHA-256 hex of the length-prefixed phone number id, `<len>:<id>,`; value: the 49-byte version 1 record, its first byte the version). **Ephemeral**: changing it forgets each number's schedule, slow-down and raised rate (records expire 24 hours after their last slot by default), so while replicas of two releases run side by side they book from two budgets; no data is stranded | `the_pacer_key_is_pinned_and_hashed` (known answer), `the_pacer_record_is_pinned` |
+| `wa.bot.jobs`, `wa.bot.jobs.due`, `wa.bot.jobs.sent`, `wa.bot.jobs.message`, `wa.bot.jobs.limited` (**pending the owner's confirmation before the first release**, roadmap § Owner touchpoints; added by B3) | `JOBS_NAMESPACE`, `JOBS_DUE_NAMESPACE`, `JOBS_SENT_NAMESPACE`, `JOBS_MESSAGE_NAMESPACE`, `JOBS_LIMITED_NAMESPACE`, `BUCKET_SECONDS`, `meta-whatsapp-bot/src/jobs/mod.rs`; the records, `meta-whatsapp-bot/src/jobs/store.rs` | store namespaces of the durable jobs: the job records (key: SHA-256 hex of the length-prefixed job id), the due index (pages `<minute start, unix seconds>:<page>` of job ids, and its `cursor`, with the page versions of the minute behind it once moved forward), the per-recipient markers (digest of the job id, the run and the recipient's key: `user:<BSUID>` first, else `phone:<digits>`, or `group:<id>`), the sent messages' ids (digest of the `wamid`) and the marketing-limited markers (digest of the job id and the recipient's key); every record JSON with `"v":1`, in a pinned field order. **Not ephemeral**: changing a name, a key's derivation or a record's shape strands the jobs scheduled, or makes a resumed job send again to recipients it sent to | `the_job_keys_are_pinned_and_hashed`, `a_recipient_is_keyed_by_bsuid_first`, `buckets_are_minutes_in_unix_seconds` (key bytes, known answers); `the_job_records_are_pinned`, `the_index_and_marker_records_are_pinned` (record bytes, written and read back) |
 
 Library store namespaces are `wa.<module>[.<purpose>]` (`wa.token`,
 `wa.otp.rate`, `wa.webhook.dedup`, `wa.bot.cooldown`): a new typed store
 takes one under its module, and an integrator who keeps their own
-records in the same `KvStore` stays clear of `wa.`.
+records in the same `KvStore` stays clear of `wa.`. A row marked pending
+was added after the table was last confirmed: the owner confirms it
+before the first release, and until then it may still change without a
+data migration.
 
 Not ours to rename either: Meta's names (`wa_id`, `wamid`, `waba_id`,
 `wa.me`, `WA_EMBEDDED_SIGNUP`, …), and the `WA_` environment variables
@@ -177,8 +187,9 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   `CustomerServiceWindowClosed`, like Meta's `131047`, so one condition has
   one kind; a thread another app owns under Conversation Routing
   (`ValidationError::thread_owned_elsewhere()`) is `ThreadOwnedElsewhere`,
-  which no Graph code maps to yet (Meta documents none; `from_code` maps
-  one there when it does). `Error::kind` looks through `Step`, and so does
+  like Meta's `131070` (a service message without owning the thread,
+  `conversation-routing/thread-control` § Errors). `Error::kind` looks
+  through `Step`, and so does
   `meta_whatsapp_rs::inbox::is_thread_owned_elsewhere`. The service answers
   both `409`.
 - Two questions about a failed send, two methods.
@@ -816,7 +827,7 @@ deprecates them on 2026-10-15.
 
 Coexistence: `smb_app_data` sync (contacts, history) within 24h.
 
-### In-App Signup (`meta_whatsapp_client::signups`), WABA (`waba`), phone numbers (`phone_numbers`), business profile, QR codes, block users, commerce, analytics, marketing (MM API), flows, groups, calling
+### In-App Signup (`meta_whatsapp_client::signups`), WABA (`waba`), phone numbers (`phone_numbers`), business profile, QR codes, block users, commerce, analytics, marketing (MM API), flows, groups, calling, thread control (`thread_control`)
 
 Typed endpoint wrappers per the rules above. Flows additionally provides
 the data-endpoint crypto (feature `flows-endpoint`): decrypt
@@ -1236,8 +1247,35 @@ for every event, after the ban and the match.
   retry paced, instead of in the client); `Ctx::pacer` hands the pacer to
   handlers; `PacedGroups` and `PacedGroup` wrap the client's group
   operations the same way, and `Pacer::acquire` is the hook for any other
-  call. No new port and no persistence: a run lives in memory (durable
-  jobs are B3's typed store on `KvStore`).
+  call. No new port and no persistence: a run lives in memory.
+- **Durable jobs** (`jobs`, roadmap B3; design D29): `KvJobs` keeps
+  `Job`s (a number, a due time, the recipients each person once, a JSON
+  payload) as a typed store on `KvStore`, no port of its own. `KvStore`
+  has no range scan, so due times are bucketed by the minute: a job's id
+  is appended to its minute's page by compare-and-swap (256 ids a page,
+  then the next page; a due time already past, to the current minute's),
+  and a `cursor` record names the oldest minute still to read. A `JobRunner` reads from the cursor up to now, claims
+  each due job by compare-and-swap (pending, or claimed under an expired
+  lease, to claimed with a lease naming it), and sends through a paced
+  `Broadcast` whose outbound checks before each send that the job is
+  still its own and not cancelled (renewing the lease) and creates the
+  recipient's marker with `put_if_absent` before the request, then
+  reads the job once more (a cancel or a re-run meanwhile: no request):
+  a "sending" marker nobody completed is an outcome unknown, never
+  resent (at most once, not exactly once). It moves the cursor past a
+  minute whose jobs are all settled, keeping that minute's page
+  versions in it, reads that minute again and moves it back if it
+  changed meanwhile (every tick starts by the same second read, so a
+  runner failing between the two loses nothing), and indexing into a
+  minute behind the cursor moves the cursor back, so no job is skipped
+  by a race. A pass that leaves recipients provably unsent
+  (`Error::may_resend`, a stop, a store failure) is retried with backoff,
+  then stopped. A message's id is kept for its status webhooks: a
+  `131049` marks that recipient for 24 hours (`KvJobs::observe`,
+  `JobFeedback`), and a re-run (`KvJobs::rerun`) skips them. The job
+  store is not behind a trait yet (the `KvStore` adapter is what swaps;
+  a `JobStore` trait is roadmap B3b); the runner's outbound, pacer,
+  failure policy and composer are.
 
 ## Typst (`meta-whatsapp-typst`)
 
@@ -1321,14 +1359,47 @@ decisions and the delivery milestones, is
     (the `http` crate is in its graph only through the library, whose
     `HttpTransport` port and client speak it; no `http` type crosses the
     core's API).
+  - The backends (roadmap S7), each on the core and the facade alone:
+    `crates/meta-whatsapp-server-store-memory` (`MemoryBackend`,
+    development and tests) and `crates/meta-whatsapp-server-store-postgres`
+    (`PgBackend` through sqlx, the facade's
+    `meta_whatsapp_rs::adapters::store::postgres::sqlx`, with the
+    service's migrations and their migrator). Each runs the core's
+    conformance suite in its own tests (live for Postgres).
+  - `crates/meta-whatsapp-server-http`: what every API adapter shares
+    over HTTP (axum through `meta_whatsapp_rs::webhooks::axum`): the
+    state (`AppState`, composed from a `Backend`, and the `Grant` its
+    composer is handed, the only way an API adapter's handlers reach the
+    records, the authorization order and the idempotency engine), the
+    listeners' accept loop, telemetry and metrics, authentication before
+    the body (the guards and extractors), the §5 renderer of the core's
+    errors, the webhook listener (the signature header's shape before
+    the body, the places, the body's size and read time, the refusals'
+    log, over the core's pipeline), media, and the operations routes.
+  - `crates/meta-whatsapp-server-api-axum`: today's `/v1` resource routes
+    and the OpenAPI document generated from them (utoipa), with the HTTP
+    crate's media and operations groups; permanent, the swap target
+    (design D26).
   - `crates/meta-whatsapp-server` (binary `meta-whatsapp-server`): the
-    HTTP API (axum and the OpenAPI document, through the facade's
-    re-exports `meta_whatsapp_rs::webhooks::axum` and
-    `meta_whatsapp_rs::adapters::store::postgres::sqlx`), which renders
-    the core's errors, the webhook listener (the signature header's shape
-    before the body, the places, the body's size and read time, the
-    refusals' log, over the core's pipeline), configuration, and the
-    backends.
+    process (configuration, `serve`, the command line), composing one
+    API adapter (feature `api-axum`) and the backends the command line
+    can open (`store-memory`, `store-postgres`), all three by default.
+    It re-exports the moved modules under their old paths
+    (`meta_whatsapp_server::api`, `::state`, `::store`, …), and keeps
+    the committed `openapi/v1.json`, which its `openapi` command prints.
+
+  ```text
+  meta-whatsapp-server (binary) ─┬─► meta-whatsapp-server-api-axum ─► meta-whatsapp-server-http ─┐
+                                 ├─► meta-whatsapp-server-http ──────────────────────────────────┤
+                                 ├─► meta-whatsapp-server-store-memory ──────────────────────────┤
+                                 └─► meta-whatsapp-server-store-postgres ────────────────────────┴─► meta-whatsapp-server-core ─► meta-whatsapp-rs (facade)
+  ```
+
+  No store crate depends on the HTTP crates, and the HTTP crate depends
+  on no API adapter or backend (dev-dependencies aside: its unit tests
+  run on the memory backend). Every log line of a moved module keeps its
+  target, `meta_whatsapp_server::<module>` as it was before the split
+  (explicit since S7): an operator's filters name them.
 - **Ports, and a backend as the unit of swapping.** The core stores
   through ports: `RecordStore` (tenants, keys, bindings),
   `IdempotencyRecords`, `Outbox`, `LeaderLock` (a lease,

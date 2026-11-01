@@ -34,7 +34,6 @@ use time::format_description::well_known::Rfc3339;
 
 use meta_whatsapp_server_core::admin::{TenantsInput, allowed_tenants, is_valid_name, mint};
 
-use crate::api::common::rfc3339;
 use crate::config::{self, Config, Env, MigrateMode, ProcessEnv, Storage};
 use crate::model::{
     AllowedTenants, ApiKeyRecord, KeyOwner, KeyScope, MAX_NAME_CHARS, MAX_PAGE_SIZE, PageRequest,
@@ -42,7 +41,9 @@ use crate::model::{
 };
 use crate::serve::{BackendFactory, BuiltinBackends};
 use crate::store::{Backend, RecordStore};
-use crate::{api, serve, telemetry};
+use crate::{serve, telemetry};
+use meta_whatsapp_server_api_axum::api;
+use meta_whatsapp_server_http::api::common::rfc3339;
 
 /// The meta-whatsapp-rs HTTP service.
 #[derive(Debug, Parser)]

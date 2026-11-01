@@ -25,14 +25,17 @@ cat /tmp/ci.exit   # 0 or it is not verified
 - **Skipped ≠ passed.** `live_*` tests print `ok` when their service URL is
   unset. Only `just test-live` sets `META_WHATSAPP_RS_REQUIRE_LIVE=1`, which turns a
   missing service into a failure. Check its output shows the live tests
-  *ran* (non-zero count). It runs three crates' live tests
-  (`meta-whatsapp-adapters` and `meta-whatsapp-server` filtered by
-  `live_`, the facade `meta-whatsapp-rs` by `live_postgres_`: its
-  `tests/inbox_events.rs`): check all three counts. The facade's filter
-  is narrower because other tests of its have `live_` in their names.
-- **`just features`' rustdoc line leaves `meta-whatsapp-server` out** on
-  purpose: the service turns on the facade's features, and in one
-  `--workspace` build they would hide an ungated doc link.
+  *ran* (non-zero count). It runs four crates' live tests
+  (`meta-whatsapp-adapters`, `meta-whatsapp-server-store-postgres` and
+  `meta-whatsapp-server` filtered by `live_`, the facade
+  `meta-whatsapp-rs` by `live_postgres_`: its `tests/inbox_events.rs`):
+  check all four counts. The facade's filter is narrower because other
+  tests of its have `live_` in their names.
+- **`just features`' rustdoc line leaves the service's crates that turn
+  on adapter features out** (`meta-whatsapp-server` and, since roadmap
+  S7, `-http`, `-api-axum`, `-store-memory`, `-store-postgres`) on
+  purpose: they turn on the facade's features, and in one `--workspace`
+  build they would hide an ungated doc link.
 - **Don't reconstruct the gate.** `cargo test` is not `just test`
   (`--all-features`); `cargo clippy` is not `just lint` (`-D warnings`,
   `--all-targets`).
