@@ -321,6 +321,23 @@ mod tests {
         assert_eq!(index_first(&to_end), None);
     }
 
+    /// A table counting one entry more than it holds, followed by another
+    /// box: the "entry" past its end is the next box's header, which is
+    /// never rewritten.
+    #[test]
+    fn a_table_never_writes_past_its_box() {
+        let mut stco = table(*b"stco", &[100, 200]);
+        stco[12..16].copy_from_slice(&3u32.to_be_bytes());
+        let mut buf = [stco, mp4_box(*b"stsz", &[0; 8])].concat();
+        let before = buf.clone();
+        let len = buf.len();
+        assert_eq!(
+            shift_offsets(&mut buf, 0, len, PATH.len(), &|o| o.checked_add(1)),
+            None
+        );
+        assert_eq!(buf[24..], before[24..], "the next box was rewritten");
+    }
+
     #[test]
     fn a_shift_that_overflows_a_32_bit_offset_is_refused() {
         let mut stco = table(*b"stco", &[u64::from(u32::MAX)]);
