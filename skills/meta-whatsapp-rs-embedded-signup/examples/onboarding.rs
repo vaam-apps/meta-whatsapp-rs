@@ -63,12 +63,15 @@ pub async fn start(
 }
 
 /// The steps after `store_token`: the token is kept, `resume` redoes them
-/// (the two credit steps run for a Solution Partner only).
-pub const AFTER_STORE: [&str; 4] = [
+/// (the two credit steps run for a Solution Partner only, the two syncs
+/// after a coexistence onboarding only, never posted twice).
+pub const AFTER_STORE: [&str; 6] = [
     steps::SUBSCRIBE_APP,
     steps::ASSIGN_SYSTEM_USER,
     steps::SHARE_CREDIT_LINE,
     steps::REGISTER_PHONE,
+    steps::SYNC_CONTACTS,
+    steps::SYNC_HISTORY,
 ];
 
 /// How the callback ended.

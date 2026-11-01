@@ -245,6 +245,39 @@ stored data, the owner's).
   `an_undated_event_after_a_move_waits_out_the_window`),
   `capabilities::failed_before_a_refresh_marks_nothing`, and the
   `webhooks` cases through the pipeline.
+- **The coexistence sync inside onboarding**
+  (`meta_whatsapp_client::embedded_signup`, roadmap L11d, parity rows
+  124 and 69; OPEN_QUESTIONS #7; the service's side is M3b). After a
+  coexistence onboarding (`FinishKind::WhatsappBusinessAppOnboarding`),
+  `onboard`, `onboard_with_approval` and `resume` end with two new steps,
+  `steps::SYNC_CONTACTS` (`sync_contacts`:
+  `POST /{PHONE_NUMBER_ID}/smb_app_data`, `sync_type`
+  `smb_app_state_sync`) and `steps::SYNC_HISTORY` (`sync_history`,
+  `history`), with the business token, after the subscription and a
+  Solution Partner's credit line, in the order of
+  `embedded-signup/onboarding-business-app-users`. On by default; a new
+  field and setter, `OnboardingRequest::coexistence_sync` /
+  `coexistence_sync(false)`, turns them off, and
+  `Onboarded::needs_coexistence_sync()` is unchanged. Meta's answers are
+  in a new field, `Onboarded::coexistence_sync`
+  (`Option<CoexistenceSync>`: per request, `SyncOutcome::Requested` with
+  its `request_id`, or `Refused` with `2593107` or `2593108`, recorded
+  and reported, not a failure). Meta allows each request once per
+  number within 24 hours, so each is claimed before it is posted in a
+  plain JSON record (new namespace `COEXISTENCE_NAMESPACE`,
+  `wa.es.coexistence`, keyed by phone number id, scoped to the stored
+  token record; pending the owner's confirmation as a stable
+  identifier), and a `resume` never posts one that was answered or
+  whose answer was lost (it fails at that step with a `ValidationError`
+  on `coexistence_sync` until the request turns the sync off); one Meta
+  refused before doing anything is asked again; a record of a later
+  onboarding of the number is never taken over (the step fails, posting
+  nothing). At most once, not exactly once: a process stopped between a
+  claim and its answer leaves the number to the documented manual way
+  out (a call that clears a claim is a follow-up). Hosted signup syncs
+  nothing (Cloud API only). Additive, but a default change for
+  coexistence onboardings: they now send two more requests, and a
+  scripted test of one needs their answers.
 - **Dead letters for webhook events a sink refuses permanently**
   (`meta_whatsapp_webhooks::deadletter`, roadmap L21a,
   `OPEN_QUESTIONS.md` #30). A sink says an event will never go through

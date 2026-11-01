@@ -72,8 +72,10 @@ pub enum FinishKind {
     /// `FINISH_ONLY_WABA`: completed without a phone number (bypass flow).
     OnlyWaba,
     /// `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`: coexistence. The number is
-    /// already registered: do **not** call `register`, and start the
-    /// `smb_app_data` syncs within 24 hours.
+    /// already registered: do **not** call `register`. The `smb_app_data`
+    /// syncs are due within 24 hours: onboarding requests them unless
+    /// [`OnboardingRequest::coexistence_sync`](super::OnboardingRequest::coexistence_sync)
+    /// is off.
     WhatsappBusinessAppOnboarding,
     /// `FINISH_OBO_MIGRATION`: an on-behalf-of migration.
     OboMigration,
