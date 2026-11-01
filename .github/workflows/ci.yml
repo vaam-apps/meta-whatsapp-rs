@@ -17,6 +17,10 @@ jobs:
     name: just ci
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # The media conversion tests (crates/meta-whatsapp-rs/tests/ffmpeg.rs)
+      # fail instead of skipping without the ffmpeg the step below installs.
+      META_WHATSAPP_RS_REQUIRE_FFMPEG: "1"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -41,6 +45,9 @@ jobs:
           node-version-file: tools/skills-ts/.nvmrc
           cache: npm
           cache-dependency-path: tools/skills-ts/package-lock.json
+      # An ffmpeg with libopus for the media conversion tests (roadmap L19),
+      # on this runner only: no image or dev container carries one.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       # The project's own gate, nothing reconstructed. test-live brings up
       # compose.test.yaml (Docker is available on ubuntu-latest).
       - run: just ci

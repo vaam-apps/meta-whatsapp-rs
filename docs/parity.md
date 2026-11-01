@@ -38,7 +38,9 @@ L15), against its code and Meta's `conversation-routing` pages of
 welcome message sequences (roadmap L13), against its code and Meta's
 marketing and CTWA pages of 2026-11-01; rows 89 and 90 with durable
 scheduling (roadmap B3), against its code and Meta's
-`templates/marketing-templates/per-user-limits` page of 2026-11-01. Every cell
+`templates/marketing-templates/per-user-limits` page of 2026-11-01; row 48 with media conversion (roadmap L19), against
+its code and Meta's `business-phone-numbers/media` and
+`messages/audio-messages` pages of 2026-11-01. Every cell
 about us was
 checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
@@ -54,7 +56,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 116 | 14 | 1 | 1 |
+| Library | 116 | 15 | 0 | 1 |
 | Service | 39 | 25 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -261,7 +263,7 @@ The owner's definition (2026-09-26):
 | 45 | Media | Download received media | Yes | Yes (by key) | `reference/media/media-api.md`, `reference/media/media-download-api.md` | `Media::download` (SHA-256 checked; of media hosts, the token goes only to Graph and `lookaside.fbsbx.com`, and otherwise to one `GET` on `api.facebook.com`, roadmap L10a) | `GET /v1/numbers/{pn}/media/{media_id}` (`server_http::api::media::download_media`, over `server_core::media::Media::download`: whole, or the core's `server_core::media::MediaStream`, one chunk held back); whether Meta serves a *received* media id under the route's `phone_number_id` check is unverified (OPEN_QUESTIONS #43, decided: exempt the ids the service recorded as received, M2e) | done / partial (M2e) |
 | 46 | Media | Delete media | — | — | `reference/media/media-api.md` | `Media::delete` | `DELETE /v1/numbers/{pn}/media/{media_id}` (`server_http::api::media::delete_media`, over `server_core::media::Media::delete`) | done / done |
 | 47 | Media | Resumable upload (template header handles, profile pictures) | — | — | Graph's Resumable Upload API, documented outside the WhatsApp docs; the WhatsApp pages that rely on it: `templates/template-media.md` (header handles), `reference/whatsapp-business-profile/whatsapp-business-profile-node-api.md` (pictures) | `Media::resumable_upload` | not exposed | done / gap (M5c1) |
-| 48 | Media | Converting media (voice to Opus, stickers from images, resizing) | Yes | Yes (runs locally: ffmpeg, sharp) | none (client side); accepted formats: `messages/audio-messages`, `messages/sticker-messages` | gap: type and size checks only | gap | gap / gap (M5c1) |
+| 48 | Media | Converting media (voice to Opus, stickers from images, resizing) | Yes | Yes (runs locally: ffmpeg, sharp) | none (client side); accepted formats: `business-phone-numbers/media` (Ogg "OPUS codecs only", "mono input only"), `messages/audio-messages`, `messages/sticker-messages` | partial: voice to Opus, through the port `core::media::MediaConverter` (`core::media::TargetFormat::OggOpus`: mono Ogg Opus, uploaded as `audio/ogg`, which `client::media::validate_upload` takes; `client::media::Media::upload_converted`), implemented by `adapters::media::FfmpegConverter` (feature `ffmpeg`, off by default: an `ffmpeg` the integrator installs, run with fixed arguments, stdin and stdout only, its input protocols and formats restricted, bounded in input, output and time; failures `core::error::ConversionError`; L19); stickers from images and resizing are not converted (L19b) | gap: the image carries no `ffmpeg` ([design §7](design/server.md#7-operations), M4); configuring a converter is M5c1's | partial / gap (M5c1) |
 | 154 | Media | A GIF (an animated mp4) as a template's media header | Yes (GIF playback, row 43) | No, or sent as plain media (row 43) | Marketing Messages API only: `marketing-messages/features.md` (an animated GIF header), `templates/components.md` (header format `GIF`: an mp4 of at most 3.5 MB); no page shows the send-time header parameter for a GIF (re-read for L13 on 2026-11-01: `templates/components.md`, `templates/template-media.md`, `marketing-messages/features.md`, `marketing-messages/send-marketing-messages.md`, the MM API and Messages API references) | the definition: `client::templates::HeaderFormat::Gif`; the send-time parameter is not typed, for want of a page showing it (`client::templates::Parameter::Other` would carry it verbatim; unverified); sent through `client::marketing::Marketing::send` | creating the template takes Meta's JSON (`POST /v1/wabas/{waba_id}/templates`); Marketing Messages API sends are not exposed (row 136) | partial / gap (M5h) |
 
 ### D. Interactive messages and Flows

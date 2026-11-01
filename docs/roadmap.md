@@ -2312,7 +2312,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     resolved (references, payload schemas, `__example__` types, form
     names), component types per Flow JSON version, and the limits the
     docs call soft (`NavigationList` content truncated or not rendered).
-- [ ] **L19. Media conversion** (`meta-whatsapp-client`: a
+- [x] **L19. Media conversion** (`meta-whatsapp-client`: a
   `MediaConverter` trait; `meta-whatsapp-adapters`: an implementation
   behind an `ffmpeg` feature, off by default; row 48): the
   implementation runs an `ffmpeg` the integrator installs, or calls a
@@ -2325,6 +2325,104 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a WAV input comes out as Ogg with Opus that
     `Media::upload`'s type check accepts; a missing `ffmpeg` is a typed
     error, not a panic.
+  - **Landed:** the port `meta_whatsapp_core::media::MediaConverter`,
+    an object-safe async trait, `convert(MediaInput, TargetFormat) ->
+    Result<ConvertedMedia>`, with `TargetFormat::OggOpus` (mono Ogg
+    Opus, uploaded as `audio/ogg`: Meta's media page reads "OPUS codecs
+    only; base audio/ogg not supported; mono input only", read on
+    2026-11-01) and its limit, core's `media::AUDIO_MAX_BYTES` (16 MiB);
+    `meta_whatsapp_client::media` re-exports them and uploads a result
+    with `Media::upload_converted` (its format's type and extension,
+    through `validate_upload`); and `meta_whatsapp_adapters::media::FfmpegConverter`
+    behind the adapters' `ffmpeg` feature (forwarded by the facade's;
+    off by default; in `full`). The converter starts the `ffmpeg` binary
+    with `tokio::process`, never a shell, with fixed literal arguments:
+    the input on stdin and the result on stdout, `-protocol_whitelist
+    pipe` and a `-format_whitelist` of recording formats (WAV, MP3, Ogg,
+    FLAC, AAC, MP4/M4A/3GP, AMR, Matroska/WebM) before `-i`, the first
+    audio stream only, tags and chapters dropped, `-ac 1`, libopus at
+    32 kb/s. The input (64 MiB) and the run (60 s, killed past it) are
+    bounded, and the result to the 16 MiB upload limit (killed past it);
+    stderr is drained and withheld; the output is checked to be mono Ogg
+    Opus. Failures are a new node, `Error::Conversion(ConversionError)`
+    (`BinaryMissing`, `EncoderMissing`, `Timeout`, `InputRejected`,
+    `OutputInvalid`, `Killed`; architecture.md § Error tree), never
+    `may_have_been_sent`, retryable only on `Timeout`; an empty or
+    oversized input (or result) is a `ValidationError` on `input`.
+    `FfmpegConverter::check` finds a missing binary or libopus at
+    startup. Decisive: `ffmpeg_turns_wav_into_ogg_opus_that_upload_accepts`
+    (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`, in the facade, where the
+    adapters and the client meet: a stereo 44.1 kHz WAV comes out as Ogg
+    whose first packet is an `OpusHead` for one channel, ffprobe
+    agreeing, and goes through `Media::upload_converted` as `audio/ogg`,
+    its exact request asserted) and `a_missing_ffmpeg_is_a_typed_error`
+    (`ConversionError::BinaryMissing`). The real-`ffmpeg` tests use
+    `META_WHATSAPP_RS_TEST_FFMPEG`, else `ffmpeg` on `PATH`, and skip
+    without one unless `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`; CI installs
+    `ffmpeg` on its runner and sets that variable
+    (`.github/workflows/ci.yml`, docs/dev-environment.md), so they count
+    there; no image or dev container carries one. They ran against
+    ffmpeg 6.1.1 when this landed. Removing the protocol or format
+    whitelist, mono, the timeout, the kill on timeout, an input or
+    output bound or the output check, or withholding stderr, changing
+    the codec, or a timeout that says `may_have_been_sent`, fails a test
+    (the protocol whitelist only the fixed-argument one: with these
+    formats, ffmpeg 6.1.1 opens nothing else from a pipe even without
+    it, so it is a second wall, not the first). The security review
+    added: the child's environment reduced to `PATH` (no `FFREPORT` log
+    file), `-max_alloc 16777216` (a 16 KiB WAV declaring 1 Hz otherwise
+    took 1.7 GB and a minute), `-abort_on empty_output` (an input
+    without audio came back as an empty voice note), an MP4 whose index
+    follows its media data moved index first in memory (from a pipe,
+    ffmpeg read next to nothing of one longer than a few seconds, and
+    the converter returned it as success), and real-`ffmpeg` tests for
+    each, one of them an MP4 whose data reference names a host file,
+    never read.
+    Not done: images into stickers and resizing (L19b), a conversion
+    sidecar over HTTP, and a limit on conversions at once (the caller's).
+  - **Decided** (coordinator, under the owner's delegation, 2026-11-01;
+    each swappable):
+    - The trait lives in `meta-whatsapp-core`, beside the other ports,
+      not in the client as planned: the adapters then depend on core
+      alone, with no dependency cycle through the client's tests. Core
+      carries the MIME type, the extension and the size limit of each
+      format; the client re-exports the port from `client::media`, and a
+      client test keeps core's limit equal to its upload table.
+    - The upload MIME type is `audio/ogg`, the literal of Meta's table,
+      not `audio/ogg; codecs=opus` (the upload check takes both).
+    - Failures get a typed node, `Error::Conversion(ConversionError)`,
+      with existing kinds (no new `ErrorKind`: the service's error codes
+      and OpenAPI document are unchanged); a missing binary is
+      `ConversionError::BinaryMissing`, not a `ConfigError`, so every
+      converter failure is handled in one place; an empty or oversized
+      input stays a `ValidationError` on `input`.
+    - Defaults: 64 MiB of input, 60 s, 32 kb/s at 48 kHz in `voip` mode,
+      the recording formats above (each a setting or a literal of the
+      converter, swapped by another `MediaConverter`).
+    - The facade's `ffmpeg` feature is in `full`; the gate variables are
+      `META_WHATSAPP_RS_REQUIRE_FFMPEG`, `META_WHATSAPP_RS_TEST_FFMPEG`
+      and `META_WHATSAPP_RS_TEST_FFPROBE`, apart from
+      `META_WHATSAPP_RS_REQUIRE_LIVE` (no `live_` test name).
+    - Row 48 stays partial, its rest planned in L19b.
+    - CI proves the conversion: its runner installs `ffmpeg`, which no
+      image or dev container does.
+- [ ] **L19b. Stickers and image resizing** (`meta-whatsapp-core`: new
+  `TargetFormat`s; `meta-whatsapp-adapters`: their conversion behind the
+  `ffmpeg` feature, or another converter; row 48): an image into a WebP
+  sticker within Meta's limits (`image/webp`, 100 KB static, 500 KB
+  animated: `messages/sticker-messages`, which gives no dimensions, so
+  none is assumed), and a JPEG or PNG resized or
+  re-encoded under the 5 MB image limit, through the same port and the
+  same safety rules as L19 (fixed arguments, input formats restricted,
+  bounded, diagnostics withheld).
+  - **Kind:** additive.
+  - **After:** L19.
+  - **Decisive:** a PNG comes out as a static WebP (its `RIFF`/`WEBP`
+    header read apart from the converter) within 100 KB that
+    `Media::upload`'s type check accepts as a sticker, and a JPEG over
+    5 MB comes out under it, both against a real
+    converter in CI; a GIF or a crafted file off the format list is a
+    `ConversionError::InputRejected`.
 - [ ] **L20a. One catch-all shape for open enums** (`meta-whatsapp-core`
   and every crate with an open enum; OPEN_QUESTIONS #27): `Other(String)`,
   generated by one macro in core.
