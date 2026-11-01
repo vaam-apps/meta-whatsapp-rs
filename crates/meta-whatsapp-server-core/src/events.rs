@@ -728,6 +728,53 @@ pub async fn purge_outbox(outbox: &dyn Outbox, retention: Duration) -> StoreResu
 mod tests {
     use super::*;
 
+    /// An outbox no test may read: [`get_event`] answers an id of no
+    /// event's shape before it asks the outbox.
+    struct Untouched;
+
+    #[async_trait::async_trait]
+    impl Outbox for Untouched {
+        async fn insert(&self, _: &NewEvent) -> StoreResult<Option<i64>> {
+            panic!("the outbox was written")
+        }
+
+        async fn page(&self, _: &EventQuery) -> StoreResult<crate::outbox::EventPage> {
+            panic!("the outbox was read")
+        }
+
+        async fn get(&self, _: &TenantId, _: &str) -> StoreResult<Option<StoredEvent>> {
+            panic!("the outbox was read")
+        }
+
+        async fn purge(&self, _: Duration) -> StoreResult<u64> {
+            panic!("the outbox was purged")
+        }
+    }
+
+    /// `GET /v1/events/{id}` with an id of no event's shape (the wrong
+    /// prefix, length, case or digits; the route's other literal, `stream`)
+    /// is `404 not_found` before the outbox is read. Decisive:
+    /// `is_event_id` in `get_event`.
+    #[tokio::test]
+    async fn an_id_of_no_events_shape_is_not_looked_up() {
+        let tenant = TenantId::parse("merchant-42").unwrap();
+        for id in [
+            "stream",
+            "",
+            "evt_",
+            "evt_4042233518184f0e9822bebdbba028a",
+            "evt_4042233518184f0e9822bebdbba028a8a",
+            "evt_4042233518184F0E9822BEBDBBA028A8",
+            "evt_4042233518184f0e9822bebdbba028ag",
+            "EVT_4042233518184f0e9822bebdbba028a8",
+            "4042233518184f0e9822bebdbba028a8",
+        ] {
+            let error = get_event(&Untouched, &tenant, id).await.unwrap_err();
+            assert_eq!((error.status(), error.code()), (404, "not_found"), "{id:?}");
+        }
+        assert!(is_event_id("evt_4042233518184f0e9822bebdbba028a8"));
+    }
+
     /// The outbox key is stored (`wa_server_events.dedup_key`): derived
     /// otherwise after an upgrade, an event Meta redelivers across it is
     /// recorded twice. Known answers (docs/architecture.md, "Stable

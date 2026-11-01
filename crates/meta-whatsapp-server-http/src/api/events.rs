@@ -16,15 +16,17 @@
 //! `event: lagged` (the client took nothing for too long and was dropped,
 //! or events after its cursor were purged: reload, or poll from `after`)
 //! or `event: shutdown` (the replica is stopping: reconnect, on another),
-//! each with `data: {"after": <the last sequence sent>}`. A stream without
+//! each with `data: {"after": <the last sequence sent>}`. A stream whose
+//! key or tenant would no longer be admitted ends with no last frame. A
+//! stream without
 //! a cursor starts at the tenant's newest sequence; `Last-Event-ID` (what
 //! `EventSource` sends when it reconnects) wins over `?after=`. A cursor
 //! below what was purged is `410 cursor_expired`, one past the tenant's
 //! newest sequence `422`, before the stream starts. The rules are the
 //! core's [`meta_whatsapp_server_core::live`]: the outbox is the source of
 //! truth, a notification only wakes a stream, the streams are bounded per
-//! tenant and replica (`429 too_many_streams`), and a slow client is
-//! dropped.
+//! tenant and replica (`429 too_many_streams`, with `Retry-After`), and a
+//! slow client is dropped.
 
 use futures::StreamExt as _;
 use meta_whatsapp_rs::core::ids::PhoneNumberId;
@@ -363,12 +365,12 @@ struct StreamCut;
         StreamParams,
     ),
     responses(
-        (status = 200, description = "Server-Sent Events: `event: whatsapp` frames (`id` the event's sequence, `data` an `Event`), a `: keepalive` comment every 15 s, and, when the service ends the stream, `event: lagged` (dropped as too slow, or events purged before they were sent) or `event: shutdown` (the replica is stopping), each with `data: {\"after\": <the last sequence sent>}`", content_type = "text/event-stream", body = String),
+        (status = 200, description = "Server-Sent Events: `event: whatsapp` frames (`id` the event's sequence, `data` an `Event`), a `: keepalive` comment every 15 s, and, when the service ends the stream, `event: lagged` (dropped as too slow, or events purged before they were sent) or `event: shutdown` (the replica is stopping), each with `data: {\"after\": <the last sequence sent>}`; the stream ends with no last frame once the key or the tenant would no longer be admitted (revoked, expired, suspended, deleted: reconnecting answers `401` or `403`)", content_type = "text/event-stream", body = String),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden` (no `events` scope), `tenant_suspended`", body = ErrorBody),
         (status = 410, description = "`cursor_expired`: events after the cursor were purged (past retention, or deleted with a tenant of the same id); start again without one", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `Last-Event-ID` or `after` (malformed, or past the tenant's newest sequence), `types` (not a `KnownEventType`) or `phone_number_id`", body = ErrorBody),
-        (status = 429, description = "`too_many_streams`: the tenant's streams open on this replica (20 by default, `WA_SERVER_STREAMS_PER_TENANT`) or the replica's (1,000, `WA_SERVER_STREAMS_PER_REPLICA`); `too_many_requests`: the tenant's `read` budget (`Retry-After`)", body = ErrorBody),
+        (status = 429, description = "`too_many_streams`: the tenant's streams open on this replica (20 by default, `WA_SERVER_STREAMS_PER_TENANT`) or the replica's (1,000, `WA_SERVER_STREAMS_PER_REPLICA`), `Retry-After` 5 s (a place frees when any stream ends); `too_many_requests`: the tenant's `read` budget (`Retry-After`)", body = ErrorBody),
         (status = 503, description = "`shutting_down`: the replica is stopping, open the stream on another; `storage_unavailable`", body = ErrorBody),
     )
 )]

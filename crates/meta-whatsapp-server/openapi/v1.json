@@ -1605,7 +1605,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Server-Sent Events: `event: whatsapp` frames (`id` the event's sequence, `data` an `Event`), a `: keepalive` comment every 15 s, and, when the service ends the stream, `event: lagged` (dropped as too slow, or events purged before they were sent) or `event: shutdown` (the replica is stopping), each with `data: {\"after\": <the last sequence sent>}`",
+            "description": "Server-Sent Events: `event: whatsapp` frames (`id` the event's sequence, `data` an `Event`), a `: keepalive` comment every 15 s, and, when the service ends the stream, `event: lagged` (dropped as too slow, or events purged before they were sent) or `event: shutdown` (the replica is stopping), each with `data: {\"after\": <the last sequence sent>}`; the stream ends with no last frame once the key or the tenant would no longer be admitted (revoked, expired, suspended, deleted: reconnecting answers `401` or `403`)",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -1655,7 +1655,7 @@
             }
           },
           "429": {
-            "description": "`too_many_streams`: the tenant's streams open on this replica (20 by default, `WA_SERVER_STREAMS_PER_TENANT`) or the replica's (1,000, `WA_SERVER_STREAMS_PER_REPLICA`); `too_many_requests`: the tenant's `read` budget (`Retry-After`)",
+            "description": "`too_many_streams`: the tenant's streams open on this replica (20 by default, `WA_SERVER_STREAMS_PER_TENANT`) or the replica's (1,000, `WA_SERVER_STREAMS_PER_REPLICA`), `Retry-After` 5 s (a place frees when any stream ends); `too_many_requests`: the tenant's `read` budget (`Retry-After`)",
             "content": {
               "application/json": {
                 "schema": {
