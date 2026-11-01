@@ -269,10 +269,18 @@ fn the_image_output_checks_read_the_headers() {
         );
     }
     let whole = png(8, 6);
-    assert_eq!(
-        check_output(p, &whole[..whole.len() - 1]),
-        Err("a truncated PNG file")
-    );
+    // Cut short, two images in a row, or anything after the end chunk.
+    for bad in [
+        whole[..whole.len() - 1].to_vec(),
+        [&whole[..], &whole[..]].concat(),
+        [&whole[..], b"\0"].concat(),
+    ] {
+        assert_eq!(
+            check_output(p, &bad),
+            Err("a PNG file that does not end with its end chunk"),
+            "{bad:?}"
+        );
+    }
     let mut no_header = png(8, 6);
     no_header[12..16].copy_from_slice(b"IDAT");
     assert_eq!(
@@ -280,6 +288,86 @@ fn the_image_output_checks_read_the_headers() {
         Err("a PNG file without its header")
     );
     assert_eq!(check_output(p, &jpeg(8, 3)), Err("no PNG file"));
+}
+
+/// One PNG chunk: length, type, data, a CRC (not read).
+fn chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
+    let mut out = u32::try_from(data.len()).unwrap().to_be_bytes().to_vec();
+    out.extend_from_slice(&kind);
+    out.extend_from_slice(data);
+    out.extend_from_slice(&[0xC0, 0xFF, 0xEE, 0x00]);
+    out
+}
+
+/// A PNG file of these chunks, after its signature.
+fn png_of(chunks: &[Vec<u8>]) -> Vec<u8> {
+    [&b"\x89PNG\r\n\x1a\n"[..], &chunks.concat()].concat()
+}
+
+/// What ffmpeg gets of a PNG: its chunks up to `IEND`, without text or
+/// EXIF (a `zTXt` chunk is what ffmpeg inflates and keeps); the colour
+/// profile and an animation's chunks (for the format whitelist to refuse)
+/// stay. A JPEG, or a PNG with nothing to take out, is passed on as it is,
+/// uncopied; one whose chunks run past its end is refused.
+#[test]
+fn a_png_reaches_ffmpeg_without_its_text_and_nothing_after_its_end() {
+    let ihdr = chunk(*b"IHDR", &[0, 0, 0, 16, 0, 0, 0, 16, 8, 2, 0, 0, 0]);
+    let iccp = chunk(*b"iCCP", b"icc\0\0x\x9c");
+    let actl = chunk(*b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0]);
+    let idat = chunk(*b"IDAT", b"x\x9c pixels");
+    let iend = chunk(*b"IEND", b"");
+    let file = png_of(&[
+        ihdr.clone(),
+        chunk(*b"tEXt", b"Author\0Jane Doe"),
+        iccp.clone(),
+        chunk(*b"zTXt", b"Comment\0\0x\x9c bomb"),
+        actl.clone(),
+        idat.clone(),
+        chunk(*b"iTXt", b"Location\0\x01\0\0\0x\x9c"),
+        chunk(*b"eXIf", b"MM\0*"),
+        iend.clone(),
+        // After the end: a second image, then anything.
+        ihdr.clone(),
+        chunk(*b"zTXt", b"Comment\0\0x\x9c bomb"),
+        iend.clone(),
+        b"trailing".to_vec(),
+    ]);
+    let given = image::prepared(&Bytes::from(file)).unwrap();
+    assert_eq!(
+        &given[..],
+        &png_of(&[ihdr.clone(), iccp, actl, idat.clone(), iend.clone()])[..]
+    );
+
+    // Nothing to take out: the same bytes, not a copy.
+    let clean = Bytes::from(png_of(&[ihdr.clone(), idat.clone(), iend.clone()]));
+    let given = image::prepared(&clean).unwrap();
+    assert_eq!((given.as_ptr(), given.len()), (clean.as_ptr(), clean.len()));
+    // Only an appended tail: a slice of it.
+    let tailed = Bytes::from([&clean[..], b"tail"].concat());
+    assert_eq!(&image::prepared(&tailed).unwrap()[..], &clean[..]);
+    let jpeg = Bytes::from(jpeg(8, 3));
+    assert_eq!(image::prepared(&jpeg).unwrap(), jpeg);
+
+    let truncated = [
+        png_of(&[ihdr.clone(), idat.clone()]),
+        png_of(&[ihdr.clone(), idat.clone(), iend[..iend.len() - 1].to_vec()]),
+        png_of(&[ihdr.clone(), idat[..idat.len() - 5].to_vec()]),
+        b"\x89PNG\r\n\x1a\n".to_vec(),
+        b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec(),
+    ];
+    for file in truncated {
+        assert_eq!(
+            image::prepared(&Bytes::from(file.clone())),
+            Err("a PNG whose chunks stop before its end chunk (a truncated file)"),
+            "{file:?}"
+        );
+    }
+    let mut huge = png_of(&[ihdr, idat, iend]);
+    huge[33..37].copy_from_slice(&0x8000_0000_u32.to_be_bytes());
+    assert_eq!(
+        image::prepared(&Bytes::from(huge)),
+        Err("a PNG chunk longer than PNG allows")
+    );
 }
 
 #[tokio::test]
@@ -356,6 +444,8 @@ mod processes {
             std::fs::write(dir.join("stereo.bin"), opus_page(2)).unwrap();
             std::fs::write(dir.join("webp.bin"), webp(*b"VP8 ", &[7; 64])).unwrap();
             std::fs::write(dir.join("animated.bin"), webp(*b"VP8X", &[0x12; 10])).unwrap();
+            // A static sticker of exactly the limit.
+            std::fs::write(dir.join("webp_at_limit.bin"), webp(*b"VP8 ", &vec![7; 99_980])).unwrap();
             let scripts = [
                 // Counts its runs and records their arguments, one line
                 // each; answers more than a static sticker takes twice,
@@ -383,6 +473,14 @@ mod processes {
                     format!(
                         "n=$(cat '{d}/slow_ladder.count' 2>/dev/null || echo 0)\nn=$((n + 1))\necho $n > '{d}/slow_ladder.count'\n\
                          cat > /dev/null\nif [ $n -eq 1 ]; then sleep 1.2; exec cat /dev/zero; fi\nexec sleep 30\n"
+                    ),
+                ),
+                // Records its arguments and its input, answers a static
+                // sticker of exactly the limit.
+                (
+                    "record_image",
+                    format!(
+                        "printf '%s\\n' \"$@\" >> '{d}/record_image.args'\ncat > '{d}/record_image.stdin'\ncat '{d}/webp_at_limit.bin'\n"
                     ),
                 ),
                 (
@@ -424,6 +522,9 @@ mod processes {
                 ("flood", "exec cat /dev/zero\n".to_owned()),
                 ("signal", "kill -9 $$\n".to_owned()),
                 ("marker", format!("touch '{d}/marker.ran'\n")),
+                // The image tests' own: `marker` runs in one of the voice
+                // tests, which may come first.
+                ("image_marker", format!("touch '{d}/image_marker.ran'\n")),
                 (
                     "encoders_ok",
                     "printf ' V....D libx264   H.264\\n A....D libopus   libopus Opus (codec opus)\\n'\n"
@@ -694,14 +795,16 @@ mod processes {
             .expect("the converter must return within the test's bound")
     }
 
-    const PNG_START: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+    /// A PNG's signature and end chunk: what passes the converter's own
+    /// checks, for a stand-in to answer.
+    const PNG_START: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\0IEND\xaeB`\x82";
 
     /// A GIF (or anything not a PNG or a JPEG) is refused by its first
     /// bytes: `ffmpeg` never starts.
     #[tokio::test]
     async fn an_image_off_the_list_never_reaches_ffmpeg() {
         let f = fakes();
-        let c = f.converter("marker");
+        let c = f.converter("image_marker");
         for target in [
             TargetFormat::StaticSticker,
             TargetFormat::Jpeg,
@@ -716,7 +819,7 @@ mod processes {
                 assert!(err.to_string().contains("not a PNG's or a JPEG's"), "{err}");
             }
         }
-        assert!(!f.path("marker.ran").exists(), "ffmpeg was started");
+        assert!(!f.path("image_marker.ran").exists(), "ffmpeg was started");
     }
 
     /// Too large, too large, then within the limit: the third attempt's
@@ -795,6 +898,57 @@ mod processes {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    /// ffmpeg reads the PNG without its text chunks and what follows its
+    /// end, and a result of exactly the limit is taken from the first
+    /// attempt; a truncated PNG never reaches ffmpeg.
+    #[tokio::test]
+    async fn ffmpeg_gets_the_png_without_its_text_and_the_limit_is_inclusive() {
+        let f = fakes();
+        let ihdr = chunk(*b"IHDR", &[0, 0, 0, 16, 0, 0, 0, 16, 8, 6, 0, 0, 0]);
+        let idat = chunk(*b"IDAT", b"x\x9c pixels");
+        let iend = chunk(*b"IEND", b"");
+        let input = [
+            png_of(&[
+                ihdr.clone(),
+                chunk(*b"zTXt", b"Comment\0\0x\x9c bomb"),
+                idat.clone(),
+                iend.clone(),
+            ]),
+            b"appended".to_vec(),
+        ]
+        .concat();
+        let out = convert_to(
+            &f.converter("record_image"),
+            &input,
+            TargetFormat::StaticSticker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.data.len(), 100_000);
+        assert_eq!(&out.data[..], &webp(*b"VP8 ", &vec![7; 99_980])[..]);
+        assert_eq!(
+            std::fs::read(f.path("record_image.stdin")).unwrap(),
+            png_of(&[ihdr.clone(), idat.clone(), iend])
+        );
+        let args = std::fs::read_to_string(f.path("record_image.args")).unwrap();
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            image::arguments(&image::STICKER[0]),
+            "one attempt"
+        );
+
+        let c = f.converter("image_marker");
+        let err = convert_to(&c, &png_of(&[ihdr, idat]), TargetFormat::Png)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("truncated"), "{err}");
+        assert!(!f.path("image_marker.ran").exists(), "ffmpeg was started");
     }
 
     #[tokio::test]

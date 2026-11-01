@@ -3,6 +3,9 @@
 //! of the input's first bytes and the check of the output (see the
 //! [module docs](super)).
 
+use std::ops::Range;
+
+use bytes::Bytes;
 use meta_whatsapp_core::media::TargetFormat;
 
 /// The demuxers `ffmpeg` may use on an image: a single PNG or JPEG.
@@ -207,7 +210,6 @@ pub(super) fn arguments(rung: &Rung) -> Vec<&'static str> {
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 const JPEG_START: &[u8] = &[0xFF, 0xD8, 0xFF];
-const PNG_END: &[u8] = &[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0x82];
 
 /// Whether `data` begins as a PNG (its eight-byte signature) or a JPEG
 /// (start of image, then a marker) does. What `ffmpeg` then detects must
@@ -215,6 +217,88 @@ const PNG_END: &[u8] = &[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0
 /// else from reaching it.
 pub(super) fn accepted(data: &[u8]) -> bool {
     data.starts_with(PNG_SIGNATURE) || data.starts_with(JPEG_START)
+}
+
+/// The chunks taken out of a PNG before `ffmpeg` reads it: its text
+/// (`tEXt`, `zTXt`, `iTXt`) and its EXIF (`eXIf`), metadata the result
+/// never carries. `ffmpeg` 6.1 inflates every `zTXt` chunk it meets and
+/// keeps the text until the frame is decoded, each chunk under the
+/// allocation bound but not all of them together: a 100 KB chunk
+/// inflating to 100 MiB cost some 400 MB of memory, four of them 1.6 GB,
+/// and a 64 MiB input holds hundreds.
+const PNG_DROPPED: &[&[u8; 4]] = &[b"tEXt", b"zTXt", b"iTXt", b"eXIf"];
+
+/// The longest chunk PNG allows (2^31 − 1 bytes of data).
+const PNG_MAX_CHUNK: u32 = 0x7FFF_FFFF;
+
+/// What a truncated PNG is, in words.
+const PNG_TRUNCATED: &str = "a PNG whose chunks stop before its end chunk (a truncated file)";
+
+/// What `ffmpeg` is given of an accepted image: a JPEG as it is; a PNG
+/// walked chunk by chunk from its signature to its end chunk (`IEND`),
+/// without [`PNG_DROPPED`] and without anything after the end chunk (a
+/// second image, appended data), the same bytes uncopied when there is
+/// nothing to take out. A PNG whose chunks do not reach an end chunk is
+/// refused, in words.
+pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
+    if !data.starts_with(PNG_SIGNATURE) {
+        return Ok(data.clone());
+    }
+    // The byte ranges kept, the adjacent ones merged.
+    let mut kept: Vec<Range<usize>> = Vec::with_capacity(8);
+    kept.push(0..PNG_SIGNATURE.len());
+    png_chunks(data, |kind, chunk| {
+        if !PNG_DROPPED.iter().any(|dropped| &dropped[..] == kind) {
+            match kept.last_mut() {
+                Some(last) if last.end == chunk.start => last.end = chunk.end,
+                _ => kept.push(chunk),
+            }
+        }
+    })?;
+    Ok(match kept.as_slice() {
+        [whole] if *whole == (0..data.len()) => data.clone(),
+        [one] => data.slice(one.clone()),
+        ranges => {
+            let mut out = Vec::with_capacity(ranges.iter().map(ExactSizeIterator::len).sum());
+            for range in ranges {
+                out.extend_from_slice(&data[range.clone()]);
+            }
+            Bytes::from(out)
+        }
+    })
+}
+
+/// Walk a PNG's chunks (`data` begins with its signature), from the first
+/// to the end chunk, giving `each` the type and the byte range (length to
+/// CRC) of each; the end of the end chunk, or what stopped the walk, in
+/// words. The CRCs are not checked.
+fn png_chunks(
+    data: &[u8],
+    mut each: impl FnMut(&[u8], Range<usize>),
+) -> Result<usize, &'static str> {
+    let mut at = PNG_SIGNATURE.len();
+    loop {
+        let header = data
+            .get(at..)
+            .and_then(|rest| rest.get(..8))
+            .ok_or(PNG_TRUNCATED)?;
+        let len = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+        if len > PNG_MAX_CHUNK {
+            return Err("a PNG chunk longer than PNG allows");
+        }
+        let kind = &header[4..8];
+        // Length, type, data, CRC.
+        let end = usize::try_from(len)
+            .ok()
+            .and_then(|len| at.checked_add(12)?.checked_add(len))
+            .filter(|&end| end <= data.len())
+            .ok_or(PNG_TRUNCATED)?;
+        each(kind, at..end);
+        at = end;
+        if kind == b"IEND" {
+            return Ok(at);
+        }
+    }
 }
 
 /// Check that `out` is `target`, reading its header; what it found
@@ -306,8 +390,10 @@ fn png(out: &[u8]) -> Result<(), &'static str> {
     if out.get(8..16) != Some(&[0, 0, 0, 13, b'I', b'H', b'D', b'R'][..]) {
         return Err("a PNG file without its header");
     }
-    if !out.ends_with(PNG_END) {
-        return Err("a truncated PNG file");
+    // One image, whole: its chunks end with its end chunk, and so does
+    // the file.
+    if png_chunks(out, |_, _| {}) != Ok(out.len()) {
+        return Err("a PNG file that does not end with its end chunk");
     }
     match (out.get(24), out.get(25)) {
         (Some(8), Some(2 | 6)) => Ok(()),

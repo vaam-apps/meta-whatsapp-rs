@@ -1281,3 +1281,139 @@ async fn ffmpeg_applies_a_jpeg_s_orientation_and_drops_its_exif() {
     let w = webp(&sticker.data);
     assert_eq!((w.width, w.height), (480, 640));
 }
+
+/// One PNG chunk: length, type, data and a zero CRC, never checked (the
+/// converter takes these chunks out before ffmpeg reads them).
+fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
+    let mut out = u32::try_from(data.len()).unwrap().to_be_bytes().to_vec();
+    out.extend_from_slice(&kind);
+    out.extend_from_slice(data);
+    out.extend_from_slice(&[0, 0, 0, 0]);
+    out
+}
+
+/// A PNG whose text chunks (a `zTXt` among them, which ffmpeg would
+/// inflate) the converter takes out, followed by a second image, and two
+/// JPEGs in a row: what ffmpeg reads of each still converts, and only the
+/// first image comes out, alone, without the text.
+#[tokio::test]
+async fn ffmpeg_converts_the_first_image_of_a_png_without_its_text() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let first = lavfi(&ffmpeg, "testsrc2=s=320x240", &["-c:v", "png"]);
+    let second = lavfi(&ffmpeg, "testsrc2=s=64x48", &["-c:v", "png"]);
+    // After the header (signature and IHDR: 33 bytes).
+    let png = [
+        &first[..33],
+        &png_chunk(*b"tEXt", b"Author\0Jane Doe"),
+        &png_chunk(*b"zTXt", b"Comment\0\0x\x9c\x03\0\0\0\0\x01"),
+        &first[33..],
+        &second,
+    ]
+    .concat();
+    for target in IMAGES {
+        let out = converter
+            .convert(MediaInput::new(png.clone()), target)
+            .await
+            .unwrap_or_else(|e| panic!("{target:?}: {e}"));
+        assert!(!out.data.windows(4).any(|w| w == b"Jane"), "{target:?}");
+        let (width, height) = match target {
+            TargetFormat::StaticSticker => {
+                let w = webp(&out.data);
+                (w.width, w.height)
+            }
+            TargetFormat::Jpeg => {
+                let (_, width, height, _) = jpeg_frame(&out.data);
+                (width, height)
+            }
+            _ => {
+                let (width, height, _, _) = png_header(&out.data);
+                assert_eq!(out.data.windows(4).filter(|w| *w == b"IEND").count(), 1);
+                (width, height)
+            }
+        };
+        assert_eq!((width, height), (320, 240), "{target:?}");
+    }
+
+    let jpeg = lavfi(&ffmpeg, "testsrc2=s=320x240", &["-c:v", "mjpeg"]);
+    let small = lavfi(&ffmpeg, "testsrc2=s=64x48", &["-c:v", "mjpeg"]);
+    let out = converter
+        .convert(
+            MediaInput::new([&jpeg[..], &small[..]].concat()),
+            TargetFormat::Jpeg,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        out.data.windows(2).filter(|w| *w == [0xFF, 0xD8]).count(),
+        1
+    );
+    let (_, width, height, _) = jpeg_frame(&out.data);
+    assert_eq!((width, height), (320, 240));
+}
+
+/// A 16-bit RGBA PNG of exactly 32 Mi pixels (8192 × 4096, a small file
+/// of one colour) decodes to a frame of 256 MiB and ffmpeg's padding: the
+/// allocation bound refuses it, two rows fewer pass. The control: ffmpeg
+/// without the bound converts it.
+#[tokio::test]
+async fn ffmpeg_refuses_a_frame_over_the_allocation_bound() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let deep = |size: &str| {
+        lavfi(
+            &ffmpeg,
+            &format!("color=c=red:s={size},format=rgba64be"),
+            &["-c:v", "png"],
+        )
+    };
+    let at_bound = deep("8192x4096");
+    assert_eq!(png_header(&at_bound), (8192, 4096, 16, 6));
+    let direct = run(
+        &ffmpeg,
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-max_pixels",
+            "33554432",
+            "-i",
+            "pipe:0",
+            "-frames:v",
+            "1",
+            "-vf",
+            "format=yuvj420p",
+            "-c:v",
+            "mjpeg",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+        ],
+        &at_bound,
+    );
+    assert!(
+        direct.is_some_and(|o| o.starts_with(&[0xFF, 0xD8])),
+        "ffmpeg did not convert it"
+    );
+    let err = converter
+        .convert(MediaInput::new(at_bound), TargetFormat::Jpeg)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
+    // Two rows fewer (lavfi's `color` source keeps sizes even).
+    let under = deep("8192x4094");
+    assert_eq!(png_header(&under), (8192, 4094, 16, 6));
+    let under = converter
+        .convert(MediaInput::new(under), TargetFormat::Jpeg)
+        .await
+        .unwrap();
+    let (_, width, height, _) = jpeg_frame(&under.data);
+    assert_eq!((width, height), (8192, 4094));
+}

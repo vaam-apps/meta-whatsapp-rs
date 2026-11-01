@@ -78,7 +78,15 @@
 //! detects the format again itself and may read nothing but a single PNG
 //! or JPEG (`-format_whitelist png_pipe,jpeg_pipe`): a JPEG-LS image or
 //! an animated PNG, which begin as a JPEG and a PNG do, are refused
-//! there. Each attempt runs these arguments, the filter and the encoder
+//! there. A PNG is walked chunk by chunk before `ffmpeg` sees it: one
+//! whose chunks stop before its end chunk (a truncated file) is
+//! [`ConversionError::InputRejected`], and `ffmpeg` gets it without its
+//! text and EXIF chunks (`tEXt`, `zTXt`, `iTXt`, `eXIf`) and without
+//! anything after its end chunk. That is a memory bound, not a nicety:
+//! `ffmpeg` 6.1 inflates every `zTXt` chunk and keeps the text until the
+//! frame is decoded, each under the allocation bound but not all of them
+//! together (four chunks of 100 KB, each inflating to 100 MiB, took
+//! 1.6 GB). Each attempt runs these arguments, the filter and the encoder
 //! from a fixed table:
 //!
 //! ```text
@@ -94,12 +102,18 @@
 //! - **Bounded in pixels**: an image of more than 32 Mi pixels
 //!   (`-max_pixels`; 8192 × 4096, more than a 24-megapixel camera's) is
 //!   refused before its frame is allocated, and no single allocation may
-//!   exceed 256 MiB (one frame at that bound in 16-bit RGBA). A larger
-//!   photo (a 48-megapixel one) has to be scaled down first.
+//!   exceed 256 MiB: one frame at that bound in 16-bit RGBA, less
+//!   `ffmpeg`'s padding, so a 16-bit RGBA PNG of exactly 32 Mi pixels is
+//!   refused and one a row smaller is not. A larger photo (a
+//!   48-megapixel one) has to be scaled down first.
 //! - **The first frame, nothing else**: no metadata (EXIF can carry a
 //!   place and a camera owner's name). A JPEG's EXIF orientation is
 //!   applied to the pixels before it is dropped (ffmpeg 6.1 rotates a
-//!   frame by it), so a photo taken upright stays upright.
+//!   frame by it), so a photo taken upright stays upright. The colour
+//!   profile (ICC) is not metadata to `ffmpeg`: a JPEG or a PNG result
+//!   keeps the input's, so that its colours stay what they were (a WebP
+//!   result has none). A truncated JPEG is not refused: `ffmpeg` decodes
+//!   what there is of it, the rest grey.
 //! - **Under the limit by a ladder**, since a size cannot be asked of an
 //!   encoder: the attempts below run in turn until one's result is within
 //!   [`TargetFormat::max_bytes`] (an attempt past it is killed as soon as
@@ -108,7 +122,13 @@
 //!   [`Error::Validation`] on `input` (with these ladders a real image
 //!   never gets there: the last attempt of each is far under its limit).
 //!   Meta gives no sticker dimensions, so none is imposed: a sticker that
-//!   fits at its own size keeps it.
+//!   fits at its own size keeps it. A large photo spends most of a
+//!   sticker's time on the first attempt, at its own size (about 18 s
+//!   for a 24-megapixel one on a 4-core machine, whose WebP is then far
+//!   over the limit): keep the timeout at its default, or above it on a
+//!   slower host. An image more than 256 times as long as it is wide
+//!   (or wide as it is long) can fail at a later, smaller attempt (a
+//!   side scaled to nothing) as [`ConversionError::InputRejected`].
 //!
 //! | Format | Encoder | Attempts (longest side, quality) |
 //! | --- | --- | --- |
@@ -118,7 +138,8 @@
 //!
 //! The output is checked before it is returned: a WebP file whose RIFF
 //! size is its length and whose image is not animated; a JPEG of 8 bits
-//! and three components; a PNG of 8-bit RGB or RGBA, whole.
+//! and three components; a PNG of 8-bit RGB or RGBA, one image whose
+//! chunks end with its end chunk and the file.
 //!
 //! # Bounds and errors
 //!
@@ -128,7 +149,7 @@
 //! | a result over the format's limit ([`TargetFormat::max_bytes`]: 16 MiB for audio) | — | [`Error::Validation`] on `input`; `ffmpeg` is killed (for an image, the next attempt runs, and only the last one's overflow is this error) |
 //! | `ffmpeg` missing or not executable | — | [`ConversionError::BinaryMissing`] |
 //! | no libopus, libwebp, mjpeg or png encoder ([`FfmpegConverter::check_for`]) | — | [`ConversionError::EncoderMissing`] |
-//! | an image whose first bytes are not a PNG's or a JPEG's | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
+//! | an image whose first bytes are not a PNG's or a JPEG's, or a PNG whose chunks stop before its end chunk | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
 //! | `ffmpeg` fails (input it cannot read, a format off the list, an image over 32 Mi pixels) | — | [`ConversionError::InputRejected`] |
 //! | the output is not the format asked for (a binary that is not the `ffmpeg` it should be) | — | [`ConversionError::OutputInvalid`] |
 //! | one allocation in `ffmpeg` over 16 MiB for audio (`-max_alloc`: a header declaring an absurd sample rate), 256 MiB for an image | — | [`ConversionError::InputRejected`]; on an `ffmpeg` whose allocations stay under the bound, the result cap above stops it instead |
@@ -155,7 +176,8 @@
 //! use meta_whatsapp_adapters::media::FfmpegConverter;
 //! use meta_whatsapp_core::media::{MediaConverter, MediaInput, TargetFormat};
 //!
-//! let converter = FfmpegConverter::new().with_timeout(Duration::from_secs(30));
+//! // A sticker from a large photo takes a while: more than the default.
+//! let converter = FfmpegConverter::new().with_timeout(Duration::from_secs(90));
 //! // At startup: a missing ffmpeg, libopus or libwebp fails here.
 //! converter
 //!     .check_for(&[TargetFormat::OggOpus, TargetFormat::StaticSticker])
@@ -597,6 +619,10 @@ impl FfmpegConverter {
             ))
             .into());
         }
+        // A PNG without its text and EXIF chunks, nothing after its end.
+        let data = image::prepared(&data).map_err(|why| {
+            ConversionError::InputRejected(format!("{why}: not converted to {target:?}"))
+        })?;
         let max = target.max_bytes();
         // `None` for a timeout too long to add to now: no deadline sooner.
         let deadline = Instant::now().checked_add(self.timeout);
