@@ -389,10 +389,13 @@ const JPEG_PAST_END: &str = "a JPEG segment whose length runs past the end of th
 /// - in place of the first EXIF segment (`APP1`, `Exif\0\0`), a minimal
 ///   EXIF of its Orientation alone ([`minimal_exif`]), or nothing when
 ///   it has no valid one;
+/// - the first colour profile segment (`APP2`, `ICC_PROFILE`) when it
+///   holds a whole profile of at most 16 KiB ([`jpeg_profile_kept`]);
 ///
 /// and the end of image. Everything else is dropped: every other `APP1`
-/// (EXIF, XMP), every other application segment (`APP2`'s ICC profile,
-/// `APP13`), comments, the markers `ffmpeg` does not decode, bytes
+/// (EXIF, XMP), every other application segment (any other `APP2`, so
+/// the rest of a profile in several chunks, and with its first chunk
+/// dropped too, the whole profile; `APP13`), comments, the markers `ffmpeg` does not decode, bytes
 /// between segments, and anything after the end of image. One cut short
 /// before its end of image, a segment whose length runs past the end or
 /// is under two bytes, a header whose length is not its content, or a
@@ -409,7 +412,7 @@ const JPEG_PAST_END: &str = "a JPEG segment whose length runs past the end of th
 fn jpeg_prepared(data: &Bytes) -> Result<Bytes, &'static str> {
     let mut pieces = Vec::with_capacity(16);
     keep(&mut pieces, 0..2);
-    let (mut exif, mut jfif, mut adobe) = (false, false, false);
+    let (mut exif, mut jfif, mut adobe, mut profile) = (false, false, false, false);
     // Just after a scan's header: what comes before the next marker is
     // its entropy-coded data.
     let mut scan = false;
@@ -463,6 +466,12 @@ fn jpeg_prepared(data: &Bytes) -> Result<Bytes, &'static str> {
                 written[9..16].copy_from_slice(&body[5..12]);
                 keep_or_write(&mut pieces, data, segment, &written);
             }
+            0xE2 if !profile && body.starts_with(b"ICC_PROFILE") => {
+                profile = true;
+                if jpeg_profile_kept(body) {
+                    keep(&mut pieces, segment);
+                }
+            }
             0xEE if !adobe && body.len() >= 12 && body.starts_with(b"Adobe") => {
                 adobe = true;
                 // Version, two flag words, the colour transform.
@@ -475,6 +484,24 @@ fn jpeg_prepared(data: &Bytes) -> Result<Bytes, &'static str> {
         }
         at = end;
     }
+}
+
+/// The largest JPEG colour profile passed on, in bytes of profile (after
+/// the `APP2` segment's 14-byte header): 16 KiB, as for a PNG's
+/// ([`PNG_ICCP_MAX`]).
+pub(super) const JPEG_ICC_MAX: usize = PNG_ICCP_MAX;
+
+/// Whether a colour profile segment's `body` (after its length, which
+/// begins `ICC_PROFILE`, as `ffmpeg` 6.1 reads one) is kept: its header
+/// whole (`ICC_PROFILE\0`), a whole profile in one segment (chunk 1 of
+/// 1), of at least one byte and at most [`JPEG_ICC_MAX`]. `ffmpeg` reads
+/// the header's 14 bytes (the name, the chunk's number, the count) and
+/// takes the rest of the segment as the profile, so a whole header is all
+/// its length needs to be its content. A profile in several chunks is
+/// not kept: the chunks after the first are dropped with every other
+/// `APP2`.
+fn jpeg_profile_kept(body: &[u8]) -> bool {
+    matches!(body.get(11..14), Some([0, 1, 1])) && (15..=14 + JPEG_ICC_MAX).contains(&body.len())
 }
 
 /// The position of the next marker at or after `from`, as `ffmpeg` 6.1

@@ -103,11 +103,14 @@
 //!   header (baseline, extended, progressive or lossless; JPEG-LS's, for
 //!   the format whitelist to refuse), the restart interval, the scans and
 //!   their entropy-coded data, the first JFIF and Adobe segments
-//!   rewritten to their fixed fields (no thumbnail), in place of the
-//!   first EXIF segment a minimal EXIF of its Orientation alone (1 to 8;
-//!   no EXIF without a valid one), and the end of image. Every other
-//!   `APP1` (EXIF, XMP), the ICC profile (`APP2`), `APP13`, comments, the
-//!   other application segments, the markers `ffmpeg` does not decode,
+//!   rewritten to their fixed fields (no thumbnail), the first colour
+//!   profile segment (`APP2`, `ICC_PROFILE`) when it holds a whole profile
+//!   in one chunk (1 of 1) of at most 16 KiB, in place of the first EXIF
+//!   segment a minimal EXIF of its Orientation alone (1 to 8; no EXIF
+//!   without a valid one), and the end of image. Every other `APP1`
+//!   (EXIF, XMP), every other `APP2` (so a profile split over several
+//!   chunks is dropped whole, and that image loses its colour profile),
+//!   `APP13`, comments, the other application segments, the markers `ffmpeg` does not decode,
 //!   bytes between segments and anything after the end of image are
 //!   dropped. `ffmpeg` copies an EXIF value once for every IFD entry
 //!   pointing at it, over every `APP1` it reads (a 67 KB JPEG of one
@@ -140,11 +143,13 @@
 //!   place and a camera owner's name). A JPEG's EXIF orientation is
 //!   applied to the pixels before it is dropped (ffmpeg 6.1 rotates a
 //!   frame by the minimal EXIF above), so a photo taken upright stays
-//!   upright. A PNG's colour profile (ICC, up to 16 KiB) is not metadata
-//!   to `ffmpeg`: a JPEG or a PNG result keeps it, so that its colours
-//!   stay what they were (a WebP result has none). A JPEG's profile is
-//!   dropped with its other application segments: a JPEG result of a
-//!   wide-gamut photo (Display P3) has none, and is shown as sRGB.
+//!   upright. The colour profile (ICC) is not metadata to `ffmpeg`: a
+//!   JPEG or a PNG result keeps the input's, so that its colours stay
+//!   what they were (a WebP result has none), when it is the one profile
+//!   the walk above keeps, at most 16 KiB for a JPEG and a PNG alike (a
+//!   JPEG's in a single chunk). An image whose profile is larger, or a
+//!   JPEG's in several chunks, comes out without one, and a wide-gamut
+//!   photo (Display P3) is then shown as sRGB.
 //! - **Under the limit by a ladder**, since a size cannot be asked of an
 //!   encoder: the attempts below run in turn until one's result is within
 //!   [`TargetFormat::max_bytes`] (an attempt past it is killed as soon as
@@ -181,7 +186,7 @@
 //! | `ffmpeg` missing or not executable | — | [`ConversionError::BinaryMissing`] |
 //! | no libopus, libwebp, mjpeg or png encoder ([`FfmpegConverter::check_for`]) | — | [`ConversionError::EncoderMissing`] |
 //! | an image whose first bytes are not a PNG's or a JPEG's; a PNG whose chunks stop before its end chunk; a JPEG that stops before its end of image, whose segment's length runs past the end or is not its header's content, or with a second start of image | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
-//! | an image's metadata (a PNG's text and EXIF chunks and colour profiles over 16 KiB, a JPEG's application segments and comments; [Images](#images)) | — | not passed to `ffmpeg`: a JPEG's EXIF becomes its Orientation alone |
+//! | an image's metadata (a PNG's text and EXIF chunks, a JPEG's application segments and comments, any colour profile but one of at most 16 KiB, a JPEG's in one chunk; [Images](#images)) | — | not passed to `ffmpeg`: a JPEG's EXIF becomes its Orientation alone |
 //! | `ffmpeg` fails (input it cannot read, a format off the list, an image over 32 Mi pixels) | — | [`ConversionError::InputRejected`] |
 //! | the output is not the format asked for (a binary that is not the `ffmpeg` it should be) | — | [`ConversionError::OutputInvalid`] |
 //! | one allocation in `ffmpeg` over 16 MiB for audio (`-max_alloc`: a header declaring an absurd sample rate), 256 MiB for an image | — | [`ConversionError::InputRejected`]; on an `ffmpeg` whose allocations stay under the bound, the result cap above stops it instead |

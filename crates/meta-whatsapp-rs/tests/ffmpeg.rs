@@ -1648,6 +1648,67 @@ async fn ffmpeg_keeps_a_small_colour_profile_and_drops_a_large_one() {
     assert_eq!(png_header(&out.data).0, 64);
 }
 
+/// A JPEG's colour profile in one `APP2` segment of at most 16 KiB
+/// reaches a JPEG result, its bytes whole, and a PNG result as an
+/// `iCCP` chunk; a profile in two chunks is dropped whole, and the
+/// result has none.
+#[tokio::test]
+async fn ffmpeg_keeps_a_jpeg_s_small_colour_profile_in_one_chunk() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let plain = lavfi(&ffmpeg, "testsrc2=s=64x48", &["-c:v", "mjpeg"]);
+    let bytes: Vec<u8> = (0..3000u32)
+        .map(|i| b"ICCprofile"[(i % 10) as usize])
+        .collect();
+    let chunk = |n: u8, count: u8, data: &[u8]| {
+        let body = [&b"ICC_PROFILE\0"[..], &[n, count], data].concat();
+        let mut segment = vec![0xFF, 0xE2];
+        segment.extend_from_slice(&u16::try_from(body.len() + 2).unwrap().to_be_bytes());
+        segment.extend_from_slice(&body);
+        segment
+    };
+    let one = [&plain[..2], &chunk(1, 1, &bytes), &plain[2..]].concat();
+    let image = converter
+        .convert(MediaInput::new(one.clone()), TargetFormat::Jpeg)
+        .await
+        .unwrap();
+    assert!(
+        image.data.windows(12).any(|w| w == b"ICC_PROFILE\0"),
+        "no profile in the JPEG result"
+    );
+    assert!(
+        image.data.windows(bytes.len()).any(|w| w == &bytes[..]),
+        "the profile's bytes changed"
+    );
+    let png = converter
+        .convert(MediaInput::new(one), TargetFormat::Png)
+        .await
+        .unwrap();
+    assert!(
+        png.data.windows(4).any(|w| w == b"iCCP"),
+        "no profile in the PNG result"
+    );
+
+    let (first, second) = bytes.split_at(1500);
+    let two = [
+        &plain[..2],
+        &chunk(1, 2, first),
+        &chunk(2, 2, second),
+        &plain[2..],
+    ]
+    .concat();
+    let image = converter
+        .convert(MediaInput::new(two), TargetFormat::Jpeg)
+        .await
+        .unwrap();
+    assert!(
+        !image.data.windows(11).any(|w| w == b"ICC_PROFILE"),
+        "a profile in two chunks was kept"
+    );
+}
+
 /// One PNG chunk: length, type, data and a zero CRC, never checked (the
 /// converter takes these chunks out before ffmpeg reads them).
 fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {

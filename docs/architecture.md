@@ -1094,7 +1094,10 @@ keyed by business number and contact, and
   (one cut short, or with a length running past the end, refused; only
   the segments ffmpeg reads whole passed on, its tables, frame header,
   scans and their data, the JFIF and Adobe segments at their fixed
-  size, and in place of its EXIF a minimal one of the Orientation alone:
+  size, its colour profile when it is one chunk of at most 16 KiB (as a
+  PNG's: each keeps one profile of at most 16 KiB; a profile in several
+  chunks is dropped), and in place of its EXIF a minimal one of the
+  Orientation alone:
   ffmpeg copies an EXIF value once for every entry pointing at it, and
   reads every `APP1`); the
   first frame, no metadata, at most 32 Mi pixels (`-max_pixels`) and

@@ -560,11 +560,13 @@ fn exif_with(big: bool, orientation: u16) -> Vec<u8> {
     )
 }
 
-/// A JPEG carrying everything the walk takes out: three EXIF segments
+/// A JPEG carrying everything the walk takes out (and one thing it
+/// keeps): three EXIF segments
 /// (the first little-endian with Orientation 6, the second big-endian
 /// with 3, the third `Exif` without its two zeros, which ffmpeg reads as
-/// EXIF all the same), XMP, an ICC profile, a JFIF segment with a
-/// thumbnail and a second one, Photoshop's `APP13`, an Adobe segment
+/// EXIF all the same), XMP, a colour profile in one chunk (kept) and a
+/// second one, a multi-picture `APP2`, a JFIF segment with a thumbnail
+/// and a second one, Photoshop's `APP13`, an Adobe segment
 /// padded past its fields, a comment, `APP3`, bytes between segments, a
 /// segment ffmpeg does not decode (`DAC`) holding what looks like an
 /// EXIF segment, then a second image and more after its end. And what
@@ -582,6 +584,8 @@ fn jpeg_to_strip() -> (Vec<u8>, Vec<u8>) {
         &exif_with(true, 3),
         &segment(0xE1, b"ExifXXMM\x00\x2A\x00\x00\x00\x08"),
         &segment(0xE2, b"ICC_PROFILE\0\x01\x01profile bytes"),
+        &segment(0xE2, b"ICC_PROFILE\0\x01\x01another profile"),
+        &segment(0xE2, b"MPF\0MM\x00\x2A\x00\x00\x00\x08"),
         &segment(0xE0, b"JFIF\0\x01\x02\x01\x00\x48\x00\x48\x02\x01RGBRGB"),
         &segment(0xE0, b"JFIF\0\x01\x01\x00\x00\x01\x00\x01\x00\x00"),
         &segment(0xED, b"Photoshop 3.0\08BIM\x04\x04Jane Doe"),
@@ -596,7 +600,16 @@ fn jpeg_to_strip() -> (Vec<u8>, Vec<u8>) {
         b"trailing",
     ]
     .concat();
-    let given = [&SOI[..], &exif_of(6), JFIF, ADOBE, &body, &EOI].concat();
+    let given = [
+        &SOI[..],
+        &exif_of(6),
+        &segment(0xE2, b"ICC_PROFILE\0\x01\x01profile bytes"),
+        JFIF,
+        ADOBE,
+        &body,
+        &EOI,
+    ]
+    .concat();
     (file, given)
 }
 
@@ -701,6 +714,65 @@ fn a_jpeg_s_exif_is_its_orientation_alone() {
             "{exif:x?}"
         );
     }
+}
+
+/// A JPEG's colour profile segment (`APP2`, `ICC_PROFILE\0`): the first
+/// is kept when it holds a whole profile (chunk 1 of 1) of 1 byte to
+/// 16 KiB, as a PNG's is; anything else is taken out, a profile in
+/// several chunks whole, and every later profile segment with it.
+#[test]
+fn a_jpeg_keeps_one_colour_profile_of_at_most_16_kib() {
+    assert_eq!(image::JPEG_ICC_MAX, 16 * 1024);
+    let body = jpeg_body();
+    let profile = |chunk: u8, count: u8, len: usize| {
+        segment(
+            0xE2,
+            &[&b"ICC_PROFILE\0"[..], &[chunk, count], &vec![0x50; len]].concat(),
+        )
+    };
+    let given = |segments: &[Vec<u8>]| {
+        let file = [&SOI[..], &segments.concat(), &body, &EOI].concat();
+        image::prepared(&Bytes::from(file)).unwrap().to_vec()
+    };
+    let with = |profile: &[u8]| [&SOI[..], profile, &body, &EOI].concat();
+    let none = [&SOI[..], &body, &EOI].concat();
+    let at_cap = profile(1, 1, 16 * 1024);
+    assert_eq!(at_cap.len(), 4 + 14 + 16 * 1024);
+    // Kept: one byte, the cap; a second profile after a kept one is not.
+    for kept in [profile(1, 1, 1), at_cap.clone()] {
+        assert_eq!(given(std::slice::from_ref(&kept)), with(&kept));
+        assert_eq!(given(&[kept.clone(), profile(1, 1, 100)]), with(&kept));
+    }
+    let dropped = [
+        // One byte over; empty; a header cut short.
+        profile(1, 1, 16 * 1024 + 1),
+        profile(1, 1, 0),
+        segment(0xE2, b"ICC_PROFILE\0\x01"),
+        // Chunk 1 of 2, 2 of 2, 2 of 1, 0 of 1.
+        profile(1, 2, 100),
+        profile(2, 2, 100),
+        profile(2, 1, 100),
+        profile(0, 1, 100),
+        // Not `ICC_PROFILE\0`, which ffmpeg would still read.
+        segment(0xE2, &[&b"ICC_PROFILEX\x01\x01"[..], &[0x50; 100]].concat()),
+    ];
+    for first in dropped {
+        assert_eq!(
+            given(std::slice::from_ref(&first)),
+            none,
+            "{:x?}",
+            &first[..20]
+        );
+        // The first profile segment decides: a valid one after it goes.
+        assert_eq!(
+            given(&[first.clone(), profile(1, 1, 100)]),
+            none,
+            "{:x?}",
+            &first[..20]
+        );
+    }
+    // A profile in two chunks loses both.
+    assert_eq!(given(&[profile(1, 2, 100), profile(2, 2, 100)]), none);
 }
 
 /// A JPEG that stops before its end of image, a segment running past the

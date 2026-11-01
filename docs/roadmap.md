@@ -3267,9 +3267,18 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
        Stripping it is one filter in the fixed table. **Decided
        2026-11-01** (coordinator): iCCP kept only up to 16 KiB
        compressed, after a 660 MB measurement (`image::PNG_ICCP_MAX`,
-       one literal; the first `iCCP` chunk only). A JPEG input's profile
-       (`APP2`) is no longer passed on at all (the EXIF fix below drops
-       every application segment but JFIF and Adobe).
+       one literal; the first `iCCP` chunk only). **Decided
+       2026-11-01** (coordinator): a JPEG's profile is kept likewise,
+       for parity with the PNG side: its first `APP2` `ICC_PROFILE`
+       segment, when it is a whole profile in one chunk (1 of 1) of at
+       most 16 KiB (`image::JPEG_ICC_MAX`, the same value); every other
+       `APP2` is dropped, so a profile split over several chunks is
+       dropped whole and that image loses its colour profile. JPEG and
+       PNG each keep one profile of at most 16 KiB. One chunk costs
+       ffmpeg nothing measurable (51.6 MB at 16 KiB, 51.9 MB at 64 KiB,
+       against 51.5 MB without); the largest profile in chunks (255 of
+       64 KiB, a 16.7 MB file) took 198 MB, bounded but some nine times
+       its size, and is dropped.
     9. The allocation bound stays 256 MiB, its edge documented (a 16-bit
        RGBA frame of 8192 × 4096 is refused by ffmpeg's padding, 8192 ×
        4094 converts); headroom is one literal.
@@ -3324,10 +3333,12 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `DHT`, `SOF0`–`SOF3`, `SOF55`, `DRI` and `SOS`, each refused unless
     its length is exactly its content (a scan header with no `FF`), and
     the scans' entropy-coded data; the first JFIF and Adobe segments at
-    their fixed fields; in place of the first EXIF segment a minimal
+    their fixed fields; the first colour profile segment when it is one
+    chunk of at most 16 KiB (decision 8 above); in place of the first
+    EXIF segment a minimal
     EXIF of 36 bytes (`image::minimal_exif`: big-endian TIFF, one IFD,
     the Orientation alone, 1 to 8; no EXIF without a valid one); the end
-    of image. Everything else is dropped (every other `APP1`, `APP2`,
+    of image. Everything else is dropped (every other `APP1` and `APP2`,
     `APP13`, comments, other `APPn`, markers ffmpeg does not decode,
     bytes between segments, anything after the end of image), and a
     JPEG cut short or with a segment past its end is `InputRejected`,
@@ -3343,10 +3354,15 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `a_jpeg_reaches_ffmpeg_with_only_what_ffmpeg_reads_whole`,
     `a_jpeg_s_exif_is_its_orientation_alone` (each orientation, both
     byte orders), `a_jpeg_cut_short_or_with_a_wrong_length_is_refused`,
-    `a_png_keeps_one_colour_profile_of_at_most_16_kib` and the stand-in
-    `ffmpeg_gets_the_jpeg_without_its_metadata`. Removing the EXIF
+    `a_png_keeps_one_colour_profile_of_at_most_16_kib`,
+    `a_jpeg_keeps_one_colour_profile_of_at_most_16_kib` and the stand-in
+    `ffmpeg_gets_the_jpeg_without_its_metadata`; a JPEG's small profile
+    reaching a JPEG and a PNG result, one in two chunks reaching neither,
+    in `ffmpeg_keeps_a_jpeg_s_small_colour_profile_in_one_chunk`. Removing the EXIF
     rewrite, keeping a second `APP1`, dropping the length check, raising
-    the `iCCP` cap or keeping a second profile, dropping the scan
+    the `iCCP` cap or keeping a second profile, raising or removing the
+    JPEG profile's cap, keeping a profile in chunks or a second one, or
+    never keeping one, dropping the scan
     header's `FF` check or a table's exact length, keeping the JFIF
     thumbnail, the tail after the end of image or an unknown marker, or
     the orientation's range check, fails a test.
