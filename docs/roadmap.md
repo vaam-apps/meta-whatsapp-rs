@@ -2321,7 +2321,6 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `onboard` per signup instead. Not offered, a follow-up if wanted:
     onboarding a WABA that failed before `store_token` from the token
     another WABA of the same signup stored.
-- [ ] **L11c. Pre-verified numbers** (`client::embedded_signup` and
 - [x] **L11c. Pre-verified numbers** (`client::embedded_signup` and
   `client::waba`; row 123): pools, adding, codes, sharing, partners
   (`reference/business/*pre-verified*`,
