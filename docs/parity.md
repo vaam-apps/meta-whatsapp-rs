@@ -45,7 +45,9 @@ the service's `doctor` (roadmap L22a), against their code and tests and
 Meta's webhook pages of 2026-11-01 (§ Sources); row 6 with the
 token-expiry signal (roadmap L11e), against its code and Meta's
 `access-tokens` and `facebook-login/facebook-login-for-business` pages
-of 2026-11-01. Every cell
+of 2026-11-01; row 117 again with the docs MCP server (roadmap L22b),
+against its code and tests and the MCP specification of 2026-11-01
+(§ Sources). Every cell
 about us was
 checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
@@ -56,12 +58,12 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**39 of the 132 counted rows are done on both sides.** Parity is not
+**40 of the 132 counted rows are done on both sides.** Parity is not
 reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 118 | 13 | 0 | 1 |
+| Library | 119 | 12 | 0 | 1 |
 | Service | 40 | 24 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -69,7 +71,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 13 partial or gap rows is cited by a
+- Each of the library's 12 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 91 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
@@ -214,6 +216,15 @@ The owner's definition (2026-09-26):
   `fields` as `string[]`, `active`; reading needs the app token) and
   `graph-api/webhooks/subscriptions-edge` (its example answer gives each
   field as `{name, version}`; the doctor reads both shapes).
+- **The Model Context Protocol**, for row 117's docs server, outside
+  Meta's docs: the specification at `modelcontextprotocol.io`, read on
+  2026-11-01 as Markdown. Revision 2026-07-28, the current one
+  (`specification/versioning`): `changelog`, `basic/index` (`_meta`,
+  `resultType`, the error codes), `basic/versioning` (no handshake, the
+  dual-era rules), `basic/transports/stdio`, `server/discover`,
+  `server/tools` (protocol errors against `isError`) and
+  `server/utilities/caching`; and revision 2025-11-25's
+  `basic/lifecycle` (the `initialize` handshake).
 - **Us**: the code at b6fc893; for rows 17, 19 and 84–88, the bot
   framework's (B1).
 
@@ -383,7 +394,7 @@ The owner's definition (2026-09-26):
 | 114 | Ops | Logging without secrets or personal data; metrics | Partial (a custom logger) | Partial | none (ours) | `tracing`; secrets kept out of `Debug`; webhook log redaction (`webhooks::redact`) | request logs with the key id, Prometheus `/metrics` (`server_http::api::ops::metrics`) | done / done |
 | 115 | Ops | Runtimes and packaging | Yes (Node, Bun, Deno, Termux) | Yes | none | Rust with tokio; the crates are not published yet (publishing to crates.io is the owner's: roadmap § Owner touchpoints) | a binary today; the Docker image and the TypeScript client in M4 | n/a / gap (M4) |
 | 116 | Ops | Server sizing guidance | Yes (for WhatsApp Web) | — | `support/load-testing.md` | — | — | n/a — unofficial protocol (sizing for a WhatsApp Web session) |
-| 117 | Tooling | Agent skills, LLM-readable docs, a docs MCP server, a project doctor | Yes | Yes | `webhooks/overview` (§ Fields), `webhooks/create-webhook-endpoint`, `solution-providers/manage-webhooks`; outside the WhatsApp docs, the Graph API reference's `app/subscriptions` and `webhooks/subscriptions-edge` (§ Sources) | consumer skills under `skills/` (`npx skills add vaam-apps/meta-whatsapp-rs`); `docs/public/llms.txt`, served at the docs site's root and checked by `tests/llms_txt.rs`; the project doctor is the service's; no docs MCP server (L22b) | the `meta-whatsapp-rs-server*` skills; `meta-whatsapp-server doctor` (`server::doctor::Doctor`: every configuration refusal by variable, the backend and its migration histories read-only, the app's `whatsapp_business_account` subscription and fields, each bound WABA's token through `debug_token` and the app's subscription to it, the Solution Partner's system token) | partial / done |
+| 117 | Tooling | Agent skills, LLM-readable docs, a docs MCP server, a project doctor | Yes | Yes | `webhooks/overview` (§ Fields), `webhooks/create-webhook-endpoint`, `solution-providers/manage-webhooks`; outside the WhatsApp docs, the Graph API reference's `app/subscriptions` and `webhooks/subscriptions-edge` (§ Sources) | consumer skills under `skills/` (`npx skills add vaam-apps/meta-whatsapp-rs`); `docs/public/llms.txt`, served at the docs site's root and checked by `tests/llms_txt.rs`; the docs MCP server, `tools/docs-mcp` (`just docs-mcp`: the tools `list`, `search` and `read`, a page or one section by its heading, over MCP's stdio transport, revision 2026-07-28 and, after `initialize`, 2025-11-25; a tool, not a crate of the library; L22b); the project doctor is the service's | the `meta-whatsapp-rs-server*` skills; `meta-whatsapp-server doctor` (`server::doctor::Doctor`: every configuration refusal by variable, the backend and its migration histories read-only, the app's `whatsapp_business_account` subscription and fields, each bound WABA's token through `debug_token` and the app's subscription to it, the Solution Partner's system token) | done / done |
 | 118 | Documents | Invoices, receipts, vouchers rendered to PDF or PNG | — | — | none (ours) | `typst::Renderer`; `typst::Template::invoice`, `receipt`, `voucher` | `POST /v1/numbers/{pn}/documents` in M4 | done / gap (M4) |
 | 119 | Inbox | CMS inbox: store events, check the 24-hour window before a reply | — | — | `pricing.md` (the customer service window) | `inbox::InboxSink`; `inbox::Inbox::reply`; `core::store::CustomerServiceWindow`; the window counts the calls that reopen it and the customer's standby messages (window events, `inbox::Inbox::window`: L7), and a reply is refused locally while another app owns the thread (`inbox::Inbox::thread_owner`), each check turned off by `inbox::ReplyChecks` | recording since M1c; the inbox routes and the window check over HTTP in M2a | done / partial (M2a) |
 

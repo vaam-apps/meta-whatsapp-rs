@@ -48,6 +48,9 @@ crates/
 .xtask                     repo automation (`cargo xtask meta-docs`): a workspace of its own,
                            with its own Cargo.lock, excluded from the root one, so its ureq
                            (rustls with `ring`) never enters a library or test build.
+tools/docs-mcp             the docs MCP server (`just docs-mcp`): the docs and skills over MCP's
+                           stdio transport. A binary on serde_json alone, a member of the
+                           root workspace but not a default one; nothing depends on it.
 ```
 
 Dependency rule: every library crate depends on `meta-whatsapp-core`; no

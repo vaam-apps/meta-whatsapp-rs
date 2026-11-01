@@ -2832,7 +2832,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     library's migration versions compared, not only counted (their list
     is private to the adapters crate: it needs a public accessor there);
     the subscriptions read moved into the client.
-- [ ] **L22b. A docs MCP server** (a tool under `tools/`, outside the
+- [x] **L22b. A docs MCP server** (a tool under `tools/`, outside the
   library; row 117): search and read the docs and skills over MCP's
   stdio transport.
   - **Kind:** additive.
@@ -2840,6 +2840,58 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a scripted MCP client lists the tools, searches
     `Idempotency-Key` and gets the server guide's section; a missing
     page is an MCP error, not a panic.
+  - **Landed:** row 117 done in the library too. `tools/docs-mcp`
+    (package and binary `meta-whatsapp-docs-mcp`, run by `just
+    docs-mcp`) serves three read-only tools over stdio: `list` (every
+    page, with its title and a skill's description), `search` (the
+    sections holding every term of a query, best first, each with its
+    heading, line and snippet) and `read` (a page, or one section by its
+    heading or anchor, to the next heading of its level). It speaks MCP
+    revision 2026-07-28, the current one on 2026-11-01 (no handshake:
+    `_meta` on every request, `server/discover`, `resultType`, the
+    caching hints, `-32022` for a version it does not speak) and, after
+    an `initialize`, 2025-11-25 and 2025-06-18, the revisions clients
+    shipped with until then (dual-era, as 2026-07-28's versioning page
+    defines it). A missing page, a missing section, a path outside the
+    corpus and bad arguments are tool execution errors (a result with
+    `isError: true`, as the tools page sorts them: the model can correct
+    them); an unknown tool or malformed params are JSON-RPC `-32602`.
+    `tools/docs-mcp/tests/stdio.rs` runs the binary as a subprocess:
+    a legacy client and a modern one each list the tools, search
+    `Idempotency-Key`, read `docs/guides/server.md`'s `Idempotency keys`
+    section and get a missing page as `isError: true` with the server
+    still answering; twelve escapes (`..`, absolute paths, repository
+    files outside the corpus, `.meta-docs/`, `\`) and symbolic links out
+    of a corpus tree are refused, and the corpus covers every Markdown
+    page `llms.txt` links. Each guard was removed in turn and a test
+    failed: the path syntax check, the listing membership, the
+    resolved-path check, the walk's refusal of links and of hidden
+    directories, the missing page's `isError`, the read and search
+    bounds.
+  - **Proposed** (for the coordinator to decide, AGENTS.md § Decisions;
+    each a constant or a list in one file of the tool, swapped by
+    changing it): Rust, in the root workspace as a non-default member
+    (its tests, clippy, rustdoc and `cargo deny` run in `just ci`'s
+    `--workspace` recipes), a binary only so no crate can depend on it,
+    with no MCP SDK and no dependency but `serde_json` (no new crate in
+    `Cargo.lock`); dual-era rather than 2026-07-28 alone; the corpus
+    (`corpus::ROOT_FILES` and `corpus::TREES` in the tool): the root's
+    README, AGENTS, CONTRIBUTING, CHANGELOG and OPEN_QUESTIONS, `docs/`'s
+    Markdown and text, `skills/`'s Markdown and example sources, never
+    `.meta-docs/`, hidden directories, `node_modules/`, generated
+    `*.d.ts` or a symbolic link, read from disk on every call (no
+    state, no stale index); the bounds: 40 KiB a read (a longer one ends
+    with its `from_line` to continue and the page's headings), 10 hits
+    a search by default and 25 at most, 240-character snippets, files
+    over 1 MiB and messages over 1 MiB refused; search ASCII
+    case-insensitive, every term required, ranked by occurrences with a
+    bonus for the heading; no `.mcp.json` committed (registering the
+    server stays each developer's choice: docs/dev-environment.md shows
+    how).
+  - **Left:** MCP resources and prompts (the pages as `resources/read`
+    too); a search that folds Unicode case or ranks by more than counts;
+    `subscriptions/listen` for a changed page (the tool list never
+    changes).
 - [ ] **L23. Template groups and archiving** (`meta-whatsapp-client`,
   `client::templates`; rows 101, 153): template groups' create, read,
   update and delete, after reading the reference Meta's changelog links

@@ -319,3 +319,14 @@ ci: lint check test skills-check skills-ts doc features deny test-live
 # Mirror Meta's docs into .meta-docs/, one page every 15 s (--missing-only retries what its README lists)
 meta-docs *args:
     cargo run -q --manifest-path .xtask/Cargo.toml -- meta-docs {{args}}
+
+# The docs MCP server (roadmap L22b, tools/docs-mcp): this repository's docs
+# and consumer skills over MCP's stdio transport, with the tools `list`,
+# `search` and `read`. An MCP client launches it; by hand it waits for
+# JSON-RPC on stdin. `-q` keeps cargo's output off stdout, which carries
+# only MCP messages. Its tests run in `test` (a member of the workspace,
+# not a default one). Flags: `--root <checkout>` (default: this one).
+#
+# Serve the docs and skills to an MCP client over stdio
+docs-mcp *args:
+    cargo run -q -p meta-whatsapp-docs-mcp -- {{args}}

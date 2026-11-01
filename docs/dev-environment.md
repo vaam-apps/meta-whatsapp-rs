@@ -173,6 +173,90 @@ and set `META_WHATSAPP_RS_REQUIRE_FFMPEG=1` to be sure they ran:
 | `just skills-check` | every skill stamp's commit is on main (directly or squash-merged) |
 | `just squash-body <pr>` | the squash commit body for a PR (CONTRIBUTING.md § Merging) |
 | `just meta-docs [--force]` | mirror Meta's docs into `.meta-docs/` |
+| `just docs-mcp` | the docs MCP server over stdio, for an MCP client to launch ([below](#the-docs-mcp-server)) |
 
 Builds are heavy (typst, aws-lc-sys, sqlx). On a shared machine, cap
 parallelism: `CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=4 just ci`.
+
+## The docs MCP server
+
+`tools/docs-mcp` (roadmap L22b) serves this repository's docs and
+consumer skills to a coding agent over the
+[Model Context Protocol](https://modelcontextprotocol.io)'s stdio
+transport: the agent launches it, sends JSON-RPC on its stdin, and reads
+the answers on its stdout. It is a tool, not part of the library: a
+binary only, on `serde_json` alone, a member of the workspace but not a
+default one (`just test`, `just lint`, `just doc` and `just deny` cover
+it; a bare `cargo build` does not build it), and no crate depends on it.
+
+**Tools.** All three are read-only.
+
+| Tool | Arguments | Answers |
+| --- | --- | --- |
+| `list` | `under` (a directory prefix, e.g. `skills`) | every page: its path, title and, for a skill, the `description` of its front matter |
+| `search` | `query` (terms that must all appear; ASCII case-insensitive; `Idempotency-Key` is one term), `under`, `limit` (1 to 25, default 10) | the matching sections, best first: path, heading, line, a snippet |
+| `read` | `path`, `section` (a heading's text, `Idempotency keys`, or its anchor, `idempotency-keys`), `from_line` | the page, or the section through the line before the next heading of its level; at most 40 KiB, a longer text ending with the `from_line` to continue and the page's headings |
+
+`search`'s hits name the heading to pass to `read`: search, then read
+the one section, rather than whole pages (`docs/roadmap.md` is over
+200 KB).
+
+**What it serves.** The root's `README.md`, `AGENTS.md`,
+`CONTRIBUTING.md`, `CHANGELOG.md` and `OPEN_QUESTIONS.md`; under
+`docs/`, every `.md` and `.txt` (the guides, the design, the planning
+docs, `public/llms.txt`); under `skills/`, every `.md`, `.rs` and `.ts`
+(the skills, their references and examples). Never `.meta-docs/` (Meta's
+pages, which this repository does not redistribute), hidden directories,
+`node_modules/`, generated `*.d.ts` files, files over 1 MiB, or a
+symbolic link. The files are read on every call, so an edit shows at
+once. A `read` takes only a path the listing has (relative,
+`/`-separated, no `..`, `.`, `\`, `:` or leading `/`), and only if the
+file system resolves it to that very path under the root. A path that is
+not a page, a missing section or a wrong argument is a tool error (the
+result's `isError: true`, with what to do instead), not a JSON-RPC one:
+the agent can correct it.
+
+**Protocol.** Revision 2026-07-28, the current one: every request
+carries `_meta` with `io.modelcontextprotocol/protocolVersion` and
+`io.modelcontextprotocol/clientCapabilities`, and `server/discover`
+gives the versions, capabilities and instructions. A client of an
+earlier revision sends `initialize` first and is answered in 2025-11-25
+or 2025-06-18 for the rest of the process. A request with neither is
+`-32602`; a version it does not speak, `-32022` with the ones it does.
+
+**Running it.** Build it once, so a client's first launch does not wait
+for cargo:
+
+```bash
+cargo build --release -p meta-whatsapp-docs-mcp
+```
+
+Then register `target/release/meta-whatsapp-docs-mcp` with your MCP
+client. It serves the checkout it was built from; `--root <checkout>`
+names another one. With Claude Code, for this checkout (the server is
+then yours, not the project's: none is committed):
+
+```bash
+claude mcp add meta-whatsapp-rs-docs -- "$PWD/target/release/meta-whatsapp-docs-mcp"
+```
+
+In a client configured by JSON (an `mcpServers` map), with the paths of
+your checkout:
+
+```json
+{
+  "mcpServers": {
+    "meta-whatsapp-rs-docs": {
+      "command": "/path/to/meta-whatsapp-rs/target/release/meta-whatsapp-docs-mcp",
+      "args": ["--root", "/path/to/meta-whatsapp-rs"]
+    }
+  }
+}
+```
+
+`just docs-mcp` runs it through `cargo run -q` instead (`"command":
+"just", "args": ["--justfile", "/path/to/meta-whatsapp-rs/justfile",
+"docs-mcp"]`), rebuilding it first when its source changed; cargo's
+messages go to stderr, so stdout carries only MCP messages. By hand, it
+waits for JSON-RPC on stdin and exits when stdin closes.
+
