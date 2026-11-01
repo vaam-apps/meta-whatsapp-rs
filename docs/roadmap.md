@@ -1003,7 +1003,11 @@ and `store-postgres`.
     backend). A grant proves its holder composed a state, not which
     one: `OwnedNumber::capability` and `OwnedWaba::capability` take any,
     and the core's services admit the capability with the authorizer
-    they are given, so another state's grant opens nothing. Every moved
+    they are given, so another state's grant opens nothing. The grant's
+    own `Caller` and `AdminCaller` extractors admit what they extract,
+    as the state's do
+    (`a_forged_capability_is_403_at_every_extractor_on_a_grant_too`).
+    Every moved
     log line keeps its target: the ones a request logs
     (`every_line_keeps_its_target_from_before_the_crate_split`) and,
     read from the sources, every one of the new crates
