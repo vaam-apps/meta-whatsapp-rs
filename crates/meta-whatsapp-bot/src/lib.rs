@@ -3,8 +3,9 @@
 //! generated help, middleware, compile-time plugins, Markdown replies in
 //! WhatsApp formatting, rich replies (images, suggestions as reply buttons
 //! or a list, product carousels: [`rich`]), paced broadcasts
-//! ([`broadcast`], [`pacer`]), and durable jobs that send at a time and
-//! survive a restart ([`jobs`]).
+//! ([`broadcast`], [`pacer`]), durable jobs that send at a time and
+//! survive a restart ([`jobs`]), and retention of the stored history
+//! ([`retention`]).
 //!
 //! Each event goes through these steps, in this order:
 //!
@@ -104,6 +105,10 @@
 //! which claims each job by compare-and-swap with a lease, sends through a
 //! paced broadcast, and records each recipient before its send, so a job
 //! resumed after a crash or a restart sends nobody twice (see [`jobs`]).
+//!
+//! The stored chat history is deleted by age and by a cap per chat,
+//! through its `ConversationStore`, by a [`RetentionPolicy`], once or on a
+//! schedule ([`RetentionSweeper`]; see [`retention`]).
 
 pub mod bot;
 pub mod broadcast;
@@ -120,6 +125,7 @@ pub mod outbound;
 pub mod pacer;
 pub mod parse;
 pub mod plugin;
+pub mod retention;
 pub mod rich;
 pub mod throughput;
 
@@ -155,5 +161,6 @@ pub use pacer::{
 };
 pub use parse::{CommandParser, ParsedCommand, PrefixParser};
 pub use plugin::{DEFAULT_CATEGORY, Listen, Plugin, Registrar};
+pub use retention::{RetentionPolicy, RetentionSweeper, Swept};
 pub use rich::{RichReply, Suggestion};
 pub use throughput::{KnownNumbers, NumberDirectory, ThroughputUpgrades};

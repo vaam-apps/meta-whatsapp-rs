@@ -3119,6 +3119,15 @@ mod tests {
         ) -> std::result::Result<meta_whatsapp_core::store::Purged, StorageError> {
             self.inner.purge_before(phone_number_id, cutoff).await
         }
+        async fn trim_conversations(
+            &self,
+            phone_number_id: Option<&PhoneNumberId>,
+            keep_last: usize,
+        ) -> std::result::Result<meta_whatsapp_core::store::Purged, StorageError> {
+            self.inner
+                .trim_conversations(phone_number_id, keep_last)
+                .await
+        }
     }
 
     /// Security review M1: one NUL in a customer's message made every
@@ -4951,6 +4960,15 @@ mod tests {
             cutoff: OffsetDateTime,
         ) -> std::result::Result<meta_whatsapp_core::store::Purged, StorageError> {
             self.inner.purge_before(phone_number_id, cutoff).await
+        }
+        async fn trim_conversations(
+            &self,
+            phone_number_id: Option<&PhoneNumberId>,
+            keep_last: usize,
+        ) -> std::result::Result<meta_whatsapp_core::store::Purged, StorageError> {
+            self.inner
+                .trim_conversations(phone_number_id, keep_last)
+                .await
         }
     }
 

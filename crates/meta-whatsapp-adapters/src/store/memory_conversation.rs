@@ -4,8 +4,9 @@
 //! media placeholders filled once and never after a revoke, tombstones kept
 //! out of the summary, window events, thread ownership, synced contacts and
 //! identity links, a person's identities, erasure (their group messages
-//! redacted or deleted, per its [`ErasureMode`]) and purge by age, each in
-//! one step under the store's lock) within one process; everything is lost
+//! redacted or deleted, per its [`ErasureMode`]), purge by age and a cap
+//! on each conversation's history, each in one step under the store's
+//! lock) within one process; everything is lost
 //! on restart. Use it for tests, development and demos.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -828,6 +829,46 @@ impl ConversationStore for MemoryConversationStore {
 
     fn retention(&self) -> Retention {
         self.retention
+    }
+
+    async fn trim_conversations(
+        &self,
+        phone_number_id: Option<&PhoneNumberId>,
+        keep_last: usize,
+    ) -> Result<Purged, StorageError> {
+        let mut guard = self.state.lock().await;
+        let st = &mut *guard;
+        // Under the store's lock, so no append interleaves: the rows beyond
+        // the newest `keep_last` of each conversation's index, which holds
+        // every row, tombstones included.
+        let doomed: Vec<(ConversationKey, BTreeSet<MessageId>)> = st
+            .history
+            .iter()
+            .filter(|(key, _)| phone_number_id.is_none_or(|n| n == &key.phone_number_id))
+            .map(|(key, index)| {
+                let older = index.iter().rev().skip(keep_last).map(|(_, id)| id.clone());
+                (key.clone(), older.collect::<BTreeSet<_>>())
+            })
+            .filter(|(_, ids)| !ids.is_empty())
+            .collect();
+        let mut purged = Purged::default();
+        for (key, ids) in doomed {
+            // Its latest message goes exactly when the rows kept are
+            // tombstones (or none): the summary holds its preview.
+            let latest_goes = st
+                .conversations
+                .get(&key)
+                .is_some_and(|s| ids.contains(&s.last_message_id));
+            for id in &ids {
+                if st.remove_message(id) {
+                    purged.messages += 1;
+                }
+            }
+            if latest_goes && st.conversations.remove(&key).is_some() {
+                purged.conversations += 1;
+            }
+        }
+        Ok(purged)
     }
 }
 

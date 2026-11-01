@@ -263,6 +263,47 @@ stored data, the owner's).
   (`meta_whatsapp_adapters::store`, roadmap L8): today's rule for message
   ids (`OPEN_QUESTIONS.md` #33, still open), outside `run`; the memory,
   Postgres, SQLite and Redis stores pass it.
+- **Retention and auto-delete** in `meta-whatsapp-bot` (roadmap B4,
+  parity row 91; over HTTP, M5k): module `retention`. A
+  `RetentionPolicy` (`max_age`, `max_messages_per_chat`; keeps
+  everything by default) deletes the stored chat history through the
+  `ConversationStore` it is in, by age (`purge_before` at
+  `now - max_age`) then by a cap per chat (the new
+  `trim_conversations`, below), of one business number or every number:
+  once (`RetentionPolicy::apply(store, number, now)`, what `Swept`
+  says it deleted) or on a schedule (`RetentionSweeper`: a sweep at
+  once, then every hour by default, on the bot's `Timer`, until its
+  stop future completes; failures logged, retried next time; restricted
+  with `number`). It is not the store's own `Retention`
+  (`with_retention`, which `apply_retention` applies), and it is not
+  erasure. Tests: `crates/meta-whatsapp-bot/tests/retention.rs` (memory,
+  and live on Postgres), the decisive one
+  `the_age_filter_deletes_exactly_what_is_older_*` (disabling the age,
+  or the store's age filter, fails it).
+- **A cap on each conversation's history**:
+  `ConversationStore::trim_conversations(phone_number_id, keep_last)`
+  (`meta-whatsapp-core`, roadmap B4), on both adapters. Each
+  conversation keeps its newest `keep_last` rows by `(timestamp, id)`,
+  every row counting (live and synced messages, revokes' tombstones,
+  messages an erasure redacted in a group), and the others are deleted,
+  with the summary of a conversation whose latest message went (its
+  newest rows all tombstones, or a cap of 0); every other summary stays
+  as it was. Window events, ownership records, contact removals, synced
+  contacts and identity links stay (design D35). Returns a `Purged`
+  (messages and conversations; `Purged` now adds with `+=`). Memory:
+  under the store's lock. Postgres: one statement under the existing
+  purge lock (trims, purges and erasures take turns), ranking rows on
+  the existing `messages_conversation_idx` (no migration, no new stable
+  identifier) and deleting only rows of its snapshot, so an append at
+  the same time is never lost; a summary is deleted only while it still
+  names a deleted message (`FOR UPDATE`, in key order), so an append
+  that moved it keeps it. Conformance:
+  `trim_keeps_the_newest_rows_of_each_conversation` and
+  `trims_racing_appends_lose_nothing`; live:
+  `live_postgres_a_trim_keeps_the_summary_an_append_moved`,
+  `live_postgres_trims_racing_appends_keep_every_new_message`,
+  `live_postgres_a_trim_and_a_history_chunk_never_deadlock`, and the
+  trims added to `live_postgres_the_locks_are_the_documented_ones`.
 - **The service's routing after a move, and the bind generation**
   (roadmap S2b, design D36; parity rows 9 and 112 now done on the
   service's side). Three settings, documented in the server guide:
@@ -1968,6 +2009,11 @@ stored data, the owner's).
   through the `postgres` feature only (they were on the dependency), so
   `sqlite` alone links none of them; nothing changes for a build with
   `postgres`.
+- **Breaking for a custom `ConversationStore`** (roadmap B4): the port
+  gains a required method, `trim_conversations` (see Added, "A cap on
+  each conversation's history"); implement it and run
+  `conversation_conformance::run` again. The in-tree memory and Postgres
+  stores implement it; nothing else changes for their users.
 - **The service routes a moved WABA's events by the rules of D36**
   (roadmap S2b). Behaviour: after a WABA moved to a tenant from another
   one, its undated tenant-visible events (errors, history chunks,

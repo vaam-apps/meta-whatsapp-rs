@@ -9,8 +9,9 @@
 //! ([`StoredContact`]) and the links between a person's identities
 //! ([`IdentityLink`]). It finds a person's identities on a number
 //! ([`ConversationStore::identities`]), erases them
-//! ([`ConversationStore::erase_all`], [`ErasureMode`]) and purges by age
-//! ([`ConversationStore::purge_before`], [`Retention`]).
+//! ([`ConversationStore::erase_all`], [`ErasureMode`]), purges by age
+//! ([`ConversationStore::purge_before`], [`Retention`]) and caps each
+//! conversation's history ([`ConversationStore::trim_conversations`]).
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -608,7 +609,9 @@ impl Erased {
     }
 }
 
-/// What [`ConversationStore::purge_before`] deleted, by record.
+/// What [`ConversationStore::purge_before`] or
+/// [`ConversationStore::trim_conversations`] deleted, by record. A trim
+/// deletes messages and summaries only: its other counts are zero.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Purged {
     /// Messages, tombstones included.
@@ -622,6 +625,18 @@ pub struct Purged {
     /// Removals of synced contacts kept to refuse a late sync
     /// ([`ConversationStore::remove_contact`]).
     pub contact_removals: u64,
+}
+
+impl std::ops::AddAssign for Purged {
+    /// Add `other`'s counts to these, saturating: what two purges (or a
+    /// purge and a trim) deleted together.
+    fn add_assign(&mut self, other: Self) {
+        self.messages = self.messages.saturating_add(other.messages);
+        self.conversations = self.conversations.saturating_add(other.conversations);
+        self.window_events = self.window_events.saturating_add(other.window_events);
+        self.thread_owners = self.thread_owners.saturating_add(other.thread_owners);
+        self.contact_removals = self.contact_removals.saturating_add(other.contact_removals);
+    }
 }
 
 impl Purged {
@@ -639,6 +654,9 @@ impl Purged {
 /// it on a schedule. The adapters take it as configuration
 /// (`with_retention`); to swap the policy (per tenant, per number), call
 /// [`ConversationStore::purge_before`] with a cutoff of your own instead.
+/// A cap on each conversation's history is
+/// [`ConversationStore::trim_conversations`] (`meta_whatsapp_bot::retention`
+/// schedules both).
 /// Which retention a deployment needs is its privacy obligations' call.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -695,8 +713,10 @@ impl Retention {
 /// card), which no erasure reaches. [`identities`](Self::identities)
 /// finds a person's keys on a number, [`erase_all`](Self::erase_all)
 /// erases them in one step ([`erase`](Self::erase) is its one-key case),
-/// and [`purge_before`](Self::purge_before) and
-/// [`apply_retention`](Self::apply_retention) delete history by age.
+/// [`purge_before`](Self::purge_before) and
+/// [`apply_retention`](Self::apply_retention) delete history by age, and
+/// [`trim_conversations`](Self::trim_conversations) by a cap on each
+/// conversation's history.
 ///
 /// Every method is required but [`erase`](Self::erase),
 /// [`erasure_mode`](Self::erasure_mode), [`retention`](Self::retention)
@@ -1128,6 +1148,62 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
             None => Ok(Purged::default()),
         }
     }
+
+    /// Cap each conversation's history: keep its `keep_last` newest rows
+    /// by `(timestamp, id)`, the order [`messages`](Self::messages) lists
+    /// them in, and delete the others, of business number
+    /// `phone_number_id` only, or of every number with `None`. Every row
+    /// of the history counts: live and synced messages, revokes'
+    /// tombstones and messages an erasure redacted
+    /// ([`StoredMessage::ERASED`]). A group's history is capped like any
+    /// other conversation's: what an erasure redacted there stays in its
+    /// place until it is one of the oldest rows, then goes like them.
+    ///
+    /// The summary of a conversation whose latest message was deleted (it
+    /// holds that message's preview) is deleted too, as
+    /// [`purge_before`](Self::purge_before) does: that is when its newest
+    /// `keep_last` rows are all tombstones, which a summary never counts,
+    /// or `keep_last` is 0, which keeps no history at all. A conversation
+    /// keeping its latest message keeps its summary as it was: its latest
+    /// message, preview and window, and an unread count that may include
+    /// deleted messages until the next [`mark_read`](Self::mark_read).
+    /// A deleted summary takes its window with it:
+    /// [`last_inbound_at`](Self::last_inbound_at) is `None` (and the
+    /// unread count gone) until the conversation's next message. A purge
+    /// deletes a summary once its latest message is older than the
+    /// cutoff, when that window has usually long closed; a trim deletes it
+    /// whatever its age, so a customer service window still open closes
+    /// (its [window events](Self::window_events) stay): with `keep_last`
+    /// 0, every conversation's, on each trim, and a reply checked against
+    /// the window (the inbox's free-form reply) is refused until the
+    /// customer's next message.
+    ///
+    /// Only messages and summaries are deleted (the other counts of the
+    /// [`Purged`] it returns are zero): window events, thread ownership
+    /// records and removals of synced contacts are not rows of a history
+    /// (a purge by age deletes them), and synced contacts and
+    /// [identity links](IdentityLink) stay, as under a purge (design D35:
+    /// a later erasure follows them to the person's other keys). A deleted
+    /// message's id is free again, as after a purge: a tombstone deleted
+    /// lets the revoked message's content in if it arrives afterwards (see
+    /// [`revoke`](Self::revoke)).
+    ///
+    /// Against concurrent writes: a trim deletes only rows beyond the
+    /// newest `keep_last` of the history it reads, so a message appended
+    /// at the same time is either read with the rest (and deleted only
+    /// when it is not among the newest `keep_last`) or kept, never lost;
+    /// and it never deletes a summary that such an append moved to its
+    /// newer message. A message older than the rows a trim keeps,
+    /// recorded while it runs (a late history chunk), may be kept over
+    /// the cap, and without its summary when the trim deleted that, until
+    /// the next trim deletes it (the same as for a purge). Nothing calls
+    /// it on its own: schedule it (`meta_whatsapp_bot::retention`, or the
+    /// integrator's housekeeping).
+    async fn trim_conversations(
+        &self,
+        phone_number_id: Option<&PhoneNumberId>,
+        keep_last: usize,
+    ) -> Result<Purged, StorageError>;
 }
 
 /// The 24-hour customer service window.
@@ -1381,6 +1457,31 @@ mod tests {
             "nothing is older than the earliest time"
         );
         assert!(Erased::default().is_empty() && Purged::default().is_empty());
+        let mut sum = Purged {
+            messages: 2,
+            conversations: 1,
+            window_events: 3,
+            thread_owners: 4,
+            contact_removals: u64::MAX,
+        };
+        sum += Purged {
+            messages: 5,
+            conversations: 1,
+            window_events: 0,
+            thread_owners: 1,
+            contact_removals: 1,
+        };
+        assert_eq!(
+            sum,
+            Purged {
+                messages: 7,
+                conversations: 2,
+                window_events: 3,
+                thread_owners: 5,
+                contact_removals: u64::MAX,
+            },
+            "every count adds, saturating"
+        );
         for erased in [
             Erased {
                 contacts: 1,
