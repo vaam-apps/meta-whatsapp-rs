@@ -1469,7 +1469,12 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     another runner claims the job, the marker stopping the second send
     (`a_runner_whose_lease_expired_mid_send_never_sends_after_the_new_claim`),
     the lease renewed between long sends
-    (`a_runner_renews_its_lease_between_sends`), a cancel racing a claim
+    (`a_runner_renews_its_lease_between_sends`), the cursor's second read
+    before a tick moves on through more minutes, against a writer whose
+    clock lags
+    (`a_job_indexed_behind_a_cursor_moving_on_through_minutes_is_not_lost`;
+    the first tick's own re-read covers only the minute just behind the
+    cursor), a cancel racing a claim
     in both orders (`a_cancel_racing_a_claim_sends_nothing`), the 131049
     skip still on two minutes short of 24 hours, and scoped to its job
     (`a_131049_skip_is_scoped_to_its_job`); the key pins are known

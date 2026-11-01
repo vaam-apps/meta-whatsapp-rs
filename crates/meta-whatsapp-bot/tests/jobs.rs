@@ -1337,6 +1337,41 @@ async fn a_runner_failing_right_after_moving_the_cursor_loses_no_job() {
     assert_eq!(outbound.attempts(), labels(&[phone(1), phone(2)]));
 }
 
+/// A writer whose clock lags (or that is slow) indexes a job into a minute
+/// the runner has just read, as it moves the cursor past it, and the tick
+/// goes on through two more minutes. The runner's second read of that
+/// minute, before it moves on, moves the cursor back. Without it, the
+/// cursor goes on past the next minutes, the versions it keeps are the
+/// last minute's, and the job is never found.
+#[tokio::test]
+async fn a_job_indexed_behind_a_cursor_moving_on_through_minutes_is_not_lost() {
+    let world = World::new();
+    let gate = Gate::new(world.kv.clone());
+    let jobs = world.jobs_on(gate.clone());
+    jobs.schedule(Job::new(id("first"), number(), T0).to([phone(1)]))
+        .await
+        .unwrap();
+    world.advance(Duration::from_mins(2));
+    // Two minutes behind the runner.
+    let lagging = KvJobs::new(world.kv.clone(), Arc::new(ManualClock::new(T0)));
+    *gate.before_cursor_moves.lock().unwrap() = Some(Hook(Box::new(move || {
+        Box::pin(async move {
+            lagging
+                .schedule(Job::new(id("late"), number(), T0).to([phone(2)]))
+                .await
+                .unwrap();
+        })
+    })));
+    let outbound = Fake::default();
+    let runner = world.runner(jobs.clone(), &outbound, "r");
+    let first = runner.tick().await.unwrap();
+    assert_eq!(first.runs.len(), 1);
+    let second = runner.tick().await.unwrap();
+    assert_eq!(second.runs.len(), 1, "the late job is found");
+    assert_eq!(second.runs[0].id, id("late"));
+    assert_eq!(outbound.attempts(), labels(&[phone(1), phone(2)]));
+}
+
 /// A job due long ago ("now or earlier" is allowed: a month, here) keeps
 /// its due time but is indexed under the current minute, so the next tick
 /// runs it without reading every minute since. Indexing it under its own
