@@ -219,7 +219,8 @@ stored data, the owner's).
 ### Added
 
 - **Live updates in the service** (roadmap M2b; design §4.5, D39–D42
-  proposed; parity row 10, categories 19 and 39, coverage row 33).
+  decided by the coordinator on 2026-11-01, D43 proposed by its review;
+  parity row 10, categories 19 and 39, coverage row 33).
   Routes, additive in `openapi/v1.json`: `GET /v1/events/stream` and
   `GET /v1/numbers/{pn}/events/stream` (scope `events`,
   `text/event-stream`: `event: whatsapp` frames whose `id` is the
@@ -229,7 +230,11 @@ stored data, the owner's).
   `Last-Event-ID`, or `?after=`, resumes exactly after on any replica,
   `410 cursor_expired` and `422` on the cursor before the stream starts,
   `429 too_many_streams` past 20 streams of a tenant or 1,000 on a
-  replica, `503 shutting_down`), and `GET /v1/events/{id}` (one of the
+  replica, with `Retry-After: 5`, `503 shutting_down`; a stream gives its
+  place and its buffer back when it ends, whether or not its client
+  takes the last frame, and ends with no last frame once its key or its
+  tenant would no longer be admitted, asked again before it reads), and
+  `GET /v1/events/{id}` (one of the
   tenant's events, whole; another tenant's id, an operator-only row's,
   a purged or malformed one `404 not_found`, alike). Operations
   `get_event`, `stream_events` and `stream_number_events`, rate class
@@ -248,12 +253,15 @@ stored data, the owner's).
   connection per replica, outside the pool), no migration. The HTTP
   crate: `api::events` (`stream_routes`, and the event envelope and its
   schemas, moved from the axum adapter, which re-exports them; the
-  document is unchanged for them), `AppState::open_streams`, and
-  `begin_shutdown` ending every stream. Notifications are a wake-up
+  document is unchanged for them), `AppState::open_streams`, the metric
+  `wa_server_event_streams_open`, `listen::Limits::write_timeout` (both
+  listeners close a connection that takes no byte of its answer for a
+  minute, `WRITE_TIMEOUT`), and `begin_shutdown` ending every stream.
+  Notifications are a wake-up
   only: each stream reads the outbox after its cursor when woken and
   every 15 s whatever it heard, so a lost one loses nothing.
   **Upgrade:** none for callers; a `Backend` implemented outside this
-  repository gains `notifier()`.
+  repository gains `notifier()` (see Changed, breaking).
 - **The payment templates and the payment webhooks** (roadmap P1c,
   parity rows 38, now done in the library, and 141; from
   `payments/payments-in/orderdetailstemplate`, `orderstatustemplate`,
@@ -2378,6 +2386,16 @@ stored data, the owner's).
   each conversation's history"); implement it and run
   `conversation_conformance::run` again. The in-tree memory and Postgres
   stores implement it; nothing else changes for their users.
+
+- **Breaking for a custom `Backend`** (roadmap M2b, the coordinator's
+  decision of 2026-11-01): the bundle gains a required method,
+  `Backend::notifier()`, with no default; a backend built outside this
+  repository adds one (a `notify::LocalNotifier`, built once and handed
+  out on every call, for a backend whose replicas are one process; its
+  database's notifications for several) and runs `conformance::run`
+  again (its `live` suite checks it). `listen::Limits` gains
+  `write_timeout`: a literal of it adds the field (`WRITE_TIMEOUT`). The
+  in-tree memory and Postgres backends do.
 
 - **Breaking for a custom `RecordStore`** (roadmap M2h): `NumberBinding`
   gains two fields (`attached_at`, `previous_tenant_released_at`), and

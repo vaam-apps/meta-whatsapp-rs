@@ -4182,19 +4182,84 @@ design's (§9).
     notifier new on each call, or waking every tenant, fails
     `conformance::run`, and an outbox whose pages leave the tenant out
     fails the tenant case (the memory crate's `tests/conformance.rs`).
-    Proposed, for the coordinator: D39–D42 (each stream reads, not one
-    shared read per replica; the channel and payload, which are stable
-    identifiers pending the owner; a stream without a cursor starts at the
-    newest sequence, `Last-Event-ID` wins, a malformed id is `404`; the
-    buffer, slow-client and re-poll numbers). Left, and why: the open
-    streams are not a metric yet (design §7.3 lists one); a client
-    stalled on a full TCP window is dropped from its stream, but its
-    connection, and its place among the 20, last until the operating
-    system gives up on it; the listener's reconnect is covered by the
-    re-poll, not by a live test (killing the `LISTEN` session would
-    disturb the other live tests of the database); webhooks-out (M2c)
-    will need the notifier's wake-ups too, and gets them through the same
-    port.
+    **The sabotage review (2026-11-01), tenant isolation and resource
+    bounds first,** added: a stream's place among the 20 and the 1,000
+    is held by its producer as well as its body, and given back when the
+    stream ends (lagged, shut down, revoked, its client gone), whatever
+    the client does, and a lagged stream drops what it held then, so a
+    client stalled on a full TCP window keeps neither its place nor its
+    buffer (`lagged` names the last sequence its client took); the
+    listeners close a connection that takes no byte of its answer for a
+    minute (`listen::Limits::write_timeout`, both listeners), so the
+    stalled connection goes too; a stream asks again, before it reads (at
+    most every second, at least every re-poll), whether its key would
+    still be admitted (`authz::Recheck`: the key stored, neither revoked
+    nor expired, the scope, a platform key's tenants, the tenant stored
+    and not suspended), and ends with no last frame once not: before, a
+    revoked key's stream went on for as long as its connection lasted;
+    `429 too_many_streams` carries `Retry-After: 5`, as the service's
+    other limit does; the open streams are a metric,
+    `wa_server_event_streams_open` (design §7.3); and the Postgres
+    listener listens again on a lost connection itself, waking every
+    stream once it listens rather than before. Decisive:
+    `conformance::live::a_slow_client_is_dropped_with_its_buffer_bounded`
+    (no place nor buffer held while the client never reads; the frames
+    held counted apart from the budget's own count, `LiveStream::pending`)
+    and `a_stream_ends_once_its_key_or_tenant_is_no_longer_admitted`, on
+    memory and live on Postgres; over HTTP `a_slow_client_is_dropped_with_lagged`,
+    `a_stream_ends_once_its_key_is_revoked`, `streams_are_bounded_per_tenant`
+    (`Retry-After`) and `the_open_streams_are_a_metric`; the HTTP crate's
+    `a_client_that_stops_reading_is_closed_after_the_write_timeout`, with
+    its control; `live_postgres_a_killed_listener_listens_again` (the
+    listening session terminated on a channel of the test's own, so no
+    other test is disturbed). Each guard was removed or bent in turn and
+    a named test failed; two that survived gained a test (the HTTP
+    crate's `a_literal_segment_beats_a_parameter_in_either_order`: the
+    stream's operation held only by the table's order; the core's
+    `an_id_of_no_events_shape_is_not_looked_up`), and one is redundant by
+    construction (`Producer::end` gives the slot back, and so does the
+    producer's first field when it drops). Checked and
+    left as built: the `NOTIFY` payload is parsed as a sequence and a
+    `TenantId` or ignored, never trusted beyond a wake-up (a forged one,
+    which any role of the database may send, costs its tenant's streams
+    a read each); a cursor is a number of the caller's own tenant's
+    stream (another tenant's sequence names nothing of theirs; a negative
+    one is `422`, one past the newest `422`); `Operations::of` and
+    `telemetry::most_specific` change only `/v1/events/stream` against
+    `/v1/events/{id}`, the one pair of the document's templates that
+    overlap; the `Event` schema is byte-identical to main's.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): D39 (each stream
+    reads, as built; one reader shared per replica is a later
+    optimisation behind `live::Streams`, not a roadmap item), D40 (the
+    channel `wa_server_events` and the payload `<sequence> <tenant>`, as
+    built, both stable identifiers pending the owner's confirmation
+    before the first release), D41 (no cursor starts at the newest
+    sequence; `Last-Event-ID` wins over `after`; a malformed event id is
+    `404`) and D42 (1 MiB and 64 frames per stream, a 30 s drop, a 15 s
+    re-poll), as design §10 records; and:
+    1. A number's stream takes step 4 of the authorization order only
+       (the number bound to the tenant), no vault read (to swap,
+       `Authorizer::owned_number` in `Streams::open_number_stream`).
+    2. The webhook pipeline notifies after the outbox insert committed,
+       for a row it routed to a tenant (to swap, `ServiceSink`'s call in
+       `inbound.rs`).
+    3. The event envelope's schemas move to the HTTP crate, the schema
+       unchanged (`api::events::EventEnvelope`).
+    4. tokio's `macros` feature in the service's core (`select!`).
+    5. `Backend::notifier()` is required, with no default: a backend
+       built outside this repository must add one (CHANGELOG, breaking
+       for it).
+  - **Proposed** by the review, for the coordinator: D43 (the re-check
+    before a read, the frames dropped on a lag, `Retry-After: 5`, the
+    one-minute write timeout).
+  - **Left, and why:** a delete and re-create of a tenant within the
+    re-check's second could let a stream read one event of the new
+    tenant before it checks (the tenant's keys go with it, so the next
+    check ends it); the re-check reads the key and the tenant, two
+    record reads per stream and second at most, for a busy tenant's 20
+    streams; webhooks-out (M2c) will need the notifier's wake-ups too,
+    and gets them through the same port.
 - [ ] **M2c. Webhooks out** (row 10): endpoints, dispatcher and retries
   (Standard Webhooks, a destination allow list).
   - **After:** M2b.
@@ -4748,8 +4813,9 @@ everything else goes into the parity-completion report.
   keys' derivations and their records' shapes, added and awaiting
   confirmation before the first release; M2b's Postgres channel
   `wa_server_events` and its payload `<sequence> <tenant>`, not stored
-  but what replicas of two releases must agree on, added and awaiting
-  confirmation, design D40), for the same reason as L5's.
+  but what replicas of two releases must agree on, added and, the
+  coordinator having decided them as built (D40), awaiting confirmation
+  before the first release), for the same reason as L5's.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored

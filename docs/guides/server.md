@@ -798,14 +798,20 @@ data: {"id":"evt_…","sequence":18343,"type":"message_received",…}
 - **The stream can end** with one last frame, both with
   `data: {"after": <the last sequence it sent>}`: `event: lagged` when
   your client took nothing for 30 s while 1 MiB (or 64 frames) waited
-  for it, or when events after its cursor were purged before it got
-  them; `event: shutdown` when the replica stops. Reconnect with
-  `Last-Event-ID` set to that `after` (after `lagged` on a purge, the
-  reconnection answers `410`: reload).
+  for it (what waited is dropped: it comes again when you resume), or
+  when events after its cursor were purged before it got them; `event:
+  shutdown` when the replica stops. Reconnect with `Last-Event-ID` set
+  to that `after` (after `lagged` on a purge, the reconnection answers
+  `410`: reload). It ends with no last frame once its key is revoked or
+  expires, or the tenant is suspended or deleted (checked again before
+  each read, within a second, or within 15 s on an idle stream): the
+  reconnection answers `401` or `403`.
 - At most 20 streams per tenant on a replica (number streams included)
   and 1,000 in all (`WA_SERVER_STREAMS_PER_TENANT`,
-  `WA_SERVER_STREAMS_PER_REPLICA`): the next is `429 too_many_streams`.
-  Opening one counts once against the tenant's `read` budget.
+  `WA_SERVER_STREAMS_PER_REPLICA`): the next is `429 too_many_streams`,
+  with `Retry-After: 5`. A stream gives its place back when it ends,
+  even when its client never reads the last frame. Opening one counts
+  once against the tenant's `read` budget.
 - Browsers cannot send the key (`EventSource` sends no `Authorization`):
   relay the stream through your backend (design D3).
 - Several replicas: each holds one `LISTEN` connection of its own on
@@ -921,8 +927,10 @@ SKIP token.wabas: the configuration is refused
   must see the replica unready first).
 - Limits, per listener: a request head must arrive within 10 s (slow
   clients are cut off), 256 connections on the public listener and
-  4,096 on the internal one (more wait), and every request is answered
-  within 55 s (past it, `504 timeout` with `may_have_been_sent: true`).
+  4,096 on the internal one (more wait), every request is answered
+  within 55 s (past it, `504 timeout` with `may_have_been_sent: true`),
+  and a connection that takes no byte of its answer for 60 s (a client
+  that stopped reading a live stream or a download) is closed.
 - `/metrics` (Prometheus) counts requests by listener, method, route
   template, status and error code, their duration, failed Graph calls by
   code, idempotent repeats by outcome (`replayed`, `reused`,
@@ -931,8 +939,9 @@ SKIP token.wabas: the configuration is refused
   `payload_too_large`, `slow_body`, `busy`: the replica at capacity,
   `in_flight`: a run of them means recording outlasts the 60 s lease,
   `failed`), recorded events by type and audience (`tenant`,
-  `operator`), duplicates and recording failures by stage; never an id,
-  a number or a key.
+  `operator`), duplicates and recording failures by stage, and the live
+  event streams open on the replica (`wa_server_event_streams_open`);
+  never an id, a number or a key.
 - Expired idempotency records are purged every 10 minutes by one replica
   at a time, with the outbox's housekeeping.
 - Logs are JSON, one line per request with its id (`X-Request-Id`, echoed

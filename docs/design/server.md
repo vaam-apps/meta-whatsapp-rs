@@ -728,7 +728,8 @@ backend's `Outbox` and its new `EventNotifier` port
 `api::events::stream_routes`, which the axum adapter mounts behind
 scope `events` (operations `stream_events` and `stream_number_events`,
 rate class `read`, charged once when a stream opens). Where it differs
-from the bullets above, as proposed in D39–D42:
+from the bullets above, as decided in D39–D42 (and D43, proposed by its
+review):
 
 - **The outbox is read by each stream, not once per replica** (D39). A
   stream is a cursor in its tenant's stream of sequences: woken by a
@@ -749,8 +750,9 @@ from the bullets above, as proposed in D39–D42:
   webhook pipeline once the outbox insert committed, for a row it routed
   to a tenant; a failed notify is logged and the delivery still
   succeeds. Each replica's listener is a connection of its own, opened
-  with its first stream, which wakes every stream of the replica when it
-  listens again after a lost connection.
+  with its first stream, which wakes every stream of the replica once it
+  listens again after a lost connection (not before: what commits in
+  between would wait for the re-poll).
 - **Cursors** (D41): `id:` is the event's sequence; `Last-Event-ID`, or
   `?after=`, resumes exactly after it, on any replica; without either, a
   stream starts at the tenant's newest sequence (what comes next only;
@@ -760,20 +762,33 @@ from the bullets above, as proposed in D39–D42:
 - **Bounded buffering** (D42): a stream holds at most 1 MiB of event data
   (one event larger alone) and 64 frames its client has not taken; a
   client that takes nothing for 30 s while its buffer is full is
-  dropped, its stream ending, after what it holds, with `event: lagged`
-  and `data: {"after": <the last sequence sent>}`. A stream whose cursor
-  fell below what housekeeping purged ends the same way (its client lost
-  events). Nothing is lost from the outbox by a drop: the client resumes
-  from `after`. A stream keeps its place among the 20 and the 1,000
-  until its connection closes.
+  dropped: its stream ends with `event: lagged` and `data: {"after":
+  <the last sequence its client took>}`, and what it held is dropped. A
+  stream whose cursor fell below what housekeeping purged ends the same
+  way (its client lost events). Nothing is lost from the outbox by a
+  drop: the client resumes from `after`. **A stream gives its place
+  among the 20 and the 1,000, and its buffer, back when it ends**, not
+  when its connection closes (D43): a client stalled on a full TCP
+  window, which never takes the last frame, holds neither. Its
+  connection goes too: both listeners close a connection that takes no
+  byte of its answer for a minute (`listen::Limits::write_timeout`).
+  Past a bound, `429 too_many_streams` carries `Retry-After: 5`.
+- **Only while admitted** (D43): before it reads, at most every second
+  and at least every re-poll, a stream asks again whether its key would
+  still be admitted for its tenant and scope `events` (the key stored,
+  not revoked nor expired, the tenant stored and not suspended, a
+  platform key still allowed it); once not, it ends with no last frame,
+  and its client reconnecting is answered `401` or `403`.
 - **Shutdown**: `begin_shutdown` ends every stream with `event:
   shutdown` (`data: {"after": n}`), so the listeners' connections close
   within the grace period, and a stream asked for afterwards is `503
   shutting_down`.
 - The limits are settings: `WA_SERVER_STREAMS_PER_TENANT` (20) and
   `WA_SERVER_STREAMS_PER_REPLICA` (1,000) ([§7.2](#72-environment)); the
-  heartbeat (15 s), the re-poll (15 s), the buffer and the slow-client
-  wait are the service's constants (`live::LiveSettings`).
+  heartbeat (15 s), the re-poll (15 s), the buffer, the slow-client
+  wait, the re-check (1 s) and the `Retry-After` (5 s) are the service's
+  constants (`live::LiveSettings`). The open streams are a metric,
+  `wa_server_event_streams_open` ([§7.3](#73-start-observability-shutdown)).
 - Decisive tests: M2.2 live on two pools of one database
   (`live_postgres_a_webhook_into_one_replica_reaches_a_stream_on_another`,
   the server's; `conformance::live::an_event_through_one_replica_wakes_a_stream_on_another`,
@@ -784,7 +799,15 @@ from the bullets above, as proposed in D39–D42:
   lost notification still delivers (`a_lost_notification_still_delivers`,
   core and HTTP); `Last-Event-ID` resumes exactly after; an outbox whose
   pages leave the tenant out fails the tenant case
-  (`removing_the_tenant_filter_on_the_stream_fails_the_tenant_case`).
+  (`removing_the_tenant_filter_on_the_stream_fails_the_tenant_case`); a
+  stalled client gives its place and buffer back
+  (`a_slow_client_is_dropped_with_its_buffer_bounded`, core;
+  `a_slow_client_is_dropped_with_lagged`, HTTP), and its connection is
+  closed (`a_client_that_stops_reading_is_closed_after_the_write_timeout`);
+  a revoked key or a suspended tenant ends its streams
+  (`a_stream_ends_once_its_key_or_tenant_is_no_longer_admitted`, core;
+  `a_stream_ends_once_its_key_is_revoked`, HTTP); a killed listener
+  listens again (`live_postgres_a_killed_listener_listens_again`).
 
 ### 4.6 Embedded Signup
 
@@ -890,7 +913,7 @@ each new kind into `unknown` silently.
 | 422 | `invalid_request` (local validation, with `field`), `invalid_parameter`, `unsupported_message_type`, `recipient_not_supported`, `undeliverable`, `template_parameter_mismatch`, `template_not_found`, `template_text_too_long`, `template_policy_violation`, `template_rejected`, `sample_template_not_allowed` (Meta's `hello_world` from a number that is not one of its public test numbers), `idempotency_key_reused` | fix the request; nothing was sent |
 | 409 | `customer_service_window_closed`, `thread_owned_elsewhere` (Meta's `131070`, a service message without owning the thread, and the inbox's local refusal while another app owns it), `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a stored token: a merchant's, or an attached WABA's once stored), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown` | a state must change first |
 | 403 | `permission`, `account_restricted`, `country_restricted`, `payment`, `feature_not_available`, `marketing_not_allowed`; `forbidden`, `tenant_suspended`, `stale_attempt` | not allowed, by Meta or the service |
-| 429 | `rate_limited` (Meta's throttling codes, `ErrorKind::RateLimited`: 4, 80007, 130429, and the Graph API's Business Use Case limits 80008, 80009, 80014), `pair_rate_limited`, `spam_rate_limited`, `ecosystem_engagement_limit`, `classification_limit_reached`, `too_many_requests`, `too_many_streams` | `Retry-After` when known (the service's own limits: Meta's wait is not forwarded); `retryable` says whether waiting helps (false for 131048, 131049) |
+| 429 | `rate_limited` (Meta's throttling codes, `ErrorKind::RateLimited`: 4, 80007, 130429, and the Graph API's Business Use Case limits 80008, 80009, 80014), `pair_rate_limited`, `spam_rate_limited`, `ecosystem_engagement_limit`, `classification_limit_reached`, `too_many_requests`, `too_many_streams` | `Retry-After` when known (the service's own limits, `too_many_requests` and `too_many_streams`: Meta's wait is not forwarded); `retryable` says whether waiting helps (false for 131048, 131049) |
 | 404, 410, 413 | `not_found`, `nothing_to_resume`; `cursor_expired`; `payload_too_large`, `media_too_large` | |
 | 502 | `service_unavailable`, `unknown`, `upstream` (non-Graph answer), `integrity`, `media_download_failed`, `media_upload_failed`, `onboarding_failed` | Meta or the network failed |
 | 504 | `timeout` | no answer in time: a send may have gone out |
@@ -2058,10 +2081,11 @@ choice stays the owner's.
 | D36 | Undated tenant-visible events of a WABA's previous holder (errors, history chunks, undated group updates), which Meta redelivers for up to 7 days after a failed delivery, arriving after the WABA moved to another tenant (S2's security review, M2) | the current holder (as built) / operator-only within a window after a move | **Coordinator's decision 2026-09-27 under the owner's delegation, swappable: fail closed by default.** A setting `undated_after_move`: `OperatorOnly { window }` by default, the window 7 days and an hour (Meta's retry window plus the dedup margin), and `CurrentHolder`, the behaviour before it. A first onboarding (no previous tenant) is unaffected, so its history sync reaches it. The same item adds a skew margin setting around `attached_at` for dated events, applied only when a previous tenant exists, and relaxes the same-second rule (strict since S2: an event of its binding's own second is operator-only) to `<=` when the WABA has no previous tenant, so a first onboarding keeps the events of its first second; the tombstone is what tells the two apart. Why: a new holder can be another business, and the operator still sees the events in the operator stream. Not a legal choice. **Built in S2b**: `events::UndatedAfterMove` and `events::MoveRules` (the core; `Inbound::with_move_rules`), the window measured from the WABA's last unbinding from another tenant (its tombstone: a tenant deleted and created again under its id counts as another), checked by the routing and again by the outbox with each insert (`RouteGuard::after_move`); the skew margin defaults to none beyond the strict second. Bindings made before the Postgres migration 4 keep S2's rules (a move before them unknown). *Decided 2026-11-01 (coordinator, owner's delegation), with S2b's build, swappable behind the same settings and the `RecordStore` port*: the window from the unbinding, not the new attach; a margin of `0s`; the epoch (`UNRECORDED_MOVE`), not NULL, for bindings made before migration 4; a deleted and recreated tenant another tenant; the generation from 1 per binding; the undated check in the routing (`events::owner`) and `RouteGuard::admits`, for every undated event; a refresh met by a capability or an attach `503`, retryable; tombstones never purged. The names of migration 4 stay the owner's (stable identifiers). To swap, the settings `WA_SERVER_UNDATED_AFTER_MOVE` (`operator_only`, `current_holder`), `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` (169h) and `WA_SERVER_MOVE_SKEW_MARGIN` (0s), [§7.2](#72-environment) | S2b |
 | D37 | A number under several Messaging Accounts (Meta's account model evolution, phase 1 from H2 2026: a WABA's id now names its Messaging Account, which holds templates, billing and webhook subscriptions, and a number can belong to several, one per partner or billing currency) | one binding per number in a deployment, the sends naming it / several bindings per number, keyed by `(waba_id, phone_number_id)` | **Coordinator's decision 2026-10-26 under the owner's delegation, swappable: one binding per number, as built.** A number stays under exactly one binding (`wa_server_numbers`, keyed by `phone_number_id`): an attach whose number another tenant's binding holds is refused (D4), and one whose number the same tenant holds under another binding moves the number to the new binding, and M5c5 makes the latest attach the account billed: a send from a number names its binding's WABA id as `messaging_account_id` (the library's `OutboundMessage::messaging_account_id`, L16a), which Meta requires when the access token can send from several Messaging Accounts on the number, from phase 2 (H1 2027), so the binding's account is billed whichever ones the token reaches. A tenant's send body cannot name the account itself (the send body's unknown keys are refused). Until M5c5 lands, the service's sends name none and Meta resolves the account from the stored token. Why: it is the rule the schema already has, and nothing about events routed by Messaging Account is published yet. The cost, documented: templates belong to the Messaging Account they were created in (`account-model-evolution`), so after a same-tenant move the number's template sends find only the new account's templates (the tenant creates them there, or migrates them with Meta's Template Migration API, which resets their quality rating). Several bindings per number is a primary-key migration, left to the owner (OPEN_QUESTIONS #46). To swap, the setting `send_messaging_account_id` M5c5 adds (on by default; off sends none, as today) | M5c5 |
 | D38 | The coexistence address book (`smb_app_state_sync`) in the service's inbox, which the library's `InboxSink` records by default since roadmap L8 | record it now, readable by no route / record nothing until M3b exposes it | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: record nothing until M3b.** The pipeline builds its `InboxSink` with `meta-whatsapp-server-core`'s `inbound::INBOX_RECORDING`, the library's `RecordingSwitches::ALL` with `contacts(false)`: the `app_state_synced` events still reach their tenant, but no synced contact (names, phone numbers, BSUIDs) is stored where no route reads it and no tenant can ask for it to be erased. Swap: the constant; M3b turns it on with the routes that read the contacts. Decisive: `conformance::webhooks::an_address_book_change_reaches_its_tenant_and_no_inbox` (memory and Postgres backends). | M3 |
-| D39 | How a replica's live streams read the outbox ([§4.5](#45-live-updates-sse)) | each stream reads after its own cursor when woken / one read per replica and tenant, shared (`Arc`) into channels per (tenant, number), as §4.5's bullets first said | **Proposed (roadmap M2b), for the coordinator: each stream reads.** A stream is a cursor in its tenant's stream, woken by its tenant's notifications or its re-poll, reading with its own filters exactly as `GET /v1/events` does: no catch-up and hand-over between a resuming stream and a shared feed to get wrong, and the tenant named in every read. The cost: up to a tenant's 20 streams each read once per wake-up (coalesced under a burst). Swap: behind `live::Streams` (the adapters call `open_stream` and `open_number_stream` only); a shared reader per tenant fits behind it with no route change, and M2.5's case (`conformance::live::many_streams_at_a_steady_rate_hold_bounded_memory`) holds it to the same bounds | M2b |
-| D40 | The Postgres notification's channel and payload | one channel per database / one per schema / a setting | **Proposed (roadmap M2b), for the coordinator: `wa_server_events` per database, payload `<sequence> <tenant>`.** A deployment is one database ([§2.2](#22-configuration-and-storage)); deployments that share one (schemas apart) hear each other's wake-ups, which cost them a read each and carry a tenant id and a sequence, nothing of an event. Swap: `PgNotifier::with_channel` (a deployment sharing its database names its own); the payload's format is `PgNotifier`'s `payload` and `wakeup`, pinned by a test. **The names are stable identifiers, pending the owner** (replicas of two releases must agree during a rolling deploy) | M2b |
-| D41 | Where a stream starts, and an event id's shape | without a cursor: the newest sequence / the oldest retained, as a poll does; `Last-Event-ID` over `?after=`; a malformed event id `404` / `422` | **Proposed (roadmap M2b), for the coordinator: the newest sequence; `Last-Event-ID` wins; `404`.** A live stream is for what comes next (history is the poll), `Last-Event-ID` is what an `EventSource` sends on its own when it reconnects (newer than the URL's `after`), and an id of no event's shape names nothing, as a non-numeric `{pn}` is `404` (roadmap L20c). Swap: `live::StreamQuery` (an adapter passes `after: Some(0)` to start at the oldest) and `events::get_event` | M2b |
-| D42 | A stream's buffer, a slow client, the re-poll | per stream 1 MiB and 64 frames, a client taking nothing for 30 s dropped with `lagged`, a re-poll every 15 s / other numbers | **Proposed (roadmap M2b), for the coordinator: those numbers.** §7's limits bound the streams (20 per tenant, 1,000 per replica: settings) but not their buffers: 1 MiB per stream bounds 1,000 streams to about 1 GiB at worst (M2.5 measures 200 streams, half never read, under 1 MiB in all); a dropped client loses nothing of the outbox and resumes from `after`; the re-poll at the heartbeat's interval bounds a lost notification's delay to 15 s. Swap: `live::LiveSettings` (the service's `Settings::live`; the two bounds are `WA_SERVER_STREAMS_PER_TENANT` and `WA_SERVER_STREAMS_PER_REPLICA`) | M2b |
+| D39 | How a replica's live streams read the outbox ([§4.5](#45-live-updates-sse)) | each stream reads after its own cursor when woken / one read per replica and tenant, shared (`Arc`) into channels per (tenant, number), as §4.5's bullets first said | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: each stream reads, as built.** A stream is a cursor in its tenant's stream, woken by its tenant's notifications or its re-poll, reading with its own filters exactly as `GET /v1/events` does: no catch-up and hand-over between a resuming stream and a shared feed to get wrong, and the tenant named in every read. The cost: up to a tenant's 20 streams each read once per wake-up (coalesced under a burst). A later optimisation, not a roadmap item: one reader per replica and tenant, shared into the streams, behind `live::Streams` (the adapters call `open_stream` and `open_number_stream` only), with no route change, held to the same bounds by M2.5's case (`conformance::live::many_streams_at_a_steady_rate_hold_bounded_memory`). To swap, that reader behind `live::Streams` | M2b |
+| D40 | The Postgres notification's channel and payload | one channel per database / one per schema / a setting | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: the channel `wa_server_events` per database, the payload `<sequence> <tenant>`, as built.** A deployment is one database ([§2.2](#22-configuration-and-storage)); deployments that share one (schemas apart) hear each other's wake-ups, which cost them a read each and carry a tenant id and a sequence, nothing of an event. **Both names stay stable identifiers pending the owner's confirmation before the first release** (replicas of two releases must agree during a rolling deploy; docs/architecture.md § Stable identifiers). To swap, `PgNotifier::with_channel` (a deployment sharing its database names its own); the payload's format is `PgNotifier`'s `payload` and `wakeup`, pinned by a test | M2b |
+| D41 | Where a stream starts, and an event id's shape | without a cursor: the newest sequence / the oldest retained, as a poll does; `Last-Event-ID` over `?after=`; a malformed event id `404` / `422` | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: as proposed.** Without a cursor a stream starts at the newest sequence (a live stream is for what comes next; history is the poll); `Last-Event-ID` wins over `?after=` (what an `EventSource` sends on its own when it reconnects, newer than the URL's `after`); a malformed event id is `404` (an id of no event's shape names nothing, as a non-numeric `{pn}` is `404`, roadmap L20c). To swap, `live::StreamQuery` (an adapter passes `after: Some(0)` to start at the oldest) and `events::get_event` | M2b |
+| D42 | A stream's buffer, a slow client, the re-poll | per stream 1 MiB and 64 frames, a client taking nothing for 30 s dropped with `lagged`, a re-poll every 15 s / other numbers | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: as proposed, 1 MiB and 64 frames per stream, a client taking nothing for 30 s dropped, a re-poll every 15 s.** §7's limits bound the streams (20 per tenant, 1,000 per replica: settings) but not their buffers: 1 MiB per stream bounds 1,000 streams to about 1 GiB at worst (M2.5 measures 200 streams, half never read, under 1 MiB in all); a dropped client loses nothing of the outbox and resumes from `after`; the re-poll at the heartbeat's interval bounds a lost notification's delay to 15 s. To swap, `live::LiveSettings` (the service's `Settings::live`; the two bounds are `WA_SERVER_STREAMS_PER_TENANT` and `WA_SERVER_STREAMS_PER_REPLICA`) | M2b |
+| D43 | What M2b's review added to the live streams: when a stream asks again whether its key is admitted, what a dropped stream keeps, the `Retry-After` of `too_many_streams`, a write timeout on the listeners | a check before a read, at most every second and at least every re-poll / at each re-poll only / none (the connection's lifetime); a lagged stream drops what it held at once / delivers it first; `Retry-After: 5` / none; a minute / none | **Proposed (M2b's sabotage review, 2026-11-01), for the coordinator: the first of each.** A stream outlived its key: a revoked or expired key, a suspended or deleted tenant, kept reading for as long as its connection lasted. The check before a read costs two record reads per stream at most once a second (an idle stream's once per re-poll), and a stream ends within a second of a revocation on a busy tenant, a re-poll on an idle one. A stalled client (its TCP window full) never takes a last frame: the stream gives its place and its buffer back when it ends, and the frames it held are dropped then (its client resumes from the last sequence it took, which `lagged` names); the listeners close a connection that takes no byte of its answer for a minute, longer than the slow-client wait, so that stalled connections do not pile up under the connection cap. `Retry-After` is a hint (a slot frees when any stream ends); 5 s is above `EventSource`'s usual reconnect delay. To swap, `LiveSettings::recheck` and `LiveSettings::retry_after`, `Producer::end` (`live.rs`), and `listen::Limits::write_timeout` (`WRITE_TIMEOUT`) | M2b |
 
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** The
 questions the service inherits were decided on 2026-09-26 under the same
@@ -2079,9 +2103,11 @@ visible to callers. #33 (message ids unique per store) stays open: its
 alternative is a primary-key migration of stored messages, which is the
 owner's; L5 and L8 are shaped to work with either answer.
 
-**Proposed in roadmap M2b (D39–D42)**, by its implementer, for the
-coordinator to decide under the delegation (AGENTS.md § Decisions): each
-ships swappable as its row says. D40's channel and payload are a
-contract between replicas of two releases during a rolling deploy, so
-their names are stable identifiers, pending the owner's confirmation
-([architecture.md](../architecture.md#stable-identifiers)).
+**Decided with roadmap M2b (D39–D42)**, by the coordinator on
+2026-11-01 under the delegation (AGENTS.md § Decisions): each ships
+swappable as its row says. D40's channel and payload are a contract
+between replicas of two releases during a rolling deploy, so their
+names stay stable identifiers, pending the owner's confirmation before
+the first release
+([architecture.md](../architecture.md#stable-identifiers)). **D43 is
+proposed** by M2b's sabotage review, for the coordinator.

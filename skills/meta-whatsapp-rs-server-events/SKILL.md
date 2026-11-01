@@ -5,7 +5,7 @@ description: "Receiving WhatsApp events through meta-whatsapp-server, the meta-w
 
 # meta-whatsapp-rs-server-events
 
-> **Verified against meta-whatsapp-rs 87b7dcae195ae9f6c15da16eec300d2f29f9b860 (2026-11-01).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 73896491572ef2c00f648889ac6595f9830be294 (2026-11-01).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/events.ts](examples/events.ts) (polling) and [examples/stream.ts](examples/stream.ts) (live), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#receiving-metas-webhooks).
 
@@ -104,11 +104,14 @@ resumes exactly after it; with neither, only the next events come.
 - The stream may end with `event: lagged` (you took nothing for 30 s
   while 1 MiB waited, or events after your cursor were purged) or
   `event: shutdown` (the replica stops), each with `{"after": n}`, the
-  last sequence sent: reconnect with it as `Last-Event-ID`.
+  last sequence sent: reconnect with it as `Last-Event-ID`. It ends with
+  no last frame once the key is revoked or the tenant suspended: the
+  reconnection is `401` or `403`.
 - Refused before it starts: `cursor_expired` (410) and `invalid_request`
   on `Last-Event-ID` or `after` (422), as for polling; `too_many_streams`
   (429: 20 per tenant and replica, `WA_SERVER_STREAMS_PER_TENANT`) and
-  `shutting_down` (503): wait, reconnect. A number not yours: `not_found`.
+  `shutting_down` (503): wait `Retry-After`, reconnect. A number not
+  yours: `not_found`.
 - Browsers cannot send the key (an EventSource sends no Authorization header):
   relay the stream from your backend.
 
