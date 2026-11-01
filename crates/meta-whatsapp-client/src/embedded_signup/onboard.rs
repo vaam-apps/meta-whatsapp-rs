@@ -176,7 +176,8 @@ impl OnboardingRequest {
     /// nothing until [`Self::register_with_pin`], and its
     /// [`finish_kind`](Self::finish_kind) is `None`: set it from what you
     /// saved for a coexistence onboarding, so that registering its number
-    /// is refused locally.
+    /// is refused locally and `resume` runs its sync steps (without it,
+    /// `resume` requests no sync).
     ///
     /// [`EmbeddedSignup::onboard`] and
     /// [`EmbeddedSignup::onboard_with_approval`] refuse it with a
@@ -726,6 +727,14 @@ impl EmbeddedSignup {
     /// one of the numbers verified and stored at onboarding, else the first
     /// stored one; a session naming another WABA or an unverified number is
     /// refused (`verify_assets`) before any request.
+    ///
+    /// For a coexistence onboarding (`request.finish_kind`, which
+    /// [`OnboardingRequest::for_resume`] leaves `None`), it then finishes
+    /// `sync_contacts` and `sync_history`, unless
+    /// [`OnboardingRequest::coexistence_sync`] is off: a request Meta
+    /// answered is reported, never posted again, and one whose answer was
+    /// lost fails the step
+    /// ([module docs](super#coexistence-whatsapp-business-app-users)).
     ///
     /// This acts with the stored token of `waba_id`, which the caller names:
     /// check that the WABA belongs to the tenant asking (your own

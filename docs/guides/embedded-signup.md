@@ -225,7 +225,7 @@ with the names in `embedded_signup::steps`:
 | `assign_system_user` | Solution Partner, share-and-attach only: your system user on the merchant's WABA | fix, then `resume` |
 | `share_credit_line` | Solution Partner only: checks, then shares your credit line | fix, then `resume` (it checks before it posts); a business whose line was revoked is refused unless the request opts in |
 | `register_phone` | `POST /{number}/register` with the PIN | fix (often the PIN), then `resume` |
-| `sync_contacts` | coexistence only, unless the request turns it off: `POST /{number}/smb_app_data`, the contacts ([below](#coexistence-merchants-keeping-the-whatsapp-business-app)) | fix, then `resume`, which never posts a request again once it may have reached Meta |
+| `sync_contacts` | coexistence only, unless the request turns it off: `POST /{number}/smb_app_data`, the contacts ([below](#coexistence-merchants-keeping-the-whatsapp-business-app)) | fix, then `resume` (with `finish_kind` set) within 24 hours of onboarding; it never posts a request again once it may have reached Meta |
 | `sync_history` | the same, the message history | as `sync_contacts` |
 
 The token is stored **before** the steps after it on purpose: a wrong PIN
@@ -800,16 +800,33 @@ conversations
   the syncs yourself (`merchant.phone_number(pnid).sync_smb_app_data(…)`).
   `onboarded.needs_coexistence_sync()` still says the onboarding was a
   coexistence one.
+- **The clock runs from the onboarding**: the syncs are the last steps,
+  so a failure before them (`subscribe_app`, a Solution Partner's
+  `share_credit_line`) holds them back until a `resume` gets past it.
+  Resume promptly, and read `onboarded.coexistence_sync` (not
+  `needs_coexistence_sync()`, which only says the onboarding was a
+  coexistence one) to know they were made. A `resume` runs them only
+  when the request's `finish_kind` is
+  `FinishKind::WhatsappBusinessAppOnboarding`: `for_resume` leaves it
+  `None`, so save it with the session and set it back.
 - **Never twice**: each request is claimed in a record before it is
   posted (namespace `wa.es.coexistence` of the vault's store, keyed by
-  number, tied to the stored token record, so a new signup syncs again),
+  number, tied to the stored token record, so a new signup syncs again;
+  a record of a later signup than the attempt's is never taken over),
   and `resume` reads it. A request Meta answered is not posted again; one
   Meta refused before doing anything (a 4xx) is asked again by `resume`;
   **one whose answer was lost** (a timeout, a 5xx) is not: `resume` fails
   at its step with a `ValidationError` on `coexistence_sync`. Look for
   its webhooks (`smb_app_state_sync` for contacts, `history`), then
   resume with `coexistence_sync(false)`; if none arrive, request it
-  yourself.
+  yourself (safe: Meta refuses a repeat with `2593107`).
+- **At most once, not exactly once**: the claim is written before the
+  post, so a process that stops between the claim and Meta's answer,
+  even before posting, leaves the number on the same manual way out as a
+  lost answer; nothing clears a claim for you yet (a follow-up, roadmap
+  L11d). Two signups of one number stored within the same second share a
+  record (the vault keeps seconds): the second reports the first's
+  answers.
 - **Hosted signup** onboards to Cloud API only, so it syncs nothing.
 
 ## Pitfalls

@@ -97,9 +97,8 @@ of its own, after an HTML comment; keep that when you add one.
    recover a missed one. Swappable by that option; until it lands,
    `needs_coexistence_sync()` stays the signal. Roadmap L11d.
 
-   **Landed with roadmap L11d (2026-11-01), the library's side, its
-   choices proposed by the implementer for the coordinator to confirm
-   (owner's delegation):** two steps, `sync_contacts` then
+   **Landed with roadmap L11d (2026-11-01), the library's side:** two
+   steps, `sync_contacts` then
    `sync_history` (Meta's steps 1 and 2 of
    `onboarding-business-app-users`, each its own once-only call), the
    last of the tail: after `subscribe_app`, a Solution Partner's credit
@@ -133,6 +132,20 @@ of its own, after an HTML comment; keep that when you add one.
    of a synced number can turn the option off for a later one. Swappable
    by the option (and by calling `sync_smb_app_data` yourself). Roadmap
    L11d (landed); the service's side, M3b.
+
+   **Confirmed 2026-11-01 (coordinator, owner's delegation; roadmap L11d
+   landed):** decided for the library, the service's side carried by
+   M3b, which builds on these steps rather than calling `smb_app_data`
+   itself. The choices, each swappable, are the ones above and in
+   roadmap L11d's Decided note: two steps after the credit-line steps,
+   in Meta's order; Meta's refusals reported as `SyncOutcome::Refused`;
+   a claim released only when `!may_have_been_sent()`; a lost answer's
+   way out manual and documented (a call clearing a pending claim is a
+   follow-up); the option `coexistence_sync(bool)`, on by default; the
+   record never expires. The record's namespace, `wa.es.coexistence`,
+   and its layout stay the owner's to confirm before the first release
+   (`docs/architecture.md` § Stable identifiers). Swappable by the
+   option. Roadmap L11d (landed), M3b.
 
 8. **Token expiry and refresh.** The expiry is recorded; nothing refreshes.
    Today the merchant redoes Embedded Signup.

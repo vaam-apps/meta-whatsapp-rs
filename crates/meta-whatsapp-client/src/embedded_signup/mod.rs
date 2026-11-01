@@ -332,14 +332,26 @@
 //! - refused before Meta did anything (a 4xx, a connection that never
 //!   opened: [`meta_whatsapp_core::Error::may_have_been_sent`] is `false`):
 //!   the step fails, the claim is released, and `resume` asks again;
-//! - **an answer lost** (a timeout, a 5xx): the step fails and the claim
+//! - **an answer lost** (a timeout, a 5xx, or a process that stopped
+//!   between the claim and recording the answer, perhaps before the
+//!   post: at most once, not exactly once): the step fails and the claim
 //!   stays, so neither the client's retries (the request is not
 //!   idempotent: [`meta_whatsapp_core::Error::may_resend`]) nor `resume`
 //!   post it again; `resume` fails at that step with a
 //!   [`ValidationError`](meta_whatsapp_core::error::ValidationError) on
 //!   `coexistence_sync`. The data's webhooks (`smb_app_state_sync`,
 //!   `history`) show whether it went through: resume with
-//!   `coexistence_sync(false)`, and if none arrive, request it yourself.
+//!   `coexistence_sync(false)`, and if none arrive, request it yourself
+//!   (safe in Meta's terms: a repeat is refused, `2593107`). There is no
+//!   call that clears a claim yet.
+//!
+//! The 24 hours run from the onboarding, not from these steps: a step
+//! before them that fails (`subscribe_app`, a Solution Partner's
+//! `share_credit_line`) delays them until a `resume` gets past it, so
+//! resume promptly. A `resume` runs them only for a request whose
+//! [`finish_kind`](OnboardingRequest::finish_kind) is coexistence:
+//! [`OnboardingRequest::for_resume`] leaves it `None`, so set it from what
+//! you saved.
 //!
 //! Hosted Embedded Signup onboards to Cloud API only (`hosted-es`: "the
 //! flow cannot be customized"), so [`OnboardingRequest::for_hosted`] names

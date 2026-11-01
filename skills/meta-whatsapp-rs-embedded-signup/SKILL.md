@@ -144,7 +144,7 @@ token, its `appsecret_proof` in the form body) replaces `exchange_code`, then th
   would route one merchant's customers to another (`meta-whatsapp-rs-token-vault`).
 - The app secret stays on the server; limit the callback's body size; never log the code, the event body, tokens or the PIN.
 - **Coexistence** (merchants keeping the WhatsApp Business app): no `register`. `onboard` ends with `sync_contacts`, `sync_history` (Meta allows each once, within 24 h; answers in `onboarded.coexistence_sync`; `coexistence_sync(false)` turns them off).
-  A sync whose answer was lost is never posted again: `resume` fails there; check its webhooks, resume with it off.
+  `resume` syncs only with `finish_kind` set (`for_resume` leaves it `None`); a sync whose answer was lost is never posted again: `resume` fails there; check its webhooks, resume with it off.
 
 ~~`redeem` first, then parse the event, code and PIN~~ (until 2026-09-24): a malformed post spent the attempt. Check everything local first.
 

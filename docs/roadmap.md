@@ -1920,7 +1920,8 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     once-only calls: `steps::SYNC_CONTACTS` (`sync_contacts`,
     `sync_type` `smb_app_state_sync`) then `steps::SYNC_HISTORY`
     (`sync_history`, `history`), the last of the tail shared by
-    `onboard`, `onboard_hosted` and `resume`, after `subscribe_app` and
+    `onboard`, `onboard_hosted` (whose `for_hosted` request names no
+    finish, so it never reaches them) and `resume`, after `subscribe_app` and
     a Solution Partner's credit line (Meta's order:
     `onboarding-business-app-users` starts the sync once the
     onboarding steps are done). They run for a coexistence
@@ -1946,10 +1947,40 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `resume_after_a_refused_request_asks_only_for_what_is_missing`,
     `a_timed_out_sync_is_never_replayed` (retries on, then `resume`),
     `a_sync_meta_refuses_is_reported_and_not_asked_again`,
-    `a_new_onboarding_of_the_number_syncs_again` and
-    `the_sync_record_is_pinned`. Hosted signup syncs nothing: Meta's
+    `a_new_onboarding_of_the_number_syncs_again` (one second later: the
+    scope's precision), `the_sync_record_is_pinned`; and, from the
+    review, `a_claim_lost_to_a_concurrent_attempt_posts_nothing` (both
+    the `put_if_absent` and the `compare_and_swap` claim),
+    `an_answer_is_never_recorded_over_a_later_onboarding`,
+    `a_resume_never_takes_over_a_later_onboardings_record` and
+    `a_4xx_releases_the_claim_and_a_5xx_keeps_it` (a 409 releases, a
+    500 with a Graph body keeps). Hosted signup syncs nothing: Meta's
     hosted page onboards to Cloud API only. M3b builds on the steps
     rather than calling `smb_app_data` itself (OPEN_QUESTIONS #7).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): the record is
+    `wa.es.coexistence`, keyed by phone number id, plain JSON of layout
+    `v` 1 (the WABA, the token record's `created_at` in seconds, a
+    `pending`, `requested` or `refused` slot per request), its namespace
+    and layout still **pending the owner's confirmation before the first
+    release** (`docs/architecture.md` § Stable identifiers, § Owner
+    touchpoints); two steps, two names (`sync_contacts`,
+    `sync_history`), as Meta has two once-only calls; placed after the
+    credit-line steps, in Meta's order (the sync begins once onboarding
+    is done), at the cost that a failure before them holds them back
+    within Meta's 24 hours (the guide says so); Meta's refusals
+    (`SyncNotAllowed`: `2593107`, `2593108`) reported as
+    `SyncOutcome::Refused`, not as a failure; a failure releases its
+    claim only when `!may_have_been_sent()` (a 4xx: Meta's errors page
+    gives codes, not statuses, for this endpoint); a lost answer, or a
+    process stopped between claim and answer, keeps the claim, and the
+    way out is manual and documented (check the webhooks, resume with
+    the sync off, ask again yourself: Meta refuses a repeat), a call
+    that clears a pending claim being **a follow-up, not scheduled**;
+    the option is `OnboardingRequest::coexistence_sync(bool)`, on by
+    default, and the record never expires; M3b builds on these steps
+    (OPEN_QUESTIONS #7, confirmed). Swappable by the option (and by
+    `PhoneNumber::sync_smb_app_data` called yourself).
 - [ ] **L11e. A token-expiry signal** (`client::embedded_signup`; row 6;
   OPEN_QUESTIONS #8): a configurable lead time before a stored business
   token's `expires_at`.

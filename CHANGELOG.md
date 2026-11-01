@@ -242,7 +242,11 @@ stored data, the owner's).
   identifier), and a `resume` never posts one that was answered or
   whose answer was lost (it fails at that step with a `ValidationError`
   on `coexistence_sync` until the request turns the sync off); one Meta
-  refused before doing anything is asked again. Hosted signup syncs
+  refused before doing anything is asked again; a record of a later
+  onboarding of the number is never taken over (the step fails, posting
+  nothing). At most once, not exactly once: a process stopped between a
+  claim and its answer leaves the number to the documented manual way
+  out (a call that clears a claim is a follow-up). Hosted signup syncs
   nothing (Cloud API only). Additive, but a default change for
   coexistence onboardings: they now send two more requests, and a
   scripted test of one needs their answers.
