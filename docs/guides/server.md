@@ -582,9 +582,12 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.1349120
   another tenant's WABA to one of yours, neither WABA moving, also shows
   nothing from before it came under you. A number bound before this
   release (Postgres migration 5) has no move record and is treated as
-  moved, its cut at its WABA's binding. A conversation the customer
-  continued after a move counts
-  the previous holder's unread messages in `unread`.
+  moved, its cut at its WABA's binding. `unread` counts only the
+  customer's messages since the cut. A free-form reply on such a number
+  needs a window the customer opened since the cut (a message, a call):
+  one the previous holder's customer opened is
+  `409 customer_service_window_closed`, nothing sent; send a template to
+  start the conversation.
 - Reads answer `409 reconnect_required` or `number_not_connected` for a
   number whose token does not work, as every number route does.
 

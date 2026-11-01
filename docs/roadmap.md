@@ -3737,8 +3737,14 @@ design's (§9).
     replica of the previous release inserts;
     `wa_server_numbers.previous_tenant_released_at`, the Unix epoch
     (`UNRECORDED_MOVE`) by default, read as a move: fail closed; the table
-    `wa_server_number_tombstones`), checksums 1 to 4 unchanged; a released
-    number's tombstone is written in the releasing statement, and a new
+    `wa_server_number_tombstones`, and the trigger
+    `wa_server_numbers_released` with its function
+    `wa_server_number_released()`), checksums 1 to 4 unchanged; a released
+    number's tombstone is written in the releasing statement by the
+    trigger, for every deleted number row (an unbind's cascade, a binding
+    that no longer lists it, and the same deletions by a replica of the
+    previous release during a rolling deploy, which writes none of its
+    own), and a new
     number binding reads it in a statement of its own after its insert,
     its start `GREATEST(now(), clock_timestamp(), released_at)`, as S2b's
     review had a WABA's. The event outbox's routing needs no per-number
@@ -3758,7 +3764,9 @@ design's (§9).
     `races::a_binding_racing_an_unbind_records_the_move`), on memory and
     live; `live_postgres_migration_5_rewrites_no_table` (the numbers
     table's file unchanged by migration 5, a number from before it read as
-    unrecorded); the S7/S2b continuity test, which now adds migrations 4
+    unrecorded, its start kept when another WABA of its tenant takes it);
+    `live_postgres_a_release_by_the_previous_release_is_recorded` (the
+    previous release's own deletions leave tombstones); the S7/S2b continuity test, which now adds migrations 4
     and 5 to `main`'s database and reads `main`'s number as unrecorded,
     its move then recorded. By mutation: the number's cut removed from
     `history_from` fails the migration case on the core's memory backend,
@@ -3766,14 +3774,34 @@ design's (§9).
     live; the read of the tombstone in a new number binding removed
     (memory's `newly_bound` given none; Postgres's statement after the
     insert skipped) fails `records::a_numbers_moves_are_recorded` and the
-    HTTP migration case, on memory and live; a refresh's release writing
-    no tombstone on Postgres fails them too, live. Left, and why: a
-    conversation the customer continued after a
-    move counts the previous holder's unread messages in `unread` until
-    it is marked read (no read route yet: M2g); the window and the
-    thread's owner a reply checks are read whole, across the cut (they
-    are Meta's state for the number and the customer, which Meta applies
-    anyway); a reply is dated by the service's clock, so one recorded in
+    HTTP migration case, on memory and live; the trigger dropped fails
+    them too, live, and the rolling deploy's case. **The sabotage
+    review (2026-11-01), tenant isolation first,** added: a free-form
+    reply on a number with a cut needs a window opened from the cut on
+    (the customer's message, a call or a standby message dated from it,
+    or, with the handover trusted, a handover recorded since), else `409
+    customer_service_window_closed` with zero requests, so the new holder
+    neither continues the previous holder's conversation nor learns from
+    the answer that its customer wrote (`Conversations::reply`'s
+    `refuse_across_the_cut`; templates exempt; nothing on a number without
+    a cut or with the window check off); `unread` counts only the
+    customer's messages dated from the cut on (`inbox::UNREAD_SCAN`
+    latest messages read at most, only on a number with a cut); a page is
+    answered only if the number's own binding also holds (its tenant, WABA
+    and `attached_at`: a capability made before its number moved to
+    another WABA of its tenant and on to another tenant, its first WABA's
+    epoch unchanged, read the new holder's history);
+    migration 5's trigger (above) for the rolling deploy; and a refresh
+    that moves a number from before migration 5 to another WABA of its
+    tenant writes its start down (its first WABA's) before the move.
+    Decisive: `conformance::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history`
+    (the reply's refusal, `unread`) and
+    `a_capability_made_before_its_number_left_reads_nothing`, on memory
+    and live, the HTTP migration case, and the two live migration tests;
+    the WABA's cut, redundant with the number's for every move recorded
+    since migration 5, is decisive for a WABA moved before it
+    (`live_postgres_a_waba_moved_before_migration_5_still_cuts_its_numbers`).
+    Left, and why: a reply is dated by the service's clock, so one recorded in
     the seconds after a move by a replica whose clock is behind the
     database's could be hidden from its own tenant; the reads open an
     `OwnedNumber`, so they read the vault and answer `409
@@ -3801,10 +3829,19 @@ design's (§9).
        than `WA_SERVER_INBOX_RETENTION`, rather than warning.
     5. M2g kept as an item of its own (the window and read routes, a
        message by id).
-  - **Still proposed** (not in the decided list): a page refused `503`
-    when the binding moved while it was read; the reply through
-    `Inbox::send` rather than `Inbox::reply`, to carry `reply_to` and
-    `callback_data`.
+    6. A page read while the binding moved (the WABA's epoch, or, since
+       the review, the number's own binding) answers `503
+       storage_unavailable`, which is retryable (to swap,
+       `OwnedNumber::still_held`).
+    7. The reply goes through `Inbox::send` rather than `Inbox::reply`,
+       to carry `reply_to` and `callback_data`: the review confirmed that
+       `Inbox::reply` is `Inbox::send` on the conversation's recipient, so
+       every check (the window with its calls and standby messages, the
+       handover trust, the thread's owner, the template and Direct Send
+       exemptions, a recipient outside the conversation refused) runs the
+       same; the service never sets a Direct Send `category` (`422
+       unsupported_message_type`). The service adds its own check before
+       them on a number with a cut (the review's, above).
   - **Also, after the first release** (from S7, carried by M2a, which
     landed before it): drop the legacy fingerprint (S6's window:
     `Fingerprint::legacy_v1_json`, `legacy_v1_upload`, `or_legacy`, and
@@ -4245,7 +4282,9 @@ everything else goes into the parity-completion report.
   its default, the Unix epoch read as "a move before the records began"
   (`UNRECORDED_MOVE`, failing closed), and the table
   `wa_server_number_tombstones` with its columns and its `ON DELETE SET
-  NULL` rule, added and awaiting confirmation; S2b's Postgres
+  NULL` rule, and the trigger `wa_server_numbers_released` with its
+  function `wa_server_number_released()` (added by M2a's review), added
+  and awaiting confirmation; S2b's Postgres
   migration 4, "waba moves": the columns `wa_server_wabas.generation` and
   `wa_server_wabas.previous_tenant_unbound_at` with its default, the Unix
   epoch read as "a move before the records began" (`UNRECORDED_MOVE`),
