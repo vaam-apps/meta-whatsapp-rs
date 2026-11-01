@@ -29,7 +29,7 @@ crates/
   meta-whatsapp-core       error tree, ids, config, ports (traits). No I/O, no runtime.
   meta-whatsapp-client     Graph API client; one module per endpoint family.
   meta-whatsapp-webhooks   verify, parse, normalize, dedup, dispatch; axum router (feature).
-  meta-whatsapp-adapters   port implementations: reqwest, memory/Postgres/Redis stores, sinks.
+  meta-whatsapp-adapters   port implementations: reqwest, memory/Postgres/SQLite/Redis stores, sinks.
   meta-whatsapp-typst      Typst → PDF/PNG for document and image messages.
   meta-whatsapp-bot        bot framework over webhooks: commands, guards, cooldowns, middleware,
                            compile-time plugins, Markdown → WhatsApp formatting, paced broadcasts.
@@ -143,12 +143,14 @@ rewrite them along with the code.
 | `wa.es.session` | `SESSION_NAMESPACE`, `meta-whatsapp-client/src/embedded_signup/session.rs` | store namespace of signup sessions in flight | `the_session_namespace_is_pinned` |
 | `wa.es.coexistence` (added by roadmap L11d; the namespace and the record layout **pending the owner's confirmation**, roadmap § Owner touchpoints) | `COEXISTENCE_NAMESPACE`, `meta-whatsapp-client/src/embedded_signup/coexistence.rs` | store namespace of the coexistence sync records (key: the phone number id; value: plain JSON, `"v":1`, the WABA id, the stored token record's `created_at` in Unix seconds, and per request, `contacts` and `history`, its `state`, `pending`, `requested` with Meta's `request_id` or `refused` with its code, and `at`). **Not ephemeral**: changing it forgets which requests an onboarding made, and Meta allows each once per number, so a `resume` would post again one that was accepted, or whose answer was lost | `the_sync_record_is_pinned` |
 | `wa.webhook.dedup` | `DEDUP_NAMESPACE`, `meta-whatsapp-webhooks/src/dedup.rs` | store namespace of the dedup markers (key: SHA-256 hex of the event's dedup key) | `the_marker_key_is_pinned` |
-| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/postgres/mod.rs` | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_identity_links`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
+| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/table_prefix.rs` (in `store/postgres/mod.rs` until roadmap L8; the SQLite adapters share it) | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_identity_links`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
 | `customer_call`, `call_accepted`, `standby_message`; `this_app`, `another_app`, `idle`; `revoked`, `erased` | `WindowEventKind::as_str`, `ThreadOwner` (its serde names), `StoredMessage::REVOKED`, `StoredMessage::ERASED`, `meta-whatsapp-core/src/store/conversation.rs` | the names a conversation store keeps for a window event's kind, a thread's owner and this crate's own message kinds (`wa_window_events.kind`, `wa_thread_owners.owner`, `wa_messages.kind_utf8`) | `stored_names_are_pinned` |
 | the number lock `('wa_messages'::regclass::oid::int4, hashtext(<phone_number_id>))`, the purge lock `('wa_conversations'::regclass::oid::int4, 0)` | `number_lock`, `purge_lock`, `meta-whatsapp-adapters/src/store/postgres/conversation.rs` | Postgres advisory locks (the two-key form, the table's object id as class) that order `erase`, `purge_before` and `trim_conversations` (under the purge lock, like a purge) against appends and each other: replicas of two releases must take the same ones | `the_locks_are_pinned`, `live_postgres_the_locks_are_the_documented_ones` |
 | the migration files | `meta-whatsapp-adapters/migrations/*.sql` | sqlx records each file's checksum; an edit, a comment included, makes `migrate` refuse every database migrated before. So they keep naming `wa_adapters`, including in the hint migration 3 raises, and the columns and indexes they create keep their names (migration 4's `wa_messages.sender`, `wa_messages_sender_idx`, `wa_messages_unsent_idx`, `wa_identity_links_idx`, among others) | `the_default_tables_and_migration_checksums_are_pinned` |
 | a message's sender: the payload's `from_user_id`, else its `from`, of an inbound message (an empty value, or one holding U+0000, is none) | `StoredMessage::sender`, `meta-whatsapp-core/src/store/conversation.rs`; migration 4's back-fill | what a store keeps beside each message (`wa_messages.sender`) and an erasure matches a person's group messages on: a changed rule leaves the rows written before out of every erasure | `the_sender_is_the_bsuid_else_the_phone_number_of_an_inbound_message`, `live_postgres_migration_4_backfills_senders_by_the_rust_rule` |
 | `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
+| the SQLite migration files and tables (added by roadmap L8; **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `MIGRATIONS`, `meta-whatsapp-adapters/src/store/sqlite/mod.rs`; `meta-whatsapp-adapters/migrations-sqlite/*.sql` | the SQLite adapters' schema under the default prefix: `wa_kv`, `wa_kv_version` (the version counter), `wa_messages` (keyed by business number and id; `wa_messages_id_idx`, unique, keeps an id once per store, `OPEN_QUESTIONS.md` #33), `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_identity_links`, `wa_sqlx_migrations`, their columns (`kind_utf8`, `text_utf8`, `payload_json`, `ts` in unix microseconds, …) and the stored names the Postgres adapter keeps (statuses, directions, owners, kinds); sqlx records each file's checksum, so an edit, a comment included, makes `migrate` refuse a database migrated before | `the_default_tables_and_migration_checksums_are_pinned` (`store::sqlite`) |
+| `{conversations:<prefix>}` and the Redis conversation layout (added by roadmap L8; **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `RedisConversationStore::base`, `key`, `ts16`, `PRELUDE`, `meta-whatsapp-adapters/src/store/redis_conversation.rs` | the hash tag after the `wa:` prefix of every key of a conversation store (naming the prefix: one slot per store), the keys under it (`:m:`, `:id:`, `:h:`, `:s:`, `:l:`, … with length-prefixed parts), the fields of each record (`c`, `d`, `k`, `t`, `p`, `s`, `ts`, …) and the time encoding (16 hex digits of the unix microseconds, sign bit flipped) | `the_conversation_layout_is_pinned`, `each_prefix_has_its_own_hash_tag`, `live_redis_conversation_layout_and_erasure_leaves_nothing` |
 | `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server-core/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
 | `meta-whatsapp-server/event-id/v1`, `evt_` + 32 hex digits | `EventIdKey`, same file | HMAC label of the key event ids are derived with under the app secret, and the id's shape: stored as `wa_server_events.id` and what receivers deduplicate on | `event_ids_are_pinned` (known answers) |
 | `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `lock_key`, `meta-whatsapp-server-store-postgres/src/postgres.rs` (`meta-whatsapp-server/src/store/postgres.rs` until roadmap S7) | Postgres advisory lock keys (the first 8 bytes of their SHA-256; `lock_key` derives the leader lock's the same way, so its `housekeeping` turn is `HOUSEKEEPING_LOCK`): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented`, `the_leader_locks_keys_are_the_services_locks` |
@@ -1014,6 +1016,42 @@ keyed by business number and contact, and
   redacts or deletes are the number's, so the number lock covers them;
   `set_thread_owner` and `put_contact` one upsert
   whose update applies only when the stored record is not later.
+- `store::{SqliteKvStore, SqliteConversationStore}` (feature `sqlite`,
+  roadmap L8; sqlx's SQLite driver with the library compiled in, no TLS;
+  embedded migrations of their own, `migrations-sqlite/`, under the same
+  `TablePrefix`). For one process on one machine (a CLI, an edge or
+  desktop deployment, a small single-instance service, tests); several
+  processes may share the file, never over a network file system. Every
+  write is one `BEGIN IMMEDIATE` transaction: SQLite's write lock is
+  taken first, so each write reads, decides in Rust and writes as one
+  step, across processes too (`store::sqlite::open` sets a 30-second busy
+  timeout). Times are `INTEGER` microseconds; identifiers `TEXT`
+  compared byte for byte, refusing U+0000 as on Postgres; content
+  `BLOB` (UTF-8 bytes) and payloads JSON text, so U+0000 round-trips.
+  The key/value store decides expiry with the application's clock (an
+  injectable `Clock`) and draws versions from one counter row
+  (`wa_kv_version`) under the write lock. `store::sqlite::memory` is a
+  private in-memory database on one connection the pool never closes.
+  `trim_conversations` (roadmap B4) is one write transaction too: it
+  ranks each conversation's rows on the conversation index, deletes the
+  summaries whose latest message ranks beyond the cap, then those rows;
+  appends wait for the write lock, so none is ranked half-way or lost.
+- `store::RedisConversationStore` (feature `redis`, roadmap L8): every
+  key under `<prefix>{conversations:<prefix>}`, one hash tag per store
+  (it names the prefix), so a store's inbox is one slot (one shard on
+  Cluster; stores of other prefixes hash elsewhere, which spreads inboxes) and every write is one Lua script over it; status updates are
+  a compare-and-swap decided in Rust, as on Postgres; history, the
+  conversation list, window events and contacts page with
+  `ZRANGEBYLEX` over sorted sets of 16-hex-digit times and ids (byte
+  order is time order); the scripts compare strings byte by byte, never
+  with Lua's locale-dependent `<`. A purge of every number runs one
+  script per number. `trim_conversations` (roadmap B4) runs one script
+  per conversation (from a set of each number's conversations with a
+  history, `B:c:<pn>`), each deleting at most 1024 of its oldest rows
+  beyond the cap (and the summary when its latest message is one of
+  them), so a conversation further over takes several; each is atomic
+  with the appends, so an append is never lost. Needs `noeviction` and
+  persistence (AOF or snapshots): the history is data.
 - `media::FfmpegConverter` (feature `ffmpeg`): core's
   `media::MediaConverter` port over an `ffmpeg` binary the integrator
   installs, run with `tokio::process` (no shell) and fixed literal
@@ -1079,7 +1117,13 @@ keyed by business number and contact, and
   `KvStore` values are `BYTEA`. `messages.id` is the primary key on its
   own, so
   a message id is stored once per store whatever the business number (the
-  memory store does the same; `OPEN_QUESTIONS.md` #33).
+  memory store does the same; `OPEN_QUESTIONS.md` #33). The SQLite and
+  Redis stores (roadmap L8) key a message by business number and id and
+  keep that rule with a separate index (`wa_messages_id_idx`, unique;
+  `{conversations:<prefix>}:id:<id>`), which ids unique per number would drop.
+  `conversation_conformance::ids_are_stored_once_per_store` (outside
+  `run`: the port allows either answer) pins today's rule; every adapter
+  passes it.
 - Redis: per-namespace version counter (a per-key counter would leak one key
   per dedup marker forever); every mutating op is one Lua script. **TLS**
   (`rediss://`, roadmap L21c) is `store::RedisTls`, not redis-rs's TLS:
@@ -1103,7 +1147,9 @@ keyed by business number and contact, and
   `META_WHATSAPP_RS_REQUIRE_LIVE=1` (`just test-live` sets it). Every `KvStore`
   adapter runs `store::conformance`, every `ConversationStore` adapter runs
   `store::conversation_conformance` (including concurrency, collation and
-  real-time expiry under load).
+  real-time expiry under load). The SQLite adapters run both in
+  process (`just test`); the Redis conversation store's suite is live
+  (`live_redis_conversation_*`).
 
 ## CMS inbox (`meta_whatsapp_rs::inbox`)
 
@@ -1204,6 +1250,18 @@ and the thread's owner, and sends replies.
   latest message, preview, window or unread count, and no summary of its
   own). A media placeholder revoked before its content arrives is never
   filled.
+- The coexistence address book (`smb_app_state_sync`, roadmap L8):
+  `InboxSink` stores an `add` (also how an edit arrives) as a synced
+  contact under `synced_contact_key` (the BSUID, else the phone number
+  without `+`, the form conversations are keyed by, also the phone number
+  stored) and applies a `remove` under each key it names, so that an
+  entry keyed by the phone number before Meta sent the BSUID goes too;
+  the store keeps the latest by the change's `metadata.timestamp`, a
+  removal kept (key and time) so that an older `add` is refused. A
+  change without a timestamp, without a usable id, or with U+0000 in
+  one is skipped and logged without content. `Inbox::contacts` and
+  `Inbox::contact` read them back; `RecordingSwitches::contacts` turns
+  the recording off.
 - Coexistence (a merchant who keeps the WhatsApp Business app): echoes
   (`MessageEchoed`, messages the merchant sent from the app) are recorded
   as `Outbound`, status `Sent` (the payload has none), in the customer's
@@ -1291,7 +1349,7 @@ for every event, after the ban and the match.
   cooldown, and only the refusal that creates it tells the user, so
   repeated attempts get one notice per period. Records expire in place:
   invisible at once, deleted by Redis itself or by `purge_expired` on the
-  memory and Postgres stores.
+  memory, Postgres and SQLite stores.
 - **Errors**: a handler's error is logged (kinds only) and acknowledged
   by default, because an error answers `500` and Meta redelivers the
   whole batch, repeating replies already sent; a transient failure is

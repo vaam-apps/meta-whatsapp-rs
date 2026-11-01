@@ -218,6 +218,61 @@ stored data, the owner's).
 
 ### Added
 
+- **SQLite stores** (`meta_whatsapp_adapters::store::{SqliteKvStore,
+  SqliteConversationStore}`, new feature `sqlite`, also on the facade and
+  in `full`; roadmap L8, parity rows 110, 111). sqlx's SQLite driver,
+  the SQLite library compiled in (`sqlite-bundled`; no TLS, nothing to
+  install). `store::sqlite::open(path)` (WAL, a 30-second busy timeout),
+  `store::sqlite::memory()` (one connection the pool never closes) and
+  `store::sqlite::migrate` / `migrate_with_prefix`, whose migrations are
+  embedded from `migrations-sqlite/` under the same `TablePrefix` as
+  Postgres, with a history of their own per prefix. Every write is one
+  `BEGIN IMMEDIATE` transaction; times are microseconds; identifiers
+  holding U+0000 are refused, content keeps it. `SqliteKvStore` decides
+  expiry with an injectable `Clock` (`with_clock`) and has
+  `purge_expired`. Both pass the conformance suites in `just test`, on an
+  in-memory database and on a file shared by a pool of connections.
+- **A Redis conversation store** (`meta_whatsapp_adapters::store::RedisConversationStore`,
+  feature `redis`; roadmap L8, parity row 111): every key under one hash
+  tag per store (`<prefix>{conversations:<prefix>}`, so stores of other
+  prefixes hash to other slots), every write one Lua script,
+  status updates a compare-and-swap decided in Rust; `with_prefix`,
+  `with_retention`, `with_erasure_mode`; any connection `RedisKvStore`
+  takes (`RedisTlsConnection` included). Needs persistence and
+  `noeviction`. Passes the conversation suite live.
+- **The inbox keeps the coexistence address book**
+  (`meta_whatsapp_rs::inbox`, roadmap L8, parity row 69): `InboxSink`
+  records `smb_app_state_sync` (`WebhookEvent::AppStateSynced`): an `add`
+  as a synced contact under `synced_contact_key` (the BSUID, else the
+  phone number without `+`), a `remove` under each key it names; a change
+  without a timestamp or a usable id is skipped. `Inbox::contacts` and
+  `Inbox::contact` read them back. A new switch,
+  `RecordingSwitches::contacts`, on in `RecordingSwitches::ALL`: a sink
+  built with `ALL` (the default) now records contacts too. The service
+  does not, until roadmap M3b (design D38): its pipeline's inbox runs
+  `meta_whatsapp_server_core::inbound::INBOX_RECORDING` (`ALL` with
+  `contacts(false)`); the `app_state_synced` events still reach their
+  tenant.
+- **`trim_conversations` on the SQLite and Redis conversation stores**
+  (roadmap L8, after B4). SQLite: one `BEGIN IMMEDIATE` transaction,
+  ranking each conversation's rows on its conversation index, then the
+  summaries whose latest message ranks beyond the cap deleted, then
+  those rows. Redis: one script per conversation, at most 1024 rows each
+  (a conversation further over its cap takes several), atomic with the
+  appends; the layout gains `B:c:<pn>`, each number's conversations with
+  a history (pending the owner's confirmation with the rest).
+  `conversation_conformance::trim_one_number_of_every_row` gives the
+  trace scans a trim's deleted rows.
+- **`conversation_conformance::erase_one_person_of_every_record` and
+  `purge_one_person_of_every_record`** (`meta_whatsapp_adapters::store`,
+  roadmap L8's review): one person's records of every kind, erased or
+  purged, and what an adapter's test must then find nowhere in its
+  storage; the SQLite, Postgres and Redis adapters' tests scan for it.
+  `run` gains `an_unbounded_limit_reads_everything`.
+- **`conversation_conformance::ids_are_stored_once_per_store`**
+  (`meta_whatsapp_adapters::store`, roadmap L8): today's rule for message
+  ids (`OPEN_QUESTIONS.md` #33, still open), outside `run`; the memory,
+  Postgres, SQLite and Redis stores pass it.
 - **Payments in Brazil** (`meta_whatsapp_client::payments`, roadmap P1b,
   parity rows 38 and 141, on P1a's types). `Currency::Brl` selects
   Brazil's rules, as `Currency::Inr` selects India's (unchanged):
@@ -315,7 +370,8 @@ stored data, the owner's).
   or the store's age filter, fails it).
 - **A cap on each conversation's history**:
   `ConversationStore::trim_conversations(phone_number_id, keep_last)`
-  (`meta-whatsapp-core`, roadmap B4), on both adapters. Each
+  (`meta-whatsapp-core`, roadmap B4), on every in-tree adapter (memory
+  and Postgres in B4; SQLite and Redis with L8, below). Each
   conversation keeps its newest `keep_last` rows by `(timestamp, id)`,
   every row counting (live and synced messages, revokes' tombstones,
   messages an erasure redacted in a group), and the others are deleted,
@@ -2034,6 +2090,14 @@ stored data, the owner's).
 
 ### Changed
 
+- **`TablePrefix` is `meta_whatsapp_adapters::store::TablePrefix`**
+  (roadmap L8), shared by the Postgres and SQLite adapters;
+  `store::postgres::TablePrefix` still names it. Its error message says
+  "table prefix" rather than "Postgres table prefix". The adapters'
+  `sqlx` dependency now enables its Postgres driver, TLS and macros
+  through the `postgres` feature only (they were on the dependency), so
+  `sqlite` alone links none of them; nothing changes for a build with
+  `postgres`.
 - **Breaking for a custom `ConversationStore`** (roadmap B4): the port
   gains a required method, `trim_conversations` (see Added, "A cap on
   each conversation's history"); implement it and run

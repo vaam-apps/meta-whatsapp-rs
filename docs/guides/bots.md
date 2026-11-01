@@ -221,7 +221,7 @@ during a cooldown is told once, not once per attempt: the first refusal
 writes a marker (`wa.bot.cooldown.notice`) that ends with the cooldown,
 and `Refusal::CoolingDown` says `notify` only for that one. Expired
 records are invisible at once; Redis deletes them itself, and with the
-memory or Postgres store call `purge_expired()` now and then, as for the
+memory, Postgres or SQLite store call `purge_expired()` now and then, as for the
 other typed stores. Owners, bans and cooldowns are traits
 (`AccessPolicy`, `Cooldowns`) when a list in code does not fit.
 
@@ -735,7 +735,7 @@ pub fn following_upgrades(
     before sending). It never falls back to a budget of its own.
   - **Expiry.** A record expires `KvRateLimiter::idle_expiry` (24 hours)
     after its last slot, and its raised rate with it, silently. Redis
-    drops it; with the memory or Postgres store, call `purge_expired`
+    drops it; with the memory, Postgres or SQLite store, call `purge_expired`
     now and then.
   - **Resetting a number**: delete its record
     (`kv.delete(&KvRateLimiter::store_key(&number))`). It is the remedy
@@ -967,7 +967,7 @@ unrun for 30 days after its due time** (no runner all that time) **is
 no longer found**: its index pages have expired, and its record stays
 pending, never sent. A due time already past is due now: the job is
 indexed under the current minute (its 30 days count from then). With
-the memory or Postgres store, call `purge_expired` now and then; on
+the memory, Postgres or SQLite store, call `purge_expired` now and then; on
 Redis, run `maxmemory-policy noeviction` (an evicted marker is a
 recipient sent again, an evicted index page a job never found).
 

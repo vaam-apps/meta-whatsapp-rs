@@ -901,6 +901,28 @@ mod tests {
         conversation_conformance::run(&store).await;
     }
 
+    /// Today's rule (`OPEN_QUESTIONS.md` #33): a second `append` of one id
+    /// on another number returns `false`.
+    #[tokio::test]
+    async fn a_second_append_of_one_id_on_another_number_is_refused() {
+        conversation_conformance::ids_are_stored_once_per_store(&MemoryConversationStore::new())
+            .await;
+    }
+
+    /// The no-trace scenarios' port-level checks (the SQL and Redis
+    /// adapters' tests also scan their storage after them).
+    #[tokio::test]
+    async fn an_erasure_or_a_purge_of_every_record_holds_through_the_port() {
+        for mode in [ErasureMode::Redact, ErasureMode::Delete] {
+            let store = MemoryConversationStore::new().with_erasure_mode(mode);
+            conversation_conformance::erase_one_person_of_every_record(&store).await;
+        }
+        conversation_conformance::purge_one_person_of_every_record(&MemoryConversationStore::new())
+            .await;
+        conversation_conformance::trim_one_number_of_every_row(&MemoryConversationStore::new())
+            .await;
+    }
+
     #[tokio::test]
     async fn debug_shows_counts_not_messages() {
         let store = MemoryConversationStore::new();
