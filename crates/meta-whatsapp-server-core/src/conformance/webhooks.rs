@@ -142,7 +142,7 @@ const MOVED_ALONE: Holder = Holder {
 /// The tenant of the address book case.
 const ADDRESS_BOOK: Holder = Holder {
     id: "wh-address-book",
-    waba: "102290129340419",
+    waba: "102290129340429",
     pn: "106540352242938",
 };
 /// The tenant the move case's numbers move to while their events record.
