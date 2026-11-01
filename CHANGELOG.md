@@ -235,6 +235,48 @@ stored data, the owner's).
   the classification on its own. The vault cannot list its records:
   call it for each WABA you hold. Additive: the stored format
   (`wa-rs/token-vault/v1`) is unchanged.
+- **Payments in India** (`meta_whatsapp_client::payments`, roadmap P1a,
+  parity rows 38 and 141; Brazil is P1b, the templates' payment buttons
+  and the payment webhooks P1c, the service's routes P2). The
+  `order_details` and `order_status` interactive messages are typed:
+  `Interactive::OrderDetails` (boxed) and `Interactive::OrderStatus`,
+  built from `OrderDetails` and `OrderStatus` (`OutboundMessage::new(to,
+  details)`), instead of `MessageContent::Raw`. Payment settings: a UPI
+  intent link, a payment link (with `payment_type` `upi`) or a payment
+  gateway (`PaymentGateway`: `BillDesk`, Razorpay, `PayU` or Zaakpay and
+  their own fields, a preferred UPI app, the enabled payment options),
+  or the older `payment_configuration`. Amounts are `Amount { value,
+  offset }` (`Amount::inr(paise)`), and `OrderDetailsParameters::inr`
+  computes the total from the order (`Order::total`). Every rule the
+  pages state is checked before any request, naming the JSON path:
+  lengths (body 1024, footer 60, `reference_id` 35 of letters, digits,
+  `_`, `-`, `.`, item names 60, descriptions 60 and 120, the gateways'
+  fields), `offset` 100 for INR, a positive total equal to `subtotal +
+  tax + shipping - discount` (summed in `u128`, never overflowing), at
+  least one item, an item's origin and importer without a `catalog_id`
+  (except with the older `payment_configuration` alone, whose page
+  makes them optional), custom images on at most 10 items and never
+  with a `retailer_id` or `catalog_id`, beneficiaries (India, a 6-digit
+  PIN code), and an `order_status` message's `reference_id` and new
+  status (never `pending`). The subtotal is not checked: every India example
+  with a `sale_amount` breaks the rule. Where the pages disagree
+  (`payment_settings` an array, `importer_address` an object,
+  `partially_shipped`, `parameters` an object), the examples win; the
+  module docs list each case. `Client::payments(phone_number_id)` reads
+  a payment (`lookup`: its transactions, refunds and the gateway fields
+  sent, the lookup's error envelope reaching the caller as
+  `Error::Http`) and refunds one (`refund`: `value` and `offset` sent as
+  strings, as documented; never replayed after a timeout).
+  `Client::payment_configurations(waba_id)` lists, gets, creates
+  (`CreatePaymentConfiguration`), regenerates the OAuth link of, and
+  deletes payment configurations; the OAuth link is a `SecretUrl`, kept
+  out of `Debug` (`PaymentOauthLink`'s hides its path too), decode
+  errors and the body of a refusal that is not Meta's envelope, and
+  neither creation nor
+  regeneration is replayed after a timeout. The WhatsApp Payments terms
+  of service stay the business's to accept, through the link in Meta's
+  `134011` error (`131005` from the onboarding calls): no call accepts
+  them.
 - **Hosted Embedded Signup** (`meta_whatsapp_client::embedded_signup`,
   roadmap L11a, parity row 121; OPEN_QUESTIONS #11; the service's side
   is M3f). `HostedSignup::new(waba_id, owner_business_id)`, from the

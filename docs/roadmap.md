@@ -51,7 +51,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
-| last | P1, P2 (payments) |
+| last | P1a–P1c, P2 (payments) |
 
 ## 1. The service's modular split (design §8, D26)
 
@@ -3092,18 +3092,95 @@ or WABA fails the family's own cross-tenant test).
 
 ## 5. Payments (last)
 
-- [ ] **P1. A `payments` client module** (`meta-whatsapp-client`; rows
-  38, 141): India (UPI, payment links, order details and order status,
-  onboarding) and Brazil (Pix, Boleto, payment links, one-click), typed,
-  instead of `MessageContent::Raw`; the payment buttons of templates
-  (`order_details`, `payment_request`).
+A `payments` client module (`meta-whatsapp-client`; rows 38, 141):
+India (UPI, payment links, order details and order status, onboarding)
+and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
+`MessageContent::Raw`; the payment buttons of templates (`order_details`,
+`payment_request`). Too large for one pull request, it lands in three:
+
+- [x] **P1a. India: the order messages, the lookup, refunds and
+  onboarding** (`meta-whatsapp-client`; rows 38, 141, partly).
+  `client::messages::Interactive::OrderDetails` and `OrderStatus`
+  (UPI intent links, payment links, payment gateways and the older
+  payment configuration, every documented rule checked first), all
+  re-exported from `client::payments`, with `Client::payments` (the
+  payment lookup, refunds) and `Client::payment_configurations` (list,
+  get, create, regenerate the OAuth link, delete).
   - **After:** nothing.
-  - **Decisive:** exact JSON from `payments/payments-in/*` and
-    `payments/payments-br/*`; the payments pages' webhook examples join
-    the conformance sweep (their manifest status moves from `OutOfScope`
-    to `Typed`).
+  - **Kind:** additive.
+  - **Decisive:** exact JSON, both ways, from
+    `payments/payments-in/upi-intent/dynamic-vpa`,
+    `payments-in/payment-links`, `payments-in/pg`,
+    `payments-in/upi-intent` and `payments-in/onboarding-apis`; a
+    refund, a configuration's creation and an OAuth link are never
+    replayed after a timeout.
+  - **Landed:** `client::payments` (the messages in
+    `client::messages::payments`, re-exported), every example of the
+    five pages an exact-JSON test (`payments/tests.rs`), every rule
+    the pages state checked first. Not checked locally: the subtotal,
+    the expiration's 300-second minimum and the beneficiaries of
+    shipped goods (the module docs say why).
+  - **Review (money, wire format, secrets):** an `order_status`
+    message refuses `pending`, which the `payments-in/pg` parameters
+    table excludes, and checks its `reference_id` as an
+    `order_details` message's; the items' origin and importer are not
+    required with the older `payment_configuration` alone (its page
+    makes them optional); a total above `u64::MAX` is refused as such
+    (`Order::total` sums in `u128`, so nothing overflows; the message
+    no longer says "negative"); a refusal of the two OAuth link
+    endpoints that is not Meta's envelope keeps its status, never its
+    body, and `PaymentOauthLink`'s `Debug` hides the link's path as
+    well as its query (no page says where its credential sits). Tests
+    added for what no test caught: every limit exactly reached, in
+    two-byte characters (`every_limit_is_inclusive_and_counts_characters`),
+    amounts at and beyond `u64::MAX`, the lookup's error example, `.`
+    and `..` as lookup names, a refund not replayed on a server error.
+    Documented: a replayed deletion can answer an error when the first
+    went through, a refund's amount is not compared with what was
+    paid, and the onboarding calls are refused with `131005`.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions): where the pages contradict
+    themselves, the examples win (`payment_settings` an array,
+    `importer_address` an object, `partially_shipped`, `parameters` an
+    object); the subtotal is not checked locally, the total equation
+    is; the header image's `provider` is not modelled; the
+    `order_details` header is an image only; the answers' fields the
+    tables call required but some example leaves out, or another table
+    calls optional, are optional (`merchant_category_code`,
+    `purpose_code`, a transaction's `pg_transaction_id`);
+    `purpose_code` is sent as a string, as both examples do, and a
+    configuration's name has at most 60 characters, an order's limit;
+    the tests put numeric ids where the examples print placeholder
+    names (`the-catalog_id`, `your-media-id`).
+- [ ] **P1b. Brazil** (`meta-whatsapp-client`; rows 38, 141): `BRL`
+  orders (`payment_type` `br`, the `order` object optional, a
+  `reference_id` of 60), the payment settings `pix_dynamic_code`,
+  `payment_link`, `boleto` and `offsite_card_pay`, and the `payment`
+  object of an `order_status` message (whose status may be `pending`
+  in Brazil, which India's check refuses), on P1a's types
+  (`payments/payments-br/orders`, `offsite-pix`, `payment-links`,
+  `boleto`, `one-click-payments`).
+  - **After:** P1a.
+  - **Kind:** additive.
+  - **Decisive:** exact JSON from `payments/payments-br/*`; a `BRL`
+    order checked by Brazil's rules, an `INR` one by India's.
+- [ ] **P1c. The payment template buttons and the payment webhooks**
+  (`meta-whatsapp-client`, `meta-whatsapp-webhooks`; rows 38, 141): a
+  template's `order_details` button and `order_status` component
+  (`payments-in/orderdetailstemplate`, `orderstatustemplate`,
+  `payments-br/orderdetailstemplate`), its `payment_request` button
+  (`payments-br/payment-request-cta`), the creation of these templates
+  (which the service refuses until then), and the status of type
+  `payment` (`payments-in/pg`) and the `payment_method` reply
+  (`payments-br/one-click-payments`) typed.
+  - **After:** P1a, P1b.
+  - **Kind:** additive.
+  - **Decisive:** the payments pages' webhook examples join the
+    conformance sweep (their manifest status moves from `OutOfScope` to
+    `Typed`), with new event data snapshots only (no changed one); exact
+    JSON of the template pages' examples.
 - [ ] **P2. Payment routes in the service** (rows 38, 141).
-  - **After:** P1.
+  - **After:** P1a, P1b, P1c.
   - **Decisive:** M1.3 over the new routes; an order-details send
     carries the tenant's token.
 

@@ -21,7 +21,15 @@ jobs:
       # The media conversion tests (crates/meta-whatsapp-rs/tests/ffmpeg.rs)
       # fail instead of skipping without the ffmpeg the step below installs.
       META_WHATSAPP_RS_REQUIRE_FFMPEG: "1"
+      # The workspace's test builds outgrew the runner's disk with full debug
+      # info ("No space left on device" linking the server's tests). Line
+      # tables keep file:line in panics and backtraces at a fraction of it.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
+      # Room for the build: drop toolchains this job never uses (about
+      # 20 GB of the runner's preinstalled .NET, Android SDK, GHC, CodeQL).
+      - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
       - uses: actions/checkout@v5
         with:
           # `just skills-check` resolves the commits the consumer skills are
