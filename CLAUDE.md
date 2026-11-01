@@ -64,7 +64,8 @@ capability table) and `docs/categories.md` (Meta's platform categories).
   `META_WHATSAPP_SERVER_UPDATE_SNAPSHOTS=1 cargo test -p meta-whatsapp-server --all-features --test event_data`,
   then review what it wrote under `crates/meta-whatsapp-server/tests/snapshots/event_data/`.
 - `live_*` adapter, inbox (`live_postgres_*` in the facade's
-  `tests/inbox_events.rs`) and service tests need real services: `just test-live` (or set
+  `tests/inbox_events.rs`), bot (retention's `live_postgres_*`) and service
+  tests need real services: `just test-live` (or set
   `META_WHATSAPP_RS_TEST_POSTGRES_URL` / `META_WHATSAPP_RS_TEST_REDIS_URL`
   / `META_WHATSAPP_RS_TEST_MONGODB_URL`, the last a single-node replica
   set's with `directConnection=true`, and `META_WHATSAPP_RS_REQUIRE_LIVE=1`);

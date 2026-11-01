@@ -16,8 +16,9 @@ check:
 test:
     cargo test --workspace --all-features
 
-# Adapter, inbox (meta-whatsapp-rs's tests/inbox_events.rs) and service tests
-# against real Postgres, Redis and MongoDB. The facade's filter is `live_postgres_`, not
+# Adapter, inbox (meta-whatsapp-rs's tests/inbox_events.rs), bot retention
+# (meta-whatsapp-bot's tests/retention.rs) and service tests against real
+# Postgres, Redis and MongoDB. The facade's filter is `live_postgres_`, not
 # `live_`: its unit and skill tests have names containing `live_`
 # (`…_live_duplicates_…`, the `live_updates` skill), which would keep its count
 # above zero with no live test run. Uses META_WHATSAPP_RS_TEST_POSTGRES_URL /
@@ -53,6 +54,7 @@ test-live:
     fi
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-adapters --all-features live_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-rs --all-features live_postgres_ -- --test-threads=4
+    META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-bot --all-features live_postgres_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server-store-postgres --all-features live_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server-store-mongodb --all-features live_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server --all-features live_ -- --test-threads=4
