@@ -15,6 +15,7 @@ use serde::ser::{SerializeMap, Serializer};
 
 use super::commerce::{CatalogMessage, ProductCarousel, ProductList, SingleProduct};
 use super::content::MediaSource;
+use super::payments::{OrderDetails, OrderStatus};
 use super::validate::{self, Check};
 
 /// Footer limit shared by reply buttons, lists, CTA URL and catalog
@@ -1364,9 +1365,8 @@ impl Serialize for RequestContactInfo {
 
 /// The `interactive` object, tagged by its `type`.
 ///
-/// Interactive types this crate does not model yet (payments
-/// `order_details`, Direct Send mixed buttons, …) can be sent with
-/// [`super::MessageContent::Raw`].
+/// Interactive types this crate does not model yet (Direct Send mixed
+/// buttons, …) can be sent with [`super::MessageContent::Raw`].
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type")]
 #[non_exhaustive]
@@ -1413,6 +1413,13 @@ pub enum Interactive {
     /// `request_contact_info`.
     #[serde(rename = "request_contact_info")]
     RequestContactInfo(RequestContactInfo),
+    /// `order_details`: a bill to pay (Payments API, see
+    /// [`crate::payments`]).
+    #[serde(rename = "order_details")]
+    OrderDetails(Box<OrderDetails>),
+    /// `order_status`: an order's new status (Payments API).
+    #[serde(rename = "order_status")]
+    OrderStatus(OrderStatus),
 }
 
 impl Interactive {
@@ -1436,6 +1443,8 @@ impl Interactive {
             }
             Self::Address(m) => m.validate(),
             Self::RequestContactInfo(m) => validate::non_empty("interactive.body.text", &m.body),
+            Self::OrderDetails(m) => m.validate(),
+            Self::OrderStatus(m) => m.validate(),
         }
     }
 }
@@ -1470,4 +1479,19 @@ into_interactive! {
     CallPermissionRequest => CallPermissionRequest,
     AddressMessage => Address,
     RequestContactInfo => RequestContactInfo,
+    OrderStatus => OrderStatus,
+}
+
+// Boxed: an order is several times larger than any other interactive
+// message.
+impl From<OrderDetails> for Interactive {
+    fn from(m: OrderDetails) -> Self {
+        Self::OrderDetails(Box::new(m))
+    }
+}
+
+impl From<OrderDetails> for super::MessageContent {
+    fn from(m: OrderDetails) -> Self {
+        Self::Interactive(Interactive::from(m))
+    }
 }
