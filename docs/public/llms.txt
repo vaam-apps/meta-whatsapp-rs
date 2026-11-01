@@ -1,0 +1,79 @@
+# meta-whatsapp-rs
+
+> A Rust toolkit for Meta's WhatsApp Business Platform (Cloud API, Graph v25.0): a typed Graph API client, verified and typed webhooks, storage, transport and sink adapters, a CMS inbox, a bot framework, Typst documents, and meta-whatsapp-server, an HTTP service for apps not written in Rust.
+
+Users are keyed by business-scoped user id (`user_id`, BSUID), never by phone number alone: from 2026 every webhook carries one and `wa_id` may be absent. Errors branch on `ErrorKind`, never on messages. Every link below is the Markdown source on `main`; the rendered site is https://vaam-apps.github.io/meta-whatsapp-rs/.
+
+## Start here
+
+- [README](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/README.md): the crates, quick starts for each product, feature flags and the service
+- [Getting started](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/getting-started.md): adding the dependency, the feature flags, the crates and the runnable examples
+- [Which guide for which job](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/guides/README.md): the integrator guides, by product
+
+## Guides
+
+- [Meta setup and first message](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/guides/getting-started.md): the app, WABA, number and system user token on Meta's side, then a first message
+- [Webhooks](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/guides/webhooks.md): the endpoint, signature checks, deduplication and the typed events
+- [Embedded Signup](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/guides/embedded-signup.md): merchants connecting their own number, as Tech Provider or Solution Partner
+- [CMS inbox](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/guides/cms-inbox.md): merchant-to-customer chat, the 24-hour window, history and erasure
+- [Marketing and commerce](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/guides/marketing-and-commerce.md): opt-ins, marketing templates, catalogs and orders
+- [WhatsApp OTP login](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/guides/otp-login.md): authentication templates and one-time codes
+- [Documents](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/guides/documents.md): invoices, receipts and vouchers rendered with Typst
+- [Bots](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/guides/bots.md): commands, middleware, plugins, broadcast and scheduling on webhooks
+- [Production](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/guides/production.md): secrets, logs, several instances, retention
+- [Run the service](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/guides/server.md): meta-whatsapp-server's configuration, keys, routes, webhooks, `doctor` and operations
+
+## Architecture and design
+
+- [Architecture](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/architecture.md): the crates, the ports, the dependency rule and the stable identifiers
+- [Design: the service](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/design/server.md): meta-whatsapp-server's design, error codes and decisions
+- [OpenAPI document](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/crates/meta-whatsapp-server/openapi/v1.json): the service's `/v1` API, generated from its code
+
+## Status and plan
+
+- [Feature coverage](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/coverage.md): what exists and what does not, feature by feature
+- [Parity](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/parity.md): capability by capability against Zaileys and Meta's Cloud API
+- [Meta platform categories](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/categories.md): what is implemented in each area of Meta's docs
+- [Roadmap](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/roadmap.md): the plan to parity, item by item
+- [Open questions](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/OPEN_QUESTIONS.md): decisions the code has not made, and how each was decided
+
+## Agent skills
+
+One task each, installable with `npx skills add vaam-apps/meta-whatsapp-rs`.
+
+- [Skills index](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/README.md): every skill and when to load it
+- [meta-whatsapp-rs](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs/SKILL.md): start here for the library, and which skill to load next
+- [meta-whatsapp-rs-setup](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-setup/SKILL.md): what to create on Meta's side, then building the client
+- [meta-whatsapp-rs-send-messages](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-send-messages/SKILL.md): free-form text, media, location, contacts and reactions
+- [meta-whatsapp-rs-send-templates](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-send-templates/SKILL.md): sending an approved template with its parameters
+- [meta-whatsapp-rs-templates](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-templates/SKILL.md): creating and managing message templates
+- [meta-whatsapp-rs-interactive-messages](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-interactive-messages/SKILL.md): reply buttons, lists, CTA URL buttons and more
+- [meta-whatsapp-rs-media](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-media/SKILL.md): uploading, sending and downloading media
+- [meta-whatsapp-rs-flows](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-flows/SKILL.md): building Flow JSON and running WhatsApp Flows
+- [meta-whatsapp-rs-webhook-endpoint](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-webhook-endpoint/SKILL.md): the webhook endpoint, its signature check and deduplication
+- [meta-whatsapp-rs-webhook-events](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-webhook-events/SKILL.md): handling the typed webhook events
+- [meta-whatsapp-rs-live-updates](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-live-updates/SKILL.md): event sinks, fan-out and server-sent events
+- [meta-whatsapp-rs-cms-inbox](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-cms-inbox/SKILL.md): a multi-tenant CMS's chat inbox
+- [meta-whatsapp-rs-groups-and-calling](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-groups-and-calling/SKILL.md): blocking users, groups and calls in an inbox
+- [meta-whatsapp-rs-embedded-signup](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-embedded-signup/SKILL.md): merchants connecting their own number
+- [meta-whatsapp-rs-token-vault](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-token-vault/SKILL.md): merchants' tokens encrypted at rest, and key rotation
+- [meta-whatsapp-rs-phone-numbers](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-phone-numbers/SKILL.md): registering and managing business phone numbers and their WABA
+- [meta-whatsapp-rs-otp-login](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-otp-login/SKILL.md): OTP login and phone verification
+- [meta-whatsapp-rs-marketing](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-marketing/SKILL.md): opt-ins and marketing messages
+- [meta-whatsapp-rs-commerce](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-commerce/SKILL.md): commerce settings, catalogs and products
+- [meta-whatsapp-rs-documents](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-documents/SKILL.md): invoices, receipts and vouchers with Typst
+- [meta-whatsapp-rs-bot](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-bot/SKILL.md): a bot on Cloud API webhooks
+- [meta-whatsapp-rs-storage](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-storage/SKILL.md): choosing and running the key/value and conversation stores
+- [meta-whatsapp-rs-errors](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-errors/SKILL.md): the error tree and classifying failures
+- [meta-whatsapp-rs-testing](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-testing/SKILL.md): testing without Meta, a network or a database
+- [meta-whatsapp-rs-production](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-production/SKILL.md): secrets, logs and several instances in production
+- [meta-whatsapp-rs-server](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server/SKILL.md): deploying and calling meta-whatsapp-server from an app not written in Rust
+- [meta-whatsapp-rs-server-send](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-send/SKILL.md): messages, media and templates through the service
+- [meta-whatsapp-rs-server-events](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-events/SKILL.md): Meta's webhooks and polled events through the service
+
+## Optional
+
+- [Changelog](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/CHANGELOG.md): what changed, release by release
+- [Contributing](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/CONTRIBUTING.md): process, merging and how the skills are kept true
+- [Development environment](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/dev-environment.md): the Claude Code dev container, its toolchain and its firewall
+- [Agent guide](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/AGENTS.md): conventions and commands for working on the repository itself

@@ -218,6 +218,33 @@ stored data, the owner's).
 
 ### Added
 
+- **`llms.txt` and `meta-whatsapp-server doctor`** (roadmap L22a,
+  parity row 117, now done in the service; from `webhooks/overview`,
+  `webhooks/create-webhook-endpoint`, `solution-providers/manage-webhooks`
+  and the Graph API reference's `app/subscriptions` and
+  `webhooks/subscriptions-edge`, read on 2026-11-01).
+  `docs/public/llms.txt` indexes the guides, the design and planning
+  docs and every consumer skill in the llms.txt convention, each link
+  the file's Markdown on `main`; the docs site serves it at its root,
+  and `crates/meta-whatsapp-rs/tests/llms_txt.rs` refuses a link to a
+  missing file and an unlisted guide or skill. The service's
+  `doctor` command (`meta_whatsapp_server::doctor`: `Doctor`, `Report`,
+  `Check`, `Status`) prints one line per check, `OK`, `WARN`, `FAIL` or
+  `SKIP`, and exits non-zero on a `FAIL`: every configuration refusal
+  by variable (not only the first), the backend `serve` would open and,
+  on Postgres, its migration histories read by `SELECT` (pending
+  service migrations fail with `WA_SERVER_MIGRATE=skip`, warn with
+  `auto`), the app's `whatsapp_business_account` subscription and its
+  fields (`GET /{app-id}/subscriptions` with the app token; `messages`
+  and `account_update` required, `REQUIRED_FIELDS`, eleven more
+  recommended, `RECOMMENDED_FIELDS`), each bound WABA's token
+  (`debug_token`: valid, this app's, not expired, both WhatsApp
+  permissions, a grant naming the WABA; up to `MAX_WABAS`) and the app's
+  subscription to it (`GET /{waba-id}/subscribed_apps`), and the
+  Solution Partner's system token. It only reads (no migration, the
+  vault opened without re-encryption on read, `GET`s only, through the
+  library's client) and prints no secret. The server crate depends on
+  `serde` for the subscriptions answer.
 - **A token-expiry signal** (`meta_whatsapp_client::embedded_signup`,
   roadmap L11e, parity row 6; OPEN_QUESTIONS #8; the service's event is
   M3e). `TokenVault::token_expiry(&waba_id, lead)` answers, on the
