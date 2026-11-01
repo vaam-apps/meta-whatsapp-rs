@@ -453,7 +453,9 @@ When you do not host the solution's Embedded Signup, a client's business
 token comes through the solution: their business portfolio id is in the
 `account_update` webhook of their onboarding. The token is an
 `AccessToken`, kept out of `Debug` and of decode errors; store it as you
-store Embedded Signup's.
+store Embedded Signup's. Meta's reference calls it time-limited: when
+`token.expires_at` (unix seconds) is set, keep it with the token and read
+a new one before then.
 
 ```rust
 let token = system

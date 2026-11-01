@@ -1609,6 +1609,26 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     wrapped: `POST /{WABA_ID}/migration_intent`, from an unindexed
     reference page with no example that the guides do not use; the
     `fields` parameter of the two deactivation answers.
+  - **Decided** (by the coordinating agent, each swappable): the core ids
+    (`SolutionId` numeric, from the Solution Details API's "must be a
+    valid numeric string"; `MigrationIntentId` opaque, no page gives its
+    shape); the module and accessor names (`client::partners::{solutions,
+    migration}`, `Client::partner_solutions`, `Client::migration_intents`);
+    both answer shapes of the token (`{"data": [...]}` and the bare
+    object); `CreateSolution::validate` checking only what the pages agree
+    on (a name, and `MESSAGING` on at least one side: the creation
+    reference allows one side, the embedded creation guide's example
+    gives it to both); page sizes 1 to 100 (the list references); roles
+    not checked locally (the pages disagree on who rejects and who
+    answers a deactivation request; Meta decides from the token).
+  - **Hardened in review:** a non-2xx answer of the token's endpoint that
+    is not Meta's error envelope keeps its body out of `Error::Http`
+    (`a_failed_token_answer_never_quotes_its_body`), and a blank
+    `access_token` is refused like an empty one
+    (`malformed_token_answers_are_withheld`).
+  - **Follow-up:** `LaunchOptions::solution_id` stays a `String`; typing
+    it as `SolutionId` is a breaking change to the Embedded Signup
+    builder, left for its own item.
 - [ ] **L13. Marketing** (`meta-whatsapp-client`, `client::marketing`;
   rows 137, 138, 154; OPEN_QUESTIONS #45): max price (its agreement, the
   partner allow list, duplicating a template at another price), reach

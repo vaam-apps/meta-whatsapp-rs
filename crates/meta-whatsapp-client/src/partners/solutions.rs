@@ -56,8 +56,10 @@
 //! tokens Embedded Signup produces (the token vault). The reference says
 //! the token is time-limited and gives its expiry as `expires_at` (unix
 //! seconds, [`SolutionAccessToken::expires_at`]); the guide's example
-//! carries no expiry. A body that fails to decode never reaches the error:
-//! neither the body nor serde's message, which would quote the token.
+//! carries no expiry: keep `expires_at` next to the token and read a new
+//! one before it passes. A body that fails to decode never reaches the
+//! error: neither the body nor serde's message, which would quote the
+//! token; nor does a non-2xx body that is not Meta's error envelope.
 //!
 //! # Where Meta's pages disagree (decided here)
 //!
@@ -338,7 +340,9 @@ pub struct SolutionAccessToken {
     /// The client's business integration system user access token.
     pub access_token: AccessToken,
     /// When it expires, in unix seconds (the reference's `expires_at`;
-    /// the guide's example has none).
+    /// the guide's example has none). Meta's value as sent, not
+    /// interpreted: `None` when absent or `null`; a value that is not an
+    /// integer fails the whole answer, withheld as any other.
     #[serde(default)]
     pub expires_at: Option<i64>,
 }
@@ -513,7 +517,10 @@ pub struct ConnectedClientBusiness {
 
 /// The decode-error body snippet of [`PartnerSolutions::access_token`]:
 /// the answer is a credential.
-pub(crate) const TOKEN_WITHHELD: &[u8] = b"(withheld: the response carries a business token)";
+pub(crate) const TOKEN_WITHHELD: &[u8] = TOKEN_WITHHELD_TEXT.as_bytes();
+
+/// [`TOKEN_WITHHELD`] as text, the snippet of an [`Error::Http`].
+const TOKEN_WITHHELD_TEXT: &str = "(withheld: the response carries a business token)";
 
 /// The page size the list references allow.
 fn check_limit(limit: Option<u32>) -> Result<()> {
@@ -547,6 +554,22 @@ fn token_shape_error(why: &'static str) -> Error {
         <serde_json::Error as serde::de::Error>::custom(why),
         TOKEN_WITHHELD,
     )
+}
+
+/// A non-2xx answer of the token's endpoint that is not Meta's error
+/// envelope: its snippet becomes [`TOKEN_WITHHELD`], whatever the body
+/// names. The crate's own rule (`safe_snippet`) withholds only bodies
+/// naming `paging` or `access_token`; this endpoint's body is a
+/// credential under any key. Meta's envelope (`Error::Api`) carries
+/// Meta's message, not the body, and is kept.
+fn withhold_http_body(error: Error) -> Error {
+    match error {
+        Error::Http { status, .. } => Error::Http {
+            status,
+            body_snippet: TOKEN_WITHHELD_TEXT.to_owned(),
+        },
+        other => other,
+    }
 }
 
 impl PartnerSolutions {
@@ -612,8 +635,9 @@ impl PartnerSolutions {
     }
 
     /// `POST /{SOLUTION_ID}/send_deactivation_request`: as the solution
-    /// owner, ask the partner to deactivate an `ACTIVE` solution. It stays
-    /// usable for onboarding until the partner accepts. Never replayed.
+    /// owner, ask the partner to deactivate a solution (`ACTIVE` in the
+    /// guide; the reference also allows `INITIATED`). It stays usable for
+    /// onboarding until the partner accepts. Never replayed.
     pub async fn send_deactivation_request(&self, solution: &SolutionId) -> Result<()> {
         self.state_change(
             solution,
@@ -695,9 +719,11 @@ impl PartnerSolutions {
     ///
     /// The answer is a credential: see the
     /// [module docs](crate::partners::solutions#the-solution-token). A
-    /// body that does not decode, or holds no token, is an
-    /// [`Error::Decode`] that carries neither the body nor serde's
-    /// message.
+    /// body that does not decode, or holds no token (an empty `data`, a
+    /// blank `access_token`), is an [`Error::Decode`] that carries neither
+    /// the body nor serde's message; a non-2xx answer that is not Meta's
+    /// error envelope is an [`Error::Http`] whose snippet is a placeholder,
+    /// never the body. A read: retried as any GET is.
     pub async fn access_token(
         &self,
         solution: &SolutionId,
@@ -709,7 +735,8 @@ impl PartnerSolutions {
             .query("business_id", business.as_str())
             .context("solution access token response")
             .send_withheld(TOKEN_WITHHELD)
-            .await?;
+            .await
+            .map_err(withhold_http_body)?;
         let token = match answer {
             TokenAnswer::Wrapped { data } => data
                 .into_iter()
@@ -717,7 +744,7 @@ impl PartnerSolutions {
                 .ok_or_else(|| token_shape_error("no token in `data`"))?,
             TokenAnswer::Bare(token) => token,
         };
-        if token.access_token.expose_secret().is_empty() {
+        if token.access_token.expose_secret().trim().is_empty() {
             return Err(token_shape_error("empty access_token"));
         }
         Ok(token)

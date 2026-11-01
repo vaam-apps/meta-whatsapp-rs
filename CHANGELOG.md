@@ -245,7 +245,8 @@ stored data, the owner's).
   `ids::MigrationIntentId` (opaque). Every creation and state change is
   never replayed after a timeout or a server error. The business token
   never reaches `Debug`, and an answer that fails to decode keeps the
-  body and serde's message out of the error. No call here accepts terms
+  body and serde's message out of the error, as does a non-2xx answer
+  that is not Meta's error envelope. No call here accepts terms
   or signs an agreement; accepting or rejecting a solution cannot be
   undone, and a migration intent the client leaves unanswered for 90
   days is accepted for them (Meta's rule).

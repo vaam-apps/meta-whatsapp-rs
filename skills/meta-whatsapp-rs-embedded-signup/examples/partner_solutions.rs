@@ -47,7 +47,8 @@ pub async fn accept_if_agreed(
 /// A client onboarded through `solution` (their business portfolio id is
 /// in the `account_update` webhook of their onboarding), as a client that
 /// authenticates with their business token. Keep the token as you keep
-/// Embedded Signup's (the token vault).
+/// Embedded Signup's (the token vault), with its `expires_at` when Meta
+/// sends one: the reference calls the token time-limited.
 pub async fn client_business(
     client: &Client,
     system_token: AccessToken,

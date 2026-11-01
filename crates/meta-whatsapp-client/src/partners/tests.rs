@@ -577,6 +577,146 @@ async fn an_access_token_answer_that_does_not_decode_is_withheld() {
     }
 }
 
+/// The malformed answers a security review asked for, beyond the ones
+/// above: a token field missing from the item, the token nested one level
+/// too deep (in the item and around `data`), an item without the token
+/// next to one with it, and an `expires_at` that is a numeric string
+/// (the reference's type is `integer (int64)`). Each is a withheld decode
+/// error.
+#[tokio::test]
+async fn malformed_token_answers_are_withheld() {
+    let bodies = [
+        r#"{"data": [{"expires_at": 1767225600}]}"#.to_owned(),
+        format!(r#"{{"data": [{{"access_token": {{"value": "{SECRET}"}}}}]}}"#),
+        format!(r#"{{"data": {{"data": [{{"access_token": "{SECRET}"}}]}}}}"#),
+        format!(r#"{{"access_token": {{"access_token": "{SECRET}"}}}}"#),
+        format!(r#"{{"data": [{{"token": "x"}}, {{"access_token": "{SECRET}"}}]}}"#),
+        format!(r#"{{"access_token": "{SECRET}", "expires_at": "1767225600"}}"#),
+        r#"{"access_token": "  "}"#.to_owned(),
+        r#"{"data": [{"access_token": "\t"}]}"#.to_owned(),
+    ];
+    for body in bodies {
+        let t = ScriptedTransport::new();
+        t.push_bytes(200, "application/json", body.clone());
+        let err = client(&t)
+            .partner_solutions()
+            .access_token(&solution(), &BusinessId::new("1").unwrap())
+            .await
+            .unwrap_err();
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("SENTINEL"), "{body}: {shown}");
+        let Error::Decode { body_snippet, .. } = &err else {
+            panic!("{body}: {err:?}")
+        };
+        assert_eq!(body_snippet.as_bytes(), TOKEN_WITHHELD, "{body}");
+        assert_eq!(t.remaining(), 0);
+    }
+}
+
+/// A non-2xx answer that is not Meta's error envelope becomes an
+/// `Error::Http` whose snippet is the token placeholder, whatever the body
+/// names: the crate's own rule withholds only bodies that name `paging` or
+/// `access_token`, and this endpoint's answer is a credential under any
+/// key. Meta's envelope stays an `Error::Api`, with its code.
+#[tokio::test]
+async fn a_failed_token_answer_never_quotes_its_body() {
+    for (status, body) in [
+        (500, format!(r#"{{"token": "{SECRET}"}}"#)),
+        (502, format!("<html>upstream said {SECRET}</html>")),
+        (
+            403,
+            format!(r#"{{"data": [{{"access_token": "{SECRET}"}}]}}"#),
+        ),
+    ] {
+        let t = ScriptedTransport::new();
+        t.push_bytes(status, "application/json", body.clone());
+        let err = client(&t)
+            .partner_solutions()
+            .access_token(&solution(), &BusinessId::new("1").unwrap())
+            .await
+            .unwrap_err();
+        let shown = format!("{err} {err:?}");
+        assert!(!shown.contains("SENTINEL"), "{body}: {shown}");
+        let Error::Http {
+            status: got,
+            body_snippet,
+        } = &err
+        else {
+            panic!("{body}: {err:?}")
+        };
+        assert_eq!(*got, status);
+        assert_eq!(body_snippet.as_bytes(), TOKEN_WITHHELD, "{body}");
+        assert_eq!(t.remaining(), 0);
+    }
+    // `access-token-api`'s 422 example (its trailing comma removed).
+    let t = ScriptedTransport::new();
+    t.push_json(
+        422,
+        json!({"error": {
+            "message": "The specified business has not shared a WABA with this Multi-Partner Solution",
+            "type": "OAuthException",
+            "code": 100
+        }}),
+    );
+    let err = client(&t)
+        .partner_solutions()
+        .access_token(&solution(), &BusinessId::new("1").unwrap())
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::InvalidParameter);
+    assert_eq!(err.graph().unwrap().code, 100);
+}
+
+/// `expires_at` is Meta's value, passed through: absent or `null` is
+/// `None`, and a value in the past (or negative) is not interpreted here.
+#[tokio::test]
+async fn expires_at_is_passed_through() {
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"access_token": SECRET, "expires_at": null}));
+    t.push_json(200, json!({"access_token": SECRET, "expires_at": -1}));
+    t.push_json(
+        200,
+        json!({"data": [{"access_token": SECRET, "expires_at": 0}]}),
+    );
+    let api = client(&t).partner_solutions();
+    let business = BusinessId::new("1").unwrap();
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        seen.push(
+            api.access_token(&solution(), &business)
+                .await
+                .unwrap()
+                .expires_at,
+        );
+    }
+    assert_eq!(seen, [None, Some(-1), Some(0)]);
+    assert_eq!(t.remaining(), 0);
+}
+
+/// A read: a timeout on the token's GET is retried, with the same query.
+#[tokio::test]
+async fn the_token_read_is_retried() {
+    let t = ScriptedTransport::new();
+    t.push_error(|| TransportError::Timeout);
+    t.push_json(200, json!({"access_token": SECRET, "expires_at": 1}));
+    let token = retrying_client(&t)
+        .partner_solutions()
+        .access_token(&solution(), &BusinessId::new("2729063490586005").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(token.access_token.expose_secret(), SECRET);
+    let reqs = t.requests();
+    assert_eq!(reqs.len(), 2);
+    for req in reqs {
+        assert_eq!(req.path(), format!("/v25.0/{SOLUTION}/access_token"));
+        assert_eq!(
+            req.query("business_id").as_deref(),
+            Some("2729063490586005")
+        );
+    }
+    assert_eq!(t.remaining(), 0);
+}
+
 // ─── Lists ───────────────────────────────────────────────────────────────
 
 /// `multi-partner-solutions`, "Get solutions associated with your app":
@@ -748,6 +888,14 @@ async fn limits_outside_one_to_a_hundred_are_refused() {
                 .await
                 .remove(0)
                 .unwrap_err(),
+            api.connected_client_businesses_stream(
+                &app,
+                &ListConnectedClientBusinesses::new().limit(limit),
+            )
+            .collect::<Vec<_>>()
+            .await
+            .remove(0)
+            .unwrap_err(),
         ];
         for err in errors {
             let Error::Validation(v) = &err else {
@@ -757,6 +905,15 @@ async fn limits_outside_one_to_a_hundred_are_refused() {
         }
     }
     assert!(t.requests().is_empty());
+}
+
+/// A stream's single item: the validation error naming `field`.
+fn refused<T: std::fmt::Debug>(items: &[meta_whatsapp_core::Result<T>], field: &str) {
+    assert_eq!(items.len(), 1, "{field}: {items:?}");
+    let Err(Error::Validation(v)) = &items[0] else {
+        panic!("{field}: {items:?}")
+    };
+    assert_eq!(v.field, field);
 }
 
 /// Each stream follows `after` over two pages, keeps the query's filters,
@@ -810,28 +967,41 @@ async fn streams_follow_cursors_and_refuse_a_callers() {
     let t = ScriptedTransport::new();
     let api = client(&t).partner_solutions();
     let app = AppId::new("1").unwrap();
-    let refused = [
-        api.app_solutions_stream(&app, &ListAppSolutions::new().after("x"))
-            .collect::<Vec<_>>()
-            .await,
-        api.app_solutions_stream(&app, &ListAppSolutions::new().before("x"))
-            .collect::<Vec<_>>()
-            .await,
-    ];
-    for items in refused {
-        assert_eq!(items.len(), 1);
-        assert!(matches!(&items[0], Err(Error::Validation(_))), "{items:?}");
+    for field in ["after", "before"] {
+        let apps = if field == "after" {
+            ListAppSolutions::new().after("x")
+        } else {
+            ListAppSolutions::new().before("x")
+        };
+        let partners = if field == "after" {
+            ListSolutionPartners::new().after("x")
+        } else {
+            ListSolutionPartners::new().before("x")
+        };
+        let connected = if field == "after" {
+            ListConnectedClientBusinesses::new().after("x")
+        } else {
+            ListConnectedClientBusinesses::new().before("x")
+        };
+        refused(
+            &api.app_solutions_stream(&app, &apps)
+                .collect::<Vec<_>>()
+                .await,
+            field,
+        );
+        refused(
+            &api.partners_stream(&solution(), &partners)
+                .collect::<Vec<_>>()
+                .await,
+            field,
+        );
+        refused(
+            &api.connected_client_businesses_stream(&app, &connected)
+                .collect::<Vec<_>>()
+                .await,
+            field,
+        );
     }
-    let partners: Vec<_> = api
-        .partners_stream(&solution(), &ListSolutionPartners::new().after("x"))
-        .collect()
-        .await;
-    assert_eq!(partners.len(), 1);
-    let connected: Vec<_> = api
-        .connected_client_businesses_stream(&app, &ListConnectedClientBusinesses::new().after("x"))
-        .collect()
-        .await;
-    assert_eq!(connected.len(), 1);
     assert!(t.requests().is_empty());
 }
 
