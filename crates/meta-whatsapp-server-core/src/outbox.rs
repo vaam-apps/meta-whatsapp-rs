@@ -170,13 +170,19 @@ pub struct DatedBounds {
 
 impl RouteGuard {
     /// The bounds of a dated event ([`DatedBounds`]); `None` for an undated
-    /// one.
+    /// one. [`DatedBounds::after_move`] is never before the Unix epoch: no
+    /// binding began before it, so a margin reaching further back changes
+    /// nothing, and a database may not hold an earlier instant (Postgres'
+    /// `to_timestamp` refuses one millennia back, which would fail every
+    /// dated insert).
     pub fn dated_bounds(&self) -> Option<DatedBounds> {
         self.not_after.map(|at| {
             let second = at.unix_timestamp();
             DatedBounds {
                 first_onboarding: second.saturating_add(1),
-                after_move: second.saturating_sub(self.after_move.margin_seconds()),
+                after_move: second
+                    .saturating_sub(self.after_move.margin_seconds())
+                    .max(crate::model::UNRECORDED_MOVE.unix_timestamp()),
             }
         })
     }
@@ -432,6 +438,17 @@ mod tests {
         assert!(!g.admits(began(5), moved));
         assert!(g.admits(began(6), moved));
         assert_eq!(margin(0.0).margin_seconds(), 0);
+        // A margin reaching before the epoch: the bound stays at it.
+        let g = guard(
+            Some(t),
+            AfterMove {
+                skew_margin: std::time::Duration::MAX,
+                undated_moved_by: None,
+            },
+        );
+        assert_eq!(g.dated_bounds().map(|b| b.after_move), Some(0));
+        assert!(!g.admits(began(3600), moved));
+        assert!(g.admits(began(0), None), "a first onboarding: no margin");
     }
 
     /// An undated event reaches a binding with a previous tenant only once

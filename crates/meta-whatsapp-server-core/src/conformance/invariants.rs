@@ -558,8 +558,11 @@ pub async fn a_first_onboarding_keeps_its_first_second(backend: &dyn Backend) {
 /// dated up to 5 seconds after its own second, and keeps one dated 6
 /// seconds after; a first onboarding's binding keeps an event of its own
 /// second under the same margin. Through a number's guard and the WABA's.
-/// Decisive: the margin in each backend's insert, and its application to
-/// a binding with a previous tenant only.
+/// A margin reaching before the Unix epoch fails no insert (Postgres
+/// refused the instant it bound, for every dated row). Decisive: the
+/// margin in each backend's insert, its application to a binding with a
+/// previous tenant only, and `RouteGuard::dated_bounds` keeping its bound
+/// at the epoch.
 pub async fn the_skew_margin_applies_after_a_move_only(backend: &dyn Backend) {
     use time::Duration as Span;
     let margin = AfterMove {
@@ -594,6 +597,24 @@ pub async fn the_skew_margin_applies_after_a_move_only(backend: &dyn Backend) {
         outbox.insert(&past).await.unwrap().unwrap();
         moved_kept.push(past.id);
         let first = guarded_row("suite-l", "48", by_number, Some(first_second), margin);
+        outbox.insert(&first).await.unwrap().unwrap();
+        first_kept.push(first.id);
+        // A margin reaching before the Unix epoch (a setting of
+        // `Duration::MAX`): the inserts succeed, the moved WABA's row a day
+        // later still no tenant's, the first onboarding's its own.
+        let absurd = AfterMove {
+            skew_margin: std::time::Duration::MAX,
+            undated_moved_by: None,
+        };
+        let moved_row = guarded_row(
+            "suite-k",
+            "47",
+            by_number,
+            Some(moved_second + Span::DAY),
+            absurd,
+        );
+        outbox.insert(&moved_row).await.unwrap().unwrap();
+        let first = guarded_row("suite-l", "48", by_number, Some(first_second), absurd);
         outbox.insert(&first).await.unwrap().unwrap();
         first_kept.push(first.id);
     }

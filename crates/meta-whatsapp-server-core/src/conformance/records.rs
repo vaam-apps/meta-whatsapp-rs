@@ -858,7 +858,8 @@ pub async fn listings_are_in_byte_order(backend: &dyn Backend) {
 /// does the new holder's own unbind and attach again (the move it records
 /// is still the last one from another tenant); moved back, the new
 /// holder's unbinding. A tenant deleted and created again under its id is
-/// another tenant: its WABA bound again is a move. Decisive: the tombstone
+/// another tenant: its WABA bound again is a move. A WABA moved twice (A
+/// to B to C) reads the last move, B's unbinding. Decisive: the tombstone
 /// written by each unbind, read by a new binding, carried for the same
 /// tenant, and forgotten by a tenant's deletion, on each backend.
 pub async fn a_move_is_recorded(backend: &dyn Backend) {
@@ -940,6 +941,33 @@ pub async fn a_move_is_recorded(backend: &dyn Backend) {
     assert!(
         back.attached_at <= left_old_a && left_old_a <= recycled.attached_at,
         "the deleted tenant's unbinding"
+    );
+    // Moved twice, A to B to C: C reads B's unbinding, the last move,
+    // later than A's (so the window after it covers A's redeliveries too).
+    let c = id("move-c");
+    store.create_tenant(&c, "").await.unwrap().unwrap();
+    let twice = WabaId::new("173").unwrap();
+    let bind_twice = |tenant: &TenantId| {
+        let (tenant, twice) = (tenant.clone(), twice.clone());
+        async move {
+            assert_eq!(
+                store.bind_waba(&tenant, &twice, &[]).await.unwrap(),
+                BindOutcome::Bound,
+                "{tenant:?}"
+            );
+            store.waba(&twice).await.unwrap().unwrap()
+        }
+    };
+    bind_twice(&a).await;
+    assert!(store.unbind_waba(&twice).await.unwrap());
+    let at_b = bind_twice(&b).await;
+    let left_first = at_b.previous_tenant_unbound_at.expect("A to B");
+    assert!(store.unbind_waba(&twice).await.unwrap());
+    let at_c = bind_twice(&c).await;
+    let left_second = at_c.previous_tenant_unbound_at.expect("B to C");
+    assert!(
+        left_first < left_second && at_b.attached_at <= left_second,
+        "C reads B's unbinding, not A's: {left_first} then {left_second}"
     );
     // Another WABA never unbound: a first onboarding, whoever binds it.
     let other = WabaId::new("172").unwrap();

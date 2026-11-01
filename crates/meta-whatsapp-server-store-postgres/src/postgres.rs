@@ -558,12 +558,21 @@ impl RecordStore for PgStore {
             // tenant, from its tombstone. A statement of its own, after the
             // insert: an unbinding the insert waited for (the row it
             // conflicted with, deleted meanwhile) committed before this
-            // statement's snapshot, so its tombstone is seen.
+            // statement's snapshot, so its tombstone is seen. And when it
+            // begins: not before now, nor before that unbinding. The
+            // insert's default, `now()`, is this transaction's start, which
+            // may precede an unbinding that committed while it ran, so an
+            // event Meta dated while the previous tenant still held the
+            // WABA would be in a second this binding began before (the
+            // race suite's `a_binding_racing_an_unbind_records_the_move`).
             sqlx::query(
                 "UPDATE wa_server_wabas w SET previous_tenant_unbound_at = ( \
                    SELECT CASE WHEN t.tenant_id IS NOT DISTINCT FROM w.tenant_id \
                                THEN t.previous_tenant_unbound_at ELSE t.unbound_at END \
-                   FROM wa_server_waba_tombstones t WHERE t.waba_id = w.waba_id) \
+                   FROM wa_server_waba_tombstones t WHERE t.waba_id = w.waba_id), \
+                 attached_at = GREATEST(w.attached_at, clock_timestamp(), ( \
+                   SELECT t.unbound_at FROM wa_server_waba_tombstones t \
+                   WHERE t.waba_id = w.waba_id)) \
                  WHERE w.waba_id = $1",
             )
             .bind(waba_id.as_str())
