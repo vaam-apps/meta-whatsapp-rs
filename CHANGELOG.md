@@ -162,7 +162,7 @@ stored data, the owner's).
   - #4, the two-step PIN is typed per attempt, never generated or
     stored (design D6; no code);
   - #5, one WABA per signup by default, every granted WABA as an opt-in
-    (L11b);
+    (L11b, landed: `EmbeddedSignup::onboard_wabas`, see Added);
   - #6, no tenant policy in the library: `onboard_with_approval` stays
     the hook, the service refuses a WABA another tenant holds (D4; no
     code);
@@ -218,6 +218,63 @@ stored data, the owner's).
 
 ### Added
 
+- **Pre-verified phone numbers** (`meta_whatsapp_client::waba`, roadmap
+  L11c, parity row 123, from `embedded-signup/pre-verified-numbers` and
+  Meta's pre-verified number reference pages, read on 2026-11-01; the
+  service's side is M3f). A partner portfolio's pool:
+  `Business::add_pre_verified_number` (`POST /{Business-ID}/add_phone_numbers`,
+  the number checked locally, a `CreatedPreVerifiedNumber`),
+  `Business::pre_verified_numbers` and `pre_verified_numbers_stream`
+  (`GET …/preverified_numbers`, `ListPreVerifiedNumbers` with
+  `phone_number` and `code_verification_status`) and
+  `Business::share_pre_verified_number`
+  (`POST …/share_preverified_numbers`; Meta removed unsharing). Each
+  number through `Client::pre_verified_phone_number`
+  (`PreVerifiedPhoneNumber`): `get` (a `PreVerifiedNumber`), `request_code`,
+  `verify_code` (the secret `phone_numbers::VerificationCode`, in the
+  JSON body, never the URL), `partners` and `partners_stream`
+  (`ListPreVerifiedNumberPartners`, Business nodes) and `delete`
+  (irreversible, an explicit call nothing else makes). The bodies are
+  the references' JSON, not the guide's query strings. No POST here is
+  replayed after a timeout. A new numeric id,
+  `meta_whatsapp_core::ids::PreVerifiedPhoneNumberId`
+  (`pre_verified_phone_number_id`), checked when built and again as
+  digits by every call before a request.
+- **Several WABAs in one signup** (`meta_whatsapp_client::embedded_signup`,
+  roadmap L11b, parity row 122; OPEN_QUESTIONS #5; the service's side is
+  M3f). A new field and setter, `OnboardingRequest::every_granted_waba` /
+  `every_granted_waba(true)`, off by default, and two new calls,
+  `EmbeddedSignup::onboard_wabas` and `onboard_wabas_with_approval` (its
+  approval an `FnMut`, called once per WABA, each recorded in that WABA's
+  credit ledger in Solution Partner mode, where it is required). They
+  exchange the code and inspect the token once, refuse the signup at
+  `verify_assets`, before anything is read or stored, when the session
+  info names a WABA (`waba_id`, `waba_ids`) the token was not granted
+  (`granular_scopes`, `whatsapp_business_management`), then onboard the
+  claimed WABA (else the newest grant) with the request as it is and,
+  with the option on, every other grant in Meta's order (newest first),
+  each through its own `verify_assets`, `approve`, `store_token`, tail
+  and credit line, with no number registered and no coexistence sync,
+  and only when Meta reports the claimed WABA's owner as its owner too
+  (else it fails at `verify_assets`, and every other grant does, with no
+  request, when that owner is unknown); another grant the vault already
+  holds is left as it is, and one stored by another onboarding while
+  this one runs is not replaced (stored with `put_if_absent`; it fails
+  at `store_token`). `onboard_hosted` and `onboard_hosted_with_approval`
+  now store the same way: their `holds` read was not a lock, and a
+  code-flow or multi-WABA onboarding storing the WABA after it was
+  replaced; such a hosted run now fails at `store_token`, the other
+  record kept. The result,
+  `WabasOnboarded` (`#[must_use]`; `is_complete`, `failures`,
+  `onboarded`, `primary`, `get`), has one `WabaOnboarding` per WABA, its
+  `WabaOutcome` `Onboarded`, `Held` or `Failed { error, steps_completed }`
+  (`is_resumable` when the token was stored): a WABA that fails does not
+  fail the call, and each is resumed on its own with `resume`.
+  `onboard`, `onboard_with_approval` and `onboard_hosted*` refuse a
+  request with the option on (a `ValidationError` on
+  `every_granted_waba`, before any request); `resume` ignores it.
+  Nothing new is stored. Additive: with the option off nothing changes.
+  Tests in `embedded_signup::multi`.
 - **SQLite stores** (`meta_whatsapp_adapters::store::{SqliteKvStore,
   SqliteConversationStore}`, new feature `sqlite`, also on the facade and
   in `full`; roadmap L8, parity rows 110, 111). sqlx's SQLite driver,
@@ -2144,6 +2201,16 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking: pre-verified ids are typed** (roadmap L11c).
+  `embedded_signup::PreVerifiedPhone::ids` is a
+  `Vec<PreVerifiedPhoneNumberId>` (it was `Vec<PhoneNumberId>`), and
+  `LaunchOptions::pre_verified_phone_ids` takes them;
+  `waba::NewPhoneNumber::preverified_id` is a
+  `PreVerifiedPhoneNumberId` (it was a `String`). Build them with
+  `PreVerifiedPhoneNumberId::new` (digits only). A pre-verified number is
+  not a business phone number: once claimed, Meta gives it another id.
+  `LaunchOptions::validate` and `Waba::create_phone_number` refuse an id
+  that is not digits (one built with `new_unchecked`).
 - **`TablePrefix` is `meta_whatsapp_adapters::store::TablePrefix`**
   (roadmap L8), shared by the Postgres and SQLite adapters;
   `store::postgres::TablePrefix` still names it. Its error message says

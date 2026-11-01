@@ -94,9 +94,11 @@ impl EmbeddedSignup {
     /// [`OnboardingRequest::register_with_pin`] to register: the hosted
     /// page asks for no PIN, so the PIN is yours to choose and keep, as the
     /// onboarding guides' `<DESIRED_PIN>`). Refused before any request: a
-    /// request with a code, one naming another WABA, a blank system token
-    /// or app secret, a token request that does not validate, and **a WABA
-    /// `vault` already holds** (a [`ValidationError`] on `waba_id`).
+    /// request with a code, one naming another WABA, one with
+    /// [`OnboardingRequest::every_granted_waba`] on (Meta sends a
+    /// `PARTNER_ADDED` per WABA: onboard each from its own), a blank system
+    /// token or app secret, a token request that does not validate, and **a
+    /// WABA `vault` already holds** (a [`ValidationError`] on `waba_id`).
     ///
     /// **`PARTNER_ADDED` is not only hosted signup's**: Meta sends it for
     /// every WABA shared with you, the code flow's onboardings and
@@ -107,10 +109,16 @@ impl EmbeddedSignup {
     /// the skill's example does), [`Self::resume`] it, or, to onboard it
     /// again on purpose, delete it from the vault first
     /// ([`TokenVault::delete`], or [`Self::offboard`]). The check is a read
-    /// before the fetch, not a lock: a code-flow onboarding still running
-    /// when the webhook arrives can store after it. Reserve the WABA for a
-    /// tenant atomically in the approval to close that window, as
-    /// [`Self::onboard_with_approval`] shows.
+    /// before the fetch, and `store_token` stores only where the vault
+    /// still holds no record (`put_if_absent`): a code-flow or multi-WABA
+    /// onboarding that stores the WABA after the read is never replaced,
+    /// and this call then fails at `store_token`, nothing stored by it,
+    /// after your approval ran (release what it reserved). The other way
+    /// round, a code-flow onboarding still running when the webhook
+    /// arrives can store after this one and replace it, as the code flow's
+    /// re-onboarding must. Reserve the WABA for a tenant atomically in the
+    /// approval to close that window, as [`Self::onboard_with_approval`]
+    /// shows.
     ///
     /// **Nothing is spent before `store_token`**: the fetch is a read, so a
     /// failure up to `store_token` (an [`Error::Step`](meta_whatsapp_core::Error::Step)
@@ -225,6 +233,9 @@ impl EmbeddedSignup {
             expires_in: None,
             session: &session,
             owner: Some(&signup.owner_business_id),
+            // The `holds` read above is not a lock: a code-flow or
+            // multi-WABA onboarding storing the WABA since is not replaced.
+            replaces: false,
         };
         self.onboard_granted(granted, request, vault, plan, approve, done)
             .await
@@ -243,6 +254,11 @@ fn check_hosted(
             "hosted Embedded Signup exchanges no code: build the request with OnboardingRequest::for_hosted",
         ));
     }
+    // `PARTNER_ADDED` comes once per WABA shared with the app: each is
+    // onboarded from its own webhook, and a WABA held is refused.
+    request.refuse_every_granted_waba(
+        "a PARTNER_ADDED webhook names one WABA, and Meta sends one for each WABA shared with your app: onboard each from its own webhook",
+    )?;
     if request
         .session
         .primary_waba_id()
@@ -1162,6 +1178,53 @@ mod tests {
         let reqs = h.t.requests();
         assert_eq!(reqs[2].path(), format!("/v25.0/{WABA}"));
         assert!(stored(&h).await.is_some());
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// The `holds` read is not a lock: a code-flow (or multi-WABA)
+    /// onboarding that stores the WABA after it (here, inside the
+    /// approval) is never replaced. `store_token` stores only where the
+    /// vault still holds none, so the hosted run fails there, nothing
+    /// stored, subscribed or registered by it, the other record intact.
+    #[tokio::test]
+    async fn a_hosted_signup_never_replaces_a_record_stored_meanwhile() {
+        let h = harness_with(
+            Arc::new(MemoryKvStore::new()),
+            APP_SECRET,
+            RetryPolicy::NONE,
+        );
+        h.t.push_json(200, token_answer());
+        h.t.push_json(200, debug_answer(WABA));
+        h.t.push_json(200, owner_answer(OWNER));
+        h.t.push_json(200, phones_answer());
+        let vault = h.vault.clone();
+        let err =
+            h.es.onboard_hosted_with_approval(
+                &signup(),
+                &system_token(),
+                &request(),
+                &h.vault,
+                |verified| async move {
+                    let theirs = super::super::StoredBusinessToken::new(
+                        verified.waba_id,
+                        AccessToken::new("EAAN-CODE-FLOW-TOKEN"),
+                    )
+                    .phone_number_ids([PhoneNumberId::new(PHONE).unwrap()]);
+                    vault.store(&theirs).await
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(step(&err), STORE_TOKEN, "{err}");
+        assert_eq!(field(&err), "waba_id");
+        assert_eq!(
+            stored(&h).await.unwrap().token.expose_secret(),
+            "EAAN-CODE-FLOW-TOKEN",
+            "the record stored meanwhile is kept"
+        );
+        let reqs = h.t.requests();
+        assert_eq!(reqs.len(), 4, "not subscribed, not registered");
+        assert!(reqs[3].path().ends_with("/phone_numbers"));
         assert_eq!(h.t.remaining(), 0);
     }
 

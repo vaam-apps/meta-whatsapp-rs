@@ -26,6 +26,13 @@
 //! - Meta's campaign schedules ([`Waba::schedules`],
 //!   [`Waba::create_schedule`]).
 //!
+//! Pre-verified phone numbers (roadmap L11c): a partner portfolio's pool
+//! ([`Business::add_pre_verified_number`],
+//! [`Business::pre_verified_numbers`],
+//! [`Business::share_pre_verified_number`]) and each number's code,
+//! partners and deletion ([`Client::pre_verified_phone_number`],
+//! [`PreVerifiedPhoneNumber`]); see [below](#pre-verified-phone-numbers).
+//!
 //! Every creation here (a WABA, a migration intent, a schedule, a resumed
 //! migration, a generated token) is a `POST` that is never replayed after a
 //! timeout ([`crate::RetryPolicy`]); fetching a client's existing token
@@ -47,7 +54,12 @@
 //! `reference/user/assigned-whatsapp-business-accounts-api`,
 //! `pricing/change-billing-currency`,
 //! `reference/message-history/whatsapp-business-message-history-events-api`,
-//! `embedded-signup/hosted-es` (step 5), and, outside that tree,
+//! `embedded-signup/hosted-es` (step 5); for L11c
+//! `embedded-signup/pre-verified-numbers`,
+//! `reference/business/{add-phone-numbers-api,
+//! whatsapp-business-pre-verified-phone-numbers-api,
+//! whatsapp-business-pre-verified-phone-number-sharing-api}` and
+//! `reference/whatsapp-business-pre-verified-phone-number/*`; and, outside that tree,
 //! `facebook-login/facebook-login-for-business` (§ Get tokens) and the
 //! Marketing API's `ads-commerce/marketing-api/reference/business/system_user_access_tokens`.
 //!
@@ -104,6 +116,72 @@
 //! "WABA customer status ID (phone number)" ([`NewSchedule`]). A schedule
 //! there is Meta's, kept by Meta.
 //!
+//! # Pre-verified phone numbers
+//!
+//! A pool of numbers a Solution Partner or Tech Provider adds to its own
+//! business portfolio and verifies ahead of time, so that Embedded Signup
+//! can offer them to a business customer without a one-time password
+//! (`embedded-signup/pre-verified-numbers`).
+//!
+//! | Step | Call | Meta path |
+//! | --- | --- | --- |
+//! | add a number to the pool | [`Business::add_pre_verified_number`] | `POST /{Business-ID}/add_phone_numbers` |
+//! | list the pool | [`Business::pre_verified_numbers`] (and `_stream`) | `GET /{Business-ID}/preverified_numbers` |
+//! | share one with a Multi-Partner Solution partner | [`Business::share_pre_verified_number`] | `POST /{Business-ID}/share_preverified_numbers` |
+//! | read one | [`PreVerifiedPhoneNumber::get`] | `GET /{Pre-Verified-Phone-Number-ID}` |
+//! | have a code sent | [`PreVerifiedPhoneNumber::request_code`] | `POST …/request_code` |
+//! | verify it | [`PreVerifiedPhoneNumber::verify_code`] | `POST …/verify_code` |
+//! | the partners it is shared with | [`PreVerifiedPhoneNumber::partners`] (and `_stream`) | `GET …/partners` |
+//! | delete it (irreversible) | [`PreVerifiedPhoneNumber::delete`] | `DELETE /{Pre-Verified-Phone-Number-ID}` |
+//!
+//! Then offer the verified ids in Embedded Signup
+//! ([`crate::embedded_signup::LaunchOptions::pre_verified_phone_ids`]), or,
+//! with the phone number screen bypassed, add one to an onboarded WABA
+//! ([`NewPhoneNumber::preverified_id`]). Once a business claims a
+//! number, Meta replaces this temporary object with a business phone
+//! number of **another** id ([`meta_whatsapp_core::ids::PhoneNumberId`]),
+//! found in the signup's session event or in [`Waba::phone_numbers`] by
+//! its `display_phone_number`; register that one within 90 days of
+//! **your** verification, not of the claim.
+//!
+//! Meta's time limits, which nothing here enforces: a number added but not
+//! verified within 30 days leaves the pool; a verified number nobody claims
+//! within 90 days becomes `EXPIRED` and leaves it too; an unclaimed number
+//! can be re-verified only from 45 days before its
+//! `verification_expiry_time`. Keeping track of who claimed which number
+//! is yours.
+//!
+//! Tokens: a user or system user token of the business that owns the pool,
+//! with `business_management` (the guide's requirements). Take it from the
+//! [`Client`] you build.
+//!
+//! ## Ids and codes
+//!
+//! A pre-verified number's id is a
+//! [`PreVerifiedPhoneNumberId`](meta_whatsapp_core::ids::PreVerifiedPhoneNumberId),
+//! numeric (Meta's own error examples: "must be a valid numeric string"):
+//! its checked constructor refuses anything else, and every call here
+//! checks it again as digits before any request, so an id built unchecked
+//! that holds `/` or `..` never reaches a path or a body. The verification
+//! code is a [`VerificationCode`](crate::phone_numbers::VerificationCode),
+//! the same secret type a business phone number's `verify_code` takes:
+//! never in `Debug`, an error, or a URL.
+//!
+//! ## Where Meta's pages disagree (decided here)
+//!
+//! - Request bodies: the guide's examples pass `phone_number`,
+//!   `code_method`, `language`, `code`, `partner_business_id` and
+//!   `preverified_id` as query parameters; the references define a JSON
+//!   request body for each, with no example. This client sends the JSON
+//!   bodies, as [`crate::phone_numbers::PhoneNumber::verify_code`] does:
+//!   it keeps the code (and the phone number) out of URLs, which end up in
+//!   proxy and transport logs.
+//! - `code_method`: the reference's enum also lists `IVR`, which the guide
+//!   never shows; [`CodeMethod`](crate::phone_numbers::CodeMethod) offers
+//!   `SMS` and `VOICE`, both documented by both pages.
+//! - Unsharing (`DELETE …/share_preverified_numbers`) is documented as
+//!   removed ("it returns an error"): not offered.
+//!
 //! # Where Meta's pages disagree
 //!
 //! - Assigned users: the reference describes `user`/`tasks` as a form body,
@@ -139,6 +217,7 @@ mod activity;
 mod billing;
 mod business;
 mod history;
+mod pre_verified;
 mod schedules;
 mod system_users;
 mod types;
@@ -156,6 +235,10 @@ pub use business::{Business, CreatedMessagingCustomerBase, ParentBsuidAccount, W
 pub use history::{
     DeliveryStatus, DeliveryStatusOccurrence, ListMessageHistoryEvents, MessageHistory,
     MessageHistoryEvent, WebhookUpdateState,
+};
+pub use pre_verified::{
+    CreatedPreVerifiedNumber, ListPreVerifiedNumberPartners, ListPreVerifiedNumbers,
+    PreVerifiedNumber, PreVerifiedPhoneNumber,
 };
 pub use schedules::{CampaignSchedule, CreatedSchedule, NewSchedule, ScheduleStatus};
 pub use system_users::{

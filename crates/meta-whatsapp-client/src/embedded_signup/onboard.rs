@@ -121,6 +121,10 @@ const PHONE_PAGE_SIZE: u32 = 100;
 /// `Debug` never shows the code or the PIN.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is an independent option of its own setter, not a state machine"
+)]
 pub struct OnboardingRequest {
     /// The exchangeable code from `FB.login`. `None` in a request built
     /// with [`Self::for_resume`]: [`EmbeddedSignup::resume`] does not use
@@ -155,6 +159,12 @@ pub struct OnboardingRequest {
     /// On by default; see [`Self::coexistence_sync`]. Without effect on any
     /// other onboarding.
     pub coexistence_sync: bool,
+    /// Onboard every WABA the business token was granted, not only the
+    /// claimed one: off by default (`OPEN_QUESTIONS.md` #5); see
+    /// [`Self::every_granted_waba`]. Only
+    /// [`EmbeddedSignup::onboard_wabas`] and
+    /// [`EmbeddedSignup::onboard_wabas_with_approval`] act on it.
+    pub every_granted_waba: bool,
 }
 
 impl OnboardingRequest {
@@ -195,6 +205,7 @@ impl OnboardingRequest {
             currency: None,
             reshare_after_revocation: false,
             coexistence_sync: true,
+            every_granted_waba: false,
         }
     }
 
@@ -297,6 +308,65 @@ impl OnboardingRequest {
         self
     }
 
+    /// Whether [`EmbeddedSignup::onboard_wabas`] (and `_with_approval`)
+    /// onboards every WABA the business token was granted
+    /// (`debug_token`'s `granular_scopes` for `whatsapp_business_management`,
+    /// as `solution-providers/manage-accounts` reads them), each verified,
+    /// approved, stored, subscribed and (in Solution Partner mode) funded
+    /// on its own, and resumable on its own with [`EmbeddedSignup::resume`]:
+    /// `false` by default, which onboards only the claimed WABA (the
+    /// session info's `waba_id`, else the first of `waba_ids`, else the
+    /// newest grant), as [`EmbeddedSignup::onboard`] does
+    /// (`OPEN_QUESTIONS.md` #5).
+    ///
+    /// With it on, every WABA the session info names (`waba_id` and the
+    /// multi-WABA flows' `waba_ids`) must be among the grants, or nothing
+    /// is onboarded; the claimed WABA is onboarded with this request as it
+    /// is, and the others with no number registered and no coexistence
+    /// sync (the PIN and the finish are the claimed number's), each only
+    /// when Meta reports the claimed WABA's owner as its owner too; another
+    /// WABA the vault already holds is left as it is
+    /// ([`WabaOutcome::Held`](super::WabaOutcome::Held)). Refused by
+    /// [`EmbeddedSignup::onboard`], whose result names one WABA, and by
+    /// [`EmbeddedSignup::onboard_hosted`] (Meta sends one `PARTNER_ADDED`
+    /// per WABA); ignored by [`EmbeddedSignup::resume`], which resumes the
+    /// WABA it is given.
+    #[must_use]
+    pub fn every_granted_waba(mut self, enabled: bool) -> Self {
+        self.every_granted_waba = enabled;
+        self
+    }
+
+    /// The request the other WABAs of a signup are onboarded with
+    /// ([`Self::every_granted_waba`]): this one's subscription override and
+    /// credit settings, `waba_id` as its only claim, and nothing that is
+    /// the claimed number's (no registration, PIN or region, no finish, so
+    /// no coexistence sync).
+    pub(super) fn for_other_waba(&self, waba_id: &WabaId) -> Self {
+        Self {
+            code: None,
+            session: SessionInfo {
+                waba_id: Some(waba_id.clone()),
+                ..SessionInfo::default()
+            },
+            finish_kind: None,
+            register: false,
+            pin: None,
+            data_localization_region: None,
+            every_granted_waba: false,
+            ..self.clone()
+        }
+    }
+
+    /// Refuse [`Self::every_granted_waba`] in a call that onboards one
+    /// WABA, rather than drop the others.
+    pub(super) fn refuse_every_granted_waba(&self, reason: &str) -> Result<(), ValidationError> {
+        if self.every_granted_waba {
+            return Err(ValidationError::new("every_granted_waba", reason));
+        }
+        Ok(())
+    }
+
     pub(super) fn validate(&self) -> Result<(), ValidationError> {
         if self.register && self.pin.is_none() {
             return Err(ValidationError::new(
@@ -396,6 +466,44 @@ pub(super) struct Granted<'a> {
     /// (hosted signup: the webhook's `owner_business_id`): the WABA's owner
     /// as Meta reports it must not be another.
     pub(super) owner: Option<&'a BusinessId>,
+    /// Whether `store_token` replaces a record the vault holds for the
+    /// WABA (the code flow's claimed WABA: re-onboarding must), or stores
+    /// only where it holds none ([`TokenVault::store_new`]: hosted signup,
+    /// whose `PARTNER_ADDED` also comes for WABAs other onboardings
+    /// store, and a signup's other grants), failing the step otherwise.
+    pub(super) replaces: bool,
+}
+
+/// One WABA of a signup whose grant `verify_grant` checked: what
+/// [`EmbeddedSignup::onboard_waba`] onboards.
+pub(super) struct GrantedWaba<'a> {
+    /// The signup's token, and the claims verified against it (only the
+    /// phone number and the owner are read here: the WABA is `waba_id`).
+    pub(super) granted: &'a Granted<'a>,
+    /// `debug_token`'s answer on that token.
+    pub(super) debug: &'a TokenDebug,
+    /// The WABA, among the token's grants.
+    pub(super) waba_id: WabaId,
+    /// Its place in the signup.
+    pub(super) role: WabaRole<'a>,
+}
+
+/// The place of a WABA in a signup, which decides how its owner is
+/// checked and how its record is stored.
+pub(super) enum WabaRole<'a> {
+    /// The only WABA onboarded ([`EmbeddedSignup::onboard`],
+    /// [`EmbeddedSignup::onboard_hosted`](super::EmbeddedSignup::onboard_hosted)):
+    /// its owner checked against [`Granted::owner`] when the flow names
+    /// one, its record stored as [`Granted::replaces`] says.
+    Only,
+    /// The primary WABA of [`EmbeddedSignup::onboard_wabas`]: as
+    /// [`Self::Only`], and the owner Meta reports for it, once it is
+    /// verified, is written here: the business the signup is about.
+    Primary(&'a mut Option<BusinessId>),
+    /// Another grant of [`EmbeddedSignup::onboard_wabas`]: Meta must report
+    /// this owner for it (the primary WABA's). Its [`Granted`] does not
+    /// replace a record.
+    Other(&'a BusinessId),
 }
 
 /// What `verify_assets` established with Meta.
@@ -434,7 +542,9 @@ impl EmbeddedSignup {
     /// use [`Self::onboard_with_approval`].
     ///
     /// Input errors are reported before any request, among them a request
-    /// without a code ([`OnboardingRequest::for_resume`]). Every later failure is
+    /// without a code ([`OnboardingRequest::for_resume`]) and one with
+    /// [`OnboardingRequest::every_granted_waba`] on (this onboards one WABA:
+    /// use [`Self::onboard_wabas`]). Every later failure is
     /// an [`Error::Step`] naming the step; see the [module docs](super) for
     /// what each step does and which can be repeated. **Do not retry a
     /// failed `onboard`**: the code is spent. After `store_token` succeeded,
@@ -535,13 +645,10 @@ impl EmbeddedSignup {
         Fut: Future<Output = Result<()>>,
     {
         request.validate()?;
-        let Some(code) = request.code.as_ref() else {
-            return Err(ValidationError::new(
-                "code",
-                "required to onboard (the first step exchanges it); a request built with OnboardingRequest::for_resume is for EmbeddedSignup::resume",
-            )
-            .into());
-        };
+        request.refuse_every_granted_waba(
+            "EmbeddedSignup::onboard reports one WABA: onboard every granted WABA with EmbeddedSignup::onboard_wabas",
+        )?;
+        let code = required_code(request)?;
         let plan = self.onboarding_plan(request, approve.is_some())?;
         let mut done = Vec::with_capacity(9);
 
@@ -556,6 +663,7 @@ impl EmbeddedSignup {
             expires_in: token.expires_in,
             session: &request.session,
             owner: None,
+            replaces: true,
         };
         self.onboard_granted(granted, request, vault, plan, approve, done)
             .await
@@ -598,30 +706,66 @@ impl EmbeddedSignup {
         F: FnOnce(VerifiedOnboarding) -> Fut,
         Fut: Future<Output = Result<()>>,
     {
-        let Granted {
-            token,
-            expires_in,
-            session,
-            owner,
-        } = granted;
         let debug = self
-            .debug_token(&token)
+            .debug_token(&granted.token)
             .await
             .map_err(|e| e.in_step(DEBUG_TOKEN))?;
         done.push(DEBUG_TOKEN);
+        let waba_id = verify_grant(&debug, granted.session.primary_waba_id(), &self.app.app_id)
+            .map_err(|e| Error::from(e).in_step(VERIFY_ASSETS))?;
+        let waba = GrantedWaba {
+            granted: &granted,
+            debug: &debug,
+            waba_id,
+            role: WabaRole::Only,
+        };
+        self.onboard_waba(waba, request, vault, plan.as_ref(), approve, &mut done)
+            .await
+    }
 
+    /// One WABA of a signup, once its grant is checked: `verify_assets`
+    /// (its owner, its numbers), `approve`, `store_token` and the tail.
+    /// `done` holds the steps that ran, for this WABA, when it fails as
+    /// when it succeeds.
+    pub(super) async fn onboard_waba<F, Fut>(
+        &self,
+        waba: GrantedWaba<'_>,
+        request: &OnboardingRequest,
+        vault: &TokenVault,
+        plan: Option<&CreditPlan<'_>>,
+        approve: Option<F>,
+        done: &mut Vec<&'static str>,
+    ) -> Result<Onboarded>
+    where
+        F: FnOnce(VerifiedOnboarding) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        let GrantedWaba {
+            granted,
+            debug,
+            waba_id,
+            role,
+        } = waba;
+        let token = &granted.token;
         let business = self.client.with_token(token.clone());
+        let owner = match (&role, granted.owner) {
+            (WabaRole::Other(signup), _) => OwnerCheck::Exactly(signup),
+            (_, Some(expected)) => OwnerCheck::IfReported(expected),
+            (_, None) => OwnerCheck::Any,
+        };
         let assets = verify_assets(
             &business,
-            &debug,
-            &self.app.app_id,
-            session,
+            waba_id,
+            granted.session.phone_number_id.as_ref(),
             owner,
             request.register || request.is_coexistence(),
         )
         .await
         .map_err(|e| e.in_step(VERIFY_ASSETS))?;
         done.push(VERIFY_ASSETS);
+        if let WabaRole::Primary(seen) = role {
+            seen.clone_from(&assets.business_id);
+        }
 
         // The token record stored below: an approval is recorded for it.
         let created_at = vault.now();
@@ -632,14 +776,15 @@ impl EmbeddedSignup {
                 phone_number_id: assets.phone_number_id.clone(),
                 phone_number_ids: assets.phone_number_ids.clone(),
             };
-            self.approve(plan.as_ref(), vault, verified, approve, Some(created_at))
+            self.approve(plan, vault, verified, approve, Some(created_at))
                 .await
                 .map_err(|e| e.in_step(APPROVE))?;
             done.push(APPROVE);
         }
 
         let expires_at = debug.expires_at_time().or_else(|| {
-            expires_in
+            granted
+                .expires_in
                 .and_then(|s| i64::try_from(s).ok())
                 .map(|s| vault.now() + time::Duration::seconds(s))
         });
@@ -648,10 +793,26 @@ impl EmbeddedSignup {
         stored.phone_number_ids.clone_from(&assets.phone_number_ids);
         stored.expires_at = expires_at;
         stored.created_at = Some(created_at);
-        vault
-            .store(&stored)
+        if granted.replaces {
+            vault
+                .store(&stored)
+                .await
+                .map_err(|e| e.in_step(STORE_TOKEN))?;
+        } else if vault
+            .store_new(&stored)
             .await
-            .map_err(|e| e.in_step(STORE_TOKEN))?;
+            .map_err(|e| e.in_step(STORE_TOKEN))?
+            .is_none()
+        {
+            // Held since the caller looked (another signup, a hosted
+            // `PARTNER_ADDED`): a WABA this onboarding did not claim, or
+            // a hosted one, never replaces it.
+            return Err(Error::from(ValidationError::new(
+                "waba_id",
+                "another onboarding stored this WABA while this one ran: its record is left as it is, nothing was stored by this one, and what your approval reserved for it is yours to release",
+            ))
+            .in_step(STORE_TOKEN));
+        }
         done.push(STORE_TOKEN);
 
         let tail = Tail {
@@ -659,13 +820,13 @@ impl EmbeddedSignup {
             business: &business,
             vault,
             request,
-            plan: plan.as_ref(),
+            plan,
         };
         let TailDone {
             allocation_config_id,
             coexistence_sync,
         } = tail
-            .run(&stored, assets.phone_number_id.as_ref(), &mut done)
+            .run(&stored, assets.phone_number_id.as_ref(), done)
             .await?;
 
         Ok(Onboarded {
@@ -674,11 +835,11 @@ impl EmbeddedSignup {
             phone_number_ids: assets.phone_number_ids,
             business_id: assets.business_id,
             finish_kind: request.finish_kind,
-            token,
+            token: token.clone(),
             token_expires_at: expires_at,
             allocation_config_id,
             coexistence_sync,
-            steps_completed: done,
+            steps_completed: done.clone(),
         })
     }
 
@@ -970,35 +1131,48 @@ async fn register(
     Ok(())
 }
 
-/// Establish with Meta, using the business token, which assets this
-/// onboarding is about. Nothing from the browser survives unchecked.
+/// Establish with Meta, using the business token, what this onboarding of
+/// `waba_id` (a grant `verify_grant` checked) is about: its owner and its
+/// numbers. Nothing from the browser survives unchecked.
 ///
-/// `owner` is the business the token was asked for (hosted signup): when
-/// Meta reports the WABA's owner, it must be that one. When Meta reports
-/// none, nothing is stored for it, as in the code flow.
+/// `owner` says which owner Meta must report for the WABA (see
+/// [`OwnerCheck`]).
 async fn verify_assets(
     business: &Client,
-    debug: &TokenDebug,
-    app_id: &AppId,
-    session: &SessionInfo,
-    owner: Option<&BusinessId>,
+    waba_id: WabaId,
+    claimed_phone: Option<&PhoneNumberId>,
+    owner: OwnerCheck<'_>,
     need_phone: bool,
 ) -> Result<VerifiedAssets> {
-    let waba_id = verify_grant(debug, session.primary_waba_id(), app_id)?;
     let waba = business.waba(waba_id.clone());
     // Privately decoded: the answer carries the business's name.
     let business_id = waba.owner_business().await?.and_then(|b| b.id);
-    if let (Some(expected), Some(reported)) = (owner, &business_id)
-        && expected != reported
-    {
-        return Err(ValidationError::new(
-            "owner_business_id",
-            "Meta reports another owner for the WABA than the business the token was fetched for",
-        )
-        .into());
+    match owner {
+        OwnerCheck::Any => {}
+        OwnerCheck::IfReported(expected) => {
+            if business_id
+                .as_ref()
+                .is_some_and(|reported| reported != expected)
+            {
+                return Err(ValidationError::new(
+                    "owner_business_id",
+                    "Meta reports another owner for the WABA than the business the token was fetched for",
+                )
+                .into());
+            }
+        }
+        OwnerCheck::Exactly(expected) => {
+            if business_id.as_ref() != Some(expected) {
+                return Err(ValidationError::new(
+                    "owner_business_id",
+                    "Meta reports another owner, or none, for this WABA than for the signup's claimed WABA: a grant that is not the same business's is not onboarded",
+                )
+                .into());
+            }
+        }
     }
     let mut numbers = waba_phone_numbers(&waba).await?;
-    let phone_number_id = match &session.phone_number_id {
+    let phone_number_id = match claimed_phone {
         Some(claimed) => {
             let Some(at) = numbers.iter().position(|n| n == claimed) else {
                 return Err(ValidationError::new(
@@ -1022,10 +1196,25 @@ async fn verify_assets(
     })
 }
 
+/// Which owner `verify_assets` requires Meta to report for a WABA.
+#[derive(Clone, Copy)]
+enum OwnerCheck<'a> {
+    /// The code flow's WABA: whichever Meta reports (or none, then none is
+    /// stored).
+    Any,
+    /// The business the token was asked for (hosted signup): when Meta
+    /// reports the WABA's owner, it must be that one. When Meta reports
+    /// none, nothing is stored for it, as in the code flow.
+    IfReported(&'a BusinessId),
+    /// Another grant of a several-WABA signup: Meta must report this owner
+    /// (the primary WABA's), and an unreported one is refused.
+    Exactly(&'a BusinessId),
+}
+
 /// Check that `debug` describes a valid token of our app that manages
 /// `claimed` (or pick the newest WABA it manages when nothing is claimed).
 /// Fails closed on anything missing.
-fn verify_grant(
+pub(super) fn verify_grant(
     debug: &TokenDebug,
     claimed: Option<&WabaId>,
     app_id: &AppId,
@@ -1099,6 +1288,18 @@ async fn waba_phone_numbers(waba: &Waba) -> Result<Vec<PhoneNumberId>> {
         }
     }
     Ok(ids)
+}
+
+/// The code of a request that starts with the code exchange, refused
+/// before any request when it has none.
+pub(super) fn required_code(request: &OnboardingRequest) -> Result<&SignupCode> {
+    request.code.as_ref().ok_or_else(|| {
+        ValidationError::new(
+            "code",
+            "required to onboard (the first step exchanges it); a request built with OnboardingRequest::for_resume is for EmbeddedSignup::resume",
+        )
+        .into()
+    })
 }
 
 /// The number [`EmbeddedSignup::resume`] registers, checked against what

@@ -414,8 +414,9 @@ Rules for every endpoint module:
    signups' `default_messaging_customer_base_id`; `OnboardingRequested::request_id`;
    the calling settings' `app_id`; `SubscribedAppData::id` and
    `AssignedUser::id`; `CommerceSettings::id`; `LibraryTemplate::id`; the
-   template's `ad_*_id`s; `preverified_id`; the phone number
-   `request_id`; the ids of an Embedded Signup session event
+   template's `ad_*_id`s; the phone number `request_id` (a new
+   number's `preverified_id` is a `PreVerifiedPhoneNumberId` since
+   roadmap L11c); the ids of an Embedded Signup session event
    (`ad_account_ids`, `page_ids`, `dataset_ids`, `catalog_ids`,
    `instagram_account_ids`, `session_id`), the launch's `solution_id` and
    the token's `user_id`; and `HealthEntity::id`, on purpose: a health
@@ -690,7 +691,21 @@ system token's `appsecret_proof` in a form body) in place of
 `exchange_code`, then the same steps, writing the same vault record; the
 WABA's owner as Meta reports it must be the webhook's, and a WABA the vault
 already holds is refused before any request (`PARTNER_ADDED` also comes for
-the code flow's onboardings). Each failure is
+the code flow's onboardings), and one stored after that read is not replaced
+(`store_token` stores only where none is, `put_if_absent`). Several WABAs in one signup (roadmap L11b,
+`OPEN_QUESTIONS.md` #5): with `OnboardingRequest::every_granted_waba(true)`
+(off by default), `onboard_wabas(&request, &vault) → WabasOnboarded` (and
+`onboard_wabas_with_approval`, its approval called once per WABA) exchanges
+the code and inspects the token once, refuses a signup whose session info
+names a WABA the token was not granted, then runs `verify_assets` to the end
+of the tail for each granted WABA on its own (its own vault record, phone
+index, approval, subscription and credit line), the claimed one first with
+the request as it is, the others registering and syncing nothing, refused
+unless Meta reports the claimed WABA's owner as theirs, left alone when the
+vault holds them and stored only where it still holds none (`put_if_absent`);
+a WABA that fails is reported in its
+`WabaOutcome`, the next one runs, and each is resumed on its own. `onboard`
+and `onboard_hosted` refuse the option. Nothing new is stored. Each failure is
 `Error::in_step("exchange_code" | "debug_token" | "verify_assets" |
 "approve" | "store_token" | "subscribe_app" | "assign_system_user" |
 "share_credit_line" | "register_phone")`; `offboard` adds
