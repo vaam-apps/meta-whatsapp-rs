@@ -482,21 +482,26 @@ notification queue on top must be idempotent itself: tag each message with
     store ranks rows on the existing `messages_conversation_idx` and
     takes the existing purge lock.
 - **Media conversion** (feature `ffmpeg`, off by default): Meta converts
-  nothing, so a recording becomes a voice message's Ogg Opus, and an
+  nothing, so a recording becomes a voice message's Ogg Opus, an
   image a sticker's static WebP or a JPEG or PNG under the 5 MB limit,
-  on your side. `meta_whatsapp_adapters::media::FfmpegConverter` runs an
-  `ffmpeg` you install on the host (built with libopus, and libwebp for
-  stickers; the library links none, and the service's image carries
-  none, so its licence is that of the build you choose). Point
+  and a GIF an animated sticker's WebP, on your side.
+  `meta_whatsapp_adapters::media::FfmpegConverter` runs an `ffmpeg` you
+  install on the host (built with libopus, and libwebp for stickers,
+  which gives it the `libwebp` and `libwebp_anim` encoders; the library
+  links none, and the service's image carries none, so its licence is
+  that of the build you choose). Point
   `with_program` at an absolute path, call `check_for` with the formats
   you convert to (`check()` for voice alone) at startup so a missing
   binary or encoder fails there (`ConversionError::BinaryMissing`,
   `EncoderMissing`) rather than at the first upload, and bound how many
   conversions run at once (each is a process on about a CPU core for up
-  to its timeout, an image's attempts one after another; the converter
+  to its timeout, an image's or an animation's attempts one after
+  another; the converter
   queues nothing). It caps each allocation in `ffmpeg` (16 MiB for
-  audio, 256 MiB for an image, which may have up to 32 Mi pixels) but
-  not the process's total memory: give it a cgroup, or point
+  audio, 256 MiB for an image, which may have up to 32 Mi pixels, and
+  for an animation, whose whole file is one packet: a GIF of up to 2 Mi
+  pixels, 500 frames (100 of 512 × 512 or larger) and 10 s, which took
+  some 170 MB at worst) but not the process's total memory: give it a cgroup, or point
   `with_program` at a wrapper script that sets `ulimit -v` and then
   `exec`s `ffmpeg` (`exec`, so that a timeout kills `ffmpeg` itself).
   Before `ffmpeg` reads an image, the converter takes out what `ffmpeg`
@@ -513,9 +518,11 @@ notification queue on top must be idempotent itself: tag each message with
   `LD_LIBRARY_PATH` sets it in such a wrapper.
   Its input and run time are bounded (64 MiB and 60 s by default; a
   sticker from a large photo spends most of it on a first attempt at the
-  photo's own size, about 18 s for 24 megapixels on 4 cores, so do not
+  photo's own size, about 18 s for 24 megapixels on 4 cores, and an
+  animated sticker re-encodes every frame at each attempt, so do not
   lower it for stickers), the result to its format's limit (16 MiB for
-  voice, 100 000 bytes for a sticker, 5 000 000 for an image), and
+  voice, 100 000 bytes for a sticker, 500 000 for an animated one,
+  5 000 000 for an image), and
   `ffmpeg`'s own diagnostics are
   never logged: they name files and URLs. Its failures are
   `Error::Conversion` (retry only `Timeout`; none was sent to Meta).

@@ -178,8 +178,9 @@ Docker for `just test-live`.
 ## ffmpeg (media conversion tests)
 
 The media conversion tests (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`,
-roadmap L19 and L19b) run `adapters::media::FfmpegConverter` against a real
-`ffmpeg` with libopus and libwebp (Ubuntu's package has both). Neither the dev container nor the service's image
+roadmap L19, L19b and L19c) run `adapters::media::FfmpegConverter` against a real
+`ffmpeg` with libopus and libwebp, whose encoders `libwebp` and
+`libwebp_anim` the sticker tests use (Ubuntu's package has both). Neither the dev container nor the service's image
 carries one, on purpose (its licence is the deployer's choice): without
 one the tests print why and skip. CI installs `ffmpeg` on its runner
 (`.github/workflows/ci.yml`, before `just ci`) and sets
