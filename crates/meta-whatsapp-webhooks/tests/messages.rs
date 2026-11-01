@@ -883,14 +883,11 @@ fn a_payment_method_reply_is_typed() {
 /// event and the `payment_method` reply as a `message_received` one,
 /// whatever they held; a typed parse that failed would make them
 /// `unknown` (operator-only in the service). The page's example, edited:
-/// each shape that does not parse typed costs only its own object.
-/// Decisive: `serde_ext::lenient_option` on `Status::payment` and on the
-/// payment's amount, method and error; the `payment_method` arm of
-/// `InteractiveReply`'s `Deserialize`.
+/// each shape that does not parse typed costs only its own object (the
+/// reply: the next test). Decisive: `serde_ext::lenient_option` on
+/// `Status::payment` and on the payment's amount, method and error.
 #[test]
 fn a_payment_that_does_not_parse_typed_never_fails_its_change() {
-    use meta_whatsapp_webhooks::fields::PaymentMethodKind;
-
     let name =
         "pages/payments.payments-in.pg__step_4_receive_webhook_about_transaction_status.json";
     let page: serde_json::Value = serde_json::from_slice(&common::fixture_bytes(name)).unwrap();
@@ -957,8 +954,17 @@ fn a_payment_that_does_not_parse_typed_never_fails_its_change() {
     });
     let p = status.payment.as_deref().unwrap();
     assert!(p.refunds.is_empty() && p.notes.is_empty(), "{p:?}");
+}
 
-    // The reply: still a message, its reply unknown.
+/// The `payment_method` reply of `payments/payments-br/one-click-payments`
+/// that does not parse typed is still a `message_received` event, its
+/// reply unknown (what it was before this crate typed it); a method this
+/// crate does not name is still typed. Decisive: the `payment_method` arm
+/// of `InteractiveReply`'s `Deserialize`.
+#[test]
+fn a_payment_method_reply_that_does_not_parse_typed_stays_a_message() {
+    use meta_whatsapp_webhooks::fields::PaymentMethodKind;
+
     let name =
         "pages/payments.payments-br.one-click-payments__webhook_notification_payload_example.json";
     let page: serde_json::Value = serde_json::from_slice(&common::fixture_bytes(name)).unwrap();
