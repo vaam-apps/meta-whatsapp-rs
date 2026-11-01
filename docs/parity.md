@@ -66,7 +66,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 120 | 11 | 0 | 1 |
+| Library | 121 | 10 | 0 | 1 |
 | Service | 42 | 22 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -74,7 +74,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 11 partial or gap rows is cited by a
+- Each of the library's 10 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 89 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, P 2 (payments).
