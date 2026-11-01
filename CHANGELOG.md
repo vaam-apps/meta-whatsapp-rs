@@ -245,6 +245,24 @@ stored data, the owner's).
   P1c's).
   None of the new fields is a secret: `Debug` shows them (the module
   docs say why, and what not to put in a `credential_id`).
+- **MongoDB in the dev container and CI** (roadmap S8, for S9, S17 and
+  S18): a `mongodb` service in `compose.test.yaml` (`127.0.0.1:57017`) and
+  a `mongodb` sidecar in the devcontainer, both `mongo:7.0.45-jammy` run
+  as a single-node replica set (`--replSet rs0`; multi-document
+  transactions need a replica set), initiated by its healthcheck on the
+  first run and healthy once primary. `META_WHATSAPP_RS_TEST_MONGODB_URL`
+  (with `directConnection=true`: the set's member address is the
+  container's own `localhost`) is exported by `just test-live` and set in
+  the devcontainer, whose image gains `mongosh` for `just
+  test-live-clean`, which now drops `wa_test_*` databases on MongoDB too.
+  The smoke test, `live_mongodb_replica_set_commits_a_multi_document_transaction`
+  in meta-whatsapp-adapters' `tests/live_mongodb.rs`, commits a
+  transaction across two collections and aborts another; under
+  `META_WHATSAPP_RS_REQUIRE_LIVE=1` a missing URL fails it. The `mongodb`
+  driver (Apache-2.0) is a dev-dependency of meta-whatsapp-adapters only,
+  without default features and with `rustls-tls-aws-lc` (an explicit
+  aws-lc-rs provider, not `ring`): no library build links it. The server
+  image is under the SSPL and only runs as a test service.
 - **The coexistence sync inside onboarding**
   (`meta_whatsapp_client::embedded_signup`, roadmap L11d, parity rows
   124 and 69; OPEN_QUESTIONS #7; the service's side is M3b). After a
