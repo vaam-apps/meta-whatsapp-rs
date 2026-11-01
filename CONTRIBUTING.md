@@ -59,6 +59,10 @@ pages; copy their example payloads into tests.
 - Errors: `.claude/skills/error-tree`. Branch on `ErrorKind`, never on
   message text.
 - Typst templates: `.claude/skills/typst-templates`.
+- Looking up this repository's own docs and skills from a coding agent:
+  the docs MCP server, `just docs-mcp`
+  ([docs/dev-environment.md](docs/dev-environment.md#the-docs-mcp-server)).
+  It serves our docs, never `.meta-docs/`.
 - Tests use `meta_whatsapp_core::testing::ScriptedTransport` and assert method, path,
   query, auth header, exact JSON body and `remaining() == 0`.
 - Secrets never reach `Debug`, logs, errors or logged URLs.
