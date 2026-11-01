@@ -18,20 +18,22 @@
 //! **The insert checks the routing again**, as the port requires
 //! ([`RouteGuard`]). An insert routed to a tenant keeps that tenant only
 //! while the binding it was routed by ([`GuardedBinding`]: the number,
-//! under the WABA it was bound under; else the WABA) still names it and,
-//! for an event Meta dated ([`RouteGuard::not_after`]), that WABA's
-//! binding began in a second before the event's (`attached_at <
-//! to_timestamp(n)`, `n` the event's Unix second). It reads the binding
-//! under a `FOR KEY SHARE` lock that holds off an unbinding (and so the
-//! tenant's deletion) until the insert commits. So an event routed just
-//! before its WABA moved to another tenant, or before its tenant was
-//! unbound, deleted, created again under the same id and bound again, is
-//! recorded operator-only, never shown to the new tenant; so is a row with
-//! a tenant and no guard. An undated event (an error, a history chunk, a
-//! group update without a date) has only the binding's tenant to go by: it
-//! is the current holder's, so after a WABA moved to another tenant the
-//! previous holder's undated events Meta redelivers reach the new holder,
-//! as in that last race the new tenant (an open gap until roadmap S2b).
+//! under the WABA it was bound under; else the WABA) still names it and
+//! that WABA's binding, as it is then, is one the event may reach
+//! ([`RouteGuard::admits`], as `binding_admits` writes it in SQL): for an
+//! event Meta dated ([`RouteGuard::not_after`]), the binding began by its
+//! second (`attached_at < to_timestamp(n + 1)`, `n` the event's Unix
+//! second), or, when the WABA had a previous tenant
+//! (`previous_tenant_unbound_at` set: migration 4), in a second before it
+//! by the skew margin (`attached_at < to_timestamp(n - margin)`); for an
+//! undated one after a move, the previous tenant left by the guard's
+//! `undated_moved_by` (roadmap S2b). It reads the binding under a `FOR KEY
+//! SHARE` lock that holds off an unbinding (and so the tenant's deletion)
+//! until the insert commits. So an event routed just before its WABA moved
+//! to another tenant, or before its tenant was unbound, deleted, created
+//! again under the same id and bound again (a move too: the tombstone
+//! forgets a deleted tenant), is recorded operator-only, never shown to
+//! the new tenant; so is a row with a tenant and no guard.
 //!
 //! **Keyless events hold their dedup key for an hour.** A row with a
 //! `dedup_until` gives its key up to a later occurrence received at or
@@ -139,6 +141,29 @@ fn i64_of(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
 }
 
+/// The insert's [`RouteGuard::admits`], over the binding row `alias` of
+/// `wa_server_wabas`: with `$9` and `$13` the guard's
+/// [`DatedBounds`](meta_whatsapp_server_core::outbox::DatedBounds)
+/// (`first_onboarding`, `after_move`: NULL for an undated event) and `$14`
+/// its `undated_moved_by`. A dated event's binding began before `$9`'s
+/// second when the WABA had no previous tenant, before `$13`'s when it had
+/// one; an undated event reaches a binding with a previous tenant only once
+/// that tenant left by `$14` (always without `$14`). The rule is the
+/// core's; this picks between the bounds it computed, by the row.
+fn binding_admits(alias: &str) -> String {
+    format!(
+        "(CASE \
+           WHEN $9::bigint IS NULL THEN ( \
+             $14::timestamptz IS NULL \
+             OR {alias}.previous_tenant_unbound_at IS NULL \
+             OR {alias}.previous_tenant_unbound_at <= $14::timestamptz) \
+           WHEN {alias}.previous_tenant_unbound_at IS NULL \
+             THEN {alias}.attached_at < to_timestamp($9::bigint) \
+           ELSE {alias}.attached_at < to_timestamp($13::bigint) \
+         END)"
+    )
+}
+
 #[async_trait]
 impl Outbox for PgEventStore {
     async fn insert(&self, event: &NewEvent) -> StoreResult<Option<i64>> {
@@ -181,20 +206,24 @@ impl Outbox for PgEventStore {
             Some(GuardedBinding::Waba(waba_id)) => (None, Some(waba_id.as_str())),
             None => (None, None),
         };
-        let not_after = guard
-            .and_then(|guard: &RouteGuard| guard.not_after)
-            .map(OffsetDateTime::unix_timestamp);
+        // The guard's rules, as the core computes them (`RouteGuard`): for a
+        // dated event, the second its binding must have begun before,
+        // without a previous tenant ($9) and with one ($13); for an undated
+        // one, the instant a previous tenant must have left by ($14, none
+        // under `CurrentHolder`).
+        let bounds = guard.and_then(RouteGuard::dated_bounds);
+        let undated_moved_by = guard.and_then(|guard| guard.after_move.undated_moved_by);
         // 1. The tenant, while the binding the event was routed by (its
         //    number, under the WABA it was bound under; else its WABA)
-        //    still names it, and, for an event Meta dated, while that
-        //    WABA's binding began in a second before the event's: the
-        //    port's `RouteGuard`. Locked, so an unbinding waits for this
-        //    commit (a number's WABA cannot go while the number is locked:
-        //    deleting it deletes the number).
+        //    still names it, and that WABA's binding is one the event may
+        //    reach: the port's `RouteGuard`, applied by `binding_admits`.
+        //    Locked, so an unbinding waits for this commit (a number's WABA
+        //    cannot go while the number is locked: deleting it deletes the
+        //    number).
         // 2. Nothing when the dedup key is stored (no sequence drawn).
         // 3. The stream's next sequence: its row stays locked until the
         //    commit, so the stream's inserts commit in order.
-        let inserted: Option<(i64, Option<String>)> = sqlx::query_as(
+        let sql = format!(
             "WITH owner AS ( \
                SELECT CASE \
                  WHEN $3::text IS NULL THEN NULL \
@@ -204,13 +233,11 @@ impl Outbox for PgEventStore {
                      AND EXISTS ( \
                        SELECT 1 FROM wa_server_wabas nw \
                        WHERE nw.waba_id = n.waba_id AND nw.tenant_id = $3 \
-                         AND ($9::bigint IS NULL \
-                              OR nw.attached_at < to_timestamp($9::bigint))) \
+                         AND {number_admits}) \
                    FOR KEY SHARE) \
                  ELSE ( \
                    SELECT w.tenant_id FROM wa_server_wabas w \
-                   WHERE w.waba_id = $12 AND w.tenant_id = $3 \
-                     AND ($9::bigint IS NULL OR w.attached_at < to_timestamp($9::bigint)) \
+                   WHERE w.waba_id = $12 AND w.tenant_id = $3 AND {waba_admits} \
                    FOR KEY SHARE) \
                END AS tenant_id \
              ), fresh AS ( \
@@ -229,22 +256,27 @@ impl Outbox for PgEventStore {
              SELECT fresh.tenant_id, drawn.last_sequence, $1, $2, $10, $4, $5, $6, $7::json, $8 \
              FROM fresh, drawn \
              ON CONFLICT (dedup_key) DO NOTHING RETURNING sequence, tenant_id",
-        )
-        .bind(&event.id)
-        .bind(event.dedup_key.as_deref())
-        .bind(guarded)
-        .bind(event.phone_number_id.as_ref().map(PhoneNumberId::as_str))
-        .bind(event.waba_id.as_ref().map(WabaId::as_str))
-        .bind(&event.event_type)
-        .bind(&event.data)
-        .bind(data_bytes)
-        .bind(not_after)
-        .bind(event.dedup_window.map(|window| window.until))
-        .bind(guard_number)
-        .bind(guard_waba)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(busy_or_backend)?;
+            number_admits = binding_admits("nw"),
+            waba_admits = binding_admits("w"),
+        );
+        let inserted: Option<(i64, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(&event.id)
+            .bind(event.dedup_key.as_deref())
+            .bind(guarded)
+            .bind(event.phone_number_id.as_ref().map(PhoneNumberId::as_str))
+            .bind(event.waba_id.as_ref().map(WabaId::as_str))
+            .bind(&event.event_type)
+            .bind(&event.data)
+            .bind(data_bytes)
+            .bind(bounds.map(|b| b.first_onboarding))
+            .bind(event.dedup_window.map(|window| window.until))
+            .bind(guard_number)
+            .bind(guard_waba)
+            .bind(bounds.map(|b| b.after_move))
+            .bind(undated_moved_by)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(busy_or_backend)?;
         tx.commit().await.map_err(backend)?;
         let Some((sequence, tenant)) = inserted else {
             return Ok(None);

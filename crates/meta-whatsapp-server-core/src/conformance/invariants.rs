@@ -19,7 +19,7 @@ use meta_whatsapp_rs::core::store::{Expiry, StoreKey};
 use super::outbox::{bind, query, row, waba_of};
 use crate::backend::Backend;
 use crate::model::{BindOutcome, DeleteTenantOutcome, TenantId};
-use crate::outbox::{GuardedBinding, NewEvent, RouteGuard};
+use crate::outbox::{AfterMove, GuardedBinding, NewEvent, RouteGuard};
 
 fn tenant(id: &str) -> TenantId {
     TenantId::parse(id).unwrap()
@@ -107,6 +107,7 @@ async fn every_other_accessor(backend: &dyn Backend, tenant: &TenantId) {
         route_guard: Some(RouteGuard {
             binding: GuardedBinding::Waba(waba.clone()),
             not_after: None,
+            after_move: AfterMove::default(),
         }),
         phone_number_id: None,
         waba_id: Some(waba),
@@ -252,6 +253,7 @@ pub async fn the_route_guard_is_checked_with_the_insert(backend: &dyn Backend) {
                 waba_id: WabaId::new(waba_of("31")).unwrap(),
             },
             not_after: Some(now + Span::HOUR),
+            after_move: AfterMove::default(),
         }),
         ..row(Some("suite-g"), "message_received", "31", None)
     };
@@ -259,6 +261,7 @@ pub async fn the_route_guard_is_checked_with_the_insert(backend: &dyn Backend) {
         route_guard: Some(RouteGuard {
             binding: GuardedBinding::Waba(WabaId::new(waba_of("31")).unwrap()),
             not_after: Some(now + Span::HOUR),
+            after_move: AfterMove::default(),
         }),
         ..row(Some("suite-g"), "template_status_updated", "31", None)
     };
@@ -268,6 +271,7 @@ pub async fn the_route_guard_is_checked_with_the_insert(backend: &dyn Backend) {
         route_guard: Some(RouteGuard {
             binding: GuardedBinding::Waba(WabaId::new(waba_of("31")).unwrap()),
             not_after: Some(now - Span::HOUR),
+            after_move: AfterMove::default(),
         }),
         ..row(Some("suite-g"), "template_status_updated", "31", None)
     };
@@ -280,6 +284,7 @@ pub async fn the_route_guard_is_checked_with_the_insert(backend: &dyn Backend) {
                 waba_id: WabaId::new(waba_of("32")).unwrap(),
             },
             not_after: None,
+            after_move: AfterMove::default(),
         }),
         ..row(Some("suite-g"), "message_received", "31", None)
     };
@@ -320,6 +325,7 @@ pub async fn the_route_guard_is_checked_with_the_insert(backend: &dyn Backend) {
         route_guard: Some(RouteGuard {
             binding: GuardedBinding::Waba(waba.clone()),
             not_after: None,
+            after_move: AfterMove::default(),
         }),
         ..row(Some("suite-g"), "template_status_updated", "31", None)
     };
@@ -360,6 +366,7 @@ pub async fn a_binding_begun_after_the_event_fails_the_number_guard(backend: &dy
                 waba_id: WabaId::new(waba_of("35")).unwrap(),
             },
             not_after: Some(not_after),
+            after_move: AfterMove::default(),
         }),
         ..row(Some("suite-n"), "message_received", "35", None)
     };
@@ -380,63 +387,293 @@ pub async fn a_binding_begun_after_the_event_fails_the_number_guard(backend: &dy
     assert_eq!(ids, [kept.id], "a number's binding begun after the event");
 }
 
-/// Roadmap S2, the security review's L3, on every backend: a row keeps its
-/// tenant only when the guarded WABA's binding began in a second before
-/// the event's. Dated in the binding's own second (its first instant, and
-/// its last millisecond), through a number's guard and through the
-/// WABA's: operator-only; dated the next second: the tenant's. Meta's
-/// dates are whole seconds, so an event of the binding's own second may be
-/// a previous holder's. Decisive: the strict comparison in each backend's
-/// insert, in each branch (memory: `began_by`; Postgres: `attached_at <
-/// to_timestamp(n)`).
-pub async fn a_binding_of_the_events_own_second_fails_the_guard(backend: &dyn Backend) {
-    use time::{Duration as Span, OffsetDateTime};
-    let outbox = backend.outbox();
-    let store = outbox.as_ref();
-    let records = backend.records();
-    let tenants = records.as_ref();
-    bind(records.as_ref(), "suite-e", "38").await;
-    let waba = WabaId::new(waba_of("38")).unwrap();
-    let began = tenants.waba(&waba).await.unwrap().unwrap().attached_at;
-    let second = OffsetDateTime::from_unix_timestamp(began.unix_timestamp()).unwrap();
-    let guarded = |by_number: bool, not_after: OffsetDateTime| NewEvent {
-        route_guard: Some(RouteGuard {
-            binding: if by_number {
-                GuardedBinding::Number {
-                    phone_number_id: PhoneNumberId::new("38").unwrap(),
-                    waba_id: waba.clone(),
-                }
-            } else {
-                GuardedBinding::Waba(waba.clone())
-            },
-            not_after: Some(not_after),
-        }),
-        ..row(Some("suite-e"), "message_received", "38", None)
-    };
-    let mut kept = Vec::new();
-    for by_number in [true, false] {
-        for same_second in [second, second + Span::milliseconds(999)] {
-            store
-                .insert(&guarded(by_number, same_second))
-                .await
-                .unwrap()
-                .unwrap();
-        }
-        let next_second = guarded(by_number, second + Span::SECOND);
-        store.insert(&next_second).await.unwrap().unwrap();
-        kept.push(next_second.id);
-    }
-    let ids: Vec<String> = store
-        .page(&query("suite-e", None, 10))
+/// Bind `pn`'s WABA ([`waba_of`]) to `from`, unbind it, and bind it to
+/// `to` (both created when missing): a binding of `to`'s whose WABA had a
+/// previous tenant (roadmap S2b). Its `previous_tenant_unbound_at`, which
+/// the store read from the tombstone the unbind left.
+async fn moved(
+    records: &dyn crate::store::RecordStore,
+    from: &str,
+    to: &str,
+    pn: &str,
+) -> time::OffsetDateTime {
+    bind(records, from, pn).await;
+    let waba = WabaId::new(waba_of(pn)).unwrap();
+    assert!(records.unbind_waba(&waba).await.unwrap(), "{pn}: unbound");
+    bind(records, to, pn).await;
+    let binding = records.waba(&waba).await.unwrap().unwrap();
+    assert_eq!(binding.tenant_id.as_str(), to, "{pn}: moved");
+    binding
+        .previous_tenant_unbound_at
+        .unwrap_or_else(|| panic!("{pn}: a move from {from} to {to} left no previous tenant"))
+}
+
+/// The ids of the rows `tenant_id`'s stream holds, in order.
+async fn ids_of(backend: &dyn Backend, tenant_id: &str) -> Vec<String> {
+    backend
+        .outbox()
+        .page(&query(tenant_id, None, 100))
         .await
         .unwrap()
         .events
         .into_iter()
         .map(|e| e.id)
-        .collect();
+        .collect()
+}
+
+/// A row for `tenant_id` about `pn`, guarded by its number's binding (or,
+/// `by_number` false, its WABA's), dated `not_after`, under `after_move`.
+fn guarded_row(
+    tenant_id: &str,
+    pn: &str,
+    by_number: bool,
+    not_after: Option<time::OffsetDateTime>,
+    after_move: AfterMove,
+) -> NewEvent {
+    let waba = WabaId::new(waba_of(pn)).unwrap();
+    NewEvent {
+        route_guard: Some(RouteGuard {
+            binding: if by_number {
+                GuardedBinding::Number {
+                    phone_number_id: PhoneNumberId::new(pn).unwrap(),
+                    waba_id: waba,
+                }
+            } else {
+                GuardedBinding::Waba(waba)
+            },
+            not_after,
+            after_move,
+        }),
+        ..row(Some(tenant_id), "message_received", pn, None)
+    }
+}
+
+/// The start of `pn`'s WABA's binding, truncated to its second.
+async fn began_second(records: &dyn crate::store::RecordStore, pn: &str) -> time::OffsetDateTime {
+    let waba = WabaId::new(waba_of(pn)).unwrap();
+    let began = records.waba(&waba).await.unwrap().unwrap().attached_at;
+    time::OffsetDateTime::from_unix_timestamp(began.unix_timestamp()).unwrap()
+}
+
+/// Roadmap S2, the security review's L3, on every backend: after a move
+/// (the WABA had a previous tenant), a row keeps its tenant only when the
+/// guarded WABA's binding began in a second before the event's. Dated in
+/// the binding's own second (its first instant, and its last
+/// millisecond), through a number's guard and through the WABA's:
+/// operator-only; dated the next second: the tenant's. Meta's dates are
+/// whole seconds, so an event of the binding's own second may be a
+/// previous holder's. Decisive: the strict comparison after a move in each
+/// backend's insert, in each branch (memory: `RouteGuard::admits`;
+/// Postgres: `attached_at < to_timestamp(n - margin)`).
+pub async fn a_binding_of_the_events_own_second_fails_the_guard(backend: &dyn Backend) {
+    use time::Duration as Span;
+    let records = backend.records();
+    moved(records.as_ref(), "suite-e-before", "suite-e", "38").await;
+    let second = began_second(records.as_ref(), "38").await;
+    let outbox = backend.outbox();
+    let mut kept = Vec::new();
+    for by_number in [true, false] {
+        for same_second in [second, second + Span::milliseconds(999)] {
+            let row = guarded_row(
+                "suite-e",
+                "38",
+                by_number,
+                Some(same_second),
+                AfterMove::default(),
+            );
+            outbox.insert(&row).await.unwrap().unwrap();
+        }
+        let next_second = guarded_row(
+            "suite-e",
+            "38",
+            by_number,
+            Some(second + Span::SECOND),
+            AfterMove::default(),
+        );
+        outbox.insert(&next_second).await.unwrap().unwrap();
+        kept.push(next_second.id);
+    }
     assert_eq!(
-        ids, kept,
+        ids_of(backend, "suite-e").await,
+        kept,
         "only the rows dated after the binding's own second"
+    );
+}
+
+/// Roadmap S2b, on every backend: a first onboarding (no tenant held the
+/// WABA before) keeps the events of its binding's first second, through a
+/// number's guard and through the WABA's, its first instant and its last
+/// millisecond; never one of the second before. Decisive: the relaxed
+/// comparison without a previous tenant in each backend's insert, in each
+/// branch (memory: `RouteGuard::admits`; Postgres: `attached_at <
+/// to_timestamp(n + 1)`), and the store's record of no previous tenant.
+pub async fn a_first_onboarding_keeps_its_first_second(backend: &dyn Backend) {
+    use time::Duration as Span;
+    let records = backend.records();
+    bind(records.as_ref(), "suite-f", "39").await;
+    let waba = WabaId::new(waba_of("39")).unwrap();
+    assert_eq!(
+        records
+            .waba(&waba)
+            .await
+            .unwrap()
+            .unwrap()
+            .previous_tenant_unbound_at,
+        None,
+        "a first onboarding has no previous tenant"
+    );
+    let second = began_second(records.as_ref(), "39").await;
+    let outbox = backend.outbox();
+    let mut kept = Vec::new();
+    for by_number in [true, false] {
+        let before = guarded_row(
+            "suite-f",
+            "39",
+            by_number,
+            Some(second - Span::milliseconds(1)),
+            AfterMove::default(),
+        );
+        outbox.insert(&before).await.unwrap().unwrap();
+        for same_second in [second, second + Span::milliseconds(999)] {
+            let row = guarded_row(
+                "suite-f",
+                "39",
+                by_number,
+                Some(same_second),
+                AfterMove::default(),
+            );
+            outbox.insert(&row).await.unwrap().unwrap();
+            kept.push(row.id);
+        }
+    }
+    assert_eq!(
+        ids_of(backend, "suite-f").await,
+        kept,
+        "a first onboarding's first second is its own, the second before is not"
+    );
+}
+
+/// Roadmap S2b, on every backend: the skew margin applies after a move
+/// only. With a margin of 5 seconds, a moved WABA's binding keeps no event
+/// dated up to 5 seconds after its own second, and keeps one dated 6
+/// seconds after; a first onboarding's binding keeps an event of its own
+/// second under the same margin. Through a number's guard and the WABA's.
+/// A margin reaching before the Unix epoch fails no insert (Postgres
+/// refused the instant it bound, for every dated row). Decisive: the
+/// margin in each backend's insert, its application to a binding with a
+/// previous tenant only, and `RouteGuard::dated_bounds` keeping its bound
+/// at the epoch.
+pub async fn the_skew_margin_applies_after_a_move_only(backend: &dyn Backend) {
+    use time::Duration as Span;
+    let margin = AfterMove {
+        skew_margin: std::time::Duration::from_secs(5),
+        undated_moved_by: None,
+    };
+    let records = backend.records();
+    moved(records.as_ref(), "suite-k-before", "suite-k", "47").await;
+    bind(records.as_ref(), "suite-l", "48").await;
+    let moved_second = began_second(records.as_ref(), "47").await;
+    let first_second = began_second(records.as_ref(), "48").await;
+    let outbox = backend.outbox();
+    let (mut moved_kept, mut first_kept) = (Vec::new(), Vec::new());
+    for by_number in [true, false] {
+        for within in [1, 5] {
+            let row = guarded_row(
+                "suite-k",
+                "47",
+                by_number,
+                Some(moved_second + Span::seconds(within)),
+                margin,
+            );
+            outbox.insert(&row).await.unwrap().unwrap();
+        }
+        let past = guarded_row(
+            "suite-k",
+            "47",
+            by_number,
+            Some(moved_second + Span::seconds(6)),
+            margin,
+        );
+        outbox.insert(&past).await.unwrap().unwrap();
+        moved_kept.push(past.id);
+        let first = guarded_row("suite-l", "48", by_number, Some(first_second), margin);
+        outbox.insert(&first).await.unwrap().unwrap();
+        first_kept.push(first.id);
+        // A margin reaching before the Unix epoch (a setting of
+        // `Duration::MAX`): the inserts succeed, the moved WABA's row a day
+        // later still no tenant's, the first onboarding's its own.
+        let absurd = AfterMove {
+            skew_margin: std::time::Duration::MAX,
+            undated_moved_by: None,
+        };
+        let moved_row = guarded_row(
+            "suite-k",
+            "47",
+            by_number,
+            Some(moved_second + Span::DAY),
+            absurd,
+        );
+        outbox.insert(&moved_row).await.unwrap().unwrap();
+        let first = guarded_row("suite-l", "48", by_number, Some(first_second), absurd);
+        outbox.insert(&first).await.unwrap().unwrap();
+        first_kept.push(first.id);
+    }
+    assert_eq!(
+        ids_of(backend, "suite-k").await,
+        moved_kept,
+        "after a move: only the rows dated past the skew margin"
+    );
+    assert_eq!(
+        ids_of(backend, "suite-l").await,
+        first_kept,
+        "a first onboarding: the skew margin applied without a previous tenant"
+    );
+}
+
+/// Roadmap S2b (design D36), on every backend: an undated row of a moved
+/// WABA keeps its tenant only once the previous tenant left by the guard's
+/// `undated_moved_by` (`OperatorOnly`: the event's arrival less the
+/// window): left after it (within the window), operator-only; left at it,
+/// the tenant's; with none (`CurrentHolder`), the tenant's; and a first
+/// onboarding's undated row under the same window is its own. Through a
+/// number's guard and the WABA's. Decisive: the window check in each
+/// backend's insert, and the first onboarding's exemption from it.
+pub async fn an_undated_event_after_a_move_waits_out_the_window(backend: &dyn Backend) {
+    use time::Duration as Span;
+    let records = backend.records();
+    let left = moved(records.as_ref(), "suite-u-before", "suite-u", "49").await;
+    bind(records.as_ref(), "suite-v", "50").await;
+    let within = AfterMove {
+        skew_margin: std::time::Duration::ZERO,
+        undated_moved_by: Some(left - Span::SECOND),
+    };
+    let past = AfterMove {
+        undated_moved_by: Some(left),
+        ..within
+    };
+    let outbox = backend.outbox();
+    let (mut moved_kept, mut first_kept) = (Vec::new(), Vec::new());
+    for by_number in [true, false] {
+        let operator_only = guarded_row("suite-u", "49", by_number, None, within);
+        outbox.insert(&operator_only).await.unwrap().unwrap();
+        for kept in [past, AfterMove::default()] {
+            let row = guarded_row("suite-u", "49", by_number, None, kept);
+            outbox.insert(&row).await.unwrap().unwrap();
+            moved_kept.push(row.id);
+        }
+        let first = guarded_row("suite-v", "50", by_number, None, within);
+        outbox.insert(&first).await.unwrap().unwrap();
+        first_kept.push(first.id);
+    }
+    assert_eq!(
+        ids_of(backend, "suite-u").await,
+        moved_kept,
+        "after a move: an undated row within the window kept its tenant"
+    );
+    assert_eq!(
+        ids_of(backend, "suite-v").await,
+        first_kept,
+        "a first onboarding: an undated row held back by a window"
     );
 }
 
@@ -524,6 +761,9 @@ pub async fn run(backend: &dyn Backend) {
     the_route_guard_is_checked_with_the_insert(backend).await;
     a_binding_begun_after_the_event_fails_the_number_guard(backend).await;
     a_binding_of_the_events_own_second_fails_the_guard(backend).await;
+    a_first_onboarding_keeps_its_first_second(backend).await;
+    the_skew_margin_applies_after_a_move_only(backend).await;
+    an_undated_event_after_a_move_waits_out_the_window(backend).await;
     deleting_a_tenant_purges_its_stream(backend).await;
     a_tenants_inserts_commit_in_sequence_order(backend).await;
 }
