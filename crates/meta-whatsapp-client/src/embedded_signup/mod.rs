@@ -25,6 +25,7 @@
 //! | [`SignupSessions`] | binds an attempt to the merchant that started it (single-use state) |
 //! | [`EmbeddedSignupEvent`] | parses the `WA_EMBEDDED_SIGNUP` message event the page forwards |
 //! | [`EmbeddedSignup::onboard`] | code → verified, stored, subscribed, (credit line shared,) registered business |
+//! | [`HostedSignup`], [`EmbeddedSignup::onboard_hosted`] | Meta's hosted page: a `PARTNER_ADDED` webhook → the business token from `system_user_access_tokens` → the same steps and record |
 //! | [`TokenVault`] | business tokens encrypted at rest, by WABA and by phone number |
 //! | [`SolutionPartner`] | per deployment: onboard as a Solution Partner, funding each customer with your credit line; [`EmbeddedSignup::offboard`], [`EmbeddedSignup::revoke_credit_line`], [`EmbeddedSignup::clear_pending_share`] |
 //!
@@ -254,6 +255,44 @@
 //! decide what a second tenant onboarding an already-mapped
 //! [`Onboarded::waba_id`] means for your product.
 //!
+//! # Hosted Embedded Signup
+//!
+//! `embedded-signup/hosted-es`: a link to Meta's own onboarding page, no
+//! JavaScript on yours, so no code and no session info reach your backend.
+//! When the customer finishes, Meta sends an `account_update` webhook with
+//! `event` `PARTNER_ADDED`; its `waba_info` names the WABA (`waba_id`) and
+//! the customer's business portfolio (`owner_business_id`). Build a
+//! [`HostedSignup`] from those two (after `meta-whatsapp-webhooks` verified
+//! the signature) and call [`EmbeddedSignup::onboard_hosted`] with your
+//! system user token:
+//!
+//! - step `fetch_token` replaces `exchange_code`:
+//!   `POST /{owner_business_id}/system_user_access_tokens` with your system
+//!   token as bearer and, in a form body, `appsecret_proof` (the hex
+//!   HMAC-SHA256 of that token keyed with this app's secret, borrowed from
+//!   [`AppCredentials`]) and `fetch_only=true`
+//!   ([`Business::system_user_access_token`](crate::waba::Business::system_user_access_token));
+//! - then the same steps (`debug_token`, `verify_assets`, `approve`,
+//!   `store_token`, the tail), which write **the same vault record** the
+//!   code flow writes from the same answers of Meta's. `verify_assets` also
+//!   refuses a WABA whose owner, as Meta reports it, is another business
+//!   than the one the token was fetched for.
+//!
+//! **`PARTNER_ADDED` is not only hosted signup's**: Meta sends it for every
+//! WABA shared with your app, the code flow's and coexistence's
+//! onboardings included, and may deliver it again. Skip a WABA the vault
+//! already holds; [`EmbeddedSignup::onboard_hosted`] refuses one before any
+//! request rather than replace its token (delete it first to onboard it
+//! again).
+//!
+//! The fetch is a read: unlike the code, nothing is spent when a step up to
+//! `store_token` fails, so the call can be made again. After `store_token`,
+//! [`EmbeddedSignup::resume`] with [`OnboardingRequest::for_hosted`] (or
+//! `for_resume` of the saved [`HostedSignup::session`]) redoes the tail.
+//! The webhook names no tenant of yours: bind the WABA in
+//! [`EmbeddedSignup::onboard_hosted_with_approval`] (required for a
+//! Solution Partner).
+//!
 //! # Coexistence (WhatsApp Business app users)
 //!
 //! Launch with [`LaunchOptions::coexistence`]. The flow ends with
@@ -273,8 +312,13 @@
 //! requests, and replaces transport and non-Graph HTTP errors from them with
 //! ones that keep the classification but drop the text, because transport
 //! libraries commonly render the full URL into their errors.
+//!
+//! Hosted signup's token request carries nothing secret in its URL: the
+//! system token travels in the `Authorization` header, its
+//! `appsecret_proof` in the form body, and no error quotes the answer.
 
 mod event;
+mod hosted;
 mod launch;
 mod ledger;
 mod onboard;
@@ -287,6 +331,7 @@ pub use event::{
     CancelInfo, CurrentStep, EmbeddedSignupEvent, FinishKind, MESSAGE_TYPE, ReportedError,
     SessionInfo,
 };
+pub use hosted::HostedSignup;
 pub use launch::{
     AddressPrefill, BusinessPhonePrefill, BusinessPrefill, EsVersion, FeatureName, FeatureType,
     LaunchOptions, MAX_BUSINESS_NAME_CHARS, MAX_PHONE_DESCRIPTION_CHARS, PhoneProfilePrefill,

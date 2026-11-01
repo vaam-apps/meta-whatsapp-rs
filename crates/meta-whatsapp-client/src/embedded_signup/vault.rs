@@ -859,6 +859,13 @@ impl TokenVault {
         self.kv.as_ref()
     }
 
+    /// Whether a record is stored under `waba_id`, readable or not: nothing
+    /// is decrypted, so a record under a key this vault no longer has, or a
+    /// damaged one, counts as held (callers refuse on it, failing closed).
+    pub(super) async fn holds(&self, waba_id: &WabaId) -> Result<bool> {
+        Ok(self.kv.get(&waba_key(waba_id)).await?.is_some())
+    }
+
     /// Seal `plaintext` for `key` under the active key: the associated data
     /// binds it to that store key, so it cannot be moved to another WABA's
     /// or business's entry.
@@ -1006,6 +1013,11 @@ pub(crate) mod tests {
                 .lock()
                 .unwrap()
                 .push((key.to_string(), value.to_vec()));
+        }
+
+        /// Every write so far, in order: `(namespace/key, value)`.
+        pub(crate) fn writes(&self) -> Vec<(String, Vec<u8>)> {
+            self.writes.lock().unwrap().clone()
         }
 
         /// Panic if any key or value ever written contains `secret`, raw or

@@ -1,6 +1,6 @@
 ---
 name: meta-whatsapp-rs-embedded-signup
-description: "Letting each merchant of a multi-tenant CMS connect their own WhatsApp number with Embedded Signup and meta-whatsapp-rs (Tech Provider, or Solution Partner funding merchants with its credit line, chosen per deployment) - Meta prerequisites, LaunchOptions for FB.login, SignupSessions binding the attempt to the merchant (start, redeem), parsing the WA_EMBEDDED_SIGNUP event, EmbeddedSignup::onboard and onboard_with_approval (code exchange, token checks, your approval gate, encrypted storage, subscribe, credit line sharing, register with the merchant's PIN), the Error::Step names, resume after a failed step, offboarding and revoking the credit line when a merchant leaves, partner-led business verification of a merchant's business, coexistence. Load when building the Connect WhatsApp button, its callback endpoint, offboarding, or recovering a half-finished onboarding."
+description: "Letting each merchant of a multi-tenant CMS connect their own WhatsApp number with Embedded Signup and meta-whatsapp-rs (Tech Provider, or Solution Partner funding merchants with its credit line, chosen per deployment) - Meta prerequisites, LaunchOptions for FB.login, SignupSessions binding the attempt to the merchant (start, redeem), parsing the WA_EMBEDDED_SIGNUP event, EmbeddedSignup::onboard and onboard_with_approval (code exchange, token checks, your approval gate, encrypted storage, subscribe, credit line sharing, register with the merchant's PIN), the Error::Step names, resume after a failed step, offboarding and revoking the credit line when a merchant leaves, partner-led business verification of a merchant's business, coexistence, hosted Embedded Signup started by the PARTNER_ADDED webhook (onboard_hosted). Load when building the Connect WhatsApp button, its callback endpoint, offboarding, or recovering a half-finished onboarding."
 ---
 
 # meta-whatsapp-rs-embedded-signup
@@ -8,7 +8,7 @@ description: "Letting each merchant of a multi-tenant CMS connect their own What
 > **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
 
 Reference code, compiled and tested by meta-whatsapp-rs's own gate:
-[examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs), [examples/business_verification.rs](examples/business_verification.rs), [examples/partner_solutions.rs](examples/partner_solutions.rs). The page side: [references/frontend.md](references/frontend.md). A full
+[examples/onboarding.rs](examples/onboarding.rs), [examples/solution_partner.rs](examples/solution_partner.rs), [examples/business_verification.rs](examples/business_verification.rs), [examples/partner_solutions.rs](examples/partner_solutions.rs), [examples/hosted_signup.rs](examples/hosted_signup.rs). The page side: [references/frontend.md](references/frontend.md). A full
 **Tech Provider** server: [`embedded_signup.rs`](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/crates/meta-whatsapp-rs/examples/embedded_signup.rs).
 
 ## When to use
@@ -126,35 +126,35 @@ signup.es.resume(waba_id, &request, &signup.vault).await
 **Check that `waba_id` belongs to the calling merchant before `resume`**:
 it acts with whatever token is stored for that WABA.
 
+## Hosted Embedded Signup: no page code
+
+Meta's page reports to your webhook alone: a signed `account_update` `PartnerAdded` names the WABA and owner ([examples/hosted_signup.rs](examples/hosted_signup.rs)).
+**Code-flow and coexistence onboardings send `PartnerAdded` too, and Meta redelivers: skip a WABA the vault holds** (`onboard_hosted`
+refuses one, before any request; delete it first to onboard it again). Step `fetch_token` (`system_user_access_tokens`, your system
+token, its `appsecret_proof` in the form body) replaces `exchange_code`, then the steps above, the same record. Nothing is spent before
+`store_token`; after it, `resume`. No merchant comes with the webhook: bind it in `onboard_hosted_with_approval`. The PIN is yours.
+
 ## Pitfalls
 
 - The PIN is the merchant's: it becomes the number's two-step PIN or
   must match it. Parse it before `redeem`; never log or store it; never
   one PIN for every merchant.
-- `register_phone` counts against 10 (de)registrations per 72 h; 133016
-  locks the number for 72 h (`ErrorKind::Registration`, never retried).
-- Never write tokens yourself instead of `onboard`: `TokenVault::store`
-  trusts its phone number ids, so browser-supplied ids would route one
-  merchant's customers to another (`meta-whatsapp-rs-token-vault`).
-- The app secret stays on the server; limit the callback's body size;
-  never log the code, the event body, tokens or the PIN.
-- **Coexistence** (merchants keeping the WhatsApp Business app): no
-  `register`; if `onboarded.needs_coexistence_sync()`, call
-  `sync_smb_app_data` once per `SmbSyncType` within 24 hours
-  (`meta-whatsapp-rs-phone-numbers`).
+- `register_phone` counts against 10 (de)registrations per 72 h; 133016 locks the number for 72 h (`ErrorKind::Registration`, never retried).
+- Never write tokens yourself instead of `onboard`: `TokenVault::store` trusts its phone number ids, so browser-supplied ids
+  would route one merchant's customers to another (`meta-whatsapp-rs-token-vault`).
+- The app secret stays on the server; limit the callback's body size; never log the code, the event body, tokens or the PIN.
+- **Coexistence** (merchants keeping the WhatsApp Business app): no `register`; if `onboarded.needs_coexistence_sync()`,
+  call `sync_smb_app_data` once per `SmbSyncType` within 24 hours (`meta-whatsapp-rs-phone-numbers`).
 
-~~`redeem` first, then parse the event, code and PIN~~ (until 2026-09-24):
-a malformed post spent the attempt. Check everything local first.
+~~`redeem` first, then parse the event, code and PIN~~ (until 2026-09-24): a malformed post spent the attempt. Check everything local first.
 
 ## What meta-whatsapp-rs does not do
 
-- ~~Only the Tech Provider flow~~ (before 581f9b1). No pre-verified
-  number pools or multi-WABA onboarding; no token refresh (an expired
-  token means running the flow again), no PIN policy ([OPEN_QUESTIONS.md #4–#9, #11 and #12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants), all decided: roadmap L11a–L11e, L25).
+- ~~Only the Tech Provider flow~~ (before 581f9b1); ~~no hosted Embedded Signup~~ (until L11a). No pre-verified number pools or
+  multi-WABA onboarding; no token refresh (an expired token means running the flow again), no PIN policy ([OPEN_QUESTIONS.md #4–#9 and #12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants), all decided: roadmap L11b–L11e, L25).
 - No tenant model: which of your merchants owns a WABA is your table.
 
 ## Related skills
 
-`meta-whatsapp-rs-token-vault` (the tokens afterwards), `meta-whatsapp-rs-phone-numbers`
-(register, PIN, profile), `meta-whatsapp-rs-webhook-endpoint` (one callback for every
-merchant), `meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-storage`.
+`meta-whatsapp-rs-token-vault` (the tokens afterwards), `meta-whatsapp-rs-phone-numbers` (register, PIN, profile),
+`meta-whatsapp-rs-webhook-endpoint` (one callback for every merchant), `meta-whatsapp-rs-cms-inbox`, `meta-whatsapp-rs-storage`.
