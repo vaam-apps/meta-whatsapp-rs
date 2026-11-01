@@ -385,10 +385,46 @@ mod tests {
             assert!(!v.is_thread_owned_elsewhere(), "{near}");
             assert_eq!(Error::from(v).kind(), ErrorKind::InvalidParameter, "{near}");
         }
-        // No Graph code maps to it yet (Meta documents none).
-        for code in [100, 131047, 131026, 2494191] {
-            assert_ne!(ErrorKind::from_code(code), ErrorKind::ThreadOwnedElsewhere);
+        // One Graph code maps to it, Meta's own refusal; its neighbours do
+        // not.
+        for code in [100, 131047, 131026, 131069, 131071, 2494191] {
+            assert_ne!(
+                ErrorKind::from_code(code),
+                ErrorKind::ThreadOwnedElsewhere,
+                "{code}"
+            );
         }
+    }
+
+    /// `131070` (`conversation-routing/thread-control` § Errors): a Service
+    /// message from a responder that does not own the thread. The same kind
+    /// as the inbox's local refusal, though an `Error::Api`, not a
+    /// `ValidationError`. Never retried (the thread must change hands
+    /// first); on a 4xx Meta sent nothing, and nothing resends it
+    /// automatically.
+    #[test]
+    fn metas_ownership_refusal_has_the_local_refusals_kind() {
+        let meta = || {
+            let mut graph = GraphApiError::new(
+                131_070,
+                "Message failed to send because another app is controlling this thread now.",
+            );
+            graph.http_status = Some(400);
+            Error::from(graph)
+        };
+        assert_eq!(meta().kind(), ErrorKind::ThreadOwnedElsewhere);
+        assert_eq!(
+            meta().kind(),
+            Error::from(ValidationError::thread_owned_elsewhere()).kind()
+        );
+        assert_eq!(
+            meta().in_step("reply").kind(),
+            ErrorKind::ThreadOwnedElsewhere
+        );
+        assert!(!matches!(meta(), Error::Validation(_)), "Meta's, not local");
+        assert!(!meta().is_retryable());
+        assert!(!meta().may_have_been_sent());
+        assert!(!meta().may_resend());
     }
 
     #[test]

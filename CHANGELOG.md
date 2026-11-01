@@ -264,6 +264,26 @@ stored data, the owner's).
   keys and records and pending the owner's confirmation before the first
   release (architecture.md § Stable identifiers). Opt-in: no existing
   API changed.
+- **Thread control** (`meta_whatsapp_client::thread_control`, roadmap
+  L15, parity row 139, from `conversation-routing/thread-control`):
+  `client.thread_control(phone_number_id)` with `ThreadControl::pass`,
+  `take` and `release`, each a `POST /{phone-number-id}/thread_control`
+  with its `action`, answering `ThreadControlResponse` (`request_id`, to
+  quote to support). A `Pass` goes to the escalation partner
+  (`Pass::to_escalation_partner`, the default, sends no `control_pass`)
+  or to a `TargetRole` (`Pass::to_role`: `ai_agent`, `ctwa`,
+  `customer_service`, `escalation`, `marketing`, `utility`, and
+  `Other(String)` for a later one), with `metadata` for the new owner's
+  `control_passed` event; `take` (the escalation partner only) carries
+  `metadata` too; `release` sends none (no event follows a release). The
+  user is a `Recipient`: a phone number or `wa_id` as `to`, a BSUID as
+  `recipient`. Checked before any request: exactly one non-empty
+  identifier (`Recipient::PhoneAndUser` and groups are refused),
+  `metadata` at most 2,000 characters
+  (`thread_control::METADATA_MAX_CHARS`, Unicode scalar values), a
+  non-empty target role. None of the three is replayed after a timeout.
+  The `meta-whatsapp-rs-cms-inbox` skill's example now makes the pass
+  before recording it.
 - **A pacer shared by replicas** in `meta-whatsapp-bot` (roadmap B2b,
   parity row 89; for the service's broadcasts, M5k). Opt-in:
   `KvRateLimiter` (module `pacer`) is a `RateLimiter` whose per-number
@@ -1558,6 +1578,26 @@ stored data, the owner's).
 
 ### Changed
 
+- **Graph error `131070` is `ThreadOwnedElsewhere`**
+  (`meta_whatsapp_core::ErrorKind::from_code`, roadmap L15; see Added,
+  "Thread control"). `conversation-routing/thread-control` § Errors gives
+  it for a service message from a responder that does not own the thread
+  ("another app is controlling this thread now"), idle threads included;
+  it was `Unknown`. It now has the kind of the inbox's local refusal
+  (`ValidationError::thread_owned_elsewhere()`), so branching on
+  `ErrorKind::ThreadOwnedElsewhere` matches both; still not retryable,
+  and `meta_whatsapp_rs::inbox::is_thread_owned_elsewhere` still matches
+  the local refusal only. The same table's `2494191` (a `take` by a
+  caller that is not the escalation partner) stays `Unknown`: not
+  `Permission`, which is the token's permissions or asset access. Tests:
+  `metas_ownership_refusal_has_the_local_refusals_kind`,
+  `classification_table_spot_checks` (`meta-whatsapp-core`).
+- **Behaviour change (the service) — Graph error `131070` is answered
+  `409 thread_owned_elsewhere`** (`meta-whatsapp-server`, from the
+  library change above; it answered `502 unknown`), the code the inbox's
+  local refusal already had (`docs/design/server.md` §5.2 now names
+  `131070`). Tests: `each_kind_answers_its_code_and_no_meta_text`,
+  `a_local_refusal_answers_its_kinds_code_and_status`.
 - **`ThroughputUpgrades` takes any `RateLimiter`** (`meta-whatsapp-bot`,
   roadmap B2b): it raises a number's rate through
   `RateLimiter::raise_rate` instead of the `TokenBucket`'s own, so a
@@ -2125,6 +2165,56 @@ stored data, the owner's).
   call its operations instead of the `Authorizer`'s vault writes; pass
   the guard its `Operations` (`api::tenant_operations()`, or your own
   router's).
+- **Breaking — the service is split into the crates its binary composes**
+  (roadmap S7, design §2.1 and §8; all `publish = false`, workspace
+  members but not default ones). `meta-whatsapp-server` keeps the
+  process (`config`, `serve`, `cli`) and composes, by its Cargo features
+  `api-axum`, `store-memory` and `store-postgres` (all three default):
+  - `meta-whatsapp-server-store-memory` (`MemoryBackend`, `MemoryStore`,
+    `MemoryEventStore`, `MemoryLeaderLock`) and
+    `meta-whatsapp-server-store-postgres` (`PgBackend`, `PgStore`,
+    `PgEventStore`, `PgLeaderLock`, `PgJanitor`, `PgMigrator`,
+    `migrate`, `migrations`, `lock_key`, `MIGRATION_LOCK`,
+    `MIGRATIONS_TABLE`, `HOUSEKEEPING_LOCK`, and the migration files),
+    each running the core's conformance suite in its own tests;
+  - `meta-whatsapp-server-http` (`state`, `auth`, `error`, `events`,
+    `idempotency`, `listen`, `metrics`, `ratelimit`, `telemetry`, a
+    `store` of the core's ports, and `api` with the public router, the
+    internal listener's layers, `api::common`, `api::media`, `api::ops`
+    and `api::webhooks`);
+  - `meta-whatsapp-server-api-axum` (`api`: the `/v1` routes, the
+    OpenAPI document and `internal_router`, re-exporting the HTTP
+    crate's shared routes).
+
+  `meta_whatsapp_server::{api, auth, error, events, idempotency, keys,
+  listen, metrics, model, ratelimit, state, store, telemetry}` are
+  re-exports of those, so code naming them still compiles, except:
+  `AppState::from_backend` returns `(AppState, Grant)` (it returned the
+  state), and `api::internal_router` takes the `&Grant` (it took the
+  state): the grant, `meta_whatsapp_server_http::state::Grant`, is what
+  an API adapter's routes are served with (the records, the
+  authorization order, `Grant::idempotent`), handed only to the state's
+  composer, and `OwnedNumber::capability` / `OwnedWaba::capability`
+  take it; the state no longer holds its backend (whoever composed it
+  closes it); `config::LogFormat` is the HTTP crate's
+  `telemetry::LogFormat`; `store`'s backends exist with their feature
+  only. Nothing an operator sees changes: `openapi/v1.json` is
+  byte-identical and stays at `crates/meta-whatsapp-server/openapi/v1.json`,
+  routes, statuses, bodies, metrics and every log line's target
+  (`meta_whatsapp_server::<module>`, now named explicitly) are as they
+  were, and the migrations moved byte for byte (same versions and
+  checksums in `wa_server_sqlx_migrations`, under the same lock), so a
+  database migrated by the binary before starts this one with no
+  migration run again. A build without `store-postgres` refuses
+  `DATABASE_URL` at start, one without `store-memory` refuses memory
+  storage, both naming the feature; one without `api-axum` does not
+  compile. S6's legacy idempotency fingerprint stays (its removal, after
+  the first release, is roadmap M2a's now). **Upgrade:** take the pair
+  (`let (state, grant) = AppState::from_backend(…)?;`) and serve
+  `internal_router(&grant)`; depend on the new crates directly if you
+  want one part (a backend, the HTTP layer) without the rest; for a
+  binary without memory storage, `--no-default-features --features
+  api-axum,store-postgres`.
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

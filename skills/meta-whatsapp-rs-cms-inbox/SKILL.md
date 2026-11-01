@@ -111,7 +111,8 @@ use meta_whatsapp_rs::inbox::{ReplyChecks, is_thread_owned_elsewhere};
 Err(e) if is_thread_owned_elsewhere(&e) => Ok(None),
 ```
 
-The escalation partner turns it off: `ReplyChecks::ALL.thread_owner(false)`. Your own `pass` or `take`:
+The escalation partner turns it off: `ReplyChecks::ALL.thread_owner(false)`. Your own `pass` or `take`
+(`ThreadControl::pass`, `ThreadControl::take` on `client.thread_control(number)`): then
 `inbox.record_thread_owner`. Who owns the thread, and why: [references/routing.md](references/routing.md).
 
 ## Conversation keys
@@ -149,7 +150,7 @@ History is kept unless the store has `with_retention` and you schedule `apply_re
 ## What meta-whatsapp-rs does not do
 
 - Not recorded by `InboxSink`: synced contacts (`smb_app_state_sync`, L8), media bytes (rows keep the
-  media id; download within 7 days), BSUID merges, `conversation_context`. No thread control API (L15).
+  media id; download within 7 days), BSUID merges, `conversation_context`. The inbox never calls the thread control API: you do, then record it.
 - Message ids are unique per store, not per business number (open question 33). No Redis store.
 
 ## Related skills

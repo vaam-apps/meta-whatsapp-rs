@@ -117,6 +117,7 @@ const REPRESENTATIVE: &[(ErrorKind, i64)] = &[
     (ErrorKind::InvalidParameter, 100),
     (ErrorKind::UnsupportedMessageType, 131051),
     (ErrorKind::CustomerServiceWindowClosed, 131047),
+    (ErrorKind::ThreadOwnedElsewhere, 131070),
     (ErrorKind::EcosystemEngagementLimit, 131049),
     (ErrorKind::MarketingOptedOut, 131050),
     (ErrorKind::MarketingNotAllowed, 131055),
@@ -151,26 +152,41 @@ const REPRESENTATIVE: &[(ErrorKind, i64)] = &[
 
 /// The kinds no Graph code maps to yet, each with the library's local
 /// refusal of that kind (raised before any request). A kind leaves this
-/// list for [`REPRESENTATIVE`] when Meta documents a code for it.
+/// list for [`REPRESENTATIVE`] when Meta documents a code for it, as
+/// `ThreadOwnedElsewhere` did (`131070`); none is left today.
 fn local_only() -> Vec<(ErrorKind, meta_whatsapp_rs::Error)> {
-    vec![(
-        ErrorKind::ThreadOwnedElsewhere,
-        ValidationError::thread_owned_elsewhere().into(),
-    )]
+    Vec::new()
+}
+
+/// The library's local refusals of a state Meta refuses too, with a Graph
+/// code of their kind (in [`REPRESENTATIVE`]): the inbox's closed window
+/// (Meta's `131047`) and its thread another app owns (Meta's `131070`).
+fn local_refusals() -> Vec<(ErrorKind, meta_whatsapp_rs::Error)> {
+    vec![
+        (
+            ErrorKind::CustomerServiceWindowClosed,
+            ValidationError::customer_service_window_closed().into(),
+        ),
+        (
+            ErrorKind::ThreadOwnedElsewhere,
+            ValidationError::thread_owned_elsewhere().into(),
+        ),
+    ]
 }
 
 /// Every Graph code `ErrorKind::from_code` names is below this (the
 /// highest is `2593109` today); a code above it would escape the scan in
-/// [`a_local_only_kind_answers_its_code_and_status`].
+/// [`a_local_refusal_answers_its_kinds_code_and_status`].
 const GRAPH_CODES_BELOW: i64 = 10_000_000;
 
-/// A kind the library only raises locally answers its own code and status,
-/// not `invalid_request`: the inbox's ownership refusal is a state to
-/// change (`409`), like the window's. Decisive: the classify arm; and a
-/// Graph code mapped to a kind still listed here (its Graph path would go
-/// untested end to end).
+/// A kind the library raises locally answers its own code and status, not
+/// `invalid_request`: the inbox's ownership refusal is a state to change
+/// (`409`), like the window's, and answers what Meta's code of the same
+/// kind does. Decisive: either classify arm; and a Graph code mapped to a
+/// kind still listed in `local_only` (its Graph path would go untested end
+/// to end).
 #[test]
-fn a_local_only_kind_answers_its_code_and_status() {
+fn a_local_refusal_answers_its_kinds_code_and_status() {
     let design = design();
     assert!(
         REPRESENTATIVE
@@ -185,11 +201,19 @@ fn a_local_only_kind_answers_its_code_and_status() {
             ErrorKind::from_code(code)
         );
     }
-    for (kind, error) in local_only() {
+    for (kind, _) in local_only() {
         assert!(
             REPRESENTATIVE.iter().all(|(k, _)| *k != kind),
             "{kind:?} has a Graph code: list it in REPRESENTATIVE instead"
         );
+    }
+    for (kind, _) in local_refusals() {
+        assert!(
+            REPRESENTATIVE.iter().any(|(k, _)| *k == kind),
+            "{kind:?} has no Graph code: list it in local_only instead"
+        );
+    }
+    for (kind, error) in local_only().into_iter().chain(local_refusals()) {
         assert_eq!(error.kind(), kind, "{error}");
         let answered = ServiceError::from_library(&error);
         assert_eq!(answered.code(), kind_code(kind), "{kind:?}");
