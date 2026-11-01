@@ -599,7 +599,7 @@ same_fields! {
 }
 
 /// Each of `items`, converted.
-fn each<T: Into<U>, U>(items: Vec<T>) -> Vec<U> {
+pub(crate) fn each<T: Into<U>, U>(items: Vec<T>) -> Vec<U> {
     items.into_iter().map(Into::into).collect()
 }
 

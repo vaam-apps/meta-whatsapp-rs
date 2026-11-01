@@ -33,7 +33,7 @@ use meta_whatsapp_rs::core::store::{
     ConversationKey, ConversationStore, Expiry, KvStore, StoreKey, Versioned,
 };
 use meta_whatsapp_server::api::admin::mint;
-use meta_whatsapp_server::config::{Config, Env, NotUnicode};
+use meta_whatsapp_server::config::{Config, Env, NotUnicode, Storage};
 use meta_whatsapp_server::model::{KeyOwner, Scope, TenantId};
 use meta_whatsapp_server::serve::{serve_until, serve_with};
 use meta_whatsapp_server::store::events::EventQuery;
@@ -528,6 +528,44 @@ async fn a_backend_is_not_migrated_when_the_configuration_skips_it() {
         .unwrap()
         .unwrap();
     assert!(backend.closed.load(Ordering::SeqCst), "never closed");
+}
+
+/// Roadmap M2a: housekeeping applies the retention the inbox store was
+/// built with, so a backend whose inbox applies another than
+/// `WA_SERVER_INBOX_RETENTION` is refused at start, naming the setting,
+/// rather than served with the setting ignored; the in-tree factory builds
+/// its backend with it (`BackendFactory::open_with`), which is then served.
+/// Decisive: the start's check, and the factory's `with_inbox_retention`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_backend_whose_inbox_ignores_the_configured_retention_is_refused_at_start() {
+    use meta_whatsapp_rs::core::store::Retention;
+    use meta_whatsapp_server::serve::{BackendFactory, BuiltinBackends};
+    let backend = Arc::new(Integrators::new());
+    let (public, internal, _held) = two_ports().await;
+    let mut vars = Vars::development(public, internal);
+    vars.0.insert("WA_SERVER_INBOX_RETENTION", "30d".to_owned());
+    let config = Config::from_env(&vars).unwrap();
+    assert_eq!(config.inbox_retention, Retention::days(30));
+    let refused = tokio::time::timeout(
+        Duration::from_secs(10),
+        serve_until(config, backend.clone(), std::future::pending()),
+    )
+    .await
+    .expect("refused at once")
+    .unwrap_err();
+    assert!(
+        refused.to_string().contains("WA_SERVER_INBOX_RETENTION"),
+        "{refused:#}"
+    );
+    assert!(http(internal, "GET", "/livez", &[], b"").await.is_none());
+    assert_eq!(backend.migrator.count(), 0, "refused before migrating");
+    let built = BuiltinBackends
+        .open_with(&Storage::Memory, Retention::days(30))
+        .await
+        .unwrap();
+    assert_eq!(built.conversations().retention(), Retention::days(30));
+    let plain = BuiltinBackends.open(&Storage::Memory).await.unwrap();
+    assert_eq!(plain.conversations().retention(), Retention::Keep);
 }
 
 /// `serve_with`, the same as `serve_until` on the process's signals,

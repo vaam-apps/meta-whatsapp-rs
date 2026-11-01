@@ -72,6 +72,39 @@ fn refused(vars: &Vars) -> ConfigError {
     }
 }
 
+/// Roadmap M2a: the inbox keeps everything and checks every reply by
+/// default; `WA_SERVER_INBOX_RETENTION` sets the inbox store's retention
+/// (`keep`, or a duration) and `WA_SERVER_INBOX_REPLY_CHECKS` a number's
+/// reply checks, every other number keeping all of them.
+#[test]
+fn the_inbox_settings_read_a_retention_and_each_numbers_reply_checks() {
+    use meta_whatsapp_rs::core::ids::PhoneNumberId;
+    use meta_whatsapp_rs::core::store::Retention;
+    use meta_whatsapp_rs::inbox::ReplyChecks;
+    let defaults = Config::from_env(&production()).unwrap();
+    assert_eq!(defaults.inbox_retention, Retention::Keep);
+    assert!(defaults.settings.inbox_reply_checks.is_empty());
+    let keep = Config::from_env(&production().set("WA_SERVER_INBOX_RETENTION", "keep")).unwrap();
+    assert_eq!(keep.inbox_retention, Retention::Keep);
+    let config = Config::from_env(&production().set("WA_SERVER_INBOX_RETENTION", "90d").set(
+        "WA_SERVER_INBOX_REPLY_CHECKS",
+        "106540352242922:window+trust_handover, 106540352242923:window",
+    ))
+    .unwrap();
+    assert_eq!(config.inbox_retention, Retention::days(90));
+    let checks = &config.settings.inbox_reply_checks;
+    let number = |id: &str| PhoneNumberId::new(id).unwrap();
+    assert_eq!(
+        checks.of(&number("106540352242922")),
+        ReplyChecks::ALL.thread_owner(false)
+    );
+    assert_eq!(
+        checks.of(&number("106540352242923")),
+        ReplyChecks::NONE.window(true)
+    );
+    assert_eq!(checks.of(&number("106540352242924")), ReplyChecks::ALL);
+}
+
 #[test]
 fn a_valid_production_configuration_starts_with_safe_defaults() {
     let config = Config::from_env(&production()).unwrap();
@@ -285,6 +318,19 @@ fn refuses_what_it_cannot_parse_without_quoting_it() {
         // Zero would purge every event at the next housekeeping round.
         ("WA_SERVER_OUTBOX_RETENTION", "0"),
         ("WA_SERVER_OUTBOX_RETENTION", "0d"),
+        // Zero would purge the whole inbox (roadmap M2a).
+        ("WA_SERVER_INBOX_RETENTION", "0d"),
+        ("WA_SERVER_INBOX_RETENTION", "forever"),
+        ("WA_SERVER_INBOX_REPLY_CHECKS", "106540352242922:windows"),
+        ("WA_SERVER_INBOX_REPLY_CHECKS", "106540352242922"),
+        (
+            "WA_SERVER_INBOX_REPLY_CHECKS",
+            "106540352242922:none,106540352242922:all",
+        ),
+        (
+            "WA_SERVER_INBOX_REPLY_CHECKS",
+            "106540352242922:trust_handover",
+        ),
         ("WA_SERVER_LOG_FORMAT", "xml"),
         ("WA_ONBOARDING_MODE", "reseller"),
         ("WA_APP_ID", "not-digits"),

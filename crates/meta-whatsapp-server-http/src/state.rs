@@ -12,10 +12,13 @@ use crate::ratelimit::{RateLimiter, RateLimits, Slots};
 use crate::store::{Backend, IdempotencyRecords, Outbox, RecordStore};
 use meta_whatsapp_rs::client::DEFAULT_TIMEOUT;
 use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
+use meta_whatsapp_rs::core::clock::Clock;
 use meta_whatsapp_rs::core::config::ApiVersion;
 use meta_whatsapp_rs::core::secret::VerifyToken;
+use meta_whatsapp_rs::core::store::ConversationStore;
 use meta_whatsapp_rs::webhooks::axum::extract::FromRef;
 use meta_whatsapp_rs::{Client, Error};
+use meta_whatsapp_server_core::inbox::ReplyChecksByNumber;
 use meta_whatsapp_server_core::templates::TemplateCache;
 
 /// Default `WA_SERVER_IDEMPOTENCY_TTL`: how long an idempotency key's
@@ -64,6 +67,10 @@ pub struct Settings {
     pub media_streams: usize,
     /// [`TEMPLATE_CACHE_TTL`].
     pub template_cache_ttl: Duration,
+    /// `WA_SERVER_INBOX_REPLY_CHECKS`: the local checks an inbox reply
+    /// makes, per number (every one on a number it does not list; roadmap
+    /// M2a).
+    pub inbox_reply_checks: ReplyChecksByNumber,
 }
 
 impl Default for Settings {
@@ -76,6 +83,7 @@ impl Default for Settings {
             media_concurrency: DEFAULT_MEDIA_CONCURRENCY,
             media_streams: DEFAULT_MEDIA_STREAMS,
             template_cache_ttl: TEMPLATE_CACHE_TTL,
+            inbox_reply_checks: ReplyChecksByNumber::new(),
         }
     }
 }
@@ -93,6 +101,8 @@ pub struct AppState {
 struct Inner {
     store: Arc<dyn RecordStore>,
     idempotency: Arc<dyn IdempotencyRecords>,
+    conversations: Arc<dyn ConversationStore>,
+    clock: Arc<dyn Clock>,
     authz: Authorizer,
     metrics: Metrics,
     events: Events,
@@ -148,11 +158,14 @@ impl AppState {
         let store = backend.records();
         let vault = TokenVault::new(backend.kv(), vault_keys)?;
         // One clock for the whole service: the webhook pipeline's.
-        let authz = Authorizer::new(store.clone(), vault, client)?.with_clock(inbound.clock());
+        let clock = inbound.clock();
+        let authz = Authorizer::new(store.clone(), vault, client)?.with_clock(clock.clone());
         let events = Events::new(inbound, backend.as_ref(), metrics.clone());
         let state = Self {
             inner: Arc::new(Inner {
                 idempotency: backend.idempotency(),
+                conversations: backend.conversations(),
+                clock,
                 authz,
                 store,
                 metrics,
@@ -234,6 +247,18 @@ impl AppState {
     /// The template lists cached per WABA.
     pub(crate) fn template_cache(&self) -> &TemplateCache {
         &self.inner.templates
+    }
+
+    /// The inbox: the backend's conversation store, the one the webhook
+    /// pipeline records into.
+    pub(crate) fn conversations(&self) -> &Arc<dyn ConversationStore> {
+        &self.inner.conversations
+    }
+
+    /// The service's one clock (the webhook pipeline's, the authorization
+    /// order's).
+    pub fn clock(&self) -> Arc<dyn Clock> {
+        self.inner.clock.clone()
     }
 
     /// The Graph API version calls use.
@@ -318,6 +343,13 @@ impl Grant {
     /// The template lists cached per WABA.
     pub fn template_cache(&self) -> &TemplateCache {
         self.0.template_cache()
+    }
+
+    /// The inbox (the backend's conversation store), for the core's inbox
+    /// services (`meta_whatsapp_server_core::inbox::Conversations`), which
+    /// open only on a number the authorization order made.
+    pub fn conversations(&self) -> Arc<dyn ConversationStore> {
+        self.0.conversations().clone()
     }
 }
 
