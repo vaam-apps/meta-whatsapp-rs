@@ -245,7 +245,12 @@ stored data, the owner's).
   `slow_down_factor`, `slow_down_spacing`, `recovery`) plus
   `KvRateLimiter::rate_of`, `KvRateLimiter::raise_rate` and
   `KvRateLimiter::with_timer`. A slot given back is reused only while
-  it is the last booked by any replica.
+  it is the last booked by any replica (a new record's slot ids start
+  at random, so a slot of a record deleted or expired since gives
+  nothing back). Deleting a number's record (`KvRateLimiter::store_key`)
+  resets it: the remedy for a record it cannot read (never
+  overwritten), for slots a clock stepped forward booked, and for a
+  raised rate to lower, at the cost of the slots booked.
 - **`RateLimiter::raise_rate`** (`meta-whatsapp-bot`): raise a number's
   rate unless it is already at or above it, atomically, never lowering
   it; whether it rose. Defaults to raising nothing (`Ok(false)`), so

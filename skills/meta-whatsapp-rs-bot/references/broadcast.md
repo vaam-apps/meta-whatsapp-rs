@@ -99,7 +99,11 @@ pub fn following_upgrades(
   more into a one-second window, so leave that headroom. Under
   contention it retries 8 times with backoff (`KvRateLimiter::contention`),
   then fails with `StorageError::Busy`; a store that fails fails the
-  booking too, and nothing is sent (`BroadcastEnd::LimiterFailed`). Or
+  booking too, and nothing is sent (`BroadcastEnd::LimiterFailed`), as
+  does a record it cannot read, which it never overwrites. Deleting the
+  number's record (`KvRateLimiter::store_key`) resets it: the remedy for
+  such a record, for slots a clock stepped forward booked, and for a
+  raised rate to lower, at the cost of the slots booked. Or
   implement `RateLimiter` yourself (`RateLimiter::reserve` takes a
   `SlotRequest` and returns a `Reservation`, `RateLimiter::release` takes
   an unused one back, `RateLimiter::slow_down` hears throttling,

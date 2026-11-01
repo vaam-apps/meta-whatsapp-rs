@@ -1357,10 +1357,44 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     `the_pacer_key_is_pinned_and_hashed` and `the_pacer_record_is_pinned`
     the namespace, key and bytes. The pacer needs no new `KvStore`
     behaviour (`get`, `put_if_absent`, `compare_and_swap` with
-    `Expiry::After`), so the store conformance suite already proves it on
-    Redis and Postgres. A slot given back is reused only while it is the
-    last booked. The namespace waits for the owner's confirmation (§ Owner
-    touchpoints).
+    `Expiry::After`), so the store conformance suite proves what it
+    relies on, on Redis and Postgres; no live test runs the limiter
+    itself there. A slot given back is reused only while it is the last
+    booked. The namespace and the record layout wait for the owner's
+    confirmation before the first release (§ Owner touchpoints).
+  - **Review (concurrency):** a new record's slot ids start at a random
+    value, so a slot of a record deleted or expired since gives back
+    nothing of the record created after it
+    (`a_slot_of_a_forgotten_record_gives_back_nothing`). Tests added for
+    what no test caught: a booking that lost the swap books as of its
+    new read and never before its request
+    (`a_booking_that_lost_books_again_as_of_its_new_read`,
+    `a_booking_that_lost_never_books_before_its_request`), the burst,
+    a multi-send cost, the divisor bound, a slow-down after recovery, an
+    upgrade whose store fails, a seeded interleaving property of three
+    replicas booking, giving back and racing
+    (`any_interleaving_keeps_every_kept_slot_an_interval_apart`), and
+    record round trips with far instants saturating. Documented:
+    deleting the record (`KvRateLimiter::store_key`) is the remedy for
+    an unreadable record, slots a clock stepped forward booked, and a
+    raised rate to lower, and drops the slots booked; a raised rate is
+    forgotten silently when the record expires. Not changed: with a
+    burst above one, a slow-down (or a lower rate) while slots are booked
+    re-reads the burst's tolerance at the slower interval, so the next
+    bookings can start before ones booked earlier; `TokenBucket` does
+    the same, and the default burst of one is not affected.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a setting or behind
+    `RateLimiter`): it fails closed, a broadcast stopping on
+    `StorageError::Busy` too, the attempts and backoff a setting
+    (`KvRateLimiter::contention`); the defaults of 8 attempts, a 1 ms
+    base delay doubling to a 64 ms cap with jitter, and a 24-hour idle
+    expiry (`KvRateLimiter::idle_expiry`); a number's rate is the higher
+    of the configured one and the raised one; `RateLimiter::release`
+    gives back the last slot only, one level deep; the shared schedule
+    never moves back; the name `KvRateLimiter`. **Pending the owner**
+    (a stable identifier): the namespace `wa.bot.pacer` and the version
+    1 record layout.
 - [ ] **B3. Durable scheduling** (`meta-whatsapp-bot`; row 90; D29): jobs
   as a typed store on `KvStore` (a bucketed due-time index, claims by
   compare-and-swap with a lease; no new port), send at a time, cancel,
@@ -2497,8 +2531,8 @@ everything else goes into the parity-completion report.
 - **New stable identifiers**, confirmed before the first release: each
   store namespace or stored name an item adds after the table in
   architecture.md § Stable identifiers was last confirmed (B2b's
-  `wa.bot.pacer`, added and awaiting confirmation, and those B3 and L21a
-  add), for the same reason as L5's.
+  `wa.bot.pacer` and its record layout, added and awaiting
+  confirmation, and those B3 and L21a add), for the same reason as L5's.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored

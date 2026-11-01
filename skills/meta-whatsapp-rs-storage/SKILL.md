@@ -7,9 +7,8 @@ description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token
 
 > **Verified against meta-whatsapp-rs 3573e219656d17a21ddbab4277b2b83c69b5c3f2 (2026-09-27).** On another revision, trust the code over this page.
 
-Reference code: [examples/stores.rs](examples/stores.rs), compiled by
-meta-whatsapp-rs's own gate; its tests run the conformance suites on the memory
-stores.
+Reference code: [examples/stores.rs](examples/stores.rs), compiled by meta-whatsapp-rs's own gate;
+its tests run the conformance suites on the memory stores.
 
 ## When to use
 
@@ -23,6 +22,7 @@ stores (vault, OTP, dedup, sessions, bot cooldowns) are built on `KvStore`, so o
 | OTP challenges and limits (`OtpService`) | `KvStore` | `wa.otp`, `wa.otp.rate` | codes fail; limits reset |
 | webhook dedup (`DedupGuard`) | `KvStore` | `wa.webhook.dedup` | Meta's retries delivered again |
 | bot cooldowns (`KvCooldowns`) | `KvStore` | `wa.bot.cooldown` | running cooldowns reset |
+| shared pacer (`KvRateLimiter`) | `KvStore` | `wa.bot.pacer` | schedules, slow-downs, raised rates reset |
 | inbox history (`InboxSink`, `Inbox`) | `ConversationStore` | tables `wa_*` | the history |
 
 | | Memory (`memory`) | Postgres (`postgres`) | Redis (`redis`) |

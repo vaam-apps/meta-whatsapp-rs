@@ -732,8 +732,17 @@ pub fn following_upgrades(
     `BroadcastEnd::LimiterFailed`, a `PacedOutbound` fails the call
     before sending). It never falls back to a budget of its own.
   - **Expiry.** A record expires `KvRateLimiter::idle_expiry` (24 hours)
-    after its last slot. Redis drops it; with the memory or Postgres
-    store, call `purge_expired` now and then.
+    after its last slot, and its raised rate with it, silently. Redis
+    drops it; with the memory or Postgres store, call `purge_expired`
+    now and then.
+  - **Resetting a number**: delete its record
+    (`kv.delete(&KvRateLimiter::store_key(&number))`). It is the remedy
+    for a record this release cannot read (never overwritten: the
+    number sends nothing until it expires or is deleted), for slots a
+    clock stepped forward booked, and for a raised rate to lower
+    (nothing else lowers it). It drops the slots booked too: those
+    waiting still start when booked and new ones from now, so for the
+    schedule's length the number can send up to twice its rate.
   - A slot given back (`RateLimiter::release`) is reused only while no
     replica booked after it.
 
