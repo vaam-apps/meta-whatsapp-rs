@@ -40,8 +40,14 @@
 //!   [`LeaderLock`] turn per round.
 //! - **A capability's writes are conditioned** on the binding it was made
 //!   from ([`RecordStore::unbind_waba_if`],
-//!   [`RecordStore::set_waba_status_if`]: a [`BindingEpoch`]), checked
-//!   atomically with the write.
+//!   [`RecordStore::set_waba_status_if`]: a [`BindingEpoch`], its
+//!   generation included), checked atomically with the write.
+//! - **Moves are recorded** (roadmap S2b): every unbind leaves the WABA's
+//!   tombstone, and a new binding reads from it when the WABA was last
+//!   unbound from another tenant
+//!   ([`WabaBinding::previous_tenant_unbound_at`](crate::model::WabaBinding::previous_tenant_unbound_at)),
+//!   which the routing and the outbox's check read
+//!   ([`crate::outbox::RouteGuard`]).
 //!
 //! **The bindings and the token vault** (the library's `TokenVault`, on
 //! `KvStore`) are two stores no transaction spans. What keeps a WABA's
@@ -134,7 +140,10 @@ pub trait RecordStore: Send + Sync + 'static {
     /// tenant: the check for WABAs and the deletion are one step that no
     /// binding of this tenant lands in between (on a database without
     /// foreign keys, both write the tenant's record, so that they
-    /// conflict).
+    /// conflict). The tombstones of the WABAs it was unbound from
+    /// ([`WabaTombstone`](crate::model::WabaTombstone)) forget it, in the
+    /// same step: a tenant created later with the same id is another tenant
+    /// to them, so binding such a WABA to it is a move (roadmap S2b).
     async fn delete_tenant(&self, id: &TenantId) -> StoreResult<DeleteTenantOutcome>;
 
     /// Store a new key; `None` when its id is taken (the caller draws a
@@ -164,8 +173,16 @@ pub trait RecordStore: Send + Sync + 'static {
     /// or a number is bound to another tenant
     /// ([`BindOutcome::OwnedByAnotherTenant`], decision D4), nothing
     /// changes. Numbers the WABA had and `numbers` lacks are unbound; the
-    /// others become `connected`. A WABA already bound to `tenant` keeps
-    /// its `attached_at`. Serialized with [`Self::delete_tenant`] of the
+    /// others become `connected`. A WABA already bound to `tenant` (a
+    /// refresh) keeps its `attached_at` and its
+    /// `previous_tenant_unbound_at`, and its `generation` moves up by one,
+    /// so that a capability made before the refresh is told from one made
+    /// after it ([`crate::model::BindingEpoch`], roadmap S2b). A new binding
+    /// begins now, at generation 1, its `previous_tenant_unbound_at` read
+    /// from the WABA's tombstone, if it has one
+    /// ([`WabaTombstone::previous_for`](crate::model::WabaTombstone::previous_for)),
+    /// in the same step: an unbinding that committed before it is seen.
+    /// Serialized with [`Self::delete_tenant`] of the
     /// same tenant: a binding lands before the deletion (which then finds
     /// the WABA) or after it (which then finds no tenant), never beside it.
     /// The caller stores the WABA's token after, then reads the binding
@@ -181,15 +198,20 @@ pub trait RecordStore: Send + Sync + 'static {
     /// the operator's unbind. `false` when it was not bound. A capability
     /// unbinds only the binding it was made from ([`Self::unbind_waba_if`]).
     /// The caller deletes the WABA's token from the vault first (the port
-    /// rule: see the [module](self)).
+    /// rule: see the [module](self)). The WABA's tombstone
+    /// ([`WabaTombstone::of`](crate::model::WabaTombstone::of): its tenant,
+    /// now, and the binding's `previous_tenant_unbound_at`) replaces the
+    /// one it had, atomically with the removal (roadmap S2b).
     async fn unbind_waba(&self, waba_id: &WabaId) -> StoreResult<bool>;
 
     /// Remove the binding of `epoch.waba_id` and its numbers only if it is
     /// still `epoch`'s: bound to `epoch.tenant_id` since
-    /// `epoch.attached_at`, checked atomically with the removal. `false`,
-    /// removing nothing, once the WABA was unbound since (and bound again,
-    /// to any tenant), or when it is not bound. What `OwnedWaba::forget`
-    /// takes (roadmap S2: the core's security review, SR-L2).
+    /// `epoch.attached_at`, at `epoch.generation`, checked atomically with
+    /// the removal. `false`, removing nothing, once the WABA was unbound
+    /// since (and bound again, to any tenant), refreshed for its tenant
+    /// since, or when it is not bound. Its tombstone as
+    /// [`Self::unbind_waba`] writes it. What `OwnedWaba::forget` takes
+    /// (roadmap S2: the core's security review, SR-L2).
     async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool>;
 
     /// The binding of a WABA.
@@ -228,9 +250,10 @@ pub trait RecordStore: Send + Sync + 'static {
     /// with the update: a binding made since keeps its numbers' status.
     /// Whether it was `epoch`'s. What a capability's `failed` takes after
     /// Meta's `190` (roadmap S2). A binding refreshed for its own tenant
-    /// ([`Self::bind_waba`] on a WABA the tenant holds: an operator
-    /// attaching it again with a new token) keeps its epoch, so a `190`
-    /// answered to a capability made before the refresh still marks it.
+    /// since ([`Self::bind_waba`] on a WABA the tenant holds: an operator
+    /// attaching it again with a new token) is another generation, so a
+    /// `190` answered to a capability made before the refresh marks nothing
+    /// (roadmap S2b).
     async fn set_waba_status_if(
         &self,
         epoch: &BindingEpoch,

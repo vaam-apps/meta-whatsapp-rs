@@ -688,7 +688,8 @@ impl Authorizer {
     /// tenant's token) would otherwise pair this binding with the new
     /// holder's token, which the capability would call Meta with and
     /// [`OwnedWaba::forget`] would delete; a binding made since begins
-    /// later, so an unchanged [`BindingEpoch`] means no unbinding came in
+    /// later, and a refresh for its own tenant moves its generation, so an
+    /// unchanged [`BindingEpoch`] means no unbinding and no attach came in
     /// between. Moved: `503 storage_unavailable` (retryable), and a repeat
     /// acts on what is there now.
     async fn still_bound(&self, binding: &WabaBinding) -> Result<(), ServiceError> {
@@ -720,7 +721,12 @@ impl Authorizer {
     /// store wrote is taken back (`TokenVault::delete_if_unchanged`, which
     /// never deletes a token stored after it) and the answer is `503
     /// storage_unavailable`, retryable: the repeat sees the WABA as it is
-    /// now (another tenant's: `waba_owned_by_another_tenant`). An `admin`
+    /// now (another tenant's: `waba_owned_by_another_tenant`). Refreshed
+    /// in between instead (another attach of `tenant` landed on the same
+    /// binding: the next generation, roadmap S2b), the answer is `503`
+    /// too, and the write is kept: it is a token of the binding's own
+    /// tenant, and taking it back could leave the binding with none (the
+    /// other attach's token overwritten by it). An `admin`
     /// another [`Authorizer`] made is `403 forbidden`, and nothing is read
     /// or stored; the vault's failure is the library's error's code.
     /// Crate-private: the admin services' attach calls it, once
@@ -745,8 +751,26 @@ impl Authorizer {
         };
         let epoch = binding.epoch();
         let written = self.tokens.store(token).await?;
-        if self.holds(&epoch).await? {
+        let now = self.records.waba(waba_id).await?;
+        if now.as_ref().is_some_and(|now| now.epoch() == epoch) {
             return Ok(());
+        }
+        // Refreshed, not moved: another attach of this tenant landed on the
+        // same binding (the next generation, the same tenant and start: a
+        // binding made after an unbind begins later). What this wrote is a
+        // token of the binding's own tenant, which that attach's may have
+        // been overwritten by: kept, so that the binding is never left
+        // with none while the other attach answered success; `503` as for
+        // a move (retryable, roadmap S2b).
+        if now.is_some_and(|now| {
+            now.tenant_id == epoch.tenant_id && now.attached_at == epoch.attached_at
+        }) {
+            tracing::info!(
+                waba_id = waba_id.as_str(),
+                "another attach of its tenant refreshed a WABA's binding while its token was \
+                 being stored: the token was kept"
+            );
+            return Err(ServiceError::from(StorageError::Busy));
         }
         // Moved while this stored: what it wrote may sit under another
         // tenant's binding. Only that write goes, never a later one.
@@ -913,7 +937,9 @@ impl OwnedNumber {
     /// (through `authz`, which made it): a `190` (or `0`) marks the WABA's
     /// numbers `reconnect_required`, if the WABA is still bound as it was
     /// when this was made; a WABA unbound and attached again since (to
-    /// this tenant or another) keeps its numbers' status. Through an
+    /// this tenant or another), or attached again to its tenant without an
+    /// unbind (a refresh: another generation, roadmap S2b), keeps its
+    /// numbers' status. Through an
     /// `authz` that did not make it: `403 forbidden`, and nothing is
     /// marked.
     pub async fn failed(&self, authz: &Authorizer, error: &Error) -> ServiceError {

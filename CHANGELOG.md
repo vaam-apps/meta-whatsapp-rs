@@ -218,6 +218,33 @@ stored data, the owner's).
 
 ### Added
 
+- **The service's routing after a move, and the bind generation**
+  (roadmap S2b, design D36; parity rows 9 and 112 now done on the
+  service's side). Three settings, documented in the server guide:
+  `WA_SERVER_UNDATED_AFTER_MOVE` (`operator_only`, the default, or
+  `current_holder`), `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` (`169h`, 7
+  days and an hour) and `WA_SERVER_MOVE_SKEW_MARGIN` (`0s`), in the core
+  as `events::MoveRules` and `events::UndatedAfterMove`
+  (`Inbound::with_move_rules`). Every backend records each WABA's last
+  unbinding (`model::WabaTombstone`, written with every unbind; a
+  deleted tenant counts as another tenant) and reads it into a new
+  binding's `WabaBinding::previous_tenant_unbound_at`, and counts a
+  binding's attaches in `WabaBinding::generation`, which a refresh (an
+  attach of the WABA to the tenant holding it) moves and
+  `BindingEpoch::generation` carries. On Postgres, an additive migration
+  4 (`0004_waba_moves.sql`, "waba moves": the columns
+  `wa_server_wabas.generation`, default 1, and
+  `wa_server_wabas.previous_tenant_unbound_at`, default the Unix epoch,
+  `UNRECORDED_MOVE`, and the table `wa_server_waba_tombstones`), whose
+  names are new stable identifiers pending the owner's confirmation
+  (docs/architecture.md § Stable identifiers). The conformance suite
+  holds every backend to it: `records::a_move_is_recorded`,
+  `records::a_refresh_moves_the_generation`, the `invariants` guard cases
+  (`a_first_onboarding_keeps_its_first_second`,
+  `the_skew_margin_applies_after_a_move_only`,
+  `an_undated_event_after_a_move_waits_out_the_window`),
+  `capabilities::failed_before_a_refresh_marks_nothing`, and the
+  `webhooks` cases through the pipeline.
 - **MongoDB in the dev container and CI** (roadmap S8, for S9, S17 and
   S18): a `mongodb` service in `compose.test.yaml` (`127.0.0.1:57017`) and
   a `mongodb` sidecar in the devcontainer, both `mongo:7.0.45-jammy` run
@@ -1888,6 +1915,39 @@ stored data, the owner's).
 
 ### Changed
 
+- **The service routes a moved WABA's events by the rules of D36**
+  (roadmap S2b). Behaviour: after a WABA moved to a tenant from another
+  one, its undated tenant-visible events (errors, history chunks,
+  undated group updates) are operator-only for 7 days and an hour after
+  the move by default (they reached the new holder before:
+  `WA_SERVER_UNDATED_AFTER_MOVE=current_holder` keeps that), its inbox
+  included; a WABA no other tenant held is unaffected, and keeps the
+  events of its binding's first second, which were operator-only since
+  S2 (that rule now applies after a move only, with the skew margin);
+  a `190` answered to a capability made before its binding was
+  refreshed for its own tenant no longer marks the numbers
+  `reconnect_required`; a capability made while a refresh lands, and an
+  attach whose confirmation finds another attach of its tenant landed
+  after its binding, are `503 storage_unavailable` (retryable), as for
+  a move (that attach keeps the token it stored, its tenant's own); a
+  new binding on Postgres begins no earlier than the unbinding it
+  follows. The WABAs bound before migration 4 keep S2's rules (their
+  history unknown); an unbind made by an earlier release, before the
+  upgrade or during its rolling deploy, is not recorded, so do not move
+  WABAs between tenants in the 7 days and an hour before the deploy nor
+  during it. `openapi/v1.json` and the
+  event data are unchanged.
+  **Breaking** in the service's crates (`publish = false`):
+  `outbox::RouteGuard` has a new field `after_move` (`outbox::AfterMove`;
+  `AfterMove::default()` is the rule before for an undated event), and
+  `outbox::began_by` is gone (`RouteGuard::admits`, `dated_bounds`);
+  `events::route` and `events::owner` take a `&events::Routing` (the
+  arrival, the replay bound and the `MoveRules`) instead of the replay
+  bound; `model::WabaBinding` and `model::BindingEpoch` have new fields
+  (`generation`, `previous_tenant_unbound_at`), and a backend of your
+  own must keep the tombstone and the generation as the port's docs say
+  (`RecordStore::bind_waba`, `unbind_waba`, `unbind_waba_if`,
+  `delete_tenant`), which the conformance suite checks.
 - **`FanoutSink` returns the first transient error before any permanent
   one** (`meta-whatsapp-adapters`, roadmap L21a): it returned the first
   error in the order the sinks were added. A fan-out is permanent only

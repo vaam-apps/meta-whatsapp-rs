@@ -22,6 +22,7 @@ use meta_whatsapp_server_core::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
     NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
+    WabaTombstone,
 };
 
 /// In-memory [`RecordStore`] and [`IdempotencyRecords`]. Its event outbox is [`MemoryStore::outbox`]: one
@@ -83,6 +84,8 @@ pub(super) struct State {
     keys: BTreeMap<String, ApiKeyRecord>,
     pub(super) wabas: BTreeMap<String, WabaBinding>,
     pub(super) numbers: BTreeMap<String, NumberBinding>,
+    /// Each WABA's last unbinding, by WABA id (roadmap S2b).
+    tombstones: BTreeMap<String, WabaTombstone>,
     /// Idempotency records by (tenant, key).
     idempotency: BTreeMap<(String, String), IdempotencyEntry>,
 }
@@ -233,6 +236,11 @@ impl RecordStore for MemoryStore {
         state
             .idempotency
             .retain(|(tenant, _), _| tenant != id.as_str());
+        // The WABAs it was unbound from forget it (Postgres: ON DELETE SET
+        // NULL): a tenant created again under its id is another tenant.
+        for tombstone in state.tombstones.values_mut() {
+            tombstone.forget_tenant(id);
+        }
         // Its events: under the store's lock, as Postgres does it in the
         // deleting transaction.
         self.outbox.forget_tenant(id);
@@ -332,14 +340,23 @@ impl RecordStore for MemoryStore {
             return Ok(BindOutcome::OwnedByAnotherTenant);
         }
         let now = OffsetDateTime::now_utc();
+        // A refresh keeps the binding's start and its previous tenant, and
+        // moves its generation; a new binding reads the WABA's tombstone.
+        let previous = state
+            .tombstones
+            .get(waba_id.as_str())
+            .and_then(|tombstone| tombstone.previous_for(tenant));
         state
             .wabas
             .entry(waba_id.as_str().to_owned())
+            .and_modify(|binding| binding.generation = binding.generation.saturating_add(1))
             .or_insert_with(|| WabaBinding {
                 waba_id: waba_id.clone(),
                 tenant_id: tenant.clone(),
                 credit_allocation_id: None,
                 attached_at: now,
+                generation: 1,
+                previous_tenant_unbound_at: previous,
             });
         state
             .numbers
@@ -360,10 +377,7 @@ impl RecordStore for MemoryStore {
     }
 
     async fn unbind_waba(&self, waba_id: &WabaId) -> StoreResult<bool> {
-        let mut state = self.lock();
-        let removed = state.wabas.remove(waba_id.as_str()).is_some();
-        state.numbers.retain(|_, b| &b.waba_id != waba_id);
-        Ok(removed)
+        Ok(unbind(&mut self.lock(), waba_id))
     }
 
     async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool> {
@@ -371,9 +385,7 @@ impl RecordStore for MemoryStore {
         if !holds(&state, epoch) {
             return Ok(false);
         }
-        state.wabas.remove(epoch.waba_id.as_str());
-        state.numbers.retain(|_, b| b.waba_id != epoch.waba_id);
-        Ok(true)
+        Ok(unbind(&mut state, &epoch.waba_id))
     }
 
     async fn waba(&self, waba_id: &WabaId) -> StoreResult<Option<WabaBinding>> {
@@ -461,12 +473,26 @@ impl RecordStore for MemoryStore {
 }
 
 /// Whether `epoch.waba_id` is still bound as `epoch` says: the same
-/// tenant, since the same instant.
+/// tenant, since the same instant, at the same generation.
 fn holds(state: &State, epoch: &BindingEpoch) -> bool {
     state
         .wabas
         .get(epoch.waba_id.as_str())
-        .is_some_and(|w| w.tenant_id == epoch.tenant_id && w.attached_at == epoch.attached_at)
+        .is_some_and(|w| w.epoch() == *epoch)
+}
+
+/// Remove `waba_id`'s binding and its numbers, leaving its tombstone (the
+/// record of this unbinding, in the same step); whether it was bound.
+fn unbind(state: &mut State, waba_id: &WabaId) -> bool {
+    let Some(binding) = state.wabas.remove(waba_id.as_str()) else {
+        return false;
+    };
+    state.numbers.retain(|_, b| &b.waba_id != waba_id);
+    state.tombstones.insert(
+        waba_id.as_str().to_owned(),
+        WabaTombstone::of(&binding, OffsetDateTime::now_utc()),
+    );
+    true
 }
 
 #[async_trait]
