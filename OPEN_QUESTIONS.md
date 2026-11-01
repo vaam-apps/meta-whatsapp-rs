@@ -97,6 +97,56 @@ of its own, after an HTML comment; keep that when you add one.
    recover a missed one. Swappable by that option; until it lands,
    `needs_coexistence_sync()` stays the signal. Roadmap L11d.
 
+   **Landed with roadmap L11d (2026-11-01), the library's side:** two
+   steps, `sync_contacts` then
+   `sync_history` (Meta's steps 1 and 2 of
+   `onboarding-business-app-users`, each its own once-only call), the
+   last of the tail: after `subscribe_app`, a Solution Partner's credit
+   line and `register_phone` (which never runs for coexistence), because
+   Meta's page starts the sync once the onboarding steps are done.
+   They run when the request's `finish_kind` is coexistence and
+   `OnboardingRequest::coexistence_sync` is on (the default); its
+   setter, `coexistence_sync(false)`, turns them off, and
+   `needs_coexistence_sync()` is unchanged. Meta's answers come back in
+   `Onboarded::coexistence_sync` (`SyncOutcome::Requested` with the
+   `request_id` Meta asks partners to keep, or `Refused`). Meta's
+   errors page says a second request is refused (`2593107`, "exceeded
+   the maximum number of times") and so is one past 24 hours
+   (`2593108`); nothing documents a way to read whether a sync was
+   made. So each request is claimed, before it is posted, in a plain
+   JSON record (`wa.es.coexistence`, keyed by phone number id, scoped to
+   the stored token record's WABA and `created_at`, so a new signup
+   starts a new sync), and `resume` reads it: an accepted or refused
+   request is never posted again; a Meta refusal (`SyncNotAllowed`) is
+   reported, not failed (only a new signup changes it); a request Meta
+   refused before doing anything (`may_have_been_sent` false) releases
+   its claim and is asked again; one whose answer was lost keeps its
+   claim, and `resume` fails at that step, before any request, until
+   the integrator checks the webhooks and resumes with the sync off.
+   Hosted signup syncs nothing (`hosted-es` onboards to Cloud API only;
+   `for_hosted` names no finish). The new namespace is a stored
+   identifier, pending the owner's confirmation (`docs/architecture.md`
+   § Stable identifiers). M3b avoids a second call by building on these
+   steps rather than calling `smb_app_data` itself: the record already
+   refuses a repeat within one onboarding, and the service's own record
+   of a synced number can turn the option off for a later one. Swappable
+   by the option (and by calling `sync_smb_app_data` yourself). Roadmap
+   L11d (landed); the service's side, M3b.
+
+   **Confirmed 2026-11-01 (coordinator, owner's delegation; roadmap L11d
+   landed):** decided for the library, the service's side carried by
+   M3b, which builds on these steps rather than calling `smb_app_data`
+   itself. The choices, each swappable, are the ones above and in
+   roadmap L11d's Decided note: two steps after the credit-line steps,
+   in Meta's order; Meta's refusals reported as `SyncOutcome::Refused`;
+   a claim released only when `!may_have_been_sent()`; a lost answer's
+   way out manual and documented (a call clearing a pending claim is a
+   follow-up); the option `coexistence_sync(bool)`, on by default; the
+   record never expires. The record's namespace, `wa.es.coexistence`,
+   and its layout stay the owner's to confirm before the first release
+   (`docs/architecture.md` § Stable identifiers). Swappable by the
+   option. Roadmap L11d (landed), M3b.
+
 8. **Token expiry and refresh.** The expiry is recorded; nothing refreshes.
    Today the merchant redoes Embedded Signup.
 
