@@ -2264,7 +2264,8 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     to POST, either field's name, a default on either field, `calls`'s
     wire name, refusing an empty `roles`, `holds` by equality, and the
     catch-all removed; each fails a test.
-  - **Proposed** (for the coordinator; each swappable as noted): a
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable as noted): a
     method on `ThreadControl` rather than a module and accessor of its
     own (`client.routing_roles(id)` would be an additive accessor);
     `RoutingRole` its own enum, not `TargetRole` (`calls` is no pass
@@ -2277,7 +2278,8 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     page calls it unordered; `holds` is the set test); the read retried
     as every GET is; no local cache or rate limiting (Meta rate limits
     the endpoint per number and per app and asks for periodic reads:
-    the caller schedules them).
+    the caller schedules them); M5l, not this item, decides whether
+    the service exposes the roles.
 - [x] **L16a. The Messaging Account a send bills**
   (`meta-whatsapp-client`, `client::messages`; row 140). Meta's account
   model evolution (`account-model-evolution`) is generally available
