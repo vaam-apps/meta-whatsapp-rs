@@ -1008,6 +1008,11 @@ pub(crate) mod tests {
                 .push((key.to_string(), value.to_vec()));
         }
 
+        /// Every write so far, in order: `(namespace/key, value)`.
+        pub(crate) fn writes(&self) -> Vec<(String, Vec<u8>)> {
+            self.writes.lock().unwrap().clone()
+        }
+
         /// Panic if any key or value ever written contains `secret`, raw or
         /// base64-encoded (standard or URL-safe).
         pub(crate) fn assert_never_wrote(&self, secret: &str) {

@@ -217,6 +217,27 @@ stored data, the owner's).
 
 ### Added
 
+- **Hosted Embedded Signup** (`meta_whatsapp_client::embedded_signup`,
+  roadmap L11a, parity row 121; OPEN_QUESTIONS #11; the service's side
+  is M3f). `HostedSignup::new(waba_id, owner_business_id)`, from the
+  `account_update` `PARTNER_ADDED` webhook's `waba_info`, and
+  `EmbeddedSignup::onboard_hosted(&signup, &system_token, &request,
+  &vault)` (and `onboard_hosted_with_approval`, required for a Solution
+  Partner): step `fetch_token` (new, in `steps`) asks
+  `POST /{owner_business_id}/system_user_access_tokens` for the business
+  token with your system user token and its `appsecret_proof` under the
+  app secret, in a form body with `fetch_only=true`
+  (`Business::system_user_access_token`; `HostedSignup::token_request`
+  swaps the request, a generation never replayed), then runs the code
+  flow's steps, now shared with `onboard`: `debug_token`,
+  `verify_assets` (which also refuses a WABA whose owner, as Meta
+  reports it, is another business than the webhook's), `approve`,
+  `store_token` (the same `wa.token` record), `subscribe_app`, the
+  credit line steps of a Solution Partner, `register_phone`.
+  `OnboardingRequest::for_hosted` builds the request (no code; the
+  session info of `HostedSignup::session`), and `resume` takes it after
+  a failure past `store_token`; before it, nothing is spent and the call
+  can be made again. Additive: `onboard` and `resume` are unchanged.
 - **A pacer shared by replicas** in `meta-whatsapp-bot` (roadmap B2b,
   parity row 89; for the service's broadcasts, M5k). Opt-in:
   `KvRateLimiter` (module `pacer`) is a `RateLimiter` whose per-number

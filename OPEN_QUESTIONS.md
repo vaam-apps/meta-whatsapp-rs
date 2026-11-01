@@ -137,6 +137,26 @@ of its own, after an HTML comment; keep that when you add one.
     are the existing ones (verify, store, subscribe, register). Swappable:
     both are opt-in, and the code-exchange flow is unchanged. Roadmap L11a.
 
+    **Landed with roadmap L11a (2026-11-01), pending the coordinator's
+    review:** `EmbeddedSignup::onboard_hosted` (and `_with_approval`)
+    takes a `HostedSignup` (the webhook's `waba_info.waba_id` and
+    `owner_business_id`) and your system user token; the app secret is
+    the `AppCredentials`' one. Found on the way, each proposed, not yet
+    decided: the token request is `fetch_only=true` by default, as
+    `hosted-es` step 5 sends it, swappable per signup
+    (`HostedSignup::token_request`; a generation is never replayed);
+    `verify_assets` refuses a WABA whose owner, as Meta reports it, is
+    another business than the webhook's (when Meta reports none, nothing
+    is stored for it, as in the code flow); `debug_token` still runs on
+    the fetched token, so its grants must name the WABA. Left to the
+    integrator, and documented: the webhook names no tenant (bind it in
+    the approval), `PARTNER_ADDED` also comes for code-flow and
+    coexistence onboardings (skip a WABA already held), and the hosted
+    page asks for no PIN (the integrator chooses one per number, as #4
+    keeps: nothing generates or stores it). With both halves landed,
+    this entry can be deleted once nothing cites it (CHANGELOG
+    "Open questions closed").
+
 12. **Launch option shape.** `pre-filled-data` shows
     `whatsAppBusinessAccount` both as `{ids: …}` and `{id: [...]}`; the code
     uses the worked example (`{id: [...]}`) and sends `business.id` as a
