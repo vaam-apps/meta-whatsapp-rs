@@ -89,7 +89,7 @@ menu: `Bot::sync_command_menu` (only `commands`, checked the same way).
 - `get(&["quality_rating", "name_status", "status"])` returns a
   `PhoneNumberInfo`; `PhoneNumberQualityUpdated` webhooks report changes.
 - Coexistence numbers (the merchant keeps the WhatsApp Business app) are
-  already registered; start the data sync once, within 24 hours:
+  already registered. `onboard` starts the data sync itself, unless told not to (`meta-whatsapp-rs-embedded-signup`); by hand, once, within 24 hours:
 
 ```rust
 let number = merchant.phone_number(phone_number_id);

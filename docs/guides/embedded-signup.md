@@ -225,6 +225,8 @@ with the names in `embedded_signup::steps`:
 | `assign_system_user` | Solution Partner, share-and-attach only: your system user on the merchant's WABA | fix, then `resume` |
 | `share_credit_line` | Solution Partner only: checks, then shares your credit line | fix, then `resume` (it checks before it posts); a business whose line was revoked is refused unless the request opts in |
 | `register_phone` | `POST /{number}/register` with the PIN | fix (often the PIN), then `resume` |
+| `sync_contacts` | coexistence only, unless the request turns it off: `POST /{number}/smb_app_data`, the contacts ([below](#coexistence-merchants-keeping-the-whatsapp-business-app)) | fix, then `resume`, which never posts a request again once it may have reached Meta |
+| `sync_history` | the same, the message history | as `sync_contacts` |
 
 The token is stored **before** the steps after it on purpose: a wrong PIN
 (`ErrorKind::TwoStepVerification`, 133005) must not cost the merchant the
@@ -274,8 +276,9 @@ with no code from the session info you saved when onboarding failed
 exchanges it. With no number named, `resume` registers the first number
 stored for the WABA (the onboarded one); without `register_with_pin` it
 only subscribes. A coexistence onboarding's request has `finish_kind` set
-from the event; `for_resume` leaves it `None`, so set it from what you saved
-if you want registering such a number refused locally.
+from the event; `for_resume` leaves it `None`, so set it from what you saved:
+then registering such a number is refused locally, and `resume` finishes
+its sync steps (without it, `resume` runs none).
 (Until roadmap L4, the request needed a placeholder code that `resume`
 ignored.)
 
@@ -775,13 +778,39 @@ if let WebhookEvent::AccountUpdated { update, .. } = &event
 
 Launch with `LaunchOptions::new(id).coexistence()`. The flow finishes with
 `FinishKind::WhatsappBusinessAppOnboarding` and only a WABA id; do not add a
-PIN (the number is already registered; validation refuses it). When
-`onboarded.needs_coexistence_sync()`, call
-`merchant.phone_number(pnid).sync_smb_app_data(SmbSyncType::SmbAppStateSync)`
-and `…(SmbSyncType::History)` once each within 24 hours, and subscribe to
-`history`, `smb_app_state_sync` and `smb_message_echoes`. `InboxSink`
-records the echoes and the synced history in the merchant's conversations
+PIN (the number is already registered; validation refuses it). Subscribe
+your Meta app to `history`, `smb_app_state_sync` and `smb_message_echoes`.
+
+Meta allows the contacts sync and the history sync once each per number,
+within 24 hours of onboarding; after that only offboarding and a new
+signup recover them. So `onboard` requests both itself, as its last two
+steps (`sync_contacts`, then `sync_history`, after the subscription and a
+Solution Partner's credit line, the order of Meta's
+`onboarding-business-app-users`), and returns Meta's answers in
+`onboarded.coexistence_sync`: each `SyncOutcome::Requested` with the
+`request_id` Meta support asks for, or `SyncOutcome::Refused` with Meta's
+code (`2593107`, already requested; `2593108`, past 24 hours), which is
+reported, not a failure. Tell the merchant the sync is running and to
+keep the WhatsApp Business app open; the data arrives by webhook.
+`InboxSink` records the echoes and the synced history in the merchant's
+conversations
 ([CMS inbox guide](cms-inbox.md#coexistence-the-merchant-also-uses-the-whatsapp-business-app)).
+
+- **Turning it off**: `request.coexistence_sync(false)`, when you request
+  the syncs yourself (`merchant.phone_number(pnid).sync_smb_app_data(…)`).
+  `onboarded.needs_coexistence_sync()` still says the onboarding was a
+  coexistence one.
+- **Never twice**: each request is claimed in a record before it is
+  posted (namespace `wa.es.coexistence` of the vault's store, keyed by
+  number, tied to the stored token record, so a new signup syncs again),
+  and `resume` reads it. A request Meta answered is not posted again; one
+  Meta refused before doing anything (a 4xx) is asked again by `resume`;
+  **one whose answer was lost** (a timeout, a 5xx) is not: `resume` fails
+  at its step with a `ValidationError` on `coexistence_sync`. Look for
+  its webhooks (`smb_app_state_sync` for contacts, `history`), then
+  resume with `coexistence_sync(false)`; if none arrive, request it
+  yourself.
+- **Hosted signup** onboards to Cloud API only, so it syncs nothing.
 
 ## Pitfalls
 
@@ -811,7 +840,7 @@ share, and to keep marking a business on offboarding, all above):
 | 4 | Two-step PIN policy | you pass a 6-digit PIN on every `onboard`/`resume`; nothing generates or stores it (the example asks the merchant each time) | keep it so |
 | 5 | Multi-WABA signups | only the claimed (or first, or newest granted) WABA is onboarded | the default stays; every granted WABA as an option (roadmap L11b) |
 | 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins unless your `onboard_with_approval` refuses it (required for a Solution Partner, whose approval is recorded; the policy is still yours) | keep it so: no tenant policy in the library |
-| 7 | Coexistence sync | flagged by `needs_coexistence_sync()`, not triggered | automatic after a coexistence onboarding, with an option to turn it off (roadmap L11d) |
+| 7 | Coexistence sync | the last two steps of a coexistence onboarding (`sync_contacts`, `sync_history`), each posted once; `OnboardingRequest::coexistence_sync(false)` turns them off (L11d) | automatic after a coexistence onboarding, with an option to turn it off (roadmap L11d) |
 | 8 | Token expiry and refresh | expiry recorded, nothing refreshes | no refresh; the expiry surfaced before it lapses (roadmap L11e) |
 | 9 | Vault key custody and rotation cadence | you supply keys; rotation supported, not scheduled | custody yours; rotation on demand, at least yearly |
 | 11 | App-only install, Hosted Embedded Signup | both integrated: the `app_only_install` launch feature, and `onboard_hosted` from the `PARTNER_ADDED` webhook (L11a) | integrate both, opt-in (roadmap L11a) |

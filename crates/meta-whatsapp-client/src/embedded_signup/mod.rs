@@ -109,6 +109,8 @@
 //! | `assign_system_user` | Solution Partner, [`CreditSharing::ShareAndAttach`] only: `POST /{WABA}/assigned_users` (system user token) | yes (sets the same grant) |
 //! | `share_credit_line` | Solution Partner only: check, then share the credit line (see below) | yes: it checks before it posts, and refuses a business whose line was revoked |
 //! | `register_phone` | `POST /{PHONE}/register` | yes, but counts against 10 per 72 h |
+//! | `sync_contacts` | coexistence only, unless [`OnboardingRequest::coexistence_sync`] is off: `POST /{PHONE}/smb_app_data`, `sync_type` `smb_app_state_sync` | **once** per number (Meta's rule): claimed before it is posted; a repeat posts nothing once Meta answered, and refuses when an answer was lost ([below](#coexistence-whatsapp-business-app-users)) |
+//! | `sync_history` | the same, `sync_type` `history` | as `sync_contacts` |
 //!
 //! **Retrying a failed `onboard` is not safe**: the code is spent by the
 //! first step. The token is stored **before** the steps after it, and only
@@ -298,11 +300,50 @@
 //! Launch with [`LaunchOptions::coexistence`]. The flow ends with
 //! `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING` and only a WABA id; `onboard`
 //! resolves the number from the WABA and refuses to register it (it is
-//! already registered). Then, within 24 hours and once each, call
-//! [`PhoneNumber::sync_smb_app_data`](crate::phone_numbers::PhoneNumber::sync_smb_app_data)
-//! with [`SmbSyncType::SmbAppStateSync`](crate::phone_numbers::SmbSyncType)
-//! and `History`, and subscribe to the `history`, `smb_app_state_sync` and
-//! `smb_message_echoes` webhook fields.
+//! already registered). Subscribe your app to the `history`,
+//! `smb_app_state_sync` and `smb_message_echoes` webhook fields.
+//!
+//! Meta allows the contacts and the history sync **once each per number,
+//! within 24 hours of onboarding**; only offboarding and a new signup
+//! allow them again (`2593107`, `2593108`:
+//! [`ErrorKind::SyncNotAllowed`](meta_whatsapp_core::ErrorKind::SyncNotAllowed)).
+//! So, by default (`OPEN_QUESTIONS.md` #7), the onboarding requests them
+//! itself, as its last two steps, in the order of
+//! `embedded-signup/onboarding-business-app-users`: after the onboarding
+//! steps (the WABA subscribed, a Solution Partner's credit line shared),
+//! `sync_contacts`, then `sync_history`
+//! ([`PhoneNumber::sync_smb_app_data`](crate::phone_numbers::PhoneNumber::sync_smb_app_data)
+//! with [`SmbSyncType::SmbAppStateSync`](crate::phone_numbers::SmbSyncType),
+//! then `History`, with the business token). Meta's answers are in
+//! [`Onboarded::coexistence_sync`] ([`SyncOutcome`], with each
+//! `request_id`). [`OnboardingRequest::coexistence_sync`]`(false)` turns
+//! the steps off; [`Onboarded::needs_coexistence_sync`] still says the
+//! onboarding was a coexistence one.
+//!
+//! Each request is claimed in a record of its own before it is posted
+//! (under [`COEXISTENCE_NAMESPACE`] on the vault's store, keyed by phone
+//! number, scoped to the stored token record: a new onboarding is a new
+//! sync), and [`EmbeddedSignup::resume`] reads it:
+//!
+//! - accepted: not posted again; its outcome is reported;
+//! - refused by Meta (`SyncNotAllowed`): recorded and reported as
+//!   [`SyncOutcome::Refused`], not as a failure, and never asked again for
+//!   this onboarding (nothing but a new signup can change Meta's answer);
+//! - refused before Meta did anything (a 4xx, a connection that never
+//!   opened: [`meta_whatsapp_core::Error::may_have_been_sent`] is `false`):
+//!   the step fails, the claim is released, and `resume` asks again;
+//! - **an answer lost** (a timeout, a 5xx): the step fails and the claim
+//!   stays, so neither the client's retries (the request is not
+//!   idempotent: [`meta_whatsapp_core::Error::may_resend`]) nor `resume`
+//!   post it again; `resume` fails at that step with a
+//!   [`ValidationError`](meta_whatsapp_core::error::ValidationError) on
+//!   `coexistence_sync`. The data's webhooks (`smb_app_state_sync`,
+//!   `history`) show whether it went through: resume with
+//!   `coexistence_sync(false)`, and if none arrive, request it yourself.
+//!
+//! Hosted Embedded Signup onboards to Cloud API only (`hosted-es`: "the
+//! flow cannot be customized"), so [`OnboardingRequest::for_hosted`] names
+//! no coexistence finish and syncs nothing.
 //!
 //! # Secrets
 //!
@@ -317,6 +358,7 @@
 //! system token travels in the `Authorization` header, its
 //! `appsecret_proof` in the form body, and no error quotes the answer.
 
+mod coexistence;
 mod event;
 mod hosted;
 mod launch;
@@ -327,6 +369,7 @@ mod session;
 mod token;
 mod vault;
 
+pub use coexistence::{COEXISTENCE_NAMESPACE, CoexistenceSync, SyncOutcome};
 pub use event::{
     CancelInfo, CurrentStep, EmbeddedSignupEvent, FinishKind, MESSAGE_TYPE, ReportedError,
     SessionInfo,

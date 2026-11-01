@@ -105,7 +105,7 @@ names are constants in `embedded_signup::steps`:
 | `exchange_code`, `debug_token`, `verify_assets` | start over: the code is spent |
 | `approve` (`onboard_with_approval`, `resume_with_approval`) | your refusal: nothing stored, subscribed or shared; a Solution Partner's `resume` of an unapproved WABA |
 | `store_token` | fix the store, start over |
-| `subscribe_app`, `assign_system_user`, `share_credit_line`, `register_phone` (`AFTER_STORE`) | the token is stored: fix the cause, then **`resume`** |
+| `subscribe_app`, `assign_system_user`, `share_credit_line`, `register_phone`, `sync_contacts`, `sync_history` (`AFTER_STORE`) | the token is stored: fix the cause, then **`resume`** |
 
 The browser's ids are claims: `verify_assets` checks them with Meta. The
 token is stored first: later steps fail for fixable reasons (a wrong PIN,
@@ -143,8 +143,8 @@ token, its `appsecret_proof` in the form body) replaces `exchange_code`, then th
 - Never write tokens yourself instead of `onboard`: `TokenVault::store` trusts its phone number ids, so browser-supplied ids
   would route one merchant's customers to another (`meta-whatsapp-rs-token-vault`).
 - The app secret stays on the server; limit the callback's body size; never log the code, the event body, tokens or the PIN.
-- **Coexistence** (merchants keeping the WhatsApp Business app): no `register`; if `onboarded.needs_coexistence_sync()`,
-  call `sync_smb_app_data` once per `SmbSyncType` within 24 hours (`meta-whatsapp-rs-phone-numbers`).
+- **Coexistence** (merchants keeping the WhatsApp Business app): no `register`. `onboard` ends with `sync_contacts`, `sync_history` (Meta allows each once, within 24 h; answers in `onboarded.coexistence_sync`; `coexistence_sync(false)` turns them off).
+  A sync whose answer was lost is never posted again: `resume` fails there; check its webhooks, resume with it off.
 
 ~~`redeem` first, then parse the event, code and PIN~~ (until 2026-09-24): a malformed post spent the attempt. Check everything local first.
 

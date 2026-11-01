@@ -29,7 +29,10 @@ use crate::waba::{CallbackOverride, PhoneNumbersQuery, Waba};
 /// they are the ones `docs/architecture.md` lists for `onboard`, in order;
 /// `approve` runs only in [`EmbeddedSignup::onboard_with_approval`], and
 /// `assign_system_user` and `share_credit_line` only in
-/// [Solution Partner mode](super#solution-partner-mode).
+/// [Solution Partner mode](super#solution-partner-mode), and
+/// `sync_contacts` and `sync_history` only after a
+/// [coexistence](super#coexistence-whatsapp-business-app-users)
+/// onboarding.
 /// [`EmbeddedSignup::onboard_hosted`] runs `fetch_token` in place of
 /// `exchange_code`, then the same steps.
 pub mod steps {
@@ -71,6 +74,21 @@ pub mod steps {
     pub const SHARE_CREDIT_LINE: &str = "share_credit_line";
     /// `POST /{PHONE_NUMBER_ID}/register`.
     pub const REGISTER_PHONE: &str = "register_phone";
+    /// `POST /{PHONE_NUMBER_ID}/smb_app_data` with `sync_type`
+    /// `smb_app_state_sync`: the WhatsApp Business app's contacts, after a
+    /// coexistence onboarding, unless
+    /// [`OnboardingRequest::coexistence_sync`](super::OnboardingRequest::coexistence_sync)
+    /// is off. The last steps, after the tail (`subscribe_app` and, in
+    /// Solution Partner mode, the credit line), in the order of
+    /// `embedded-signup/onboarding-business-app-users`. Meta allows it
+    /// once per number, within 24 hours: each request is claimed in a
+    /// record before it is posted, and never posted again once accepted,
+    /// refused, or posted without a recorded answer
+    /// ([module docs](crate::embedded_signup#coexistence-whatsapp-business-app-users)).
+    pub const SYNC_CONTACTS: &str = "sync_contacts";
+    /// `POST /{PHONE_NUMBER_ID}/smb_app_data` with `sync_type` `history`:
+    /// the message history, right after `sync_contacts`, on the same terms.
+    pub const SYNC_HISTORY: &str = "sync_history";
     /// Reading the token back from the vault ([`EmbeddedSignup::resume`](super::EmbeddedSignup::resume)
     /// only).
     pub const LOAD_TOKEN: &str = "load_token";
@@ -81,6 +99,7 @@ pub mod steps {
     pub const DELETE_TOKEN: &str = "delete_token";
 }
 
+use super::coexistence::{CoexistenceSync, sync_coexistence};
 use steps::{
     APPROVE, ASSIGN_SYSTEM_USER, DEBUG_TOKEN, EXCHANGE_CODE, LOAD_TOKEN, REGISTER_PHONE,
     SHARE_CREDIT_LINE, STORE_TOKEN, SUBSCRIBE_APP, VERIFY_ASSETS,
@@ -130,6 +149,12 @@ pub struct OnboardingRequest {
     /// revoked from it (Solution Partner mode only; see
     /// [`Self::reshare_after_revocation`]).
     pub reshare_after_revocation: bool,
+    /// After a coexistence onboarding (a [`finish_kind`](Self::finish_kind)
+    /// of [`FinishKind::WhatsappBusinessAppOnboarding`]), request the
+    /// contacts and history syncs (steps `sync_contacts`, `sync_history`).
+    /// On by default; see [`Self::coexistence_sync`]. Without effect on any
+    /// other onboarding.
+    pub coexistence_sync: bool,
 }
 
 impl OnboardingRequest {
@@ -168,6 +193,7 @@ impl OnboardingRequest {
             subscribe_override: None,
             currency: None,
             reshare_after_revocation: false,
+            coexistence_sync: true,
         }
     }
 
@@ -254,6 +280,22 @@ impl OnboardingRequest {
         self
     }
 
+    /// Whether a coexistence onboarding requests the WhatsApp Business
+    /// app's contacts and message history (steps `sync_contacts` and
+    /// `sync_history`, after every other step): `true` by default
+    /// (`OPEN_QUESTIONS.md` #7). Meta allows each request once per number,
+    /// within 24 hours of onboarding, and only offboarding and a new signup
+    /// recover a missed one, so turn it off only when you request them
+    /// yourself ([`PhoneNumber::sync_smb_app_data`](crate::phone_numbers::PhoneNumber::sync_smb_app_data)),
+    /// or to finish a [`EmbeddedSignup::resume`] whose sync step reported a
+    /// request that may have reached Meta. Without effect on any other
+    /// onboarding.
+    #[must_use]
+    pub fn coexistence_sync(mut self, enabled: bool) -> Self {
+        self.coexistence_sync = enabled;
+        self
+    }
+
     pub(super) fn validate(&self) -> Result<(), ValidationError> {
         if self.register && self.pin.is_none() {
             return Err(ValidationError::new(
@@ -316,13 +358,23 @@ pub struct Onboarded {
     /// Partner mode; also in the vault's credit ledger,
     /// [`TokenVault::credit`]). `None` for a Tech Provider.
     pub allocation_config_id: Option<AllocationConfigId>,
+    /// Meta's answers to the coexistence sync requests (steps
+    /// `sync_contacts` and `sync_history`), made by this call or an earlier
+    /// attempt of the same onboarding. `None` when the steps did not run:
+    /// not a coexistence onboarding, or
+    /// [`OnboardingRequest::coexistence_sync`] off. Keep each `request_id`:
+    /// Meta support asks for it.
+    pub coexistence_sync: Option<CoexistenceSync>,
     /// Steps that ran, in order (see [`steps`]).
     pub steps_completed: Vec<&'static str>,
 }
 
 impl Onboarded {
-    /// Whether this was a coexistence onboarding, which still needs the
-    /// `smb_app_data` syncs within 24 hours.
+    /// Whether this was a coexistence onboarding, whose `smb_app_data`
+    /// syncs Meta allows once each within 24 hours. With
+    /// [`OnboardingRequest::coexistence_sync`] on (the default), onboarding
+    /// requested them ([`Self::coexistence_sync`] has Meta's answers); with
+    /// it off, they are yours to request.
     pub fn needs_coexistence_sync(&self) -> bool {
         self.finish_kind == Some(FinishKind::WhatsappBusinessAppOnboarding)
     }
@@ -608,7 +660,10 @@ impl EmbeddedSignup {
             request,
             plan: plan.as_ref(),
         };
-        let allocation_config_id = tail
+        let TailDone {
+            allocation_config_id,
+            coexistence_sync,
+        } = tail
             .run(&stored, assets.phone_number_id.as_ref(), &mut done)
             .await?;
 
@@ -621,6 +676,7 @@ impl EmbeddedSignup {
             token,
             token_expires_at: expires_at,
             allocation_config_id,
+            coexistence_sync,
             steps_completed: done,
         })
     }
@@ -779,7 +835,10 @@ impl EmbeddedSignup {
             request,
             plan: plan.as_ref(),
         };
-        let allocation_config_id = tail
+        let TailDone {
+            allocation_config_id,
+            coexistence_sync,
+        } = tail
             .run(&stored, phone_number_id.as_ref(), &mut done)
             .await?;
         Ok(Onboarded {
@@ -791,6 +850,7 @@ impl EmbeddedSignup {
             token: stored.token,
             token_expires_at: stored.expires_at,
             allocation_config_id,
+            coexistence_sync,
             steps_completed: done,
         })
     }
@@ -807,17 +867,26 @@ struct Tail<'a> {
     plan: Option<&'a CreditPlan<'a>>,
 }
 
+/// What the tail established.
+struct TailDone {
+    /// The allocation funding the WABA, in Solution Partner mode.
+    allocation_config_id: Option<AllocationConfigId>,
+    /// Meta's answers to the coexistence syncs, when they ran.
+    coexistence_sync: Option<CoexistenceSync>,
+}
+
 impl Tail<'_> {
     /// `subscribe_app`; in Solution Partner mode `assign_system_user`
     /// (share-and-attach only) and `share_credit_line`; then
-    /// `register_phone` if requested. The allocation funding the WABA, in
-    /// Solution Partner mode.
+    /// `register_phone` if requested; then, after a coexistence onboarding
+    /// unless the request turns it off, `sync_contacts` and
+    /// `sync_history`.
     async fn run(
         &self,
         stored: &StoredBusinessToken,
         phone_number_id: Option<&PhoneNumberId>,
         done: &mut Vec<&'static str>,
-    ) -> Result<Option<AllocationConfigId>> {
+    ) -> Result<TailDone> {
         let waba_id = stored.waba_id.clone();
         let business = self.business;
         let request = self.request;
@@ -845,7 +914,18 @@ impl Tail<'_> {
         }
 
         register(business, phone_number_id, request, done).await?;
-        Ok(allocation)
+
+        // `onboarding-business-app-users`: once the onboarding steps are
+        // done (the WABA subscribed), contacts first, then history.
+        let coexistence_sync = if request.is_coexistence() && request.coexistence_sync {
+            Some(sync_coexistence(business, self.vault, stored, phone_number_id, done).await?)
+        } else {
+            None
+        };
+        Ok(TailDone {
+            allocation_config_id: allocation,
+            coexistence_sync,
+        })
     }
 }
 
@@ -1051,11 +1131,14 @@ pub(super) mod tests {
     use serde_json::json;
     use time::macros::datetime;
 
+    use super::super::coexistence::{COEXISTENCE_NAMESPACE, SyncOutcome};
     use super::super::session::SignupSessions;
     use super::super::vault::tests::RecordingKv;
     use super::super::vault::{TOKEN_NAMESPACE, VaultKey, VaultKeys};
+    use super::steps::{SYNC_CONTACTS, SYNC_HISTORY};
     use super::*;
     use crate::{AppCredentials, RetryPolicy};
+    use meta_whatsapp_core::store::Expiry;
 
     const APP_ID: &str = "236484624622562";
     const APP_SECRET: &str = "614fc2afde15eee07a26b2fe3eaee9b9";
@@ -1170,6 +1253,61 @@ pub(super) mod tests {
         match err {
             Error::Step { step, .. } => step,
             other => panic!("not a step error: {other}"),
+        }
+    }
+
+    /// The harness's clock.
+    const NOW: OffsetDateTime = datetime!(2026-09-24 12:00 UTC);
+
+    /// A coexistence onboarding, as the flow's message event reports it
+    /// (`onboarding-business-app-users`: only the WABA id).
+    fn coexistence_request() -> OnboardingRequest {
+        let event = finish_event(
+            &json!({"waba_id": WABA}),
+            "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING",
+        );
+        OnboardingRequest::from_event(SignupCode::new(CODE).unwrap(), &event).unwrap()
+    }
+
+    /// Script a coexistence onboarding up to its subscription (no sync).
+    fn script_coexistence_until_subscribed(t: &ScriptedTransport) {
+        t.push_json(200, token_response(TOKEN));
+        t.push_json(200, debug_response(&[WABA]));
+        t.push_json(200, owner_response(WABA, BUSINESS));
+        t.push_json(200, phones_response(&[PHONE]));
+        t.push_json(200, success());
+    }
+
+    /// `onboarding-business-app-users`, steps 1 and 2: the example
+    /// response.
+    fn sync_response(request_id: &str) -> serde_json::Value {
+        json!({"messaging_product": "whatsapp", "request_id": request_id})
+    }
+
+    /// The step 1 or 2 example request, with the business token.
+    fn assert_sync_request(r: &meta_whatsapp_core::testing::RecordedRequest, sync_type: &str) {
+        assert_eq!(r.method, Method::POST);
+        assert_eq!(r.path(), format!("/v25.0/{PHONE}/smb_app_data"));
+        assert_eq!(r.bearer(), Some(TOKEN));
+        assert_eq!(
+            r.json(),
+            Some(json!({"messaging_product": "whatsapp", "sync_type": sync_type}))
+        );
+    }
+
+    /// How many sync requests were sent.
+    fn sync_requests(t: &ScriptedTransport) -> usize {
+        t.requests()
+            .iter()
+            .filter(|r| r.path().ends_with("/smb_app_data"))
+            .count()
+    }
+
+    fn synced(contacts: SyncOutcome, history: SyncOutcome) -> CoexistenceSync {
+        CoexistenceSync {
+            phone_number_id: PhoneNumberId::new(PHONE).unwrap(),
+            contacts,
+            history,
         }
     }
 
@@ -1437,11 +1575,9 @@ pub(super) mod tests {
         ));
         assert!(h.t.requests().is_empty());
 
-        h.t.push_json(200, token_response(TOKEN));
-        h.t.push_json(200, debug_response(&[WABA]));
-        h.t.push_json(200, owner_response(WABA, BUSINESS));
-        h.t.push_json(200, phones_response(&[PHONE]));
-        h.t.push_json(200, success());
+        script_coexistence_until_subscribed(&h.t);
+        h.t.push_json(200, sync_response("R-CONTACTS"));
+        h.t.push_json(200, sync_response("R-HISTORY"));
         let done = h.es.onboard(&request, &h.vault).await.unwrap();
         assert!(done.needs_coexistence_sync());
         assert_eq!(
@@ -1455,13 +1591,36 @@ pub(super) mod tests {
                 DEBUG_TOKEN,
                 VERIFY_ASSETS,
                 STORE_TOKEN,
-                SUBSCRIBE_APP
+                SUBSCRIBE_APP,
+                SYNC_CONTACTS,
+                SYNC_HISTORY
             ]
         );
         assert!(
             h.t.requests()
                 .iter()
                 .all(|r| !r.path().ends_with("/register"))
+        );
+        // Decisive (L11d): the sync is requested exactly once, contacts then
+        // history, after the subscription, with the business token.
+        let reqs = h.t.requests();
+        assert_eq!(reqs.len(), 7);
+        assert_eq!(reqs[4].path(), format!("/v25.0/{WABA}/subscribed_apps"));
+        assert_sync_request(&reqs[5], "smb_app_state_sync");
+        assert_sync_request(&reqs[6], "history");
+        assert_eq!(sync_requests(&h.t), 2);
+        assert_eq!(
+            done.coexistence_sync,
+            Some(synced(
+                SyncOutcome::Requested {
+                    request_id: "R-CONTACTS".into(),
+                    at: NOW,
+                },
+                SyncOutcome::Requested {
+                    request_id: "R-HISTORY".into(),
+                    at: NOW,
+                },
+            ))
         );
         assert!(
             h.vault
@@ -1962,22 +2121,437 @@ pub(super) mod tests {
         assert_eq!(h.t.requests().len(), sent, "nothing was sent");
 
         h.t.push_json(200, success());
+        h.t.push_json(200, sync_response("R1"));
+        h.t.push_json(200, sync_response("R2"));
         let done =
             h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
                 .await
                 .unwrap();
         assert_eq!(
             done.steps_completed,
-            vec![LOAD_TOKEN, VERIFY_ASSETS, SUBSCRIBE_APP]
+            vec![
+                LOAD_TOKEN,
+                VERIFY_ASSETS,
+                SUBSCRIBE_APP,
+                SYNC_CONTACTS,
+                SYNC_HISTORY
+            ]
         );
         assert!(done.needs_coexistence_sync());
         let reqs = h.t.requests();
-        assert_eq!(reqs.len(), sent + 1, "the subscription only");
+        assert_eq!(reqs.len(), sent + 3, "the subscription and the syncs only");
         assert_eq!(reqs[sent].method, Method::POST);
         assert_eq!(reqs[sent].path(), format!("/v25.0/{WABA}/subscribed_apps"));
         assert_eq!(reqs[sent].bearer(), Some(TOKEN));
         assert_eq!(reqs[sent].body, RecordedBody::Empty);
+        assert_sync_request(&reqs[sent + 1], "smb_app_state_sync");
+        assert_sync_request(&reqs[sent + 2], "history");
         assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Decisive (L11d): with the option off, a coexistence onboarding
+    /// requests no sync and stores no sync record.
+    #[tokio::test]
+    async fn with_the_option_off_no_sync_is_requested() {
+        let h = harness();
+        script_coexistence_until_subscribed(&h.t);
+        let request = coexistence_request().coexistence_sync(false);
+        assert!(!request.coexistence_sync);
+        let done = h.es.onboard(&request, &h.vault).await.unwrap();
+        assert!(done.needs_coexistence_sync(), "the signal stays");
+        assert_eq!(done.coexistence_sync, None);
+        assert_eq!(
+            done.steps_completed,
+            vec![
+                EXCHANGE_CODE,
+                DEBUG_TOKEN,
+                VERIFY_ASSETS,
+                STORE_TOKEN,
+                SUBSCRIBE_APP
+            ]
+        );
+        assert_eq!(h.t.requests().len(), 5);
+        assert_eq!(sync_requests(&h.t), 0);
+        assert!(sync_record(&h.kv).await.is_none());
+        assert_eq!(h.t.remaining(), 0);
+
+        // Off for a resume too.
+        h.t.push_json(200, success());
+        let done =
+            h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(done.coexistence_sync, None);
+        assert_eq!(sync_requests(&h.t), 0);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Decisive (L11d): an onboarding that is not a coexistence one sends no
+    /// sync, the option on (the default): the Cloud API flow, the flow
+    /// without a number, and a request that names no finish (hosted signup's
+    /// `for_hosted`, a `for_resume`).
+    #[tokio::test]
+    async fn an_onboarding_without_coexistence_sends_no_sync() {
+        let h = harness();
+        script_success(&h.t, TOKEN, WABA, &[PHONE]);
+        let request = full_request();
+        assert!(request.coexistence_sync, "on by default");
+        let done = h.es.onboard(&request, &h.vault).await.unwrap();
+        assert_eq!(done.coexistence_sync, None);
+        assert_eq!(done.steps_completed.last(), Some(&REGISTER_PHONE));
+        assert_eq!(h.t.remaining(), 0);
+
+        let only_waba = OnboardingRequest::from_event(
+            SignupCode::new(CODE).unwrap(),
+            &finish_event(&json!({"waba_id": WABA}), "FINISH_ONLY_WABA"),
+        )
+        .unwrap();
+        h.t.push_json(200, token_response(TOKEN));
+        h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(200, owner_response(WABA, BUSINESS));
+        h.t.push_json(200, phones_response(&[PHONE]));
+        h.t.push_json(200, success());
+        let done = h.es.onboard(&only_waba, &h.vault).await.unwrap();
+        assert_eq!(done.coexistence_sync, None);
+        assert_eq!(h.t.remaining(), 0);
+
+        for request in [
+            OnboardingRequest::for_resume(SessionInfo::default()),
+            OnboardingRequest::for_hosted(&HostedSignup::new(
+                WabaId::new(WABA).unwrap(),
+                BusinessId::new(BUSINESS).unwrap(),
+            )),
+        ] {
+            assert!(request.coexistence_sync && request.finish_kind.is_none());
+            h.t.push_json(200, success());
+            let done =
+                h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
+                    .await
+                    .unwrap();
+            assert_eq!(done.coexistence_sync, None);
+            assert_eq!(h.t.remaining(), 0);
+        }
+        assert_eq!(sync_requests(&h.t), 0);
+        assert!(sync_record(&h.kv).await.is_none());
+    }
+
+    /// A resume of a coexistence onboarding whose syncs Meta accepted posts
+    /// neither again, and reports the first answers; so does a second
+    /// resume. The clock is not on a whole second: the record keeps whole
+    /// seconds, as the vault does.
+    #[tokio::test]
+    async fn a_resume_never_requests_an_accepted_sync_again() {
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let mut h = harness_on(Arc::clone(&kv), RetryPolicy::NONE);
+        let at = datetime!(2026-09-24 12:00:00.75 UTC);
+        h.vault = h.vault.with_clock(Arc::new(ManualClock::new(at)));
+        script_coexistence_until_subscribed(&h.t);
+        h.t.push_json(200, sync_response("R-CONTACTS"));
+        h.t.push_json(200, sync_response("R-HISTORY"));
+        let request = coexistence_request();
+        let first = h.es.onboard(&request, &h.vault).await.unwrap();
+        assert_eq!(sync_requests(&h.t), 2);
+        let expected = synced(
+            SyncOutcome::Requested {
+                request_id: "R-CONTACTS".into(),
+                at: NOW,
+            },
+            SyncOutcome::Requested {
+                request_id: "R-HISTORY".into(),
+                at: NOW,
+            },
+        );
+        assert_eq!(first.coexistence_sync.as_ref(), Some(&expected));
+
+        for _ in 0..2 {
+            h.t.push_json(200, success());
+            let done =
+                h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                done.steps_completed,
+                vec![
+                    LOAD_TOKEN,
+                    VERIFY_ASSETS,
+                    SUBSCRIBE_APP,
+                    SYNC_CONTACTS,
+                    SYNC_HISTORY
+                ]
+            );
+            assert_eq!(done.coexistence_sync.as_ref(), Some(&expected));
+            assert_eq!(sync_requests(&h.t), 2, "never asked again");
+            assert_eq!(h.t.remaining(), 0);
+        }
+    }
+
+    /// A sync Meta refused before doing anything (a 4xx) fails its step
+    /// and is asked again by `resume`; the sync it accepted before is not.
+    #[tokio::test]
+    async fn resume_after_a_refused_request_asks_only_for_what_is_missing() {
+        let h = harness();
+        script_coexistence_until_subscribed(&h.t);
+        h.t.push_json(200, sync_response("R-CONTACTS"));
+        h.t.push_json(403, graph_error(200));
+        let request = coexistence_request();
+        let err = h.es.onboard(&request, &h.vault).await.unwrap_err();
+        assert_eq!(step(&err), SYNC_HISTORY);
+        assert_eq!(err.kind(), ErrorKind::Permission);
+        assert!(!err.may_have_been_sent());
+        assert_eq!(sync_requests(&h.t), 2);
+        assert!(
+            h.vault
+                .get(&WabaId::new(WABA).unwrap())
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(h.t.remaining(), 0);
+
+        let sent = h.t.requests().len();
+        h.t.push_json(200, success());
+        h.t.push_json(200, sync_response("R-HISTORY"));
+        let done =
+            h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(
+            done.steps_completed,
+            vec![
+                LOAD_TOKEN,
+                VERIFY_ASSETS,
+                SUBSCRIBE_APP,
+                SYNC_CONTACTS,
+                SYNC_HISTORY
+            ]
+        );
+        let reqs = h.t.requests();
+        assert_eq!(reqs.len(), sent + 2, "the subscription and the history");
+        assert_sync_request(&reqs[sent + 1], "history");
+        assert_eq!(
+            done.coexistence_sync,
+            Some(synced(
+                SyncOutcome::Requested {
+                    request_id: "R-CONTACTS".into(),
+                    at: NOW,
+                },
+                SyncOutcome::Requested {
+                    request_id: "R-HISTORY".into(),
+                    at: NOW,
+                },
+            ))
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A sync whose answer was lost (a timeout) may have reached Meta: the
+    /// client does not replay it, even with retries on, and `resume` does
+    /// not post it again; it fails at that step until the request turns
+    /// the sync off.
+    #[tokio::test]
+    async fn a_timed_out_sync_is_never_replayed() {
+        let h = harness_on(
+            Arc::new(MemoryKvStore::new()),
+            RetryPolicy {
+                max_retries: 3,
+                base_delay: Duration::ZERO,
+                max_delay: Duration::ZERO,
+            },
+        );
+        script_coexistence_until_subscribed(&h.t);
+        h.t.push_error(|| meta_whatsapp_core::error::TransportError::Timeout);
+        let request = coexistence_request();
+        let err = h.es.onboard(&request, &h.vault).await.unwrap_err();
+        assert_eq!(step(&err), SYNC_CONTACTS);
+        assert!(err.may_have_been_sent());
+        assert_eq!(sync_requests(&h.t), 1, "not replayed by the client");
+        assert_eq!(h.t.remaining(), 0);
+
+        // Resume: the subscription again, then a refusal before any sync.
+        h.t.push_json(200, success());
+        let err =
+            h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(step(&err), SYNC_CONTACTS);
+        match &err {
+            Error::Step { source, .. } => assert!(
+                matches!(&**source, Error::Validation(v) if v.field == "coexistence_sync"),
+                "{err:?}"
+            ),
+            other => panic!("{other:?}"),
+        }
+        assert!(!err.is_retryable());
+        assert_eq!(sync_requests(&h.t), 1, "not posted again by resume");
+        assert_eq!(h.t.remaining(), 0);
+
+        // Turned off, the resume finishes without a sync.
+        h.t.push_json(200, success());
+        let done =
+            h.es.resume(
+                &WabaId::new(WABA).unwrap(),
+                &request.clone().coexistence_sync(false),
+                &h.vault,
+            )
+            .await
+            .unwrap();
+        assert_eq!(done.coexistence_sync, None);
+        assert_eq!(sync_requests(&h.t), 1);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Meta's refusal (`2593107`: already requested for this number;
+    /// `2593108`: past 24 hours) is recorded and reported, not a failure,
+    /// and is not asked again.
+    #[tokio::test]
+    async fn a_sync_meta_refuses_is_reported_and_not_asked_again() {
+        let h = harness();
+        script_coexistence_until_subscribed(&h.t);
+        h.t.push_json(400, graph_error(2_593_107));
+        h.t.push_json(400, graph_error(2_593_108));
+        let request = coexistence_request();
+        let done = h.es.onboard(&request, &h.vault).await.unwrap();
+        let expected = synced(
+            SyncOutcome::Refused {
+                code: 2_593_107,
+                at: NOW,
+            },
+            SyncOutcome::Refused {
+                code: 2_593_108,
+                at: NOW,
+            },
+        );
+        assert_eq!(done.coexistence_sync.as_ref(), Some(&expected));
+        assert_eq!(done.steps_completed.last(), Some(&SYNC_HISTORY));
+        assert_eq!(sync_requests(&h.t), 2);
+        assert_eq!(h.t.remaining(), 0);
+
+        h.t.push_json(200, success());
+        let done =
+            h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(done.coexistence_sync.as_ref(), Some(&expected));
+        assert_eq!(sync_requests(&h.t), 2);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A new onboarding of the number stores a new token record and starts
+    /// a new sync (what Meta allows after an offboarding and a new
+    /// signup); the earlier onboarding's record does not stop it.
+    #[tokio::test]
+    async fn a_new_onboarding_of_the_number_syncs_again() {
+        let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
+        let mut h = harness_on(Arc::clone(&kv), RetryPolicy::NONE);
+        let clock = Arc::new(ManualClock::new(NOW));
+        h.vault = h.vault.with_clock(Arc::clone(&clock) as _);
+        script_coexistence_until_subscribed(&h.t);
+        h.t.push_json(200, sync_response("R1"));
+        h.t.push_json(200, sync_response("R2"));
+        h.es.onboard(&coexistence_request(), &h.vault)
+            .await
+            .unwrap();
+
+        clock.advance(Duration::from_secs(3_600));
+        script_coexistence_until_subscribed(&h.t);
+        h.t.push_json(200, sync_response("R3"));
+        h.t.push_json(200, sync_response("R4"));
+        let done =
+            h.es.onboard(&coexistence_request(), &h.vault)
+                .await
+                .unwrap();
+        assert_eq!(sync_requests(&h.t), 4);
+        let later = NOW + time::Duration::hours(1);
+        assert_eq!(
+            done.coexistence_sync,
+            Some(synced(
+                SyncOutcome::Requested {
+                    request_id: "R3".into(),
+                    at: later,
+                },
+                SyncOutcome::Requested {
+                    request_id: "R4".into(),
+                    at: later,
+                },
+            ))
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Without a number (a WABA that lists none), the sync fails at its
+    /// step, after the token is stored, and nothing is posted.
+    #[tokio::test]
+    async fn a_coexistence_onboarding_without_a_number_fails_at_the_sync() {
+        let h = harness();
+        h.t.push_json(200, token_response(TOKEN));
+        h.t.push_json(200, debug_response(&[WABA]));
+        h.t.push_json(200, owner_response(WABA, BUSINESS));
+        h.t.push_json(200, phones_response(&[]));
+        h.t.push_json(200, success());
+        let err =
+            h.es.onboard(&coexistence_request(), &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(step(&err), SYNC_CONTACTS);
+        assert!(!err.may_have_been_sent());
+        assert_eq!(sync_requests(&h.t), 0);
+        assert!(sync_record(&h.kv).await.is_none());
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// The record's namespace, key and layout (version 1, plain JSON), as
+    /// `docs/architecture.md` § Stable identifiers lists them (pending the
+    /// owner's confirmation), and a record of another layout version fails
+    /// closed before any sync is posted.
+    #[tokio::test]
+    async fn the_sync_record_is_pinned() {
+        let h = harness();
+        script_coexistence_until_subscribed(&h.t);
+        h.t.push_json(200, sync_response("R-CONTACTS"));
+        h.t.push_json(400, graph_error(2_593_108));
+        h.es.onboard(&coexistence_request(), &h.vault)
+            .await
+            .unwrap();
+        // `\x77` is `w`: spelled so that a search-and-replace of the
+        // namespace cannot rewrite this pin along with the code.
+        let key = StoreKey::new("\x77a.es.coexistence", PHONE);
+        let raw = h.kv.get(&key).await.unwrap().unwrap().value;
+        let created = NOW.unix_timestamp();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&raw).unwrap(),
+            json!({
+                "v": 1,
+                "waba_id": WABA,
+                "token_created_at": created,
+                "contacts": {"state": "requested", "at": created, "request_id": "R-CONTACTS"},
+                "history": {"state": "refused", "at": created, "code": 2_593_108}
+            })
+        );
+        assert_eq!(COEXISTENCE_NAMESPACE, "\x77a.es.coexistence");
+
+        let other = json!({"v": 2, "waba_id": WABA, "token_created_at": created});
+        h.kv.put(&key, serde_json::to_vec(&other).unwrap(), Expiry::Never)
+            .await
+            .unwrap();
+        h.t.push_json(200, success());
+        let err =
+            h.es.resume(
+                &WabaId::new(WABA).unwrap(),
+                &coexistence_request(),
+                &h.vault,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(step(&err), SYNC_CONTACTS);
+        assert_eq!(sync_requests(&h.t), 2);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    async fn sync_record(kv: &Arc<dyn KvStore>) -> Option<Vec<u8>> {
+        kv.get(&StoreKey::new(COEXISTENCE_NAMESPACE, PHONE))
+            .await
+            .unwrap()
+            .map(|v| v.value)
     }
 
     /// A code-less request is refused by both onboarding entry points
