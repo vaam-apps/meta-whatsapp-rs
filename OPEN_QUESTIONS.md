@@ -110,6 +110,32 @@ of its own, after an HTML comment; keep that when you add one.
    add a refresh, a refresher behind a trait slots in. Roadmap L11e (the
    library's signal) and M3e (the service's event).
 
+   **Landed with roadmap L11e (2026-11-01), the library's side, its
+   choices proposed to the coordinator (owner's delegation):**
+   `TokenVault::token_expiry(waba_id, lead)` reports a stored token as
+   `TokenExpiry::Never` (no `expires_at`), `Fresh`, `ExpiresSoon`
+   (`now + lead` included: a boundary token is warned about, not missed)
+   or `Expired` (`expires_at <= now`, as `is_expired`), on the vault's
+   clock. The lead is the caller's, per call; `DEFAULT_EXPIRY_LEAD` is 7
+   days: business tokens default to never expiring
+   (`facebook-login/facebook-login-for-business`), and one generated to
+   expire lasts 60 days, so a week leaves time to run Embedded Signup
+   again. It reads the record's clear `expires_at`, not the sealed one:
+   no key, no token in memory, no write, and the stored format
+   unchanged; the clear copy is not authenticated (whoever writes the
+   store can change the answer, as they can delete the record), so
+   `StoredBusinessToken::expiry` answers on the decrypted record for a
+   caller who wants the authenticated copy. A per-record check, not a
+   listing: the vault cannot enumerate its records, so the caller walks
+   its own WABAs (the service, its bindings). The answer is stateless:
+   notifying once per `(waba_id, expires_at)` is the caller's (M3e's).
+   Not recorded, so not reported: `debug_token`'s
+   `data_access_expires_at` (0 for business tokens in Meta's examples);
+   adding it would change the stored record. Swappable: the lead per
+   call, and the classification is one function (`TokenExpiry::at`) a
+   caller can replace on `expires_at`. Roadmap L11e (landed); the
+   service's event, M3e.
+
 9. **Vault key custody and rotation cadence.** The integrator supplies the
    AES-256 key(s); rotation is supported but not scheduled.
 
