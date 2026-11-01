@@ -789,6 +789,24 @@ fn button(b: &Button, ctx: &Ctx<'_>, field: &str) -> Check {
             text: t,
             payment_setting,
         } => payment_request_button(t, payment_setting, field),
+        // A payment button that did not parse typed (a method this client
+        // has no rules for, a setting without its object, `type` spelled
+        // `Payment_Request`) would be created unchecked: refused, as in a
+        // send.
+        Button::Other(raw)
+            if raw
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|t| {
+                    t.eq_ignore_ascii_case("ORDER_DETAILS")
+                        || t.eq_ignore_ascii_case("PAYMENT_REQUEST")
+                }) =>
+        {
+            Err(err(
+                field,
+                "an ORDER_DETAILS or PAYMENT_REQUEST button must be typed: a label, and a payment method this client knows with its object",
+            ))
+        }
         Button::RequestContactInfo { text: t } => {
             // `business-scoped-user-ids#using-templates`: utility and
             // marketing templates; label fixed.

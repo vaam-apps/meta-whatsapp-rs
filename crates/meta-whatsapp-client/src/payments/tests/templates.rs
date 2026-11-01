@@ -1001,3 +1001,157 @@ fn an_unknown_payment_shape_lands_in_the_catch_all() {
     .unwrap();
     assert_eq!(refused(&status), "template.components[0].parameters");
 }
+
+/// A payment object the typed components do not take (a component `type`
+/// spelled `Button` or `Order_Status`, an `index` that is not a number, a
+/// parameter `type` `ACTION` or `ORDER_STATUS`) lands in a catch-all,
+/// which is sent as written: one holding `order_details`,
+/// `payment_request` or `order_status` is refused, so no spelling skips
+/// the per-currency rules. A definition's payment button that did not
+/// parse typed is refused at creation too. Decisive: `untyped_payment`
+/// in `templates/send.rs`, the `Button::Other` arm of
+/// `templates/validate.rs`.
+#[test]
+fn a_payment_object_in_a_catch_all_is_refused() {
+    let usd = json!({"order_details": {"currency": "USD", "reference_id": "r"}});
+    let pending = json!({"reference_id": "r r", "order": {"status": "pending"}});
+    let send = |component: Value| {
+        let template: TemplateMessage = serde_json::from_value(json!({
+            "name": "order_bill", "language": {"code": "en_US"}, "components": [component]
+        }))
+        .unwrap();
+        template.validate().map_err(|e| e.field)
+    };
+    let components = [
+        (
+            json!({"type": "Button", "sub_type": "order_details", "index": "0",
+                   "parameters": [{"type": "action", "action": usd}]}),
+            "template.components[0]",
+        ),
+        (
+            json!({"type": "button", "sub_type": "order_details", "index": "x",
+                   "parameters": [{"type": "action", "action": usd}]}),
+            "template.components[0]",
+        ),
+        (
+            json!({"type": "button", "sub_type": "payment_request", "index": 0.0,
+                   "parameters": [{"type": "action", "action": {"payment_request": {
+                       "payment_setting": {"type": "crypto_wallet"}}}}]}),
+            "template.components[0]",
+        ),
+        (
+            json!({"type": "Order_Status", "parameters": [
+                {"type": "order_status", "order_status": pending}]}),
+            "template.components[0]",
+        ),
+        (
+            json!({"type": "button", "sub_type": "flow", "index": "0",
+                   "parameters": [{"type": "ACTION", "action": usd}]}),
+            "template.components[0].parameters[0]",
+        ),
+        (
+            json!({"type": "body", "parameters": [
+                {"type": "ORDER_STATUS", "order_status": pending}]}),
+            "template.components[0].parameters[0]",
+        ),
+    ];
+    for (component, field) in components {
+        assert_eq!(
+            send(component.clone()),
+            Err(field.to_owned()),
+            "{component}"
+        );
+    }
+    // A catch-all without a payment object is still sent as written.
+    send(json!({"type": "Button", "sub_type": "url", "index": "0",
+                "parameters": [{"type": "text", "text": "summer"}]}))
+    .unwrap();
+    send(json!({"type": "body", "parameters": [{"type": "sticker", "sticker": {"id": "1"}}]}))
+        .unwrap();
+
+    let definition = |button: Value| {
+        let d: TemplateDefinition = serde_json::from_value(json!({
+            "name": "cobranca", "language": "pt_BR", "category": "UTILITY",
+            "components": [{"type": "BODY", "text": "Body Text"},
+                           {"type": "BUTTONS", "buttons": [button]}]
+        }))
+        .unwrap();
+        d.validate().map_err(|e| e.field)
+    };
+    for button in [
+        json!({"type": "PAYMENT_REQUEST", "text": "Pay with crypto",
+               "payment_setting": {"type": "crypto_wallet"}}),
+        json!({"type": "PAYMENT_REQUEST", "text": "Copy Boleto code",
+               "payment_setting": {"type": "boleto"}}),
+        json!({"type": "Payment_Request", "text": "Copy Pix code",
+               "payment_setting": {"type": "pix_dynamic_code",
+                                   "pix_dynamic_code": {"code": PIX_CODE}}}),
+        json!({"type": "ORDER_DETAILS"}),
+    ] {
+        assert_eq!(
+            definition(button.clone()),
+            Err("components[1].buttons[0]".to_owned()),
+            "{button}"
+        );
+    }
+    definition(json!({"type": "SOME_NEW_BUTTON", "text": "New"})).unwrap();
+}
+
+/// A payment button's one `action` parameter must carry its own object:
+/// an order details button without `order_details` (or with only a
+/// `payment_request`), a payment request button without
+/// `payment_request` (or with only an `order_details`) is refused, though
+/// it parses typed. And an order whose currency the client has no rules
+/// for, complete otherwise, does not parse typed: India's send example
+/// with `currency` `USD` is refused. Decisive: the `typed` match of
+/// `validate_components`, `Currency`'s `Deserialize`.
+#[test]
+fn a_payment_button_carries_its_own_object_in_a_known_currency() {
+    let order = serde_json::to_value(india_template_parameters()).unwrap();
+    let request = json!({"payment_setting": {"type": "boleto",
+                                             "boleto": {"digitable_line": DIGITABLE_LINE}}});
+    let send = |sub_type: &str, action: Value| {
+        let template: TemplateMessage = serde_json::from_value(json!({
+            "name": "order_bill", "language": {"code": "en_US"},
+            "components": [{"type": "button", "sub_type": sub_type, "index": "0",
+                            "parameters": [{"type": "action", "action": action}]}]
+        }))
+        .unwrap();
+        assert!(
+            matches!(
+                &template.components[0],
+                SendComponent::Button { parameters, .. }
+                    if matches!(parameters.as_slice(), [Parameter::Action { .. }])
+            ),
+            "{template:?}"
+        );
+        template.validate().map_err(|e| e.field)
+    };
+    let refused = Err("template.components[0].parameters".to_owned());
+    send("order_details", json!({"order_details": order})).unwrap();
+    send("payment_request", json!({"payment_request": request})).unwrap();
+    for (sub_type, action) in [
+        ("order_details", json!({"flow_token": "t"})),
+        ("order_details", json!({"payment_request": request})),
+        ("payment_request", json!({"flow_token": "t"})),
+        ("payment_request", json!({"order_details": order})),
+    ] {
+        assert_eq!(
+            send(sub_type, action.clone()),
+            refused,
+            "{sub_type} {action}"
+        );
+    }
+
+    assert!(serde_json::from_value::<Currency>(json!("USD")).is_err());
+    let mut usd = order;
+    usd["currency"] = json!("USD");
+    assert!(serde_json::from_value::<OrderDetailsParameters>(usd.clone()).is_err());
+    let template: TemplateMessage = serde_json::from_value(json!({
+        "name": "order_bill", "language": {"code": "en_US"},
+        "components": [{"type": "button", "sub_type": "order_details", "index": "0",
+                        "parameters": [{"type": "action", "action": {"order_details": usd}}]}]
+    }))
+    .unwrap();
+    assert_eq!(template.validate().map_err(|e| e.field), refused);
+}

@@ -285,6 +285,7 @@ fn validate_components(list: &[SendComponent], path: &str) -> Result<(), Validat
                 };
                 validate_parameter(p, &format!("{field}.parameters[0]"))?;
             }
+            SendComponent::Other(raw) => untyped_payment(raw, &field)?,
             SendComponent::Header { parameters }
             | SendComponent::Body { parameters }
             | SendComponent::Button { parameters, .. } => {
@@ -351,8 +352,39 @@ fn validate_parameter(p: &Parameter, field: &str) -> Result<(), ValidationError>
             }
             Ok(())
         }
+        Parameter::Other(raw) => untyped_payment(raw, field),
         _ => Ok(()),
     }
+}
+
+/// The keys of the payment objects a send carries: an order details
+/// button's `order_details`, a payment request button's `payment_request`,
+/// an order status component's `order_status`.
+const PAYMENT_KEYS: [&str; 3] = ["order_details", "payment_request", "order_status"];
+
+/// A component or parameter that did not parse typed (the catch-all:
+/// a `type` spelled `Button` or `ORDER_STATUS` in a parameter, an `index`
+/// that is not a number, a currency this client has no rules for) is sent
+/// as written, unchecked. One holding a payment object at any depth is
+/// refused, as a payment button whose parameter is not typed is: it would
+/// skip every payment rule, the per-currency ones included.
+fn untyped_payment(raw: &Value, field: &str) -> Result<(), ValidationError> {
+    fn holds_payment(v: &Value) -> bool {
+        match v {
+            Value::Object(map) => map
+                .iter()
+                .any(|(k, v)| PAYMENT_KEYS.contains(&k.as_str()) || holds_payment(v)),
+            Value::Array(items) => items.iter().any(holds_payment),
+            _ => false,
+        }
+    }
+    if holds_payment(raw) {
+        return Err(ValidationError::new(
+            field,
+            "a payment object (`order_details`, `payment_request`, `order_status`) must be in its typed component and parameter, of a currency and payment method this client knows",
+        ));
+    }
+    Ok(())
 }
 
 /// `template.language`.

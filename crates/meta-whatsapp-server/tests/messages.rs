@@ -266,7 +266,8 @@ async fn envelopes_bsuids_templates_and_reactions_are_metas_objects() {
 /// `payments-in/orderstatustemplate`) reach Meta as the pages write them,
 /// checked by the library's payment rules: a payment button the library
 /// does not type (a currency it has no rules for) is `422` on its
-/// parameters, before any request. Until P1c a send's `payment_request`
+/// parameters, before any request, and so is a payment in a component the
+/// library does not type. Until P1c a send's `payment_request`
 /// and `order_details` were refused on their key.
 #[tokio::test]
 async fn payment_templates_are_sent_as_metas_objects_and_checked() {
@@ -308,6 +309,21 @@ async fn payment_templates_are_sent_as_metas_objects_and_checked() {
         (
             StatusCode::UNPROCESSABLE_ENTITY,
             Some("template.components[0].parameters")
+        ),
+        "{}",
+        reply.text
+    );
+    // The same order in a component the library does not type (its
+    // `type` spelled `Button`), which would reach Meta as written: `422`
+    // too (`untyped_payment` in the library).
+    let mut spelled = usd.clone();
+    spelled["template"]["components"][0]["type"] = json!("Button");
+    let reply = h.call(send(&key, &spelled)).await;
+    assert_eq!(
+        (reply.status, error(&reply)["field"].as_str()),
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Some("template.components[0]")
         ),
         "{}",
         reply.text

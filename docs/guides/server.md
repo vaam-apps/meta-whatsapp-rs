@@ -498,8 +498,11 @@ parameters syntax) included, the payment templates among them (roadmap
 P1c: the order details and payment request buttons, the order status
 component, each checked by the library's payment rules; a payment button
 of a currency or payment method the library has no rules for is `422
-invalid_request` on its `parameters`), but for shapes the library cannot
-carry yet, refused on the key named:
+invalid_request` on its `parameters`, and an `order_details`,
+`payment_request` or `order_status` object in a component or parameter
+the library does not type, a `type` spelled `Button` for one, on that
+component or parameter), but for shapes the library cannot carry yet,
+refused on the key named:
 
 - in a definition, `optimization_spec` (Marketing Messages API
   bidding), and `package_name` and `signature_hash` on a one-tap or zero-tap

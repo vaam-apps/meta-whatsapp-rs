@@ -248,7 +248,13 @@ stored data, the owner's).
     amount (required for one-click, refused for Boleto and links, together
     for Pix, `BRL`, `offset` 100, positive); an order status other than
     `pending`; and a payment button or order status component whose
-    parameter did not parse typed is refused rather than sent unchecked.
+    parameter did not parse typed is refused rather than sent unchecked,
+    as is any component or parameter of a send that lands in the
+    catch-all (`SendComponent::Other`, `Parameter::Other`: a `type`
+    spelled `Button`, an `index` that is not a number) holding an
+    `order_details`, `payment_request` or `order_status` object, and a
+    definition's `ORDER_DETAILS` or `PAYMENT_REQUEST` button that did
+    not parse typed.
     Every creation and send example of the four pages is an exact-JSON
     test, both ways. The order types (`OrderDetailsParameters`, `Order`,
     `OrderItem`, `PaymentSetting`, `PaymentGateway`, `Currency`,
