@@ -561,3 +561,47 @@ async fn replay_all_goes_past_a_letter_that_no_longer_decodes() {
     assert_eq!(*sink.seen.lock().unwrap(), [good]);
     assert!(letters.get(bad).await.unwrap().is_some(), "kept");
 }
+
+/// The size bound is inclusive: an event of exactly `max_event_bytes`
+/// keeps its content, one byte over loses it (but keeps its contacts).
+#[tokio::test]
+async fn the_size_bound_keeps_an_event_of_exactly_its_size() {
+    let kv = Arc::new(MemoryKvStore::new());
+    let clock = clock();
+    let event = text("wamid.A", "16505551234", None);
+    let bytes = serde_json::to_vec(&serde_json::to_value(&event).unwrap())
+        .unwrap()
+        .len();
+    let exact = store(&kv, &clock, 10).with_max_event_bytes(bytes);
+    let id = exact.record(&event, &permanent()).await.unwrap();
+    let letter = exact.get(id).await.unwrap().unwrap();
+    assert_eq!(letter.event_bytes, bytes as u64);
+    assert!(letter.event.is_some(), "exactly the bound: kept");
+
+    let under = store(&kv, &clock, 10).with_max_event_bytes(bytes - 1);
+    let id = under.record(&event, &permanent()).await.unwrap();
+    let letter = under.get(id).await.unwrap().unwrap();
+    assert_eq!(letter.event, None, "one byte over: content dropped");
+    assert_eq!(letter.contacts, ["16505551234"]);
+}
+
+/// The sink's error text is stored cut to 512 bytes (it is the
+/// integrator's text, and may be long or name the person).
+#[tokio::test]
+async fn the_stored_error_text_is_capped() {
+    let kv = Arc::new(MemoryKvStore::new());
+    let clock = clock();
+    let letters = store(&kv, &clock, 10);
+    let long = SinkError::permanent(std::io::Error::other("é".repeat(600)));
+    let id = letters
+        .record(&text("wamid.A", "16505551234", None), &long)
+        .await
+        .unwrap();
+    let error = letters.get(id).await.unwrap().unwrap().error;
+    assert!(
+        error.len() <= ERROR_TEXT_CAP && error.len() > 500,
+        "{}",
+        error.len()
+    );
+    assert!(error.starts_with("sink refused the event permanently: é"));
+}
