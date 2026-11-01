@@ -5,11 +5,17 @@
 //! Nothing is linked or bundled. The converter starts the `ffmpeg`
 //! binary as a child process, feeds it the input on stdin and reads the
 //! result from stdout; no file is written. Install `ffmpeg` built with
-//! `libopus` on the host (Debian and Ubuntu: `apt-get install ffmpeg`),
-//! or point [`FfmpegConverter::with_program`] at one, and call
-//! [`FfmpegConverter::check`] at startup to fail early. The service's
-//! public image carries no `ffmpeg`: a deployment that wants conversion
-//! adds it, under the licence of the build it chooses.
+//! `libopus` (voice) and `libwebp` (stickers) on the host (Debian and
+//! Ubuntu: `apt-get install ffmpeg`, whose build has both), or point
+//! [`FfmpegConverter::with_program`] at one, and call
+//! [`FfmpegConverter::check`] (or [`check_for`](FfmpegConverter::check_for)
+//! with the formats you convert to) at startup to fail early. The
+//! service's public image carries no `ffmpeg`: a deployment that wants
+//! conversion adds it, under the licence of the build it chooses.
+//!
+//! It makes four formats: [`TargetFormat::OggOpus`] from a recording
+//! (below), and [`TargetFormat::StaticSticker`], [`TargetFormat::Jpeg`]
+//! and [`TargetFormat::Png`] from a PNG or a JPEG ([Images](#images)).
 //!
 //! # What it runs
 //!
@@ -62,18 +68,71 @@
 //!   would (in memory, its chunk offsets shifted; anything it does not
 //!   understand, such as a compressed index, is passed on as it is).
 //!
+//! # Images
+//!
+//! A sticker, a JPEG or a PNG is made from a **PNG or a JPEG** only, the
+//! formats Meta's image table names. The input's first bytes are read
+//! before `ffmpeg` starts (a PNG's signature, a JPEG's start of image),
+//! and anything else (a GIF, a WebP, an SVG, a TIFF, a video) is
+//! [`ConversionError::InputRejected`] without starting it; `ffmpeg` then
+//! detects the format again itself and may read nothing but a single PNG
+//! or JPEG (`-format_whitelist png_pipe,jpeg_pipe`): a JPEG-LS image or
+//! an animated PNG, which begin as a JPEG and a PNG do, are refused
+//! there. Each attempt runs these arguments, the filter and the encoder
+//! from a fixed table:
+//!
+//! ```text
+//! ffmpeg -hide_banner -nostdin -nostats -loglevel error
+//!        -max_alloc 268435456 -abort_on empty_output
+//!        -protocol_whitelist pipe -format_whitelist png_pipe,jpeg_pipe
+//!        -max_pixels 33554432
+//!        -i pipe:0
+//!        -map 0:v:0 -map_metadata -1 -frames:v 1
+//!        -vf <filter> <encoder> -f image2pipe pipe:1
+//! ```
+//!
+//! - **Bounded in pixels**: an image of more than 32 Mi pixels
+//!   (`-max_pixels`; 8192 × 4096, more than a 24-megapixel camera's) is
+//!   refused before its frame is allocated, and no single allocation may
+//!   exceed 256 MiB (one frame at that bound in 16-bit RGBA). A larger
+//!   photo (a 48-megapixel one) has to be scaled down first.
+//! - **The first frame, nothing else**: no metadata (EXIF can carry a
+//!   place and a camera owner's name). A JPEG's EXIF orientation is
+//!   applied to the pixels before it is dropped (ffmpeg 6.1 rotates a
+//!   frame by it), so a photo taken upright stays upright.
+//! - **Under the limit by a ladder**, since a size cannot be asked of an
+//!   encoder: the attempts below run in turn until one's result is within
+//!   [`TargetFormat::max_bytes`] (an attempt past it is killed as soon as
+//!   it passes); the aspect ratio is kept and an image is never enlarged.
+//!   If every attempt is over, the conversion is
+//!   [`Error::Validation`] on `input` (with these ladders a real image
+//!   never gets there: the last attempt of each is far under its limit).
+//!   Meta gives no sticker dimensions, so none is imposed: a sticker that
+//!   fits at its own size keeps it.
+//!
+//! | Format | Encoder | Attempts (longest side, quality) |
+//! | --- | --- | --- |
+//! | [`TargetFormat::StaticSticker`] (100 000 bytes) | `libwebp`, lossy, transparency kept | its own (up to 16383, WebP's limit) at 80; 1024 at 80, then 50; 512 at 75, then 50; 256 at 50 |
+//! | [`TargetFormat::Jpeg`] (5 000 000 bytes) | `mjpeg`, 8-bit 4:2:0 | its own at `-q:v` 2, 5, then 10; 2048 at 5; 1024 at 10 |
+//! | [`TargetFormat::Png`] (5 000 000 bytes) | `png`, 8-bit RGB or RGBA (a 16-bit, grey or palette PNG becomes one) | its own; 2048; 1024 |
+//!
+//! The output is checked before it is returned: a WebP file whose RIFF
+//! size is its length and whose image is not animated; a JPEG of 8 bits
+//! and three components; a PNG of 8-bit RGB or RGBA, whole.
+//!
 //! # Bounds and errors
 //!
 //! | Bound or failure | Default | Error |
 //! | --- | --- | --- |
 //! | an empty input, or one over [`with_max_input_bytes`](FfmpegConverter::with_max_input_bytes) | 64 MiB | [`Error::Validation`] on `input`, before `ffmpeg` starts |
-//! | a result over the upload limit ([`TargetFormat::max_bytes`], 16 MiB) | — | [`Error::Validation`] on `input`; `ffmpeg` is killed |
+//! | a result over the format's limit ([`TargetFormat::max_bytes`]: 16 MiB for audio) | — | [`Error::Validation`] on `input`; `ffmpeg` is killed (for an image, the next attempt runs, and only the last one's overflow is this error) |
 //! | `ffmpeg` missing or not executable | — | [`ConversionError::BinaryMissing`] |
-//! | no libopus ([`FfmpegConverter::check`]) | — | [`ConversionError::EncoderMissing`] |
-//! | `ffmpeg` fails (input it cannot read, a format off the list) | — | [`ConversionError::InputRejected`] |
-//! | the output is not mono Ogg Opus (a binary that is not the `ffmpeg` it should be) | — | [`ConversionError::OutputInvalid`] |
-//! | one allocation in `ffmpeg` over 16 MiB (`-max_alloc`: a header declaring an absurd sample rate) | — | [`ConversionError::InputRejected`]; on an `ffmpeg` whose allocations stay under the bound, the result cap above stops it instead |
-//! | a run over [`with_timeout`](FfmpegConverter::with_timeout) | 60 s | [`ConversionError::Timeout`], the one retryable; `ffmpeg` is killed |
+//! | no libopus, libwebp, mjpeg or png encoder ([`FfmpegConverter::check_for`]) | — | [`ConversionError::EncoderMissing`] |
+//! | an image whose first bytes are not a PNG's or a JPEG's | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
+//! | `ffmpeg` fails (input it cannot read, a format off the list, an image over 32 Mi pixels) | — | [`ConversionError::InputRejected`] |
+//! | the output is not the format asked for (a binary that is not the `ffmpeg` it should be) | — | [`ConversionError::OutputInvalid`] |
+//! | one allocation in `ffmpeg` over 16 MiB for audio (`-max_alloc`: a header declaring an absurd sample rate), 256 MiB for an image | — | [`ConversionError::InputRejected`]; on an `ffmpeg` whose allocations stay under the bound, the result cap above stops it instead |
+//! | a conversion over [`with_timeout`](FfmpegConverter::with_timeout), every attempt of an image's ladder together | 60 s | [`ConversionError::Timeout`], the one retryable; `ffmpeg` is killed |
 //! | `ffmpeg` killed by a signal, or a pipe to it broken | — | [`ConversionError::Killed`] |
 //!
 //! Every [`ConversionError`] is [`Error::Conversion`]: never
@@ -85,25 +144,35 @@
 //! a conversion in flight kills its process. Conversions are not
 //! queued: bound how many run at once yourself (each one is a process
 //! using about a CPU core, for up to the timeout, and memory this crate
-//! does not cap beyond `-max_alloc`'s per allocation: a cgroup, or `ulimit
-//! -v` in a wrapper script, bounds it). Run it on a tokio runtime with I/O enabled (what
+//! does not cap beyond `-max_alloc`'s per allocation, and an image at the
+//! pixel bound takes several frames of it: a cgroup, or `ulimit -v` in a
+//! wrapper script, bounds it). Run it on a tokio runtime with I/O enabled (what
 //! `#[tokio::main]` builds): child processes need tokio's I/O driver.
 //!
 //! ```no_run
-//! # async fn demo(wav: Vec<u8>) -> meta_whatsapp_core::Result<()> {
+//! # async fn demo(wav: Vec<u8>, png: Vec<u8>) -> meta_whatsapp_core::Result<()> {
 //! use std::time::Duration;
 //! use meta_whatsapp_adapters::media::FfmpegConverter;
 //! use meta_whatsapp_core::media::{MediaConverter, MediaInput, TargetFormat};
 //!
 //! let converter = FfmpegConverter::new().with_timeout(Duration::from_secs(30));
-//! converter.check().await?; // at startup: a missing ffmpeg or libopus fails here
+//! // At startup: a missing ffmpeg, libopus or libwebp fails here.
+//! converter
+//!     .check_for(&[TargetFormat::OggOpus, TargetFormat::StaticSticker])
+//!     .await?;
 //! let note = converter
 //!     .convert(MediaInput::new(wav), TargetFormat::OggOpus)
 //!     .await?;
 //! assert_eq!(note.format.mime_type(), "audio/ogg");
+//! let sticker = converter
+//!     .convert(MediaInput::new(png), TargetFormat::StaticSticker)
+//!     .await?;
+//! assert_eq!(sticker.format.mime_type(), "image/webp");
+//! assert!(sticker.data.len() <= 100_000);
 //! # Ok(()) }
 //! ```
 
+mod image;
 mod mp4;
 #[cfg(test)]
 mod tests;
@@ -111,7 +180,7 @@ mod tests;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -199,13 +268,48 @@ const ENCODERS_ARGS: &[&str] = &[
 /// The most of `ffmpeg -encoders` read (a full build lists some 30 KB).
 const ENCODERS_CAP: u64 = 1024 * 1024;
 
-/// The arguments that make `target`, or `None` for a format this
-/// converter does not produce.
+/// The arguments that make `target` from audio, or `None` for a format
+/// this converter does not make from audio (an image's are
+/// [`image::ladder`]).
 fn arguments(target: TargetFormat) -> Option<&'static [&'static str]> {
     match target {
         TargetFormat::OggOpus => Some(OGG_OPUS_ARGS),
         _ => None,
     }
+}
+
+/// The encoder a format needs, as `ffmpeg -encoders` lists it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Encoder {
+    /// The first letter of its flags: `A` audio, `V` video (and images).
+    kind: char,
+    /// Its name.
+    name: &'static str,
+    /// What it makes, in words, for errors.
+    makes: &'static str,
+}
+
+/// The encoder `target` needs, or `None` for a format this converter
+/// does not make.
+fn encoder(target: TargetFormat) -> Option<Encoder> {
+    let (kind, name, makes) = match target {
+        TargetFormat::OggOpus => ('A', "libopus", "mono Ogg Opus"),
+        TargetFormat::StaticSticker => ('V', "libwebp", "a static WebP sticker"),
+        TargetFormat::Jpeg => ('V', "mjpeg", "an 8-bit colour JPEG"),
+        TargetFormat::Png => ('V', "png", "an 8-bit RGB or RGBA PNG"),
+        _ => return None,
+    };
+    Some(Encoder { kind, name, makes })
+}
+
+/// A format this converter does not make: a [`ValidationError`] on
+/// `target`.
+fn unsupported(target: TargetFormat) -> Error {
+    ValidationError::new(
+        "target",
+        format!("{target:?} is not a format FfmpegConverter produces"),
+    )
+    .into()
 }
 
 /// A [`MediaConverter`] that runs an installed `ffmpeg` (see the
@@ -223,8 +327,24 @@ impl Default for FfmpegConverter {
     }
 }
 
+/// How one run of the program ended.
+enum Run {
+    /// It exited (or was stopped by a signal) with this output.
+    Done(Vec<u8>, ExitStatus),
+    /// Its output passed the bound; it was killed.
+    Overflow,
+}
+
+/// Why a run stopped before the program exited.
+enum Stop {
+    /// Its output passed the bound.
+    Overflow,
+    /// A pipe to it, or waiting for it, failed.
+    Fail(Error),
+}
+
 impl FfmpegConverter {
-    /// How long one run may take by default.
+    /// How long one conversion may take by default.
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
     /// The largest input taken by default: 64 MiB (about six minutes of
@@ -249,8 +369,9 @@ impl FfmpegConverter {
         self
     }
 
-    /// The longest one run may take, writing the input and reading the
-    /// result included; past it the process is killed
+    /// The longest one conversion may take, writing the input and reading
+    /// the result included, and for an image every attempt of its ladder
+    /// together; past it the process is killed
     /// ([`DEFAULT_TIMEOUT`](Self::DEFAULT_TIMEOUT) unless set).
     #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -274,24 +395,52 @@ impl FfmpegConverter {
     }
 
     /// Check that the binary starts and has the `libopus` encoder, with
-    /// `ffmpeg -encoders`: call it at startup, so that a missing or
-    /// unsuitable `ffmpeg` is found before the first conversion.
+    /// `ffmpeg -encoders`: [`check_for`](Self::check_for) with
+    /// [`TargetFormat::OggOpus`]. Call it (or `check_for` with the formats
+    /// you convert to) at startup, so that a missing or unsuitable
+    /// `ffmpeg` is found before the first conversion.
     ///
     /// # Errors
     ///
+    /// As [`check_for`](Self::check_for).
+    pub async fn check(&self) -> Result<()> {
+        self.check_for(&[TargetFormat::OggOpus]).await
+    }
+
+    /// Check that the binary starts and has the encoder each of `targets`
+    /// needs (`libopus` for [`TargetFormat::OggOpus`], `libwebp` for
+    /// [`TargetFormat::StaticSticker`], `mjpeg` for [`TargetFormat::Jpeg`],
+    /// `png` for [`TargetFormat::Png`]), with `ffmpeg -encoders`. Decoders
+    /// are not checked: every `ffmpeg` build but a stripped-down one reads
+    /// the input formats.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Validation`] on `target` for a format this converter does
+    /// not make, before anything starts;
     /// [`ConversionError::BinaryMissing`] when the binary cannot be
     /// started, [`ConversionError::OutputInvalid`] when it does not list
     /// its encoders as ffmpeg does, [`ConversionError::EncoderMissing`]
-    /// when it lists no `libopus`, [`ConversionError::Timeout`] past the
-    /// timeout.
-    pub async fn check(&self) -> Result<()> {
-        let overflow = ConversionError::OutputInvalid(format!(
-            "`{}` listed more than {ENCODERS_CAP} bytes of encoders: is it ffmpeg?",
-            self.program.display()
-        ));
-        let (out, status) = self
-            .run(ENCODERS_ARGS, None, ENCODERS_CAP, overflow.into())
-            .await?;
+    /// when it lists no encoder a target needs,
+    /// [`ConversionError::Timeout`] past the timeout.
+    pub async fn check_for(&self, targets: &[TargetFormat]) -> Result<()> {
+        let mut needed = Vec::with_capacity(targets.len());
+        for &target in targets {
+            needed.push(encoder(target).ok_or_else(|| unsupported(target))?);
+        }
+        let not_ffmpeg = || {
+            ConversionError::OutputInvalid(format!(
+                "`{}` listed more than {ENCODERS_CAP} bytes of encoders: is it ffmpeg?",
+                self.program.display()
+            ))
+        };
+        let (out, status) = match self
+            .run(ENCODERS_ARGS, None, ENCODERS_CAP, self.timeout)
+            .await?
+        {
+            Run::Done(out, status) => (out, status),
+            Run::Overflow => return Err(not_ffmpeg().into()),
+        };
         if !status.success() {
             return Err(ConversionError::OutputInvalid(format!(
                 "`{}` did not list its encoders ({}): is it ffmpeg?",
@@ -300,35 +449,41 @@ impl FfmpegConverter {
             ))
             .into());
         }
-        let listed = String::from_utf8_lossy(&out).lines().any(|line| {
-            let mut words = line.split_whitespace();
-            matches!(
-                (words.next(), words.next()),
-                (Some(flags), Some("libopus")) if flags.starts_with('A')
-            )
-        });
-        if listed {
-            Ok(())
-        } else {
-            Err(ConversionError::EncoderMissing(format!(
-                "`{}` has no libopus encoder: Ogg Opus needs an ffmpeg built with libopus",
-                self.program.display()
-            ))
-            .into())
+        let listing = String::from_utf8_lossy(&out);
+        for wanted in needed {
+            let listed = listing.lines().any(|line| {
+                let mut words = line.split_whitespace();
+                matches!(
+                    (words.next(), words.next()),
+                    (Some(flags), Some(name)) if name == wanted.name && flags.starts_with(wanted.kind)
+                )
+            });
+            if !listed {
+                return Err(ConversionError::EncoderMissing(format!(
+                    "`{}` has no {} encoder: {} needs an ffmpeg with it",
+                    self.program.display(),
+                    wanted.name,
+                    wanted.makes
+                ))
+                .into());
+            }
         }
+        Ok(())
     }
 
     /// Start the program with `args`, feed it `input` (stdin is closed
     /// when there is none), read at most `max_out` bytes of its stdout
-    /// (`overflow` past them) and discard its stderr, all within the
-    /// timeout. On a timeout or an error the process is killed.
+    /// ([`Run::Overflow`] past them) and discard its stderr, all within
+    /// `within` (a [`ConversionError::Timeout`] of the configured timeout
+    /// past it). On a timeout, an overflow or an error the process is
+    /// killed.
     async fn run(
         &self,
         args: &[&str],
         input: Option<Bytes>,
         max_out: u64,
-        overflow: Error,
-    ) -> Result<(Vec<u8>, ExitStatus)> {
+        within: Duration,
+    ) -> Result<Run> {
         let mut command = Command::new(&self.program);
         // Nothing of this process's environment but `PATH`: ffmpeg reads
         // some (`FFREPORT` writes its full log, file names included, to a
@@ -363,11 +518,11 @@ impl FfmpegConverter {
                     let _ = pipe.write_all(&data).await;
                     let _ = pipe.shutdown().await;
                 }
-                Ok::<(), Error>(())
+                Ok::<(), Stop>(())
             };
             let collect = async move {
                 match stdout {
-                    Some(out) => read_bounded(out, max_out, overflow).await,
+                    Some(out) => read_bounded(out, max_out).await,
                     None => Ok(Vec::new()),
                 }
             };
@@ -377,21 +532,24 @@ impl FfmpegConverter {
                 if let Some(mut err) = stderr {
                     let _ = tokio::io::copy(&mut err, &mut tokio::io::sink()).await;
                 }
-                Ok::<(), Error>(())
+                Ok::<(), Stop>(())
             };
             let ((), out, ()) = futures::try_join!(feed, collect, drain)?;
             let status = child
                 .wait()
                 .await
-                .map_err(|e| process_error("wait for", &e))?;
-            Ok::<_, Error>((out, status))
+                .map_err(|e| Stop::Fail(process_error("wait for", &e)))?;
+            Ok::<_, Stop>((out, status))
         };
-        let outcome = tokio::time::timeout(self.timeout, work).await;
+        let outcome = tokio::time::timeout(within, work).await;
         match outcome {
-            Ok(Ok(done)) => Ok(done),
-            Ok(Err(e)) => {
+            Ok(Ok((out, status))) => Ok(Run::Done(out, status)),
+            Ok(Err(stop)) => {
                 let _ = child.kill().await;
-                Err(e)
+                match stop {
+                    Stop::Overflow => Ok(Run::Overflow),
+                    Stop::Fail(e) => Err(e),
+                }
             }
             Err(_elapsed) => {
                 let _ = child.kill().await;
@@ -403,18 +561,89 @@ impl FfmpegConverter {
             }
         }
     }
+
+    /// A recording into `target` (Ogg Opus), in one run of `args`.
+    async fn convert_audio(
+        &self,
+        data: Bytes,
+        target: TargetFormat,
+        args: &'static [&'static str],
+    ) -> Result<ConvertedMedia> {
+        let max = target.max_bytes();
+        // An MP4 whose index follows its media data cannot be read from a
+        // pipe: put it first (`mp4`), leaving anything else as it is.
+        let data = mp4::index_first(&data).map_or(data, Bytes::from);
+        let (out, status) = match self.run(args, Some(data), max, self.timeout).await? {
+            Run::Done(out, status) => (out, status),
+            Run::Overflow => return Err(too_large(target, None)),
+        };
+        if !status.success() {
+            return Err(failed(target, status));
+        }
+        self.checked(target, out)
+    }
+
+    /// An image into `target`, trying each rung of `ladder` in turn until
+    /// one's result is within the format's limit, all within the timeout.
+    async fn convert_image(
+        &self,
+        data: Bytes,
+        target: TargetFormat,
+        ladder: &'static [image::Rung],
+    ) -> Result<ConvertedMedia> {
+        if !image::accepted(&data) {
+            return Err(ConversionError::InputRejected(format!(
+                "its first bytes are not a PNG's or a JPEG's, the images FfmpegConverter makes {target:?} from"
+            ))
+            .into());
+        }
+        let max = target.max_bytes();
+        // `None` for a timeout too long to add to now: no deadline sooner.
+        let deadline = Instant::now().checked_add(self.timeout);
+        for rung in ladder {
+            let left = deadline.map_or(self.timeout, |d| {
+                d.saturating_duration_since(Instant::now())
+            });
+            if left.is_zero() {
+                return Err(ConversionError::Timeout(self.timeout).into());
+            }
+            let args = image::arguments(rung);
+            match self.run(&args, Some(data.clone()), max, left).await? {
+                // Too large: the next rung is smaller.
+                Run::Overflow => {}
+                Run::Done(out, status) => {
+                    if !status.success() {
+                        return Err(failed(target, status));
+                    }
+                    return self.checked(target, out);
+                }
+            }
+        }
+        Err(too_large(target, Some(ladder.len())))
+    }
+
+    /// `out` as `target`, once its header shows it is one.
+    fn checked(&self, target: TargetFormat, out: Vec<u8>) -> Result<ConvertedMedia> {
+        check_output(target, &out).map_err(|why| {
+            let (makes, with) =
+                encoder(target).map_or(("the format asked for", "ffmpeg"), |e| (e.makes, e.name));
+            ConversionError::OutputInvalid(format!(
+                "`{}` returned {why}, not {makes}: is it ffmpeg with {with}?",
+                self.program.display()
+            ))
+        })?;
+        Ok(ConvertedMedia::new(out, target))
+    }
 }
 
 #[async_trait]
 impl MediaConverter for FfmpegConverter {
     async fn convert(&self, input: MediaInput, target: TargetFormat) -> Result<ConvertedMedia> {
-        let Some(args) = arguments(target) else {
-            return Err(ValidationError::new(
-                "target",
-                format!("{target:?} is not a format FfmpegConverter produces"),
-            )
-            .into());
-        };
+        let audio = arguments(target);
+        let ladder = image::ladder(target);
+        if audio.is_none() && ladder.is_none() {
+            return Err(unsupported(target));
+        }
         let len = u64::try_from(input.data.len()).unwrap_or(u64::MAX);
         if len == 0 {
             return Err(ValidationError::new("input", "is empty").into());
@@ -429,52 +658,56 @@ impl MediaConverter for FfmpegConverter {
             )
             .into());
         }
-        let max = target.max_bytes();
-        let overflow = ValidationError::new(
-            "input",
-            format!(
-                "converted to {target:?}, it exceeds {max} bytes, the most an upload of it takes"
-            ),
-        );
-        // An MP4 whose index follows its media data cannot be read from a
-        // pipe: put it first (`mp4`), leaving anything else as it is.
-        let data = mp4::index_first(&input.data).map_or(input.data, Bytes::from);
-        let (out, status) = self.run(args, Some(data), max, overflow.into()).await?;
-        if !status.success() {
-            return Err(match status.code() {
-                Some(_) => ConversionError::InputRejected(format!(
-                    "ffmpeg could not convert it to {target:?} ({}); its diagnostics are withheld",
-                    describe(status)
-                ))
-                .into(),
-                None => ConversionError::Killed(format!("ffmpeg was {}", describe(status))).into(),
-            });
+        match (audio, ladder) {
+            (Some(args), _) => self.convert_audio(input.data, target, args).await,
+            (None, Some(ladder)) => self.convert_image(input.data, target, ladder).await,
+            (None, None) => Err(unsupported(target)),
         }
-        check_output(target, &out).map_err(|why| {
-            ConversionError::OutputInvalid(format!(
-                "`{}` returned {why}, not mono Ogg Opus: is it ffmpeg with libopus?",
-                self.program.display()
-            ))
-        })?;
-        Ok(ConvertedMedia::new(out, target))
     }
 }
 
-/// Read `reader` to its end, or fail with `overflow` once it has given
-/// more than `max` bytes.
+/// A result over `target`'s limit: after one run (`attempts` `None`) or
+/// after every attempt of an image's ladder.
+fn too_large(target: TargetFormat, attempts: Option<usize>) -> Error {
+    let max = target.max_bytes();
+    let message = match attempts {
+        None => format!(
+            "converted to {target:?}, it exceeds {max} bytes, the most an upload of it takes"
+        ),
+        Some(n) => format!(
+            "converted to {target:?} at each of the {n} sizes and qualities FfmpegConverter tries, it still exceeds {max} bytes"
+        ),
+    };
+    ValidationError::new("input", message).into()
+}
+
+/// `ffmpeg` exited without converting: the input (status code) or a
+/// signal (none).
+fn failed(target: TargetFormat, status: ExitStatus) -> Error {
+    match status.code() {
+        Some(_) => ConversionError::InputRejected(format!(
+            "ffmpeg could not convert it to {target:?} ({}); its diagnostics are withheld",
+            describe(status)
+        ))
+        .into(),
+        None => ConversionError::Killed(format!("ffmpeg was {}", describe(status))).into(),
+    }
+}
+
+/// Read `reader` to its end, or stop with [`Stop::Overflow`] once it has
+/// given more than `max` bytes.
 async fn read_bounded<R: AsyncRead + Unpin>(
     reader: R,
     max: u64,
-    overflow: Error,
-) -> Result<Vec<u8>> {
+) -> std::result::Result<Vec<u8>, Stop> {
     let mut out = Vec::new();
     reader
         .take(max.saturating_add(1))
         .read_to_end(&mut out)
         .await
-        .map_err(|e| process_error("read the output of", &e))?;
+        .map_err(|e| Stop::Fail(process_error("read the output of", &e)))?;
     if u64::try_from(out.len()).unwrap_or(u64::MAX) > max {
-        return Err(overflow);
+        return Err(Stop::Overflow);
     }
     Ok(out)
 }
@@ -514,7 +747,8 @@ fn describe(status: ExitStatus) -> String {
 
 /// Check that `out` is `target`: for Ogg Opus, an Ogg stream whose first
 /// page opens it and carries an `OpusHead` for one channel (RFC 7845
-/// § 5.1). Returns what it found instead, in words.
+/// § 5.1); for an image, its header ([`image::check`]). Returns what it
+/// found instead, in words.
 fn check_output(target: TargetFormat, out: &[u8]) -> std::result::Result<(), &'static str> {
     match target {
         TargetFormat::OggOpus => {
@@ -528,7 +762,7 @@ fn check_output(target: TargetFormat, out: &[u8]) -> std::result::Result<(), &'s
                 None => Err("a truncated Opus header"),
             }
         }
-        _ => Err("a format it cannot check"),
+        _ => image::check(target, out),
     }
 }
 

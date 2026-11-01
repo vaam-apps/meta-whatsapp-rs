@@ -50,8 +50,10 @@
 //!   anything slow, a `sink::BroadcastSink` for live inbox views, a
 //!   `sink::FanoutSink` to do both.
 //! - **Transport**: `ReqwestTransport` unless you need your own HTTP stack.
-//! - **Media conversion** (a recording into a voice message's Ogg Opus):
-//!   `media::FfmpegConverter` when the host has an `ffmpeg` with libopus;
+//! - **Media conversion** (a recording into a voice message's Ogg Opus,
+//!   an image into a sticker's WebP or under the image limit):
+//!   `media::FfmpegConverter` when the host has an `ffmpeg` with libopus
+//!   (and libwebp, for stickers);
 //!   the library ships none, and the service's image carries none.
 //!
 //! # Whose clock?

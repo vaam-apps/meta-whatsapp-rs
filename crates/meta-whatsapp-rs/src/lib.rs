@@ -156,7 +156,7 @@
 //! | `axum` | | `webhooks::router` (`GET`/`POST` webhook endpoint) and `webhooks::sse` (live inbox stream) |
 //! | `typst` | | the `typst` module: invoice, receipt and voucher templates → PDF/PNG |
 //! | `flows-endpoint` | | `client::flows::endpoint`: WhatsApp Flows data-endpoint crypto (aws-lc-rs) |
-//! | `ffmpeg` | | `adapters::media::FfmpegConverter`: core's `core::media::MediaConverter` port (a recording into a voice message's Ogg Opus) over an `ffmpeg` you install; links none |
+//! | `ffmpeg` | | `adapters::media::FfmpegConverter`: core's `core::media::MediaConverter` port (a recording into a voice message's Ogg Opus, an image into a sticker's WebP or under the image limit) over an `ffmpeg` you install; links none |
 //! | `bot` | | the `bot` module: a bot framework over webhooks (commands, middleware, plugins, Markdown replies, paced broadcasts, durable scheduled jobs) |
 //! | `testing` | | `core::testing::ScriptedTransport` for your own tests (enable in `[dev-dependencies]`) |
 //! | `full` | | all of the above |

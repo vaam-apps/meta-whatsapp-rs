@@ -2488,7 +2488,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     - Row 48 stays partial, its rest planned in L19b.
     - CI proves the conversion: its runner installs `ffmpeg`, which no
       image or dev container does.
-- [ ] **L19b. Stickers and image resizing** (`meta-whatsapp-core`: new
+- [x] **L19b. Stickers and image resizing** (`meta-whatsapp-core`: new
   `TargetFormat`s; `meta-whatsapp-adapters`: their conversion behind the
   `ffmpeg` feature, or another converter; row 48): an image into a WebP
   sticker within Meta's limits (`image/webp`, 100 KB static, 500 KB
@@ -2505,6 +2505,85 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     5 MB comes out under it, both against a real
     converter in CI; a GIF or a crafted file off the format list is a
     `ConversionError::InputRejected`.
+  - **Landed:** three `TargetFormat`s in core, `StaticSticker` (a
+    static WebP, `image/webp`, `.webp`, at most
+    `media::STATIC_STICKER_MAX_BYTES`, 100 000 bytes), `Jpeg` and `Png`
+    (8-bit, `image/jpeg` and `image/png`, `.jpeg` and `.png`, at most
+    `media::IMAGE_MAX_BYTES`, 5 000 000 bytes), read from
+    `messages/sticker-messages` and `business-phone-numbers/media` on
+    2026-11-01; the client's test keeps each within its upload table.
+    `FfmpegConverter` makes them from a PNG or a JPEG only: the input's
+    first bytes (a PNG's signature, a JPEG's start of image) are checked
+    before ffmpeg starts, and ffmpeg's own detection may land on nothing
+    but `png_pipe` or `jpeg_pipe` (`-format_whitelist`). Each attempt
+    runs fixed literal arguments: the L19 prefix (`-protocol_whitelist
+    pipe`, `-abort_on empty_output`, environment reduced to `PATH`,
+    stderr drained and withheld), `-max_alloc 268435456`, `-max_pixels
+    33554432` (32 Mi pixels), the first video frame, no metadata, a
+    filter and an encoder from a fixed table, `-f image2pipe` on stdout.
+    Each format is brought under its limit by a ladder of sizes and
+    qualities (sticker: its own size at quality 80, then 1024 at 80 and
+    50, 512 at 75 and 50, 256 at 50; JPEG: its own size at `-q:v` 2, 5,
+    10, then 2048 at 5, 1024 at 10; PNG: its own size, 2048, 1024), the
+    aspect ratio kept and never enlarged, each attempt killed once its
+    output passes the limit, the whole ladder within `with_timeout`; an
+    image no attempt brings under is a `ValidationError` on `input`. The
+    result's header is checked (a WebP whose RIFF size is its length and
+    whose first chunk is `VP8 `, `VP8L`, or `VP8X` without the animation
+    flag; a JPEG of 8 bits and 3 components; a PNG of 8-bit RGB or RGBA
+    ending in `IEND`). `FfmpegConverter::check_for(&[TargetFormat])`
+    checks each format's encoder; `check()` is it for `OggOpus`.
+    Decisive (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`, against ffmpeg
+    6.1.1, Ubuntu 24.04's package, the one CI's runner installs, built
+    with libwebp, a hard dependency of its `libavcodec60`):
+    `ffmpeg_turns_a_png_into_a_static_webp_sticker_that_upload_accepts`
+    (a 1600 × 1200 picture with noise, a 4 MB PNG whose own-size WebP is
+    nearly 700 KB, comes out as a 1024 × 768 static WebP within 100 000
+    bytes, its RIFF header, chunks and size read in the test, ffprobe
+    agreeing, `validate_upload` taking it as a sticker, and its upload's
+    exact request), `ffmpeg_brings_a_jpeg_over_five_megabytes_under_the_image_limit`
+    (a 10 MB, 4000 × 3000 JPEG, which `validate_upload` refuses, comes out
+    as an 8-bit colour JPEG under 5 000 000 bytes, 4:3 kept), and
+    `ffmpeg_refuses_a_gif_a_jpeg_ls_an_animated_png_and_a_crafted_png`
+    (each `InputRejected` for every image format; the JPEG-LS image
+    passes the first-bytes check, and without the whitelist ffmpeg reads
+    it from a pipe and converts it: the control). Also: a small
+    transparent PNG keeps its size and alpha; a 16-bit PNG over 5 MB
+    comes out 8-bit RGBA under it; a 6000 × 6000 PNG is refused by the
+    pixel bound (ffmpeg without it converts it); a JPEG whose EXIF says
+    Orientation 6 comes out rotated (640 × 480 to 480 × 640), its EXIF
+    gone. The inputs are made by the tests (`lavfi` sources, an EXIF
+    segment written in Rust); nothing is committed. Removing the
+    first-bytes check, the whitelist (or widening it to `jpegls_pipe`),
+    `-max_pixels`, the ladder (an overflow ending it), the aspect ratio,
+    the 8-bit PNG format, the WebP check or its RIFF-size or animation
+    test, the ladder-wide timeout, or setting the sticker limit to the
+    animated one fails a test (the first-bytes check only in the
+    adapters' tests: for a GIF, the whitelist is a second wall). Not
+    done: animated stickers (a GIF or an animated PNG is refused;
+    ffmpeg 6.1.1 cannot read an APNG from a pipe at all), WebP or HEIC
+    as an input, and a photo of more than 32 Mi pixels (a 48-megapixel
+    one), which has to be scaled down before it comes here.
+  - **Proposed** (implementer, for the coordinator; each swappable by
+    another `MediaConverter`, or a literal of this one):
+    - Meta's "100 KB" and "5 MB" read as decimal (100 000 and
+      5 000 000) for what a converter makes, under the upload check's
+      binary reading: a converted file then fits whichever Meta means.
+      `AUDIO_MAX_BYTES` keeps its binary reading (16 MiB), as L19
+      decided: a voice note is far under either.
+    - Inputs: PNG and JPEG only, the formats of Meta's image table; no
+      GIF, WebP, HEIC or animation.
+    - Static stickers only (no `AnimatedSticker` target): the inputs
+      allowed are still images.
+    - No sticker dimensions imposed (Meta gives none): a sticker that
+      fits keeps its size; the ladder's sizes (1024, 512, 256) are where
+      it steps down, not a requirement.
+    - Bounds: 32 Mi pixels, 256 MiB a single allocation, the existing
+      64 MiB of input and 60 s, now for the whole ladder.
+    - The ladders above; a result over the limit after every attempt is
+      a `ValidationError` on `input`, as L19's result over the limit is.
+    - Row 48 done on the library's side (animated stickers named as not
+      made), the service's still M5c1's.
 - [ ] **L20a. One catch-all shape for open enums** (`meta-whatsapp-core`
   and every crate with an open enum; OPEN_QUESTIONS #27): `Other(String)`,
   generated by one macro in core.

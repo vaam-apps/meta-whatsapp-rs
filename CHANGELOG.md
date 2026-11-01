@@ -218,6 +218,33 @@ stored data, the owner's).
 
 ### Added
 
+- **Stickers and image resizing** (roadmap L19b, parity row 48, from
+  `messages/sticker-messages` and `business-phone-numbers/media`, read
+  on 2026-11-01): three new `meta_whatsapp_core::media::TargetFormat`s,
+  `StaticSticker` (a static WebP, uploaded as `image/webp`, at most
+  `media::STATIC_STICKER_MAX_BYTES`, 100 000 bytes), `Jpeg` and `Png`
+  (8-bit, `image/jpeg` and `image/png`, at most `media::IMAGE_MAX_BYTES`,
+  5 000 000 bytes): Meta's "100 KB" and "5 MB" read as decimal, under the
+  upload check's binary reading, so that a converted file fits whichever
+  Meta means. `FfmpegConverter` makes them from a PNG or a JPEG only,
+  checked by its first bytes before `ffmpeg` starts (anything else is
+  `ConversionError::InputRejected`) and again by ffmpeg's own detection
+  (`-format_whitelist png_pipe,jpeg_pipe`: a JPEG-LS image or an
+  animated PNG is refused there); with fixed arguments, the first frame
+  only and no metadata (a JPEG's EXIF orientation applied to the
+  pixels), at most 32 Mi pixels (`-max_pixels`) and 256 MiB a single
+  allocation; brought under the limit by a fixed ladder of sizes and
+  qualities (each attempt killed once past it, the aspect ratio kept,
+  never enlarged, the whole ladder within `with_timeout`; an image no
+  attempt brings under is `Error::Validation` on `input`), the result's
+  header checked (a WebP whose RIFF size is its length and that is not
+  animated, an 8-bit colour JPEG, an 8-bit RGB or RGBA PNG). Meta gives
+  no sticker dimensions, and none is imposed. New:
+  `FfmpegConverter::check_for(&[TargetFormat])`, which checks each
+  format's encoder (libopus, libwebp, mjpeg, png); `check()` is
+  `check_for(&[TargetFormat::OggOpus])`, as before. `with_timeout` now
+  bounds a whole conversion, every attempt of an image's ladder together.
+  Animated stickers are not made.
 - **A token-expiry signal** (`meta_whatsapp_client::embedded_signup`,
   roadmap L11e, parity row 6; OPEN_QUESTIONS #8; the service's event is
   M3e). `TokenVault::token_expiry(&waba_id, lead)` answers, on the
