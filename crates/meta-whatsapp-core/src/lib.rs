@@ -12,6 +12,7 @@
 //! | [`store::ConversationStore`] | Inbox history for in-app chat | memory, Postgres |
 //! | [`sink::EventSink`] | Where webhook events go | channel, broadcast, fan-out, fn, tracing |
 //! | [`clock::Clock`] | "Now", injectable for tests | system, manual |
+//! | [`media::MediaConverter`] | Convert media before an upload (a recording into a voice message's Ogg Opus) | `ffmpeg` (runs one you install) |
 //!
 //! See `docs/architecture.md` at the repository root for how they compose.
 
@@ -19,6 +20,7 @@ pub mod clock;
 pub mod config;
 pub mod error;
 pub mod ids;
+pub mod media;
 pub mod paging;
 pub mod recipient;
 pub mod secret;
