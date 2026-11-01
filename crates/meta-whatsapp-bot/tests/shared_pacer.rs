@@ -653,3 +653,324 @@ fn the_store_key_is_a_digest_of_the_number() {
     let other = KvRateLimiter::store_key(&PhoneNumberId::new("2").unwrap());
     assert_ne!(key, other);
 }
+
+/// A `MemoryKvStore` whose next `compare_and_swap`s lose (as many as
+/// `losing` holds), as if another replica wrote first, then win.
+#[derive(Debug, Clone)]
+struct LosesNext {
+    inner: MemoryKvStore,
+    losing: Arc<AtomicUsize>,
+}
+
+impl LosesNext {
+    fn new(clock: &ManualClock) -> Self {
+        Self {
+            inner: MemoryKvStore::with_clock(Arc::new(clock.clone())),
+            losing: Arc::default(),
+        }
+    }
+
+    fn lose(&self, swaps: usize) {
+        self.losing.store(swaps, Ordering::SeqCst);
+    }
+}
+
+#[async_trait]
+impl KvStore for LosesNext {
+    async fn get(&self, key: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+        self.inner.get(key).await
+    }
+    async fn put(
+        &self,
+        key: &StoreKey,
+        value: Vec<u8>,
+        expiry: Expiry,
+    ) -> Result<u64, StorageError> {
+        self.inner.put(key, value, expiry).await
+    }
+    async fn put_if_absent(
+        &self,
+        key: &StoreKey,
+        value: Vec<u8>,
+        expiry: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        self.inner.put_if_absent(key, value, expiry).await
+    }
+    async fn compare_and_swap(
+        &self,
+        key: &StoreKey,
+        expected: u64,
+        new: Option<Vec<u8>>,
+        expiry: Expiry,
+    ) -> Result<Option<u64>, StorageError> {
+        let lost = self
+            .losing
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if lost {
+            return Ok(None);
+        }
+        self.inner
+            .compare_and_swap(key, expected, new, expiry)
+            .await
+    }
+    async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+        self.inner.delete(key).await
+    }
+}
+
+/// A booking that lost the swap books again as of the time it reads the
+/// record again, after its backoff: the slot starts then, not at the
+/// request's time, which has passed (a send at once there, and the next
+/// replica's a slot after the request, would be closer than the rate).
+#[tokio::test]
+async fn a_booking_that_lost_books_again_as_of_its_new_read() {
+    let clock = ManualClock::new(T0);
+    let store = LosesNext::new(&clock);
+    let kv: Arc<dyn KvStore> = Arc::new(store.clone());
+    let limiter = replica(&kv, per_second(20), &clock)
+        .contention(2, ms(100))
+        .unwrap();
+    // The record exists, its schedule in the past.
+    limiter
+        .reserve(&SlotRequest::new(number(), T0))
+        .await
+        .unwrap();
+    clock.advance(Duration::from_secs(1));
+
+    store.lose(1);
+    let request = SlotRequest::new(number(), clock.now());
+    let slot = limiter.reserve(&request).await.unwrap();
+    // The backoff (50 to 100 ms) passed on the limiter's timer: the slot
+    // starts when the record was read again.
+    let backoff = Duration::try_from(clock.now() - request.now).unwrap();
+    assert!((ms(50)..=ms(100)).contains(&backoff), "{backoff:?}");
+    assert_eq!(slot.wait, backoff);
+    // The next slot is a full interval after it.
+    let next = SlotRequest::new(number(), clock.now());
+    assert_eq!(limiter.reserve(&next).await.unwrap().wait, ms(50));
+}
+
+/// ... and never as of a time before the request: a limiter whose timer is
+/// behind the request's books from the request (else a slot booked in the
+/// past would let the next replica start at once too).
+#[tokio::test]
+async fn a_booking_that_lost_never_books_before_its_request() {
+    let clock = ManualClock::new(T0);
+    let behind = ManualClock::new(T0 - Duration::from_secs(10));
+    let store = LosesNext::new(&clock);
+    let kv: Arc<dyn KvStore> = Arc::new(store.clone());
+    let limiter = replica(&kv, per_second(20), &behind)
+        .contention(2, ms(1))
+        .unwrap();
+    // The record exists, its schedule 20 s in the past.
+    limiter
+        .reserve(&SlotRequest::new(number(), T0 - Duration::from_secs(20)))
+        .await
+        .unwrap();
+
+    store.lose(1);
+    let request = SlotRequest::new(number(), T0);
+    assert_eq!(
+        limiter.reserve(&request).await.unwrap().wait,
+        Duration::ZERO
+    );
+    assert_eq!(limiter.reserve(&request).await.unwrap().wait, ms(50));
+}
+
+/// The settings shared with the token bucket hold on the shared schedule:
+/// a burst goes at once after a quiet spell, then the rate holds.
+#[tokio::test]
+async fn a_burst_goes_at_once_then_the_rate_holds() {
+    let clock = ManualClock::new(T0);
+    let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::with_clock(Arc::new(clock.clone())));
+    let a = replica(&kv, per_second(10), &clock).burst(3).unwrap();
+    let b = replica(&kv, per_second(10), &clock).burst(3).unwrap();
+    let request = SlotRequest::new(number(), T0);
+    let mut waits = Vec::new();
+    for i in 0..6 {
+        let limiter = if i % 2 == 0 { &a } else { &b };
+        waits.push(limiter.reserve(&request).await.unwrap().wait);
+    }
+    assert_eq!(waits, [ms(0), ms(0), ms(0), ms(100), ms(200), ms(300)]);
+}
+
+/// A request costing several sends takes that many slots of the schedule.
+#[tokio::test]
+async fn a_request_can_cost_several_sends() {
+    let clock = ManualClock::new(T0);
+    let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::with_clock(Arc::new(clock.clone())));
+    let a = replica(&kv, per_second(10), &clock);
+    let b = replica(&kv, per_second(10), &clock);
+    let three = SlotRequest::new(number(), T0).with_cost(std::num::NonZeroU32::new(3).unwrap());
+    assert_eq!(a.reserve(&three).await.unwrap().wait, Duration::ZERO);
+    let one = SlotRequest::new(number(), T0);
+    assert_eq!(b.reserve(&one).await.unwrap().wait, ms(300));
+}
+
+/// Slow-downs stop at one message a second, however many there are (the
+/// divisor never overflows).
+#[tokio::test]
+async fn slow_downs_stop_at_one_a_second() {
+    let clock = ManualClock::new(T0);
+    let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::with_clock(Arc::new(clock.clone())));
+    let limiter = replica(&kv, per_second(4), &clock);
+    for s in 0..40 {
+        limiter
+            .slow_down(&number(), T0 + Duration::from_secs(s))
+            .await
+            .unwrap();
+    }
+    let now = SlotRequest::new(number(), T0 + Duration::from_secs(40));
+    limiter.reserve(&now).await.unwrap();
+    assert_eq!(
+        limiter.reserve(&now).await.unwrap().wait,
+        Duration::from_secs(1)
+    );
+}
+
+/// A throughput upgrade whose limiter fails raises nothing, and is
+/// `observe`'s error and, as a sink, a delivery failure (Meta redelivers).
+#[tokio::test]
+async fn a_throughput_upgrade_whose_store_fails_is_an_error() {
+    use meta_whatsapp_core::error::SinkError;
+    use meta_whatsapp_core::sink::EventSink;
+    let clock = ManualClock::new(T0);
+    let kv: Arc<dyn KvStore> = Arc::new(Down);
+    let numbers = KnownNumbers::new()
+        .number(
+            WabaId::new("102290129340398").unwrap(),
+            "15550783881",
+            number(),
+        )
+        .unwrap();
+    let upgrades = ThroughputUpgrades::new(Arc::new(replica(&kv, Rate::DEFAULT, &clock)), numbers);
+    let upgrade = event("fields/phone_number_quality_update.json");
+    assert!(is_backend(&upgrades.observe(&upgrade).await.unwrap_err()));
+    assert!(matches!(
+        upgrades.deliver(upgrade).await,
+        Err(SinkError::Delivery(_))
+    ));
+}
+
+/// A slot given back after its record was deleted (or expired) and
+/// created again by another replica gives back nothing of the new
+/// schedule: the ids of a new record do not start again where the old
+/// one's did.
+#[tokio::test]
+async fn a_slot_of_a_forgotten_record_gives_back_nothing() {
+    let clock = ManualClock::new(T0);
+    let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::with_clock(Arc::new(clock.clone())));
+    let a = replica(&kv, per_second(20), &clock);
+    let b = replica(&kv, per_second(20), &clock);
+    let request = SlotRequest::new(number(), T0);
+    let stale = a.reserve(&request).await.unwrap();
+    // The operator's remedy, or an expiry: the record is forgotten.
+    assert!(
+        kv.delete(&KvRateLimiter::store_key(&number()))
+            .await
+            .unwrap()
+    );
+    b.reserve(&request).await.unwrap(); // 0 ms, of the new record
+    a.release(&request, &stale).await.unwrap();
+    assert_eq!(b.reserve(&request).await.unwrap().wait, ms(50));
+}
+
+/// A small deterministic generator for the interleavings below.
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self, below: usize) -> usize {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        usize::try_from((self.0 >> 33) % u64::try_from(below).unwrap()).unwrap()
+    }
+}
+
+/// Property: three replicas booking, giving back and racing in any order,
+/// the clock moving on meanwhile, never book two kept slots less than an
+/// interval apart, so no one-second window holds more than the rate.
+#[tokio::test]
+async fn any_interleaving_keeps_every_kept_slot_an_interval_apart() {
+    for seed in 1..=40 {
+        let mut rng = Lcg(seed);
+        let clock = ManualClock::new(T0);
+        let store = Lockstep::new(&clock);
+        let kv: Arc<dyn KvStore> = Arc::new(store.clone());
+        let replicas: Vec<KvRateLimiter> = (0..3)
+            .map(|_| {
+                replica(&kv, per_second(20), &clock)
+                    .contention(64, ms(1))
+                    .unwrap()
+            })
+            .collect();
+        // Every slot booked: its start, and whether it was given back.
+        let mut slots: Vec<(
+            OffsetDateTime,
+            SlotRequest,
+            meta_whatsapp_bot::Reservation,
+            bool,
+        )> = Vec::new();
+        for _ in 0..60 {
+            match rng.next(4) {
+                // Two replicas race for the record.
+                0 | 1 => {
+                    let (x, y) = (rng.next(3), rng.next(3));
+                    let request = SlotRequest::new(number(), clock.now());
+                    let (first, second) = futures::join!(
+                        replicas[x].reserve(&request),
+                        replicas[y].reserve(&request)
+                    );
+                    for slot in [first.unwrap(), second.unwrap()] {
+                        slots.push((request.now + slot.wait, request.clone(), slot, false));
+                    }
+                }
+                // One gives back a slot not started yet, booked by any.
+                2 => {
+                    let now = clock.now();
+                    let waiting: Vec<usize> = (0..slots.len())
+                        .filter(|&i| !slots[i].3 && slots[i].0 > now)
+                        .collect();
+                    if let Some(&i) = waiting.get(rng.next(waiting.len().max(1))) {
+                        let who = rng.next(3);
+                        replicas[who]
+                            .release(&slots[i].1, &slots[i].2)
+                            .await
+                            .unwrap();
+                        slots[i].3 = true;
+                    }
+                }
+                // Time passes.
+                _ => clock.advance(ms(u64::try_from(rng.next(120)).unwrap())),
+            }
+        }
+        let mut kept: Vec<OffsetDateTime> = slots.iter().filter(|s| !s.3).map(|s| s.0).collect();
+        kept.sort();
+        for pair in kept.windows(2) {
+            assert!(pair[1] - pair[0] >= ms(50), "seed {seed}: {pair:?}");
+        }
+        assert!(store.lost() > 0, "seed {seed}: no race");
+    }
+}
+
+/// A slow-down after quiet recovery periods divides the recovered rate,
+/// not the rate of the last slow-down: 8 a second slowed twice (2 a
+/// second), three quiet periods later back at 8, then slowed once: 4.
+#[tokio::test]
+async fn a_slow_down_after_a_quiet_spell_divides_the_recovered_rate() {
+    let clock = ManualClock::new(T0);
+    let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::with_clock(Arc::new(clock.clone())));
+    let a = replica(&kv, per_second(8), &clock);
+    let b = replica(&kv, per_second(8), &clock);
+    a.slow_down(&number(), T0).await.unwrap();
+    b.slow_down(&number(), T0 + Duration::from_secs(1))
+        .await
+        .unwrap();
+    let quiet = T0 + Duration::from_secs(100);
+    a.slow_down(&number(), quiet).await.unwrap();
+    let request = SlotRequest::new(number(), quiet);
+    b.reserve(&request).await.unwrap();
+    assert_eq!(b.reserve(&request).await.unwrap().wait, ms(250));
+}

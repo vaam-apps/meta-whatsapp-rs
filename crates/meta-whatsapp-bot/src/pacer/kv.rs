@@ -54,7 +54,10 @@ struct Record {
     since: OffsetDateTime,
     /// The last slow-down that counted.
     slowed: Option<OffsetDateTime>,
-    /// The id of the last slot booked (any replica's).
+    /// The id of the last slot booked (any replica's). A new record's
+    /// count starts at a random value, so that a slot of a record deleted
+    /// or expired since never matches one of the record created after it
+    /// ([`RateLimiter::release`]).
     last_id: u64,
     /// The schedule before the last slot booked, while it can be given
     /// back ([`RateLimiter::release`]).
@@ -69,7 +72,7 @@ impl Record {
             divisor: 1,
             since: now,
             slowed: None,
-            last_id: 0,
+            last_id: RandomState::new().hash_one(nanos(now)),
             last_base: None,
         }
     }
@@ -234,12 +237,23 @@ enum Change<R> {
 /// [`crate::Broadcast`] stops, `BroadcastEnd::LimiterFailed`; a
 /// [`super::PacedOutbound`] fails the call before sending). It never falls
 /// back to a budget of its own, which would let every replica send the
-/// whole rate.
+/// whole rate. A record it cannot read is never overwritten: the number
+/// sends nothing until the record expires or is deleted (below).
 ///
 /// **Expiry.** A record expires [`Self::idle_expiry`] (default 24 hours)
 /// after its last slot, forgetting the number's schedule, slow-down and
-/// raised rate. Redis drops it itself; with the memory or Postgres store,
-/// call its `purge_expired` now and then (as for the other typed stores).
+/// raised rate, silently: a number idle that long is back at its
+/// configured rate. Redis drops it itself; with the memory or Postgres
+/// store, call its `purge_expired` now and then (as for the other typed
+/// stores).
+///
+/// **Resetting a number.** Deleting its record (`KvStore::delete` on
+/// [`Self::store_key`]) is the remedy for a record this release cannot
+/// read, for slots a clock stepped forward booked, and for a raised rate
+/// to lower (nothing else lowers it). It forgets the slots booked too:
+/// those still waiting start when they were booked, and new bookings
+/// start from now, so for the length of the schedule dropped the number
+/// can send up to twice its rate.
 ///
 /// A slot given back ([`RateLimiter::release`]) is reused only when no
 /// replica booked after it; otherwise it stays unused.
@@ -301,7 +315,9 @@ impl KvRateLimiter {
     }
 
     /// Read the time from `timer`, and wait on it between attempts under
-    /// contention (a `ManualClock` in tests): the pacer's timer.
+    /// contention (a `ManualClock` in tests). Give it the pacer's timer: a
+    /// booking that lost the swap books again as of this timer's now (never
+    /// before the request's), and the pacer waits from the request's.
     pub fn with_timer(mut self, timer: impl Timer) -> Self {
         self.timer = Arc::new(timer);
         self
@@ -674,6 +690,44 @@ mod tests {
         assert_eq!(Record::decode(&bytes), Ok(record));
         let fresh = Record::new(datetime!(2026-09-26 12:00 UTC));
         assert_eq!(Record::decode(&fresh.encode()), Ok(fresh));
+    }
+
+    /// Any record whose instants fit in `i64` nanoseconds (1677 to 2262)
+    /// reads back as written; one beyond saturates at the bounds instead
+    /// of failing (a `due` that far ahead is never reached anyway).
+    #[test]
+    fn records_read_back_and_far_instants_saturate() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let instant = |n: u64| {
+            let n = i64::from_ne_bytes(n.to_ne_bytes());
+            // Never `ABSENT`, the one value an instant cannot be.
+            OffsetDateTime::from_unix_timestamp_nanos(i128::from(n.max(ABSENT + 1))).unwrap()
+        };
+        for _ in 0..1_000 {
+            let raised = u32::try_from(next() % 3_000).unwrap();
+            let record = Record {
+                due: instant(next()),
+                raised: (raised > 0).then_some(Rate(raised)),
+                divisor: u32::try_from(next() % 64).unwrap() + 1,
+                since: instant(next()),
+                slowed: (next() % 2 == 0).then(|| instant(next())),
+                last_id: next(),
+                last_base: (next() % 2 == 0).then(|| instant(next())),
+            };
+            assert_eq!(Record::decode(&record.encode()), Ok(record));
+        }
+        let mut far = Record::new(datetime!(2026-09-26 12:00 UTC));
+        far.due = datetime!(9999-12-31 23:59 UTC);
+        far.since = datetime!(-9999-01-01 0:00 UTC);
+        let read = Record::decode(&far.encode()).unwrap();
+        assert_eq!(nanos(read.due), i64::MAX);
+        assert_eq!(nanos(read.since), ABSENT + 1);
     }
 
     #[test]
