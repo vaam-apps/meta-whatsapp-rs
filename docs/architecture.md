@@ -795,6 +795,16 @@ content matching the type), and a submission is never replayed (Meta
 allows three per merchant). The decision is the `account_update` webhook
 `PARTNER_CLIENT_CERTIFICATION_STATUS_UPDATE`.
 
+Multi-Partner Solutions and migration intents are `meta_whatsapp_client::partners`
+(`solutions`: create, accept, reject, the three deactivation calls, a
+solution and its partners, an app's solutions and connected client
+businesses, and a client's business token through a solution;
+`migration`: `set_solution_migration_intent` and reading an intent),
+also outside onboarding and each on its client's token. The business
+token a solution gives is an `AccessToken`, decoded so that a body that
+fails to parse reaches no error; no call there is replayed after a
+timeout but the reads.
+
 `EsVersion`'s v2, v3 and their public previews are `#[deprecated]`: Meta
 deprecates them on 2026-10-15.
 

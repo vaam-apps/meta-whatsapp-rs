@@ -241,6 +241,39 @@ stored data, the owner's).
   (`crates/meta-whatsapp-adapters/tests/ffmpeg.rs`) skip without one
   unless `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`; `META_WHATSAPP_RS_TEST_FFMPEG`
   names the binary.
+- **Multi-Partner Solutions and migration intents**
+  (`meta_whatsapp_client::partners`, roadmap L12, parity rows 144 and
+  145, from `solution-providers/multi-partner-solutions`,
+  `…/multi-partner-solution-embedded-creation`,
+  `…/support/adding-waba-to-mps`,
+  `…/support/migrating-wabas-among-solutions-via-meta-business-suite`
+  and the `reference/whatsapp-business-solution/*`,
+  `reference/application/*` and migration intent references).
+  `Client::partner_solutions()` (`partners::solutions::PartnerSolutions`):
+  `create(owner_app, &CreateSolution)` (`POST
+  /{APP_ID}/whatsapp_business_solution`; a blank name, or `MESSAGING` on
+  neither side, is refused first), `accept`, `reject`,
+  `send_deactivation_request`, `accept_deactivation_request` and
+  `reject_deactivation_request` (`POST /{SOLUTION_ID}/…`; the last two
+  answer `None` for Meta's `{"success": true}` or the solution
+  afterwards), `get(solution, fields)`, `partners`, `app_solutions`
+  (`role`, `fields`, `limit` 1 to 100) and `connected_client_businesses`,
+  each list with a `…_stream`, and `access_token(solution, business)`:
+  an onboarded client's business token (`SolutionAccessToken`, an
+  `AccessToken` and its `expires_at`), read with your system user token,
+  from Meta's wrapped or bare answer. `Client::migration_intents()`
+  (`partners::migration::MigrationIntents`): `create(waba, solution)`
+  (`POST /{WABA_ID}/set_solution_migration_intent`, the client's
+  business token) and `get(intent, fields)` (`MigrationIntentInfo`, with
+  `is_accepted`). Core: `ids::SolutionId` (numeric, checked) and
+  `ids::MigrationIntentId` (opaque). Every creation and state change is
+  never replayed after a timeout or a server error. The business token
+  never reaches `Debug`, and an answer that fails to decode keeps the
+  body and serde's message out of the error, as does a non-2xx answer
+  that is not Meta's error envelope. No call here accepts terms
+  or signs an agreement; accepting or rejecting a solution cannot be
+  undone, and a migration intent the client leaves unanswered for 90
+  days is accepted for them (Meta's rule).
 - **Call recording and transcription** (`meta_whatsapp_client::calling`,
   roadmap L14, parity row 135, from `calling/call-recording` and
   `calling/call-transcription`): the per-call `recording` and
