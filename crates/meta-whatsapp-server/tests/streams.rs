@@ -315,9 +315,8 @@ async fn streams_are_bounded_per_tenant() {
     let b_key = h.tenant_key(B, &[Scope::Events]).await;
     let first = opened(&h, stream(&a_key)).await;
     let _second = opened(&h, stream(&a_key)).await;
-    let reply = match open(&h.internal, stream(&a_key)).await {
-        Ok(_) => panic!("the stream opened"),
-        Err(reply) => reply,
+    let Err(reply) = open(&h.internal, stream(&a_key)).await else {
+        panic!("the stream opened")
     };
     let body = reply.json();
     assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS, "{body}");
