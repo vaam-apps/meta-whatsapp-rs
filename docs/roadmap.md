@@ -1821,7 +1821,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     Business node documents, not from the WABA the guide's request prints
     (its prose asks for a business id); a non-2xx answer to the token
     request never quotes its body.
-- [ ] **L11a. Hosted Embedded Signup** (`meta-whatsapp-client`,
+- [x] **L11a. Hosted Embedded Signup** (`meta-whatsapp-client`,
   `client::embedded_signup`; row 121; OPEN_QUESTIONS #11): started by the
   `PARTNER_ADDED` webhook, its business token from
   `system_user_access_tokens` with an `appsecret_proof`, then the
@@ -1832,6 +1832,62 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     carrying the `appsecret_proof` of the app secret (a wrong proof fails
     the test's request assertion), and to the same stored record the
     code flow writes.
+  - **Landed:** row 121 done in the library (the service's side stays
+    with M3f). `HostedSignup` (the webhook's `waba_info.waba_id` and
+    `owner_business_id`, and the token request, `fetch_only` by
+    default) and `EmbeddedSignup::onboard_hosted` /
+    `onboard_hosted_with_approval`: step `fetch_token`
+    (`Business::system_user_access_token` on the customer's portfolio,
+    with the system token passed in and the app secret of
+    `AppCredentials`, borrowed) in place of `exchange_code`, then the
+    code flow's steps, shared with it (`onboard_granted`); `verify_assets`
+    also refuses a WABA whose owner, as Meta reports it, is another
+    business than the webhook's. Resumed by `resume` with
+    `OnboardingRequest::for_hosted`. The decisive tests, in
+    `embedded_signup::hosted`:
+    `a_partner_added_fetches_the_token_with_the_proof_and_onboards`
+    (the form body exactly, the proof both a fixed vector computed with
+    `openssl dgst -sha256 -hmac` and an HMAC the test computes),
+    `a_wrong_app_secret_sends_another_proof`,
+    `the_stored_record_is_the_code_flows` (the same keys, clear fields
+    and sealed record but the random nonce), a failure at each step
+    before `store_token` re-run and after it resumed,
+    `a_fetch_is_replayed_and_a_generation_is_not`; and through the
+    webhook parser, the skill's `hosted_signup.rs` (Meta's
+    `PARTNER_ADDED` example, verbatim). Found on the way: the webhook
+    names no tenant and also comes for code-flow onboardings, and the
+    hosted page asks for no PIN; both are the integrator's, documented
+    in the guide. Found in review: `PARTNER_ADDED` comes for every WABA
+    shared with the app (the code flow's and coexistence's onboardings
+    too) and may be delivered again, and `store_token` replaces a
+    record (as the code flow's re-onboarding must), so a hosted run
+    after a code-flow onboarding would have replaced its token and
+    `created_at` (and with it a Solution Partner's recorded approval)
+    unasked; `onboard_hosted` now refuses a WABA the vault holds,
+    before any request (a presence read, an unreadable record counting
+    as held; `a_waba_the_vault_holds_is_refused_before_any_request`),
+    and re-onboarding one is deleting it first. A read, not a lock: a
+    code-flow onboarding still running when the webhook arrives can
+    store after it; the approval's atomic reservation closes that
+    window, and the rustdoc says so.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): the token
+    request is `fetch_only=true` by default, swapped per signup by
+    `HostedSignup::token_request` (a fetch is replayed as a read, a
+    generation never is); the system user token is an explicit argument
+    of `onboard_hosted`, not held by `EmbeddedSignup`; a WABA whose
+    owner, as Meta reports it, is another business than the webhook's
+    is refused, and when Meta reports no owner none is stored, as in
+    the code flow; `debug_token` runs on the fetched token, on the
+    assumption that hosted signup's business tokens carry
+    `granular_scopes` naming the WABA, as the code exchange's do (one
+    that does not fails `verify_assets` on `granular_scopes`, closed);
+    the integrator's, documented: re-onboarding a WABA already held
+    (delete it first; the library refuses it otherwise), the tenant
+    binding (in the approval) and the PIN; no facade helper (the glue
+    stays in the skill's `hosted_signup.rs`); the skill not re-stamped.
+    The library's side of OPEN_QUESTIONS #11 is decided; the service's
+    is M3f.
 - [ ] **L11b. Several WABAs in one signup** (`client::embedded_signup`;
   row 122; OPEN_QUESTIONS #5): opt-in onboarding of every granted WABA,
   each bound and resumable on its own.
