@@ -2024,7 +2024,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a coexistence onboarding requests the sync exactly
     once; with the option off, none; an onboarding without coexistence
     sends none.
-- [ ] **L11e. A token-expiry signal** (`client::embedded_signup`; row 6;
+- [x] **L11e. A token-expiry signal** (`client::embedded_signup`; row 6;
   OPEN_QUESTIONS #8): a configurable lead time before a stored business
   token's `expires_at`.
   - **Kind:** additive.
@@ -2032,6 +2032,32 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** under a fake clock, a token expiring inside the lead
     time is reported and one expiring after it is not; removing the
     comparison fails the test.
+  - **Landed:** row 6 done for the library. `TokenVault::token_expiry(waba_id,
+    lead)` answers, on the vault's clock, with a `TokenExpiry`: `Never`
+    (no `expires_at`: Meta reported none, or `0`), `Fresh`,
+    `ExpiresSoon { expires_at, remaining }` (`now + lead` included) or
+    `Expired` (`expires_at <= now`, as `StoredBusinessToken::is_expired`);
+    `is_due()` is the last two. `DEFAULT_EXPIRY_LEAD` is 7 days (business
+    tokens default to never expiring; one generated to expire lasts 60
+    days). It reads the record's clear `expires_at` only: nothing is
+    decrypted, no key is needed, nothing is written (no re-encryption on
+    read), and the stored format (`wa-rs/token-vault/v1`) is unchanged;
+    the clear copy is not authenticated, so `StoredBusinessToken::expiry`
+    gives the same answer on a token `get` decrypted. A record naming
+    another WABA or of another version is refused. The vault cannot list
+    its records: the caller walks the WABAs it holds, and M3e walks the
+    service's bindings as its vault rotation does. The decisive tests, in
+    `embedded_signup::vault`:
+    `a_token_inside_the_lead_is_reported_and_one_after_it_is_not` (a
+    `ManualClock`; inside, outside, exactly at the lead, expired, at
+    `now`, absent; the clock moved across the boundary) and
+    `the_boundaries_of_the_lead_time`; with
+    `the_expiry_check_decrypts_nothing_and_writes_nothing` (a record
+    under a key the vault lacks still answers; a record under a previous
+    key is not rewritten), `an_absent_expiry_never_expires` and
+    `the_expiry_check_refuses_what_is_not_this_wabas_record`. Removing
+    the lead comparison, `<` for `<=` at either boundary, and an absent
+    expiry read as expired each fail them.
 - [x] **L12. Partners** (`meta-whatsapp-client`, new client modules; rows
   144, 145): Multi-Partner Solutions (create, accept, reject,
   deactivation, the solution token, an app's solutions and connected

@@ -40,7 +40,10 @@ marketing and CTWA pages of 2026-11-01; rows 89 and 90 with durable
 scheduling (roadmap B3), against its code and Meta's
 `templates/marketing-templates/per-user-limits` page of 2026-11-01; row 48 with media conversion (roadmap L19), against
 its code and Meta's `business-phone-numbers/media` and
-`messages/audio-messages` pages of 2026-11-01. Every cell
+`messages/audio-messages` pages of 2026-11-01; row 6 with the
+token-expiry signal (roadmap L11e), against its code and Meta's
+`access-tokens` and `facebook-login/facebook-login-for-business` pages
+of 2026-11-01. Every cell
 about us was
 checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
@@ -56,7 +59,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 117 | 14 | 0 | 1 |
+| Library | 118 | 13 | 0 | 1 |
 | Service | 41 | 23 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -64,7 +67,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 14 partial or gap rows is cited by a
+- Each of the library's 13 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 90 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, L 1 (L22a, tooling), P 2 (payments).
@@ -210,7 +213,7 @@ The owner's definition (2026-09-26):
 | 3 | Connection | Saved session, logout, a budget of login attempts | Yes | No (the Cloud API is stateless HTTPS) | none | — | — | n/a — unofficial protocol |
 | 4 | Connection | Token authentication; checking the token and the number at start | No | Yes (checks the token and the phone number id when it connects) | `access-tokens`, `permissions.md` | `client::ClientBuilder::access_token`; token inspection `client::embedded_signup::EmbeddedSignup::debug_token`; `client::phone_numbers::PhoneNumber::get`. No single "check my credentials" call | incomplete configuration refuses the start (`server::config`); attaching a WABA checks it with Meta: `POST /v1/admin/tenants/{id}/wabas` (`server_core::admin::Admin::attach_waba`) | done / done |
 | 5 | Connection | Reconnect semantics on the Cloud API: back off when throttled, never replay a send that timed out | Yes (reconnects with growing delays) | Partial (waits after a rate limit) | `throughput.md` (error 130429), `support/error-codes.md` | `client::RetryPolicy` (jittered exponential backoff, `Retry-After` honoured, a send replayed only after a throttle or the account in maintenance, `core::Error::may_resend`); `core::ErrorKind::is_retryable` | `may_have_been_sent` on `502`/`504`; `Idempotency-Key` replays an answer, never a send (`server_core::idempotency::run`, over HTTP `server_http::idempotency`), a key covering the operation and its canonical input, not the path (`server_core::idempotency::Fingerprint`, S6) | done / done |
-| 6 | Connection | Token expiry and refresh | — | — | `access-tokens` (business tokens need no re-authentication; no refresh call is documented) | expiry recorded (`client::embedded_signup::StoredBusinessToken::expires_at`); nothing refreshes it (OPEN_QUESTIONS #8, decided: re-onboard, surface the expiry early, L11e) | `409 reconnect_required` (`server_core::authz`, over HTTP `server_http::auth`); the expiry surfaced before it lapses in M3e | partial / partial (M3e) |
+| 6 | Connection | Token expiry and refresh | — | — | `access-tokens` (business tokens need no re-authentication; no refresh call is documented) | expiry recorded (`client::embedded_signup::StoredBusinessToken::expires_at`) and reported a configurable lead ahead, 7 days by default, from the record's clear metadata with nothing decrypted (`client::embedded_signup::TokenVault::token_expiry`, a `TokenExpiry`; L11e); nothing refreshes it, as Meta documents no refresh (OPEN_QUESTIONS #8, decided: re-onboard) | `409 reconnect_required` (`server_core::authz`, over HTTP `server_http::auth`); the expiry surfaced before it lapses in M3e | done / partial (M3e) |
 | 7 | Connection | Webhook endpoint: the verify-token handshake, `X-Hub-Signature-256` | No | Yes (`client.webhook()`; an unsigned mode for development) | `webhooks/overview.md`, `webhooks/create-webhook-endpoint.md` | `webhooks::verify::verify_subscription`; `webhooks::SignatureVerifier` (several secrets, fail-closed, no unsigned mode); `webhooks::WebhookHandler::deliver`; the axum `webhooks::router` | `GET` and `POST /webhooks/meta` (`server_http::api::webhooks::verify`, `receive`, over the core's pipeline since S5e, `server_core::inbound::Pipeline::deliver`): a missing or malformed signature header refused before the body is read, the signature checked against every app secret before parsing, 3 MiB | done / done |
 | 8 | Connection | Webhook deduplication | — | — | `webhooks/overview.md` (Meta retries a delivery) | `webhooks::dedup::DedupGuard` (a lease: pending, then done or released) | the library's lease, shared by every replica through the Postgres `KvStore` | done / done |
 | 9 | Accounts | Several numbers and accounts, routed by `phone_number_id` | Yes (one client per session) | Yes (one client per phone number id; a router reads the body) | `solution-providers/manage-accounts.md` | `client::Client::with_token`; `client::embedded_signup::TokenVault::get_by_phone_number`; every event carries its business number | tenants, keys and WABA bindings (`server_core::admin::Admin`, under the routes of `server_api_axum::api::admin`); each webhook event routed to the tenant that owns its number or WABA (`server_core::events::route`, `owner`), a dated event only when that binding began by its second (a first onboarding keeps its first second; after a move from another tenant, a second before it, by the skew margin `server_core::events::MoveRules`); since S2b an undated event (an error, a history chunk, an undated group update) of a WABA that moved from another tenant is operator-only for 7 days and an hour after the move (`server_core::events::UndatedAfterMove`, `OperatorOnly` by default, `CurrentHolder` the behaviour before: design D36), from the record of the WABA's last unbinding (`server_core::model::WabaTombstone`), so a previous holder's that Meta redelivers no longer reach a new holder | done / done |
