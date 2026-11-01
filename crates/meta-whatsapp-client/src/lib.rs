@@ -43,6 +43,7 @@ pub mod phone_numbers;
 pub mod qr_codes;
 pub mod signups;
 pub mod templates;
+pub mod thread_control;
 pub mod waba;
 
 pub use client::{Client, ClientBuilder, DEFAULT_TIMEOUT};

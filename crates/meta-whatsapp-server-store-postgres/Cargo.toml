@@ -1,0 +1,38 @@
+[package]
+name = "meta-whatsapp-server-store-postgres"
+description = "The meta-whatsapp-rs service's Postgres backend: the core's storage ports through sqlx, with the service's migrations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# Part of the service (roadmap S7), never a library dependency: no crate of
+# the library depends on it.
+publish = false
+
+[lib]
+name = "meta_whatsapp_server_store_postgres"
+
+[dependencies]
+# sqlx and the library's Postgres stores, through the facade
+# (`meta_whatsapp_rs::adapters::store::postgres::sqlx`).
+meta-whatsapp-rs = { workspace = true, features = ["postgres"] }
+# The ports this backend implements, and the model they speak.
+meta-whatsapp-server-core.workspace = true
+
+anyhow.workspace = true
+async-trait.workspace = true
+# SHA-256 of the advisory lock keys (`lock_key`).
+sha2.workspace = true
+time.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# tests/live_postgres.rs: the core's conformance suite on this backend, live
+# (`meta_whatsapp_server_core::conformance::run`).
+meta-whatsapp-server-core = { workspace = true, features = ["conformance"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+
+[lints]
+workspace = true

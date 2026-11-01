@@ -34,6 +34,7 @@ test-live:
     fi
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-adapters --all-features live_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-rs --all-features live_postgres_ -- --test-threads=4
+    META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server-store-postgres --all-features live_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server --all-features live_ -- --test-threads=4
 
 # Stop the compose.test.yaml services
@@ -113,9 +114,11 @@ doc:
 # (tests/signature.rs uses SIGNATURE_HEADER) must build without axum. The doc
 # line builds rustdoc without default features (meta-whatsapp-rs included): a link to a
 # feature-gated item must be gated with it; `just doc` covers --all-features.
-# It leaves meta-whatsapp-server out: the service turns on the facade's
-# reqwest, memory, postgres and axum, and in one --workspace build those
-# features would be on for every crate, hiding an ungated link. For the
+# It leaves the service's crates that turn on adapter features out
+# (meta-whatsapp-server and, since roadmap S7, the crates it composes):
+# together they turn on the facade's reqwest, memory, postgres and axum,
+# and in one --workspace build those features would be on for every
+# crate, hiding an ungated link. For the
 # same reason the meta-whatsapp-server-core lines check that crate alone,
 # all targets: it must build on the facade without those features, with
 # and without its `conformance` suites. The library is also checked alone,
@@ -124,7 +127,10 @@ doc:
 # the crate's dev-dependencies (the facade's memory adapters, tokio's
 # macros) would lend the library what it forgot to enable, and an
 # intra-doc link of the suites' that names an ungated item would pass
-# (roadmap S6).
+# (roadmap S6). The crates the service's binary composes (roadmap S7) are
+# each checked alone, all targets, so none borrows a facade feature from
+# another; and the binary is built with `api-axum` and each backend alone:
+# a `#[cfg(feature = "store-…")]` gate it forgot fails one of them.
 #
 # Each feature on its own, so a missing cfg gate cannot hide behind --all-features
 features:
@@ -134,6 +140,7 @@ features:
     cargo check -p meta-whatsapp-adapters --no-default-features --features reqwest
     cargo check -p meta-whatsapp-adapters --no-default-features --features postgres
     cargo check -p meta-whatsapp-adapters --no-default-features --features redis
+    cargo check -p meta-whatsapp-adapters --no-default-features --features ffmpeg
     cargo check -p meta-whatsapp-webhooks --no-default-features --all-targets
     cargo check -p meta-whatsapp-webhooks --features axum
     cargo check -p meta-whatsapp-client --no-default-features
@@ -148,6 +155,7 @@ features:
     cargo check -p meta-whatsapp-rs --no-default-features --features axum
     cargo check -p meta-whatsapp-rs --no-default-features --features typst
     cargo check -p meta-whatsapp-rs --no-default-features --features flows-endpoint
+    cargo check -p meta-whatsapp-rs --no-default-features --features ffmpeg
     cargo check -p meta-whatsapp-rs --no-default-features --features bot
     cargo check -p meta-whatsapp-rs
     cargo check -p meta-whatsapp-server-core
@@ -155,7 +163,13 @@ features:
     cargo check -p meta-whatsapp-server-core --all-targets --features conformance
     cargo check -p meta-whatsapp-server-core --features conformance
     RUSTDOCFLAGS="-D warnings" cargo doc -p meta-whatsapp-server-core --features conformance --no-deps
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude meta-whatsapp-server --no-default-features --no-deps
+    cargo check -p meta-whatsapp-server-store-memory --all-targets
+    cargo check -p meta-whatsapp-server-store-postgres --all-targets
+    cargo check -p meta-whatsapp-server-http --all-targets
+    cargo check -p meta-whatsapp-server-api-axum --all-targets
+    cargo check -p meta-whatsapp-server --no-default-features --features api-axum,store-memory
+    cargo check -p meta-whatsapp-server --no-default-features --features api-axum,store-postgres
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude meta-whatsapp-server --exclude meta-whatsapp-server-http --exclude meta-whatsapp-server-api-axum --exclude meta-whatsapp-server-store-memory --exclude meta-whatsapp-server-store-postgres --no-default-features --no-deps
 
 # Licenses, advisories, duplicate versions, sources
 deny:

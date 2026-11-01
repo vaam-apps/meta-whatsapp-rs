@@ -22,12 +22,17 @@ postgres = ["dep:sqlx", "dep:serde"]
 redis = ["dep:redis"]
 # Channel, broadcast, fan-out, filter, fn and tracing sinks, and event streams.
 sinks = ["tokio/sync", "dep:tokio-stream"]
+# `media::FfmpegConverter`: core's `MediaConverter` port over an `ffmpeg`
+# binary the integrator installs, run as a child process. Nothing is linked
+# or bundled: no codec library enters the build.
+ffmpeg = ["dep:bytes", "tokio/process", "tokio/io-util"]
 
 [dependencies]
 meta-whatsapp-core.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
+bytes = { workspace = true, optional = true }
 futures.workspace = true
 http.workspace = true
 serde_json.workspace = true

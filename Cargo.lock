@@ -2229,6 +2229,7 @@ dependencies = [
  "meta-whatsapp-webhooks",
  "pretty_assertions",
  "pulldown-cmark",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "time",
@@ -2319,17 +2320,15 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "futures",
- "getrandom 0.3.4",
  "hex",
  "http-body-util",
- "hyper",
- "hyper-util",
  "meta-whatsapp-rs",
+ "meta-whatsapp-server-api-axum",
  "meta-whatsapp-server-core",
- "multer",
+ "meta-whatsapp-server-http",
+ "meta-whatsapp-server-store-memory",
+ "meta-whatsapp-server-store-postgres",
  "pretty_assertions",
- "prometheus-client",
- "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror",
@@ -2338,6 +2337,22 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "meta-whatsapp-server-api-axum"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "meta-whatsapp-rs",
+ "meta-whatsapp-server-core",
+ "meta-whatsapp-server-http",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
  "trybuild",
  "utoipa",
  "utoipa-axum",
@@ -2366,6 +2381,62 @@ dependencies = [
  "tracing",
  "trybuild",
  "unicode-properties",
+]
+
+[[package]]
+name = "meta-whatsapp-server-http"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "getrandom 0.3.4",
+ "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "meta-whatsapp-rs",
+ "meta-whatsapp-server-core",
+ "meta-whatsapp-server-store-memory",
+ "multer",
+ "prometheus-client",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "trybuild",
+ "utoipa",
+ "utoipa-axum",
+]
+
+[[package]]
+name = "meta-whatsapp-server-store-memory"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "meta-whatsapp-rs",
+ "meta-whatsapp-server-core",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "meta-whatsapp-server-store-postgres"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "meta-whatsapp-rs",
+ "meta-whatsapp-server-core",
+ "sha2 0.10.9",
+ "time",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

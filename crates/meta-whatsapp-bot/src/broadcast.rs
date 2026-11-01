@@ -64,8 +64,10 @@
 //! without lines.
 //!
 //! **Not durable.** The run lives in memory: a restart loses it, and the
-//! report is the only record. Durable, resumable jobs are roadmap item
-//! B3 (a typed store on `KvStore`).
+//! report is the only record. For a broadcast that survives a restart, or
+//! one sent at a time, schedule it as a job ([`crate::jobs`]): its runner
+//! sends through a broadcast like this one, and records each recipient in
+//! a `KvStore` before its send.
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -601,7 +603,7 @@ fn identities(recipient: &Recipient) -> Vec<Identity> {
 
 /// Each listing of a person after their first, with the index of the
 /// first: `(index, of)`, in list order.
-fn duplicates(recipients: &[Recipient]) -> Vec<(usize, usize)> {
+pub(crate) fn duplicates(recipients: &[Recipient]) -> Vec<(usize, usize)> {
     let mut first: HashMap<Identity, usize> = HashMap::new();
     let mut out = Vec::new();
     for (index, recipient) in recipients.iter().enumerate() {

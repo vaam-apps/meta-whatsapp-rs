@@ -1,0 +1,61 @@
+[package]
+name = "meta-whatsapp-server-http"
+description = "The meta-whatsapp-rs service's HTTP layer: listeners, authentication before the body, the error renderer, Meta's webhook, media and operations routes, shared by every API adapter."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# Part of the service (roadmap S7), never a library dependency: no crate of
+# the library depends on it.
+publish = false
+
+[lib]
+name = "meta_whatsapp_server_http"
+
+[dependencies]
+# The library, through the facade alone (docs/architecture.md, § Service):
+# axum through `meta_whatsapp_rs::webhooks::axum`.
+meta-whatsapp-rs = { workspace = true, features = ["axum"] }
+# The service's framework-free core: the domain, the authorization order,
+# the error model as data, the webhook pipeline and the ports.
+meta-whatsapp-server-core.workspace = true
+
+futures.workspace = true
+# Request ids (`req_` and 16 random hex digits).
+getrandom.workspace = true
+# Opaque list cursors and request ids.
+hex.workspace = true
+# Media uploads: multipart parsing with per-field size limits.
+multer.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "net", "sync", "time", "io-util"] }
+tracing.workspace = true
+# JSON logs (`WA_SERVER_LOG_FORMAT=json`, the default).
+tracing-subscriber = { workspace = true, features = ["json"] }
+
+# The accept loop: a header read timeout and a connection cap
+# (src/listen.rs).
+hyper = { workspace = true, features = ["server", "http1"] }
+hyper-util = { workspace = true, features = ["tokio", "server", "server-graceful", "service"] }
+prometheus-client.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
+
+[dev-dependencies]
+meta-whatsapp-rs = { workspace = true, features = ["axum", "testing"] }
+# The unit tests' state (`AppState::for_tests`) and tests/visibility: a
+# memory backend. It depends on the core only, never on this crate.
+meta-whatsapp-server-store-memory.workspace = true
+http-body-util.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "test-util"] }
+tower = { workspace = true, features = ["util"] }
+# tests/visibility.rs: what does not compile outside this crate.
+trybuild.workspace = true
+
+[lints]
+workspace = true

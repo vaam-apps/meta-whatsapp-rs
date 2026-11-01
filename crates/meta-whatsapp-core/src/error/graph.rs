@@ -213,14 +213,15 @@ pub enum ErrorKind {
     /// later, in its `failed` status webhook: classify a status's errors
     /// with [`GraphApiError::kind`] too.
     CustomerServiceWindowClosed,
-    /// No Graph code yet: another app owns the thread under Conversation
-    /// Routing, so a service message is refused (the inbox's local refusal,
-    /// [`ValidationError::thread_owned_elsewhere`](crate::error::ValidationError::thread_owned_elsewhere)).
-    /// Meta documents no code of
-    /// its own for it (`conversation-routing/thread-lifecycle`, "Sending
-    /// without ownership": "rejected with an API error"); when it does,
-    /// [`ErrorKind::from_code`] maps that code here. Send a template (it
-    /// needs no ownership), or wait for the thread to come back.
+    /// `131070`: a service message from a responder that does not own the
+    /// thread under Conversation Routing ("another app is controlling this
+    /// thread now", `conversation-routing/thread-control` § Errors), also
+    /// while the thread is idle, with no owner; the escalation partner is
+    /// exempt (its service message takes the thread). Also the inbox's
+    /// local refusal while another app owns the thread
+    /// ([`ValidationError::thread_owned_elsewhere`](crate::error::ValidationError::thread_owned_elsewhere)).
+    /// Send a template (it needs no ownership), or wait for the thread to
+    /// be routed or passed to you.
     ThreadOwnedElsewhere,
     /// `131049`: not delivered "to maintain healthy ecosystem engagement"
     /// (per-user marketing limits). Do not retry for at least 24h.
@@ -303,7 +304,9 @@ pub enum ErrorKind {
     /// exist.
     NotFound,
     /// `2494165`: the API is not enabled for this account (e.g. In-App
-    /// Signup on this WABA).
+    /// Signup on this WABA). Also a media converter this deployment lacks
+    /// (`ConversionError::BinaryMissing`, `EncoderMissing`): not Meta's
+    /// answer, as [`Error::graph`](crate::Error::graph) being `None` tells.
     FeatureNotAvailable,
 
     // ── Billing ───────────────────────────────────────────────────────────
@@ -465,6 +468,7 @@ impl ErrorKind {
             | 2494179 => Self::InvalidParameter,
             131051 => Self::UnsupportedMessageType,
             131047 => Self::CustomerServiceWindowClosed,
+            131070 => Self::ThreadOwnedElsewhere,
             131049 => Self::EcosystemEngagementLimit,
             131050 => Self::MarketingOptedOut,
             131055 | 131063 | 134100 => Self::MarketingNotAllowed,
@@ -671,6 +675,14 @@ mod tests {
             (131048, K::SpamRateLimited),
             (131049, K::EcosystemEngagementLimit),
             (131050, K::MarketingOptedOut),
+            // conversation-routing/thread-control § Errors: a service
+            // message without owning the thread.
+            (131070, K::ThreadOwnedElsewhere),
+            // The same table's `take` by a caller that is not the
+            // escalation partner: deliberately not `Permission` (the
+            // token's permissions or asset access), the business's routing
+            // role is missing.
+            (2494191, K::Unknown),
             (131062, K::RecipientNotSupported),
             (132001, K::TemplateNotFound),
             (132015, K::TemplatePaused),

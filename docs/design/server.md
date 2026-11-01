@@ -88,10 +88,11 @@ separate deployments only for separate apps or environments.
 
 ## 2. Architecture
 
-### 2.1 The crate
+### 2.1 The crates
 
-Two crates, as built through M1 and roadmap S1, both `publish = false`
-and workspace members (so `just ci` covers them) but not default ones:
+Six crates, as built through roadmap S7 (S1 extracted the core, S7 split
+the rest), all `publish = false` and workspace members (so `just ci`
+covers them) but not default ones:
 
 - `crates/meta-whatsapp-server-core`, a library: the domain, the
   authorization order, event routing and polling, the webhook pipeline
@@ -99,22 +100,36 @@ and workspace members (so `just ci` covers them) but not default ones:
   error model as data, and the ports a backend implements
   ([§8.1](#81-a-framework-free-core-with-ports)). It turns on none of
   the facade's adapter features: no axum, no sqlx, no utoipa.
-- `crates/meta-whatsapp-server`, binary `meta-whatsapp-server`: the axum
-  API and the OpenAPI document, the webhook listener (what an HTTP body
-  needs before the core's pipeline), configuration, the command line,
-  and the memory and Postgres backends. It turns on the
-  facade's `reqwest`, `memory`, `postgres` and `axum` (axum and sqlx
-  through its re-exports, OQ #29).
+- `crates/meta-whatsapp-server-store-memory` and
+  `crates/meta-whatsapp-server-store-postgres`: the two backends
+  ([§8.2](#82-the-backend-bundle-is-the-unit-of-swapping)), on the core
+  and the facade's `memory` or `postgres` alone (sqlx through its
+  re-export, OQ #29); the Postgres one holds the service's migrations
+  and their migrator.
+- `crates/meta-whatsapp-server-http`: what every API adapter shares
+  ([§8.3](#83-api-adapters)): the state and the grant an adapter's routes
+  are served with, the listeners, telemetry and metrics, authentication
+  before the body, the §5 renderer, the webhook listener (what an HTTP
+  body needs before the core's pipeline), media and the operations
+  routes. On the facade's `axum`.
+- `crates/meta-whatsapp-server-api-axum`: the `/v1` resource routes and
+  the OpenAPI document generated from them.
+- `crates/meta-whatsapp-server`, binary `meta-whatsapp-server`:
+  configuration, `serve` and the command line, composing the others by
+  its Cargo features (`api-axum`, `store-memory`, `store-postgres`, all
+  three by default; a build without `api-axum` does not compile, as it
+  is the only API adapter), with the facade's `reqwest`. The committed
+  `openapi/v1.json` stays here, beside the command that prints it.
 
 They depend on the `meta-whatsapp-rs` facade and on each other, never on
 another crate of the library, and no library crate depends on them: the
 API an outside integrator has, which proves the facade suffices.
 [architecture.md](../architecture.md)'s "nothing depends on
 `meta-whatsapp-rs`" became "no library crate depends on
-`meta-whatsapp-rs`; binaries may, and the service's crates do" (L6). §8
-splits the server further, into API adapters and backends. New
-dependencies (OpenAPI generation, `tower-http`, a Prometheus exporter, a
-rate limiter, `clap`) must pass `cargo deny`.
+`meta-whatsapp-rs`; binaries may, and the service's crates do" (L6). No
+backend depends on the HTTP crates, and the HTTP crate on no adapter or
+backend. New dependencies (OpenAPI generation, `tower-http`, a Prometheus
+exporter, a rate limiter, `clap`) must pass `cargo deny`.
 
 ```text
                public listener (:8080)                      internal listener (:8081)
@@ -798,7 +813,7 @@ each new kind into `unknown` silently.
 | HTTP | Codes | Meaning |
 | --- | --- | --- |
 | 422 | `invalid_request` (local validation, with `field`), `invalid_parameter`, `unsupported_message_type`, `recipient_not_supported`, `undeliverable`, `template_parameter_mismatch`, `template_not_found`, `template_text_too_long`, `template_policy_violation`, `template_rejected`, `sample_template_not_allowed` (Meta's `hello_world` from a number that is not one of its public test numbers), `idempotency_key_reused` | fix the request; nothing was sent |
-| 409 | `customer_service_window_closed`, `thread_owned_elsewhere` (the inbox's local refusal while another app owns the thread; no Graph code yet), `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a stored token: a merchant's, or an attached WABA's once stored), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown` | a state must change first |
+| 409 | `customer_service_window_closed`, `thread_owned_elsewhere` (Meta's `131070`, a service message without owning the thread, and the inbox's local refusal while another app owns it), `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a stored token: a merchant's, or an attached WABA's once stored), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown` | a state must change first |
 | 403 | `permission`, `account_restricted`, `country_restricted`, `payment`, `feature_not_available`, `marketing_not_allowed`; `forbidden`, `tenant_suspended`, `stale_attempt` | not allowed, by Meta or the service |
 | 429 | `rate_limited` (Meta's throttling codes, `ErrorKind::RateLimited`: 4, 80007, 130429, and the Graph API's Business Use Case limits 80008, 80009, 80014), `pair_rate_limited`, `spam_rate_limited`, `ecosystem_engagement_limit`, `classification_limit_reached`, `too_many_requests`, `too_many_streams` | `Retry-After` when known (the service's own limits: Meta's wait is not forwarded); `retryable` says whether waiting helps (false for 131048, 131049) |
 | 404, 410, 413 | `not_found`, `nothing_to_resume`; `cursor_expired`; `payload_too_large`, `media_too_large` | |
@@ -1076,14 +1091,15 @@ database's where it has one, else the service's `Clock`); contention is
 a typed error; a bundle's accessors return the same data on every call;
 listings are in byte order.
 
-**As built (roadmap S1, S2, S3, S4, S5a, S5b, S5c, S5d, S5e, S6).** `crates/meta-whatsapp-server-core`
+**As built (roadmap S1, S2, S3, S4, S5a, S5b, S5c, S5d, S5e, S6, S7).** `crates/meta-whatsapp-server-core`
 exists, with the model, the keys, event routing and polling, the
 idempotency engine, the rate limiter, the error model, authorization,
 housekeeping (over a `Backend`, since S4), the admin operations
 (since S5a), the message operations and the idempotency engine's
 run (since S5b), the number and template operations (since S5c), the
 media operations (since S5d), the webhook pipeline (since S5e), and
-the pieces every API adapter shares made adapter-neutral (since S6).
+the pieces every API adapter shares made adapter-neutral (since S6);
+since S7 the rest of the service is the crates of [§2.1](#21-the-crates).
 What it holds today, where it differs from the target above:
 
 - **The ports** are `RecordStore`, `IdempotencyRecords`, `Outbox`,
@@ -1158,7 +1174,8 @@ What it holds today, where it differs from the target above:
   Postgres, or another by name) and `close()`. Each accessor returns a
   handle to the same data on every call: what one call's handle writes,
   the next reads. The service has two, `MemoryBackend` and `PgBackend`,
-  still in `meta-whatsapp-server` (S7 splits them out).
+  crates of their own since S7 (`meta-whatsapp-server-store-memory`,
+  `meta-whatsapp-server-store-postgres`).
 - **The service is composed from a `Backend` alone** (S4), so a backend
   an integrator brings is served as the in-tree ones are, with nothing
   of the server changed for it. `AppState::from_backend(Arc<dyn
@@ -1168,7 +1185,7 @@ What it holds today, where it differs from the target above:
   `ConversationStore` (the inbox), `Outbox` and records (routing);
   `Inbound` holds what deliveries are checked with (the app secrets,
   the verify token) and the service's clock, no store. No constructor
-  takes a port on its own, and the server's UI tests pin it (loose
+  takes a port on its own, and the HTTP crate's UI tests pin it, the server's before S7 (loose
   ports do not compile into a state). `serve::serve_with(config,
   Arc<dyn Backend>)` (`serve_until` with a shutdown future of the
   caller's) migrates it unless `WA_SERVER_MIGRATE=skip`, mints the
@@ -1385,8 +1402,8 @@ What it holds today, where it differs from the target above:
   log, at most one line a minute per reason, the outcome's count
   (`wa_server_webhook_deliveries_total`) and the subscription handshake
   (`GET`, the library's `verify_subscription` with the pipeline's verify
-  token). No `meta-whatsapp-server-http` crate was made: what needs a
-  listener stays in the server until S7 splits it out. The conformance
+  token). Since S7 that adapter half is `meta-whatsapp-server-http`'s,
+  shared by every API adapter (before, the server's). The conformance
   suite `webhooks` holds the pipeline with no listener, over a view of
   the backend that records what reaches its key/value store and its
   outbox: M1.2's routing cases (an unowned number's event, a number
@@ -1438,8 +1455,9 @@ What it holds today, where it differs from the target above:
   built with a token (SR-L4), and what must not compile outside the
   service's crates (the vault's methods, a capability of one's own, the
   `Authorizer`'s records, since S5a; in
-  the server `AppState::store` and `authz`, the handlers and
-  `idempotency::run`) is pinned by UI tests with the compiler's errors.
+  the HTTP crate (the server's before S7) `AppState::store` and `authz`,
+  a `Grant` made from a state and `idempotency::run`, in the API adapter
+  the handlers) is pinned by UI tests with the compiler's errors.
   Deleting an opened WABA's token and binding, and marking its numbers
   `reconnect_required` after a `190`, are conditioned on what the
   capability was made from (SR-L2, S2): an `OwnedNumber` and an
@@ -1540,16 +1558,50 @@ What it holds today, where it differs from the target above:
   signature before any store; the turns to record; dedup, the answer
   after the recording; the core's `tests/webhooks.rs` runs it on that memory
   backend, which gains an outbox and an inbox, and
-  `tests/webhooks_logs.rs` pins its log lines' target). The memory backend runs
-  it in the service's `tests/store.rs`, the Postgres one live in
-  `tests/live_postgres.rs`; the service's tests also show what it
-  refuses: a backend whose `kv()` is a new store on each call, an
-  outbox that ignores the route guard (S2's security review, L4), and
-  outboxes that bend the guard's date (L3), each through
-  `conformance::run` or `invariants::run`, not only the case. The
-  Postgres-only tests (locks held across sessions, two purges at once,
-  a deadlocked insert) stay in the service's tests: they reach into
-  Postgres's own SQL.
+  `tests/webhooks_logs.rs` pins its log lines' target). Each backend
+  runs it in its own crate since S7: the memory one in
+  `meta-whatsapp-server-store-memory`'s `tests/conformance.rs` (the
+  service's `tests/store.rs` before), the Postgres one live in
+  `meta-whatsapp-server-store-postgres`'s `tests/live_postgres.rs`; the
+  memory crate's tests also show what it refuses: a backend whose `kv()`
+  is a new store on each call, an outbox that ignores the route guard
+  (S2's security review, L4), and outboxes that bend the guard's date
+  (L3), each through `conformance::run` or `invariants::run`, not only
+  the case. The Postgres-only tests (locks held across sessions, two
+  purges at once, a deadlocked insert) are the Postgres crate's: they
+  reach into Postgres's own SQL. The live tests over the whole service on
+  Postgres stay the binary's.
+- **The crate split** (S7, [§2.1](#21-the-crates)). The backends, the
+  HTTP layer (`meta-whatsapp-server-http`) and the axum API adapter
+  (`meta-whatsapp-server-api-axum`) are crates of their own, which the
+  binary composes by its features `api-axum`, `store-memory` and
+  `store-postgres` (all default; `just features` builds `api-axum` with
+  each backend alone). `openapi/v1.json` is byte-identical, generated by
+  the adapter and committed beside the binary, whose `openapi` command
+  prints it. An API adapter's handlers are another crate's than the
+  state's, so the state's records, its authorization order and the
+  idempotency engine reach them through a `Grant`
+  (`meta_whatsapp_server_http::state::Grant`), which
+  `AppState::from_backend` hands only to the state's composer, beside
+  the state: whoever composes the state holds the backend already, and
+  a handler or a router given only the state still reaches none of them
+  (`AppState`'s accessors stay crate-private; a UI case pins that no
+  crate makes a `Grant` from a state). The adapter's router is served
+  with the grant as its state; the HTTP crate's handlers take the
+  `AppState` it gives. The state no longer holds the backend (its
+  composer closes it). The migrations moved to the Postgres crate byte
+  for byte: sqlx knows a migration by its version and checksum in
+  `wa_server_sqlx_migrations`, under `MIGRATION_LOCK`, all unchanged, and
+  a live test migrates a database as `main`'s binary did and starts the
+  split binary on it with no migration run again
+  (`live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration`).
+  Every moved module's log lines keep their target
+  (`meta_whatsapp_server::<module>`, explicit since S7; the service's
+  `tests/logs.rs` checks no line a request logs carries a new crate's
+  path, and reads every log line of the new crates' sources: each names
+  its module's `LOG_TARGET`, pinned to the path it had), and the
+  metrics' names and labels are unchanged. The binary re-exports the
+  moved modules under their old paths.
 
 ### 8.2 The backend bundle is the unit of swapping
 
@@ -1564,8 +1616,8 @@ Postgres pool the service used as its "memory?" flag: that is
 | Backend | Database | Status |
 | --- | --- | --- |
 | `meta-whatsapp-server-store-cratestack` (the default once the owner accepts D20 (a); until then `meta-whatsapp-server-store-postgres`) | Postgres: CrateStack models for the records tables (tenants, API keys, WABAs, numbers); the outbox, idempotency, locks, janitor and migrations reuse store-postgres's SQL on the same pool, and the library's stores are `PostgresKvStore` and `PostgresConversationStore` on it | planned |
-| `meta-whatsapp-server-store-postgres` | Postgres through sqlx: today's code and migrations | built; kept and conformance-tested |
-| `meta-whatsapp-server-store-memory` | memory, development only | built; kept |
+| `meta-whatsapp-server-store-postgres` | Postgres through sqlx: today's code and migrations | built (a crate since S7); kept and conformance-tested, live |
+| `meta-whatsapp-server-store-memory` | memory, development only | built (a crate since S7); kept and conformance-tested |
 | `meta-whatsapp-server-store-mongodb` | MongoDB, a replica set | later: first an `Outbox` spike against the conformance suite, before the port shapes freeze (roadmap S9), then the library's MongoDB adapters (S17) and the whole bundle (S18) |
 
 ### 8.3 API adapters
@@ -1575,12 +1627,18 @@ telemetry, request ids, authentication before the body is read, rate
 limits, the §5 renderer, and the routes CrateStack cannot express
 (`/webhooks/meta`, media upload and download, SSE, the operations
 routes). Both CrateStack and our routes use axum 0.8, so their routers
-merge.
+merge. *As built in S7*: a crate, with the state and its `Grant` (what
+an adapter's handlers reach beyond the state; §8.1), the guards and
+extractors, the internal listener's layers around an adapter's routes
+(`api::internal_router_with`), the public router, and the media and
+operations routes as documented route groups (`api::media::routes`,
+`api::ops::routes`) an adapter merges into its router and its document;
+SSE is not built yet (M2).
 
 | Adapter | Contract | Status |
 | --- | --- | --- |
 | `meta-whatsapp-server-api-cratestack` (the default once the owner accepts D20 (a); until then `meta-whatsapp-server-api-axum`) | `api.cstack`: procedures, types and enums, REST (D19) | planned |
-| `meta-whatsapp-server-api-axum` | today's `/v1` resource routes and `openapi/v1.json` | built; permanent, the swap target: every new route lands in it too, and it stays conformance-tested |
+| `meta-whatsapp-server-api-axum` | today's `/v1` resource routes and `openapi/v1.json` | built (a crate since S7); permanent, the swap target: every new route lands in it too, and it stays conformance-tested |
 
 The binary composes one adapter and one backend: Cargo features choose
 which are compiled in (`api-cratestack` and `store-cratestack` by
@@ -1592,7 +1650,11 @@ the wire contract and the client with it: procedures and CrateStack's
 generated client, or resource URLs and a client from openapi-typescript.
 The authorization (M1.3), error (M1.5) and idempotency (M1.4) suites run
 against every adapter, enumerated from its contract so a new route
-cannot skip them.
+cannot skip them. *As built in S7*: the features are `api-axum`,
+`store-memory` and `store-postgres`, all three by default; with one
+API adapter there is nothing to pick, and the storage configuration
+(`DATABASE_URL`, or memory in development) picks the backend, a build
+without it refusing that storage at start, naming the feature.
 
 ### 8.4 Two CrateStack schemas
 
@@ -1841,9 +1903,9 @@ choice stays the owner's.
 | D24 | A deleted tenant on platform keys | scrubbed from every key's allowed tenants, a tenant created again needing a new key / kept | **Coordinator's decision 2026-09-25, standing under the owner's delegation of 2026-09-26: scrubbed** (a tenant created again under a recycled id must not inherit access). No route or command edits a key's allowed tenants, so a tenant created again under the id needs a new platform key; a `*` key allows it at once. Reversing it keeps the allowances of tenants deleted afterwards only: the lists already scrubbed are not restored. The owner confirms it before the first release | M1 |
 | D25 | The event types the webhook conformance sweep typed (PR #17: `standby_observed`, `thread_control_changed`, `user_action_reported`, formerly `unknown`) | operator-only / tenant-visible | **Decided 2026-09-26: tenant-visible, in M2** (with the inbox's answer to `OPEN_QUESTIONS.md` #44); M1c ships them operator-only, the rule for a type not yet reviewed | M2 |
 | D26 | The service's architecture | one crate / a framework-free core with ports, API adapters and backend bundles | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the modular service ([§8](#8-modular-architecture-and-client-sdks)).** Defaults: `api-cratestack` and `store-cratestack` (the hybrid), once the owner accepts D20's licence (a). Kept built and conformance-tested: `api-axum` (today's v1 and its OpenAPI document), permanent: the swap target, where every new route lands too, through core services that keep both adapters thin; and `store-postgres` (sqlx); `store-memory` for development; later `store-mongodb`, after the library's MongoDB adapters, with an `Outbox` spike first. Swapping the API adapter swaps the wire contract and the client: procedures with CrateStack's generated client, resource URLs with openapi-typescript. To swap, Cargo features choose which adapters are compiled in and configuration picks one of each; a new backend implements the core ports and passes `meta_whatsapp_server_core::conformance` | [roadmap.md](../roadmap.md) S1–S18 |
-| D27 | The idempotency fingerprint ([§5.4](#54-idempotency-keys)) | method, route and body (as built until S6) / operation id and canonical input | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the operation id plus the canonical input**, so one key means the same through every API adapter. **Built in S6**: `idempotency::Fingerprint`'s constructors, one per idempotent operation (the path parameter as a decoded id, the canonical JSON body or the upload's type, file name and digest). **Decided 2026-10-31 (coordinator, under the owner's delegation):** "canonical input" is the request's JSON as it came, canonicalized (object keys sorted, whitespace ignored), not the parsed request type re-serialized; a request's rate class is its operation's, charged with `RateLimiter::charge(&TenantId, Operation)` (a bare tenant id, not an admitted `Caller`: a forged one could only spend a tenant's per-replica budget); the vault's admin writes, `graph_failed_for_admin` among them, are crate-private behind `Admin`, and `authz::rotate_vault` stays public for the command line. **The window (decided the same day):** a deployment exists, and a duplicate customer message is real harm, so for one `WA_SERVER_IDEMPOTENCY_TTL` (24 h by default) after the upgrade a repeat also matches a record stored under the fingerprint of before (the request's method, its path as sent and its canonical body, or the upload's parts: `Fingerprint::legacy_v1_json`, `legacy_v1_upload`, pinned to main's known answers, added by the HTTP adapter with `Fingerprint::or_legacy`); a claim always stores the new fingerprint. A repeat of an old key under another spelling of its path, and an upgraded replica's key repeated on an old one during a rolling deploy, are `422 idempotency_key_reused`, never a second send. The legacy fingerprint goes after the first release (roadmap S7). To swap, change those constructors, the one place every adapter's fingerprint comes from | S6 |
+| D27 | The idempotency fingerprint ([§5.4](#54-idempotency-keys)) | method, route and body (as built until S6) / operation id and canonical input | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the operation id plus the canonical input**, so one key means the same through every API adapter. **Built in S6**: `idempotency::Fingerprint`'s constructors, one per idempotent operation (the path parameter as a decoded id, the canonical JSON body or the upload's type, file name and digest). **Decided 2026-10-31 (coordinator, under the owner's delegation):** "canonical input" is the request's JSON as it came, canonicalized (object keys sorted, whitespace ignored), not the parsed request type re-serialized; a request's rate class is its operation's, charged with `RateLimiter::charge(&TenantId, Operation)` (a bare tenant id, not an admitted `Caller`: a forged one could only spend a tenant's per-replica budget); the vault's admin writes, `graph_failed_for_admin` among them, are crate-private behind `Admin`, and `authz::rotate_vault` stays public for the command line. **The window (decided the same day):** a deployment exists, and a duplicate customer message is real harm, so for one `WA_SERVER_IDEMPOTENCY_TTL` (24 h by default) after the upgrade a repeat also matches a record stored under the fingerprint of before (the request's method, its path as sent and its canonical body, or the upload's parts: `Fingerprint::legacy_v1_json`, `legacy_v1_upload`, pinned to main's known answers, added by the HTTP adapter with `Fingerprint::or_legacy`); a claim always stores the new fingerprint. A repeat of an old key under another spelling of its path, and an upgraded replica's key repeated on an old one during a rolling deploy, are `422 idempotency_key_reused`, never a second send. The legacy fingerprint goes after the first release (roadmap M2a, which carries the line since S7 landed before the release). To swap, change those constructors, the one place every adapter's fingerprint comes from | S6 |
 | D28 | The bot framework and its plugins | in the facade / a new library crate / in the service; plugins loaded at run time / registered at compile time | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: a new library crate, `meta-whatsapp-bot`, with plugins registered at compile time.** No hot reload: loading Rust code at run time is neither idiomatic nor safe (no stable ABI, and `unsafe` loading, which the workspace forbids), and parity row 87 says so. To swap, a `Bot` is an `EventSink`, so an integrator can put their own dispatcher in its place; the service exposes the bot over HTTP in M5 | B1 |
-| D29 | Paced broadcast and scheduled messages | a job-queue port / a typed store on `KvStore` / the caller's | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: in `meta-whatsapp-bot`, with jobs as a typed store on `KvStore`** (a bucketed due-time index, claims by compare-and-swap under a lease), not a new port, per architecture.md's rule that typed stores are built on `KvStore`; broadcasts are paced per number under Meta's throughput. To swap, the pacer and the job store are traits with these as their defaults | B2, B3 |
+| D29 | Paced broadcast and scheduled messages | a job-queue port / a typed store on `KvStore` / the caller's | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: in `meta-whatsapp-bot`, with jobs as a typed store on `KvStore`** (a bucketed due-time index, claims by compare-and-swap under a lease), not a new port, per architecture.md's rule that typed stores are built on `KvStore`; broadcasts are paced per number under Meta's throughput. To swap, the pacer and the job store are traits with these as their defaults. **Amended 2026-11-01 (coordinator, under the owner's delegation):** until B3b the job store is the concrete `KvJobs`, swappable through its `KvStore` adapter; the `JobStore` trait, with `KvJobs` its default, is roadmap B3b | B2, B3, B3b |
 | D30 | Erasing a person who has several keys on a number (a history thread under their phone number, live messages under their BSUID, an earlier BSUID; the privacy review of L5, M3) | one key per call, the caller finding the others / the store finds a person's keys and erases them in one step, on one number / across numbers | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the port widens in L5** (so adapters change once): `ConversationStore::identities` (the closure over the synced contacts and the identity links, read only), `IdentityLink` (`link_identity`, `identity_links`; the inbox records them in L7), and `erase_all(phone_number_id, ids)`, one step, whose one-key case is `erase`. Never across numbers: a `wa_id` is the same on every number, so an erasure across them would delete other businesses' customers. To swap, a caller passes its own ids to `erase_all` (the closure is a separate read), or an adapter of its own implements the port | L5 |
 | D31 | An erased person's messages in someone else's conversation (a group's; review M2) | delete them / redact them in place | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: redact by default, delete as an option**: `ErasureMode::Redact` keeps the message's place and time and replaces its content, payload and sender with the `erased` marker, so the other participants' history keeps its shape; `ErasureMode::Delete` removes it. Either way the group's summary never keeps the erased text. The message id stays under `Redact` (a `wamid` encodes the sender's phone number), which the docs say. To swap, `with_erasure_mode` on the store (a setting, like retention) | L5 |
 | D32 | A synced contact's removal (`smb_app_state_sync` `remove`), whose webhooks arrive out of order (the sabotage review of L5) | delete the row, so a late older `add` stores the contact again / keep the removal, its key and time only, so an older `add` is refused | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: keep the removal**, nothing of the contact but its key and time; `erase_all` deletes it with the key's records and `purge_before` once it is older than the cutoff. To swap, a store's retention bounds how long removals are kept, and an adapter of its own may keep them elsewhere (the conformance suite checks the refusal) | L5 |

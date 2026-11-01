@@ -1,0 +1,5 @@
+error[E0599]: no method named `backend` found for reference `&AppState` in the current scope
+  --> tests/visibility/fail/app_state_backend.rs:10:19
+   |
+10 |     let _ = state.backend();
+   |                   ^^^^^^^ method not found in `&AppState`

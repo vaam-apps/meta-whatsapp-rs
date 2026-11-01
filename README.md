@@ -251,6 +251,7 @@ coding agents of those apps: the `meta-whatsapp-rs-server` skill.
 | `axum` | | `webhooks::router` (webhook endpoint) and `webhooks::sse` (live inbox stream) |
 | `typst` | | `meta_whatsapp_rs::typst`: invoice, receipt and voucher templates → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto (aws-lc-rs) |
+| `ffmpeg` | | `adapters::media::FfmpegConverter`: media conversion (a recording into a voice message's Ogg Opus) by an `ffmpeg` you install; nothing is linked |
 | `bot` | | `meta_whatsapp_rs::bot`: a bot framework (commands, guards, cooldowns, middleware, plugins, Markdown replies, paced broadcasts) |
 | `testing` | | `core::testing::ScriptedTransport` for your own tests (enable in `[dev-dependencies]`) |
 | `full` | | all of the above |
@@ -268,6 +269,7 @@ coding agents of those apps: the `meta-whatsapp-rs-server` skill.
 | `meta-whatsapp-bot` | Bot framework over webhooks: commands, guards, cooldowns, middleware, compile-time plugins, Markdown → WhatsApp formatting, paced broadcasts. |
 | `meta-whatsapp-server` | The HTTP service (a binary, not a dependency): tenants, keys, the `/v1` API over the facade. See [Not writing Rust? Run the service](#not-writing-rust-run-the-service). |
 | `meta-whatsapp-server-core` | The service's framework-free core (not a dependency either): its domain, authorization order, error model as data, and the storage ports its memory and Postgres backends implement. No axum, sqlx or utoipa. |
+| `meta-whatsapp-server-http`, `-api-axum`, `-store-memory`, `-store-postgres` | The crates the service's binary composes by its Cargo features: the HTTP layer (listeners, authentication, Meta's webhook, media, operations), the `/v1` API and its OpenAPI document, and the memory and Postgres backends. |
 
 ## Development
 

@@ -17,61 +17,68 @@ name = "meta_whatsapp_server"
 name = "meta-whatsapp-server"
 path = "src/main.rs"
 
+# The binary composes the service's crates (roadmap S7, design §8.3): one
+# API adapter for the internal listener, and the backends the command line
+# can open (`serve::BuiltinBackends`; an integrator's own through
+# `cli::run_with`). `just features` builds `api-axum` with each backend
+# alone.
+[features]
+default = ["api-axum", "store-memory", "store-postgres"]
+# Today's `/v1` routes and `openapi/v1.json` (meta-whatsapp-server-api-axum):
+# the only API adapter, so a build without it does not compile.
+api-axum = ["dep:meta-whatsapp-server-api-axum"]
+# Memory storage, `WA_SERVER_ENV=development` only
+# (meta-whatsapp-server-store-memory).
+store-memory = ["dep:meta-whatsapp-server-store-memory"]
+# `DATABASE_URL` (meta-whatsapp-server-store-postgres, with the pool this
+# crate opens on sqlx through the facade).
+store-postgres = ["dep:meta-whatsapp-server-store-postgres", "meta-whatsapp-rs/postgres"]
+
 [dependencies]
 # The library, through the facade alone (docs/architecture.md, § Service):
-# axum through `meta_whatsapp_rs::webhooks::axum`, sqlx through
-# `meta_whatsapp_rs::adapters::store::postgres::sqlx`.
-meta-whatsapp-rs = { workspace = true, features = ["reqwest", "memory", "postgres", "axum"] }
-# The service's framework-free core: the domain, the authorization order,
-# the error model as data, and the ports this crate's backends implement.
+# the Graph client's transport (`reqwest`); sqlx through
+# `meta_whatsapp_rs::adapters::store::postgres::sqlx` with `store-postgres`.
+meta-whatsapp-rs = { workspace = true, features = ["reqwest"] }
+# The service's framework-free core: housekeeping, the admin key minting
+# of the command line.
 meta-whatsapp-server-core.workspace = true
+# The state, the listeners and the public router.
+meta-whatsapp-server-http.workspace = true
+meta-whatsapp-server-api-axum = { workspace = true, optional = true }
+meta-whatsapp-server-store-memory = { workspace = true, optional = true }
+meta-whatsapp-server-store-postgres = { workspace = true, optional = true }
 
 anyhow.workspace = true
 async-trait.workspace = true
 futures.workspace = true
-# Request ids (`req_` and 16 random hex digits).
-getrandom.workspace = true
-# Opaque list cursors and request ids (a keyless event's digest is the
-# core's since roadmap S5e).
-hex.workspace = true
-# Media uploads: multipart parsing with per-field size limits.
-multer.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-# SHA-256 of the advisory lock keys (src/store/postgres.rs). A keyless
-# event's body, an upload's idempotency fingerprint and a download's
-# digest are the core's (roadmap S5e, S6, S5d).
-sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time", "io-util"] }
 tracing.workspace = true
-# JSON logs (`WA_SERVER_LOG_FORMAT=json`, the default).
-tracing-subscriber = { workspace = true, features = ["json"] }
 
 clap.workspace = true
-# The accept loop: a header read timeout and a connection cap
-# (src/listen.rs).
-hyper = { workspace = true, features = ["server", "http1"] }
-hyper-util = { workspace = true, features = ["tokio", "server", "server-graceful", "service"] }
-prometheus-client.workspace = true
-utoipa.workspace = true
-utoipa-axum.workspace = true
 
 [dev-dependencies]
 meta-whatsapp-rs = { workspace = true, features = ["reqwest", "memory", "postgres", "axum", "testing"] }
+# The unit tests' memory backend, whatever the build's features.
+meta-whatsapp-server-store-memory.workspace = true
 # tests/media.rs: Meta's digest in base64, as its webhooks carry it (the
 # core reads it since roadmap S5d).
 base64.workspace = true
-# tests/store.rs and tests/live_postgres.rs: both backends pass the core's
-# conformance suites (`meta_whatsapp_server_core::conformance`).
+# The core's conformance suites: tests/live_postgres.rs's cross-crate
+# cases (`meta_whatsapp_server_core::conformance`); each backend runs the
+# whole suite in its own crate.
 meta-whatsapp-server-core = { workspace = true, features = ["conformance"] }
+hex.workspace = true
 http-body-util.workspace = true
 pretty_assertions.workspace = true
+serde_json.workspace = true
+# tests/common/capture.rs: the digest a log line must not show.
+sha2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "test-util"] }
 tower = { workspace = true, features = ["util"] }
-# tests/visibility.rs: what does not compile outside this crate.
-trybuild.workspace = true
+# tests/common/capture.rs: the log lines the tests read.
+tracing-subscriber = { workspace = true, features = ["json"] }
 
 [lints]
 workspace = true
