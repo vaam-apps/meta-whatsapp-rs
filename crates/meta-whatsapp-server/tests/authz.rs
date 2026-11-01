@@ -92,6 +92,15 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::POST, "/v1/numbers/{pn}/media"),
         (Method::GET, "/v1/numbers/{pn}/media/{media_id}"),
         (Method::DELETE, "/v1/numbers/{pn}/media/{media_id}"),
+        (Method::GET, "/v1/numbers/{pn}/conversations"),
+        (
+            Method::GET,
+            "/v1/numbers/{pn}/conversations/{contact}/messages",
+        ),
+        (
+            Method::POST,
+            "/v1/numbers/{pn}/conversations/{contact}/messages",
+        ),
         (Method::GET, "/v1/wabas/{waba_id}/templates"),
         (Method::POST, "/v1/wabas/{waba_id}/templates"),
         (Method::DELETE, "/v1/wabas/{waba_id}/templates"),
@@ -213,6 +222,17 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
     assert!(h.graph.requests().is_empty(), "no call reached Meta");
 }
 
+/// The owned routes that ask Meta nothing: the inbox's reads (roadmap
+/// M2a), which read the service's own store. They still take the whole
+/// authorization order, the vault included, as every owned route does.
+const ASK_META_NOTHING: [(Method, &str); 2] = [
+    (Method::GET, "/v1/numbers/{pn}/conversations"),
+    (
+        Method::GET,
+        "/v1/numbers/{pn}/conversations/{contact}/messages",
+    ),
+];
+
 /// The control of M1.3: the counter counts, and A's own key does reach the
 /// vault on the same routes.
 #[tokio::test]
@@ -236,6 +256,19 @@ async fn the_owner_reads_the_vault_on_every_owned_route() {
         }
         let before = h.kv.vault_reads();
         let asked = h.graph.requests().len();
+        if ASK_META_NOTHING
+            .iter()
+            .any(|(m, t)| *m == operation.method && *t == operation.template)
+        {
+            let reply = h.call(call(&operation, &a_key, None)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{label}: {}", reply.text);
+            assert!(
+                h.kv.vault_reads() > before,
+                "{label}: A's own call did not read the vault"
+            );
+            assert_eq!(h.graph.requests().len(), asked, "{label} asked Meta");
+            continue;
+        }
         // Graph answers with an error: the point is the vault read before it.
         h.graph.push_json(
             500,

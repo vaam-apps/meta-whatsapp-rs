@@ -47,11 +47,11 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
 | 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
-| 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2f |
+| 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2h |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
-| last | P1a–P1c, P2 (payments) |
+| last | P1a–P1d, P2 (payments) |
 
 ## 1. The service's modular split (design §8, D26)
 
@@ -1314,7 +1314,7 @@ and `store-postgres`.
     replica set; removing the version check from compare-and-swap fails
     them.
 - [ ] **S18. `meta-whatsapp-server-store-mongodb`**, the whole bundle.
-  - **After:** S9, S17, M2a–M2f.
+  - **After:** S9, S17, M2a–M2h.
   - **Decisive:** the core conformance suite passes live; the service's
     M1–M2 acceptance tests pass on it.
 
@@ -1725,7 +1725,7 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     owner** (stable identifiers, before the first release): the five
     namespaces, their keys' derivations and their records' layouts
     (architecture.md § Stable identifiers, § Owner touchpoints below).
-- [ ] **B3b. A `JobStore` trait** (`meta-whatsapp-bot`; D29): the job
+- [x] **B3b. A `JobStore` trait** (`meta-whatsapp-bot`; D29): the job
   store's operations (schedule, cancel, re-run, get, the 131049
   feedback, and the runner's claim, markers and due index) behind a
   trait the runner takes, `KvJobs` its default, so a job queue of the
@@ -1733,6 +1733,82 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
   - **After:** B3.
   - **Decisive:** `KvJobs` implements it, and a second, in-memory
     implementation passes the same job suite.
+  - **Landed:** `JobStore` (module `jobs`), object-safe, the runner
+    holding an `Arc<dyn JobStore>` (`JobRunner::builder` takes any
+    `impl JobStore`, `JobRunner::builder_shared` an `Arc`; `Arc<T>`
+    forwards): `schedule`, `cancel`, `rerun`, `get`, the `131049`
+    feedback (`limit_message`, `observe` provided on top of it), and the
+    runner's steps: `claim_due` (the store claims each due job and hands
+    it, a `JobClaim`, to a `ClaimHandler`, the runner's pass, whose
+    `JobEnd` tells `KvJobs`'s due index whether to keep the minute),
+    `hold` (the claim still holds, renewed at half the lease),
+    `check_run` (the run unchanged, not cancelled), `recipient` (a
+    `RecipientMark`), `mark_sending`, `mark_outcome` (a `SendRecord`),
+    `unmark`, `limit_recipient`, `settle`, `retry` (each
+    `Option<JobHalt>`); `clock`, the time jobs are due and leases
+    expire by. Its rustdoc is the contract under concurrency (claims
+    atomic under a lease, a claim checked on every write, markers
+    created atomically and durably before the send and only their
+    runner's to complete or remove, a "sending" nobody completed an
+    outcome unknown, cancels winning or losing whole, the skip per job,
+    each job handed over once a call and no lock held while it sends).
+    `KvJobs` implements it with B3's code moved behind the trait (the
+    runner's cursor, claim, marker and settle steps now `KvJobs`'s; the
+    records, keys and namespaces unchanged). `MemoryJobs`, in memory
+    behind one mutex, independent of `KvStore`, is the second
+    implementation. `jobs::conformance::run` is the job suite, 24
+    checks: B3's tests that do not depend on `KvStore` (moved out of
+    `crates/meta-whatsapp-bot/tests/jobs.rs`, names kept) plus two
+    races (two to five runners on one job, four on twenty, interleaved
+    at every call they make to the store), a runner ticking during
+    another's send, a retry within a tick, and each method on its own
+    (`markers_are_exclusive_and_their_runners`,
+    `a_claim_is_checked_on_every_write`). In `tests/jobs.rs`:
+    `kv_jobs_pass_the_job_suite`, `memory_jobs_pass_the_job_suite` (the
+    decisive pair), `kv_jobs_pass_the_job_suite_raced_inside_the_store`
+    (on a `KvStore` that yields at every call: replacing the claim's
+    compare-and-swap by a plain put fails it, as it fails
+    `two_runners_on_one_store_send_a_due_job_once`), and
+    `runners_on_threads_send_each_recipient_once` (six runners on four
+    threads, twenty rounds, both stores); `KvJobs`'s own tests (the due
+    index, unreadable records, a failing store, the restart on one
+    `KvStore`) stay. Mutations of `MemoryJobs`, each failing the suite:
+    the claim checked, then an `.await`, then written
+    (`two_runners_racing_one_job_send_it_once`); the same without the
+    `.await` (only the threaded test, in three runs of four: the suite
+    runs on one task); no "sending" marker before the request
+    (`a_resumed_broadcast_never_resends_a_recipient_recorded_as_sent`),
+    a marker created over an existing one
+    (`a_runner_whose_lease_expired_mid_send_never_sends_after_the_new_claim`),
+    the `131049` skip ignored, or extended by a redelivery
+    (`a_131049_status_makes_a_rerun_within_24_hours_skip_that_recipient`),
+    the lease ignored, `check_run` blind to the run
+    (`a_send_checked_before_a_cancel_and_a_rerun_is_not_made`) or to a
+    cancel (`a_cancel_racing_a_claim_sends_nothing`), `hold` never
+    renewing (`a_long_marker_scan_keeps_the_lease`), `settle` not
+    checking the claim; and of the runner, the request made before the
+    marker. Not in it: a suite for a store on a clock of its own (a
+    database's `now()`: the suite moves a `ManualClock`), and
+    durability across processes (a restart in the suite is a new
+    runner on the same store value).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; design D29's amendment closed; each
+    swappable by implementing the trait): the trait object-safe
+    and held as `Arc<dyn JobStore>` (not a generic `JobRunner<S>`);
+    claims through a callback (`claim_due` with a `ClaimHandler`)
+    rather than a list of due ids and a `claim(id)`, which keeps
+    `KvJobs`'s cursor logic whole and fits a `FOR UPDATE SKIP LOCKED`
+    loop; recipients addressed by their index into the claimed job;
+    the store owning time (`JobStore::clock`) and the lease's
+    half-renewal rule written into `hold`'s contract; `KvJobs`
+    re-reading a marker before completing or removing it (one more
+    `KvStore` read per send) rather than carrying the marker's version
+    through the trait; the operations moved off `KvJobs` onto the trait
+    (callers import `JobStore`) rather than kept as inherent twins;
+    `MemoryJobs` public, nothing expiring in it but the `131049` skips
+    and the message ids; the suite in the library, always compiled, as
+    the adapters' `KvStore` suite is; design D29's amendment ("until
+    B3b") to be closed.
 - [x] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
   age and a cap per chat, through `ConversationStore`'s erasure.
   - **After:** B1, L5.
@@ -3835,7 +3911,7 @@ design's (§9).
 
 ### M2. Inbox, live updates, webhooks out
 
-- [ ] **M2a. Inbox routes** (rows 91, 111, 119): conversation list,
+- [x] **M2a. Inbox routes** (rows 91, 111, 119): conversation list,
   history, a reply checked against the window, all filtered by the
   number's binding epoch; retention per store (D10): the inbox store
   built `with_retention` from a setting, and `apply_retention` run by
@@ -3858,6 +3934,201 @@ design's (§9).
     S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. If M2a lands before the first
     release, the next item of the service's to land after it carries
     this line.
+  - **Landed:** three routes in `meta-whatsapp-server-api-axum`
+    (`api::inbox`, tag and scope `inbox`), each a core service
+    (`meta_whatsapp_server_core::inbox::Conversations`, opened on an
+    `OwnedNumber` its `Authorizer` admits, so key, tenant, scope,
+    ownership, then the vault, as every number route): `GET
+    /v1/numbers/{pn}/conversations` (`list_conversations`, read class)
+    and `GET /v1/numbers/{pn}/conversations/{contact}/messages`
+    (`list_conversation_messages`, read class), `?limit=&cursor=` and
+    `next_cursor` as every list but the events (the store's exclusive
+    `(time, id)` cursor, wrapped opaquely), and `POST
+    /v1/numbers/{pn}/conversations/{contact}/messages`
+    (`reply_to_conversation`, send class, `Idempotency-Key` over
+    `Fingerprint::reply_to_conversation`: the number, the contact decoded,
+    the canonical body; no legacy fingerprint), whose body is
+    `ReplyMessage` (a `SendMessage` without `to`) and whose answer is `202
+    MessageAccepted`. The reply goes through the library's `Inbox::send`
+    (what `Inbox::reply` calls, so `reply_to` and `callback_data` pass),
+    addressed to `Inbox::recipient`: a free-form reply outside the window
+    is `409 customer_service_window_closed`, one while another app owns
+    the thread `409 thread_owned_elsewhere` (`ErrorKind::ThreadOwnedElsewhere`,
+    already in §5.2), both before any request; a template is exempt. The
+    binding epoch is `authz::history_from` (a WABA with a previous
+    tenant shows its holder nothing dated before `attached_at`; `None`, all
+    of it, for a first onboarding, whose synced history predates its
+    binding), carried by the `OwnedNumber` from the binding it was made
+    from; a page is answered only if that binding still holds once read
+    (`503 storage_unavailable` otherwise); a conversation whose customer
+    last wrote before the cut shows no `last_inbound_at` and no `unread`.
+    Retention: `WA_SERVER_INBOX_RETENTION` (`keep` by default, or a
+    positive duration), the inbox store built with it
+    (`MemoryBackend::with_inbox_retention`, `PgBackend::with_inbox_retention`,
+    through `BackendFactory::open_with`, which `serve` calls), and
+    `housekeeping::round` runs `ConversationStore::apply_retention` under
+    its turn; `serve` refuses a backend whose inbox applies another
+    retention than the setting. `ReplyChecks` per number:
+    `WA_SERVER_INBOX_REPLY_CHECKS` (`inbox::ReplyChecksByNumber`). The
+    OpenAPI document is additive only (796 lines added, none removed:
+    two paths, the tag `inbox`, six schemas). Decisive tests:
+    `conformance::inbox` (in `conformance::run`: M2.1 with no HTTP layer,
+    the binding epoch, `control_taken`, the order's own number, the
+    retention) on the core's memory backend, the memory crate's (built
+    with a 30-day retention, and without one) and live on Postgres; over
+    HTTP, the service's `tests/inbox.rs` (M2.1, the epoch, the reply's
+    key, the ownership refusal and the setting, the scope, pages) and
+    `live_postgres_m2_1_an_inbound_message_is_listed_read_and_answered`
+    and `live_postgres_a_moved_numbers_history_is_hidden_from_its_new_tenant`;
+    the start's refusal (`composed.rs`), the settings (`config.rs`), the
+    M1.3 table, M1.5's sentinel and M1.7's log capture over the new
+    routes. By mutation: the epoch filter removed fails the memory and
+    core suites and the HTTP epoch test; the `apply_retention` call
+    removed fails the retention case on the memory backend and live on
+    Postgres; the window check, or the ownership refusal's mapping,
+    removed fails M2.1 and the ownership cases. **With M2h, in the same
+    pull request:** a number's own move record, so that a number Meta
+    migrated from one tenant's WABA to another tenant's, neither WABA
+    moving, is cut too. `NumberBinding` gains `attached_at` (when the
+    number came under its tenant: a refresh, and a move between the
+    tenant's own WABAs while bound, keep it) and
+    `previous_tenant_released_at` (when another tenant last released it,
+    from its `NumberTombstone`: a release is a binding that no longer
+    lists it, or an unbind of its WABA, recorded in the same step; a
+    deleted tenant counts as another), and `authz::history_from` is the
+    later of the WABA's cut and the number's (a number another tenant
+    released hides what is dated before its own `attached_at`; a first
+    binding of a number no other tenant held keeps everything). The port
+    rules are `RecordStore::bind_waba`'s and `unbind_waba`'s, applied by
+    `NumberBinding::newly_bound` and `NumberTombstone` in memory and in the
+    Postgres SQL. Postgres: migration 5, `number moves`
+    (`0005_number_moves.sql`, additive, metadata only on Postgres 16:
+    `wa_server_numbers.attached_at`, no default for the existing rows,
+    which read their WABA's `attached_at`, and `now()` for the rows a
+    replica of the previous release inserts;
+    `wa_server_numbers.previous_tenant_released_at`, the Unix epoch
+    (`UNRECORDED_MOVE`) by default, read as a move: fail closed; the table
+    `wa_server_number_tombstones`, and the trigger
+    `wa_server_numbers_released` with its function
+    `wa_server_number_released()`), checksums 1 to 4 unchanged; a released
+    number's tombstone is written in the releasing statement by the
+    trigger, for every deleted number row (an unbind's cascade, a binding
+    that no longer lists it, and the same deletions by a replica of the
+    previous release during a rolling deploy, which writes none of its
+    own), and a new
+    number binding reads it in a statement of its own after its insert,
+    its start `GREATEST(now(), clock_timestamp(), released_at)`, as S2b's
+    review had a WABA's. The event outbox's routing needs no per-number
+    rule: an event names the WABA of the entry Meta sent it under, and the
+    routing gives a number's event to its tenant only when that WABA is
+    the one the number is bound under, so the previous holder's events,
+    dated or not, redelivered or late, name its WABA and reach nobody
+    (S2b's window exists because a moved WABA keeps its id; a migrated
+    number does not keep its WABA). Decisive tests:
+    `conformance::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history`
+    (the core's memory backend, the memory crate's, live on Postgres) and
+    over HTTP `a_number_migrated_between_two_tenants_wabas_hides_its_history`
+    and `live_postgres_a_number_migrated_between_two_tenants_wabas_hides_its_history`;
+    `records::a_numbers_moves_are_recorded`,
+    `races::a_number_taken_while_released_records_the_move` (and the
+    number's assertions added to
+    `races::a_binding_racing_an_unbind_records_the_move`), on memory and
+    live; `live_postgres_migration_5_rewrites_no_table` (the numbers
+    table's file unchanged by migration 5, a number from before it read as
+    unrecorded, its start kept when another WABA of its tenant takes it);
+    `live_postgres_a_release_by_the_previous_release_is_recorded` (the
+    previous release's own deletions leave tombstones); the S7/S2b continuity test, which now adds migrations 4
+    and 5 to `main`'s database and reads `main`'s number as unrecorded,
+    its move then recorded. By mutation: the number's cut removed from
+    `history_from` fails the migration case on the core's memory backend,
+    the memory crate's and live on Postgres, and over HTTP on memory and
+    live; the read of the tombstone in a new number binding removed
+    (memory's `newly_bound` given none; Postgres's statement after the
+    insert skipped) fails `records::a_numbers_moves_are_recorded` and the
+    HTTP migration case, on memory and live; the trigger dropped fails
+    them too, live, and the rolling deploy's case. **The sabotage
+    review (2026-11-01), tenant isolation first,** added: a free-form
+    reply on a number with a cut needs a window opened from the cut on
+    (the customer's message, a call or a standby message dated from it,
+    or, with the handover trusted, a handover recorded since), else `409
+    customer_service_window_closed` with zero requests, so the new holder
+    neither continues the previous holder's conversation nor learns from
+    the answer that its customer wrote (`Conversations::reply`'s
+    `refuse_across_the_cut`; templates exempt; nothing on a number without
+    a cut or with the window check off); `unread` counts only the
+    customer's messages dated from the cut on (`inbox::UNREAD_SCAN`
+    latest messages read at most, only on a number with a cut); a page is
+    answered only if the number's own binding also holds (its tenant, WABA
+    and `attached_at`: a capability made before its number moved to
+    another WABA of its tenant and on to another tenant, its first WABA's
+    epoch unchanged, read the new holder's history);
+    migration 5's trigger (above) for the rolling deploy; and a refresh
+    that moves a number from before migration 5 to another WABA of its
+    tenant writes its start down (its first WABA's) before the move.
+    Decisive: `conformance::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history`
+    (the reply's refusal, `unread`) and
+    `a_capability_made_before_its_number_left_reads_nothing`, on memory
+    and live, the HTTP migration case, and the two live migration tests;
+    the WABA's cut, redundant with the number's for every move recorded
+    since migration 5, is decisive for a WABA moved before it
+    (`live_postgres_a_waba_moved_before_migration_5_still_cuts_its_numbers`).
+    Left, and why: a reply is dated by the service's clock, so one recorded in
+    the seconds after a move by a replica whose clock is behind the
+    database's could be hidden from its own tenant; the reads open an
+    `OwnedNumber`, so they read the vault and answer `409
+    reconnect_required` for a number whose token lapsed, although they
+    ask Meta nothing; the design's window and read routes, a message by
+    id, and the list's `window` are M2g's; `ReplyChecks` and the
+    retention are per deployment (by number id, and for every number),
+    not per tenant. No new stored identifier: the two settings are
+    environment variables.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable):
+    1. `ReplyChecks` per number as a deployment setting keyed by phone
+       number id, `WA_SERVER_INBOX_REPLY_CHECKS`, in the format as built,
+       not a field on the binding (no schema change; to swap, a column
+       read into `ReplyChecksByNumber`, which `Conversations::new` takes
+       as a value).
+    2. A binding made before migration 4 (and, with M2h, a number bound
+       before migration 5), which reads `UNRECORDED_MOVE`, counts as
+       moved: fail closed, hiding a pre-migration coexistence history
+       older than its binding (to swap, `authz::history_from`).
+    3. The inbox's reads go through the whole authorization order, the
+       vault included, so a number whose token lapsed answers `409
+       reconnect_required` (to swap, a token-less capability for reads).
+    4. `serve` refuses a backend whose inbox applies another retention
+       than `WA_SERVER_INBOX_RETENTION`, rather than warning.
+    5. M2g kept as an item of its own (the window and read routes, a
+       message by id).
+    6. A page read while the binding moved (the WABA's epoch, or, since
+       the review, the number's own binding) answers `503
+       storage_unavailable`, which is retryable (to swap,
+       `OwnedNumber::still_held`).
+    7. The reply goes through `Inbox::send` rather than `Inbox::reply`,
+       to carry `reply_to` and `callback_data`: the review confirmed that
+       `Inbox::reply` is `Inbox::send` on the conversation's recipient, so
+       every check (the window with its calls and standby messages, the
+       handover trust, the thread's owner, the template and Direct Send
+       exemptions, a recipient outside the conversation refused) runs the
+       same; the service never sets a Direct Send `category` (`422
+       unsupported_message_type`). The service adds its own check before
+       them on a number with a cut (the review's, above).
+    8. On a number with a cut, a free-form reply needs a window opened
+       since the cut (an inbound message or window event dated from the
+       cut on, or, with handover trust, a `ThisApp` handover recorded
+       since it); otherwise `409 customer_service_window_closed` with no
+       request, templates and Direct Send categories exempt. A previous
+       holder's window never opens one for the new holder, and the 409
+       cannot tell B whether A's customer wrote. The cost: the new holder
+       starts with a template. Swap: drop `Conversations::reply`'s
+       `refuse_across_the_cut` call.
+  - **Also, after the first release** (from S7, carried by M2a, which
+    landed before it): drop the legacy fingerprint (S6's window:
+    `Fingerprint::legacy_v1_json`, `legacy_v1_upload`, `or_legacy`, and
+    the handlers' `Uri`), once every deployment has run a release with
+    S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. The next item of the
+    service's to land after the first release carries this line if it
+    lands before it.
 - [x] **M2b. Live updates** (row 10): SSE through an `EventNotifier`
   port (Postgres `LISTEN/NOTIFY`, memory broadcast; resume by
   `Last-Event-ID`); `GET /v1/events/{id}`.
@@ -3962,6 +4233,38 @@ design's (§9).
     as the library's live test does), and removing the outbox clause
     fails it; the journal and the audit event hold no identity in
     clear; a tenant's key cannot erase on another tenant's number.
+
+- [ ] **M2g. The inbox's other routes** (row 111; added by M2a, kept as
+  an item by the coordinator's decision of 2026-11-01): the design's `GET
+  /v1/numbers/{pn}/conversations/{contact}/window` (`{open, closes_at}`,
+  `Inbox::check_reply`'s answer beside the recorded window) and `POST
+  …/{contact}/read` (unread reset, `notify_customer` marking the latest
+  inbound message read on Meta), the list's `window`, and a message by
+  id on the number (`ConversationStore::message`), each from the binding
+  epoch on.
+  - **After:** M2a.
+  - **Decisive:** a message of the number's previous holder is `404` by
+    id to the new holder (removing the epoch from the lookup fails it);
+    after the read route, `unread` is 0 and Meta got one read receipt for
+    the latest inbound message only with `notify_customer`.
+- [x] **M2h. A number's own move record** (row 111; added by M2a, and
+  folded into it by the coordinator: the inbox never ships with the leak):
+  the binding epoch for a number Meta migrated from
+  one tenant's WABA to another tenant's WABA, the WABA not moving (M2a
+  cuts by the WABA's move record only): a per-number record of the last
+  tenant that held it, written with every number a binding drops (an
+  unbind, a refresh that no longer lists it), read when a binding takes
+  it, on both backends; its names are stable identifiers, the owner's
+  to confirm (§ Owner touchpoints).
+  - **Kind:** port change (`RecordStore`, an additive migration).
+  - **After:** M2a.
+  - **Decisive:** a number dropped by tenant A's WABA and listed by
+    tenant B's WABA, bound long before, shows B none of A's history;
+    removing the number's record from the cut fails it, on memory and
+    live on Postgres.
+  - **Landed:** with M2a, in the same pull request: see M2a's Landed
+    note ("With M2h"). Migration 5's names are stable identifiers pending
+    the owner (§ Owner touchpoints).
 
 ### M3. Embedded Signup, OTP, coexistence
 
@@ -4245,7 +4548,7 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
        there.
     7. The `header` Brazil's `order_status` table lists, with no fields
        and no example, is not modelled (a gap).
-- [ ] **P1c. The payment template buttons and the payment webhooks**
+- [x] **P1c. The payment template buttons and the payment webhooks**
   (`meta-whatsapp-client`, `meta-whatsapp-webhooks`; rows 38, 141): a
   template's `order_details` button and `order_status` component
   (`payments-in/orderdetailstemplate`, `orderstatustemplate`,
@@ -4260,6 +4563,116 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     conformance sweep (their manifest status moves from `OutOfScope` to
     `Typed`), with new event data snapshots only (no changed one); exact
     JSON of the template pages' examples.
+  - **Landed:** webhooks: a status's `type` and `payment`
+    (`webhooks::fields::Status::payment`, `StatusPayment`: the
+    transaction, its method and error, the refunds, the gateways' echoed
+    fields), `MessageStatus::Captured` and `Pending`, and
+    `InteractiveReply::PaymentMethod` (`PaymentMethodReply`); both pages
+    `Typed` in the conformance manifest (the `OutOfScope` status, with no
+    page left, is gone), two fixtures, two new event data snapshots, no
+    existing one changed, no new event kind. Client: the
+    `ORDER_DETAILS` and `PAYMENT_REQUEST` buttons of a definition
+    (`client::templates::Button::OrderDetails`, `Button::PaymentRequest`),
+    `TemplateDefinition::sub_category` and `display_format`, and the send
+    side (`TemplateMessage::order_details_button`,
+    `payment_request_button`, `order_status`;
+    `client::payments::PaymentRequest`, `PaymentRequestSetting`,
+    `PaymentRequestCard`, `TemplateOrderStatus`), the order checked by
+    its currency's rules (P1a's and P1b's, with the template's field
+    paths), every example of the four pages an exact-JSON test both ways
+    (`payments/tests/templates.rs`). The order types now also
+    deserialize (the service reads a send through them). The service's
+    send refusal is lifted here, not in M5b: it read sends through the
+    library type, so typing them lifts it; creation was never refused
+    (the buttons parsed as `Button::Other`), and is now checked
+    (`request::tests::the_payment_templates_pass_with_no_key_dropped`,
+    the service's `payment_templates_are_sent_as_metas_objects_and_checked`).
+    Not done here: India's checkout button templates
+    (`payments-in/checkout-button-templates`, their checkout endpoint and
+    the configuration's data endpoint) and the alpha third-party
+    validation, P1d's (row 141 stays partial in the library).
+  - **Review (fields, parsing, the send path, mutations):** a payment
+    object in a catch-all was sent unchecked: a component `type` spelled
+    `Button` or `Order_Status`, an `index` that is not a number, a
+    parameter `type` `ACTION` or `ORDER_STATUS` land in
+    `SendComponent::Other` or `Parameter::Other`, which reach Meta as
+    written, so an order in `USD` (or a `pending` order status) skipped
+    every rule, through the service too. One holding `order_details`,
+    `payment_request` or `order_status` at any depth is now refused, as
+    is a definition's `ORDER_DETAILS` or `PAYMENT_REQUEST` button that
+    did not parse typed
+    (`a_payment_object_in_a_catch_all_is_refused`; the service's
+    `payment_templates_are_sent_as_metas_objects_and_checked`). And a
+    payment webhook that failed its typed parse turned an event tenants
+    received before P1c (`status_updated`, `message_received`) into an
+    operator-only `unknown`: the `payment`, and its amount, method and
+    error, are `None` when they do not parse, the reply an unknown reply,
+    `refunds` may be `null` and `notes` `[]`
+    (`a_payment_that_does_not_parse_typed_never_fails_its_change`).
+    Three guards survived their deletion and are now pinned
+    (`a_payment_button_carries_its_own_object_in_a_known_currency`): a
+    payment button's `action` without its own object, and `Currency`
+    refusing an unknown code (the catch-all tests' `USD` order lacked
+    required fields, so it failed to parse whatever its currency).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions):
+    1. No new event kind. India's payment status stays a
+       `status_updated` event (tenants of the service receive it so
+       today, as a status `captured` or `pending`: a new kind, which
+       would start operator-only, would take it from them), with `type`
+       and `payment` added (`Status::is_payment` tells it from a
+       message's); the `payment_method` reply stays a `message_received`
+       event. Both already were tenant types.
+    2. `MessageStatus` gains `Captured` and `Pending`, the payment
+       statuses; the inbox ignores them (no delivery status maps), the
+       bot's 131049 feedback needs an error code they never carry.
+    3. The webhook types require only the identifiers (`reference_id`,
+       a transaction's and a refund's `id`, the reply's
+       `payment_method`); Razorpay's `notes` keep a non-string value as
+       its JSON text, as `open_enum!` does. Tightened by the review: no
+       payment object can fail the change it arrives in (a `payment`, an
+       amount, a method or an error that does not parse typed is `None`,
+       a reply that does not is `InteractiveReply::Unknown`), so a new
+       field or value never costs the event.
+    4. An order details template is `UTILITY` or `MARKETING` with a
+       `TEXT`, `IMAGE` or `DOCUMENT` header, whatever its currency
+       (Brazil's page says "must"; India's is silent and its examples
+       comply); its label is not checked (India fixes `Review and Pay`,
+       Brazil's example prints a placeholder).
+    5. A payment request button: the label its method requires; at most
+       three, each a different method, and then three buttons in all; a
+       sample value, no card at creation, the card at send
+       (`credential_id` optional, as this page says); `currency` and
+       `total_amount` required for a card, refused for Boleto and links,
+       and together or not at all for Pix ("used with").
+    6. An order status template is checked by India's rules (a
+       `reference_id` of 35, no `pending`): India alone documents it.
+    7. A payment button or order status component whose parameter does
+       not parse typed (a currency or payment method the client has no
+       rules for, a required field missing) is refused by `validate`,
+       not sent unchecked as the catch-all; so is a payment object in
+       any catch-all component or parameter, and, at creation, a payment
+       button that did not parse typed (the review's extension).
+    8. The button `index` stays a string, as every template button's,
+       though the order details pages print a number.
+- [ ] **P1d. India's checkout button templates** (`meta-whatsapp-client`;
+  row 141): the checkout button templates
+  (`payments/payments-in/checkout-button-templates`: one `order_details`
+  button labelled `Buy now` per product, in a single product template or
+  a carousel, each sent with its order), the checkout endpoint they call
+  (its `get_coupons`, `apply_coupon`, `remove_coupon` and
+  `apply_shipping` sub-actions, encrypted as a Flows endpoint is), the
+  link of that endpoint to a payment configuration
+  (`payments/payments-in/onboarding-apis`, "Link or update data
+  endpoint"), and the alpha third-party validation
+  (`payments/payments-in/pg`, "Third party validation": a Razorpay or
+  `PayU` setting's `encrypted_payment_gateway_data`).
+  - **After:** P1c.
+  - **Kind:** additive.
+  - **Decisive:** exact JSON of the checkout button page's creation and
+    send examples; each endpoint sample request decrypted and answered
+    with its sample response through the Flows endpoint's crypto; the
+    two third-party validation payloads of `pg` as exact JSON.
 - [ ] **P2. Payment routes in the service** (rows 38, 141).
   - **After:** P1a, P1b, P1c.
   - **Decisive:** M1.3 over the new routes; an order-details send
@@ -4313,7 +4726,16 @@ everything else goes into the parity-completion report.
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
   with their keys' derivations and their records' shapes, added and
-  awaiting confirmation before the first release; S2b's Postgres
+  awaiting confirmation before the first release; M2h's Postgres
+  migration 5, "number moves": the columns
+  `wa_server_numbers.attached_at` (a row from before it read as its
+  WABA's start) and `wa_server_numbers.previous_tenant_released_at` with
+  its default, the Unix epoch read as "a move before the records began"
+  (`UNRECORDED_MOVE`, failing closed), and the table
+  `wa_server_number_tombstones` with its columns and its `ON DELETE SET
+  NULL` rule, and the trigger `wa_server_numbers_released` with its
+  function `wa_server_number_released()` (added by M2a's review), added
+  and awaiting confirmation; S2b's Postgres
   migration 4, "waba moves": the columns `wa_server_wabas.generation` and
   `wa_server_wabas.previous_tenant_unbound_at` with its default, the Unix
   epoch read as "a move before the records began" (`UNRECORDED_MOVE`),

@@ -26,7 +26,7 @@ use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
     IdempotencyRecord, IdempotencyState, KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus,
-    PageRequest, Tenant, TenantId, TenantStatus, WabaBinding, WabaTombstone,
+    NumberTombstone, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding, WabaTombstone,
 };
 use meta_whatsapp_server_core::notify::{EventNotifier, LocalNotifier};
 use meta_whatsapp_server_core::outbox::{
@@ -47,6 +47,26 @@ pub struct State {
     numbers: BTreeMap<String, NumberBinding>,
     /// Each WABA's last unbinding (roadmap S2b: the webhooks suite's moves).
     tombstones: BTreeMap<String, WabaTombstone>,
+    /// Each number's last release (roadmap M2h: the inbox suite's moves).
+    number_tombstones: BTreeMap<String, NumberTombstone>,
+}
+
+/// Release the bound numbers of `waba_id` that `keep` does not list, each
+/// leaving its tombstone at `at`.
+fn release(state: &mut State, waba_id: &WabaId, keep: &[PhoneNumberId], at: OffsetDateTime) {
+    let gone: Vec<String> = state
+        .numbers
+        .iter()
+        .filter(|(pn, n)| &n.waba_id == waba_id && !keep.iter().any(|k| k.as_str() == *pn))
+        .map(|(pn, _)| pn.clone())
+        .collect();
+    for pn in gone {
+        if let Some(binding) = state.numbers.remove(&pn) {
+            state
+                .number_tombstones
+                .insert(pn, NumberTombstone::of(&binding, at));
+        }
+    }
 }
 
 /// Remove `waba_id`'s binding and its numbers, leaving its tombstone, in
@@ -55,7 +75,7 @@ fn unbind(state: &mut State, waba_id: &WabaId) -> bool {
     let Some(binding) = state.wabas.remove(waba_id.as_str()) else {
         return false;
     };
-    state.numbers.retain(|_, n| &n.waba_id != waba_id);
+    release(state, waba_id, &[], OffsetDateTime::now_utc());
     state.tombstones.insert(
         waba_id.as_str().to_owned(),
         WabaTombstone::of(&binding, OffsetDateTime::now_utc()),
@@ -193,20 +213,24 @@ impl RecordStore for Records {
         state.wabas.insert(waba_id.as_str().to_owned(), binding);
         // Exactly `numbers`: those the WABA had and the list lacks are
         // unbound (the port's contract).
-        state
-            .numbers
-            .retain(|pn, n| &n.waba_id != waba_id || numbers.iter().any(|p| p.as_str() == pn));
+        release(&mut state, waba_id, numbers, now);
         for pn in numbers {
-            state.numbers.insert(
-                pn.as_str().to_owned(),
-                NumberBinding {
-                    phone_number_id: pn.clone(),
+            let bound = match state.numbers.get(pn.as_str()) {
+                Some(held) => NumberBinding {
                     waba_id: waba_id.clone(),
-                    tenant_id: tenant.clone(),
                     status: NumberStatus::Connected,
                     updated_at: now,
+                    ..held.clone()
                 },
-            );
+                None => NumberBinding::newly_bound(
+                    pn.clone(),
+                    waba_id.clone(),
+                    tenant.clone(),
+                    now,
+                    state.number_tombstones.get(pn.as_str()),
+                ),
+            };
+            state.numbers.insert(pn.as_str().to_owned(), bound);
         }
         Ok(BindOutcome::Bound)
     }

@@ -8,16 +8,17 @@ its reasons and the owner's decisions, is
 [docs/design/server.md](../design/server.md); the rules it keeps are in
 [architecture.md](../architecture.md#service-meta-whatsapp-server).
 
-> **What exists today (milestones M1a, M1b and M1c).** Tenants, API
+> **What exists today (milestones M1a, M1b and M1c, M2a and M2b).** Tenants, API
 > keys, the admin API, attaching the platform's own WhatsApp Business
 > Accounts (WABAs), the numbers and business profile routes, vault key
 > rotation, sending messages (with idempotency keys), read receipts,
 > media upload, verified download and delete, template listing, creation
 > and deletion, per-tenant rate limits, Meta's webhooks into the inbox
 > and the event outbox, polling events (`GET /v1/events`), one event by
-> id and live events as Server-Sent Events (roadmap M2b), health,
-> metrics and the OpenAPI document. **Not yet**: the inbox routes and
-> webhooks to your backend (M2), Embedded Signup, OTP
+> id and live events as Server-Sent Events (M2b), the inbox's
+> conversations, history and replies (M2a), health, metrics and the
+> OpenAPI document. **Not yet**: webhooks to your backend (M2), Embedded
+> Signup, OTP
 > and authentication templates (M3), the Docker image and the TypeScript
 > client (M4).
 > [coverage.md](../coverage.md) tracks it.
@@ -109,6 +110,8 @@ read yet: set, it stops the start.
 | `WA_SERVER_MIGRATE` | `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
 | `WA_SERVER_SHUTDOWN_GRACE` | `25s` | how long open requests get after `SIGTERM` |
 | `WA_SERVER_OUTBOX_RETENTION` | `7d` | how long the event outbox keeps an event (a positive duration, `30d`, `72h`); the outbox's own retention (design D10, decided on 2026-09-26 under the owner's delegation: retention is set per store) |
+| `WA_SERVER_INBOX_RETENTION` | `keep` | how long the inbox keeps a customer's messages, window events and thread ownership records: `keep` (everything, design D10's default) or a positive duration (`90d`); housekeeping purges what is older, on one replica at a time. The inbox store's own setting, built in with the backend: a backend of your own built without it is refused at start. Which one you set follows your privacy obligations |
+| `WA_SERVER_INBOX_REPLY_CHECKS` | every check on every number | the local checks an inbox reply makes, per number: `<phone_number_id>:<checks>`, comma-separated, `<checks>` being `all`, `none`, or the checks left on joined by `+` (`window`, `trust_handover`, `thread_owner`; `trust_handover` only with `window`). `106540352242922:window+trust_handover` turns the ownership check off on the number of the account's escalation partner; `…:window+thread_owner` turns the handover trust off on a number that receives standby copies. A check off only lets Meta decide |
 | `WA_SERVER_LOG_FORMAT`, `RUST_LOG` | `json`, `info` | `text` for humans |
 | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than the key's one-minute lease) |
 | `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
@@ -182,9 +185,9 @@ the upgrade keeps the earlier rules, with the same result. Do not move
 WABAs between tenants in the 7 days and an hour before the deploy, nor
 during it.
 
-The inbox tables are kept forever for now: the service sets no
-retention on them (roadmap M2a wires one into housekeeping) and has no
-erasure route (roadmap M2f). The event outbox keeps whole events
+The inbox tables are kept forever unless `WA_SERVER_INBOX_RETENTION` is
+set (housekeeping then purges what is older than it, roadmap M2a); the
+service has no erasure route yet (roadmap M2f). The event outbox keeps whole events
 (message texts, BSUIDs, phone numbers) for `WA_SERVER_OUTBOX_RETENTION`
 (7 days by default), with no column to find a customer's rows by. Until
 M2f, an erasure request is a job of your own: the library's
@@ -207,7 +210,7 @@ immutable. Three kinds of API key, all `wak_<key id>_<secret>`, sent as
 | admin key | nobody: `/v1/admin` only | operators |
 
 Tenant and platform keys carry scopes (`numbers`, `send`, `media`,
-`templates` and `events` today; `inbox`, `webhooks`, `signup`, `otp` for
+`templates`, `inbox` and `events` today; `webhooks`, `signup`, `otp` for
 the routes to come). The service keeps only each key's id and the SHA-256 of its
 secret, and shows the key once. Rotate by minting a new one, deploying
 it, then revoking the old one: revocation and suspension take effect on
@@ -497,12 +500,16 @@ A definition breaking a documented limit is `422 invalid_request` with
 on to Meta (a misspelling, or a field it does not know): never silently
 dropped. The template definitions and sends of Meta's examples pass,
 `body_text` as a flat list (`["Pablo", "860198"]`, the positional
-parameters syntax) included, but for shapes the library cannot carry
-yet, refused on the key named:
+parameters syntax) included, the payment templates among them (roadmap
+P1c: the order details and payment request buttons, the order status
+component, each checked by the library's payment rules; a payment button
+of a currency or payment method the library has no rules for is `422
+invalid_request` on its `parameters`, and an `order_details`,
+`payment_request` or `order_status` object in a component or parameter
+the library does not type, a `type` spelled `Button` for one, on that
+component or parameter), but for shapes the library cannot carry yet,
+refused on the key named:
 
-- in a send's `template`, the payment buttons' `order_details` and
-  `payment_request` (India and Brazil payments are out of scope,
-  docs/coverage.md row 32);
 - in a definition, `optimization_spec` (Marketing Messages API
   bidding), and `package_name` and `signature_hash` on a one-tap or zero-tap
   button itself, which Meta accepts on Graph API v20.0 and older only:
@@ -537,6 +544,59 @@ The lookup has limits to know about:
   `GET …/templates/{id}` asks for the id's name, then 1 to 5 pages; a
   deletion by id reads 1 to 5 pages, then deletes. Lists answered from
   the cache cost nothing, lookups are never cached.
+
+## The inbox
+
+What the service received for a tenant's number, read and answered over
+HTTP (scope `inbox`; roadmap M2a). The inbox is the one the webhook
+pipeline records into: a customer's message is there once Meta's
+delivery is answered.
+
+| Route | Does |
+| --- | --- |
+| `GET /v1/numbers/{pn}/conversations` | the number's conversations, most recent activity first: `contact` (the customer's BSUID, else their `wa_id`, else a group's id), `last_message_at`, `last_inbound_at`, `last_text`, `unread` |
+| `GET /v1/numbers/{pn}/conversations/{contact}/messages` | one conversation's history, newest first: `id`, `direction`, `kind`, `text`, `payload` (the message as Meta sent it, or as it was sent), `status`, `timestamp`, `status_at`, `error` |
+| `POST /v1/numbers/{pn}/conversations/{contact}/messages` | a reply to the conversation's contact: a message's content as `POST /v1/numbers/{pn}/messages` takes it, without `to`; `202` with `message_id`, recorded `accepted` until its status events move it on |
+
+```bash
+curl -sS "$WA_SERVER/v1/numbers/106540352242922/conversations?limit=20" -H "Authorization: Bearer $KEY"
+curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.13491208655302741918/messages" \
+  -H "Authorization: Bearer $KEY" -H "Idempotency-Key: ticket-881:reply-1" \
+  -H "Content-Type: application/json" -d '{"type": "text", "text": {"body": "It ships tomorrow."}}'
+```
+
+- Lists take `limit` (1 to 100, 50 by default) and `cursor`, and answer
+  `next_cursor` (`null` on the last page), like every list but
+  `GET /v1/events`. Percent-encode the contact in a path.
+- **A reply is checked first**, through the library's `Inbox::reply`,
+  and refused with nothing sent (`409`, `may_have_been_sent: false`):
+  free-form content outside the 24-hour window (which counts the
+  customer's calls and their messages seen in standby) is
+  `customer_service_window_closed`; a service message while another app
+  owns the thread under Conversation Routing (a `control_taken` the inbox
+  recorded) is `thread_owned_elsewhere`. A template is exempt from both.
+  `WA_SERVER_INBOX_REPLY_CHECKS` turns a check off per number; Meta then
+  decides (`131047`, `131070`). A reply takes an `Idempotency-Key`, as a
+  send does, and its rate class is the writes'.
+- **A number that moved to the tenant from another one shows nothing
+  from before its binding** (design D10: hidden, never purged): no
+  conversation whose latest message is older, no message dated before
+  the binding began, and a conversation's `last_inbound_at` and `unread`
+  only when the customer wrote since. A number no other tenant held
+  shows all of it, a coexistence history synced from before the binding
+  included. The cut follows both the WABA's move record (roadmap S2b)
+  and the number's own (roadmap M2h): a number Meta migrated from
+  another tenant's WABA to one of yours, neither WABA moving, also shows
+  nothing from before it came under you. A number bound before this
+  release (Postgres migration 5) has no move record and is treated as
+  moved, its cut at its WABA's binding. `unread` counts only the
+  customer's messages since the cut. A free-form reply on such a number
+  needs a window the customer opened since the cut (a message, a call):
+  one the previous holder's customer opened is
+  `409 customer_service_window_closed`, nothing sent; send a template to
+  start the conversation.
+- Reads answer `409 reconnect_required` or `number_not_connected` for a
+  number whose token does not work, as every number route does.
 
 ## Rate limits
 
@@ -898,8 +958,8 @@ SKIP token.wabas: the configuration is refused
 
 ## Not yet
 
-The inbox routes, webhooks-out and the service's own number events
-(M2); the open live streams as a metric; Embedded Signup,
+The inbox's window and read routes and a message by id (M2g),
+webhooks-out and the service's own number events (M2); Embedded Signup,
 disconnection by Meta's webhooks, coexistence sync and OTP (M3); the
 Docker image, a Compose file, the documents route and the TypeScript
 client (M4). Tenant settings (OTP sender and template, limits) in `PATCH

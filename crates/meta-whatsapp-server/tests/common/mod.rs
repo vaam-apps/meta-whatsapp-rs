@@ -4,6 +4,7 @@
 #![allow(dead_code)] // each test binary uses a different subset
 
 pub mod capture;
+pub mod inbox;
 pub mod meta;
 pub mod moving;
 pub mod scenarios;
@@ -863,6 +864,7 @@ impl Sample {
                 "id" => &self.tenant,
                 "key_id" => &self.key_id,
                 "message_id" => SAMPLE_MESSAGE_ID,
+                "contact" => SAMPLE_CONTACT,
                 "media_id" => SAMPLE_MEDIA_ID,
                 _ => "placeholder",
             });
@@ -875,6 +877,9 @@ impl Sample {
 
 /// A received message's id (`messages/mark-message-as-read`).
 pub const SAMPLE_MESSAGE_ID: &str = "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBJDQjZCMzlEQUE4OTJBMTE4RTUA";
+
+/// A conversation's contact: a BSUID (`business-scoped-user-ids`).
+pub const SAMPLE_CONTACT: &str = "US.13491208655302741918";
 
 /// A media id (`business-phone-numbers/media`).
 pub const SAMPLE_MEDIA_ID: &str = "1037543291543636";
@@ -928,6 +933,11 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "text": {"body": "Your order has shipped."}
         }),
         ("POST", "/v1/wabas/{waba_id}/templates") => sample_template_definition(),
+        // A template: a reply that needs no open window, so it reaches Meta.
+        ("POST", "/v1/numbers/{pn}/conversations/{contact}/messages") => serde_json::json!({
+            "type": "template",
+            "template": {"name": "order_confirmation", "language": {"code": "en_US"}}
+        }),
         ("POST", "/v1/admin/tenants") => serde_json::json!({"id": "sample-new-tenant"}),
         ("PATCH", "/v1/admin/tenants/{id}") => serde_json::json!({"name": "Renamed"}),
         ("POST", "/v1/admin/tenants/{id}/keys") => serde_json::json!({"scopes": ["numbers"]}),

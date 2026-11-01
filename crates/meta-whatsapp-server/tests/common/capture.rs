@@ -109,6 +109,7 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     assert_eq!(attached.status.as_u16(), 201, "{}", attached.text);
 
     secrets.extend(webhooks(h, &tenant_key).await);
+    secrets.extend(inbox(h, &admin).await);
 
     // Numbers calls, by both keys, with Meta answering phone numbers.
     h.graph.push_json(
@@ -465,6 +466,79 @@ async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
         .map(str::to_owned),
     );
     carried
+}
+
+/// A reply's text, and a contact with no conversation, neither of which
+/// may be logged.
+pub const INBOX_REPLY_TEXT: &str = "Yes, the Echeveria comes in blue";
+pub const INBOX_STRANGER: &str = "16505559876";
+/// The caller's references for those replies.
+pub const INBOX_KEYS: [&str; 2] = ["inbox-reply-order-1234", "inbox-reply-order-5678"];
+
+/// The inbox routes (roadmap M2a) on merchant-42's first number, which
+/// [`webhooks`] filled: its conversations, the history of Meta's example
+/// customer, a reply to them within the window, and one to a contact with
+/// no conversation (refused `409`); returns the key it minted and what
+/// the logs must not hold (the reply's text, the stranger).
+async fn inbox(h: &Harness, admin: &str) -> Vec<String> {
+    const PN: &str = "1972385232742141";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["inbox"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let listed = h
+        .call(Call::get(format!("/v1/numbers/{PN}/conversations")).key(&key))
+        .await;
+    assert_eq!(listed.status.as_u16(), 200, "{}", listed.text);
+    assert!(listed.text.contains(EXAMPLE_WA_ID), "{}", listed.text);
+    let history = h
+        .call(
+            Call::get(format!(
+                "/v1/numbers/{PN}/conversations/{EXAMPLE_WA_ID}/messages"
+            ))
+            .key(&key),
+        )
+        .await;
+    assert_eq!(history.status.as_u16(), 200, "{}", history.text);
+    assert!(history.text.contains(EXAMPLE_TEXT), "{}", history.text);
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp",
+               "contacts": [{"input": RECIPIENT, "wa_id": RECIPIENT_DIGITS}],
+               "messages": [{"id": "wamid.CAPTURE-REPLY"}]}),
+    );
+    let reply = |contact: &str, idempotency_key: &str| {
+        Call::new(
+            Method::POST,
+            format!("/v1/numbers/{PN}/conversations/{contact}/messages"),
+        )
+        .key(&key)
+        .header("idempotency-key", idempotency_key)
+        .json(&json!({"type": "text", "text": {"body": INBOX_REPLY_TEXT},
+                      "callback_data": CALLBACK_DATA}))
+    };
+    let replied = h.call(reply(EXAMPLE_WA_ID, INBOX_KEYS[0])).await;
+    assert_eq!(replied.status.as_u16(), 202, "{}", replied.text);
+    let refused = h.call(reply(INBOX_STRANGER, INBOX_KEYS[1])).await;
+    assert_eq!(
+        (refused.status.as_u16(), refused.code().as_str()),
+        (409, "customer_service_window_closed"),
+        "{}",
+        refused.text
+    );
+    vec![
+        key.clone(),
+        key.rsplit('_').next().unwrap().to_owned(),
+        INBOX_REPLY_TEXT.to_owned(),
+        INBOX_STRANGER.to_owned(),
+        INBOX_KEYS[0].to_owned(),
+        INBOX_KEYS[1].to_owned(),
+    ]
 }
 
 /// A message's text, a recipient, a contact and the caller's references,

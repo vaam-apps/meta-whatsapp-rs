@@ -62,11 +62,19 @@ pub enum Operation {
     StreamEvents,
     /// `stream_number_events`: one of the tenant's numbers' events, live.
     StreamNumberEvents,
+    /// `list_conversations`: a number's inbox, newest activity first.
+    ListConversations,
+    /// `list_conversation_messages`: one conversation's history, newest
+    /// first.
+    ListConversationMessages,
+    /// `reply_to_conversation`: a reply to a conversation's contact,
+    /// checked against the window and the thread's owner first.
+    ReplyToConversation,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 22] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -86,6 +94,9 @@ impl Operation {
         Self::GetEvent,
         Self::StreamEvents,
         Self::StreamNumberEvents,
+        Self::ListConversations,
+        Self::ListConversationMessages,
+        Self::ReplyToConversation,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -110,6 +121,9 @@ impl Operation {
             Self::GetEvent => "get_event",
             Self::StreamEvents => "stream_events",
             Self::StreamNumberEvents => "stream_number_events",
+            Self::ListConversations => "list_conversations",
+            Self::ListConversationMessages => "list_conversation_messages",
+            Self::ReplyToConversation => "reply_to_conversation",
         }
     }
 
@@ -136,6 +150,9 @@ impl Operation {
             Self::ListEvents | Self::GetEvent | Self::StreamEvents | Self::StreamNumberEvents => {
                 Scope::Events
             }
+            Self::ListConversations
+            | Self::ListConversationMessages
+            | Self::ReplyToConversation => Scope::Inbox,
         }
     }
 }
