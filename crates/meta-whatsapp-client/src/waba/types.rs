@@ -3,7 +3,9 @@
 use std::fmt;
 
 use meta_whatsapp_core::error::ValidationError;
-use meta_whatsapp_core::ids::{BusinessId, WabaId};
+use meta_whatsapp_core::ids::{
+    BusinessId, MAX_NUMERIC_ID_LEN, PreVerifiedPhoneNumberId, WabaId, is_numeric_id,
+};
 use meta_whatsapp_core::secret::VerifyToken;
 use serde::de::Deserializer;
 use serde::ser::Serializer;
@@ -417,9 +419,11 @@ pub struct NewPhoneNumber {
     /// On-Premises → Cloud API migration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub migrate_phone_number: Option<bool>,
-    /// Pre-verified phone number id to use.
+    /// Pre-verified phone number id to use
+    /// (`embedded-signup/pre-verified-numbers`, § Registering pre-verified
+    /// numbers programmatically), checked as digits before a request.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub preverified_id: Option<String>,
+    pub preverified_id: Option<PreVerifiedPhoneNumberId>,
 }
 
 impl NewPhoneNumber {
@@ -440,7 +444,7 @@ impl NewPhoneNumber {
 
     /// Use a pre-verified number.
     #[must_use]
-    pub fn preverified_id(mut self, id: impl Into<String>) -> Self {
+    pub fn preverified_id(mut self, id: impl Into<PreVerifiedPhoneNumberId>) -> Self {
         self.preverified_id = Some(id.into());
         self
     }
@@ -454,6 +458,14 @@ impl NewPhoneNumber {
             if value.trim().is_empty() {
                 return Err(ValidationError::new(field, "required"));
             }
+        }
+        if let Some(id) = &self.preverified_id
+            && !is_numeric_id(id.as_str())
+        {
+            return Err(ValidationError::new(
+                "preverified_id",
+                format!("expected a numeric id: 1 to {MAX_NUMERIC_ID_LEN} ASCII digits"),
+            ));
         }
         Ok(())
     }

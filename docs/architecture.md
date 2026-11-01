@@ -413,8 +413,9 @@ Rules for every endpoint module:
    signups' `default_messaging_customer_base_id`; `OnboardingRequested::request_id`;
    the calling settings' `app_id`; `SubscribedAppData::id` and
    `AssignedUser::id`; `CommerceSettings::id`; `LibraryTemplate::id`; the
-   template's `ad_*_id`s; `preverified_id`; the phone number
-   `request_id`; the ids of an Embedded Signup session event
+   template's `ad_*_id`s; the phone number `request_id` (a new
+   number's `preverified_id` is a `PreVerifiedPhoneNumberId` since
+   roadmap L11c); the ids of an Embedded Signup session event
    (`ad_account_ids`, `page_ids`, `dataset_ids`, `catalog_ids`,
    `instagram_account_ids`, `session_id`), the launch's `solution_id` and
    the token's `user_id`; and `HealthEntity::id`, on purpose: a health

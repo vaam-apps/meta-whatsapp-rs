@@ -27,6 +27,7 @@
 //! | [`EmbeddedSignup::onboard`] | code → verified, stored, subscribed, (credit line shared,) registered business |
 //! | [`EmbeddedSignup::onboard_wabas`] | the same for every WABA the signup grants, each on its own, when [`OnboardingRequest::every_granted_waba`] is on ([`WabasOnboarded`], [`WabaOutcome`]) |
 //! | [`HostedSignup`], [`EmbeddedSignup::onboard_hosted`] | Meta's hosted page: a `PARTNER_ADDED` webhook → the business token from `system_user_access_tokens` → the same steps and record |
+//! | [`crate::waba::Business::add_pre_verified_number`], [`crate::waba::PreVerifiedPhoneNumber`] | your pool of pre-verified numbers (add, verify, list, share), offered by [`LaunchOptions::pre_verified_phone_ids`] ([`crate::waba`] § Pre-verified phone numbers) |
 //! | [`TokenVault`] | business tokens encrypted at rest, by WABA and by phone number; [`TokenVault::token_expiry`] reports one due to lapse ([`TokenExpiry`]) without decrypting it |
 //! | [`SolutionPartner`] | per deployment: onboard as a Solution Partner, funding each customer with your credit line; [`EmbeddedSignup::offboard`], [`EmbeddedSignup::revoke_credit_line`], [`EmbeddedSignup::clear_pending_share`] |
 //!

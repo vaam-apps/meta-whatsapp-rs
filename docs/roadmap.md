@@ -2397,14 +2397,81 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `onboard` per signup instead. Not offered, a follow-up if wanted:
     onboarding a WABA that failed before `store_token` from the token
     another WABA of the same signup stored.
-- [ ] **L11c. Pre-verified numbers** (`client::embedded_signup` and
+- [x] **L11c. Pre-verified numbers** (`client::embedded_signup` and
   `client::waba`; row 123): pools, adding, codes, sharing, partners
   (`reference/business/*pre-verified*`,
   `reference/whatsapp-business-pre-verified-phone-number/*`).
-  - **Kind:** additive.
+  - **Kind:** additive, plus two breaking type changes before the first
+    release (CHANGELOG): `embedded_signup::PreVerifiedPhone::ids` and
+    `waba::NewPhoneNumber::preverified_id` take the new id type.
   - **After:** nothing.
   - **Decisive:** exact JSON per endpoint; a pre-verified phone id is
     checked as digits before any request.
+  - **Landed:** row 123 done in the library; the service's side stays
+    with M3f. Seven endpoints from Meta's seven pages (the guide, three
+    `reference/business/` pages and the four of
+    `reference/whatsapp-business-pre-verified-phone-number/`): the pool
+    on the partner's portfolio, `Business::add_pre_verified_number`
+    (`POST /{Business-ID}/add_phone_numbers`, a `CreatedPreVerifiedNumber`),
+    `Business::pre_verified_numbers` and `_stream`
+    (`GET …/preverified_numbers`, `ListPreVerifiedNumbers`: `fields`,
+    `phone_number`, `code_verification_status`, `limit`, cursors) and
+    `Business::share_pre_verified_number`
+    (`POST …/share_preverified_numbers`); each number through
+    `Client::pre_verified_phone_number` (`waba::PreVerifiedPhoneNumber`:
+    `get`, `request_code`, `verify_code`, `partners` and `_stream`, with
+    `ListPreVerifiedNumberPartners`, and `delete`), read as a
+    `PreVerifiedNumber` (the six fields of Meta's schema, the status the
+    phone numbers' `CodeVerificationStatus`). Its id is a new
+    `core::ids::PreVerifiedPhoneNumberId`, numeric (the node and
+    partners pages' own error examples: "must be a valid numeric
+    string"), checked when built and again as digits by every call
+    before its path or body is built, so an id built unchecked holding
+    `/` reaches nothing; the launch option and a WABA's new number
+    (`preverified_id`) take it and check it too. The code is the phone
+    numbers' secret `VerificationCode`, in the JSON body. The decisive
+    tests, in `waba::pre_verified`:
+    `a_pre_verified_id_that_is_not_digits_is_refused_before_any_request`
+    (five hostile ids, built unchecked, through each of the eight calls
+    that take one, every answer scripted: nothing is sent), one test per
+    endpoint asserting method, path, bearer, query and the exact body
+    (`adding_sends_the_number_in_the_body_and_parses_the_guides_answer`,
+    `the_pool_is_listed_with_every_documented_filter`,
+    `sharing_sends_both_ids_in_the_body`,
+    `a_code_request_sends_method_and_language`,
+    `verify_code_sends_the_code_in_the_body_only`,
+    `the_partners_are_listed_with_the_documented_parameters`,
+    `a_number_is_read_with_its_fields`,
+    `delete_addresses_the_number_and_maps_meta_errors`), with
+    `a_verification_code_reaches_no_debug_url_or_error` (a sentinel code
+    against a 403) and `no_post_is_replayed_after_a_timeout` (the four
+    POSTs, retries on); in core,
+    `ids::tests::a_numeric_id_is_one_to_sixty_four_ascii_digits` lists
+    the new type; the launch's `pre_verified_numbers_page_example`. Not
+    offered: unsharing (Meta documents its `DELETE` as removed) and the
+    reference's `IVR` code method (`CodeMethod` has `SMS` and `VOICE`,
+    the values both pages show). Meta's pages print no response example
+    for the pool list, a number or its partners: those tests parse
+    Meta's schemas with our values. No legal act: no endpoint accepts
+    terms. The time limits (30 days to verify, 90 to be claimed or
+    registered, re-verification from 45 days before expiry) are
+    documented, not enforced; tracking who claimed which number stays
+    the integrator's, as Meta says.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): the bodies are JSON, as the references define, not the
+    guide's query strings (the code and the phone number stay out of
+    URLs, as `PhoneNumber::verify_code` does; swapped per call by
+    moving a field to `.query`); a pre-verified id is numeric (one
+    `numeric_id_type!` line) and re-checked at request time, as
+    `commerce::catalog` does for its ids; the API lives in `client::waba`
+    (`Business` for the pool, a new accessor for the number) rather
+    than a new module, the launch option staying in
+    `client::embedded_signup`; the two breaking type changes above; the
+    status filter refuses `UNVERIFIED` and `Unknown`, which the
+    reference does not list; `delete` and `share_pre_verified_number`
+    are explicit calls no other call makes; `IVR` is left out until a
+    page shows it; the phone number to add is checked locally (digits,
+    with `+`, spaces, hyphens, parentheses: the reference's formats).
 - [x] **L11d. The coexistence sync inside onboarding**
   (`client::embedded_signup`; OPEN_QUESTIONS #7): a step right after a
   coexistence onboarding, on by default, that an option turns off. The

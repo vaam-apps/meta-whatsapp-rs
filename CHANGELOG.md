@@ -218,6 +218,28 @@ stored data, the owner's).
 
 ### Added
 
+- **Pre-verified phone numbers** (`meta_whatsapp_client::waba`, roadmap
+  L11c, parity row 123, from `embedded-signup/pre-verified-numbers` and
+  Meta's pre-verified number reference pages, read on 2026-11-01; the
+  service's side is M3f). A partner portfolio's pool:
+  `Business::add_pre_verified_number` (`POST /{Business-ID}/add_phone_numbers`,
+  the number checked locally, a `CreatedPreVerifiedNumber`),
+  `Business::pre_verified_numbers` and `pre_verified_numbers_stream`
+  (`GET …/preverified_numbers`, `ListPreVerifiedNumbers` with
+  `phone_number` and `code_verification_status`) and
+  `Business::share_pre_verified_number`
+  (`POST …/share_preverified_numbers`; Meta removed unsharing). Each
+  number through `Client::pre_verified_phone_number`
+  (`PreVerifiedPhoneNumber`): `get` (a `PreVerifiedNumber`), `request_code`,
+  `verify_code` (the secret `phone_numbers::VerificationCode`, in the
+  JSON body, never the URL), `partners` and `partners_stream`
+  (`ListPreVerifiedNumberPartners`, Business nodes) and `delete`
+  (irreversible, an explicit call nothing else makes). The bodies are
+  the references' JSON, not the guide's query strings. No POST here is
+  replayed after a timeout. A new numeric id,
+  `meta_whatsapp_core::ids::PreVerifiedPhoneNumberId`
+  (`pre_verified_phone_number_id`), checked when built and again as
+  digits by every call before a request.
 - **Several WABAs in one signup** (`meta_whatsapp_client::embedded_signup`,
   roadmap L11b, parity row 122; OPEN_QUESTIONS #5; the service's side is
   M3f). A new field and setter, `OnboardingRequest::every_granted_waba` /
@@ -2167,6 +2189,16 @@ stored data, the owner's).
   records a send's outcome after reading its marker again (one more
   `KvStore` read per send), so its runner-side steps stand alone; its
   stored records are unchanged.
+- **Breaking: pre-verified ids are typed** (roadmap L11c).
+  `embedded_signup::PreVerifiedPhone::ids` is a
+  `Vec<PreVerifiedPhoneNumberId>` (it was `Vec<PhoneNumberId>`), and
+  `LaunchOptions::pre_verified_phone_ids` takes them;
+  `waba::NewPhoneNumber::preverified_id` is a
+  `PreVerifiedPhoneNumberId` (it was a `String`). Build them with
+  `PreVerifiedPhoneNumberId::new` (digits only). A pre-verified number is
+  not a business phone number: once claimed, Meta gives it another id.
+  `LaunchOptions::validate` and `Waba::create_phone_number` refuse an id
+  that is not digits (one built with `new_unchecked`).
 - **`TablePrefix` is `meta_whatsapp_adapters::store::TablePrefix`**
   (roadmap L8), shared by the Postgres and SQLite adapters;
   `store::postgres::TablePrefix` still names it. Its error message says
