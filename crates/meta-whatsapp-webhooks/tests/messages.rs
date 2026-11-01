@@ -759,3 +759,121 @@ fn marketing_link_clicks_are_user_actions() {
     assert_eq!(click.click_id.as_deref(), Some("click_id"));
     assert_eq!(click.tracking_token.as_deref(), Some("example_token"));
 }
+
+/// `payments/payments-in/pg`, "Receive webhook about transaction status": a
+/// status of `type` `payment`, every documented property typed, and still
+/// a `status_updated` event (the kind tenants of the service already
+/// receive it as).
+#[test]
+fn a_payment_status_carries_its_payment() {
+    use meta_whatsapp_webhooks::fields::{
+        PaymentAmount, PaymentGatewayType, PaymentMethodType, PaymentTransactionStatus,
+        RefundSpeed, RefundStatus, StatusType,
+    };
+
+    let name =
+        "pages/payments.payments-in.pg__step_4_receive_webhook_about_transaction_status.json";
+    let events = common::events(name);
+    let [
+        WebhookEvent::StatusUpdated {
+            phone_number_id,
+            contact,
+            status,
+            ..
+        },
+    ] = events.as_slice()
+    else {
+        panic!("{events:?}")
+    };
+    assert_eq!(phone_number_id.as_str(), "106540352242922");
+    assert_eq!(contact, &None, "the example lists no contact");
+    assert_eq!(status.id.as_str(), "gBGGFlB5YjhvAgnhuF1qIUvCo7A");
+    assert_eq!(status.recipient_id.as_deref(), Some("919999999999"));
+    assert_eq!(status.status_type, Some(StatusType::Payment));
+    assert!(status.is_payment());
+    assert_eq!(status.status, MessageStatus::Captured);
+    assert_eq!(status.timestamp, ts(1_726_170_400));
+    let p = status.payment.as_deref().unwrap();
+    assert_eq!(p.reference_id, "BM345A-12");
+    assert_eq!(
+        p.amount,
+        Some(PaymentAmount {
+            value: 21000,
+            offset: 100
+        })
+    );
+    assert_eq!(p.currency.as_deref(), Some("INR"));
+    let t = p.transaction.as_ref().unwrap();
+    assert_eq!(t.id, "order_Om4Vzc8ZgFXs1D");
+    assert_eq!(t.pg_transaction_id.as_deref(), Some("pay_Om4WaaNKk3xL2p"));
+    assert_eq!(t.gateway, Some(PaymentGatewayType::Razorpay));
+    assert_eq!(t.status, Some(PaymentTransactionStatus::Success));
+    assert_eq!(t.created_timestamp, Some(ts(1_726_170_122)));
+    assert_eq!(t.updated_timestamp, Some(ts(1_726_170_180)));
+    assert_eq!(
+        t.method.as_ref().unwrap().method_type,
+        PaymentMethodType::Upi
+    );
+    let error = t.error.as_ref().unwrap();
+    assert_eq!(
+        (error.code.as_str(), error.reason.as_str()),
+        ("pg-generated-error-code", "pg-generated-descriptive-reason")
+    );
+    assert_eq!(p.receipt.as_deref(), Some("receipt-value"));
+    assert_eq!(p.notes.len(), 2);
+    assert_eq!(p.notes["key2"], "value2");
+    assert_eq!(p.udf4.as_deref(), Some("udf4-value"));
+    assert_eq!(
+        p.additional_info7.as_deref(),
+        Some("additional_info7-value")
+    );
+    let [refund] = p.refunds.as_slice() else {
+        panic!("{:?}", p.refunds)
+    };
+    assert_eq!(refund.id, "rfnd_Om4XkB2tQ1aV9c");
+    assert_eq!(
+        refund.amount,
+        Some(PaymentAmount {
+            value: 100,
+            offset: 100
+        })
+    );
+    assert_eq!(refund.speed_processed, Some(RefundSpeed::Instant));
+    assert_eq!(refund.status, Some(RefundStatus::Success));
+    assert_eq!(refund.created_timestamp, Some(ts(1_726_170_300)));
+    // A message's status has neither.
+    let plain = common::events("messages/status_sent.json");
+    let WebhookEvent::StatusUpdated { status, .. } = &plain[0] else {
+        panic!("{plain:?}")
+    };
+    assert!(!status.is_payment() && status.payment.is_none());
+}
+
+/// `payments/payments-br/one-click-payments`, "Receive the webhook
+/// notification": the buyer's `payment_method` reply.
+#[test]
+fn a_payment_method_reply_is_typed() {
+    use meta_whatsapp_webhooks::fields::PaymentMethodKind;
+
+    let (contact, m) = only_message(
+        "pages/payments.payments-br.one-click-payments__webhook_notification_payload_example.json",
+    );
+    assert_eq!(contact.unwrap().wa_id.unwrap().as_str(), "5511912345678");
+    assert_eq!(m.from_logical_id.as_deref(), Some("64244926160970"));
+    let MessageContent::Interactive(InteractiveReply::PaymentMethod(reply)) = &m.content else {
+        panic!("{:?}", m.content)
+    };
+    assert_eq!(reply.payment_method, PaymentMethodKind::OffsiteCardPay);
+    assert_eq!(reply.payment_timestamp, Some(ts(1_726_170_122)));
+    assert_eq!(reply.reference_id, "pix_test_webhook");
+    assert_eq!(reply.last_four_digits.as_deref(), Some("5235"));
+    assert_eq!(reply.credential_id.as_deref(), Some("1234567"));
+    // Written back as Meta sent it (the time as this crate writes times).
+    assert_eq!(
+        serde_json::to_value(&m.content).unwrap()["interactive"],
+        json!({"type": "payment_method", "payment_method": {
+            "payment_method": "offsite_card_pay", "payment_timestamp": "1726170122",
+            "reference_id": "pix_test_webhook", "last_four_digits": "5235",
+            "credential_id": "1234567"}})
+    );
+}

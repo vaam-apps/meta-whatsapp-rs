@@ -262,6 +262,60 @@ async fn envelopes_bsuids_templates_and_reactions_are_metas_objects() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// Roadmap P1c: the payment templates' sends (`payments-br/payment-request-cta`,
+/// `payments-in/orderstatustemplate`) reach Meta as the pages write them,
+/// checked by the library's payment rules: a payment button the library
+/// does not type (a currency it has no rules for) is `422` on its
+/// parameters, before any request. Until P1c a send's `payment_request`
+/// and `order_details` were refused on their key.
+#[tokio::test]
+async fn payment_templates_are_sent_as_metas_objects_and_checked() {
+    let (h, key) = connected().await;
+    let payment_request = json!({
+        "name": "cobranca", "language": {"code": "pt_BR"},
+        "components": [{"type": "button", "sub_type": "payment_request", "index": "0",
+            "parameters": [{"type": "action", "action": {"payment_request": {
+                "currency": "BRL", "total_amount": {"value": 1000, "offset": 100},
+                "payment_setting": {"type": "offsite_card_pay", "offsite_card_pay": {
+                    "last_four_digits": "4242", "credential_id": "cred_abc123"}}}}}]}]
+    });
+    let order_status = json!({
+        "name": "order_update", "language": {"policy": "deterministic", "code": "en_US"},
+        "components": [{"type": "order_status", "parameters": [{"type": "order_status",
+            "order_status": {"reference_id": "reference_id_value",
+                "order": {"status": "shipped", "description": "On its way"}}}]}]
+    });
+    for template in [payment_request, order_status] {
+        h.graph.push_json(200, accepted());
+        let body = json!({"to": {"phone": TO}, "type": "template", "template": template});
+        let reply = h.call(send(&key, &body)).await;
+        assert_eq!(reply.status, StatusCode::ACCEPTED, "{}", reply.text);
+        assert_eq!(
+            h.graph.last_request().unwrap().json().unwrap(),
+            json!({"messaging_product": "whatsapp", "recipient_type": "individual", "to": TO,
+                   "type": "template", "template": template})
+        );
+    }
+    let sent = h.graph.requests().len();
+    let usd = json!({"to": {"phone": TO}, "type": "template", "template": {
+        "name": "order_bill", "language": {"code": "en_US"},
+        "components": [{"type": "button", "sub_type": "order_details", "index": "0",
+            "parameters": [{"type": "action", "action": {"order_details": {
+                "currency": "USD", "reference_id": "r"}}}]}]}});
+    let reply = h.call(send(&key, &usd)).await;
+    assert_eq!(
+        (reply.status, error(&reply)["field"].as_str()),
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Some("template.components[0].parameters")
+        ),
+        "{}",
+        reply.text
+    );
+    assert_eq!(h.graph.requests().len(), sent, "nothing more reached Meta");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// Roadmap L20c: a message's media `id` is a body value, never a Graph
 /// path segment, so it reaches Meta as given, for Meta to judge, as it
 /// did before ids were checked (v1's answer unchanged). Decisive: checking

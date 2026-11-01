@@ -3897,7 +3897,7 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
        there.
     7. The `header` Brazil's `order_status` table lists, with no fields
        and no example, is not modelled (a gap).
-- [ ] **P1c. The payment template buttons and the payment webhooks**
+- [x] **P1c. The payment template buttons and the payment webhooks**
   (`meta-whatsapp-client`, `meta-whatsapp-webhooks`; rows 38, 141): a
   template's `order_details` button and `order_status` component
   (`payments-in/orderdetailstemplate`, `orderstatustemplate`,
@@ -3912,6 +3912,68 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     conformance sweep (their manifest status moves from `OutOfScope` to
     `Typed`), with new event data snapshots only (no changed one); exact
     JSON of the template pages' examples.
+  - **Landed:** webhooks: a status's `type` and `payment`
+    (`webhooks::fields::Status::payment`, `StatusPayment`: the
+    transaction, its method and error, the refunds, the gateways' echoed
+    fields), `MessageStatus::Captured` and `Pending`, and
+    `InteractiveReply::PaymentMethod` (`PaymentMethodReply`); both pages
+    `Typed` in the conformance manifest (the `OutOfScope` status, with no
+    page left, is gone), two fixtures, two new event data snapshots, no
+    existing one changed, no new event kind. Client: the
+    `ORDER_DETAILS` and `PAYMENT_REQUEST` buttons of a definition
+    (`client::templates::Button::OrderDetails`, `Button::PaymentRequest`),
+    `TemplateDefinition::sub_category` and `display_format`, and the send
+    side (`TemplateMessage::order_details_button`,
+    `payment_request_button`, `order_status`;
+    `client::payments::PaymentRequest`, `PaymentRequestSetting`,
+    `PaymentRequestCard`, `TemplateOrderStatus`), the order checked by
+    its currency's rules (P1a's and P1b's, with the template's field
+    paths), every example of the four pages an exact-JSON test both ways
+    (`payments/tests/templates.rs`). The order types now also
+    deserialize (the service reads a send through them). The service's
+    send refusal is lifted here, not in M5b: it read sends through the
+    library type, so typing them lifts it; creation was never refused
+    (the buttons parsed as `Button::Other`), and is now checked
+    (`request::tests::the_payment_templates_pass_with_no_key_dropped`,
+    the service's `payment_templates_are_sent_as_metas_objects_and_checked`).
+    Not done, and planned by no item: India's checkout button templates
+    (`payments-in/checkout-button-templates`, their checkout endpoint and
+    the configuration's undocumented data endpoint) and the alpha
+    third-party validation (row 141 stays partial in the library).
+  - **Proposed** (the implementer's, for the coordinator to decide,
+    AGENTS.md § Decisions):
+    1. No new event kind. India's payment status stays a
+       `status_updated` event (tenants of the service receive it so
+       today, as a status `captured` or `pending`: a new kind, which
+       would start operator-only, would take it from them), with `type`
+       and `payment` added (`Status::is_payment` tells it from a
+       message's); the `payment_method` reply stays a `message_received`
+       event. Both already were tenant types.
+    2. `MessageStatus` gains `Captured` and `Pending`, the payment
+       statuses; the inbox ignores them (no delivery status maps).
+    3. The webhook types require only the identifiers (`reference_id`,
+       a transaction's and a refund's `id`, the reply's
+       `payment_method`); Razorpay's `notes` keep a non-string value as
+       its JSON text, as `open_enum!` does, rather than fail the change.
+    4. An order details template is `UTILITY` or `MARKETING` with a
+       `TEXT`, `IMAGE` or `DOCUMENT` header, whatever its currency
+       (Brazil's page says "must"; India's is silent and its examples
+       comply); its label is not checked (India fixes `Review and Pay`,
+       Brazil's example prints a placeholder).
+    5. A payment request button: the label its method requires; at most
+       three, each a different method, and then three buttons in all; a
+       sample value, no card at creation, the card at send
+       (`credential_id` optional, as this page says); `currency` and
+       `total_amount` required for a card, refused for Boleto and links,
+       and together or not at all for Pix ("used with").
+    6. An order status template is checked by India's rules (a
+       `reference_id` of 35, no `pending`): India alone documents it.
+    7. A payment button or order status component whose parameter does
+       not parse typed (a currency or payment method the client has no
+       rules for, a required field missing) is refused by `validate`,
+       not sent unchecked as the catch-all.
+    8. The button `index` stays a string, as every template button's,
+       though the order details pages print a number.
 - [ ] **P2. Payment routes in the service** (rows 38, 141).
   - **After:** P1a, P1b, P1c.
   - **Decisive:** M1.3 over the new routes; an order-details send

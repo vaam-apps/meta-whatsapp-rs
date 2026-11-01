@@ -297,4 +297,73 @@ mod tests {
             Some("extra")
         );
     }
+
+    /// Roadmap P1c: the payment templates of Meta's pages
+    /// (`payments-br/orderdetailstemplate`, `payments-in/orderstatustemplate`,
+    /// `payments-br/payment-request-cta`), sent and created, lose no key on
+    /// the way through the library, and pass its checks. Until P1c a
+    /// send's `order_details` and `payment_request` were refused on their
+    /// key. Decisive: `ParameterAction::order_details` and
+    /// `ParameterAction::payment_request` in the library.
+    #[test]
+    fn the_payment_templates_pass_with_no_key_dropped() {
+        let action = |action: serde_json::Value, sub_type: &str| {
+            json!({"type": "button", "sub_type": sub_type, "index": "0",
+                   "parameters": [{"type": "action", "action": action}]})
+        };
+        let order_details = action(
+            json!({"order_details": {
+                "reference_id": "pedido-2026-000123-1", "type": "digital-goods",
+                "payment_type": "br",
+                "payment_settings": [{"type": "pix_dynamic_code", "pix_dynamic_code": {
+                    "code": "00020101021226700014br.gov.bcb.pix2548pix.example.com...",
+                    "merchant_name": "Account holder name", "key": "39580525000189",
+                    "key_type": "CNPJ"}}],
+                "currency": "BRL", "total_amount": {"value": 50000, "offset": 100},
+                "order": {"status": "pending",
+                          "tax": {"value": 0, "offset": 100, "description": "optional text"},
+                          "items": [{"retailer_id": "1234567", "name": "Cake",
+                                     "amount": {"value": 50000, "offset": 100}, "quantity": 1}],
+                          "subtotal": {"value": 50000, "offset": 100}}}}),
+            "order_details",
+        );
+        let one_click = action(
+            json!({"payment_request": {
+                "currency": "BRL", "total_amount": {"value": 1000, "offset": 100},
+                "payment_setting": {"type": "offsite_card_pay", "offsite_card_pay": {
+                    "last_four_digits": "4242", "credential_id": "cred_abc123"}}}}),
+            "payment_request",
+        );
+        let order_status = json!({"type": "order_status", "parameters": [{
+            "type": "order_status", "order_status": {"reference_id": "reference_id_value",
+                "order": {"status": "shipped", "description": "On its way"}}}]});
+        for component in [order_details, one_click, order_status] {
+            let send = json!({"name": "pedido", "language": {"policy": "deterministic", "code": "pt_BR"},
+                              "components": [component]});
+            let template = meta_object::<TemplateMessage>("template", &send)
+                .unwrap_or_else(|e| panic!("{:?}: {send}", e.field()));
+            template.validate().unwrap();
+        }
+        let definition = json!({"name": "cobranca", "language": "pt_BR", "category": "UTILITY",
+            "components": [
+                {"type": "BODY", "text": "Body Text"},
+                {"type": "BUTTONS", "buttons": [
+                    {"type": "PAYMENT_REQUEST", "text": "Copy Boleto code",
+                     "payment_setting": {"type": "boleto", "boleto": {
+                         "digitable_line": "03399026944140000002628346101018898510000008848"}}},
+                    {"type": "PAYMENT_REQUEST", "text": "Review payment",
+                     "payment_setting": {"type": "offsite_card_pay"}}]}]});
+        meta_object::<TemplateDefinition>("", &definition)
+            .unwrap()
+            .validate()
+            .unwrap();
+        let order_details = json!({"name": "pedido", "language": "pt_BR", "category": "UTILITY",
+            "display_format": "ORDER_DETAILS",
+            "components": [{"type": "BODY", "text": "Body Text"},
+                           {"type": "BUTTONS", "buttons": [{"type": "ORDER_DETAILS", "text": "Copy Pix code"}]}]});
+        meta_object::<TemplateDefinition>("", &order_details)
+            .unwrap()
+            .validate()
+            .unwrap();
+    }
 }

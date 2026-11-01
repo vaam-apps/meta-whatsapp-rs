@@ -218,6 +218,63 @@ stored data, the owner's).
 
 ### Added
 
+- **The payment templates and the payment webhooks** (roadmap P1c,
+  parity rows 38, now done in the library, and 141; from
+  `payments/payments-in/orderdetailstemplate`, `orderstatustemplate`,
+  `payments/payments-br/orderdetailstemplate`, `payment-request-cta`,
+  `payments/payments-in/pg` and `payments/payments-br/one-click-payments`,
+  read on 2026-11-01).
+  - **Templates** (`meta_whatsapp_client::templates`, the new types
+    re-exported from `meta_whatsapp_client::payments`): the definitions'
+    `Button::OrderDetails` and `Button::PaymentRequest`
+    (`Button::order_details(text)`, `Button::payment_request(setting)`,
+    which writes the label the method requires), and
+    `TemplateDefinition::sub_category` and `display_format` (an order
+    status template is `ORDER_STATUS`, an order details one
+    `ORDER_DETAILS`); the sends' `TemplateMessage::order_details_button`
+    (an `OrderDetailsParameters`, checked by its currency's rules as an
+    `order_details` message's, the fields named in the template),
+    `payment_request_button` (a `PaymentRequest`: a
+    `PaymentRequestSetting`, Pix code, Boleto, payment link or one-click
+    `PaymentRequestCard`, with an optional `BRL` amount) and
+    `order_status` (a `TemplateOrderStatus`, India's rules), with the
+    `ButtonSubType::OrderDetails` and `PaymentRequest`,
+    `SendComponent::OrderStatus` and `Parameter::OrderStatus` they
+    build. Checked before any request: an order details template is
+    `UTILITY` or `MARKETING` with a `TEXT`, `IMAGE` or `DOCUMENT` header;
+    a payment request button has its method's label, at most three in a
+    template, each a different method, and then three buttons in all, a
+    sample value and no card at creation; a payment request's card and
+    amount (required for one-click, refused for Boleto and links, together
+    for Pix, `BRL`, `offset` 100, positive); an order status other than
+    `pending`; and a payment button or order status component whose
+    parameter did not parse typed is refused rather than sent unchecked.
+    Every creation and send example of the four pages is an exact-JSON
+    test, both ways. The order types (`OrderDetailsParameters`, `Order`,
+    `OrderItem`, `PaymentSetting`, `PaymentGateway`, `Currency`,
+    `OrderUpdate`, …) now also implement `Deserialize`, refusing what
+    they could not send back (an unknown currency or setting type, an
+    order `status` other than `pending`).
+  - **Webhooks** (`meta_whatsapp_webhooks::fields`): India's status of
+    type `payment` is a `status_updated` event as before, now with
+    `Status::status_type` (`StatusType::Payment`), `Status::payment`
+    (`StatusPayment`: the order's `reference_id`, amount, currency, the
+    `PaymentTransaction` with its gateway, status, method and error, the
+    `PaymentRefund`s, and the gateways' echoed fields) and
+    `Status::is_payment`; its `status` is the new
+    `MessageStatus::Captured` or `MessageStatus::Pending`. Brazil's
+    one-click confirmation is `InteractiveReply::PaymentMethod`
+    (`PaymentMethodReply`: method, time, `reference_id`, last four
+    digits, `credential_id`). Both pages joined the conformance sweep
+    (their manifest status `Typed`; the `OutOfScope` status is gone
+    with them), with two fixtures; the service has two new event data
+    snapshots and no changed one, and no new event type.
+  - **The service** sends the payment templates through
+    `POST /v1/messages` (`type` `template`), checked by the library:
+    until now a send's `order_details` and `payment_request` were
+    refused on their key (docs/guides/server.md). A payment template's
+    creation already passed and is now checked too.
+
 - **Payments in Brazil** (`meta_whatsapp_client::payments`, roadmap P1b,
   parity rows 38 and 141, on P1a's types). `Currency::Brl` selects
   Brazil's rules, as `Currency::Inr` selects India's (unchanged):
@@ -2034,6 +2091,15 @@ stored data, the owner's).
 
 ### Changed
 
+- **New public fields** (roadmap P1c): `templates::ParameterAction`
+  gains `order_details` and `payment_request`, and
+  `webhooks::fields::Status` gains `status_type` and `payment`. Code
+  that builds either with a struct literal and no `..` base must add
+  them (`ParameterAction` is `Default`); parsing and serialization are
+  unchanged for what parsed before, but for a payment status: its
+  `payment` and `type` were dropped and are now kept, and its `status`,
+  `MessageStatus::Other("captured")` before, is `MessageStatus::Captured`
+  (`Pending` likewise).
 - **Breaking for a custom `ConversationStore`** (roadmap B4): the port
   gains a required method, `trim_conversations` (see Added, "A cap on
   each conversation's history"); implement it and run

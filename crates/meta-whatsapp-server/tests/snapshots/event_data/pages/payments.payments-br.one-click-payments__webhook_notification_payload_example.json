@@ -1,0 +1,34 @@
+[
+  {
+    "data": {
+      "contact": {
+        "profile": {
+          "name": "Maria Silva"
+        },
+        "wa_id": "5511912345678"
+      },
+      "display_phone_number": "15550783881",
+      "event": "message_received",
+      "message": {
+        "from": "5511912345678",
+        "from_logical_id": "64244926160970",
+        "id": "wamid.HBgNNTUxMTkxMjM0NTY3OBUCABIYFjNFQjBDNUQ3RjM4N0Q2QjE1OTJGQ0IA",
+        "interactive": {
+          "payment_method": {
+            "credential_id": "1234567",
+            "last_four_digits": "5235",
+            "payment_method": "offsite_card_pay",
+            "payment_timestamp": "1726170122",
+            "reference_id": "pix_test_webhook"
+          },
+          "type": "payment_method"
+        },
+        "timestamp": "1726170122",
+        "type": "interactive"
+      },
+      "phone_number_id": "106540352242922",
+      "waba_id": "102290129340398"
+    },
+    "type": "message_received"
+  }
+]
