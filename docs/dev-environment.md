@@ -8,7 +8,7 @@ devcontainer (`github.com/anthropics/claude-code/.devcontainer`), for Rust:
 | Piece | What |
 | --- | --- |
 | `Dockerfile` | `node:24-bookworm` base (Claude Code is an npm package), Rust 1.98.1 via rustup, `just`, `cargo-deny`, `typst` CLI, `git-delta`, zsh, `psql`/`redis-cli`/`mongosh` |
-| `compose.yaml` | `dev` (your shell), `postgres:18-alpine`, `redis:8-alpine`, `redis-tls` (`redis:8-alpine` serving TLS only on 6380, client certificates required), and `mongodb` (`mongo:8.0.34-noble`, a single-node replica set); named volumes for shell history, Claude config and the cargo registry |
+| `compose.yaml` | `dev` (your shell), `postgres:18-alpine`, `redis:8-alpine`, `redis-tls` (`redis:8-alpine` serving TLS only on 6380, client certificates required), and `mongodb` (`mongo:7.0.45-jammy`, a single-node replica set); named volumes for shell history, Claude config and the cargo registry |
 | `init-firewall.sh` | default-deny egress, run on every start |
 | `github-meta-snapshot.json` | GitHub's IPv4 ranges as of the date inside it: the firewall's fallback (copied to `/etc/meta-whatsapp-rs-firewall/`) |
 | `devcontainer.json` | VS Code extensions (Claude Code, rust-analyzer, tinymist for Typst, Even Better TOML, CodeLLDB, just, GitLens) |
@@ -54,14 +54,16 @@ which redis-rs's own TLS panics.
 
 The MongoDB stores (roadmap S9, S17, S18) need multi-document
 transactions, which MongoDB runs only on a replica set, so the test server
-is a **single-node replica set** (`rs0`): `mongo:8.0.34-noble` started with
+is a **single-node replica set** (`rs0`): `mongo:7.0.45-jammy` started with
 `--replSet rs0`, no authentication, no TLS. Its healthcheck initiates the
 set on its first run (one member, `localhost:27017`, its address inside its
 own container) and passes once that member is primary, a few seconds after
 start. As that member address is reachable only from inside the container,
 the test URL carries `directConnection=true`: the driver keeps to the
 address it was given instead of switching to the member address it
-discovers.
+discovers. The image is the 7.0 series, not 8.x: every 8.x release
+refuses to start on Linux 6.19 and later (MongoDB's SERVER-121912), which
+CI's runners run.
 
 - **Dev container**: the `mongodb` sidecar, and
   `META_WHATSAPP_RS_TEST_MONGODB_URL=mongodb://mongodb:27017/?directConnection=true`.

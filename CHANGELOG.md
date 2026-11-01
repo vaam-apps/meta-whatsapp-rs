@@ -220,7 +220,7 @@ stored data, the owner's).
 
 - **MongoDB in the dev container and CI** (roadmap S8, for S9, S17 and
   S18): a `mongodb` service in `compose.test.yaml` (`127.0.0.1:57017`) and
-  a `mongodb` sidecar in the devcontainer, both `mongo:8.0.34-noble` run
+  a `mongodb` sidecar in the devcontainer, both `mongo:7.0.45-jammy` run
   as a single-node replica set (`--replSet rs0`; multi-document
   transactions need a replica set), initiated by its healthcheck on the
   first run and healthy once primary. `META_WHATSAPP_RS_TEST_MONGODB_URL`

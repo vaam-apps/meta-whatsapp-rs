@@ -16,7 +16,7 @@ Either open the repo in the dev container (see
 - [`just`](https://github.com/casey/just) ≥ 1.58 and
   [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) 0.20.
 - Docker, for `just test-live` (Postgres 18, Redis 8, a TLS-only Redis
-  8 and MongoDB 8.0 as a single-node replica set, from `compose.test.yaml`,
+  8 and MongoDB 7.0 as a single-node replica set, from `compose.test.yaml`,
   on ports 55432/56379/56380/57017; MongoDB's image is a 320 MB download,
   about 1 GB unpacked), and `openssl`
   (or LibreSSL), with which `tools/test-tls/generate.sh` writes the TLS

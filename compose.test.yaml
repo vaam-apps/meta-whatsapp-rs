@@ -62,7 +62,7 @@ services:
   # engine uses `interval` throughout, and is just slower to report
   # healthy), then every 30 s, not every 2 s through the whole test run.
   mongodb:
-    image: mongo:8.0.34-noble
+    image: mongo:7.0.45-jammy
     command: ["mongod", "--replSet", "rs0"]
     ports: ["127.0.0.1:57017:27017"]
     healthcheck:

@@ -1045,7 +1045,7 @@ and `store-postgres`.
     `META_WHATSAPP_RS_REQUIRE_LIVE=1` and no MongoDB URL fails; with it,
     a live smoke test commits a multi-document transaction.
   - **Landed:** `mongodb` in `compose.test.yaml` (`127.0.0.1:57017`) and
-    as a devcontainer sidecar: `mongo:8.0.34-noble` with
+    as a devcontainer sidecar: `mongo:7.0.45-jammy` with
     `--replSet rs0`, whose healthcheck runs `rs.initiate()` when
     `rs.status()` reports the set not yet initiated (code 94), with one
     member, `localhost:27017`, and passes once that member is primary
@@ -1071,8 +1071,12 @@ and `store-postgres`.
     only.
   - **Decided 2026-11-01** (the coordinator, under the owner's
     delegation, AGENTS.md § Decisions; each swappable by its tag, line
-    or setting): the image `mongo:8.0.34-noble`, pinned by tag (the 8.0
-    series, not 8.3); the driver a dev-dependency of the adapters only,
+    or setting): the image `mongo:7.0.45-jammy`, pinned by tag: the 7.0
+    series, as every 8.x release refuses to start on Linux 6.19 and
+    later (MongoDB's SERVER-121912, an rseq incompatibility in its
+    tcmalloc; the CI runner's kernel is one), and 7.0 has transactions on
+    a replica set; back to 8.x once MongoDB ships a release that starts
+    there; the driver a dev-dependency of the adapters only,
     with `rustls-tls-aws-lc` and `bson-3`, until S17 makes it an optional
     dependency; the healthcheck's `start_interval` of 1 s and `interval`
     of 30 s (a check every 2 s cost half a core); `mongosh` 2.14.1 in the

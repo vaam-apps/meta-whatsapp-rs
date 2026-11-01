@@ -84,7 +84,7 @@ services:
   # As compose.test.yaml's (see there): a single-node replica set whose
   # healthcheck initiates it once and passes when this member is primary.
   mongodb:
-    image: mongo:8.0.34-noble
+    image: mongo:7.0.45-jammy
     command: ["mongod", "--replSet", "rs0"]
     healthcheck:
       test:
