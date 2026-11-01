@@ -278,12 +278,18 @@
 //!   refuses a WABA whose owner, as Meta reports it, is another business
 //!   than the one the token was fetched for.
 //!
+//! **`PARTNER_ADDED` is not only hosted signup's**: Meta sends it for every
+//! WABA shared with your app, the code flow's and coexistence's
+//! onboardings included, and may deliver it again. Skip a WABA the vault
+//! already holds; [`EmbeddedSignup::onboard_hosted`] refuses one before any
+//! request rather than replace its token (delete it first to onboard it
+//! again).
+//!
 //! The fetch is a read: unlike the code, nothing is spent when a step up to
 //! `store_token` fails, so the call can be made again. After `store_token`,
 //! [`EmbeddedSignup::resume`] with [`OnboardingRequest::for_hosted`] (or
 //! `for_resume` of the saved [`HostedSignup::session`]) redoes the tail.
-//! The webhook names no tenant of yours, and `PARTNER_ADDED` also comes for
-//! WABAs onboarded through the code flow: bind the WABA in
+//! The webhook names no tenant of yours: bind the WABA in
 //! [`EmbeddedSignup::onboard_hosted_with_approval`] (required for a
 //! Solution Partner).
 //!

@@ -699,6 +699,17 @@ and business portfolio (`owner_business_id`). Your app must be
 subscribed to `account_update` (and a Solution Partner must have a line
 of credit).
 
+> **`PARTNER_ADDED` is not only hosted signup's.** Meta sends it for every
+> WABA shared with your app: the code flow's onboardings and
+> coexistence's too, and it may deliver one again. Skip a WABA your vault
+> (or your WABA → merchant table) already holds. `onboard_hosted` refuses
+> one the vault holds, before any request (a `ValidationError` on
+> `waba_id`), rather than replace its token and record; to onboard such a
+> WABA again on purpose, delete it from the vault first
+> (`TokenVault::delete`, or `offboard`). The check is a read, not a lock:
+> a code-flow onboarding still running when the webhook arrives can store
+> after it, so reserve the WABA for a merchant atomically in the approval.
+
 ```text
 Meta's hosted page ──► account_update PARTNER_ADDED {waba_id, owner_business_id}
                        └► your webhook endpoint (signature verified)
@@ -717,8 +728,11 @@ if let WebhookEvent::AccountUpdated { update, .. } = &event
     && let (Some(waba), Some(owner)) = (&info.waba_id, &info.owner_business_id)
 {
     let signup = HostedSignup::new(waba.clone(), owner.clone());
-    let request = OnboardingRequest::for_hosted(&signup).register_with_pin(pin);
-    let done = es.onboard_hosted(&signup, &system_token, &request, &vault).await?;
+    if vault.get(&signup.waba_id).await?.is_none() {
+        // Not onboarded yet (the code flow's onboardings send PARTNER_ADDED too).
+        let request = OnboardingRequest::for_hosted(&signup).register_with_pin(pin);
+        let done = es.onboard_hosted(&signup, &system_token, &request, &vault).await?;
+    }
 }
 ```
 
@@ -737,17 +751,18 @@ if let WebhookEvent::AccountUpdated { update, .. } = &event
   must be `owner_business_id`; the number among the WABA's, the most
   recently onboarded when none is named), `approve`, `store_token`, and
   the tail. The vault record is the code flow's, byte for byte but for
-  its random nonce: same `wa.token` keys, same fields.
+  its random nonce: same `wa.token` keys, same fields. `debug_token`
+  assumes, as for the code exchange, that the fetched business token
+  carries `granular_scopes` naming the WABA: one that does not fails
+  `verify_assets` (on `granular_scopes`) and nothing is stored.
 - **Retrying.** The fetch spends nothing: a failure up to `store_token`
   can be fixed and `onboard_hosted` called again. After it, `resume`
   with `OnboardingRequest::for_hosted(&signup)` (or `for_resume` of the
-  saved `signup.session()`) redoes the tail with the stored token.
-- **No tenant, and not only hosted.** The webhook names none of your
-  merchants, and `PARTNER_ADDED` also arrives for WABAs onboarded through
-  the code flow (and coexistence). Skip a WABA your tables already hold,
-  and bind the others to a merchant in
-  `onboard_hosted_with_approval` (required for a Solution Partner, as
-  `onboard_with_approval` is).
+  saved `signup.session()`) redoes the tail with the stored token
+  (`onboard_hosted` again is refused: the vault holds the WABA).
+- **No tenant.** The webhook names none of your merchants: bind the WABA
+  to one in `onboard_hosted_with_approval` (required for a Solution
+  Partner, as `onboard_with_approval` is), reserving it atomically.
 - **The PIN is yours.** The hosted page asks for none: choose one per
   number (the onboarding guides' `<DESIRED_PIN>`) and keep it in your
   secret store, never one for every merchant.

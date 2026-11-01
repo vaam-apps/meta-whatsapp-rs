@@ -128,11 +128,11 @@ it acts with whatever token is stored for that WABA.
 
 ## Hosted Embedded Signup: no page code
 
-Meta's hosted page reports to your webhook alone: a signed `account_update` `PartnerAdded` names the WABA and its owner
-([examples/hosted_signup.rs](examples/hosted_signup.rs)). `onboard_hosted` runs step `fetch_token` (`system_user_access_tokens`,
-your system token, its `appsecret_proof` in the form body) in place of `exchange_code`, then the steps above: the same vault record.
-Nothing is spent before `store_token` (call again); after it, `resume` with `for_hosted`. The PIN is yours to choose. No merchant
-comes with the webhook, and code-flow onboardings send `PartnerAdded` too: skip WABAs you hold, bind the rest in `onboard_hosted_with_approval`.
+Meta's page reports to your webhook alone: a signed `account_update` `PartnerAdded` names the WABA and owner ([examples/hosted_signup.rs](examples/hosted_signup.rs)).
+**Code-flow and coexistence onboardings send `PartnerAdded` too, and Meta redelivers: skip a WABA the vault holds** (`onboard_hosted`
+refuses one, before any request; delete it first to onboard it again). Step `fetch_token` (`system_user_access_tokens`, your system
+token, its `appsecret_proof` in the form body) replaces `exchange_code`, then the steps above, the same record. Nothing is spent before
+`store_token`; after it, `resume`. No merchant comes with the webhook: bind it in `onboard_hosted_with_approval`. The PIN is yours.
 
 ## Pitfalls
 

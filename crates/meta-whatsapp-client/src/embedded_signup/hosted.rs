@@ -121,6 +121,12 @@ impl EmbeddedSignup {
     ///
     /// The webhook names no tenant of yours: bind the WABA to one in
     /// [`Self::onboard_hosted_with_approval`].
+    ///
+    /// `debug_token` runs on the fetched token as on the exchanged one, so
+    /// this assumes, as Meta's pages do not say otherwise, that hosted
+    /// signup's business tokens carry `granular_scopes` naming the WABA:
+    /// one that does not fails `verify_assets` (on `granular_scopes`)
+    /// before anything is stored.
     pub async fn onboard_hosted(
         &self,
         signup: &HostedSignup,
@@ -1018,6 +1024,35 @@ mod tests {
         assert_eq!(h.t.remaining(), 0);
     }
 
+    /// `debug_token` runs on the fetched token as on the exchanged one: a
+    /// token not limited to named WABAs (no `granular_scopes`) proves no
+    /// grant of the webhook's WABA, and nothing is stored.
+    #[tokio::test]
+    async fn a_fetched_token_without_granular_scopes_is_refused() {
+        let h = harness();
+        h.t.push_json(200, token_answer());
+        h.t.push_json(
+            200,
+            json!({"data": {
+              "app_id": APP_ID, "type": "SYSTEM_USER", "is_valid": true, "expires_at": 0,
+              "scopes": ["whatsapp_business_management", "whatsapp_business_messaging"]
+            }}),
+        );
+        let err =
+            h.es.onboard_hosted(&signup(), &system_token(), &request(), &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(step(&err), VERIFY_ASSETS);
+        assert_eq!(field(&err), "granular_scopes");
+        assert!(stored(&h).await.is_none());
+        assert_eq!(
+            h.t.requests().len(),
+            2,
+            "no asset read with an unproven grant"
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
     /// The code flow checks no owner: the browser's `business_id` is a
     /// claim, never compared, and the owner stored is Meta's.
     #[tokio::test]
@@ -1244,6 +1279,10 @@ mod tests {
             .onboard_hosted(&signup(), &system_token(), &request(), &blank_secret.vault)
             .await
             .unwrap_err();
+        assert!(
+            matches!(err, Error::Validation(_)),
+            "refused before step fetch_token: {err:?}"
+        );
         assert_eq!(field(&err), "app_secret");
         // A Solution Partner must approve.
         let p = harness();

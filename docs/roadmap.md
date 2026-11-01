@@ -1682,7 +1682,37 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `PARTNER_ADDED` example, verbatim). Found on the way: the webhook
     names no tenant and also comes for code-flow onboardings, and the
     hosted page asks for no PIN; both are the integrator's, documented
-    in the guide.
+    in the guide. Found in review: `PARTNER_ADDED` comes for every WABA
+    shared with the app (the code flow's and coexistence's onboardings
+    too) and may be delivered again, and `store_token` replaces a
+    record (as the code flow's re-onboarding must), so a hosted run
+    after a code-flow onboarding would have replaced its token and
+    `created_at` (and with it a Solution Partner's recorded approval)
+    unasked; `onboard_hosted` now refuses a WABA the vault holds,
+    before any request (a presence read, an unreadable record counting
+    as held; `a_waba_the_vault_holds_is_refused_before_any_request`),
+    and re-onboarding one is deleting it first. A read, not a lock: a
+    code-flow onboarding still running when the webhook arrives can
+    store after it; the approval's atomic reservation closes that
+    window, and the rustdoc says so.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): the token
+    request is `fetch_only=true` by default, swapped per signup by
+    `HostedSignup::token_request` (a fetch is replayed as a read, a
+    generation never is); the system user token is an explicit argument
+    of `onboard_hosted`, not held by `EmbeddedSignup`; a WABA whose
+    owner, as Meta reports it, is another business than the webhook's
+    is refused, and when Meta reports no owner none is stored, as in
+    the code flow; `debug_token` runs on the fetched token, on the
+    assumption that hosted signup's business tokens carry
+    `granular_scopes` naming the WABA, as the code exchange's do (one
+    that does not fails `verify_assets` on `granular_scopes`, closed);
+    the integrator's, documented: re-onboarding a WABA already held
+    (delete it first; the library refuses it otherwise), the tenant
+    binding (in the approval) and the PIN; no facade helper (the glue
+    stays in the skill's `hosted_signup.rs`); the skill not re-stamped.
+    The library's side of OPEN_QUESTIONS #11 is decided; the service's
+    is M3f.
 - [ ] **L11b. Several WABAs in one signup** (`client::embedded_signup`;
   row 122; OPEN_QUESTIONS #5): opt-in onboarding of every granted WABA,
   each bound and resumable on its own.

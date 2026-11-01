@@ -631,7 +631,9 @@ tenant mismatch. Hosted Embedded Signup
 `"fetch_token"` (`POST /{business}/system_user_access_tokens` with the
 system token's `appsecret_proof` in a form body) in place of
 `exchange_code`, then the same steps, writing the same vault record; the
-WABA's owner as Meta reports it must be the webhook's. Each failure is
+WABA's owner as Meta reports it must be the webhook's, and a WABA the vault
+already holds is refused before any request (`PARTNER_ADDED` also comes for
+the code flow's onboardings). Each failure is
 `Error::in_step("exchange_code" | "debug_token" | "verify_assets" |
 "approve" | "store_token" | "subscribe_app" | "assign_system_user" |
 "share_credit_line" | "register_phone")`; `offboard` adds

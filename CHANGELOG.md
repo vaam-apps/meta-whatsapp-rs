@@ -237,7 +237,11 @@ stored data, the owner's).
   `OnboardingRequest::for_hosted` builds the request (no code; the
   session info of `HostedSignup::session`), and `resume` takes it after
   a failure past `store_token`; before it, nothing is spent and the call
-  can be made again. Additive: `onboard` and `resume` are unchanged.
+  can be made again. `PARTNER_ADDED` also comes for the code flow's and
+  coexistence's onboardings, and may be delivered again: `onboard_hosted`
+  refuses a WABA the vault already holds, before any request, rather
+  than replace its token (delete the record first to onboard it again).
+  Additive: `onboard` and `resume` are unchanged.
 - **A pacer shared by replicas** in `meta-whatsapp-bot` (roadmap B2b,
   parity row 89; for the service's broadcasts, M5k). Opt-in:
   `KvRateLimiter` (module `pacer`) is a `RateLimiter` whose per-number
