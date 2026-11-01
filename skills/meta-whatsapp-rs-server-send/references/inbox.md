@@ -1,6 +1,6 @@
 # Replying from the inbox
 
-> **Verified against meta-whatsapp-rs 73e660893a3c034b3b9193db949390f92a8c1bef (2026-11-01).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, tag `inbox`), `docs/guides/server.md` section "The inbox" and [examples/send.ts](../examples/send.ts).
+> **Verified against meta-whatsapp-rs ee4e9d2362e93527793a7638749c0a314ba27ccc (2026-11-01).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, tag `inbox`), `docs/guides/server.md` section "The inbox" and [examples/send.ts](../examples/send.ts).
 
 The inbox (scope `inbox`) holds what the service received for your
 number: a customer's message is there once Meta's delivery is answered.
@@ -43,7 +43,11 @@ export async function reply(api: WhatsApp, pn: string, contact: string, message:
   check off per number (`WA_SERVER_INBOX_REPLY_CHECKS`); Meta then
   decides.
 - A number that moved to you from another tenant shows nothing from
-  before your binding; a number no other tenant held shows all of it.
+  before your binding, and `unread` counts only what came since; a
+  number no other tenant held shows all of it. On such a number a
+  free-form reply needs a window the customer opened since your binding:
+  one the previous holder's customer opened is
+  `customer_service_window_closed`, nothing sent (send a template).
 - The inbox keeps everything unless the operator sets
   `WA_SERVER_INBOX_RETENTION`.
 - No window or read route, and no message by id, yet.
