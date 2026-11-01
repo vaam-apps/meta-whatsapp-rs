@@ -136,8 +136,9 @@ late "typing…" after the answer looks broken).
 ## What meta-whatsapp-rs does not do
 
 - No send queue, rate limiting across your fleet, or retry scheduler.
-- Payment message types are not modelled: `MessageContent::Raw` is the
-  escape hatch.
+- Payment messages are typed for India only
+  (`meta_whatsapp_rs::client::payments`); Brazil's go through
+  `MessageContent::Raw`.
 - The 24-hour window is not tracked here; the CMS inbox tracks it from
   recorded messages and calls (`meta-whatsapp-rs-cms-inbox`).
 
