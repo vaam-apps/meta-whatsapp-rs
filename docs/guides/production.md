@@ -65,13 +65,52 @@ An upgrade across a migration that rewrites tables (migration 3, lossless
 message content) is the exception: run `migrate` once from a one-off job
 first ([section 7](#7-before-going-live)).
 
-Redis over TLS (`rediss://`): meta-whatsapp-rs enables no TLS feature of redis on
-purpose (two rustls crypto providers in one binary make the first TLS
-connection panic). Enable redis's `tokio-rustls-comp` in your own crate,
-install a provider at startup, and hand the connection to
-`RedisKvStore::new(conn)`; the type's rustdoc shows how
-([decided](../../OPEN_QUESTIONS.md#storage) 19: `rediss://` with an explicit
-provider, roadmap L21c, not built yet).
+Redis over TLS (`rediss://`) goes through `RedisTls` (feature `redis`),
+not through redis's own TLS features, which meta-whatsapp-rs leaves off:
+redis-rs builds its TLS configuration from rustls' process-wide default
+crypto provider, and when a binary links both of rustls' providers
+(aws-lc-rs, which reqwest and sqlx use here, and ring, which many other
+crates bring) with no default installed, the first TLS connection panics.
+`RedisTls` names aws-lc-rs itself, so it needs no default and ignores the
+one you installed:
+
+```rust
+use meta_whatsapp_rs::adapters::store::{RedisKvStore, RedisTls};
+
+let tls = RedisTls::builder()
+    // A private CA; leave it out to trust the system's roots.
+    .root_certificates_pem(std::fs::read("/run/secrets/redis-ca.crt")?)
+    // If your Redis asks for a client certificate (`tls-auth-clients yes`).
+    .client_auth_pem(
+        std::fs::read("/run/secrets/redis-client.crt")?,
+        std::fs::read("/run/secrets/redis-client.key")?,
+    )
+    .build()?;
+let kv = RedisKvStore::new(tls.connect(&std::env::var("REDIS_URL")?).await?);
+```
+
+- **Trust**: the system's trust store by default, as the reqwest transport
+  does (in a `scratch` or distroless image with no CA bundle, `build`
+  fails: pass the CA). `root_certificates_pem` trusts those certificates
+  *instead of* the system's. The certificate must name the URL's host: an
+  IP address (`rediss://10.0.0.5`) needs an IP address in the certificate,
+  a DNS name never covers it. `RedisTls::builder()` has no mode without
+  verification: a URL with `#insecure` is refused.
+- **The connection reconnects** on its own: the command that meets a
+  dropped connection fails (it is not replayed, a compare-and-swap
+  included) and the next one opens a new connection, which authenticates
+  and selects the database again. Unlike `ConnectionManager`, it neither
+  retries nor backs off: one attempt per command that finds no
+  connection, bounded by the connection timeout. Timeouts are redis-rs's
+  (1 s to connect, the handshake included, 500 ms per reply):
+  `with_connection_timeout`, `with_response_timeout`.
+- **Your own TLS configuration** (another verifier, your own provider):
+  `RedisTls::from_client_config`, used as it is: a verifier of yours that
+  accepts any certificate turns verification off, and that is your call.
+  A connection you built yourself, with
+  redis's TLS features and a provider you installed, still goes to
+  `RedisKvStore::new` as before.
+- Redis Cluster and Sentinel over TLS are not covered.
 
 Every store adapter runs an executable conformance suite; `just test-live`
 runs it against real Postgres and Redis.
@@ -434,6 +473,27 @@ notification queue on top must be idempotent itself: tag each message with
     recorded before an upgrade stay as they were written (synced history
     recorded before 6d50701 keeps the unread count and window it moved,
     for instance).
+- **Media conversion** (feature `ffmpeg`, off by default): Meta converts
+  nothing, so a recording becomes a voice message's Ogg Opus on your
+  side. `meta_whatsapp_adapters::media::FfmpegConverter` runs an
+  `ffmpeg` you install on the host (built with libopus; the library
+  links none, and the service's image carries none, so its licence is
+  that of the build you choose). Point `with_program` at an absolute
+  path, call `check()` at startup so a missing binary or libopus fails
+  there (`ConversionError::BinaryMissing`, `EncoderMissing`) rather than
+  at the first upload, and bound how many conversions run at
+  once (each is a process on about a CPU core for up to its timeout; the
+  converter queues nothing). It caps each allocation in `ffmpeg` (16 MiB)
+  but not the process's total memory: give it a cgroup, or point
+  `with_program` at a wrapper script that sets `ulimit -v` and then
+  `exec`s `ffmpeg` (`exec`, so that a timeout kills `ffmpeg` itself). The
+  process inherits no environment but `PATH`; a build that needs
+  `LD_LIBRARY_PATH` sets it in such a wrapper.
+  Its input and run time are bounded (64 MiB and 60 s by default), the
+  result to the 16 MiB upload limit, and `ffmpeg`'s own diagnostics are
+  never logged: they name files and URLs. Its failures are
+  `Error::Conversion` (retry only `Timeout`; none was sent to Meta).
+  CI proves it against a real `ffmpeg` (docs/dev-environment.md).
 
 ## 8. Retention and erasure on Postgres
 

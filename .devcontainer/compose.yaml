@@ -23,9 +23,16 @@ services:
       POWERLEVEL9K_DISABLE_GITSTATUS: "true"
       META_WHATSAPP_RS_TEST_POSTGRES_URL: postgres://wa:wa@postgres:5432/wa
       META_WHATSAPP_RS_TEST_REDIS_URL: redis://redis:6379
+      # `rediss://` (roadmap L21c): the redis-tls sidecar, and the test-only
+      # files devcontainer.json's initializeCommand writes to .test-tls/.
+      META_WHATSAPP_RS_TEST_REDISS_URL: rediss://redis-tls:6380
+      META_WHATSAPP_RS_TEST_REDISS_CA: /workspace/.test-tls/ca.crt
+      META_WHATSAPP_RS_TEST_REDISS_CLIENT_CERT: /workspace/.test-tls/client.crt
+      META_WHATSAPP_RS_TEST_REDISS_CLIENT_KEY: /workspace/.test-tls/client.key
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      redis-tls: { condition: service_healthy }
   postgres:
     image: postgres:18-alpine
     environment:
@@ -41,6 +48,31 @@ services:
     image: redis:8-alpine
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  # As compose.test.yaml's: TLS only, client certificates required, the
+  # test-only certificates of tools/test-tls/generate.sh.
+  redis-tls:
+    image: redis:8-alpine
+    command:
+      - redis-server
+      - --port
+      - "0"
+      - --tls-port
+      - "6380"
+      - --tls-cert-file
+      - /tls/server.crt
+      - --tls-key-file
+      - /tls/server.key
+      - --tls-ca-cert-file
+      - /tls/ca.crt
+      - --tls-auth-clients
+      - "yes"
+    volumes:
+      - ../.test-tls:/tls:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "-p", "6380", "--cacert", "/tls/ca.crt", "--cert", "/tls/client.crt", "--key", "/tls/client.key", "ping"]
       interval: 2s
       timeout: 3s
       retries: 30

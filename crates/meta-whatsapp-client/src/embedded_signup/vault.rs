@@ -76,6 +76,7 @@
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -291,6 +292,109 @@ impl StoredBusinessToken {
     pub fn is_expired(&self, now: OffsetDateTime) -> bool {
         self.expires_at.is_some_and(|t| t <= now)
     }
+
+    /// Where this token stands at `now` against its expiry, reported
+    /// `lead` ahead ([`TokenExpiry::at`] on [`Self::expires_at`]). On a
+    /// token [`TokenVault::get`] returned, `expires_at` is the
+    /// authenticated copy; [`TokenVault::token_expiry`] reads the clear
+    /// one without decrypting.
+    pub fn expiry(&self, lead: Duration, now: OffsetDateTime) -> TokenExpiry {
+        TokenExpiry::at(self.expires_at, lead, now)
+    }
+}
+
+/// The lead time [`TokenExpiry::ExpiresSoon`] starts at by default: 7 days
+/// before a token's `expires_at`.
+///
+/// A business token from Embedded Signup defaults to never expiring
+/// (Meta's `facebook-login/facebook-login-for-business`, and
+/// `access-tokens`: no re-authentication needed), so most vault records
+/// carry no `expires_at` and are [`TokenExpiry::Never`]. One generated to
+/// expire, the 60-day kind (`set_token_expires_in_60_days`, or a login
+/// configuration choosing an expiry), gets a week's notice: time for the
+/// merchant to run Embedded Signup again, which is the only way back
+/// (`OPEN_QUESTIONS.md` #8: Meta documents no refresh call). Pass another
+/// lead to [`TokenVault::token_expiry`] to change it.
+pub const DEFAULT_EXPIRY_LEAD: Duration = Duration::from_hours(7 * 24);
+
+/// Where a stored business token stands against its expiry, at a time
+/// and for a lead time: what [`TokenVault::token_expiry`] (the clear
+/// metadata, nothing decrypted) and [`StoredBusinessToken::expiry`]
+/// report.
+///
+/// With `remaining = expires_at - now`, the boundaries are:
+///
+/// | `expires_at` | variant |
+/// | --- | --- |
+/// | absent (Meta reported none, or `0`) | [`Self::Never`] |
+/// | `remaining <= 0` (at `now` or before) | [`Self::Expired`], as [`StoredBusinessToken::is_expired`] |
+/// | `0 < remaining <= lead` (`now + lead` **included**) | [`Self::ExpiresSoon`] |
+/// | `remaining > lead` | [`Self::Fresh`] |
+///
+/// Carries times only: no token, no key, nothing secret, in its fields or
+/// its `Debug`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TokenExpiry {
+    /// No expiry recorded: the token does not expire. Never due.
+    Never,
+    /// Expires after the lead time. Not due yet.
+    Fresh {
+        /// When the token expires.
+        expires_at: OffsetDateTime,
+    },
+    /// Expires within the lead time, `now + lead` included. Due: ask the
+    /// merchant to run Embedded Signup again before it lapses.
+    ExpiresSoon {
+        /// When the token expires.
+        expires_at: OffsetDateTime,
+        /// How long until then, more than zero and at most the lead time.
+        remaining: Duration,
+    },
+    /// Expired: `expires_at` is `now` or earlier. Due: the merchant's
+    /// calls fail (`ErrorKind::Authentication`) until they run Embedded
+    /// Signup again.
+    Expired {
+        /// When the token expired.
+        expires_at: OffsetDateTime,
+    },
+}
+
+impl TokenExpiry {
+    /// Classify `expires_at` at `now`, reporting it `lead` ahead (the
+    /// table on [`TokenExpiry`]; [`DEFAULT_EXPIRY_LEAD`] is the default
+    /// lead). A zero `lead` reports only [`Self::Expired`].
+    pub fn at(expires_at: Option<OffsetDateTime>, lead: Duration, now: OffsetDateTime) -> Self {
+        let Some(expires_at) = expires_at else {
+            return Self::Never;
+        };
+        let remaining = expires_at - now;
+        if remaining <= time::Duration::ZERO {
+            Self::Expired { expires_at }
+        } else if remaining <= lead {
+            Self::ExpiresSoon {
+                expires_at,
+                remaining: remaining.unsigned_abs(),
+            }
+        } else {
+            Self::Fresh { expires_at }
+        }
+    }
+
+    /// Whether to act on it: [`Self::ExpiresSoon`] or [`Self::Expired`].
+    pub fn is_due(&self) -> bool {
+        matches!(self, Self::ExpiresSoon { .. } | Self::Expired { .. })
+    }
+
+    /// When the token expires; `None` for [`Self::Never`].
+    pub fn expires_at(&self) -> Option<OffsetDateTime> {
+        match *self {
+            Self::Never => None,
+            Self::Fresh { expires_at }
+            | Self::ExpiresSoon { expires_at, .. }
+            | Self::Expired { expires_at } => Some(expires_at),
+        }
+    }
 }
 
 /// Which write of a WABA's vault record a token was read from
@@ -430,7 +534,8 @@ impl TokenVault {
         })
     }
 
-    /// Use `clock` for `created_at` (tests pass a `ManualClock`).
+    /// Use `clock` for `created_at` and for the `now` of
+    /// [`Self::token_expiry`] (tests pass a `ManualClock`).
     #[must_use]
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
@@ -594,6 +699,61 @@ impl TokenVault {
             .phone_number_ids
             .contains(phone_number_id)
             .then_some((token, version)))
+    }
+
+    /// Where the token stored for `waba_id` stands against its expiry, on
+    /// the vault's clock, reported `lead` ahead ([`DEFAULT_EXPIRY_LEAD`]
+    /// unless you choose another; the boundaries are on [`TokenExpiry`]).
+    /// `None` when no record is stored.
+    ///
+    /// **Nothing is decrypted.** It reads the record's clear `expires_at`
+    /// (the copy for operators the record carries next to the sealed one;
+    /// a record written before the field existed reads as
+    /// [`TokenExpiry::Never`]), so it needs no vault key (a record under a
+    /// key no longer configured still answers), never brings the token
+    /// into memory, and never writes (no re-encryption on read, whatever
+    /// [`Self::rotate_on_read`] says). The stored format is unchanged.
+    ///
+    /// The clear copy is not authenticated: whoever can write the store
+    /// can change what this reports (as they can delete the record). A
+    /// signal ahead of a lapse, not a gate: Meta enforces the expiry, not
+    /// this. For the authenticated copy, [`Self::get`] and
+    /// [`StoredBusinessToken::expiry`].
+    ///
+    /// The vault cannot list its records: call it for each WABA you hold
+    /// (your merchant table, as for [`Self::rotate`]). The answer is
+    /// stateless, so a token stays due on every check until the merchant
+    /// onboards again: notify once per `(waba_id, expires_at)`, not once
+    /// per check. The service builds its token-expiry event and metric on
+    /// this (roadmap M3e): a periodic walk of every bound WABA, as its vault
+    /// rotation walks them, an event for the tenant bound to a WABA that is
+    /// due, and a count.
+    ///
+    /// # Errors
+    ///
+    /// The store failing; a record that does not parse
+    /// ([`StorageError::Corrupt`]), of an unknown record version, or naming
+    /// another WABA than the one it is stored under (copied from another
+    /// entry: [`CryptoError::Malformed`]).
+    pub async fn token_expiry(
+        &self,
+        waba_id: &WabaId,
+        lead: Duration,
+    ) -> Result<Option<TokenExpiry>> {
+        let Some((record, _)) = self.read_record(&waba_key(waba_id)).await? else {
+            return Ok(None);
+        };
+        if record.v != RECORD_VERSION {
+            return Err(CryptoError::Malformed("unsupported token vault record version").into());
+        }
+        if &record.waba_id != waba_id {
+            return Err(CryptoError::Malformed("the record names another WABA").into());
+        }
+        Ok(Some(TokenExpiry::at(
+            record.expires_at,
+            lead,
+            self.clock.now(),
+        )))
     }
 
     /// Delete the token of `waba_id` and the phone index entries that point
@@ -859,6 +1019,13 @@ impl TokenVault {
         self.kv.as_ref()
     }
 
+    /// Whether a record is stored under `waba_id`, readable or not: nothing
+    /// is decrypted, so a record under a key this vault no longer has, or a
+    /// damaged one, counts as held (callers refuse on it, failing closed).
+    pub(super) async fn holds(&self, waba_id: &WabaId) -> Result<bool> {
+        Ok(self.kv.get(&waba_key(waba_id)).await?.is_some())
+    }
+
     /// Seal `plaintext` for `key` under the active key: the associated data
     /// binds it to that store key, so it cannot be moved to another WABA's
     /// or business's entry.
@@ -1006,6 +1173,11 @@ pub(crate) mod tests {
                 .lock()
                 .unwrap()
                 .push((key.to_string(), value.to_vec()));
+        }
+
+        /// Every write so far, in order: `(namespace/key, value)`.
+        pub(crate) fn writes(&self) -> Vec<(String, Vec<u8>)> {
+            self.writes.lock().unwrap().clone()
         }
 
         /// Panic if any key or value ever written contains `secret`, raw or
@@ -2149,5 +2321,283 @@ pub(crate) mod tests {
             aad(&WabaId::new("101").unwrap(), "k1"),
             aad(&WabaId::new("101").unwrap(), "k2")
         );
+    }
+
+    // ---- Roadmap L11e: the token-expiry signal ----
+
+    const T0: OffsetDateTime = datetime!(2026-09-24 12:00 UTC);
+    const DAY: Duration = Duration::from_hours(24);
+    const SECOND: Duration = Duration::from_secs(1);
+
+    fn expiring(waba: &str, at: Option<OffsetDateTime>) -> StoredBusinessToken {
+        let mut token = sample(waba);
+        token.expires_at = at;
+        token
+    }
+
+    /// The decisive test of roadmap L11e: under a fake clock, a token
+    /// expiring inside the lead time is reported, one expiring after it is
+    /// not, `now + lead` counts as inside, an expired one is reported as
+    /// such and one with no expiry never is. Through the vault (clear
+    /// metadata) and the decrypted record alike.
+    #[tokio::test]
+    async fn a_token_inside_the_lead_is_reported_and_one_after_it_is_not() {
+        let kv = kv();
+        let clock = Arc::new(ManualClock::new(T0));
+        let v = TokenVault::new(Arc::clone(&kv), VaultKeys::new(key("k1", 7)))
+            .unwrap()
+            .with_clock(clock.clone());
+        let lead = DEFAULT_EXPIRY_LEAD;
+        assert_eq!(lead, 7 * DAY);
+        let cases = [
+            ("201", Some(T0 + 3 * DAY)),
+            ("202", Some(T0 + 30 * DAY)),
+            ("203", Some(T0 + lead)),
+            ("204", Some(T0 + lead + SECOND)),
+            ("205", Some(T0 - DAY)),
+            ("206", Some(T0)),
+            ("207", None),
+        ];
+        for (waba, at) in cases {
+            v.store(&expiring(waba, at)).await.unwrap();
+        }
+        let expected = [
+            TokenExpiry::ExpiresSoon {
+                expires_at: T0 + 3 * DAY,
+                remaining: 3 * DAY,
+            },
+            TokenExpiry::Fresh {
+                expires_at: T0 + 30 * DAY,
+            },
+            TokenExpiry::ExpiresSoon {
+                expires_at: T0 + lead,
+                remaining: lead,
+            },
+            TokenExpiry::Fresh {
+                expires_at: T0 + lead + SECOND,
+            },
+            TokenExpiry::Expired {
+                expires_at: T0 - DAY,
+            },
+            TokenExpiry::Expired { expires_at: T0 },
+            TokenExpiry::Never,
+        ];
+        let mut due = Vec::new();
+        for ((waba, _), want) in cases.iter().zip(expected) {
+            let id = WabaId::new(*waba).unwrap();
+            let got = v.token_expiry(&id, lead).await.unwrap();
+            assert_eq!(got, Some(want), "WABA {waba}");
+            if want.is_due() {
+                due.push(*waba);
+            }
+            // The authenticated copy agrees with the clear one.
+            let stored = v.get(&id).await.unwrap().unwrap();
+            assert_eq!(stored.expiry(lead, T0), want, "WABA {waba}, decrypted");
+            assert_eq!(
+                stored.is_expired(T0),
+                matches!(want, TokenExpiry::Expired { .. })
+            );
+        }
+        assert_eq!(due, ["201", "203", "205", "206"]);
+
+        // The clock moves: 202 enters the lead time 23 days on, not a
+        // second before.
+        let w202 = WabaId::new("202").unwrap();
+        clock.advance((23 * DAY).saturating_sub(SECOND));
+        assert_eq!(
+            v.token_expiry(&w202, lead).await.unwrap(),
+            Some(TokenExpiry::Fresh {
+                expires_at: T0 + 30 * DAY
+            })
+        );
+        clock.advance(SECOND);
+        assert_eq!(
+            v.token_expiry(&w202, lead).await.unwrap(),
+            Some(TokenExpiry::ExpiresSoon {
+                expires_at: T0 + 30 * DAY,
+                remaining: lead,
+            })
+        );
+        clock.advance(lead);
+        assert_eq!(
+            v.token_expiry(&w202, lead).await.unwrap(),
+            Some(TokenExpiry::Expired {
+                expires_at: T0 + 30 * DAY
+            })
+        );
+        // No expiry is never due, however far the clock went.
+        let never = v
+            .token_expiry(&WabaId::new("207").unwrap(), lead)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(never, TokenExpiry::Never);
+        assert!(!never.is_due());
+        assert_eq!(never.expires_at(), None);
+        // No record: no answer.
+        assert_eq!(
+            v.token_expiry(&WabaId::new("299").unwrap(), lead)
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn the_boundaries_of_the_lead_time() {
+        let lead = DEFAULT_EXPIRY_LEAD;
+        let at = |e| TokenExpiry::at(e, lead, T0);
+        // One second inside, exactly at, one second outside.
+        assert_eq!(
+            at(Some(T0 + lead - SECOND)),
+            TokenExpiry::ExpiresSoon {
+                expires_at: T0 + lead - SECOND,
+                remaining: lead.saturating_sub(SECOND),
+            }
+        );
+        assert!(at(Some(T0 + lead)).is_due(), "now + lead is inside");
+        assert!(!at(Some(T0 + lead + SECOND)).is_due());
+        // One second left is still soon; none left is expired.
+        assert_eq!(
+            at(Some(T0 + SECOND)),
+            TokenExpiry::ExpiresSoon {
+                expires_at: T0 + SECOND,
+                remaining: SECOND,
+            }
+        );
+        assert_eq!(at(Some(T0)), TokenExpiry::Expired { expires_at: T0 });
+        assert_eq!(
+            at(Some(T0 - SECOND)).expires_at(),
+            Some(T0 - SECOND),
+            "expired keeps its time"
+        );
+        assert!(at(Some(T0 - SECOND)).is_due());
+        assert_eq!(at(None), TokenExpiry::Never);
+        assert!(!at(None).is_due());
+        // A zero lead reports only what has expired; the largest one
+        // reports everything that has not, without overflowing.
+        assert_eq!(
+            TokenExpiry::at(Some(T0 + SECOND), Duration::ZERO, T0),
+            TokenExpiry::Fresh {
+                expires_at: T0 + SECOND
+            }
+        );
+        assert_eq!(
+            TokenExpiry::at(Some(T0), Duration::ZERO, T0),
+            TokenExpiry::Expired { expires_at: T0 }
+        );
+        let far = datetime!(9999-12-31 23:59:59 UTC);
+        assert!(matches!(
+            TokenExpiry::at(Some(far), Duration::MAX, T0),
+            TokenExpiry::ExpiresSoon { expires_at, .. } if expires_at == far
+        ));
+        // The record's method is the same function.
+        assert_eq!(
+            expiring("208", Some(T0 + DAY)).expiry(lead, T0),
+            at(Some(T0 + DAY))
+        );
+        assert_eq!(expiring("208", None).expiry(lead, T0), TokenExpiry::Never);
+    }
+
+    /// The check reads the clear metadata only: it answers for a record
+    /// under a key the vault does not have (where `get` fails), never
+    /// rewrites a record under a previous key (where `get` re-encrypts),
+    /// and nothing in its answer is secret.
+    #[tokio::test]
+    async fn the_expiry_check_decrypts_nothing_and_writes_nothing() {
+        let rec = Arc::new(RecordingKv::default());
+        let kv: Arc<dyn KvStore> = rec.clone();
+        vault(&kv, VaultKeys::new(key("old", 1)))
+            .store(&expiring("101", Some(T0 + DAY)))
+            .await
+            .unwrap();
+        let id = WabaId::new("101").unwrap();
+        let want = Some(TokenExpiry::ExpiresSoon {
+            expires_at: T0 + DAY,
+            remaining: DAY,
+        });
+
+        let keyless = vault(&kv, VaultKeys::new(key("other", 2)));
+        assert!(matches!(
+            keyless.get(&id).await,
+            Err(Error::Crypto(CryptoError::InvalidKey(_)))
+        ));
+        assert_eq!(
+            keyless
+                .token_expiry(&id, DEFAULT_EXPIRY_LEAD)
+                .await
+                .unwrap(),
+            want
+        );
+
+        let rotating = vault(
+            &kv,
+            VaultKeys::new(key("new", 2)).with_previous(key("old", 1)),
+        );
+        let writes = rec.writes().len();
+        let got = rotating
+            .token_expiry(&id, DEFAULT_EXPIRY_LEAD)
+            .await
+            .unwrap();
+        assert_eq!(got, want);
+        assert_eq!(rec.writes().len(), writes, "no write");
+        assert_eq!(raw_json(&kv, "waba/101").await["kid"], "old", "no rotation");
+
+        let shown = format!("{got:?}");
+        assert!(!shown.contains(TOKEN), "{shown}");
+    }
+
+    /// Records with no expiry (`null`, what the vault writes for none),
+    /// and records without the field at all, never expire.
+    #[tokio::test]
+    async fn an_absent_expiry_never_expires() {
+        let kv = kv();
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        v.store(&expiring("101", None)).await.unwrap();
+        let mut record = raw_json(&kv, "waba/101").await;
+        assert_eq!(record["expires_at"], serde_json::Value::Null);
+        record.as_object_mut().unwrap().remove("expires_at");
+        put_json(&kv, "waba/101", &record).await;
+        let got = v
+            .token_expiry(&WabaId::new("101").unwrap(), DEFAULT_EXPIRY_LEAD)
+            .await
+            .unwrap();
+        assert_eq!(got, Some(TokenExpiry::Never));
+    }
+
+    #[tokio::test]
+    async fn the_expiry_check_refuses_what_is_not_this_wabas_record() {
+        let kv = kv();
+        let v = vault(&kv, VaultKeys::new(key("k1", 7)));
+        v.store(&expiring("101", Some(T0 + DAY))).await.unwrap();
+        // Copied over another WABA's entry: `get` fails to decrypt it, and
+        // the expiry check refuses it rather than report the other's time.
+        let copied = raw_json(&kv, "waba/101").await;
+        put_json(&kv, "waba/102", &copied).await;
+        let w102 = WabaId::new("102").unwrap();
+        assert!(matches!(
+            v.get(&w102).await,
+            Err(Error::Crypto(CryptoError::Decrypt))
+        ));
+        assert!(matches!(
+            v.token_expiry(&w102, DEFAULT_EXPIRY_LEAD).await,
+            Err(Error::Crypto(CryptoError::Malformed(_)))
+        ));
+        // Another record version.
+        let mut future = copied.clone();
+        future["v"] = 2.into();
+        put_json(&kv, "waba/101", &future).await;
+        assert!(matches!(
+            v.token_expiry(&WabaId::new("101").unwrap(), DEFAULT_EXPIRY_LEAD)
+                .await,
+            Err(Error::Crypto(CryptoError::Malformed(_)))
+        ));
+        // Not a record at all.
+        put_json(&kv, "waba/103", &serde_json::json!({})).await;
+        assert!(matches!(
+            v.token_expiry(&WabaId::new("103").unwrap(), DEFAULT_EXPIRY_LEAD)
+                .await,
+            Err(Error::Storage(StorageError::Corrupt { .. }))
+        ));
     }
 }

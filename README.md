@@ -247,10 +247,11 @@ coding agents of those apps: the `meta-whatsapp-rs-server` skill.
 | `memory` | yes | `MemoryKvStore`, `MemoryConversationStore`: tests, development, one instance |
 | `sinks` | yes | channel, broadcast, fan-out, filter, fn and tracing sinks |
 | `postgres` | | `PostgresKvStore`, `PostgresConversationStore`, embedded migrations (sqlx) |
-| `redis` | | `RedisKvStore` |
+| `redis` | | `RedisKvStore`, and `RedisTls` for `rediss://` (aws-lc-rs, never the process default) |
 | `axum` | | `webhooks::router` (webhook endpoint) and `webhooks::sse` (live inbox stream) |
 | `typst` | | `meta_whatsapp_rs::typst`: invoice, receipt and voucher templates → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto (aws-lc-rs) |
+| `ffmpeg` | | `adapters::media::FfmpegConverter`: media conversion (a recording into a voice message's Ogg Opus) by an `ffmpeg` you install; nothing is linked |
 | `bot` | | `meta_whatsapp_rs::bot`: a bot framework (commands, guards, cooldowns, middleware, plugins, Markdown replies, paced broadcasts) |
 | `testing` | | `core::testing::ScriptedTransport` for your own tests (enable in `[dev-dependencies]`) |
 | `full` | | all of the above |

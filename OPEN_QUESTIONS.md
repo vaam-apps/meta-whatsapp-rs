@@ -110,6 +110,32 @@ of its own, after an HTML comment; keep that when you add one.
    add a refresh, a refresher behind a trait slots in. Roadmap L11e (the
    library's signal) and M3e (the service's event).
 
+   **Landed with roadmap L11e (2026-11-01), the library's side, its
+   choices proposed to the coordinator (owner's delegation):**
+   `TokenVault::token_expiry(waba_id, lead)` reports a stored token as
+   `TokenExpiry::Never` (no `expires_at`), `Fresh`, `ExpiresSoon`
+   (`now + lead` included: a boundary token is warned about, not missed)
+   or `Expired` (`expires_at <= now`, as `is_expired`), on the vault's
+   clock. The lead is the caller's, per call; `DEFAULT_EXPIRY_LEAD` is 7
+   days: business tokens default to never expiring
+   (`facebook-login/facebook-login-for-business`), and one generated to
+   expire lasts 60 days, so a week leaves time to run Embedded Signup
+   again. It reads the record's clear `expires_at`, not the sealed one:
+   no key, no token in memory, no write, and the stored format
+   unchanged; the clear copy is not authenticated (whoever writes the
+   store can change the answer, as they can delete the record), so
+   `StoredBusinessToken::expiry` answers on the decrypted record for a
+   caller who wants the authenticated copy. A per-record check, not a
+   listing: the vault cannot enumerate its records, so the caller walks
+   its own WABAs (the service, its bindings). The answer is stateless:
+   notifying once per `(waba_id, expires_at)` is the caller's (M3e's).
+   Not recorded, so not reported: `debug_token`'s
+   `data_access_expires_at` (0 for business tokens in Meta's examples);
+   adding it would change the stored record. Swappable: the lead per
+   call, and the classification is one function (`TokenExpiry::at`) a
+   caller can replace on `expires_at`. Roadmap L11e (landed); the
+   service's event, M3e.
+
 9. **Vault key custody and rotation cadence.** The integrator supplies the
    AES-256 key(s); rotation is supported but not scheduled.
 
@@ -136,6 +162,31 @@ of its own, after an HTML comment; keep that when you add one.
     `appsecret_proof` instead of a code exchange, and the steps after it
     are the existing ones (verify, store, subscribe, register). Swappable:
     both are opt-in, and the code-exchange flow is unchanged. Roadmap L11a.
+
+    **Landed with roadmap L11a (2026-11-01), the library's side, its
+    choices the coordinator's (owner's delegation):**
+    `EmbeddedSignup::onboard_hosted` (and `_with_approval`) takes a `HostedSignup` (the webhook's
+    `waba_info.waba_id` and `owner_business_id`) and the system user
+    token as an explicit argument; the app secret is the
+    `AppCredentials`' one. The token request is `fetch_only=true`, as
+    `hosted-es` step 5 sends it (a fetch is replayed as a read, a
+    generation never is); a WABA whose owner, as Meta reports it, is
+    another business than the webhook's is refused (when Meta reports
+    none, none is stored, as in the code flow); `debug_token` runs on
+    the fetched token, assuming hosted signup's business tokens carry
+    `granular_scopes` naming the WABA (one that does not fails closed);
+    a WABA the vault already holds is refused before any request,
+    because `PARTNER_ADDED` also comes for code-flow and coexistence
+    onboardings and redeliveries, and storing again would replace the
+    held token unasked. The integrator's, documented: re-onboarding a
+    held WABA (delete it first), the tenant binding (in the approval:
+    the webhook names no tenant) and the PIN (the hosted page asks for
+    none; as #4 keeps, nothing generates or stores it). Hosted signup
+    reuses the code flow's steps and vault record, so nothing new is
+    stored. Swappable by `HostedSignup::token_request` (the request) and
+    by not calling `onboard_hosted` (the code flow is unchanged); the
+    held-WABA refusal by deleting the record first. Roadmap L11a
+    (landed); the service's side, M3f.
 
 12. **Launch option shape.** `pre-filled-data` shows
     `whatsAppBusinessAccount` both as `{ids: …}` and `{id: [...]}`; the code
@@ -194,6 +245,33 @@ of its own, after an HTML comment; keep that when you add one.
     redis-rs cannot take an explicit provider, integrator-built
     connections stay the way, documented. Swappable: an integrator can
     still pass its own connection. Roadmap L21c.
+
+    **Confirmed 2026-11-01 (coordinator, owner's delegation; roadmap
+    L21c landed):** redis-rs 1.7 cannot take an explicit provider (its
+    rustls path always calls `rustls::ClientConfig::builder()`, and
+    nothing of it accepts a `ClientConfig` or a connector), but it takes
+    any stream (`MultiplexedConnection::new_with_config`), so `rediss://`
+    is wired anyway rather than left to integrator-built connections:
+    `store::RedisTls` builds the `ClientConfig` on
+    `rustls::crypto::aws_lc_rs::default_provider()`, does the handshake
+    with tokio-rustls and hands the stream to that constructor, none of
+    redis-rs's TLS features enabled. The platform's trust store
+    (`rustls-platform-verifier`, as reqwest does) is the default; a
+    private CA or a client certificate is given as PEM. It stays under
+    the existing `redis` feature. `ring` is linked into the workspace's
+    test builds only, through the adapters' rustls dev-dependency, so the
+    tests run in the binary where the process default panics; no library
+    build links it (`cargo tree -e normal -p meta-whatsapp-adapters
+    --features redis -i ring` finds nothing). The test Redis requires
+    client certificates, and its certificates are generated
+    (`tools/test-tls/generate.sh`, and rcgen in the in-process tests),
+    none committed. Why: the decision of 2026-09-26 asked for an explicit
+    provider handed to the connection, and handing redis-rs a stream
+    delivers exactly that without waiting on redis-rs. Swappable by
+    `RedisTls::from_client_config` (any `ClientConfig`: your provider,
+    your verifier) or by an integrator-built connection passed to
+    `RedisKvStore::new`. Not covered: Cluster and Sentinel over TLS.
+    Roadmap L21c (landed).
 
 ## Security posture
 

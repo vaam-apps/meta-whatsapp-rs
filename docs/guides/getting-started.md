@@ -62,7 +62,8 @@ anyhow = "1"
 - Rust **1.98.1** or newer, edition 2024.
 - Defaults are `reqwest` (the HTTP transport), `memory` (in-process stores)
   and `sinks`. Add `postgres`, `redis`, `axum` (webhook router and SSE),
-  `typst` (documents) or `flows-endpoint` as needed; `full` enables all. The
+  `typst` (documents), `flows-endpoint` or `ffmpeg` (media conversion, with
+  an `ffmpeg` you install) as needed; `full` enables all. The
   table is in the [README](../../README.md#feature-flags).
 - Types from sqlx, axum and redis cross the API (`PgPool`, `axum::Router`,
   a redis connection). Use the versions meta-whatsapp-rs was built with, re-exported:
@@ -71,8 +72,8 @@ anyhow = "1"
   `meta_whatsapp_rs::adapters::store::redis` (feature `redis`), as the examples do;
   then there is nothing to pin. If you need axum features meta-whatsapp-rs does not
   turn on, add `axum = "0.8"` with them yourself: Cargo builds one axum 0.8
-  for both (likewise `redis = "1"` with `tokio-rustls-comp` for
-  `rediss://`).
+  for both. `rediss://` needs no redis feature of yours:
+  `meta_whatsapp_rs::adapters::store::RedisTls` does the TLS.
 
 ## 3. Send a first message
 

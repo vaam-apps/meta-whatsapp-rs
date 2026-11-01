@@ -21,16 +21,25 @@ test:
 # `live_`: its unit and skill tests have names containing `live_`
 # (`…_live_duplicates_…`, the `live_updates` skill), which would keep its count
 # above zero with no live test run. Uses META_WHATSAPP_RS_TEST_POSTGRES_URL /
-# META_WHATSAPP_RS_TEST_REDIS_URL when set (the devcontainer sets them to its sidecars),
-# otherwise starts compose.test.yaml. META_WHATSAPP_RS_REQUIRE_LIVE=1 turns a missing
-# service into a failure instead of a skip.
+# META_WHATSAPP_RS_TEST_REDIS_URL / META_WHATSAPP_RS_TEST_REDISS_URL when set (the
+# devcontainer sets them to its sidecars), otherwise generates the test-only
+# TLS certificates (tools/test-tls/generate.sh, into .test-tls/) and starts
+# compose.test.yaml. The `rediss://` tests (roadmap L21c) also read the PEM
+# files in META_WHATSAPP_RS_TEST_REDISS_CA, `…_CLIENT_CERT` and `…_CLIENT_KEY`.
+# META_WHATSAPP_RS_REQUIRE_LIVE=1 turns a missing service into a failure
+# instead of a skip.
 test-live:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -z "${META_WHATSAPP_RS_TEST_POSTGRES_URL:-}" ] || [ -z "${META_WHATSAPP_RS_TEST_REDIS_URL:-}" ]; then
+    if [ -z "${META_WHATSAPP_RS_TEST_POSTGRES_URL:-}" ] || [ -z "${META_WHATSAPP_RS_TEST_REDIS_URL:-}" ] || [ -z "${META_WHATSAPP_RS_TEST_REDISS_URL:-}" ]; then
+        tools/test-tls/generate.sh
         docker compose -f compose.test.yaml up -d --wait
         export META_WHATSAPP_RS_TEST_POSTGRES_URL="postgres://wa:wa@127.0.0.1:55432/wa"
         export META_WHATSAPP_RS_TEST_REDIS_URL="redis://127.0.0.1:56379"
+        export META_WHATSAPP_RS_TEST_REDISS_URL="rediss://localhost:56380"
+        export META_WHATSAPP_RS_TEST_REDISS_CA="$PWD/.test-tls/ca.crt"
+        export META_WHATSAPP_RS_TEST_REDISS_CLIENT_CERT="$PWD/.test-tls/client.crt"
+        export META_WHATSAPP_RS_TEST_REDISS_CLIENT_KEY="$PWD/.test-tls/client.key"
     fi
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-adapters --all-features live_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-rs --all-features live_postgres_ -- --test-threads=4
@@ -43,10 +52,12 @@ test-live-down:
 
 # Drop what live tests left on the test services: `wa_test_*` databases and
 # `wa_test_*` / `wa_server_test_*` schemas on Postgres, `wa-test:*` keys on
-# Redis. The live tests delete their own, when they panic too (the
-# adapters' tests/common PgCleanup and RedisCleanup, the server's TestDb);
-# this clears older runs and killed ones (SIGKILL and abort skip Drop). Uses META_WHATSAPP_RS_TEST_POSTGRES_URL
-# and META_WHATSAPP_RS_TEST_REDIS_URL when set (the devcontainer's sidecars),
+# Redis and the TLS Redis. The live tests delete their own, when they panic too (the
+# adapters' tests/common PgCleanup and RedisCleanup, tests/redis_tls.rs's
+# RedissCleanup, the server's TestDb);
+# this clears older runs and killed ones (SIGKILL and abort skip Drop). Uses META_WHATSAPP_RS_TEST_POSTGRES_URL,
+# META_WHATSAPP_RS_TEST_REDIS_URL and META_WHATSAPP_RS_TEST_REDISS_URL (with
+# its CA and client files) when set (the devcontainer's sidecars),
 # otherwise the compose.test.yaml servers. Not during a live run: it would
 # delete that run's objects too.
 #
@@ -82,16 +93,36 @@ test-live-clean:
     else
         redis=(docker compose -f compose.test.yaml exec -T redis redis-cli)
     fi
+    # The TLS Redis: its variables when set, compose.test.yaml's when the
+    # plain Redis is too, none otherwise (a devcontainer built before it).
+    if [ -n "${META_WHATSAPP_RS_TEST_REDISS_URL:-}" ]; then
+        rediss=(redis-cli -u "$META_WHATSAPP_RS_TEST_REDISS_URL" --tls
+            --cacert "$META_WHATSAPP_RS_TEST_REDISS_CA"
+            --cert "$META_WHATSAPP_RS_TEST_REDISS_CLIENT_CERT"
+            --key "$META_WHATSAPP_RS_TEST_REDISS_CLIENT_KEY")
+    elif [ -z "${META_WHATSAPP_RS_TEST_REDIS_URL:-}" ]; then
+        rediss=(docker compose -f compose.test.yaml exec -T redis-tls redis-cli --tls -p 6380
+            --cacert /tls/ca.crt --cert /tls/client.crt --key /tls/client.key)
+    else
+        rediss=()
+    fi
     # One script, so no key name goes through a shell or xargs.
-    deleted=$("${redis[@]}" --no-raw EVAL "
+    script="
       local n, cursor = 0, '0'
       repeat
         local page = redis.call('SCAN', cursor, 'MATCH', ARGV[1], 'COUNT', 1000)
         cursor = page[1]
         for _, key in ipairs(page[2]) do n = n + redis.call('DEL', key) end
       until cursor == '0'
-      return n" 0 'wa-test:*')
+      return n"
+    deleted=$("${redis[@]}" --no-raw EVAL "$script" 0 'wa-test:*')
     echo "test-live-clean: deleted ${deleted#(integer) } Redis keys"
+    if [ "${#rediss[@]}" -gt 0 ]; then
+        deleted=$("${rediss[@]}" --no-raw EVAL "$script" 0 'wa-test:*')
+        echo "test-live-clean: deleted ${deleted#(integer) } keys on the TLS Redis"
+    else
+        echo "test-live-clean: no TLS Redis (META_WHATSAPP_RS_TEST_REDISS_URL is not set)"
+    fi
 
 # Formatting and clippy, warnings are errors. `.xtask` is a workspace of its
 # own (see .xtask/Cargo.toml), so it is checked by manifest path.
@@ -140,6 +171,7 @@ features:
     cargo check -p meta-whatsapp-adapters --no-default-features --features reqwest
     cargo check -p meta-whatsapp-adapters --no-default-features --features postgres
     cargo check -p meta-whatsapp-adapters --no-default-features --features redis
+    cargo check -p meta-whatsapp-adapters --no-default-features --features ffmpeg
     cargo check -p meta-whatsapp-webhooks --no-default-features --all-targets
     cargo check -p meta-whatsapp-webhooks --features axum
     cargo check -p meta-whatsapp-client --no-default-features
@@ -154,6 +186,7 @@ features:
     cargo check -p meta-whatsapp-rs --no-default-features --features axum
     cargo check -p meta-whatsapp-rs --no-default-features --features typst
     cargo check -p meta-whatsapp-rs --no-default-features --features flows-endpoint
+    cargo check -p meta-whatsapp-rs --no-default-features --features ffmpeg
     cargo check -p meta-whatsapp-rs --no-default-features --features bot
     cargo check -p meta-whatsapp-rs
     cargo check -p meta-whatsapp-server-core

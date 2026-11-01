@@ -119,8 +119,10 @@ is gone).
   an `ErrorKind::Authentication` (190) on a merchant's calls means running
   Embedded Signup again
   ([OPEN_QUESTIONS.md #8](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants),
-  decided on 2026-09-26: no refresh; the expiry is to be surfaced before
-  it lapses, roadmap L11e).
+  decided on 2026-09-26: no refresh). Ahead of the lapse,
+  `vault.token_expiry(&waba_id, DEFAULT_EXPIRY_LEAD)` reports a
+  `TokenExpiry` (`is_due()` within 7 days) from the clear metadata,
+  nothing decrypted (roadmap L11e).
 - No key custody or rotation schedule: custody stays yours, rotation on
   demand, at least yearly (#9, decided); and no tenant mapping: one WABA
   shared by two of your tenants is your product's call (#6, decided:

@@ -59,7 +59,7 @@ condition: every choice stays swappable. The rule:
 | `just lint` | `cargo fmt --check` + clippy (pedantic, `-D warnings`) |
 | `just test` | unit + in-process tests; `live_*` tests *skip* here |
 | `just test-live` | adapter, facade (the inbox's `live_postgres_*` tests) and service (`meta-whatsapp-server`, and the Postgres backend's `meta-whatsapp-server-store-postgres`) tests against real Postgres + Redis, with `META_WHATSAPP_RS_REQUIRE_LIVE=1` so a missing service **fails** |
-| `just test-live-clean` | drops the `wa_test_*` databases and `wa_test_*` / `wa_server_test_*` schemas live runs left on the test Postgres, and their `wa-test:*` keys on the test Redis (killed runs; a panicking live test deletes its own); not during a live run |
+| `just test-live-clean` | drops the `wa_test_*` databases and `wa_test_*` / `wa_server_test_*` schemas live runs left on the test Postgres, and their `wa-test:*` keys on the test Redis and the TLS Redis (killed runs; a panicking live test deletes its own); not during a live run |
 | `just doc` | rustdoc with `-D warnings` (broken intra-doc links fail) |
 | `just features` | each adapter feature compiled alone |
 | `just skills-check` | every consumer skill's `Verified against meta-whatsapp-rs <sha>` stamp is a commit in HEAD's history, directly or listed as `Squashed-commit:` by a squash commit on main (the rest of the skill checks run in `just test`: `crates/meta-whatsapp-rs/tests/skills.rs`) |

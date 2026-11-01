@@ -51,7 +51,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
-| last | P1, P2 (payments) |
+| last | P1a–P1c, P2 (payments) |
 
 ## 1. The service's modular split (design §8, D26)
 
@@ -1821,7 +1821,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     Business node documents, not from the WABA the guide's request prints
     (its prose asks for a business id); a non-2xx answer to the token
     request never quotes its body.
-- [ ] **L11a. Hosted Embedded Signup** (`meta-whatsapp-client`,
+- [x] **L11a. Hosted Embedded Signup** (`meta-whatsapp-client`,
   `client::embedded_signup`; row 121; OPEN_QUESTIONS #11): started by the
   `PARTNER_ADDED` webhook, its business token from
   `system_user_access_tokens` with an `appsecret_proof`, then the
@@ -1832,6 +1832,62 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     carrying the `appsecret_proof` of the app secret (a wrong proof fails
     the test's request assertion), and to the same stored record the
     code flow writes.
+  - **Landed:** row 121 done in the library (the service's side stays
+    with M3f). `HostedSignup` (the webhook's `waba_info.waba_id` and
+    `owner_business_id`, and the token request, `fetch_only` by
+    default) and `EmbeddedSignup::onboard_hosted` /
+    `onboard_hosted_with_approval`: step `fetch_token`
+    (`Business::system_user_access_token` on the customer's portfolio,
+    with the system token passed in and the app secret of
+    `AppCredentials`, borrowed) in place of `exchange_code`, then the
+    code flow's steps, shared with it (`onboard_granted`); `verify_assets`
+    also refuses a WABA whose owner, as Meta reports it, is another
+    business than the webhook's. Resumed by `resume` with
+    `OnboardingRequest::for_hosted`. The decisive tests, in
+    `embedded_signup::hosted`:
+    `a_partner_added_fetches_the_token_with_the_proof_and_onboards`
+    (the form body exactly, the proof both a fixed vector computed with
+    `openssl dgst -sha256 -hmac` and an HMAC the test computes),
+    `a_wrong_app_secret_sends_another_proof`,
+    `the_stored_record_is_the_code_flows` (the same keys, clear fields
+    and sealed record but the random nonce), a failure at each step
+    before `store_token` re-run and after it resumed,
+    `a_fetch_is_replayed_and_a_generation_is_not`; and through the
+    webhook parser, the skill's `hosted_signup.rs` (Meta's
+    `PARTNER_ADDED` example, verbatim). Found on the way: the webhook
+    names no tenant and also comes for code-flow onboardings, and the
+    hosted page asks for no PIN; both are the integrator's, documented
+    in the guide. Found in review: `PARTNER_ADDED` comes for every WABA
+    shared with the app (the code flow's and coexistence's onboardings
+    too) and may be delivered again, and `store_token` replaces a
+    record (as the code flow's re-onboarding must), so a hosted run
+    after a code-flow onboarding would have replaced its token and
+    `created_at` (and with it a Solution Partner's recorded approval)
+    unasked; `onboard_hosted` now refuses a WABA the vault holds,
+    before any request (a presence read, an unreadable record counting
+    as held; `a_waba_the_vault_holds_is_refused_before_any_request`),
+    and re-onboarding one is deleting it first. A read, not a lock: a
+    code-flow onboarding still running when the webhook arrives can
+    store after it; the approval's atomic reservation closes that
+    window, and the rustdoc says so.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): the token
+    request is `fetch_only=true` by default, swapped per signup by
+    `HostedSignup::token_request` (a fetch is replayed as a read, a
+    generation never is); the system user token is an explicit argument
+    of `onboard_hosted`, not held by `EmbeddedSignup`; a WABA whose
+    owner, as Meta reports it, is another business than the webhook's
+    is refused, and when Meta reports no owner none is stored, as in
+    the code flow; `debug_token` runs on the fetched token, on the
+    assumption that hosted signup's business tokens carry
+    `granular_scopes` naming the WABA, as the code exchange's do (one
+    that does not fails `verify_assets` on `granular_scopes`, closed);
+    the integrator's, documented: re-onboarding a WABA already held
+    (delete it first; the library refuses it otherwise), the tenant
+    binding (in the approval) and the PIN; no facade helper (the glue
+    stays in the skill's `hosted_signup.rs`); the skill not re-stamped.
+    The library's side of OPEN_QUESTIONS #11 is decided; the service's
+    is M3f.
 - [ ] **L11b. Several WABAs in one signup** (`client::embedded_signup`;
   row 122; OPEN_QUESTIONS #5): opt-in onboarding of every granted WABA,
   each bound and resumable on its own.
@@ -1860,7 +1916,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a coexistence onboarding requests the sync exactly
     once; with the option off, none; an onboarding without coexistence
     sends none.
-- [ ] **L11e. A token-expiry signal** (`client::embedded_signup`; row 6;
+- [x] **L11e. A token-expiry signal** (`client::embedded_signup`; row 6;
   OPEN_QUESTIONS #8): a configurable lead time before a stored business
   token's `expires_at`.
   - **Kind:** additive.
@@ -1868,6 +1924,32 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** under a fake clock, a token expiring inside the lead
     time is reported and one expiring after it is not; removing the
     comparison fails the test.
+  - **Landed:** row 6 done for the library. `TokenVault::token_expiry(waba_id,
+    lead)` answers, on the vault's clock, with a `TokenExpiry`: `Never`
+    (no `expires_at`: Meta reported none, or `0`), `Fresh`,
+    `ExpiresSoon { expires_at, remaining }` (`now + lead` included) or
+    `Expired` (`expires_at <= now`, as `StoredBusinessToken::is_expired`);
+    `is_due()` is the last two. `DEFAULT_EXPIRY_LEAD` is 7 days (business
+    tokens default to never expiring; one generated to expire lasts 60
+    days). It reads the record's clear `expires_at` only: nothing is
+    decrypted, no key is needed, nothing is written (no re-encryption on
+    read), and the stored format (`wa-rs/token-vault/v1`) is unchanged;
+    the clear copy is not authenticated, so `StoredBusinessToken::expiry`
+    gives the same answer on a token `get` decrypted. A record naming
+    another WABA or of another version is refused. The vault cannot list
+    its records: the caller walks the WABAs it holds, and M3e walks the
+    service's bindings as its vault rotation does. The decisive tests, in
+    `embedded_signup::vault`:
+    `a_token_inside_the_lead_is_reported_and_one_after_it_is_not` (a
+    `ManualClock`; inside, outside, exactly at the lead, expired, at
+    `now`, absent; the clock moved across the boundary) and
+    `the_boundaries_of_the_lead_time`; with
+    `the_expiry_check_decrypts_nothing_and_writes_nothing` (a record
+    under a key the vault lacks still answers; a record under a previous
+    key is not rewritten), `an_absent_expiry_never_expires` and
+    `the_expiry_check_refuses_what_is_not_this_wabas_record`. Removing
+    the lead comparison, `<` for `<=` at either boundary, and an absent
+    expiry read as expired each fail them.
 - [x] **L12. Partners** (`meta-whatsapp-client`, new client modules; rows
   144, 145): Multi-Partner Solutions (create, accept, reject,
   deactivation, the solution token, an app's solutions and connected
@@ -2312,7 +2394,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     resolved (references, payload schemas, `__example__` types, form
     names), component types per Flow JSON version, and the limits the
     docs call soft (`NavigationList` content truncated or not rendered).
-- [ ] **L19. Media conversion** (`meta-whatsapp-client`: a
+- [x] **L19. Media conversion** (`meta-whatsapp-client`: a
   `MediaConverter` trait; `meta-whatsapp-adapters`: an implementation
   behind an `ffmpeg` feature, off by default; row 48): the
   implementation runs an `ffmpeg` the integrator installs, or calls a
@@ -2325,6 +2407,104 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a WAV input comes out as Ogg with Opus that
     `Media::upload`'s type check accepts; a missing `ffmpeg` is a typed
     error, not a panic.
+  - **Landed:** the port `meta_whatsapp_core::media::MediaConverter`,
+    an object-safe async trait, `convert(MediaInput, TargetFormat) ->
+    Result<ConvertedMedia>`, with `TargetFormat::OggOpus` (mono Ogg
+    Opus, uploaded as `audio/ogg`: Meta's media page reads "OPUS codecs
+    only; base audio/ogg not supported; mono input only", read on
+    2026-11-01) and its limit, core's `media::AUDIO_MAX_BYTES` (16 MiB);
+    `meta_whatsapp_client::media` re-exports them and uploads a result
+    with `Media::upload_converted` (its format's type and extension,
+    through `validate_upload`); and `meta_whatsapp_adapters::media::FfmpegConverter`
+    behind the adapters' `ffmpeg` feature (forwarded by the facade's;
+    off by default; in `full`). The converter starts the `ffmpeg` binary
+    with `tokio::process`, never a shell, with fixed literal arguments:
+    the input on stdin and the result on stdout, `-protocol_whitelist
+    pipe` and a `-format_whitelist` of recording formats (WAV, MP3, Ogg,
+    FLAC, AAC, MP4/M4A/3GP, AMR, Matroska/WebM) before `-i`, the first
+    audio stream only, tags and chapters dropped, `-ac 1`, libopus at
+    32 kb/s. The input (64 MiB) and the run (60 s, killed past it) are
+    bounded, and the result to the 16 MiB upload limit (killed past it);
+    stderr is drained and withheld; the output is checked to be mono Ogg
+    Opus. Failures are a new node, `Error::Conversion(ConversionError)`
+    (`BinaryMissing`, `EncoderMissing`, `Timeout`, `InputRejected`,
+    `OutputInvalid`, `Killed`; architecture.md § Error tree), never
+    `may_have_been_sent`, retryable only on `Timeout`; an empty or
+    oversized input (or result) is a `ValidationError` on `input`.
+    `FfmpegConverter::check` finds a missing binary or libopus at
+    startup. Decisive: `ffmpeg_turns_wav_into_ogg_opus_that_upload_accepts`
+    (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`, in the facade, where the
+    adapters and the client meet: a stereo 44.1 kHz WAV comes out as Ogg
+    whose first packet is an `OpusHead` for one channel, ffprobe
+    agreeing, and goes through `Media::upload_converted` as `audio/ogg`,
+    its exact request asserted) and `a_missing_ffmpeg_is_a_typed_error`
+    (`ConversionError::BinaryMissing`). The real-`ffmpeg` tests use
+    `META_WHATSAPP_RS_TEST_FFMPEG`, else `ffmpeg` on `PATH`, and skip
+    without one unless `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`; CI installs
+    `ffmpeg` on its runner and sets that variable
+    (`.github/workflows/ci.yml`, docs/dev-environment.md), so they count
+    there; no image or dev container carries one. They ran against
+    ffmpeg 6.1.1 when this landed. Removing the protocol or format
+    whitelist, mono, the timeout, the kill on timeout, an input or
+    output bound or the output check, or withholding stderr, changing
+    the codec, or a timeout that says `may_have_been_sent`, fails a test
+    (the protocol whitelist only the fixed-argument one: with these
+    formats, ffmpeg 6.1.1 opens nothing else from a pipe even without
+    it, so it is a second wall, not the first). The security review
+    added: the child's environment reduced to `PATH` (no `FFREPORT` log
+    file), `-max_alloc 16777216` (a 16 KiB WAV declaring 1 Hz otherwise
+    took 1.7 GB and a minute), `-abort_on empty_output` (an input
+    without audio came back as an empty voice note), an MP4 whose index
+    follows its media data moved index first in memory (from a pipe,
+    ffmpeg read next to nothing of one longer than a few seconds, and
+    the converter returned it as success), and real-`ffmpeg` tests for
+    each, one of them an MP4 whose data reference names a host file,
+    never read.
+    Not done: images into stickers and resizing (L19b), a conversion
+    sidecar over HTTP, and a limit on conversions at once (the caller's).
+  - **Decided** (coordinator, under the owner's delegation, 2026-11-01;
+    each swappable):
+    - The trait lives in `meta-whatsapp-core`, beside the other ports,
+      not in the client as planned: the adapters then depend on core
+      alone, with no dependency cycle through the client's tests. Core
+      carries the MIME type, the extension and the size limit of each
+      format; the client re-exports the port from `client::media`, and a
+      client test keeps core's limit equal to its upload table.
+    - The upload MIME type is `audio/ogg`, the literal of Meta's table,
+      not `audio/ogg; codecs=opus` (the upload check takes both).
+    - Failures get a typed node, `Error::Conversion(ConversionError)`,
+      with existing kinds (no new `ErrorKind`: the service's error codes
+      and OpenAPI document are unchanged); a missing binary is
+      `ConversionError::BinaryMissing`, not a `ConfigError`, so every
+      converter failure is handled in one place; an empty or oversized
+      input stays a `ValidationError` on `input`.
+    - Defaults: 64 MiB of input, 60 s, 32 kb/s at 48 kHz in `voip` mode,
+      the recording formats above (each a setting or a literal of the
+      converter, swapped by another `MediaConverter`).
+    - The facade's `ffmpeg` feature is in `full`; the gate variables are
+      `META_WHATSAPP_RS_REQUIRE_FFMPEG`, `META_WHATSAPP_RS_TEST_FFMPEG`
+      and `META_WHATSAPP_RS_TEST_FFPROBE`, apart from
+      `META_WHATSAPP_RS_REQUIRE_LIVE` (no `live_` test name).
+    - Row 48 stays partial, its rest planned in L19b.
+    - CI proves the conversion: its runner installs `ffmpeg`, which no
+      image or dev container does.
+- [ ] **L19b. Stickers and image resizing** (`meta-whatsapp-core`: new
+  `TargetFormat`s; `meta-whatsapp-adapters`: their conversion behind the
+  `ffmpeg` feature, or another converter; row 48): an image into a WebP
+  sticker within Meta's limits (`image/webp`, 100 KB static, 500 KB
+  animated: `messages/sticker-messages`, which gives no dimensions, so
+  none is assumed), and a JPEG or PNG resized or
+  re-encoded under the 5 MB image limit, through the same port and the
+  same safety rules as L19 (fixed arguments, input formats restricted,
+  bounded, diagnostics withheld).
+  - **Kind:** additive.
+  - **After:** L19.
+  - **Decisive:** a PNG comes out as a static WebP (its `RIFF`/`WEBP`
+    header read apart from the converter) within 100 KB that
+    `Media::upload`'s type check accepts as a sticker, and a JPEG over
+    5 MB comes out under it, both against a real
+    converter in CI; a GIF or a crafted file off the format list is a
+    `ConversionError::InputRejected`.
 - [ ] **L20a. One catch-all shape for open enums** (`meta-whatsapp-core`
   and every crate with an open enum; OPEN_QUESTIONS #27): `Other(String)`,
   generated by one macro in core.
@@ -2597,7 +2777,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     OPEN_QUESTIONS #31 is closed and deleted (CHANGELOG). No parity row
     changes: parity row 10 already counted `webhooks::sse` and
     `BroadcastSink` as done.
-- [ ] **L21c. `rediss://`** (`meta-whatsapp-adapters`, feature `redis`;
+- [x] **L21c. `rediss://`** (`meta-whatsapp-adapters`, feature `redis`;
   OPEN_QUESTIONS #19): an explicit aws-lc-rs provider handed to the
   connection, never the process default; if redis-rs cannot take one,
   integrator-built connections stay the way, documented.
@@ -2608,6 +2788,66 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     binary linking both `ring` and aws-lc-rs with no process default
     installed (the case that panics today); handing the connection the
     process default instead makes that test panic.
+  - **Landed:** redis-rs 1.7 cannot take a provider (its rustls path
+    always calls `ClientConfig::builder()`) but takes any stream, so
+    `store::RedisTls` does the TLS itself: a `ClientConfig` on
+    `aws_lc_rs::default_provider()` (the platform's roots, or the CAs of
+    `root_certificates_pem`; `client_auth_pem` for mutual TLS;
+    `from_client_config` for your own), the handshake with tokio-rustls,
+    the stream to `MultiplexedConnection::new_with_config`, and a
+    `RedisTlsConnection` for `RedisKvStore::new` that reconnects on its
+    own; none of redis-rs's TLS features is enabled. The test binaries
+    link `ring` too (an adapters dev-dependency, rustls with both
+    providers). The decisive test is
+    `live_rediss_store_connects_with_both_providers_and_no_default`
+    (`tests/redis_tls.rs`: the key/value conformance suite over TLS,
+    asserting before and after that no process default is installed),
+    against compose.test.yaml's `redis-tls` (TLS only, client
+    certificates required, test-only certificates generated by
+    `tools/test-tls/generate.sh`). Building on the process default
+    (`ClientConfig::builder()`) panics it and every other test of that
+    binary, the non-live
+    `builds_on_aws_lc_rs_with_both_providers_linked_and_no_default`
+    included; the library installing a default fails them on the
+    no-default assertion; taking the process default when one is
+    installed (reqwest's rule) fails
+    `uses_aws_lc_rs_when_the_process_default_is_ring`
+    (`tests/redis_tls_ring_default.rs`, which installs `ring`). The
+    sentinel `tests/redis_tls_process_default.rs` (`#[should_panic]`)
+    proves those binaries are the hostile case: without `ring` linked,
+    `builder()` would install aws-lc-rs quietly and it fails. Also live:
+    an untrusted server and a missing client certificate are refused, and
+    a killed connection is replaced on the next command. Not covered:
+    Cluster and Sentinel over TLS.
+  - **Review (2026-11-01):** the live tests share one Redis whose
+    certificate names every host they use, so a verifier that ignored
+    the name passed them all. `tests/redis_tls_handshake.rs` runs
+    `RedisTls` against an in-process TLS server (certificates made per
+    test by rcgen, a dev-dependency): a trusted certificate for another
+    name is refused, an IP host is checked against IP SANs only
+    (`an_ip_host_is_checked_against_ip_sans_only`), an untrusted issuer
+    is refused, the connection timeout bounds a stalled handshake and a
+    stalled setup, a reconnect sends `AUTH` and `SELECT` again and
+    replays nothing, and eight commands that find the connection gone
+    share one failed attempt
+    (`concurrent_commands_share_one_failed_reconnect_attempt`). PEM
+    errors no longer quote the offending line (a client chain can be a
+    combined file holding the key). Left untested: the generation check
+    that keeps a late error from an old connection from discarding its
+    replacement (no deterministic way to deliver that error late).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation; each swappable as noted): TLS through a stream handed to
+    `MultiplexedConnection::new_with_config`, rather than leaving
+    `rediss://` to integrator-built connections (an integrator's own
+    connection still goes to `RedisKvStore::new`); the platform's roots
+    by default (`root_certificates_pem` replaces them,
+    `from_client_config` takes any configuration); TLS under the
+    existing `redis` feature, not a feature of its own; `ring` allowed in
+    the workspace's test builds through the adapters' rustls
+    dev-dependency only, never in a library build (`cargo tree -e normal
+    -p meta-whatsapp-adapters --features redis -i ring` finds nothing);
+    the test Redis requires client certificates; its certificates are
+    generated, none committed (OPEN_QUESTIONS #19).
 - [ ] **L22a. `llms.txt` and a `doctor`** (docs; the service's CLI in
   `meta-whatsapp-server`; row 117): `llms.txt` for the docs, and a
   `doctor` command checking the configuration, the webhook subscription
@@ -2985,18 +3225,95 @@ or WABA fails the family's own cross-tenant test).
 
 ## 5. Payments (last)
 
-- [ ] **P1. A `payments` client module** (`meta-whatsapp-client`; rows
-  38, 141): India (UPI, payment links, order details and order status,
-  onboarding) and Brazil (Pix, Boleto, payment links, one-click), typed,
-  instead of `MessageContent::Raw`; the payment buttons of templates
-  (`order_details`, `payment_request`).
+A `payments` client module (`meta-whatsapp-client`; rows 38, 141):
+India (UPI, payment links, order details and order status, onboarding)
+and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
+`MessageContent::Raw`; the payment buttons of templates (`order_details`,
+`payment_request`). Too large for one pull request, it lands in three:
+
+- [x] **P1a. India: the order messages, the lookup, refunds and
+  onboarding** (`meta-whatsapp-client`; rows 38, 141, partly).
+  `client::messages::Interactive::OrderDetails` and `OrderStatus`
+  (UPI intent links, payment links, payment gateways and the older
+  payment configuration, every documented rule checked first), all
+  re-exported from `client::payments`, with `Client::payments` (the
+  payment lookup, refunds) and `Client::payment_configurations` (list,
+  get, create, regenerate the OAuth link, delete).
   - **After:** nothing.
-  - **Decisive:** exact JSON from `payments/payments-in/*` and
-    `payments/payments-br/*`; the payments pages' webhook examples join
-    the conformance sweep (their manifest status moves from `OutOfScope`
-    to `Typed`).
+  - **Kind:** additive.
+  - **Decisive:** exact JSON, both ways, from
+    `payments/payments-in/upi-intent/dynamic-vpa`,
+    `payments-in/payment-links`, `payments-in/pg`,
+    `payments-in/upi-intent` and `payments-in/onboarding-apis`; a
+    refund, a configuration's creation and an OAuth link are never
+    replayed after a timeout.
+  - **Landed:** `client::payments` (the messages in
+    `client::messages::payments`, re-exported), every example of the
+    five pages an exact-JSON test (`payments/tests.rs`), every rule
+    the pages state checked first. Not checked locally: the subtotal,
+    the expiration's 300-second minimum and the beneficiaries of
+    shipped goods (the module docs say why).
+  - **Review (money, wire format, secrets):** an `order_status`
+    message refuses `pending`, which the `payments-in/pg` parameters
+    table excludes, and checks its `reference_id` as an
+    `order_details` message's; the items' origin and importer are not
+    required with the older `payment_configuration` alone (its page
+    makes them optional); a total above `u64::MAX` is refused as such
+    (`Order::total` sums in `u128`, so nothing overflows; the message
+    no longer says "negative"); a refusal of the two OAuth link
+    endpoints that is not Meta's envelope keeps its status, never its
+    body, and `PaymentOauthLink`'s `Debug` hides the link's path as
+    well as its query (no page says where its credential sits). Tests
+    added for what no test caught: every limit exactly reached, in
+    two-byte characters (`every_limit_is_inclusive_and_counts_characters`),
+    amounts at and beyond `u64::MAX`, the lookup's error example, `.`
+    and `..` as lookup names, a refund not replayed on a server error.
+    Documented: a replayed deletion can answer an error when the first
+    went through, a refund's amount is not compared with what was
+    paid, and the onboarding calls are refused with `131005`.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions): where the pages contradict
+    themselves, the examples win (`payment_settings` an array,
+    `importer_address` an object, `partially_shipped`, `parameters` an
+    object); the subtotal is not checked locally, the total equation
+    is; the header image's `provider` is not modelled; the
+    `order_details` header is an image only; the answers' fields the
+    tables call required but some example leaves out, or another table
+    calls optional, are optional (`merchant_category_code`,
+    `purpose_code`, a transaction's `pg_transaction_id`);
+    `purpose_code` is sent as a string, as both examples do, and a
+    configuration's name has at most 60 characters, an order's limit;
+    the tests put numeric ids where the examples print placeholder
+    names (`the-catalog_id`, `your-media-id`).
+- [ ] **P1b. Brazil** (`meta-whatsapp-client`; rows 38, 141): `BRL`
+  orders (`payment_type` `br`, the `order` object optional, a
+  `reference_id` of 60), the payment settings `pix_dynamic_code`,
+  `payment_link`, `boleto` and `offsite_card_pay`, and the `payment`
+  object of an `order_status` message (whose status may be `pending`
+  in Brazil, which India's check refuses), on P1a's types
+  (`payments/payments-br/orders`, `offsite-pix`, `payment-links`,
+  `boleto`, `one-click-payments`).
+  - **After:** P1a.
+  - **Kind:** additive.
+  - **Decisive:** exact JSON from `payments/payments-br/*`; a `BRL`
+    order checked by Brazil's rules, an `INR` one by India's.
+- [ ] **P1c. The payment template buttons and the payment webhooks**
+  (`meta-whatsapp-client`, `meta-whatsapp-webhooks`; rows 38, 141): a
+  template's `order_details` button and `order_status` component
+  (`payments-in/orderdetailstemplate`, `orderstatustemplate`,
+  `payments-br/orderdetailstemplate`), its `payment_request` button
+  (`payments-br/payment-request-cta`), the creation of these templates
+  (which the service refuses until then), and the status of type
+  `payment` (`payments-in/pg`) and the `payment_method` reply
+  (`payments-br/one-click-payments`) typed.
+  - **After:** P1a, P1b.
+  - **Kind:** additive.
+  - **Decisive:** the payments pages' webhook examples join the
+    conformance sweep (their manifest status moves from `OutOfScope` to
+    `Typed`), with new event data snapshots only (no changed one); exact
+    JSON of the template pages' examples.
 - [ ] **P2. Payment routes in the service** (rows 38, 141).
-  - **After:** P1.
+  - **After:** P1a, P1b, P1c.
   - **Decisive:** M1.3 over the new routes; an order-details send
     carries the tenant's token.
 
