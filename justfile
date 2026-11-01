@@ -36,7 +36,13 @@ test-live:
     set -euo pipefail
     if [ -z "${META_WHATSAPP_RS_TEST_POSTGRES_URL:-}" ] || [ -z "${META_WHATSAPP_RS_TEST_REDIS_URL:-}" ] || [ -z "${META_WHATSAPP_RS_TEST_REDISS_URL:-}" ] || [ -z "${META_WHATSAPP_RS_TEST_MONGODB_URL:-}" ]; then
         tools/test-tls/generate.sh
-        docker compose -f compose.test.yaml up -d --wait
+        if ! docker compose -f compose.test.yaml up -d --wait; then
+            # A service that exits or never turns healthy says why only in
+            # its own log: print the last lines of each before failing.
+            docker compose -f compose.test.yaml ps -a || true
+            docker compose -f compose.test.yaml logs --no-color --tail 40 || true
+            exit 1
+        fi
         export META_WHATSAPP_RS_TEST_POSTGRES_URL="postgres://wa:wa@127.0.0.1:55432/wa"
         export META_WHATSAPP_RS_TEST_REDIS_URL="redis://127.0.0.1:56379"
         export META_WHATSAPP_RS_TEST_REDISS_URL="rediss://localhost:56380"
