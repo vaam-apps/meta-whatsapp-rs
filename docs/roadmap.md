@@ -3143,24 +3143,43 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     `OrderStatus::brl` with a `PaymentUpdate`), India's unchanged; the
     settings `PixDynamicCode` (with `PixFlowType`, Pix with redirect),
     `PaymentSetting::boleto`, `OffsiteCardPay` and the `payment_link`'s
-    `uri` alone; every example of the five pages an exact-JSON test
-    (`payments/tests/brazil.rs`), the decisive pair
+    `uri` alone; every message example of the five pages an exact-JSON
+    test (`payments/tests/brazil.rs`; the one-click page's
+    `payment_method` webhook is P1c's), the decisive pair
     (`a_brl_order_is_checked_by_brazils_rules_and_an_inr_one_by_indias`,
-    `an_order_status_is_checked_by_its_currencys_rules`). Proposed for
-    the coordinator to decide: the fields one currency's pages
-    document and the other's do not are refused (India's beneficiaries,
-    importers, item images, `quick_pay`, a link's success and cancel
-    URLs in `BRL`; Brazil's settings and `payment` update in `INR`);
-    Brazil's subtotal is checked (its page says the sale price counts,
-    its examples keep the rule), India's still not; `payment_settings`
-    are optional in `BRL`, as every Brazil table says; an
-    `order_status` in `BRL` may carry neither an order nor a payment
-    update (no page requires either); `last_four_digits` must be four
-    ASCII digits; none of the new fields is a secret (a Pix code, key,
-    digitable line and card digits are shown to the buyer; a
-    `credential_id` is the merchant's id of a stored card, echoed in a
-    webhook). Not modelled: the `order_status` header Brazil's table
-    lists without fields.
+    `an_order_status_is_checked_by_its_currencys_rules`).
+  - **Review (fields, limits, mutations):** a `BRL` header by media id
+    is refused (Brazil's image object has `link` alone, required; the id
+    is India's), and the item image's refusal is pinned by its reason
+    (`an_item_image_is_refused_in_a_brl_order_as_indias`: Brazil's
+    required `retailer_id` conflicts with an image anyway, so deleting
+    the refusal left every test green), as is the simplified order's
+    header refusal being Brazil's alone
+    (`the_header_rules_are_brazils_only`).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions):
+    1. A field documented for one currency only is refused in the
+       other's orders (India's `payment_configuration`, beneficiaries,
+       header by media id, item images, importers, `quick_pay`, a link's
+       success and cancel URLs and settings in `BRL`; Brazil's settings,
+       `payment_type` `br` and `payment` update in `INR`).
+    2. Brazil's subtotal is checked against `Order::items_sum` (its
+       page says the sale price counts, its examples keep the rule);
+       India's stays unchecked (P1a).
+    3. `payment_settings` are optional in `BRL`: every Brazil table
+       says Optional.
+    4. A `BRL` `order_status` with neither `order` nor `payment` is
+       accepted: no page requires either.
+    5. `last_four_digits` must be exactly four ASCII digits.
+    6. Pix codes and keys, Boleto digitable lines, a card's last four
+       digits and `credential_id` are payment data shown to the buyer
+       or echoed to the merchant, not secrets: no secret type, and
+       `Debug` shows them. Meta's page calls `credential_id` "the ID of
+       the credential" the merchant looks the card up by; the module
+       docs (not Meta's) say never to put a card number or PSP token
+       there.
+    7. The `header` Brazil's `order_status` table lists, with no fields
+       and no example, is not modelled (a gap).
 - [ ] **P1c. The payment template buttons and the payment webhooks**
   (`meta-whatsapp-client`, `meta-whatsapp-webhooks`; rows 38, 141): a
   template's `order_details` button and `order_status` component
