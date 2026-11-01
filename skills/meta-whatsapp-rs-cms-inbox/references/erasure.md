@@ -19,9 +19,14 @@ BSUID after a number change. `erase` reaches one key; erase the person.
    ownership check of the number: an `Inbox` is bound to one number, and
    `Inbox::erase` and `Inbox::identities` refuse another number's key
    before the store is called. A raw `ConversationStore::erase_all`
-   trusts the number it is given.
+   trusts the number it is given. If your webhook handler keeps dead
+   letters (roadmap L21a), `Inbox::erase_all` does not reach them: run
+   step 2 through the facade's `meta_whatsapp_rs::erasure::Eraser`
+   (`Eraser::new(store).with_dead_letters(dead_letters)`, then
+   `erase_all(&phone_number_id, &ids)` behind the same ownership check),
+   which erases both.
 3. **Delete your own copies**: media you downloaded, exports, the
-   service's outbox rows (roadmap M2f); your dead letters (L21a) go with step 2 through the facade's `Eraser`.
+   service's outbox rows (roadmap M2f).
 4. **Delete the customer from Meta's contact book**:
    `PhoneNumber::delete_contact_book_entry(&bsuid)` for each of their
    BSUIDs, with the merchant's client (`with_token`) on any number of the

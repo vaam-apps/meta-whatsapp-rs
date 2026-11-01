@@ -333,7 +333,18 @@ let handler = WebhookHandler::builder(verifier, verify_token, sink)
   conversation store and the letters together
   ([cms-inbox.md § 8](cms-inbox.md#8-erasing-a-customer-and-retention)).
   The letters keep their own index (`KvStore` has no scan), by business
-  number and contact: BSUID first, else the phone number.
+  number and contact, under every identifier the event gives (BSUIDs,
+  parent BSUIDs, phone numbers without `+`), so an erasure that knows
+  the person by one of them reaches the letter. A letter that names
+  nobody (a body that is not JSON) is in no index: only the bounds
+  remove it. A letter dead-lettered while an erasure runs may be indexed
+  after the erasure read the index: erase again, as the erasure
+  procedure's last step says. Do not replay while erasing: a replay
+  hands the event back to your sink.
+- **The sink's error text is stored** with the letter (up to 512 bytes)
+  and returned by `get` and `list`: if your error quotes the value it
+  refused, it holds personal data too (erased with the letter, never
+  logged by the alert).
 - **Fan-out.** `FanoutSink` returns a transient error before a permanent
   one: a batch is dead-lettered only when every failing sink refused it
   for good.

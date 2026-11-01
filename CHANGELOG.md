@@ -234,9 +234,11 @@ stored data, the owner's).
   overwritten), age (14 days: its retention of the personal data an
   event holds) and size (256 KiB per event, a larger one kept without
   its content); `get`, `list`, `remove`, `replay(id, sink)` and
-  `replay_all(sink)` (past the dedup guard) handle the letters, and
+  `replay_all(sink)` (past the dedup guard; a letter whose event no
+  longer decodes is counted as failed, not fatal) handle the letters, and
   `erase(phone_number_id, contacts)` removes a person's through a
-  per-contact index (BSUID first, else the phone number). The facade's
+  per-contact index (every identifier the event gives: BSUIDs, parent
+  BSUIDs, phone numbers). The facade's
   new `meta_whatsapp_rs::erasure::Eraser` erases a person from the
   conversation store and the dead letters together (`Erasure`).
   `FanoutSink` now returns a transient error before a permanent one.
@@ -247,6 +249,7 @@ stored data, the owner's).
   `a_batch_with_one_permanent_failure_delivers_the_others_and_dead_letters_it`,
   `post_is_200_when_a_permanent_failure_is_dead_lettered`,
   `erasing_a_contact_removes_their_dead_letters`,
+  `every_person_a_fixture_event_names_is_indexed`,
   `the_keys_are_pinned_and_hashed`, `the_record_bytes_are_pinned`.
 - **Max price, reach estimates and welcome message sequences**
   (`meta_whatsapp_client::marketing`, roadmap L13, parity rows 137 and

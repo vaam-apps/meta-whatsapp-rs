@@ -2506,9 +2506,10 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     slot `id % capacity`, the oldest overwritten without a scan), 14 days
     per record and index, 256 KiB per stored event (a larger one kept
     without its content). Replay (`replay`, `replay_all`) goes past the
-    dedup guard. Erasure: a per-contact index (BSUID first, else the
-    phone number, per object of the event; keyed by business number and
-    contact, an event with no number under the empty one, which every
+    dedup guard. Erasure: a per-contact index (every identifier the
+    event gives, BSUIDs, parent BSUIDs and phone numbers, since an
+    erasure may know the person by one only; keyed by business number
+    and contact, an event with no number under the empty one, which every
     number's erasure reads) and `DeadLetters::erase`, called by the new
     facade `meta_whatsapp_rs::erasure::Eraser` beside
     `ConversationStore::erase_all`. The namespaces `wa.webhook.deadletter`
@@ -2530,6 +2531,39 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     a Meta-assigned id on Postgres still answers `500`); the service
     does not wire a store (its sink classifies nothing). No parity row
     changes status: row 8 already counted delivery semantics as done.
+    The sabotage review indexed every identifier (the draft took the
+    BSUID alone when an object had one and missed `phone_number`,
+    `input`, `participant_recipient_id` and parent BSUIDs:
+    `every_person_a_fixture_event_names_is_indexed` walks every fixture),
+    pinned the write-before-index order and the erasure/append race
+    (`an_erasure_that_reads_an_index_entry_finds_its_letter`,
+    `an_erasure_racing_an_append_leaves_it_to_the_next_erasure`), the
+    head's compare-and-swap (`racing_appends_take_distinct_ids_and_keep_every_letter`)
+    and the take-back of an unindexed letter
+    (`a_letter_that_cannot_be_indexed_is_taken_back_and_fails_the_delivery`).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable as noted): the
+    core change, `SinkError::Permanent` with `SinkError::permanent` and
+    `is_permanent` (additive, the enum `#[non_exhaustive]`; a sink
+    classifies its own errors); a new `meta_whatsapp_rs::erasure::Eraser`
+    rather than a change to `Inbox::erase_all`, whose rustdoc says it does
+    not reach the dead letters, and the guides and the cms-inbox skill
+    point to it; the defaults of 1000 letters, 14 days and 256 KiB, an
+    oversized event kept without its content (`with_capacity`,
+    `with_max_age`, `with_max_event_bytes`); a dead-lettered event's claim
+    marked done, and replay past the dedup guard (at least once); an event
+    naming no business number erased by any number's erasure of the
+    contact (over-deleting diagnostic copies is the safe direction for an
+    erasure); `FanoutSink` returning a transient error before a permanent
+    one; and the known limits, documented in the `deadletter` module
+    (an erasure racing an append leaves that letter to the next erasure;
+    a replay racing an erasure hands the event back to the sink; more than
+    `capacity` appends at once may evict a newer letter; a capacity change
+    strands letters from `get`, `list` and `replay` until they age out;
+    a letter naming nobody is reached by the bounds only). The namespaces
+    `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, their
+    keys' derivations and their records' shapes stay pending the owner's
+    confirmation before the first release (§ Owner touchpoints).
 - [x] **L21b. Live events shared, not cloned** (`meta-whatsapp-webhooks`
   `sse`, `meta-whatsapp-adapters` `BroadcastSink`; OPEN_QUESTIONS #31):
   both over `Arc<WebhookEvent>`.

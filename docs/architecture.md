@@ -884,9 +884,10 @@ number; never content or the sink's error text) and
 `replay_all(sink)`) hands the stored event to a sink past the dedup guard:
 delivered, the letter goes; refused permanently again, it stays with one
 more attempt. Erasure: `KvStore` has no scan, so the store keeps a
-per-contact index (BSUID first, else the phone number, per object of the
-event; the business's own number left out) keyed by business number and
-contact, and `DeadLetters::erase(phone_number_id, contacts)`; the facade's
+per-contact index (every identifier the event gives: BSUIDs, parent
+BSUIDs, phone numbers without `+`; the business's own number left out)
+keyed by business number and contact, and
+`DeadLetters::erase(phone_number_id, contacts)`; the facade's
 `erasure::Eraser` calls it beside `ConversationStore::erase_all`.
 
 - `verify_subscription(query, &VerifyToken) -> Result<String /*challenge*/>`
