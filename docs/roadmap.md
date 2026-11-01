@@ -2868,9 +2868,9 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     resolved-path check, the walk's refusal of links and of hidden
     directories, the missing page's `isError`, the read and search
     bounds.
-  - **Proposed** (for the coordinator to decide, AGENTS.md § Decisions;
-    each a constant or a list in one file of the tool, swapped by
-    changing it): Rust, in the root workspace as a non-default member
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a constant or a list in one
+    file of the tool, swapped by changing it): Rust, in the root workspace as a non-default member
     (its tests, clippy, rustdoc and `cargo deny` run in `just ci`'s
     `--workspace` recipes), a binary only so no crate can depend on it,
     with no MCP SDK and no dependency but `serde_json` (no new crate in
