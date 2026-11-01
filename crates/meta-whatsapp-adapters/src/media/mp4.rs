@@ -96,7 +96,14 @@ pub(super) fn index_first(data: &[u8]) -> Option<Vec<u8>> {
     let mdat = top.iter().position(|b| &b.kind == b"mdat")?;
     let moov = top.iter().position(|b| &b.kind == b"moov")?;
     let indexes = top.iter().filter(|b| &b.kind == b"moov").count();
-    let fragmented = top.iter().any(|b| &b.kind == b"moof");
+    let fragmented = top.iter().any(|b| &b.kind == b"moof")
+        || boxes(
+            data,
+            top.get(moov)?.start.checked_add(top.get(moov)?.header)?,
+            top.get(moov)?.start.checked_add(top.get(moov)?.len)?,
+        )?
+        .iter()
+        .any(|b| &b.kind == b"mvex");
     if moov < mdat || indexes != 1 || fragmented {
         return None;
     }
@@ -110,13 +117,32 @@ pub(super) fn index_first(data: &[u8]) -> Option<Vec<u8>> {
     let mut moved = data.get(index.start..index_end)?.to_vec();
     let shift = u64::try_from(index.len).ok()?;
     let (low, high) = (u64::try_from(first).ok()?, u64::try_from(index.start).ok()?);
-    shift_offsets(&mut moved, index.header, index.len, 0, &|offset| {
-        if (low..high).contains(&offset) {
-            offset.checked_add(shift)
-        } else {
-            Some(offset)
-        }
-    })?;
+    let mut tables = 0;
+    shift_offsets(
+        &mut moved,
+        index.header,
+        index.len,
+        0,
+        &mut tables,
+        &|offset| {
+            if (low..high).contains(&offset) {
+                offset.checked_add(shift)
+            } else {
+                Some(offset)
+            }
+        },
+    )?;
+    // A chunk table this walk did not reach (under `dinf`, `edts`, or a
+    // second one in a `stbl`) may be the one ffmpeg reads, and it would
+    // keep its old offsets: leave such a file as it is. A false match (the
+    // four bytes inside opaque metadata) only costs the move.
+    let named = moved
+        .windows(4)
+        .filter(|w| *w == b"stco" || *w == b"co64")
+        .count();
+    if named != tables {
+        return None;
+    }
     let mut out = Vec::with_capacity(data.len());
     out.extend_from_slice(data.get(..first)?);
     out.extend_from_slice(&moved);
@@ -134,6 +160,7 @@ fn shift_offsets(
     from: usize,
     end: usize,
     depth: usize,
+    tables: &mut usize,
     shift: &dyn Fn(u64) -> Option<u64>,
 ) -> Option<()> {
     for b in boxes(buf, from, end)? {
@@ -142,9 +169,10 @@ fn shift_offsets(
         match (&b.kind, PATH.get(depth)) {
             (b"cmov", _) => return None,
             (kind, Some(next)) if kind == next => {
-                shift_offsets(buf, body, b_end, depth + 1, shift)?;
+                shift_offsets(buf, body, b_end, depth + 1, tables, shift)?;
             }
             (b"stco" | b"co64", None) => {
+                *tables = tables.checked_add(1)?;
                 let wide = &b.kind == b"co64";
                 let width = if wide { 8 } else { 4 };
                 // Version and flags, then the entry count.
@@ -297,6 +325,44 @@ mod tests {
         assert_eq!(index_first(&huge), None);
     }
 
+    /// A file whose index holds `extra` under `minf`, next to the `stbl`.
+    fn index_last_with(extra: &[u8]) -> Vec<u8> {
+        let ftyp = mp4_box(*b"ftyp", b"M4A \0\0\0\0");
+        let mdat = mp4_box(*b"mdat", b"AAAABBBB");
+        let a = u64::try_from(ftyp.len() + 8).unwrap();
+        let stbl = mp4_box(*b"stbl", &table(*b"stco", &[a, a + 4]));
+        let minf = mp4_box(*b"minf", &[extra, &stbl].concat());
+        let mdia = mp4_box(*b"mdia", &minf);
+        let trak = mp4_box(*b"trak", &[mp4_box(*b"tkhd", &[0; 4]), mdia].concat());
+        let moov = mp4_box(*b"moov", &[mp4_box(*b"mvhd", &[0; 4]), trak].concat());
+        [ftyp, mdat, moov].concat()
+    }
+
+    /// A chunk table off the walked path (here under `dinf`, which ffmpeg
+    /// reads first) would keep its old offsets: such a file is left as it
+    /// is rather than rewritten into one ffmpeg decodes to near silence.
+    #[test]
+    fn a_chunk_table_off_the_walked_path_leaves_the_file_as_it_is() {
+        let a = u64::try_from(mp4_box(*b"ftyp", b"M4A \0\0\0\0").len() + 8).unwrap();
+        let dinf = mp4_box(*b"dinf", &table(*b"stco", &[a]));
+        assert_eq!(index_first(&index_last_with(&dinf)), None);
+        // The same file without the stray table is rewritten.
+        assert!(index_first(&index_last_with(&[])).is_some());
+    }
+
+    /// An index with `mvex` describes a fragmented file, even before its
+    /// first `moof`: left as it is.
+    #[test]
+    fn an_index_with_mvex_is_left_as_it_is() {
+        let file = index_last(*b"stco");
+        let top = boxes(&file, 0, file.len()).unwrap();
+        let moov = top[2];
+        let mut body = file[moov.start + moov.header..moov.start + moov.len].to_vec();
+        body.extend_from_slice(&mp4_box(*b"mvex", &[]));
+        let fragmented = [&file[..moov.start], &mp4_box(*b"moov", &body)].concat();
+        assert_eq!(index_first(&fragmented), None);
+    }
+
     /// A `trak` in a `trak` in a `trak`, a hundred thousand deep, is not
     /// entered past the first: no recursion follows the input's nesting.
     #[test]
@@ -312,8 +378,10 @@ mod tests {
         nested.extend_from_slice(&inner);
         let ftyp = mp4_box(*b"ftyp", b"M4A \0\0\0\0");
         let file = [ftyp, mp4_box(*b"mdat", b"AAAA"), mp4_box(*b"moov", &nested)].concat();
-        let out = index_first(&file).unwrap();
-        assert_eq!(out.len(), file.len());
+        // Returning at all is the point (no stack overflow); the table
+        // at the bottom is off the walked path, so the file is left as it
+        // is.
+        assert_eq!(index_first(&file), None);
         // And a `moov` sized "to the end of the file" is not moved.
         let mut to_end = file.clone();
         let at = to_end.windows(4).position(|w| w == b"moov").unwrap() - 4;
@@ -332,7 +400,7 @@ mod tests {
         let before = buf.clone();
         let len = buf.len();
         assert_eq!(
-            shift_offsets(&mut buf, 0, len, PATH.len(), &|o| o.checked_add(1)),
+            shift_offsets(&mut buf, 0, len, PATH.len(), &mut 0, &|o| o.checked_add(1)),
             None
         );
         assert_eq!(buf[24..], before[24..], "the next box was rewritten");
@@ -343,13 +411,13 @@ mod tests {
         let mut stco = table(*b"stco", &[u64::from(u32::MAX)]);
         let len = stco.len();
         assert_eq!(
-            shift_offsets(&mut stco, 0, len, PATH.len(), &|o| o.checked_add(1)),
+            shift_offsets(&mut stco, 0, len, PATH.len(), &mut 0, &|o| o.checked_add(1)),
             None
         );
         let mut co64 = table(*b"co64", &[u64::from(u32::MAX)]);
         let len = co64.len();
         assert_eq!(
-            shift_offsets(&mut co64, 0, len, PATH.len(), &|o| o.checked_add(1)),
+            shift_offsets(&mut co64, 0, len, PATH.len(), &mut 0, &|o| o.checked_add(1)),
             Some(())
         );
         assert_eq!(read_u64(&co64, 16), Some(u64::from(u32::MAX) + 1));
