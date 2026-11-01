@@ -1,0 +1,71 @@
+[
+  {
+    "data": {
+      "contact": null,
+      "display_phone_number": "15550783881",
+      "event": "status_updated",
+      "phone_number_id": "106540352242922",
+      "status": {
+        "id": "gBGGFlB5YjhvAgnhuF1qIUvCo7A",
+        "payment": {
+          "additional_info1": "additional_info1-value",
+          "additional_info2": "additional_info2-value",
+          "additional_info3": "additional_info3-value",
+          "additional_info4": "additional_info4-value",
+          "additional_info5": "additional_info5-value",
+          "additional_info6": "additional_info6-value",
+          "additional_info7": "additional_info7-value",
+          "amount": {
+            "offset": 100,
+            "value": 21000
+          },
+          "currency": "INR",
+          "notes": {
+            "key1": "value1",
+            "key2": "value2"
+          },
+          "receipt": "receipt-value",
+          "reference_id": "BM345A-12",
+          "refunds": [
+            {
+              "amount": {
+                "offset": 100,
+                "value": 100
+              },
+              "created_timestamp": "1726170300",
+              "id": "rfnd_Om4XkB2tQ1aV9c",
+              "speed_processed": "instant",
+              "status": "success",
+              "updated_timestamp": "1726170360"
+            }
+          ],
+          "transaction": {
+            "created_timestamp": "1726170122",
+            "error": {
+              "code": "pg-generated-error-code",
+              "reason": "pg-generated-descriptive-reason"
+            },
+            "id": "order_Om4Vzc8ZgFXs1D",
+            "method": {
+              "type": "upi"
+            },
+            "pg_transaction_id": "pay_Om4WaaNKk3xL2p",
+            "status": "success",
+            "type": "razorpay",
+            "updated_timestamp": "1726170180"
+          },
+          "udf1": "udf1-value",
+          "udf2": "udf2-value",
+          "udf3": "udf3-value",
+          "udf4": "udf4-value"
+        },
+        "recipient_id": "919999999999",
+        "status": "captured",
+        "timestamp": "1726170400",
+        "type": "payment"
+      },
+      "waba_id": "102290129340398"
+    },
+    "type": "status_updated"
+  }
+]

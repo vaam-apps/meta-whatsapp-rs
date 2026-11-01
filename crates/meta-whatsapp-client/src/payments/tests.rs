@@ -23,6 +23,8 @@ use meta_whatsapp_core::ids::CatalogId;
 
 /// Brazil's pages and rules (roadmap P1b), on this module's helpers.
 mod brazil;
+/// The payment templates (roadmap P1c), on this module's helpers.
+mod templates;
 
 const PHONE_ID: &str = "106540352242922";
 const WABA: &str = "102290129340398";
