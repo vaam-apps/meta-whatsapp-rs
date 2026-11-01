@@ -72,7 +72,7 @@ leaks its library's types through a port.
 | `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at`; `message` (the lookup, scoped: `phone_number_id, id`, never another number's); `record_window_event`, `window_events` (a call or a standby message that reopens the window: never history, never the summary); `set_thread_owner`, `thread_owner` (Conversation Routing: the latest record wins); `put_contact`, `remove_contact`, `contact`, `contacts` (the coexistence address book; a removal is kept, key and time only, so an older sync arriving after it is refused); `link_identity`, `identity_links` (two identities of one person on one number, as Meta reports a BSUID or number change); `identities` (a person's keys on one number: the closure over the synced contacts and the links, read only); `erase_all` (a person on one number, deleted: every record under their keys, the contacts and links naming them, and their messages in groups redacted or deleted per the store's `ErasureMode`); `purge_before` (by age, one number or all); `trim_conversations` (a cap on each conversation's history: its newest rows kept, every row counting, the summary deleted when its latest message goes; one number or all); `erase` (one key), `erasure_mode`, `retention`, `apply_retention` (provided: redact group messages and keep everything unless the adapter is configured) | `meta_whatsapp_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
-| `media::MediaConverter` | `convert` (a `MediaInput` into a `TargetFormat`, today `OggOpus`: a voice message's mono Ogg Opus, uploaded as `audio/ogg`; `TargetFormat::max_bytes` is core's own `media::AUDIO_MAX_BYTES`, kept equal to the client's upload table by `every_target_format_is_what_the_upload_check_takes`) | rustdoc; `meta-whatsapp-client` re-exports it from `client::media` (`Media::upload_converted`) |
+| `media::MediaConverter` | `convert` (a `MediaInput` into a `TargetFormat`: `OggOpus`, a voice message's mono Ogg Opus, uploaded as `audio/ogg`; `StaticSticker`, a static WebP sticker, `image/webp`; `Jpeg` and `Png`, 8-bit images, `image/jpeg` and `image/png`; `TargetFormat::max_bytes` is core's own `media::AUDIO_MAX_BYTES`, `media::STATIC_STICKER_MAX_BYTES` (100 000) and `media::IMAGE_MAX_BYTES` (5 000 000: Meta's figures read as decimal), kept within the client's upload table by `every_target_format_is_what_the_upload_check_takes`) | rustdoc; `meta-whatsapp-client` re-exports it from `client::media` (`Media::upload_converted`) |
 
 Typed stores are built **on `KvStore`**, never as new ports: token vault,
 OTP challenges, webhook dedup, Embedded Signup sessions, bot cooldowns,
@@ -1027,9 +1027,20 @@ keyed by business number and contact, and
   index first in memory before ffmpeg reads it (a pipe cannot seek
   back); its stderr is drained and never kept (it names files); an input
   that decodes to no audio fails (`-abort_on empty_output`), and the
-  output is checked to be mono Ogg Opus. An empty or oversized input (or result)
-  is a `ValidationError` on `input`; every other failure an
-  `Error::Conversion` (see Error tree).
+  output is checked to be mono Ogg Opus. Images (a static WebP sticker,
+  a JPEG, a PNG; roadmap L19b) are made from a PNG or a JPEG only:
+  checked by the input's first bytes before ffmpeg starts, and by
+  ffmpeg's own detection (`-format_whitelist png_pipe,jpeg_pipe`); a
+  PNG walked chunk by chunk first (one cut short refused, its text and
+  EXIF chunks and anything after its end not passed on: ffmpeg inflates
+  every `zTXt` and keeps the text); the
+  first frame, no metadata, at most 32 Mi pixels (`-max_pixels`) and
+  256 MiB a single allocation; brought under the format's limit by a
+  fixed ladder of sizes and qualities (each attempt killed once past
+  it, the whole ladder within the timeout), the result's header
+  checked. An empty or oversized input (or a result over the limit
+  after every attempt) is a `ValidationError` on `input`; every other
+  failure an `Error::Conversion` (see Error tree).
 - `store::RedisKvStore` (feature `redis`; CAS via Lua). Requires the
   `noeviction` policy: every key with a TTL here enforces a limit (OTP
   issue logs, dedup markers), and Redis evicts silently.
