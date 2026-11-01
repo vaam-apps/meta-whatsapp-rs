@@ -14,7 +14,10 @@ a **Tech Provider** server (it calls plain `onboard`, which Solution Partner
 mode refuses); the Solution Partner flow is in the skill's
 [`solution_partner.rs`](../../skills/meta-whatsapp-rs-embedded-signup/examples/solution_partner.rs),
 partner-led business verification in its
-[`business_verification.rs`](../../skills/meta-whatsapp-rs-embedded-signup/examples/business_verification.rs).
+[`business_verification.rs`](../../skills/meta-whatsapp-rs-embedded-signup/examples/business_verification.rs),
+and [hosted Embedded Signup](#hosted-embedded-signup-no-page-code) (Meta's
+own page, started by the `PARTNER_ADDED` webhook) in its
+[`hosted_signup.rs`](../../skills/meta-whatsapp-rs-embedded-signup/examples/hosted_signup.rs).
 Agent skills:
 [`meta-whatsapp-rs-embedded-signup`](../../skills/meta-whatsapp-rs-embedded-signup/SKILL.md),
 [`meta-whatsapp-rs-token-vault`](../../skills/meta-whatsapp-rs-token-vault/SKILL.md).
@@ -684,6 +687,90 @@ The skill's
 [`business_verification.rs`](../../skills/meta-whatsapp-rs-embedded-signup/examples/business_verification.rs)
 does all three: look, then submit; read the webhook; check the status.
 
+## Hosted Embedded Signup: no page code
+
+`embedded-signup/hosted-es`: instead of `FB.login` on your page, a link to
+Meta's own onboarding page (App Dashboard, **WhatsApp** > **Quickstart** >
+**View onboarding**, the "Zero integration onboarding" card). The page
+returns nothing to your backend: no code, no message event, no PIN. When
+the customer finishes, Meta sends an `account_update` webhook with
+`event` `PARTNER_ADDED`, whose `waba_info` names their WABA (`waba_id`)
+and business portfolio (`owner_business_id`). Your app must be
+subscribed to `account_update` (and a Solution Partner must have a line
+of credit).
+
+> **`PARTNER_ADDED` is not only hosted signup's.** Meta sends it for every
+> WABA shared with your app: the code flow's onboardings and
+> coexistence's too, and it may deliver one again. Skip a WABA your vault
+> (or your WABA → merchant table) already holds. `onboard_hosted` refuses
+> one the vault holds, before any request (a `ValidationError` on
+> `waba_id`), rather than replace its token and record; to onboard such a
+> WABA again on purpose, delete it from the vault first
+> (`TokenVault::delete`, or `offboard`). The check is a read, not a lock:
+> a code-flow onboarding still running when the webhook arrives can store
+> after it, so reserve the WABA for a merchant atomically in the approval.
+
+```text
+Meta's hosted page ──► account_update PARTNER_ADDED {waba_id, owner_business_id}
+                       └► your webhook endpoint (signature verified)
+                          HostedSignup::new(waba_id, owner_business_id)
+                          EmbeddedSignup::onboard_hosted ──► POST /{owner_business_id}/system_user_access_tokens
+                                                              (your system token; appsecret_proof, fetch_only)
+                                                             debug_token, verify WABA + owner + number,
+                                                             store, subscribe, [share credit line], register
+```
+
+```rust
+// After the webhook pipeline verified the signature and parsed the event.
+if let WebhookEvent::AccountUpdated { update, .. } = &event
+    && update.event == AccountUpdateEvent::PartnerAdded
+    && let Some(info) = &update.waba_info
+    && let (Some(waba), Some(owner)) = (&info.waba_id, &info.owner_business_id)
+{
+    let signup = HostedSignup::new(waba.clone(), owner.clone());
+    if vault.get(&signup.waba_id).await?.is_none() {
+        // Not onboarded yet (the code flow's onboardings send PARTNER_ADDED too).
+        let request = OnboardingRequest::for_hosted(&signup).register_with_pin(pin);
+        let done = es.onboard_hosted(&signup, &system_token, &request, &vault).await?;
+    }
+}
+```
+
+- **The token.** Step `fetch_token` replaces `exchange_code`:
+  `Business::system_user_access_token` on the customer's portfolio (not
+  yours), your system user token as bearer, and in a form body
+  `appsecret_proof` (the hex HMAC-SHA256 of your system token keyed with
+  the app secret of `AppCredentials`, computed for you) and
+  `fetch_only=true`. Nothing goes in the URL; no error quotes the answer.
+  `HostedSignup::token_request` swaps the request (e.g. to name a
+  `system_user_id`); one without `fetch_only` generates a token and is
+  never replayed after a timeout, while a fetch, a read, is replayed as
+  one.
+- **The same steps and record.** Then `debug_token`, `verify_assets`
+  (the WABA among the token's grants; the WABA's owner as Meta reports it
+  must be `owner_business_id`; the number among the WABA's, the most
+  recently onboarded when none is named), `approve`, `store_token`, and
+  the tail. The vault record is the code flow's, byte for byte but for
+  its random nonce: same `wa.token` keys, same fields. `debug_token`
+  assumes, as for the code exchange, that the fetched business token
+  carries `granular_scopes` naming the WABA: one that does not fails
+  `verify_assets` (on `granular_scopes`) and nothing is stored.
+- **Retrying.** The fetch spends nothing: a failure up to `store_token`
+  can be fixed and `onboard_hosted` called again (a failure at
+  `store_token` may have written the record before its phone index: then
+  delete the WABA from the vault first). After it, `resume`
+  with `OnboardingRequest::for_hosted(&signup)` (or `for_resume` of the
+  saved `signup.session()`) redoes the tail with the stored token
+  (`onboard_hosted` again is refused: the vault holds the WABA).
+- **No tenant.** The webhook names none of your merchants: bind the WABA
+  to one in `onboard_hosted_with_approval` (required for a Solution
+  Partner, as `onboard_with_approval` is), reserving it atomically.
+- **The PIN is yours.** The hosted page asks for none: choose one per
+  number (the onboarding guides' `<DESIRED_PIN>`) and keep it in your
+  secret store, never one for every merchant.
+- Hosted signup onboards to Cloud API only, and the flow cannot be
+  customized (no pre-fill, no coexistence launch).
+
 ## Coexistence (merchants keeping the WhatsApp Business app)
 
 Launch with `LaunchOptions::new(id).coexistence()`. The flow finishes with
@@ -727,7 +814,7 @@ share, and to keep marking a business on offboarding, all above):
 | 7 | Coexistence sync | flagged by `needs_coexistence_sync()`, not triggered | automatic after a coexistence onboarding, with an option to turn it off (roadmap L11d) |
 | 8 | Token expiry and refresh | expiry recorded, nothing refreshes | no refresh; the expiry surfaced before it lapses (roadmap L11e) |
 | 9 | Vault key custody and rotation cadence | you supply keys; rotation supported, not scheduled | custody yours; rotation on demand, at least yearly |
-| 11 | App-only install, Hosted Embedded Signup | not integrated | integrate both, opt-in (roadmap L11a) |
+| 11 | App-only install, Hosted Embedded Signup | both integrated: the `app_only_install` launch feature, and `onboard_hosted` from the `PARTNER_ADDED` webhook (L11a) | integrate both, opt-in (roadmap L11a) |
 | 12 | Pre-fill shape | follows Meta's worked example; confirm in the Integration Helper | keep the worked example's shape |
 
 ## Not handled

@@ -14,6 +14,7 @@ use time::OffsetDateTime;
 
 use super::EmbeddedSignup;
 use super::event::{EmbeddedSignupEvent, FinishKind, SessionInfo};
+use super::hosted::HostedSignup;
 use super::partner::{CreditPlan, CreditSharing, assign_system_user, share_credit_line};
 use super::token::{SignupCode, TokenDebug, WHATSAPP_BUSINESS_MANAGEMENT};
 use super::vault::{StoredBusinessToken, TokenVault};
@@ -29,9 +30,18 @@ use crate::waba::{CallbackOverride, PhoneNumbersQuery, Waba};
 /// `approve` runs only in [`EmbeddedSignup::onboard_with_approval`], and
 /// `assign_system_user` and `share_credit_line` only in
 /// [Solution Partner mode](super#solution-partner-mode).
+/// [`EmbeddedSignup::onboard_hosted`] runs `fetch_token` in place of
+/// `exchange_code`, then the same steps.
 pub mod steps {
     /// `GET oauth/access_token`.
     pub const EXCHANGE_CODE: &str = "exchange_code";
+    /// `POST /{BUSINESS_ID}/system_user_access_tokens` with your system
+    /// user token and its `appsecret_proof`: the business token of hosted
+    /// Embedded Signup, in place of `exchange_code`
+    /// ([`EmbeddedSignup::onboard_hosted`](super::EmbeddedSignup::onboard_hosted)).
+    /// A read (`fetch_only`): nothing is spent when it, or a step before
+    /// `store_token`, fails.
+    pub const FETCH_TOKEN: &str = "fetch_token";
     /// `GET debug_token`.
     pub const DEBUG_TOKEN: &str = "debug_token";
     /// Checking the browser's claims against Meta: the WABA among the
@@ -161,6 +171,17 @@ impl OnboardingRequest {
         }
     }
 
+    /// Onboard the WABA of a hosted Embedded Signup with
+    /// [`EmbeddedSignup::onboard_hosted`], with no code, and resume it with
+    /// [`EmbeddedSignup::resume`]: [`Self::for_resume`] of
+    /// [`HostedSignup::session`] (its WABA and owner business; no phone
+    /// number, so the WABA's most recently onboarded one is registered).
+    /// Like [`Self::new`], it registers nothing until
+    /// [`Self::register_with_pin`].
+    pub fn for_hosted(signup: &HostedSignup) -> Self {
+        Self::for_resume(signup.session())
+    }
+
     /// From the parsed message event. Fails unless the flow finished.
     pub fn from_event(code: SignupCode, event: &EmbeddedSignupEvent) -> Result<Self> {
         match event {
@@ -233,7 +254,7 @@ impl OnboardingRequest {
         self
     }
 
-    fn validate(&self) -> Result<(), ValidationError> {
+    pub(super) fn validate(&self) -> Result<(), ValidationError> {
         if self.register && self.pin.is_none() {
             return Err(ValidationError::new(
                 "pin",
@@ -305,6 +326,23 @@ impl Onboarded {
     pub fn needs_coexistence_sync(&self) -> bool {
         self.finish_kind == Some(FinishKind::WhatsappBusinessAppOnboarding)
     }
+}
+
+/// A business token in hand, and what to verify it against: from the code
+/// exchange ([`EmbeddedSignup::onboard`]) or from
+/// `system_user_access_tokens` ([`EmbeddedSignup::onboard_hosted`]).
+pub(super) struct Granted<'a> {
+    /// The business token.
+    pub(super) token: AccessToken,
+    /// The answer's `expires_in`, when it has one (the code exchange's may;
+    /// `system_user_access_tokens` documents none).
+    pub(super) expires_in: Option<u64>,
+    /// The claimed ids `verify_assets` checks with Meta.
+    pub(super) session: &'a SessionInfo,
+    /// The business the token was asked for, when the flow names one
+    /// (hosted signup: the webhook's `owner_business_id`): the WABA's owner
+    /// as Meta reports it must not be another.
+    pub(super) owner: Option<&'a BusinessId>,
 }
 
 /// What `verify_assets` established with Meta.
@@ -451,13 +489,7 @@ impl EmbeddedSignup {
             )
             .into());
         };
-        let plan = self.credit_plan(request.currency.as_ref(), request.reshare_after_revocation)?;
-        if plan.is_some() && approve.is_none() {
-            return Err(CreditError::ApprovalRequired(
-                "a Solution Partner shares its credit line, which cannot be taken back once attached: onboard with EmbeddedSignup::onboard_with_approval, whose approval decides which of your tenants may onboard the WABA".into(),
-            )
-            .into());
-        }
+        let plan = self.onboarding_plan(request, approve.is_some())?;
         let mut done = Vec::with_capacity(9);
 
         let token = self
@@ -466,18 +498,72 @@ impl EmbeddedSignup {
             .map_err(|e| e.in_step(EXCHANGE_CODE))?;
         done.push(EXCHANGE_CODE);
 
+        let granted = Granted {
+            token: token.access_token,
+            expires_in: token.expires_in,
+            session: &request.session,
+            owner: None,
+        };
+        self.onboard_granted(granted, request, vault, plan, approve, done)
+            .await
+    }
+
+    /// The credit plan of an onboarding (`None` for a Tech Provider),
+    /// refused before any request when the request does not fit the
+    /// deployment, or when a Solution Partner onboards without an approval.
+    pub(super) fn onboarding_plan(
+        &self,
+        request: &OnboardingRequest,
+        approves: bool,
+    ) -> Result<Option<CreditPlan<'_>>> {
+        let plan = self.credit_plan(request.currency.as_ref(), request.reshare_after_revocation)?;
+        if plan.is_some() && !approves {
+            return Err(CreditError::ApprovalRequired(
+                "a Solution Partner shares its credit line, which cannot be taken back once attached: onboard with EmbeddedSignup::onboard_with_approval (or onboard_hosted_with_approval), whose approval decides which of your tenants may onboard the WABA".into(),
+            )
+            .into());
+        }
+        Ok(plan)
+    }
+
+    /// The steps after the business token is in hand, shared by
+    /// [`Self::onboard`] (a code exchange) and
+    /// [`Self::onboard_hosted`](super::EmbeddedSignup::onboard_hosted)
+    /// (`system_user_access_tokens`): `debug_token`, `verify_assets`,
+    /// `approve`, `store_token` and the tail. Both write the same record
+    /// from the same answers of Meta's.
+    pub(super) async fn onboard_granted<F, Fut>(
+        &self,
+        granted: Granted<'_>,
+        request: &OnboardingRequest,
+        vault: &TokenVault,
+        plan: Option<CreditPlan<'_>>,
+        approve: Option<F>,
+        mut done: Vec<&'static str>,
+    ) -> Result<Onboarded>
+    where
+        F: FnOnce(VerifiedOnboarding) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        let Granted {
+            token,
+            expires_in,
+            session,
+            owner,
+        } = granted;
         let debug = self
-            .debug_token(&token.access_token)
+            .debug_token(&token)
             .await
             .map_err(|e| e.in_step(DEBUG_TOKEN))?;
         done.push(DEBUG_TOKEN);
 
-        let business = self.client.with_token(token.access_token.clone());
+        let business = self.client.with_token(token.clone());
         let assets = verify_assets(
             &business,
             &debug,
             &self.app.app_id,
-            &request.session,
+            session,
+            owner,
             request.register || request.is_coexistence(),
         )
         .await
@@ -500,13 +586,11 @@ impl EmbeddedSignup {
         }
 
         let expires_at = debug.expires_at_time().or_else(|| {
-            token
-                .expires_in
+            expires_in
                 .and_then(|s| i64::try_from(s).ok())
                 .map(|s| vault.now() + time::Duration::seconds(s))
         });
-        let mut stored =
-            StoredBusinessToken::new(assets.waba_id.clone(), token.access_token.clone());
+        let mut stored = StoredBusinessToken::new(assets.waba_id.clone(), token.clone());
         stored.business_id.clone_from(&assets.business_id);
         stored.phone_number_ids.clone_from(&assets.phone_number_ids);
         stored.expires_at = expires_at;
@@ -534,7 +618,7 @@ impl EmbeddedSignup {
             phone_number_ids: assets.phone_number_ids,
             business_id: assets.business_id,
             finish_kind: request.finish_kind,
-            token: token.access_token,
+            token,
             token_expires_at: expires_at,
             allocation_config_id,
             steps_completed: done,
@@ -799,17 +883,31 @@ async fn register(
 
 /// Establish with Meta, using the business token, which assets this
 /// onboarding is about. Nothing from the browser survives unchecked.
+///
+/// `owner` is the business the token was asked for (hosted signup): when
+/// Meta reports the WABA's owner, it must be that one. When Meta reports
+/// none, nothing is stored for it, as in the code flow.
 async fn verify_assets(
     business: &Client,
     debug: &TokenDebug,
     app_id: &AppId,
     session: &SessionInfo,
+    owner: Option<&BusinessId>,
     need_phone: bool,
 ) -> Result<VerifiedAssets> {
     let waba_id = verify_grant(debug, session.primary_waba_id(), app_id)?;
     let waba = business.waba(waba_id.clone());
     // Privately decoded: the answer carries the business's name.
     let business_id = waba.owner_business().await?.and_then(|b| b.id);
+    if let (Some(expected), Some(reported)) = (owner, &business_id)
+        && expected != reported
+    {
+        return Err(ValidationError::new(
+            "owner_business_id",
+            "Meta reports another owner for the WABA than the business the token was fetched for",
+        )
+        .into());
+    }
     let mut numbers = waba_phone_numbers(&waba).await?;
     let phone_number_id = match &session.phone_number_id {
         Some(claimed) => {
@@ -938,7 +1036,7 @@ fn resume_phone(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -2022,9 +2120,10 @@ mod tests {
         assert!(raw(&h.kv, &format!("waba/{WABA_A}")).await.is_none());
     }
 
-    /// A `tracing` subscriber that renders every event and span field.
+    /// A `tracing` subscriber that renders every event and span field
+    /// (also hosted signup's, `super::hosted`).
     #[derive(Clone, Default)]
-    struct Capture(Arc<Mutex<String>>);
+    pub(in super::super) struct Capture(pub(in super::super) Arc<Mutex<String>>);
 
     struct Render<'a>(&'a mut String);
 

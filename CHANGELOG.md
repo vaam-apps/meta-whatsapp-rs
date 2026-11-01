@@ -244,6 +244,108 @@ stored data, the owner's).
   vault opened without re-encryption on read, `GET`s only, through the
   library's client) and prints no secret. The server crate depends on
   `serde` for the subscriptions answer.
+- **Payments in India** (`meta_whatsapp_client::payments`, roadmap P1a,
+  parity rows 38 and 141; Brazil is P1b, the templates' payment buttons
+  and the payment webhooks P1c, the service's routes P2). The
+  `order_details` and `order_status` interactive messages are typed:
+  `Interactive::OrderDetails` (boxed) and `Interactive::OrderStatus`,
+  built from `OrderDetails` and `OrderStatus` (`OutboundMessage::new(to,
+  details)`), instead of `MessageContent::Raw`. Payment settings: a UPI
+  intent link, a payment link (with `payment_type` `upi`) or a payment
+  gateway (`PaymentGateway`: `BillDesk`, Razorpay, `PayU` or Zaakpay and
+  their own fields, a preferred UPI app, the enabled payment options),
+  or the older `payment_configuration`. Amounts are `Amount { value,
+  offset }` (`Amount::inr(paise)`), and `OrderDetailsParameters::inr`
+  computes the total from the order (`Order::total`). Every rule the
+  pages state is checked before any request, naming the JSON path:
+  lengths (body 1024, footer 60, `reference_id` 35 of letters, digits,
+  `_`, `-`, `.`, item names 60, descriptions 60 and 120, the gateways'
+  fields), `offset` 100 for INR, a positive total equal to `subtotal +
+  tax + shipping - discount` (summed in `u128`, never overflowing), at
+  least one item, an item's origin and importer without a `catalog_id`
+  (except with the older `payment_configuration` alone, whose page
+  makes them optional), custom images on at most 10 items and never
+  with a `retailer_id` or `catalog_id`, beneficiaries (India, a 6-digit
+  PIN code), and an `order_status` message's `reference_id` and new
+  status (never `pending`). The subtotal is not checked: every India example
+  with a `sale_amount` breaks the rule. Where the pages disagree
+  (`payment_settings` an array, `importer_address` an object,
+  `partially_shipped`, `parameters` an object), the examples win; the
+  module docs list each case. `Client::payments(phone_number_id)` reads
+  a payment (`lookup`: its transactions, refunds and the gateway fields
+  sent, the lookup's error envelope reaching the caller as
+  `Error::Http`) and refunds one (`refund`: `value` and `offset` sent as
+  strings, as documented; never replayed after a timeout).
+  `Client::payment_configurations(waba_id)` lists, gets, creates
+  (`CreatePaymentConfiguration`), regenerates the OAuth link of, and
+  deletes payment configurations; the OAuth link is a `SecretUrl`, kept
+  out of `Debug` (`PaymentOauthLink`'s hides its path too), decode
+  errors and the body of a refusal that is not Meta's envelope, and
+  neither creation nor
+  regeneration is replayed after a timeout. The WhatsApp Payments terms
+  of service stay the business's to accept, through the link in Meta's
+  `134011` error (`131005` from the onboarding calls): no call accepts
+  them.
+- **Hosted Embedded Signup** (`meta_whatsapp_client::embedded_signup`,
+  roadmap L11a, parity row 121; OPEN_QUESTIONS #11; the service's side
+  is M3f). `HostedSignup::new(waba_id, owner_business_id)`, from the
+  `account_update` `PARTNER_ADDED` webhook's `waba_info`, and
+  `EmbeddedSignup::onboard_hosted(&signup, &system_token, &request,
+  &vault)` (and `onboard_hosted_with_approval`, required for a Solution
+  Partner): step `fetch_token` (new, in `steps`) asks
+  `POST /{owner_business_id}/system_user_access_tokens` for the business
+  token with your system user token and its `appsecret_proof` under the
+  app secret, in a form body with `fetch_only=true`
+  (`Business::system_user_access_token`; `HostedSignup::token_request`
+  swaps the request, a generation never replayed), then runs the code
+  flow's steps, now shared with `onboard`: `debug_token`,
+  `verify_assets` (which also refuses a WABA whose owner, as Meta
+  reports it, is another business than the webhook's), `approve`,
+  `store_token` (the same `wa.token` record), `subscribe_app`, the
+  credit line steps of a Solution Partner, `register_phone`.
+  `OnboardingRequest::for_hosted` builds the request (no code; the
+  session info of `HostedSignup::session`), and `resume` takes it after
+  a failure past `store_token`; before it, nothing is spent and the call
+  can be made again. `PARTNER_ADDED` also comes for the code flow's and
+  coexistence's onboardings, and may be delivered again: `onboard_hosted`
+  refuses a WABA the vault already holds, before any request, rather
+  than replace its token (delete the record first to onboard it again).
+  Additive: `onboard` and `resume` are unchanged.
+- **Media conversion** (roadmap L19, parity row 48, from
+  `business-phone-numbers/media` and `messages/audio-messages`): a new
+  port, `meta_whatsapp_core::media::MediaConverter`, an object-safe
+  async trait (`convert(MediaInput, TargetFormat) -> Result<ConvertedMedia>`),
+  and `TargetFormat::OggOpus`, a voice message's mono Ogg Opus, uploaded
+  as `audio/ogg` (`mime_type`, `extension`, `max_bytes`: core's
+  `media::AUDIO_MAX_BYTES`, 16 MiB); `MediaInput` and `ConvertedMedia`
+  show only their length in `Debug`. `meta_whatsapp_client::media`
+  re-exports them and adds `Media::upload_converted(converted, stem)`
+  (uploaded as the format's type, named `stem.ogg`, checked by
+  `validate_upload` first). A new error node,
+  `Error::Conversion(ConversionError)` (`BinaryMissing`, `EncoderMissing`,
+  `Timeout`, `InputRejected`, `OutputInvalid`, `Killed`; `Error::conversion()`),
+  with existing kinds, retryable only on `Timeout`, never
+  `may_have_been_sent`; no `ErrorKind` is added, so the service's error
+  codes are unchanged. `meta_whatsapp_adapters::media::FfmpegConverter`
+  implements the port behind a new `ffmpeg` feature of the adapters and
+  the facade (off by default; in `full`): it runs an `ffmpeg` you install
+  (`with_program`, else `ffmpeg` on `PATH`) with fixed arguments, the
+  input on stdin and the result on stdout, its input protocols
+  restricted to the pipe and its input formats to recording formats,
+  bounded in input (`with_max_input_bytes`, 64 MiB; refused as
+  `Error::Validation` on `input`), output (the 16 MiB upload limit),
+  time (`with_timeout`, 60 s; killed past it) and single allocations in
+  `ffmpeg` (`-max_alloc`, 16 MiB), its environment reduced to `PATH`, its
+  stderr withheld, an MP4 whose index follows its media data put index
+  first in memory (a pipe cannot seek back to it), an input with no audio
+  refused, the result checked to be mono Ogg Opus; `check()` finds a missing binary or
+  libopus at startup. Nothing is linked, and the service's image gains
+  no `ffmpeg`. Images into stickers and resizing are not converted
+  (roadmap L19b). For contributors: the real-`ffmpeg` tests
+  (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`) skip without one unless
+  `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`, which CI sets after installing
+  `ffmpeg` on its runner; `META_WHATSAPP_RS_TEST_FFMPEG` names the
+  binary (docs/dev-environment.md).
 - **Max price, reach estimates and welcome message sequences**
   (`meta_whatsapp_client::marketing`, roadmap L13, parity rows 137 and
   138, from `marketing-messages/pricing`,

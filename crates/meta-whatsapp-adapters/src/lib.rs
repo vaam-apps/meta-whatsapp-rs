@@ -12,6 +12,7 @@
 //! | `reqwest` | `http::ReqwestTransport` | `HttpTransport` | reqwest (rustls, aws-lc-rs, HTTP/2) |
 //! | `postgres` | `store::PostgresKvStore`, `store::PostgresConversationStore`, `store::postgres::migrate` | `KvStore`, `ConversationStore` | sqlx (Postgres, tokio, rustls) |
 //! | `redis` | `store::RedisKvStore` | `KvStore` | redis (tokio, connection manager; no TLS) |
+//! | `ffmpeg` | `media::FfmpegConverter` | `MediaConverter` | tokio `process`; runs an `ffmpeg` you install, links none |
 //!
 //! Every feature compiles on its own; none is required by another.
 //!
@@ -48,6 +49,9 @@
 //!   anything slow, a `sink::BroadcastSink` for live inbox views, a
 //!   `sink::FanoutSink` to do both.
 //! - **Transport**: `ReqwestTransport` unless you need your own HTTP stack.
+//! - **Media conversion** (a recording into a voice message's Ogg Opus):
+//!   `media::FfmpegConverter` when the host has an `ffmpeg` with libopus;
+//!   the library ships none, and the service's image carries none.
 //!
 //! # Whose clock?
 //!
@@ -97,6 +101,8 @@
 
 #[cfg(feature = "reqwest")]
 pub mod http;
+#[cfg(feature = "ffmpeg")]
+pub mod media;
 #[cfg(feature = "sinks")]
 pub mod sink;
 pub mod store;
