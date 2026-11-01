@@ -572,6 +572,18 @@ stored data, the owner's).
   non-empty target role. None of the three is replayed after a timeout.
   The `meta-whatsapp-rs-cms-inbox` skill's example now makes the pass
   before recording it.
+- **Routing roles** (`meta_whatsapp_client::thread_control`, roadmap
+  L15a, parity row 139, from `conversation-routing/routing-roles`):
+  `ThreadControl::routing_roles()`, a `GET
+  /{phone-number-id}/routing_roles`, answers `RoutingRoles`: the
+  `roles` the caller's business holds on the number (`RoutingRole`:
+  `calls`, `ctwa`, `customer_service`, `escalation`, `marketing`,
+  `utility`, and `Other(String)` for any other value) and `is_standby`,
+  its standby grant; `RoutingRoles::holds` tests one role. An empty
+  `roles` is a success; a number without Conversation Routing is Meta's
+  error `100` (`ErrorKind::InvalidParameter`). Both fields are required:
+  a response without either fails to decode. A read, retried like any
+  GET. Row 139 is done for the library.
 - **A pacer shared by replicas** in `meta-whatsapp-bot` (roadmap B2b,
   parity row 89; for the service's broadcasts, M5k). Opt-in:
   `KvRateLimiter` (module `pacer`) is a `RateLimiter` whose per-number

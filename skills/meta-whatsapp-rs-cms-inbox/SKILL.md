@@ -112,8 +112,8 @@ Err(e) if is_thread_owned_elsewhere(&e) => Ok(None),
 ```
 
 The escalation partner turns it off: `ReplyChecks::ALL.thread_owner(false)`. Your own `pass` or `take`
-(`ThreadControl::pass`, `ThreadControl::take` on `client.thread_control(number)`): then
-`inbox.record_thread_owner`. Who owns the thread, and why: [references/routing.md](references/routing.md).
+(`ThreadControl::pass`, `ThreadControl::take` on `client.thread_control(number)`): then `inbox.record_thread_owner`.
+Your business's roles on the number, not who owns a thread: `ThreadControl::routing_roles`. Who owns the thread, and why: [references/routing.md](references/routing.md).
 
 ## Conversation keys
 

@@ -2287,7 +2287,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `TargetRole` and `ThreadControlResponse` only, not on `Pass`, a
     request type (OPEN_QUESTIONS #28); and L15a kept as its own item,
     with row 139 partial until it lands.
-- [ ] **L15a. The Routing Roles API** (`meta-whatsapp-client`, next to
+- [x] **L15a. The Routing Roles API** (`meta-whatsapp-client`, next to
   `client::thread_control`; row 139): `GET
   /{phone-number-id}/routing_roles`, the roles the caller's business
   holds on a number (`roles`, `is_standby`), which say which thread
@@ -2298,6 +2298,48 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** exact response JSON from
     `conversation-routing/routing-roles` (both examples, the empty
     `roles` among them).
+  - **Landed:** `ThreadControl::routing_roles()` on
+    `client.thread_control(phone_number_id)`, a `GET
+    /{phone-number-id}/routing_roles` with no query and no body,
+    answering `RoutingRoles` (`roles: Vec<RoutingRole>`, `is_standby:
+    bool`, and `RoutingRoles::holds`, which compares wire names).
+    `RoutingRole` is the page's six values (`calls`, `ctwa`,
+    `customer_service`, `escalation`, `marketing`, `utility`) with
+    `Other(String)` keeping any other verbatim, `ai_agent` among them
+    (the page: never returned to a partner). Row 139 is done for the
+    library; the service's side stays M2d and M5l. Decisive tests
+    (`thread_control::tests`): both of the page's responses as exact
+    JSON, with the request's method, path, absent query and body, and
+    token (`routing_roles_match_docs_example`,
+    `empty_routing_roles_match_docs_example`: an empty `roles` is a
+    success), every role's wire name (`every_routing_role_has_its_wire_name`),
+    a response missing either field refused
+    (`routing_roles_tolerate_new_fields_and_require_both`), the page's
+    two errors, both code `100`, as `ErrorKind::InvalidParameter`
+    (`routing_not_enabled_is_an_invalid_parameter`,
+    `an_unreadable_number_is_an_invalid_parameter`: no kind of their
+    own, which would be a core change and could not split one code), a
+    retry after a timeout (`routing_roles_are_retried_after_a_timeout`)
+    and the id kept one segment. Mutated by hand: the path segment, GET
+    to POST, either field's name, a default on either field, `calls`'s
+    wire name, refusing an empty `roles`, `holds` by equality, and the
+    catch-all removed; each fails a test.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable as noted): a
+    method on `ThreadControl` rather than a module and accessor of its
+    own (`client.routing_roles(id)` would be an additive accessor);
+    `RoutingRole` its own enum, not `TargetRole` (`calls` is no pass
+    target, `ai_agent` never a held role; a conversion between the two
+    is additive), with `#[non_exhaustive]` and the `Other(String)`
+    catch-all like `TargetRole`; both fields required, with no serde
+    default (the page says both are always present, and a default would
+    read as "no role" or "not standby"; relaxing it is a one-line
+    change); `roles` a `Vec` in Meta's order rather than a set (the
+    page calls it unordered; `holds` is the set test); the read retried
+    as every GET is; no local cache or rate limiting (Meta rate limits
+    the endpoint per number and per app and asks for periodic reads:
+    the caller schedules them); M5l, not this item, decides whether
+    the service exposes the roles.
 - [x] **L16a. The Messaging Account a send bills**
   (`meta-whatsapp-client`, `client::messages`; row 140). Meta's account
   model evolution (`account-model-evolution`) is generally available
