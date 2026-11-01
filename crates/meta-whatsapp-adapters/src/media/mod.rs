@@ -72,7 +72,7 @@
 //! | no libopus ([`FfmpegConverter::check`]) | — | [`ConversionError::EncoderMissing`] |
 //! | `ffmpeg` fails (input it cannot read, a format off the list) | — | [`ConversionError::InputRejected`] |
 //! | the output is not mono Ogg Opus (a binary that is not the `ffmpeg` it should be) | — | [`ConversionError::OutputInvalid`] |
-//! | one allocation in `ffmpeg` over 16 MiB (`-max_alloc`: a header declaring an absurd sample rate) | — | [`ConversionError::InputRejected`] |
+//! | one allocation in `ffmpeg` over 16 MiB (`-max_alloc`: a header declaring an absurd sample rate) | — | [`ConversionError::InputRejected`]; on an `ffmpeg` whose allocations stay under the bound, the result cap above stops it instead |
 //! | a run over [`with_timeout`](FfmpegConverter::with_timeout) | 60 s | [`ConversionError::Timeout`], the one retryable; `ffmpeg` is killed |
 //! | `ffmpeg` killed by a signal, or a pipe to it broken | — | [`ConversionError::Killed`] |
 //!
