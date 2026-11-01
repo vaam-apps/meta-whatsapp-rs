@@ -259,6 +259,24 @@ of its own, after an HTML comment; keep that when you add one.
     their own deployment. Swappable: nothing signs unless a deployment
     calls it. Roadmap L13 and M5h.
 
+    **Found on 2026-11-01 (roadmap L13, Meta's pages of that day):** the
+    agreement is `POST /{BUSINESS_ID}/max_price_agreements` with
+    `signer_name` and `signer_email`, once per business portfolio, by an
+    admin of it, with `business_management`; Meta emails the signer an
+    acceptance link and answers `pending` until the business accepts
+    (`GET` reads `none`, `pending` or `accepted`); posting again while
+    pending resends the email (HTTP 429 within 5 minutes). Meta states
+    it uses the two fields only to execute the agreement. The partner
+    allow list is gone since the open beta (2026-10-01): a partner's
+    accepted agreement covers the client WABAs shared with or managed by
+    it, so no per-client act remains. The library's side is done as
+    decided: `MarketingBusiness::sign_max_price_agreement` is the one
+    call that sends the `POST`, never replayed, and no send, duplicate,
+    reach estimate or template update makes it (a test checks that no
+    other file of the client names its path); Meta's refusals for want
+    of the agreement (`100`, a duplicate's HTTP 403) are returned, not
+    answered by signing. M5h remains.
+
 ## API conventions
 
 Found by the conventions reviews of 8ee6fab (27–29; counts are from that

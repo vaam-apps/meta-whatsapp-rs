@@ -1,10 +1,14 @@
 //! Marketing Messages API for WhatsApp (MM API): send marketing templates
-//! through `/marketing_messages` with MM-only options, and check or drive
-//! onboarding.
+//! through `/marketing_messages` with MM-only options, check or drive
+//! onboarding, and the max price beta (its agreement, a template's max
+//! price, duplicating a template at another max price, reach estimates);
+//! plus Click-to-WhatsApp welcome message sequences.
 //!
 //! Docs: `marketing-messages/send-marketing-messages`,
 //! `marketing-messages/onboarding`, `marketing-messages/onboard-business-customers`,
-//! `marketing-messages/pricing`,
+//! `marketing-messages/pricing`, `marketing-messages/pricing/enroll-max-price`,
+//! `marketing-messages/pricing/duplicate-templates`,
+//! `ctwa/welcome-message-sequences`,
 //! `reference/whatsapp-business-phone-number/marketing-messages-api-for-whatsapp`,
 //! `reference/business/whatsapp-business-partner-onboarding-to-mm-lite-api`,
 //! `support/error-codes` (MM API section).
@@ -16,17 +20,36 @@
 //! | Accessor | Scope | Calls |
 //! | --- | --- | --- |
 //! | [`Client::marketing`](crate::Client::marketing) | phone number | [`Marketing::send`] |
-//! | [`Client::marketing_account`](crate::Client::marketing_account) | WABA | [`MarketingAccount::onboarding_status`], [`MarketingAccount::owner_business_info`], [`MarketingAccount::cloud_api_marketing_disabled`], [`MarketingAccount::set_cloud_api_marketing_disabled`] |
-//! | [`Client::marketing_business`](crate::Client::marketing_business) | business portfolio | [`MarketingBusiness::onboarding_status`], [`MarketingBusiness::client_wabas_with_status`] (+ `_stream`), [`MarketingBusiness::request_onboarding`] |
+//! | [`Client::marketing_account`](crate::Client::marketing_account) | WABA | [`MarketingAccount::onboarding_status`], [`MarketingAccount::owner_business_info`], [`MarketingAccount::cloud_api_marketing_disabled`], [`MarketingAccount::set_cloud_api_marketing_disabled`], [`MarketingAccount::duplicate_template`], [`MarketingAccount::reach_estimate`] |
+//! | [`Client::marketing_business`](crate::Client::marketing_business) | business portfolio | [`MarketingBusiness::onboarding_status`], [`MarketingBusiness::client_wabas_with_status`] (+ `_stream`), [`MarketingBusiness::request_onboarding`], [`MarketingBusiness::max_price_agreement`], [`MarketingBusiness::sign_max_price_agreement`] |
+//! | [`Client::marketing_template`](crate::Client::marketing_template) | template | [`MarketingTemplate::max_price`], [`MarketingTemplate::set_max_price`], [`MarketingTemplate::clear_max_price`] |
+//! | [`Client::welcome_sequences`](crate::Client::welcome_sequences) | WABA | [`WelcomeSequences::create`], [`WelcomeSequences::update`], [`WelcomeSequences::list`], [`WelcomeSequences::get`], [`WelcomeSequences::delete`] |
 //!
-//! What lives elsewhere: message TTL, max price (`optimization_spec`),
-//! deep links and creative-optimization opt-outs are *template* settings
-//! (templates module); click events (`user_actions` on the `messages`
-//! field) and the `account_update` onboarding events are webhooks
-//! (`meta-whatsapp-webhooks`); conversion and cost metrics come from Meta's Insights
-//! API and the analytics module. Not wrapped: the max-price beta agreement
-//! and partner allowlist (`marketing-messages/pricing/enroll-max-price`) and
-//! reach estimates (`/{WABA_ID}/reachestimate`).
+//! # The max price agreement is a legal act
+//!
+//! Max price needs Meta's Max Price Beta Agreement, signed once per
+//! business portfolio. [`MarketingBusiness::sign_max_price_agreement`]
+//! signs it on the business's behalf: it is its own explicit call, and no
+//! other call makes it (no send, duplicate, reach estimate, template update
+//! or builder; an error saying the agreement is missing is returned, never
+//! answered by signing). Signing is the deployer's decision (AGENTS.md §
+//! Decisions, `OPEN_QUESTIONS.md` #45). [`MarketingBusiness::max_price_agreement`]
+//! only reads its state.
+//!
+//! Since the open beta (2026-10-01) a Solution Partner no longer
+//! allowlists its clients: its own agreement covers the client WABAs
+//! shared with or managed by it, so there is no allow list to manage.
+//!
+//! What lives elsewhere: message TTL, deep links and creative-optimization
+//! opt-outs are *template* settings (templates module); click events
+//! (`user_actions` on the `messages` field) and the `account_update`
+//! onboarding events are webhooks (`meta-whatsapp-webhooks`); conversion
+//! and cost metrics come from Meta's Insights API and the analytics module.
+//! A GIF template header is defined with
+//! [`HeaderFormat::Gif`](crate::templates::HeaderFormat::Gif); Meta's pages
+//! show no send-time parameter for it, so none is typed
+//! ([`Parameter::Other`](crate::templates::Parameter::Other) carries one
+//! verbatim).
 //!
 //! # Errors to expect
 //!
@@ -38,6 +61,13 @@
 //! [`MarketingAccount::onboarding_status`]), `DuplicateOnboarding`
 //! (`1752041`, Intent API), plus every Cloud API send error (`131049`,
 //! `131050`, …).
+//!
+//! The max price codes of `marketing-messages/pricing` have no kind of
+//! their own yet: read [`GraphApiError::code`](meta_whatsapp_core::GraphApiError)
+//! for `131061` (a max-price template sent through Cloud API `/messages`),
+//! `131065` (no max price delivery to the recipient's country) and `100`
+//! with "You need to sign the testing legal agreement" (the agreement is
+//! missing: see above, the client does not sign it for you).
 //!
 //! # Send a marketing message
 //!
@@ -59,19 +89,37 @@
 //! # Ok(()) }
 //! ```
 
+mod agreement;
 mod onboarding;
+mod pricing;
 mod send;
+mod welcome;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_max_price;
+#[cfg(test)]
+mod tests_welcome;
+
+pub use agreement::{AgreementStatus, MaxPriceAgreement, MaxPriceAgreementSigner};
 
 pub use onboarding::{
     BusinessOnboardingStatus, ClientWaba, ListClientWabas, MarketingAccount, MarketingBusiness,
     OnboardingRequested, OnboardingStatus, OwnerBusinessInfo, TermsStatus,
 };
+pub use pricing::{
+    BidStrategy, DateInterval, DuplicateTemplate, MAX_COUNTRY_MULTIPLIER, MAX_COUNTRY_MULTIPLIERS,
+    MarketingTemplate, MaxPrice, OptimizationSpec, ReachEstimate, ReachEstimatePoint,
+    ReachEstimateQuery,
+};
 pub use send::{
     Marketing, MarketingOptions, MessageStatus, ProductPolicy, SendResponse, SentContact,
     SentMessage,
+};
+pub use welcome::{
+    AutofillMessage, IceBreaker, ListWelcomeSequences, WelcomeMessage, WelcomeSequence,
+    WelcomeSequenceCreated, WelcomeSequenceUpdate, WelcomeSequences,
 };
 
 /// A string enum Meta may extend: documented values get variants, anything

@@ -1629,7 +1629,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Follow-up:** `LaunchOptions::solution_id` stays a `String`; typing
     it as `SolutionId` is a breaking change to the Embedded Signup
     builder, left for its own item.
-- [ ] **L13. Marketing** (`meta-whatsapp-client`, `client::marketing`;
+- [x] **L13. Marketing** (`meta-whatsapp-client`, `client::marketing`;
   rows 137, 138, 154; OPEN_QUESTIONS #45): max price (its agreement, the
   partner allow list, duplicating a template at another price), reach
   estimates and CTWA welcome message sequences, and a typed send-time
@@ -1643,6 +1643,63 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** exact JSON per endpoint; the 15-entry allow-list cap
     is checked locally; a max-price send makes no agreement request
     (a transport scripted for the send alone fails on any other call).
+  - **Landed:** rows 137 and 138 done for the library, against Meta's
+    pages of 2026-11-01 (`marketing-messages/pricing`,
+    `marketing-messages/pricing/enroll-max-price`,
+    `marketing-messages/pricing/duplicate-templates`,
+    `marketing-messages/changelog`, `ctwa/welcome-message-sequences`). In
+    `client::marketing`: the agreement on `MarketingBusiness`
+    (`sign_max_price_agreement`, `max_price_agreement`), duplicating a
+    template (`MarketingAccount::duplicate_template`, a
+    `DuplicateTemplate` with a `MaxPrice`, answering
+    `templates::TemplateCreated`), reach estimates
+    (`MarketingAccount::reach_estimate`), a template's max price
+    (`Client::marketing_template`: `MarketingTemplate::max_price`,
+    `set_max_price`, `clear_max_price`) and the welcome message sequences
+    (`Client::welcome_sequences`: `WelcomeSequences::create`, `update`,
+    `list`, `get`, `delete`); core gains `ids::WelcomeSequenceId`
+    (opaque). **The allow list is gone:** Meta's changelog raised the
+    partner cap from 15 to 100 (2026-07-31) and 500 (2026-09-07), then
+    removed allowlisting with the open beta (2026-10-01): a partner's
+    agreement covers the client WABAs shared with or managed by it, and
+    no current page shows the allow list's request, so it is not
+    wrapped and there is no cap to check; the cap checked locally is
+    `optimization_spec`'s 240 country multipliers
+    (`marketing::MAX_COUNTRY_MULTIPLIERS`). The agreement is isolated:
+    `sign_max_price_agreement` is the one call that sends its `POST`,
+    never replayed, and an error naming the missing agreement (`100`, a
+    duplicate's 403) is returned, not answered by signing. Decisive
+    tests (`marketing::tests_max_price`):
+    `a_max_price_send_makes_no_agreement_request` (one scripted
+    response, the send's), `no_other_max_price_call_signs_the_agreement`,
+    `only_the_agreement_module_names_the_agreement` (no other file under
+    `src/` names its path or calls it),
+    `signing_the_agreement_posts_the_documented_body`,
+    `signing_is_not_replayed_after_a_timeout`,
+    `duplicate_matches_the_documented_example`,
+    `set_max_price_matches_the_documented_update`,
+    `clear_max_price_sends_exactly_the_two_nulls`,
+    `template_max_price_reads_the_documented_list_shape`,
+    `reach_estimate_matches_the_documented_example`,
+    `a_max_price_is_checked_against_the_documented_limits` (240 entries
+    pass, 241 do not; multipliers in (0, 10]; alpha-2 keys; `bid_amount`
+    1 to `i32::MAX`); in `marketing::tests_welcome`, the guide's create,
+    update, list, get and delete examples and
+    `create_is_not_replayed_after_a_timeout`. Row 154 stays partial: no
+    page of 2026-11-01 (`templates/components`, `templates/template-media`,
+    `marketing-messages/features`, `marketing-messages/send-marketing-messages`,
+    the MM API and Messages API references) shows a GIF header's
+    send-time parameter, so none is typed (`templates::Parameter::Other`
+    carries one verbatim).
+  - **Not wrapped:** the allow list (withdrawn, above); the WhatsApp
+    Manager visibility switch
+    (`whatsapp_manager_marketing_messages_max_price_enroll_status`,
+    `marketing-messages/pricing/whatsapp-manager-visibility`, not
+    fetched); `optimization_spec` on `templates::TemplateDefinition` at
+    creation (a template takes its max price after creation with
+    `MarketingTemplate::set_max_price`, or as a duplicate); an
+    `ErrorKind` for `131061`, `131065` and the welcome sequences'
+    `4027xxx` codes (core's error tree, not this item).
 - [x] **L14. Call recording and transcription** (`meta-whatsapp-client`,
   `client::calling`; row 135): the per-call `recording` and
   `transcription` objects on connect and accept (`calling/call-recording`,
