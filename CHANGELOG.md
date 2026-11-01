@@ -217,6 +217,44 @@ stored data, the owner's).
 
 ### Added
 
+- **Max price, reach estimates and welcome message sequences**
+  (`meta_whatsapp_client::marketing`, roadmap L13, parity rows 137 and
+  138, from `marketing-messages/pricing`,
+  `marketing-messages/pricing/enroll-max-price`,
+  `marketing-messages/pricing/duplicate-templates` and
+  `ctwa/welcome-message-sequences`, read on 2026-11-01).
+  `MarketingBusiness::sign_max_price_agreement(&MaxPriceAgreementSigner)`
+  (`POST /{BUSINESS_ID}/max_price_agreements`) **signs Meta's Max Price
+  Beta Agreement on the business's behalf**, a legal act: it is its own
+  explicit call, sent once whatever the `RetryPolicy` (not replayed
+  after a timeout, nor on Meta's HTTP 429 within 5 minutes of the last
+  email), and no other call makes it (a max-price send, a duplicate, a
+  reach estimate or a template update never signs, and Meta's "sign the
+  agreement" refusals are returned as they come);
+  `MarketingBusiness::max_price_agreement()` reads its state
+  (`AgreementStatus`: `none`, `pending`, `accepted`). Neither call's
+  errors quote the signer's name or email.
+  `MarketingAccount::duplicate_template(&DuplicateTemplate)` clones an
+  approved marketing template at another `MaxPrice`
+  (`source_template_id`, `name`, `optimization_spec`; answering a
+  `DuplicatedTemplate`, with its `source_template_id`), and
+  `MarketingAccount::reach_estimate(&ReachEstimateQuery)` estimates
+  deliveries and costs at several max prices (`GET
+  /{WABA_ID}/reachestimate`, `DateInterval` `L1D` to `L28D`).
+  `Client::marketing_template(id)` reads, sets and clears a template's
+  max price (`MarketingTemplate::max_price`, `set_max_price`,
+  `clear_max_price`, the two nulls Meta requires). A `MaxPrice` is
+  checked first: `bid_amount` 1 to `i32::MAX` per 1,000 deliveries
+  (`MaxPrice::per_delivery` converts from a per-delivery price), at most
+  240 country multipliers, each keyed by an alpha-2 code and in (0, 10].
+  `Client::welcome_sequences(waba)` (`WelcomeSequences`): `create`,
+  `update`, `list`, `get` and `delete` Click-to-WhatsApp welcome message
+  sequences (`WelcomeMessage`: text, prefilled message, ice breakers),
+  sent as the guide's form. Core: `ids::WelcomeSequenceId` (opaque).
+  Meta withdrew the partner allow list with the open beta of 2026-10-01
+  (a partner's agreement covers its shared and managed client WABAs), so
+  there is none to wrap; a GIF header's send-time parameter is still
+  shown by no page, so none is typed.
 - **Durable scheduling** in `meta-whatsapp-bot` (roadmap B3, parity row
   90, now done in the library; design D29), from
   `templates/marketing-templates/per-user-limits` (read on 2026-11-01).
