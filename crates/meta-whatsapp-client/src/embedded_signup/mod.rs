@@ -282,7 +282,11 @@
 //! - the claimed WABA is onboarded with the request as it is; the others
 //!   register no number and request no coexistence sync (the PIN and the
 //!   finish are the claimed number's), and one the vault already holds is
-//!   left as it is ([`WabaOutcome::Held`]).
+//!   left as it is ([`WabaOutcome::Held`]; one stored by another
+//!   onboarding meanwhile fails at `store_token`, its record kept);
+//! - the others are the claimed WABA's business's: one Meta reports
+//!   another owner for, or none, fails at `verify_assets`, and all fail
+//!   there, with no request, when the claimed WABA's owner is unknown.
 //!
 //! `onboard` and `onboard_hosted` refuse a request with the option on;
 //! hosted signup gets one `PARTNER_ADDED` per WABA, each onboarded from its

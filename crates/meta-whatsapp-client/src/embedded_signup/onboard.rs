@@ -323,7 +323,8 @@ impl OnboardingRequest {
     /// multi-WABA flows' `waba_ids`) must be among the grants, or nothing
     /// is onboarded; the claimed WABA is onboarded with this request as it
     /// is, and the others with no number registered and no coexistence
-    /// sync (the PIN and the finish are the claimed number's); another
+    /// sync (the PIN and the finish are the claimed number's), each only
+    /// when Meta reports the claimed WABA's owner as its owner too; another
     /// WABA the vault already holds is left as it is
     /// ([`WabaOutcome::Held`](super::WabaOutcome::Held)). Refused by
     /// [`EmbeddedSignup::onboard`], whose result names one WABA, and by
@@ -477,6 +478,26 @@ pub(super) struct GrantedWaba<'a> {
     pub(super) debug: &'a TokenDebug,
     /// The WABA, among the token's grants.
     pub(super) waba_id: WabaId,
+    /// Its place in the signup.
+    pub(super) role: WabaRole<'a>,
+}
+
+/// The place of a WABA in a signup, which decides how its owner is
+/// checked and how its record is stored.
+pub(super) enum WabaRole<'a> {
+    /// The only WABA onboarded ([`EmbeddedSignup::onboard`],
+    /// [`EmbeddedSignup::onboard_hosted`](super::EmbeddedSignup::onboard_hosted)):
+    /// its owner checked against [`Granted::owner`] when the flow names
+    /// one, its record replacing any.
+    Only,
+    /// The primary WABA of [`EmbeddedSignup::onboard_wabas`]: as
+    /// [`Self::Only`], and the owner Meta reports for it, once it is
+    /// verified, is written here: the business the signup is about.
+    Primary(&'a mut Option<BusinessId>),
+    /// Another grant of [`EmbeddedSignup::onboard_wabas`]: Meta must report
+    /// this owner for it (the primary WABA's), and its record is stored
+    /// only where the vault holds none ([`TokenVault::store_new`]).
+    Other(&'a BusinessId),
 }
 
 /// What `verify_assets` established with Meta.
@@ -689,6 +710,7 @@ impl EmbeddedSignup {
             granted: &granted,
             debug: &debug,
             waba_id,
+            role: WabaRole::Only,
         };
         self.onboard_waba(waba, request, vault, plan.as_ref(), approve, &mut done)
             .await
@@ -715,19 +737,33 @@ impl EmbeddedSignup {
             granted,
             debug,
             waba_id,
+            role,
         } = waba;
         let token = &granted.token;
         let business = self.client.with_token(token.clone());
+        let owner = match (&role, granted.owner) {
+            (WabaRole::Other(signup), _) => OwnerCheck::Exactly(signup),
+            (_, Some(expected)) => OwnerCheck::IfReported(expected),
+            (_, None) => OwnerCheck::Any,
+        };
         let assets = verify_assets(
             &business,
             waba_id,
             granted.session.phone_number_id.as_ref(),
-            granted.owner,
+            owner,
             request.register || request.is_coexistence(),
         )
         .await
         .map_err(|e| e.in_step(VERIFY_ASSETS))?;
         done.push(VERIFY_ASSETS);
+        let replace = match role {
+            WabaRole::Primary(seen) => {
+                seen.clone_from(&assets.business_id);
+                true
+            }
+            WabaRole::Only => true,
+            WabaRole::Other(_) => false,
+        };
 
         // The token record stored below: an approval is recorded for it.
         let created_at = vault.now();
@@ -755,10 +791,26 @@ impl EmbeddedSignup {
         stored.phone_number_ids.clone_from(&assets.phone_number_ids);
         stored.expires_at = expires_at;
         stored.created_at = Some(created_at);
-        vault
-            .store(&stored)
+        if replace {
+            vault
+                .store(&stored)
+                .await
+                .map_err(|e| e.in_step(STORE_TOKEN))?;
+        } else if vault
+            .store_new(&stored)
             .await
-            .map_err(|e| e.in_step(STORE_TOKEN))?;
+            .map_err(|e| e.in_step(STORE_TOKEN))?
+            .is_none()
+        {
+            // Held since `onboard_wabas` looked (another signup, a hosted
+            // `PARTNER_ADDED`): a grant this signup did not claim never
+            // replaces it.
+            return Err(Error::from(ValidationError::new(
+                "waba_id",
+                "another onboarding stored this WABA while this signup onboarded it: its record is left as it is, nothing was stored for this signup, and what your approval reserved for it is yours to release",
+            ))
+            .in_step(STORE_TOKEN));
+        }
         done.push(STORE_TOKEN);
 
         let tail = Tail {
@@ -1081,27 +1133,41 @@ async fn register(
 /// `waba_id` (a grant `verify_grant` checked) is about: its owner and its
 /// numbers. Nothing from the browser survives unchecked.
 ///
-/// `owner` is the business the token was asked for (hosted signup): when
-/// Meta reports the WABA's owner, it must be that one. When Meta reports
-/// none, nothing is stored for it, as in the code flow.
+/// `owner` says which owner Meta must report for the WABA (see
+/// [`OwnerCheck`]).
 async fn verify_assets(
     business: &Client,
     waba_id: WabaId,
     claimed_phone: Option<&PhoneNumberId>,
-    owner: Option<&BusinessId>,
+    owner: OwnerCheck<'_>,
     need_phone: bool,
 ) -> Result<VerifiedAssets> {
     let waba = business.waba(waba_id.clone());
     // Privately decoded: the answer carries the business's name.
     let business_id = waba.owner_business().await?.and_then(|b| b.id);
-    if let (Some(expected), Some(reported)) = (owner, &business_id)
-        && expected != reported
-    {
-        return Err(ValidationError::new(
-            "owner_business_id",
-            "Meta reports another owner for the WABA than the business the token was fetched for",
-        )
-        .into());
+    match owner {
+        OwnerCheck::Any => {}
+        OwnerCheck::IfReported(expected) => {
+            if business_id
+                .as_ref()
+                .is_some_and(|reported| reported != expected)
+            {
+                return Err(ValidationError::new(
+                    "owner_business_id",
+                    "Meta reports another owner for the WABA than the business the token was fetched for",
+                )
+                .into());
+            }
+        }
+        OwnerCheck::Exactly(expected) => {
+            if business_id.as_ref() != Some(expected) {
+                return Err(ValidationError::new(
+                    "owner_business_id",
+                    "Meta reports another owner, or none, for this WABA than for the signup's claimed WABA: a grant that is not the same business's is not onboarded",
+                )
+                .into());
+            }
+        }
     }
     let mut numbers = waba_phone_numbers(&waba).await?;
     let phone_number_id = match claimed_phone {
@@ -1126,6 +1192,21 @@ async fn verify_assets(
         phone_number_id,
         phone_number_ids,
     })
+}
+
+/// Which owner `verify_assets` requires Meta to report for a WABA.
+#[derive(Clone, Copy)]
+enum OwnerCheck<'a> {
+    /// The code flow's WABA: whichever Meta reports (or none, then none is
+    /// stored).
+    Any,
+    /// The business the token was asked for (hosted signup): when Meta
+    /// reports the WABA's owner, it must be that one. When Meta reports
+    /// none, nothing is stored for it, as in the code flow.
+    IfReported(&'a BusinessId),
+    /// Another grant of a several-WABA signup: Meta must report this owner
+    /// (the primary WABA's), and an unreported one is refused.
+    Exactly(&'a BusinessId),
 }
 
 /// Check that `debug` describes a valid token of our app that manages

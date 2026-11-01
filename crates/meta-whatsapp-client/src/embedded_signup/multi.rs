@@ -12,19 +12,27 @@
 //! (`solution-providers/manage-accounts`). The browser's list is a claim;
 //! the token's grants are Meta's, so they decide what is onboarded, and a
 //! claim they do not back refuses the signup.
+//!
+//! A token's grants can outlast one signup, and Meta's example token is a
+//! user's, whose grants may span businesses: so a grant other than the
+//! primary WABA is onboarded only when Meta reports the primary WABA's
+//! owner as its owner too (`owner_business_info`, the business the signup
+//! is about), and only where the vault holds no record for it, checked by
+//! a read before any request and again, atomically, when it is stored.
 
 use std::future::{Future, Ready};
 
 use meta_whatsapp_core::error::ValidationError;
-use meta_whatsapp_core::ids::{AppId, WabaId};
+use meta_whatsapp_core::ids::{AppId, BusinessId, WabaId};
 use meta_whatsapp_core::{Error, Result};
 
 use super::EmbeddedSignup;
 use super::event::SessionInfo;
 use super::onboard::{
-    Granted, GrantedWaba, Onboarded, OnboardingRequest, VerifiedOnboarding, required_code, steps,
-    verify_grant,
+    Granted, GrantedWaba, Onboarded, OnboardingRequest, VerifiedOnboarding, WabaRole,
+    required_code, steps, verify_grant,
 };
+use super::partner::CreditPlan;
 use super::token::{TokenDebug, WHATSAPP_BUSINESS_MANAGEMENT};
 use super::vault::TokenVault;
 
@@ -104,7 +112,10 @@ pub enum WabaOutcome {
     /// (an earlier onboarding, perhaps another tenant's): left as it is,
     /// with no request, so as not to replace its token and record unasked.
     /// Re-onboard it by claiming it in a signup, or delete it from the
-    /// vault first.
+    /// vault first. A record stored for it after this check (another
+    /// signup, a hosted `PARTNER_ADDED`, racing this one) is not replaced
+    /// either: the WABA then fails at `store_token`, after your approval
+    /// ran, so release what it reserved.
     Held,
     /// Failed at a step: `error` is an [`Error::Step`] naming it. When
     /// `steps_completed` includes `store_token` the token is stored and
@@ -171,8 +182,16 @@ impl EmbeddedSignup {
     /// finish are the claimed number's, and both are once-only or
     /// rate-limited (resume such a WABA with a request of its own to
     /// register or sync it). Another WABA the vault already holds is left
-    /// as it is ([`WabaOutcome::Held`]), the primary one is replaced, as
-    /// `onboard` replaces it.
+    /// as it is ([`WabaOutcome::Held`]; one stored by another onboarding
+    /// while this one runs fails at `store_token`, its record kept), the
+    /// primary one is replaced, as `onboard` replaces it.
+    ///
+    /// **The others must be the primary WABA's business's**: each fails
+    /// at `verify_assets`, before its numbers are read, approved or
+    /// stored, when Meta reports another owner for it, or none, than the
+    /// owner it reported for the primary WABA; and every one fails there,
+    /// with no request, when that owner is unknown (the primary WABA
+    /// failed before it was verified, or Meta reported no owner for it).
     ///
     /// With the option off, the result has one entry, the primary WABA's,
     /// whose failure is reported in it (not as an error, unlike
@@ -258,6 +277,9 @@ impl EmbeddedSignup {
         )
         .map_err(|e| Error::from(e).in_step(steps::VERIFY_ASSETS))?;
 
+        // The business the signup is about: the owner Meta reports for the
+        // primary WABA, once verified. Every other grant must be its.
+        let mut signup_owner: Option<BusinessId> = None;
         let mut out = Vec::with_capacity(wabas.len());
         for (at, waba_id) in wabas.into_iter().enumerate() {
             let primary = at == 0;
@@ -267,6 +289,7 @@ impl EmbeddedSignup {
                     granted: &granted,
                     debug: &debug,
                     waba_id: waba_id.clone(),
+                    role: WabaRole::Primary(&mut signup_owner),
                 };
                 self.onboard_waba(
                     waba,
@@ -278,43 +301,31 @@ impl EmbeddedSignup {
                 )
                 .await
             } else {
-                // A read, not a lock, as in hosted signup: a token held
-                // for this WABA is not replaced by a signup that did not
-                // claim it.
-                match vault.holds(&waba_id).await {
-                    Ok(true) => {
-                        out.push(WabaOnboarding {
-                            waba_id,
-                            primary,
-                            outcome: WabaOutcome::Held,
-                        });
-                        continue;
-                    }
-                    Err(e) => Err(e.in_step(steps::VERIFY_ASSETS)),
-                    Ok(false) => {
-                        let other = request.for_other_waba(&waba_id);
-                        let granted = Granted {
-                            token: granted.token.clone(),
-                            expires_in: granted.expires_in,
-                            session: &other.session,
-                            owner: None,
-                        };
-                        let waba = GrantedWaba {
-                            granted: &granted,
-                            debug: &debug,
-                            waba_id: waba_id.clone(),
-                        };
-                        self.onboard_waba(
-                            waba,
-                            &other,
-                            vault,
-                            plan.as_ref(),
-                            approve.as_mut(),
-                            &mut done,
-                        )
-                        .await
-                    }
-                }
+                let signup = Signup {
+                    granted: &granted,
+                    debug: &debug,
+                    request,
+                    vault,
+                    plan: plan.as_ref(),
+                };
+                let Some(onboarded) = self
+                    .onboard_other(
+                        &signup,
+                        &waba_id,
+                        signup_owner.as_ref(),
+                        approve.as_mut(),
+                        &mut done,
+                    )
+                    .await
+                else {
+                    out.push(WabaOnboarding {
+                        waba_id,
+                        primary,
+                        outcome: WabaOutcome::Held,
+                    });
+                    continue;
+                };
+                onboarded
             };
             let outcome = match onboarded {
                 Ok(done) => WabaOutcome::Onboarded(Box::new(done)),
@@ -331,6 +342,68 @@ impl EmbeddedSignup {
         }
         Ok(WabasOnboarded { wabas: out })
     }
+
+    /// Another grant of a signup: `None` when the vault holds it (left as
+    /// it is, nothing requested), else its onboarding, with no number
+    /// registered and no coexistence sync, its owner required to be
+    /// `signup_owner` (the primary WABA's, as Meta reported it).
+    async fn onboard_other<F, Fut>(
+        &self,
+        signup: &Signup<'_>,
+        waba_id: &WabaId,
+        signup_owner: Option<&BusinessId>,
+        approve: Option<&mut F>,
+        done: &mut Vec<&'static str>,
+    ) -> Option<Result<Onboarded>>
+    where
+        F: FnMut(VerifiedOnboarding) -> Fut,
+        Fut: Future<Output = Result<()>>,
+    {
+        // A token held for this WABA is not replaced by a signup that did
+        // not claim it: this read skips it before any request, and
+        // `store_token` stores only where the vault still holds none (one
+        // stored meanwhile fails the WABA there). A read that fails fails
+        // the WABA closed.
+        match signup.vault.holds(waba_id).await {
+            Ok(true) => return None,
+            Ok(false) => {}
+            Err(e) => return Some(Err(e.in_step(steps::VERIFY_ASSETS))),
+        }
+        let Some(owner) = signup_owner else {
+            return Some(Err(Error::from(ValidationError::new(
+                "owner_business_id",
+                "the business of the signup is unknown (the claimed WABA was not verified, or Meta reported no owner for it), so this grant cannot be shown to be the same business's: not onboarded, nothing requested or stored for it",
+            ))
+            .in_step(steps::VERIFY_ASSETS)));
+        };
+        let other = signup.request.for_other_waba(waba_id);
+        let granted = Granted {
+            token: signup.granted.token.clone(),
+            expires_in: signup.granted.expires_in,
+            session: &other.session,
+            owner: None,
+        };
+        let waba = GrantedWaba {
+            granted: &granted,
+            debug: signup.debug,
+            waba_id: waba_id.clone(),
+            role: WabaRole::Other(owner),
+        };
+        Some(
+            self.onboard_waba(waba, &other, signup.vault, signup.plan, approve, done)
+                .await,
+        )
+    }
+}
+
+/// What the WABAs of one signup share: the token, its inspection, the
+/// request, the vault and the credit plan.
+struct Signup<'a> {
+    granted: &'a Granted<'a>,
+    debug: &'a TokenDebug,
+    request: &'a OnboardingRequest,
+    vault: &'a TokenVault,
+    plan: Option<&'a CreditPlan<'a>>,
 }
 
 /// The WABAs a signup onboards, the primary one first: the claimed WABA
@@ -379,9 +452,10 @@ mod tests {
     use http::Method;
     use meta_whatsapp_adapters::store::MemoryKvStore;
     use meta_whatsapp_core::clock::ManualClock;
-    use meta_whatsapp_core::error::CreditError;
+    use meta_whatsapp_core::error::{CreditError, StorageError};
     use meta_whatsapp_core::ids::{AllocationConfigId, BusinessId, PhoneNumberId};
     use meta_whatsapp_core::secret::{AccessToken, SecretBytes};
+    use meta_whatsapp_core::store::{Expiry, KvStore, StoreKey, Versioned};
     use meta_whatsapp_core::testing::{RecordedBody, RecordedRequest, ScriptedTransport};
     use pretty_assertions::assert_eq;
     use serde_json::{Value, json};
@@ -429,6 +503,10 @@ mod tests {
     }
 
     fn harness_with(partner: Option<SolutionPartner>) -> Harness {
+        harness_on(Arc::new(MemoryKvStore::new()), partner)
+    }
+
+    fn harness_on(kv: Arc<dyn KvStore>, partner: Option<SolutionPartner>) -> Harness {
         let t = ScriptedTransport::new();
         let client = Client::builder()
             .transport(t.clone())
@@ -436,7 +514,7 @@ mod tests {
             .build()
             .unwrap();
         let vault = TokenVault::new(
-            Arc::new(MemoryKvStore::new()),
+            kv,
             VaultKeys::new(VaultKey::new("k1", SecretBytes::new([42; 32])).unwrap()),
         )
         .unwrap()
@@ -816,26 +894,303 @@ mod tests {
         assert_eq!(h.t.remaining(), 0);
     }
 
-    /// Isolation the other way: the claimed WABA failing before
-    /// `store_token` does not stop the other one.
+    /// Isolation the other way: the claimed WABA failing after it was
+    /// verified (here at `subscribe_app`) does not stop the other one.
     #[tokio::test]
     async fn a_failure_on_the_claimed_waba_does_not_stop_the_others() {
         let h = harness();
         script_shared(&h.t, &[WABA_B, WABA_A]);
-        h.t.push_json(403, graph_error(200)); // owner of A
+        script_verified(&h.t, WABA_A, &[PHONE_A]);
+        h.t.push_json(403, graph_error(200)); // subscribe A
         script_verified(&h.t, WABA_B, &[PHONE_B]);
         h.t.push_json(200, success()); // subscribe B
         let result = h.es.onboard_wabas(&request(true), &h.vault).await.unwrap();
         let a = &result.primary().unwrap().outcome;
-        assert_eq!(step(a.error().unwrap()), VERIFY_ASSETS);
-        assert!(!a.is_resumable(), "nothing was stored for it");
-        assert!(stored(&h.vault, WABA_A).await.is_none());
+        assert_eq!(step(a.error().unwrap()), SUBSCRIBE_APP);
+        assert!(a.is_resumable(), "its token was stored");
+        assert!(stored(&h.vault, WABA_A).await.is_some());
         onboarded(&result, WABA_B);
         assert!(stored(&h.vault, WABA_B).await.is_some());
         let reqs = h.t.requests();
-        assert_eq!(reqs.len(), 6);
-        assert_owner_lookup(&reqs[2], WABA_A);
-        assert_owner_lookup(&reqs[3], WABA_B);
+        assert_eq!(reqs.len(), 8);
+        assert_subscribe(&reqs[4], WABA_A);
+        assert_owner_lookup(&reqs[5], WABA_B);
+        assert_subscribe(&reqs[7], WABA_B);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// The business a signup is about is the owner Meta reports for its
+    /// claimed WABA. When that is unknown (the claimed WABA failed its
+    /// verification, or Meta reported no owner for it), no other grant
+    /// can be shown to be that business's: each fails closed at
+    /// `verify_assets`, with no request made and nothing stored for it.
+    #[tokio::test]
+    async fn the_others_fail_closed_when_the_signup_business_is_unknown() {
+        for owner_of_a in [None, Some(json!({"id": WABA_A}))] {
+            let h = harness();
+            script_shared(&h.t, &[WABA_B, WABA_A]);
+            match &owner_of_a {
+                // The owner lookup fails: A is not verified.
+                None => {
+                    h.t.push_json(403, graph_error(200));
+                }
+                // Meta reports no owner: A is onboarded, as by `onboard`.
+                Some(answer) => {
+                    h.t.push_json(200, answer.clone());
+                    h.t.push_json(200, phones_response(&[PHONE_A]));
+                    h.t.push_json(200, success()); // subscribe A
+                    h.t.push_json(200, success()); // register A
+                }
+            }
+            let result = h.es.onboard_wabas(&request(true), &h.vault).await.unwrap();
+            let a = &result.primary().unwrap().outcome;
+            assert_eq!(a.onboarded().is_some(), owner_of_a.is_some(), "{a:?}");
+            let b = &result.get(&waba(WABA_B)).unwrap().outcome;
+            let WabaOutcome::Failed {
+                error,
+                steps_completed,
+            } = b
+            else {
+                panic!("{b:?}")
+            };
+            assert_eq!(step(error), VERIFY_ASSETS);
+            assert!(
+                matches!(error, Error::Step { source, .. } if matches!(&**source, Error::Validation(v) if v.field == "owner_business_id")),
+                "{error}"
+            );
+            assert_eq!(steps_completed, &[EXCHANGE_CODE, DEBUG_TOKEN]);
+            assert!(!b.is_resumable());
+            assert!(!touches(&h.t.requests(), WABA_B), "nothing asked for B");
+            assert!(stored(&h.vault, WABA_B).await.is_none());
+            assert_eq!(h.t.remaining(), 0);
+        }
+    }
+
+    /// A grant Meta reports another owner for than the claimed WABA's (or
+    /// none) is not the signup's business's: it fails at `verify_assets`,
+    /// before its numbers are read, nothing stored, approved or subscribed
+    /// for it, while the claimed WABA is onboarded.
+    #[tokio::test]
+    async fn a_grant_of_another_business_is_not_onboarded() {
+        let other_business = json!({"owner_business_info": {"name": "Other", "id": "9990001112223334"}, "id": WABA_B});
+        for owner_of_b in [other_business, json!({"id": WABA_B})] {
+            let h = harness();
+            script_shared(&h.t, &[WABA_B, WABA_A]);
+            script_verified(&h.t, WABA_A, &[PHONE_A]);
+            h.t.push_json(200, success()); // subscribe A
+            h.t.push_json(200, success()); // register A
+            h.t.push_json(200, owner_of_b.clone());
+            let approved = Mutex::new(Vec::new());
+            let result =
+                h.es.onboard_wabas_with_approval(&request(true), &h.vault, |verified| {
+                    approved.lock().unwrap().push(verified.waba_id);
+                    async { Ok(()) }
+                })
+                .await
+                .unwrap();
+            onboarded(&result, WABA_A);
+            let b = &result.get(&waba(WABA_B)).unwrap().outcome;
+            let error = b.error().unwrap_or_else(|| panic!("{b:?}"));
+            assert_eq!(step(error), VERIFY_ASSETS, "{owner_of_b}");
+            assert!(
+                matches!(error, Error::Step { source, .. } if matches!(&**source, Error::Validation(v) if v.field == "owner_business_id")),
+                "{error}"
+            );
+            assert_eq!(
+                approved.into_inner().unwrap(),
+                [waba(WABA_A)],
+                "B not approved"
+            );
+            let reqs = h.t.requests();
+            assert_eq!(reqs.len(), 7, "B's numbers not read");
+            assert_owner_lookup(&reqs[6], WABA_B);
+            assert!(stored(&h.vault, WABA_B).await.is_none());
+            assert!(
+                h.vault
+                    .get_by_phone_number(&phone(PHONE_B))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(h.t.remaining(), 0);
+        }
+    }
+
+    /// The `Held` read is not a lock: a record another onboarding stores
+    /// for a grant after it (here, inside the approval) is not replaced.
+    /// `store_token` stores only where the vault still holds none, and the
+    /// grant fails there, nothing stored or subscribed for it.
+    #[tokio::test]
+    async fn a_grant_stored_meanwhile_is_not_replaced() {
+        let h = harness();
+        script_shared(&h.t, &[WABA_B, WABA_A]);
+        script_verified(&h.t, WABA_A, &[PHONE_A]);
+        h.t.push_json(200, success()); // subscribe A
+        h.t.push_json(200, success()); // register A
+        script_verified(&h.t, WABA_B, &[PHONE_B]);
+        let vault = h.vault.clone();
+        let result =
+            h.es.onboard_wabas_with_approval(&request(true), &h.vault, |verified| {
+                let vault = vault.clone();
+                async move {
+                    if verified.waba_id.as_str() == WABA_B {
+                        // Another signup (or a hosted `PARTNER_ADDED`) of B.
+                        let theirs =
+                            StoredBusinessToken::new(waba(WABA_B), AccessToken::new("EAAtheirs"))
+                                .phone_number_ids([phone(PHONE_B)]);
+                        vault.store(&theirs).await?;
+                    }
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+        onboarded(&result, WABA_A);
+        let b = &result.get(&waba(WABA_B)).unwrap().outcome;
+        let WabaOutcome::Failed {
+            error,
+            steps_completed,
+        } = b
+        else {
+            panic!("{b:?}")
+        };
+        assert_eq!(step(error), STORE_TOKEN);
+        assert_eq!(
+            steps_completed,
+            &[EXCHANGE_CODE, DEBUG_TOKEN, VERIFY_ASSETS, APPROVE]
+        );
+        assert!(!b.is_resumable(), "this signup stored nothing for it");
+        assert_eq!(
+            stored(&h.vault, WABA_B)
+                .await
+                .unwrap()
+                .token
+                .expose_secret(),
+            "EAAtheirs"
+        );
+        let reqs = h.t.requests();
+        assert_eq!(reqs.len(), 8, "B not subscribed");
+        assert_numbers(&reqs[7], WABA_B);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A store whose reads of one key fail.
+    #[derive(Debug)]
+    struct UnreadableKv {
+        inner: MemoryKvStore,
+        key: String,
+    }
+
+    #[async_trait::async_trait]
+    impl KvStore for UnreadableKv {
+        async fn get(&self, key: &StoreKey) -> Result<Option<Versioned>, StorageError> {
+            if key.key() == self.key {
+                return Err(StorageError::Backend(anyhow::anyhow!("unreachable")));
+            }
+            self.inner.get(key).await
+        }
+        async fn put(
+            &self,
+            key: &StoreKey,
+            value: Vec<u8>,
+            expiry: Expiry,
+        ) -> Result<u64, StorageError> {
+            self.inner.put(key, value, expiry).await
+        }
+        async fn put_if_absent(
+            &self,
+            key: &StoreKey,
+            value: Vec<u8>,
+            expiry: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            self.inner.put_if_absent(key, value, expiry).await
+        }
+        async fn compare_and_swap(
+            &self,
+            key: &StoreKey,
+            expected: u64,
+            value: Option<Vec<u8>>,
+            expiry: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            self.inner
+                .compare_and_swap(key, expected, value, expiry)
+                .await
+        }
+        async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+            self.inner.delete(key).await
+        }
+    }
+
+    /// Whether the vault holds another grant is read before anything is
+    /// asked for it: a read that fails fails that grant closed (it may be
+    /// held), not as absent.
+    #[tokio::test]
+    async fn a_grant_whose_record_cannot_be_read_fails_closed() {
+        let h = harness_on(
+            Arc::new(UnreadableKv {
+                inner: MemoryKvStore::new(),
+                key: format!("waba/{WABA_B}"),
+            }),
+            None,
+        );
+        script_shared(&h.t, &[WABA_B, WABA_A]);
+        script_verified(&h.t, WABA_A, &[PHONE_A]);
+        h.t.push_json(200, success()); // subscribe A
+        h.t.push_json(200, success()); // register A
+        let result = h.es.onboard_wabas(&request(true), &h.vault).await.unwrap();
+        onboarded(&result, WABA_A);
+        let b = &result.get(&waba(WABA_B)).unwrap().outcome;
+        assert_eq!(step(b.error().unwrap()), VERIFY_ASSETS);
+        assert!(
+            matches!(b.error().unwrap(), Error::Step { source, .. } if matches!(&**source, Error::Storage(_))),
+            "{b:?}"
+        );
+        assert!(!touches(&h.t.requests(), WABA_B));
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// With nothing claimed, the primary WABA is the newest grant (what
+    /// `onboard` picks), then the others in Meta's order; each record
+    /// carries the code exchange's expiry.
+    #[tokio::test]
+    async fn with_nothing_claimed_the_newest_grant_is_primary() {
+        let h = harness();
+        h.t.push_json(
+            200,
+            json!({"access_token": TOKEN, "token_type": "bearer", "expires_in": 3600}),
+        );
+        h.t.push_json(200, debug_response(&[WABA_B, WABA_A]));
+        script_verified(&h.t, WABA_B, &[PHONE_B]);
+        h.t.push_json(200, success()); // subscribe B
+        script_verified(&h.t, WABA_A, &[PHONE_A]);
+        h.t.push_json(200, success()); // subscribe A
+        let request =
+            OnboardingRequest::new(SignupCode::new(CODE).unwrap(), SessionInfo::default())
+                .every_granted_waba(true);
+        let result = h.es.onboard_wabas(&request, &h.vault).await.unwrap();
+        assert!(result.is_complete(), "{result:?}");
+        let order: Vec<_> = result
+            .wabas
+            .iter()
+            .map(|w| (w.waba_id.as_str(), w.primary))
+            .collect();
+        assert_eq!(order, [(WABA_B, true), (WABA_A, false)]);
+        assert_eq!(result.primary().unwrap().waba_id, waba(WABA_B));
+        let expires = datetime!(2026-09-24 13:00 UTC);
+        for id in [WABA_A, WABA_B] {
+            assert_eq!(
+                onboarded(&result, id).token_expires_at,
+                Some(expires),
+                "{id}"
+            );
+            assert_eq!(
+                stored(&h.vault, id).await.unwrap().expires_at,
+                Some(expires)
+            );
+        }
+        let reqs = h.t.requests();
+        assert_owner_lookup(&reqs[2], WABA_B);
+        assert_owner_lookup(&reqs[5], WABA_A);
         assert_eq!(h.t.remaining(), 0);
     }
 
@@ -1305,6 +1660,44 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(step(&err), LOAD_TOKEN);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A revoked business's line is shared again for none of its WABAs
+    /// unless the request opts in: the other grants keep the request's
+    /// credit settings, `reshare_after_revocation` off included.
+    #[tokio::test]
+    async fn a_revoked_business_is_funded_again_for_no_waba() {
+        let h = partner_harness();
+        h.vault
+            .mark_revoked(&BusinessId::new(BUSINESS).unwrap(), &[])
+            .await
+            .unwrap();
+        script_shared(&h.t, &[WABA_B, WABA_A]);
+        script_verified(&h.t, WABA_A, &[PHONE_A]);
+        h.t.push_json(200, success()); // subscribe A
+        h.t.push_json(200, success()); // assigned_users A
+        script_verified(&h.t, WABA_B, &[PHONE_B]);
+        h.t.push_json(200, success()); // subscribe B
+        h.t.push_json(200, success()); // assigned_users B
+        let result = h
+            .es
+            .onboard_wabas_with_approval(&partner_request(true), &h.vault, |_| async { Ok(()) })
+            .await
+            .unwrap();
+        for id in [WABA_A, WABA_B] {
+            let outcome = &result.get(&waba(id)).unwrap().outcome;
+            let error = outcome.error().unwrap_or_else(|| panic!("{outcome:?}"));
+            assert_eq!(step(error), SHARE_CREDIT_LINE, "{id}");
+            assert!(
+                matches!(error, Error::Step { source, .. } if matches!(&**source, Error::Credit(CreditError::Revoked { posted: false, .. }))),
+                "{id}: {error}"
+            );
+            assert!(outcome.is_resumable());
+        }
+        let reqs = h.t.requests();
+        assert_eq!(reqs.len(), 10, "no lookup, no share");
+        assert_assigned(&reqs[9], WABA_B);
         assert_eq!(h.t.remaining(), 0);
     }
 }
