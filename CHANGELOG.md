@@ -217,6 +217,31 @@ stored data, the owner's).
 
 ### Added
 
+- **Payments in Brazil** (`meta_whatsapp_client::payments`, roadmap P1b,
+  parity rows 38 and 141, on P1a's types). `Currency::Brl` selects
+  Brazil's rules, as `Currency::Inr` selects India's (unchanged):
+  `OrderDetailsParameters::brl` (total computed from the order) and
+  `brl_simplified` (the total alone, no `order`, no header) send
+  `payment_type` `br` (`PaymentType::Br`); `Amount::brl(centavos)`. New
+  payment settings: `PixDynamicCode` (code, merchant name, key,
+  `PixKeyType`, and `PixFlowType` for Pix with redirect),
+  `PaymentSetting::boleto` (the digitable line) and `OffsiteCardPay`
+  (one-click: the last four digits and your credential id); a payment
+  link carries its `uri` alone. `OrderStatus::brl` sends an order update
+  and a `PaymentUpdate` (`pending`, `captured`, `failed`, a timestamp),
+  each optional; the new `OrderStatus` fields `payment` and `currency`
+  (not sent) select the rules. Brazil's checks: `reference_id` at most
+  60 characters, `payment_type` `br`, `offset` 100, a positive total,
+  with an `order` the total equation and the subtotal (each item's sale
+  price, or price, times its quantity: `Order::items_sum`; India's stays
+  unchecked), a `retailer_id` on every item, an order status that may
+  be `pending`. One currency's fields are refused in the other's orders
+  (India's `payment_configuration`, beneficiaries, item images,
+  importers, `quick_pay`, a payment link's success and cancel URLs and
+  settings; Brazil's settings, `payment_type` `br` and `payment`
+  update). Every example of the five Brazil pages is an exact-JSON test.
+  None of the new fields is a secret: `Debug` shows them (the module
+  docs say why, and what not to put in a `credential_id`).
 - **Payments in India** (`meta_whatsapp_client::payments`, roadmap P1a,
   parity rows 38 and 141; Brazil is P1b, the templates' payment buttons
   and the payment webhooks P1c, the service's routes P2). The

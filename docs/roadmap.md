@@ -3126,7 +3126,7 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     configuration's name has at most 60 characters, an order's limit;
     the tests put numeric ids where the examples print placeholder
     names (`the-catalog_id`, `your-media-id`).
-- [ ] **P1b. Brazil** (`meta-whatsapp-client`; rows 38, 141): `BRL`
+- [x] **P1b. Brazil** (`meta-whatsapp-client`; rows 38, 141): `BRL`
   orders (`payment_type` `br`, the `order` object optional, a
   `reference_id` of 60), the payment settings `pix_dynamic_code`,
   `payment_link`, `boleto` and `offsite_card_pay`, and the `payment`
@@ -3138,6 +3138,29 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
   - **Kind:** additive.
   - **Decisive:** exact JSON from `payments/payments-br/*`; a `BRL`
     order checked by Brazil's rules, an `INR` one by India's.
+  - **Landed:** `Currency::Brl` selects Brazil's rules
+    (`OrderDetailsParameters::brl`, `brl_simplified`,
+    `OrderStatus::brl` with a `PaymentUpdate`), India's unchanged; the
+    settings `PixDynamicCode` (with `PixFlowType`, Pix with redirect),
+    `PaymentSetting::boleto`, `OffsiteCardPay` and the `payment_link`'s
+    `uri` alone; every example of the five pages an exact-JSON test
+    (`payments/tests/brazil.rs`), the decisive pair
+    (`a_brl_order_is_checked_by_brazils_rules_and_an_inr_one_by_indias`,
+    `an_order_status_is_checked_by_its_currencys_rules`). Proposed for
+    the coordinator to decide: the fields one currency's pages
+    document and the other's do not are refused (India's beneficiaries,
+    importers, item images, `quick_pay`, a link's success and cancel
+    URLs in `BRL`; Brazil's settings and `payment` update in `INR`);
+    Brazil's subtotal is checked (its page says the sale price counts,
+    its examples keep the rule), India's still not; `payment_settings`
+    are optional in `BRL`, as every Brazil table says; an
+    `order_status` in `BRL` may carry neither an order nor a payment
+    update (no page requires either); `last_four_digits` must be four
+    ASCII digits; none of the new fields is a secret (a Pix code, key,
+    digitable line and card digits are shown to the buyer; a
+    `credential_id` is the merchant's id of a stored card, echoed in a
+    webhook). Not modelled: the `order_status` header Brazil's table
+    lists without fields.
 - [ ] **P1c. The payment template buttons and the payment webhooks**
   (`meta-whatsapp-client`, `meta-whatsapp-webhooks`; rows 38, 141): a
   template's `order_details` button and `order_status` component

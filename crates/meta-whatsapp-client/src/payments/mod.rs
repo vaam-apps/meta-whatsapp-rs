@@ -1,12 +1,16 @@
-//! Payments API (India): the `order_details` and `order_status` messages
-//! and their parts (defined with the other interactive messages, in
-//! [`crate::messages`], and re-exported here), the payment lookup, refunds,
-//! and the payment configurations a WABA collects payments with.
+//! Payments API (India and Brazil): the `order_details` and
+//! `order_status` messages and their parts (defined with the other
+//! interactive messages, in [`crate::messages`], and re-exported here),
+//! and, in India, the payment lookup, refunds, and the payment
+//! configurations a WABA collects payments with.
 //!
 //! Docs: `payments/payments-in/overview`,
 //! `payments/payments-in/upi-intent/dynamic-vpa`,
 //! `payments/payments-in/upi-intent`, `payments/payments-in/payment-links`,
-//! `payments/payments-in/pg`, `payments/payments-in/onboarding-apis`.
+//! `payments/payments-in/pg`, `payments/payments-in/onboarding-apis`;
+//! `payments/payments-br/overview`, `payments/payments-br/orders`,
+//! `payments/payments-br/offsite-pix`, `payments/payments-br/payment-links`,
+//! `payments/payments-br/boleto`, `payments/payments-br/one-click-payments`.
 //!
 //! Doc paths are relative to
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
@@ -21,6 +25,27 @@
 //! Every call authenticates with the token of the [`Client`] it was built
 //! from: the business's (a merchant's, with [`Client::with_token`]).
 //!
+//! # One currency, one set of rules
+//!
+//! An order's [`Currency`] selects what is checked: India's rules for
+//! `INR` ([`OrderDetailsParameters::inr`], [`OrderStatus::new`]),
+//! Brazil's for `BRL` ([`OrderDetailsParameters::brl`],
+//! [`OrderDetailsParameters::brl_simplified`], [`OrderStatus::brl`]).
+//!
+//! | | India (`INR`) | Brazil (`BRL`) |
+//! | --- | --- | --- |
+//! | `reference_id` | at most 35 characters | at most 60 characters |
+//! | `payment_type` | `upi`, with a payment link or a configuration | `br`, always |
+//! | `payment_settings` | required (or `payment_configuration`) | optional |
+//! | settings | `upi_intent_link`, `payment_link`, `payment_gateway` | `pix_dynamic_code`, `payment_link` (`uri` alone), `boleto`, `offsite_card_pay` |
+//! | `order` | required | optional ("simplified": the total alone, no header) |
+//! | items | origin and importer without a catalog; custom images | a `retailer_id` each; the subtotal checked |
+//! | `order_status` | `order` required, not `pending`; no `payment` | `order` and `payment` optional; `pending` allowed |
+//! | `offset` | 100 | 100 |
+//!
+//! A field one currency's pages document and the other's do not is
+//! refused, rather than sent where no page says Meta reads it.
+//!
 //! # Integration modes
 //!
 //! - **UPI intent** ([`PaymentSetting::upi_intent_link`]) and **payment
@@ -34,10 +59,18 @@
 //!   asks not to rely on the webhook alone: look the payment up.
 //! - Enhanced payment links (a template with a payment link URL button)
 //!   need nothing of this module.
+//! - **Brazil**: a dynamic Pix code ([`PixDynamicCode`], copied by the
+//!   buyer or, with [`PixFlowType::AppSwitch`], opened in their bank
+//!   app), a payment link, a Boleto ([`PaymentSetting::boleto`]) or a
+//!   one-click card payment ([`OffsiteCardPay`], not publicly available).
+//!   Your bank or PSP confirms the payment to you; then send an
+//!   [`OrderStatus`] with a [`PaymentUpdate`] (`captured`). WhatsApp does
+//!   not reconcile payments: match them by `reference_id`. Only for Pix
+//!   with redirect does WhatsApp mark the order paid by itself.
 //!
-//! Brazil (Pix, Boleto, payment links, one-click), the payment template
-//! buttons and the payment status webhooks are not typed yet (roadmap
-//! P1b, P1c).
+//! The payment template buttons and the payment webhooks (India's status
+//! of type `payment`, Brazil's `payment_method` reply) are not typed yet
+//! (roadmap P1c).
 //!
 //! # Where the pages disagree
 //!
@@ -59,18 +92,39 @@
 //!   as an object.
 //! - The examples' header images carry a `provider` object that no table
 //!   describes; it is not modelled.
+//! - Brazil's `subtotal` row says its `offset` and `value` are strings;
+//!   the amount tables say integers, and every example sends integers:
+//!   they are sent as integers.
+//! - Brazil's tables call `payment_settings` optional on every page,
+//!   while each page's text says the message carries them: they are
+//!   optional (every example sends one).
+//! - Brazil's `order_status` table lists a `header`, "Optional object",
+//!   with no fields and no example: it is not modelled.
 //!
 //! # What is checked locally
 //!
 //! Every limit the pages state as a rule ("required", "must", "cannot
 //! exceed", "only supported value"), before any request:
 //! [`OrderDetails::validate`] and [`OrderStatus::validate`] list them.
-//! Three rules are not checked: `subtotal` equal to the sum of the items'
-//! prices (every India example that has a `sale_amount` breaks it, and
-//! the pages disagree on whether `sale_amount` counts), the expiration's
-//! 300-second minimum (it is relative to the time Meta receives the
-//! message), and beneficiaries for physical goods, which only shipped
-//! goods need (the client cannot tell them from goods collected).
+//! Three rules are not checked: in India, `subtotal` equal to the sum of
+//! the items' prices (every India example that has a `sale_amount` breaks
+//! it, and the pages disagree on whether `sale_amount` counts; Brazil's
+//! page says the sale price counts, its examples keep the rule, and it is
+//! checked there, [`Order::items_sum`]), the expiration's 300-second
+//! minimum (it is relative to the time Meta receives the message), and
+//! beneficiaries for physical goods, which only shipped goods need (the
+//! client cannot tell them from goods collected). Brazil's order status
+//! transitions, like India's, are Meta's to refuse (error `2046`); a Pix
+//! code's validity is not read from the code, by WhatsApp or here.
+//!
+//! # Payment data, not secrets
+//!
+//! A Pix code, its key and merchant name, a Boleto's digitable line and
+//! a card's last four digits are shown to (or copied by) the buyer, and
+//! `Debug` shows them; a `CPF` key is a person's taxpayer number, which
+//! the buyer sees too. An [`OffsiteCardPay::credential_id`] is your id of
+//! a stored card, not the card: Meta returns it in the buyer's reply. Do
+//! not put a card number or a PSP token there.
 //!
 //! # Retries
 //!
@@ -137,10 +191,11 @@ use time::OffsetDateTime;
 pub use crate::common::SecretUrl;
 pub use crate::messages::payments::{
     Amount, Beneficiary, BilldeskFields, Currency, DescribedAmount, Discount, GatewayProvider,
-    GoodsType, ImporterAddress, ItemImage, Order, OrderDetails, OrderDetailsParameters,
-    OrderExpiration, OrderItem, OrderStatus, OrderStatusValue, OrderUpdate, PaymentGateway,
-    PaymentLink, PaymentOption, PaymentSetting, PaymentType, PayuFields, RazorpayFields, UpiApp,
-    ZaakpayFields,
+    GoodsType, ImporterAddress, ItemImage, OffsiteCardPay, Order, OrderDetails,
+    OrderDetailsParameters, OrderExpiration, OrderItem, OrderStatus, OrderStatusValue, OrderUpdate,
+    PaymentGateway, PaymentLink, PaymentOption, PaymentSetting, PaymentType, PaymentUpdate,
+    PaymentUpdateStatus, PayuFields, PixDynamicCode, PixFlowType, PixKeyType, RazorpayFields,
+    UpiApp, ZaakpayFields,
 };
 
 use crate::Client;
