@@ -217,6 +217,41 @@ stored data, the owner's).
 
 ### Added
 
+- **A pacer shared by replicas** in `meta-whatsapp-bot` (roadmap B2b,
+  parity row 89; for the service's broadcasts, M5k). Opt-in:
+  `KvRateLimiter` (module `pacer`) is a `RateLimiter` whose per-number
+  schedules are records in a `KvStore` (a typed store, no new port), so
+  every replica on the same Redis or Postgres books each number's sends
+  from one budget: `Pacer::new(KvRateLimiter::new(kv, Rate::DEFAULT))`.
+  `TokenBucket` stays the default and is unchanged. A record holds the
+  generic cell rate algorithm's due time, the slow-down (shared by every
+  replica) and a raised rate, in a 49-byte layout whose first byte is
+  its version (1), under the new namespace `wa.bot.pacer`
+  (`PACER_NAMESPACE`; ephemeral; a stable identifier pending the owner's
+  confirmation, docs/architecture.md § Stable identifiers), keyed by
+  the SHA-256 of the length-prefixed phone number id
+  (`KvRateLimiter::store_key`). A booking reads the record and writes it
+  back with `compare_and_swap` on the version read; one that loses
+  reads again after a jittered backoff (1 ms doubling to 64 ms), at
+  most 8 times (`KvRateLimiter::contention`), then fails with
+  `StorageError::Busy`. It fails closed: a store error, contention past
+  the bound or a record of another version fails the booking, so
+  nothing is sent (a broadcast ends `BroadcastEnd::LimiterFailed`). A
+  record expires `KvRateLimiter::idle_expiry` (24 hours by default)
+  after its last slot. The replicas' clocks are assumed synchronized
+  (NTP): a skew between two lets up to `⌈skew × rate⌉` more sends into a
+  one-second window, and the shared schedule never moves back. Settings
+  as `TokenBucket`'s (`rate_for`, `set_rate`, `burst`, `adaptive`,
+  `slow_down_factor`, `slow_down_spacing`, `recovery`) plus
+  `KvRateLimiter::rate_of`, `KvRateLimiter::raise_rate` and
+  `KvRateLimiter::with_timer`. A slot given back is reused only while
+  it is the last booked by any replica.
+- **`RateLimiter::raise_rate`** (`meta-whatsapp-bot`): raise a number's
+  rate unless it is already at or above it, atomically, never lowering
+  it; whether it rose. Defaults to raising nothing (`Ok(false)`), so
+  existing limiters compile unchanged; `TokenBucket` raises it in this
+  process, `KvRateLimiter` in the record, for every replica (checked
+  against the record read, under the same compare-and-swap).
 - **Call recording and transcription** (`meta_whatsapp_client::calling`,
   roadmap L14, parity row 135, from `calling/call-recording` and
   `calling/call-transcription`): the per-call `recording` and
@@ -1379,6 +1414,16 @@ stored data, the owner's).
 
 ### Changed
 
+- **`ThroughputUpgrades` takes any `RateLimiter`** (`meta-whatsapp-bot`,
+  roadmap B2b): it raises a number's rate through
+  `RateLimiter::raise_rate` instead of the `TokenBucket`'s own, so a
+  `KvRateLimiter` takes an upgrade for every replica.
+  `ThroughputUpgrades::new` is generic over the limiter
+  (`Arc<L: RateLimiter>`: an `Arc<TokenBucket>` passes as before) and
+  `ThroughputUpgrades::shared` takes an `Arc<dyn RateLimiter>` (an
+  `Arc<TokenBucket>` argument coerces to it). `ThroughputUpgrades::observe`
+  now also fails when the limiter does (a `KvRateLimiter` whose store is
+  down), raising nothing; a `TokenBucket` never fails.
 - **Breaking — `ConnectCall` has two more fields**
   (`meta_whatsapp_client::calling`, roadmap L14; see Added, "Call
   recording and transcription"): `recording: Option<CallRecording>` and
