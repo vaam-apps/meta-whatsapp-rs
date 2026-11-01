@@ -43,6 +43,21 @@ fn program(var: &str, default: &str) -> PathBuf {
     std::env::var_os(var).map_or_else(|| PathBuf::from(default), PathBuf::from)
 }
 
+/// The tests that assert a wall-clock bound take the CPU alone: run beside
+/// the animation tests (each an ffmpeg using every core), a conversion the
+/// CI runner finishes in about 11 s took over 15. Every other test shares.
+static CPU: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
+/// A share of the CPU, beside the other tests that share it.
+async fn cpu_shared() -> tokio::sync::RwLockReadGuard<'static, ()> {
+    CPU.read().await
+}
+
+/// The CPU alone, for a test that asserts how long a conversion takes.
+async fn cpu_alone() -> tokio::sync::RwLockWriteGuard<'static, ()> {
+    CPU.write().await
+}
+
 /// The converter over the test's `ffmpeg`, or `None` (skip) without one.
 ///
 /// # Panics
@@ -162,6 +177,7 @@ fn opus_head(ogg: &[u8]) -> &[u8] {
 
 #[tokio::test]
 async fn ffmpeg_turns_wav_into_ogg_opus_that_upload_accepts() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -250,6 +266,7 @@ async fn ffmpeg_turns_wav_into_ogg_opus_that_upload_accepts() {
 
 #[tokio::test]
 async fn ffmpeg_reads_browser_and_phone_recordings() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -295,6 +312,7 @@ async fn ffmpeg_reads_browser_and_phone_recordings() {
 
 #[tokio::test]
 async fn ffmpeg_refuses_a_format_off_its_list() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -336,6 +354,7 @@ async fn ffmpeg_refuses_a_format_off_its_list() {
 
 #[tokio::test]
 async fn ffmpeg_refuses_input_it_cannot_read() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -505,6 +524,7 @@ fn with_external_alias(mov: &[u8], target: &Path) -> Vec<u8> {
 /// silence of its own is no audio.
 #[tokio::test]
 async fn ffmpeg_never_reads_a_file_an_mp4_names() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -592,6 +612,7 @@ async fn ffmpeg_never_reads_a_file_an_mp4_names() {
 /// voice note.
 #[tokio::test]
 async fn ffmpeg_refuses_input_with_no_audio() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -634,6 +655,7 @@ fn ogg_opus_duration(ogg: &[u8]) -> Duration {
 /// and converts all twenty seconds.
 #[tokio::test]
 async fn ffmpeg_reads_an_m4a_whose_index_comes_last() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -710,6 +732,7 @@ async fn ffmpeg_reads_an_m4a_whose_index_comes_last() {
 /// the bound (the CI runner's ffmpeg reached the cap in about 11 s).
 #[tokio::test]
 async fn ffmpeg_refuses_a_header_that_inflates_the_input() {
+    let _cpu = cpu_alone().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -925,6 +948,7 @@ async fn assert_uploaded(media: meta_whatsapp_rs::client::media::ConvertedMedia,
 /// `Media::upload`'s type check takes as a sticker.
 #[tokio::test]
 async fn ffmpeg_turns_a_png_into_a_static_webp_sticker_that_upload_accepts() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -969,6 +993,7 @@ async fn ffmpeg_turns_a_png_into_a_static_webp_sticker_that_upload_accepts() {
 /// alpha channel are kept.
 #[tokio::test]
 async fn ffmpeg_keeps_a_small_sticker_s_size_and_transparency() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -996,6 +1021,7 @@ async fn ffmpeg_keeps_a_small_sticker_s_size_and_transparency() {
 /// ratio kept.
 #[tokio::test]
 async fn ffmpeg_brings_a_jpeg_over_five_megabytes_under_the_image_limit() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1040,6 +1066,7 @@ async fn ffmpeg_brings_a_jpeg_over_five_megabytes_under_the_image_limit() {
 /// keeps its size and becomes 8-bit RGB.
 #[tokio::test]
 async fn ffmpeg_makes_a_png_eight_bit_and_under_the_image_limit() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1124,6 +1151,7 @@ fn without_whitelist(ffmpeg: &PathBuf, file: &[u8]) -> Option<Vec<u8>> {
 /// without the whitelist.
 #[tokio::test]
 async fn ffmpeg_refuses_a_gif_a_jpeg_ls_an_animated_png_and_a_crafted_png() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1189,6 +1217,7 @@ async fn ffmpeg_refuses_a_gif_a_jpeg_ls_an_animated_png_and_a_crafted_png() {
 /// converts it.
 #[tokio::test]
 async fn ffmpeg_refuses_an_image_over_the_pixel_bound() {
+    let _cpu = cpu_alone().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1258,6 +1287,7 @@ fn with_orientation(jpeg: &[u8], orientation: u16) -> Vec<u8> {
 /// pixels rotated (640 × 480 becomes 480 × 640), its EXIF dropped.
 #[tokio::test]
 async fn ffmpeg_applies_a_jpeg_s_orientation_and_drops_its_exif() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1300,6 +1330,7 @@ fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
 /// first image comes out, alone, without the text.
 #[tokio::test]
 async fn ffmpeg_converts_the_first_image_of_a_png_without_its_text() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1362,6 +1393,7 @@ async fn ffmpeg_converts_the_first_image_of_a_png_without_its_text() {
 /// without the bound converts it.
 #[tokio::test]
 async fn ffmpeg_refuses_a_frame_over_the_allocation_bound() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1516,6 +1548,7 @@ fn animated_webp(file: &[u8]) -> AnimatedWebp {
 /// sticker.
 #[tokio::test]
 async fn ffmpeg_turns_a_gif_into_an_animated_webp_sticker_that_upload_accepts() {
+    let _cpu = cpu_alone().await;
     let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
         return;
     };
@@ -1579,6 +1612,7 @@ async fn ffmpeg_turns_a_gif_into_an_animated_webp_sticker_that_upload_accepts() 
 /// frames, so the bound is the converter's.
 #[tokio::test]
 async fn ffmpeg_refuses_an_animation_over_the_frame_bound() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
         return;
     };
@@ -1624,6 +1658,7 @@ async fn ffmpeg_refuses_an_animation_over_the_frame_bound() {
 /// The time bound: 11 frames of a second each are refused; 10 convert.
 #[tokio::test]
 async fn ffmpeg_refuses_an_animation_over_the_time_bound() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
         return;
     };
@@ -1656,6 +1691,7 @@ async fn ffmpeg_refuses_an_animation_over_the_time_bound() {
 /// The control: ffmpeg alone converts them.
 #[tokio::test]
 async fn ffmpeg_refuses_an_animation_over_the_frame_pixel_bound() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
         return;
     };
@@ -1700,6 +1736,7 @@ async fn ffmpeg_refuses_an_animation_over_the_frame_pixel_bound() {
 /// scaled within 512. The control: ffmpeg alone converts the larger one.
 #[tokio::test]
 async fn ffmpeg_refuses_an_animation_over_the_pixel_bound() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
         return;
     };
@@ -1774,6 +1811,7 @@ fn sub_blocks(data: &[u8]) -> Vec<u8> {
 /// converts, and nothing of them reaches the sticker.
 #[tokio::test]
 async fn ffmpeg_makes_a_sticker_of_a_gif_without_its_comments_and_extensions() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
         return;
     };
@@ -1820,6 +1858,7 @@ async fn ffmpeg_makes_a_sticker_of_a_gif_without_its_comments_and_extensions() {
 /// sticker; a GIF is still refused for a static one.
 #[tokio::test]
 async fn ffmpeg_refuses_what_is_not_an_animated_gif() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
         return;
     };
