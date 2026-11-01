@@ -33,6 +33,12 @@ const ADD_BY_PHONE: &str =
 const ADD_AND_REMOVE_BY_BSUID: &str =
     include_str!("../../meta-whatsapp-webhooks/tests/fixtures/bsuid/smb_app_state_sync_bsuid.json");
 
+/// `business-scoped-user-ids`, `smb_app_state_sync`: Pablo Morales added
+/// with his phone number, BSUID, parent BSUID and username at 1750030073.
+const ADD_WITH_EVERY_ID: &str = include_str!(
+    "../../meta-whatsapp-webhooks/tests/fixtures/pages/business-scoped-user-ids__smb_app_state_sync_webhooks.json"
+);
+
 const PNID: &str = "106540352242922";
 const PHONE: &str = "16505551234";
 const SHEENA: &str = "US.13491208655302741918";
@@ -159,6 +165,17 @@ async fn unplaceable_changes_are_skipped(store: Arc<dyn ConversationStore>) {
             r#""phone_number": "16505551234""#,
             r#""phone_number": "1650\u0000""#,
         ),
+        // U+0000 in a BSUID or a parent BSUID: the phone number alone
+        // would key it, but the change is skipped whole (a store refusing
+        // the id would otherwise fail every redelivery).
+        ADD_WITH_EVERY_ID.replace(
+            r#""user_id": "US.13491208655302741918""#,
+            r#""user_id": "US.1349\u0000""#,
+        ),
+        ADD_WITH_EVERY_ID.replace(
+            r#""parent_user_id": "US.ENT.11815799212886844830""#,
+            r#""parent_user_id": "US.ENT.\u0000""#,
+        ),
         ADD_BY_PHONE.replace(r#""type": "contact""#, r#""type": "label""#),
         ADD_BY_PHONE.replace(r#""action": "add""#, r#""action": "archive""#),
     ] {
@@ -185,6 +202,33 @@ async fn unplaceable_changes_are_skipped(store: Arc<dyn ConversationStore>) {
             .collect::<Vec<_>>(),
         [(PHONE, Some(PHONE))]
     );
+}
+
+/// A synced contact names the person's identities, and goes with them:
+/// erasing everything `identities` connects from the phone number (how a
+/// conversation keyed before the BSUID is found) erases the contact keyed
+/// by the BSUID.
+async fn a_synced_contact_is_erased_with_its_person(store: Arc<dyn ConversationStore>) {
+    let sink = InboxSink::new(store.clone());
+    let inbox = inbox(&store);
+    deliver(&sink, ADD_WITH_EVERY_ID).await;
+    let pablo = "US.13491208655302741918";
+    assert!(inbox.contact(&inbox.key(pablo)).await.unwrap().is_some());
+    let ids = inbox.identities(&inbox.key(PHONE)).await.unwrap();
+    assert_eq!(
+        ids,
+        BTreeSet::from([
+            PHONE.to_owned(),
+            pablo.to_owned(),
+            "US.ENT.11815799212886844830".to_owned()
+        ])
+    );
+    let erased = inbox
+        .erase_all(&ids.into_iter().collect::<Vec<_>>())
+        .await
+        .unwrap();
+    assert_eq!(erased.contacts, 1, "{erased:?}");
+    assert!(inbox.contacts(None, 10).await.unwrap().is_empty());
 }
 
 /// With the contacts switch off, the sink records no contact, and the rest
@@ -241,6 +285,11 @@ async fn memory_unplaceable_changes_are_skipped() {
 }
 
 #[tokio::test]
+async fn memory_a_synced_contact_is_erased_with_its_person() {
+    a_synced_contact_is_erased_with_its_person(memory()).await;
+}
+
+#[tokio::test]
 async fn memory_the_contacts_switch_turns_recording_off() {
     the_contacts_switch_turns_recording_off(memory()).await;
 }
@@ -266,6 +315,11 @@ mod sqlite {
     #[tokio::test]
     async fn sqlite_unplaceable_changes_are_skipped() {
         unplaceable_changes_are_skipped(store().await).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_a_synced_contact_is_erased_with_its_person() {
+        a_synced_contact_is_erased_with_its_person(store().await).await;
     }
 
     #[tokio::test]
