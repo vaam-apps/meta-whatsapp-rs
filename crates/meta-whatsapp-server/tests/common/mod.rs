@@ -590,7 +590,9 @@ impl Harness {
             outbox: outbox.clone(),
             memory: MemoryBackend::new(),
         };
-        let state = AppState::from_backend(
+        // The state and its grant, which the internal router is served
+        // with (roadmap S7).
+        let (state, grant) = AppState::from_backend(
             Arc::new(backend),
             vault_keys(),
             client,
@@ -600,7 +602,7 @@ impl Harness {
         )
         .unwrap();
         Self {
-            internal: internal_router(&state),
+            internal: internal_router(&grant),
             public: public_router(&state),
             state,
             graph,

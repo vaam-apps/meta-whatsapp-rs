@@ -1,0 +1,37 @@
+[package]
+name = "meta-whatsapp-server-store-memory"
+description = "The meta-whatsapp-rs service's memory backend: the core's storage ports in one process, for development and tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# Part of the service (roadmap S7), never a library dependency: no crate of
+# the library depends on it.
+publish = false
+
+[lib]
+name = "meta_whatsapp_server_store_memory"
+
+[dependencies]
+# The library's memory `KvStore` and `ConversationStore`, through the facade.
+meta-whatsapp-rs = { workspace = true, features = ["memory"] }
+# The ports this backend implements, and the model they speak.
+meta-whatsapp-server-core.workspace = true
+
+# A storage failure's opaque leaf (`StorageError::backend`).
+anyhow.workspace = true
+async-trait.workspace = true
+time.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# tests/conformance.rs: the core's conformance suite on this backend
+# (`meta_whatsapp_server_core::conformance::run`), and what it refuses.
+meta-whatsapp-server-core = { workspace = true, features = ["conformance"] }
+futures.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
+
+[lints]
+workspace = true
