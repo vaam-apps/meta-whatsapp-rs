@@ -232,8 +232,13 @@ stored data, the owner's).
   claimed WABA (else the newest grant) with the request as it is and,
   with the option on, every other grant in Meta's order (newest first),
   each through its own `verify_assets`, `approve`, `store_token`, tail
-  and credit line, with no number registered and no coexistence sync;
-  another grant the vault already holds is left as it is. The result,
+  and credit line, with no number registered and no coexistence sync,
+  and only when Meta reports the claimed WABA's owner as its owner too
+  (else it fails at `verify_assets`, and every other grant does, with no
+  request, when that owner is unknown); another grant the vault already
+  holds is left as it is, and one stored by another onboarding while
+  this one runs is not replaced (stored with `put_if_absent`; it fails
+  at `store_token`). The result,
   `WabasOnboarded` (`#[must_use]`; `is_complete`, `failures`,
   `onboarded`, `primary`, `get`), has one `WabaOnboarding` per WABA, its
   `WabaOutcome` `Onboarded`, `Held` or `Failed { error, steps_completed }`

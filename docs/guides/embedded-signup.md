@@ -727,7 +727,15 @@ Partner mode, where the approval is required):
 - the claimed WABA gets the request as it is (its number registered with
   the PIN, a coexistence sync); the others register no number and sync
   nothing, and one your vault already holds is left as it is
-  (`WabaOutcome::Held`).
+  (`WabaOutcome::Held`); one another onboarding stores while this one
+  runs is not replaced either: it fails at `store_token`, after your
+  approval ran, so release what the approval reserved for it;
+- the others must be the claimed WABA's business's: a token's grants
+  outlast one signup and, for a user's token, may span businesses, so a
+  grant Meta reports another owner for (or none) fails at
+  `verify_assets`, and when the claimed WABA's owner is unknown (it
+  failed before it was verified, or Meta reported none) every other
+  grant fails there, with no request.
 
 The call succeeds when the shared steps do, so read the result:
 `WabasOnboarded::is_complete()`, then each `WabaOnboarding`: record each

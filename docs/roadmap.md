@@ -1943,28 +1943,83 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     phone given to the others, an unbacked claim accepted, the others
     registering or keeping the finish, `onboard` or `onboard_hosted`
     accepting the option, `is_resumable` ignoring `store_token`.
-  - **Proposed** (for the coordinator, AGENTS.md § Decisions; each
-    swappable): the option is the request's (OPEN_QUESTIONS #5), acted on
-    by two new calls, because `onboard`'s result names one WABA and its
-    approval is an `FnOnce` (the new approval is an `FnMut`, called once
-    per WABA); `onboard` and `onboard_hosted` refuse the option rather
-    than drop the others, and `resume` ignores it (it resumes the WABA it
-    is given); the set onboarded is the token's grants (Meta's), not the
-    browser's `waba_ids`, which must all be among them or the signup is
-    refused; the claimed WABA first, then the grants in Meta's order;
-    the others register no number and request no coexistence sync (the
-    PIN, region and finish are the claimed number's; registering counts
-    against 10 per 72 hours, the sync is once per number), and keep the
-    request's subscription override and credit settings; another grant
-    the vault holds is reported `Held` and left alone (a read, not a
-    lock, as `onboard_hosted`'s), while the claimed one is replaced as
-    `onboard` replaces it; a per-WABA failure is an outcome, not the
-    call's error (`WabasOnboarded` is `#[must_use]`), and a failure in
-    the shared steps fails the call; hosted signup stays one WABA per
-    `PARTNER_ADDED`. Swappable by the option (off: `onboard`'s
-    behaviour), and by calling `onboard` per signup instead. Not
-    offered, a follow-up if wanted: onboarding a WABA that failed before
-    `store_token` from the token another WABA of the same signup stored.
+  - **Found in review** (sabotage review, security lens): a token's
+    `granular_scopes` list every WABA that granted the app, across
+    signups, and the token in Meta's own `debug_token` example is a
+    user's, whose grants may span businesses; the draft onboarded every
+    grant whoever owned it, under the request's credit settings (a
+    `reshare_after_revocation` meant for one business re-funding
+    another's revoked line). The other grants must now be the primary
+    WABA's business's: Meta must report, for each, the owner it reported
+    for the primary WABA, or the grant fails at `verify_assets` before
+    its numbers are read, approved or stored; when the primary's owner is
+    unknown (it failed before it was verified, or Meta reported none),
+    every other grant fails there with no request
+    (`a_grant_of_another_business_is_not_onboarded`,
+    `the_others_fail_closed_when_the_signup_business_is_unknown`). And
+    `Held` was a read followed, two Meta round trips and the approval
+    later, by a replacing `store`: another signup or a hosted
+    `PARTNER_ADDED` storing the WABA in that window was overwritten. The
+    other grants are now stored with `put_if_absent`
+    (`TokenVault::store_new`, crate-private, the phone index untouched
+    when it loses) and fail at `store_token` when the vault came to hold
+    them (`a_grant_stored_meanwhile_is_not_replaced`). A read of the
+    vault that fails fails the grant closed
+    (`a_grant_whose_record_cannot_be_read_fails_closed`); the others keep
+    the request's subscription override
+    (`the_others_keep_the_subscription_override`) and a revoked
+    business is funded again for none of them
+    (`a_revoked_business_is_funded_again_for_no_waba`); with nothing
+    claimed the newest grant is the primary one, and every record carries
+    the code exchange's expiry
+    (`with_nothing_claimed_the_newest_grant_is_primary`). Mutations the
+    review added that each fail a test: the others' owner checked only
+    when reported, or not at all; the signup's owner taken from the
+    browser's `business_id`, or not recorded; the others stored with a
+    replacing `store` (or `store_new` with `put`); a failed vault read
+    taken as absent; the others' subscription override, or the token's
+    expiry, dropped. Three survive as equivalent: the `waba_id` claim
+    left out of the unbacked check (`verify_grant` already refuses it),
+    and the others' `currency` or `reshare_after_revocation` changed
+    (the credit plan is computed once, from the request, for every
+    WABA).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable):
+    1. the option is the request's (`OnboardingRequest::every_granted_waba`,
+       OPEN_QUESTIONS #5), and only the new calls, `onboard_wabas` and
+       `onboard_wabas_with_approval` (its approval an `FnMut`, called and,
+       for a Solution Partner, recorded once per WABA), act on it;
+    2. `onboard` and `onboard_hosted` refuse the option rather than drop
+       the other WABAs; `resume` ignores it (it resumes the WABA it is
+       given);
+    3. the token's grants decide what is onboarded, not the browser's
+       `waba_ids`: every WABA the session info names must be among them,
+       or the signup is refused before anything is stored; the claimed
+       WABA first, then the grants in Meta's order; tightened in review,
+       a grant other than the claimed WABA is onboarded only when Meta
+       reports the claimed WABA's owner as its owner too, and none is
+       when that owner is unknown;
+    4. the other WABAs register no number and request no coexistence
+       sync (the PIN, region and finish are the claimed number's;
+       registering counts against 10 per 72 hours, the sync is once per
+       number), and keep the request's subscription override and credit
+       settings;
+    5. another grant the vault holds is `Held` and left alone, and,
+       tightened in review, stored only where the vault still holds none
+       (`put_if_absent`): the read alone let a signup or a hosted
+       `PARTNER_ADDED` racing this one be overwritten; the claimed WABA is
+       replaced, as `onboard` replaces it;
+    6. per-WABA failures are outcomes in `WabasOnboarded` (`#[must_use]`),
+       not the call's error; only the shared steps fail the call;
+    7. hosted signup stays one WABA per `PARTNER_ADDED`;
+    8. `OnboardingRequest` carries an
+       `#[expect(clippy::struct_excessive_bools)]`: each bool is an
+       independent option of its own setter, not a state machine.
+
+    Swappable by the option (off: `onboard`'s behaviour), and by calling
+    `onboard` per signup instead. Not offered, a follow-up if wanted:
+    onboarding a WABA that failed before `store_token` from the token
+    another WABA of the same signup stored.
 - [ ] **L11c. Pre-verified numbers** (`client::embedded_signup` and
   `client::waba`; row 123): pools, adding, codes, sharing, partners
   (`reference/business/*pre-verified*`,

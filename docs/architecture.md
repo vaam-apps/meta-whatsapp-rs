@@ -689,8 +689,10 @@ the code and inspects the token once, refuses a signup whose session info
 names a WABA the token was not granted, then runs `verify_assets` to the end
 of the tail for each granted WABA on its own (its own vault record, phone
 index, approval, subscription and credit line), the claimed one first with
-the request as it is, the others registering and syncing nothing and left
-alone when the vault holds them; a WABA that fails is reported in its
+the request as it is, the others registering and syncing nothing, refused
+unless Meta reports the claimed WABA's owner as theirs, left alone when the
+vault holds them and stored only where it still holds none (`put_if_absent`);
+a WABA that fails is reported in its
 `WabaOutcome`, the next one runs, and each is resumed on its own. `onboard`
 and `onboard_hosted` refuse the option. Nothing new is stored. Each failure is
 `Error::in_step("exchange_code" | "debug_token" | "verify_assets" |
