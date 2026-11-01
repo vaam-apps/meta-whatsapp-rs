@@ -137,9 +137,9 @@ of its own, after an HTML comment; keep that when you add one.
     are the existing ones (verify, store, subscribe, register). Swappable:
     both are opt-in, and the code-exchange flow is unchanged. Roadmap L11a.
 
-    **Decided 2026-11-01 (coordinator, owner's delegation), the
-    library's side:** `EmbeddedSignup::onboard_hosted` (and
-    `_with_approval`) takes a `HostedSignup` (the webhook's
+    **Landed with roadmap L11a (2026-11-01), the library's side, its
+    choices the coordinator's (owner's delegation):**
+    `EmbeddedSignup::onboard_hosted` (and `_with_approval`) takes a `HostedSignup` (the webhook's
     `waba_info.waba_id` and `owner_business_id`) and the system user
     token as an explicit argument; the app secret is the
     `AppCredentials`' one. The token request is `fetch_only=true`, as

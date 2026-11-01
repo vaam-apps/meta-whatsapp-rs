@@ -114,10 +114,13 @@ impl EmbeddedSignup {
     ///
     /// **Nothing is spent before `store_token`**: the fetch is a read, so a
     /// failure up to `store_token` (an [`Error::Step`](meta_whatsapp_core::Error::Step)
-    /// naming it) can be fixed and the call made again. After it, the token
-    /// is stored: [`Self::resume`] with the same request redoes only the
-    /// steps after `store_token`, as for the code flow (calling this again
-    /// is refused: the vault holds the WABA).
+    /// naming it) can be fixed and the call made again; a failure at
+    /// `store_token` itself may have written the record before its phone
+    /// index, and then the call again is refused as held: delete the WABA
+    /// from the vault first. After it, the token is stored:
+    /// [`Self::resume`] with the same request redoes only the steps after
+    /// `store_token`, as for the code flow (calling this again is refused:
+    /// the vault holds the WABA).
     ///
     /// The webhook names no tenant of yours: bind the WABA to one in
     /// [`Self::onboard_hosted_with_approval`].
@@ -314,16 +317,21 @@ mod tests {
     const PIN: &str = "581063";
     const CODE: &str = "AQBhlXsctMxJYbwbrpybxlo9tLPGy";
 
-    /// A store whose writes fail while `broken` is set.
+    /// A store whose writes fail while `broken` is set, and whose phone
+    /// index writes fail while `broken_index` is.
     #[derive(Debug, Default)]
     struct FlakyKv {
         inner: MemoryKvStore,
         broken: AtomicBool,
+        broken_index: AtomicBool,
     }
 
     impl FlakyKv {
-        fn check(&self) -> Result<(), StorageError> {
-            if self.broken.load(Ordering::SeqCst) {
+        fn check(&self, key: &StoreKey) -> Result<(), StorageError> {
+            let index = key.to_string().contains("/phone/");
+            if self.broken.load(Ordering::SeqCst)
+                || (index && self.broken_index.load(Ordering::SeqCst))
+            {
                 Err(StorageError::Backend(anyhow::anyhow!("disk full")))
             } else {
                 Ok(())
@@ -342,7 +350,7 @@ mod tests {
             value: Vec<u8>,
             expiry: Expiry,
         ) -> Result<u64, StorageError> {
-            self.check()?;
+            self.check(key)?;
             self.inner.put(key, value, expiry).await
         }
         async fn put_if_absent(
@@ -351,7 +359,7 @@ mod tests {
             value: Vec<u8>,
             expiry: Expiry,
         ) -> Result<Option<u64>, StorageError> {
-            self.check()?;
+            self.check(key)?;
             self.inner.put_if_absent(key, value, expiry).await
         }
         async fn compare_and_swap(
@@ -361,13 +369,13 @@ mod tests {
             value: Option<Vec<u8>>,
             expiry: Expiry,
         ) -> Result<Option<u64>, StorageError> {
-            self.check()?;
+            self.check(key)?;
             self.inner
                 .compare_and_swap(key, expected, value, expiry)
                 .await
         }
         async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
-            self.check()?;
+            self.check(key)?;
             self.inner.delete(key).await
         }
     }
@@ -869,6 +877,47 @@ mod tests {
             .await
             .unwrap();
         assert!(stored(&h).await.is_some());
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A `store_token` that failed after writing the record (its phone
+    /// index did not follow) leaves the WABA held: the call again is
+    /// refused, and once the record is deleted it runs and routes every
+    /// number.
+    #[tokio::test]
+    async fn a_store_token_that_wrote_the_record_is_deleted_then_run_again() {
+        let kv = Arc::new(FlakyKv::default());
+        kv.broken_index.store(true, Ordering::SeqCst);
+        let h = harness_with(kv.clone(), APP_SECRET, RetryPolicy::NONE);
+        h.t.push_json(200, token_answer());
+        h.t.push_json(200, debug_answer(WABA));
+        h.t.push_json(200, owner_answer(OWNER));
+        h.t.push_json(200, phones_answer());
+        let err =
+            h.es.onboard_hosted(&signup(), &system_token(), &request(), &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(step(&err), STORE_TOKEN);
+        assert!(stored(&h).await.is_some(), "the record was written");
+        let phone = PhoneNumberId::new(PHONE).unwrap();
+        assert!(h.vault.get_by_phone_number(&phone).await.unwrap().is_none());
+        kv.broken_index.store(false, Ordering::SeqCst);
+
+        let before = h.t.requests().len();
+        let err =
+            h.es.onboard_hosted(&signup(), &system_token(), &request(), &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(field(&err), "waba_id");
+        assert_eq!(h.t.requests().len(), before, "refused before any request");
+
+        assert!(h.vault.delete(&WabaId::new(WABA).unwrap()).await.unwrap());
+        script_hosted(&h.t);
+        h.es.onboard_hosted(&signup(), &system_token(), &request(), &h.vault)
+            .await
+            .unwrap();
+        let routed = h.vault.get_by_phone_number(&phone).await.unwrap().unwrap();
+        assert_eq!(routed.waba_id.as_str(), WABA);
         assert_eq!(h.t.remaining(), 0);
     }
 

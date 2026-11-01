@@ -756,7 +756,9 @@ if let WebhookEvent::AccountUpdated { update, .. } = &event
   carries `granular_scopes` naming the WABA: one that does not fails
   `verify_assets` (on `granular_scopes`) and nothing is stored.
 - **Retrying.** The fetch spends nothing: a failure up to `store_token`
-  can be fixed and `onboard_hosted` called again. After it, `resume`
+  can be fixed and `onboard_hosted` called again (a failure at
+  `store_token` may have written the record before its phone index: then
+  delete the WABA from the vault first). After it, `resume`
   with `OnboardingRequest::for_hosted(&signup)` (or `for_resume` of the
   saved `signup.session()`) redoes the tail with the stored token
   (`onboard_hosted` again is refused: the vault holds the WABA).
