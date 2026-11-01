@@ -147,7 +147,7 @@ rows live on until VACUUM, in the WAL, replicas, backups and, unless the applica
 
 Read [OPEN_QUESTIONS.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md)
 before going live: the defaults decided (OTP issue limit, PIN policy, no token refresh) and what is
-decided but not built (dead-lettering, Redis TLS). No metrics exporter, no health endpoint, no secret
+decided but not built (dead-lettering). No metrics exporter, no health endpoint, no secret
 manager integration. A revoked message keeps its content in the inbox (decided 2026-09-25;
 `meta-whatsapp-rs-cms-inbox`). ~~Whether the OTP namespace becomes
 required~~: decided in d67b3ac (2026-09-24), it is (`meta-whatsapp-rs-otp-login`).

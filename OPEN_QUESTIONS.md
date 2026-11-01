@@ -220,6 +220,33 @@ of its own, after an HTML comment; keep that when you add one.
     connections stay the way, documented. Swappable: an integrator can
     still pass its own connection. Roadmap L21c.
 
+    **Confirmed 2026-11-01 (coordinator, owner's delegation; roadmap
+    L21c landed):** redis-rs 1.7 cannot take an explicit provider (its
+    rustls path always calls `rustls::ClientConfig::builder()`, and
+    nothing of it accepts a `ClientConfig` or a connector), but it takes
+    any stream (`MultiplexedConnection::new_with_config`), so `rediss://`
+    is wired anyway rather than left to integrator-built connections:
+    `store::RedisTls` builds the `ClientConfig` on
+    `rustls::crypto::aws_lc_rs::default_provider()`, does the handshake
+    with tokio-rustls and hands the stream to that constructor, none of
+    redis-rs's TLS features enabled. The platform's trust store
+    (`rustls-platform-verifier`, as reqwest does) is the default; a
+    private CA or a client certificate is given as PEM. It stays under
+    the existing `redis` feature. `ring` is linked into the workspace's
+    test builds only, through the adapters' rustls dev-dependency, so the
+    tests run in the binary where the process default panics; no library
+    build links it (`cargo tree -e normal -p meta-whatsapp-adapters
+    --features redis -i ring` finds nothing). The test Redis requires
+    client certificates, and its certificates are generated
+    (`tools/test-tls/generate.sh`, and rcgen in the in-process tests),
+    none committed. Why: the decision of 2026-09-26 asked for an explicit
+    provider handed to the connection, and handing redis-rs a stream
+    delivers exactly that without waiting on redis-rs. Swappable by
+    `RedisTls::from_client_config` (any `ClientConfig`: your provider,
+    your verifier) or by an integrator-built connection passed to
+    `RedisKvStore::new`. Not covered: Cluster and Sentinel over TLS.
+    Roadmap L21c (landed).
+
 ## Security posture
 
 21. **quick-xml advisories (RUSTSEC-2026-0194/0195)** are ignored in
