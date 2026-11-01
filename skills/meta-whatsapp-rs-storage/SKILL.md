@@ -86,7 +86,7 @@ Deleted rows live on until VACUUM, in the WAL, replicas and backups; set `log_pa
 ## Redis
 
 ```rust
-let client = redis::Client::open(url)?; // `rediss://`: see the skill (your TLS feature and provider)
+let client = redis::Client::open(url)?; // `redis://`; `rediss://` goes through `RedisTls`
 let conn = client.get_connection_manager().await?;
 Ok(Arc::new(RedisKvStore::new(conn).with_prefix("shop:wa:")))
 ```
@@ -97,8 +97,10 @@ limit (OTP issue logs and cooldowns, dedup markers, sessions, job markers), and 
 silently. Size `maxmemory` for 7 days of dedup markers. No `ConversationStore` on Redis. `redis`
 here is meta-whatsapp-rs's re-export (`meta_whatsapp_rs::adapters::store::redis`, feature `redis`),
 so the connection types always match `RedisKvStore::new` — no redis dependency of your own. For
-`rediss://`, add your own `redis` with `tokio-rustls-comp` at the same version, install a rustls
-crypto provider once at startup, and hand the connection to `RedisKvStore::new`.
+`rediss://`, connect with `RedisTls` instead: `RedisTls::builder()`,
+`root_certificates_pem` for a private CA, `client_auth_pem` for a client certificate, then
+`build` and `connect(url)`, and hand that to `RedisKvStore::new`. It names aws-lc-rs itself: no redis
+TLS feature, no provider to install (redis-rs's own TLS panics when two rustls providers are linked).
 
 ~~`noeviction` or `volatile-*`~~: wrong until 1a3cfc6 (2026-09-24); `volatile-*` evicts OTP limits and dedup markers.
 
@@ -147,9 +149,7 @@ that made U+0000 lossless (PR #7, 2026-09-25).
 
 ## What meta-whatsapp-rs does not do
 
-- No built-in Redis TLS yet
-  ([OPEN_QUESTIONS.md #19](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#storage),
-  decided on 2026-09-26: `rediss://` with an explicit provider, roadmap L21c), no Redis
+- No Redis Cluster or Sentinel over TLS (`RedisTls` is one server, roadmap L21c), no Redis
   `ConversationStore`, no backups of inbox history.
 - Message ids are unique per store, not per business number
   ([open question 33](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#cms-inbox)).

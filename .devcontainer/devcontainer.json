@@ -8,7 +8,11 @@
   "name": "meta-whatsapp-rs (Claude Code sandbox)",
   "dockerComposeFile": ["compose.yaml"],
   "service": "dev",
-  "runServices": ["dev", "postgres", "redis"],
+  "runServices": ["dev", "postgres", "redis", "redis-tls"],
+  // On the host, before the sidecars start: the test-only certificates the
+  // redis-tls sidecar serves and the `rediss://` tests trust (.test-tls/,
+  // gitignored; needs bash and openssl on the host).
+  "initializeCommand": "tools/test-tls/generate.sh",
   "workspaceFolder": "/workspace",
   "shutdownAction": "stopCompose",
   "remoteUser": "node",

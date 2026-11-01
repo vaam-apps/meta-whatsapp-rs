@@ -8,15 +8,44 @@ devcontainer (`github.com/anthropics/claude-code/.devcontainer`), for Rust:
 | Piece | What |
 | --- | --- |
 | `Dockerfile` | `node:24-bookworm` base (Claude Code is an npm package), Rust 1.98.1 via rustup, `just`, `cargo-deny`, `typst` CLI, `git-delta`, zsh, `psql`/`redis-cli` |
-| `compose.yaml` | `dev` (your shell), `postgres:18-alpine`, `redis:8-alpine`; named volumes for shell history, Claude config and the cargo registry |
+| `compose.yaml` | `dev` (your shell), `postgres:18-alpine`, `redis:8-alpine`, and `redis-tls` (`redis:8-alpine` serving TLS only on 6380, client certificates required); named volumes for shell history, Claude config and the cargo registry |
 | `init-firewall.sh` | default-deny egress, run on every start |
 | `github-meta-snapshot.json` | GitHub's IPv4 ranges as of the date inside it: the firewall's fallback (copied to `/etc/meta-whatsapp-rs-firewall/`) |
 | `devcontainer.json` | VS Code extensions (Claude Code, rust-analyzer, tinymist for Typst, Even Better TOML, CodeLLDB, just, GitLens) |
 
 Open it with VS Code's "Reopen in Container" or `devcontainer up`. Inside,
-`META_WHATSAPP_RS_TEST_POSTGRES_URL` and `META_WHATSAPP_RS_TEST_REDIS_URL`
-point at the sidecars, so `just test-live` (and `just ci`) use them instead
-of starting `compose.test.yaml`.
+`META_WHATSAPP_RS_TEST_POSTGRES_URL`, `META_WHATSAPP_RS_TEST_REDIS_URL` and
+`META_WHATSAPP_RS_TEST_REDISS_URL` point at the sidecars, so `just
+test-live` (and `just ci`) use them instead of starting `compose.test.yaml`.
+
+### The TLS Redis
+
+The `rediss://` live tests (roadmap L21c, `tests/redis_tls.rs` and
+`tests/redis_tls_ring_default.rs` in meta-whatsapp-adapters; the name
+checks, timeouts and reconnects of `tests/redis_tls_handshake.rs` run
+in-process, against certificates each test makes) need a Redis that speaks TLS and asks for a client
+certificate, as a self-hosted Redis does by default. Its certificates are
+**test-only and generated, never committed**: `tools/test-tls/generate.sh`
+writes a CA, a server certificate (for `localhost`, `127.0.0.1` and
+`redis-tls`) and a client certificate, valid 30 days, to `.test-tls/`
+(gitignored), and deletes the CA's key. It needs `bash` and `openssl` (or
+LibreSSL), and does nothing while the files are there and good for another
+day.
+
+- **Dev container**: `devcontainer.json`'s `initializeCommand` runs the
+  script on the host before the sidecars start; the `redis-tls` sidecar
+  reads `.test-tls/` and the dev container gets
+  `META_WHATSAPP_RS_TEST_REDISS_URL=rediss://redis-tls:6380` and the PEM
+  paths in `META_WHATSAPP_RS_TEST_REDISS_CA`, `…_CLIENT_CERT` and
+  `…_CLIENT_KEY`. A container left running past the 30 days: run the
+  script on the host again and restart `redis-tls`.
+- **Without it**: `just test-live` runs the script, then starts
+  `compose.test.yaml`, whose `redis-tls` listens on `127.0.0.1:56380`
+  (`rediss://localhost:56380`).
+
+The tests' binaries link both of rustls' crypto providers (a
+dev-dependency adds `ring`) and install no process default: the case in
+which redis-rs's own TLS panics.
 
 The Compose project is `meta-whatsapp-rs-dev` (it was `wa-rs-dev` before
 the rename), and named volumes are per project: a container built before
@@ -138,7 +167,7 @@ and set `META_WHATSAPP_RS_REQUIRE_FFMPEG=1` to be sure they ran:
 | `just check` / `just test` / `just doc` | all targets, all features |
 | `just features` | each adapter/client feature compiled alone |
 | `just test-live` / `just test-live-down` | live adapter, inbox, bot retention and service tests; stop the services |
-| `just test-live-clean` | drop leftover live-test databases (`wa_test_*`) and schemas (`wa_test_*`, `wa_server_test_*`) on the test Postgres, and keys (`wa-test:*`) on the test Redis (the sidecars, or compose.test.yaml's), keeping them up; not during a live run |
+| `just test-live-clean` | drop leftover live-test databases (`wa_test_*`) and schemas (`wa_test_*`, `wa_server_test_*`) on the test Postgres, and keys (`wa-test:*`) on the test Redis and the TLS Redis (the sidecars, or compose.test.yaml's), keeping them up; not during a live run |
 | `just skills-ts` | the server skills' TypeScript examples type-check against the committed OpenAPI document; needs Node of `tools/skills-ts/.nvmrc`'s major (24: the image's base, checked by `crates/meta-whatsapp-rs/tests/skills.rs`) and npm's registry (on the firewall's allowlist) |
 | `just deny` | licenses, advisories, bans, sources |
 | `just skills-check` | every skill stamp's commit is on main (directly or squash-merged) |

@@ -22,3 +22,30 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+  # `rediss://` (roadmap L21c): TLS only, and a client certificate required
+  # (`tls-auth-clients yes`, Redis' own default). The certificates are
+  # test-only, written to .test-tls/ by tools/test-tls/generate.sh, which
+  # `just test-live` runs before `up`.
+  redis-tls:
+    image: redis:8-alpine
+    command:
+      - redis-server
+      - --port
+      - "0"
+      - --tls-port
+      - "6380"
+      - --tls-cert-file
+      - /tls/server.crt
+      - --tls-key-file
+      - /tls/server.key
+      - --tls-ca-cert-file
+      - /tls/ca.crt
+      - --tls-auth-clients
+      - "yes"
+    volumes: ["./.test-tls:/tls:ro"]
+    ports: ["127.0.0.1:56380:6380"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "-p", "6380", "--cacert", "/tls/ca.crt", "--cert", "/tls/client.crt", "--key", "/tls/client.key", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

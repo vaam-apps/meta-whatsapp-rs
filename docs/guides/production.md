@@ -65,13 +65,52 @@ An upgrade across a migration that rewrites tables (migration 3, lossless
 message content) is the exception: run `migrate` once from a one-off job
 first ([section 7](#7-before-going-live)).
 
-Redis over TLS (`rediss://`): meta-whatsapp-rs enables no TLS feature of redis on
-purpose (two rustls crypto providers in one binary make the first TLS
-connection panic). Enable redis's `tokio-rustls-comp` in your own crate,
-install a provider at startup, and hand the connection to
-`RedisKvStore::new(conn)`; the type's rustdoc shows how
-([decided](../../OPEN_QUESTIONS.md#storage) 19: `rediss://` with an explicit
-provider, roadmap L21c, not built yet).
+Redis over TLS (`rediss://`) goes through `RedisTls` (feature `redis`),
+not through redis's own TLS features, which meta-whatsapp-rs leaves off:
+redis-rs builds its TLS configuration from rustls' process-wide default
+crypto provider, and when a binary links both of rustls' providers
+(aws-lc-rs, which reqwest and sqlx use here, and ring, which many other
+crates bring) with no default installed, the first TLS connection panics.
+`RedisTls` names aws-lc-rs itself, so it needs no default and ignores the
+one you installed:
+
+```rust
+use meta_whatsapp_rs::adapters::store::{RedisKvStore, RedisTls};
+
+let tls = RedisTls::builder()
+    // A private CA; leave it out to trust the system's roots.
+    .root_certificates_pem(std::fs::read("/run/secrets/redis-ca.crt")?)
+    // If your Redis asks for a client certificate (`tls-auth-clients yes`).
+    .client_auth_pem(
+        std::fs::read("/run/secrets/redis-client.crt")?,
+        std::fs::read("/run/secrets/redis-client.key")?,
+    )
+    .build()?;
+let kv = RedisKvStore::new(tls.connect(&std::env::var("REDIS_URL")?).await?);
+```
+
+- **Trust**: the system's trust store by default, as the reqwest transport
+  does (in a `scratch` or distroless image with no CA bundle, `build`
+  fails: pass the CA). `root_certificates_pem` trusts those certificates
+  *instead of* the system's. The certificate must name the URL's host: an
+  IP address (`rediss://10.0.0.5`) needs an IP address in the certificate,
+  a DNS name never covers it. `RedisTls::builder()` has no mode without
+  verification: a URL with `#insecure` is refused.
+- **The connection reconnects** on its own: the command that meets a
+  dropped connection fails (it is not replayed, a compare-and-swap
+  included) and the next one opens a new connection, which authenticates
+  and selects the database again. Unlike `ConnectionManager`, it neither
+  retries nor backs off: one attempt per command that finds no
+  connection, bounded by the connection timeout. Timeouts are redis-rs's
+  (1 s to connect, the handshake included, 500 ms per reply):
+  `with_connection_timeout`, `with_response_timeout`.
+- **Your own TLS configuration** (another verifier, your own provider):
+  `RedisTls::from_client_config`, used as it is: a verifier of yours that
+  accepts any certificate turns verification off, and that is your call.
+  A connection you built yourself, with
+  redis's TLS features and a provider you installed, still goes to
+  `RedisKvStore::new` as before.
+- Redis Cluster and Sentinel over TLS are not covered.
 
 Every store adapter runs an executable conformance suite; `just test-live`
 runs it against real Postgres and Redis.
