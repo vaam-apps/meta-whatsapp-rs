@@ -721,6 +721,23 @@ pub async fn a_number_migrated_between_two_tenants_wabas_hides_its_history(backe
     // refused before any request, also with the ownership check off; a
     // template goes (B's own conversation, dated after the cut).
     let b_clock = ManualClock::new(OffsetDateTime::now_utc());
+    // A handover to this app recorded while A held the number: A's, not
+    // B's to trust.
+    assert!(
+        backend
+            .conversations()
+            .set_thread_owner(
+                &key,
+                ThreadOwnership {
+                    owner: ThreadOwner::ThisApp,
+                    role: None,
+                    app_id: None,
+                    since: number.attached_at - time::Duration::milliseconds(1),
+                },
+            )
+            .await
+            .unwrap()
+    );
     for checks in [ReplyChecks::ALL, ReplyChecks::ALL.thread_owner(false)] {
         let refused = b
             .inbox(backend, checks, &b_clock)
@@ -757,7 +774,6 @@ pub async fn a_number_migrated_between_two_tenants_wabas_hides_its_history(backe
     );
     // A handover to B's app recorded since the cut: B's thread, and with
     // the handover trusted, B's window; not trusted, still refused.
-    let key = ConversationKey::new(PhoneNumberId::new(pn).unwrap(), CONTACT);
     assert!(
         backend
             .conversations()
