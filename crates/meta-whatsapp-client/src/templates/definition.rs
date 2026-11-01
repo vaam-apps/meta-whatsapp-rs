@@ -27,10 +27,10 @@
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::FlowId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use super::macros::string_enum;
 use super::types::{
     DisplayFormat, ParameterFormat, SendType, TemplateCategory, TemplateSubCategory,
 };
@@ -422,7 +422,8 @@ impl TemplateComponent {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// Header `format`.
     pub enum HeaderFormat {
         /// Text, at most one placeholder.

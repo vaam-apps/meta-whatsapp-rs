@@ -37,12 +37,12 @@
 
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::ids::{MigrationIntentId, SolutionId, WabaId};
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 
 use crate::Client;
 use crate::partners::solutions::SolutionInfo;
 use crate::phone_numbers::fields_param;
-use crate::templates::macros::string_enum;
 
 /// Entry point, see [`Client::migration_intents`].
 #[derive(Debug, Clone)]
@@ -61,7 +61,8 @@ impl Client {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A migration intent's `status`
     /// (`WhatsAppBusinessAccountMigrationStatus`). The guide: go on only
     /// at `ACCEPTED`.

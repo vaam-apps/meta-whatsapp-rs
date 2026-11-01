@@ -15,6 +15,7 @@ use std::fmt;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::MediaId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use time::{Date, Month, OffsetDateTime};
 
@@ -82,31 +83,25 @@ impl CallingSettings {
     }
 }
 
-/// `ENABLED` / `DISABLED`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum FeatureStatus {
-    /// `ENABLED`.
-    Enabled,
-    /// `DISABLED`.
-    Disabled,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `ENABLED` / `DISABLED`.
+    pub enum FeatureStatus {
+        /// `ENABLED`.
+        Enabled => "ENABLED",
+        /// `DISABLED`.
+        Disabled => "DISABLED",
+    }
 }
 
-/// `call_icon_visibility`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum CallIconVisibility {
-    /// `DEFAULT`: call button shown, unsolicited calls allowed.
-    Default,
-    /// `DISABLE_ALL`: call button and external entry points hidden; users
-    /// cannot place unsolicited calls. Call-button messages still work.
-    DisableAll,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `call_icon_visibility`.
+    pub enum CallIconVisibility {
+        /// `DEFAULT`: call button shown, unsolicited calls allowed.
+        Default => "DEFAULT",
+        /// `DISABLE_ALL`: call button and external entry points hidden; users
+        /// cannot place unsolicited calls. Call-button messages still work.
+        DisableAll => "DISABLE_ALL",
+    }
 }
 
 /// `call_icons`.
@@ -233,27 +228,24 @@ pub struct HolidayHours {
     pub end_time: ClockTime,
 }
 
-/// Day of the week.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DayOfWeek {
-    /// `MONDAY`.
-    Monday,
-    /// `TUESDAY`.
-    Tuesday,
-    /// `WEDNESDAY`.
-    Wednesday,
-    /// `THURSDAY`.
-    Thursday,
-    /// `FRIDAY`.
-    Friday,
-    /// `SATURDAY`.
-    Saturday,
-    /// `SUNDAY`.
-    Sunday,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Day of the week.
+    pub enum DayOfWeek {
+        /// `MONDAY`.
+        Monday => "MONDAY",
+        /// `TUESDAY`.
+        Tuesday => "TUESDAY",
+        /// `WEDNESDAY`.
+        Wednesday => "WEDNESDAY",
+        /// `THURSDAY`.
+        Thursday => "THURSDAY",
+        /// `FRIDAY`.
+        Friday => "FRIDAY",
+        /// `SATURDAY`.
+        Saturday => "SATURDAY",
+        /// `SUNDAY`.
+        Sunday => "SUNDAY",
+    }
 }
 
 /// A time of day in call hours, `"HHMM"` on the wire (`"1130"` = 11:30).
@@ -463,17 +455,14 @@ pub struct AudioSettings {
     pub additional_codecs: Option<Vec<AudioCodec>>,
 }
 
-/// An additional audio codec.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum AudioCodec {
-    /// `PCMA` (G.711 A-law).
-    Pcma,
-    /// `PCMU` (G.711 µ-law).
-    Pcmu,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// An additional audio codec.
+    pub enum AudioCodec {
+        /// `PCMA` (G.711 A-law).
+        Pcma => "PCMA",
+        /// `PCMU` (G.711 µ-law).
+        Pcmu => "PCMU",
+    }
 }
 
 /// `voicemail`. Needs calling enabled; turn call hours off while using it.
@@ -531,17 +520,14 @@ impl Voicemail {
     }
 }
 
-/// A voicemail trigger.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum VoicemailTrigger {
-    /// `REJECT`: you reject the call.
-    Reject,
-    /// `TIMEOUT`: you neither accept nor reject within `timeout_seconds`.
-    Timeout,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// A voicemail trigger.
+    pub enum VoicemailTrigger {
+        /// `REJECT`: you reject the call.
+        Reject => "REJECT",
+        /// `TIMEOUT`: you neither accept nor reject within `timeout_seconds`.
+        Timeout => "TIMEOUT",
+    }
 }
 
 /// `voicemail.audio`.
@@ -592,17 +578,14 @@ pub struct CallingRestriction {
     pub expiration: Option<OffsetDateTime>,
 }
 
-/// Kind of calling restriction.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum RestrictionType {
-    /// `RESTRICTED_BUSINESS_INITIATED_CALLING`.
-    RestrictedBusinessInitiatedCalling,
-    /// `RESTRICTED_USER_INITIATED_CALLING`.
-    RestrictedUserInitiatedCalling,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Kind of calling restriction.
+    pub enum RestrictionType {
+        /// `RESTRICTED_BUSINESS_INITIATED_CALLING`.
+        RestrictedBusinessInitiatedCalling => "RESTRICTED_BUSINESS_INITIATED_CALLING",
+        /// `RESTRICTED_USER_INITIATED_CALLING`.
+        RestrictedUserInitiatedCalling => "RESTRICTED_USER_INITIATED_CALLING",
+    }
 }
 
 #[allow(clippy::ref_option)] // serde's `serialize_with` contract passes `&Option<T>`

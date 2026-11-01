@@ -39,6 +39,7 @@
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{CallId, PhoneNumberId, UserId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::recipient::Recipient;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -543,29 +544,26 @@ pub struct CallPermission {
     pub expiration_time: Option<OffsetDateTime>,
 }
 
-/// Call permission status. The guides document `no_permission`,
-/// `temporary`, `permanent`; the endpoint reference lists `granted`,
-/// `pending`, `denied`, `expired`. All are known.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CallPermissionStatus {
-    /// `no_permission` (also returned for uncallable numbers).
-    NoPermission,
-    /// `temporary`: granted for 7 days.
-    Temporary,
-    /// `permanent`.
-    Permanent,
-    /// `granted`.
-    Granted,
-    /// `pending`.
-    Pending,
-    /// `denied`.
-    Denied,
-    /// `expired`.
-    Expired,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Call permission status. The guides document `no_permission`,
+    /// `temporary`, `permanent`; the endpoint reference lists `granted`,
+    /// `pending`, `denied`, `expired`. All are known.
+    pub enum CallPermissionStatus {
+        /// `no_permission` (also returned for uncallable numbers).
+        NoPermission => "no_permission",
+        /// `temporary`: granted for 7 days.
+        Temporary => "temporary",
+        /// `permanent`.
+        Permanent => "permanent",
+        /// `granted`.
+        Granted => "granted",
+        /// `pending`.
+        Pending => "pending",
+        /// `denied`.
+        Denied => "denied",
+        /// `expired`.
+        Expired => "expired",
+    }
 }
 
 /// An element of [`CallPermissions::actions`].
@@ -580,17 +578,14 @@ pub struct CallPermissionAction {
     pub limits: Vec<ActionLimit>,
 }
 
-/// Name of a call-permission action.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CallPermissionActionName {
-    /// `start_call`: a new call that the user picks up.
-    StartCall,
-    /// `send_call_permission_request`.
-    SendCallPermissionRequest,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Name of a call-permission action.
+    pub enum CallPermissionActionName {
+        /// `start_call`: a new call that the user picks up.
+        StartCall => "start_call",
+        /// `send_call_permission_request`.
+        SendCallPermissionRequest => "send_call_permission_request",
+    }
 }
 
 /// A limit on an action.

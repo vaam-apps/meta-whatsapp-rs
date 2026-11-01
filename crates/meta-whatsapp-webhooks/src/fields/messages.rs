@@ -36,6 +36,7 @@ use std::fmt;
 
 use meta_whatsapp_core::GraphApiError;
 use meta_whatsapp_core::ids::{CatalogId, GroupId, MediaId, MessageId, TemplateId, UserId, WaId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::secret::RedactedUrl;
 use serde::de::Error as _;
 use serde::ser::SerializeMap;
@@ -45,7 +46,6 @@ use time::OffsetDateTime;
 
 use super::common::{Contact, Metadata};
 use super::routing::ConversationContext;
-use crate::open_enum::open_enum;
 
 /// `value` of a `messages` change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

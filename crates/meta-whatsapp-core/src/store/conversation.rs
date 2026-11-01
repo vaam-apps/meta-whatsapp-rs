@@ -272,69 +272,35 @@ pub struct ConversationSummary {
     pub unread: u64,
 }
 
-/// Why a [`WindowEvent`] opened or refreshed the customer service window.
-///
-/// Stored by name ([`as_str`](Self::as_str)): a store keeps the name, so
-/// the names never change. [`Other`](Self::Other) carries any other name,
-/// for a reason this crate does not name yet; parsing a known name never
-/// gives `Other`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum WindowEventKind {
-    /// The customer called the business number, answered or not
-    /// (`calling/pricing`, "How calling changes the 24 hour customer
-    /// service window"). `customer_call`.
-    CustomerCall,
-    /// The customer accepted a call from the business (same page).
-    /// `call_accepted`.
-    CallAccepted,
-    /// A customer's message observed in standby under Conversation Routing
-    /// (`webhooks/reference/standby`): it refreshes the window, but it is
-    /// not the business's to answer, nor unread (`OPEN_QUESTIONS.md` #44).
-    /// `standby_message`.
-    StandbyMessage,
-    /// Any other name.
-    Other(String),
+crate::open_enum! {
+    /// Why a [`WindowEvent`] opened or refreshed the customer service window.
+    ///
+    /// Stored by name ([`as_str`](WindowEventKind::as_str)): a store keeps
+    /// the name, so the names never change.
+    /// [`Other`](WindowEventKind::Other) carries any other name, for a
+    /// reason this crate does not name yet; parsing a known name never
+    /// gives `Other`.
+    pub enum WindowEventKind {
+        /// The customer called the business number, answered or not
+        /// (`calling/pricing`, "How calling changes the 24 hour customer
+        /// service window"). `customer_call`.
+        CustomerCall => "customer_call",
+        /// The customer accepted a call from the business (same page).
+        /// `call_accepted`.
+        CallAccepted => "call_accepted",
+        /// A customer's message observed in standby under Conversation Routing
+        /// (`webhooks/reference/standby`): it refreshes the window, but it is
+        /// not the business's to answer, nor unread (`OPEN_QUESTIONS.md` #44).
+        /// `standby_message`.
+        StandbyMessage => "standby_message",
+    }
 }
 
 impl WindowEventKind {
-    /// The stored name.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::CustomerCall => "customer_call",
-            Self::CallAccepted => "call_accepted",
-            Self::StandbyMessage => "standby_message",
-            Self::Other(name) => name,
-        }
-    }
-
-    /// The kind a stored name stands for.
+    /// The kind a stored name stands for; the same as
+    /// `WindowEventKind::from(name)`.
     pub fn from_name(name: &str) -> Self {
-        match name {
-            "customer_call" => Self::CustomerCall,
-            "call_accepted" => Self::CallAccepted,
-            "standby_message" => Self::StandbyMessage,
-            other => Self::Other(other.to_owned()),
-        }
-    }
-}
-
-impl fmt::Display for WindowEventKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl Serialize for WindowEventKind {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for WindowEventKind {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let name = String::deserialize(deserializer)?;
-        Ok(Self::from_name(&name))
+        Self::from(name)
     }
 }
 

@@ -6,6 +6,7 @@ use std::fmt;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{AppId, WabaId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::secret::{AccessToken, SecretBytes};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -123,18 +124,14 @@ pub struct GranularScope {
     pub target_ids: Option<Vec<String>>,
 }
 
-/// Token type reported by `debug_token`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
-pub enum TokenType {
-    /// User token.
-    User,
-    /// System user token (including business integration system users).
-    SystemUser,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
+open_enum! {
+    /// Token type reported by `debug_token`.
+    pub enum TokenType {
+        /// User token.
+        User => "USER",
+        /// System user token (including business integration system users).
+        SystemUser => "SYSTEM_USER",
+    }
 }
 
 impl TokenDebug {

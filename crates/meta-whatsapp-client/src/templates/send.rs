@@ -31,10 +31,9 @@ use std::fmt;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{CatalogId, MediaId};
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-
-use super::macros::string_enum;
 
 /// The `template` object of a send request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -289,7 +288,8 @@ pub struct TemplateLanguage {
     pub policy: Option<String>,
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `sub_type` of a button component. Spelled as each page does,
     /// including the catalog page's upper-case `CATALOG`.
     pub enum ButtonSubType {

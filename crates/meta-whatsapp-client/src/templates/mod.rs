@@ -61,7 +61,6 @@
 mod definition;
 mod groups;
 mod info;
-pub(crate) mod macros;
 mod send;
 mod types;
 pub(crate) mod validate;

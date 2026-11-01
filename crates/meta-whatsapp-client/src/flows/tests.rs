@@ -71,7 +71,7 @@ async fn create_sends_the_documented_body() {
     let created = client(&t)
         .flows(WabaId::new("102290129340398").unwrap())
         .create(
-            &CreateFlow::new("My first flow", [FlowCategory::Other])
+            &CreateFlow::new("My first flow", [FlowCategory::OtherCategory])
                 .flow_json(DOC_FLOW_JSON)
                 .publish(true),
         )
