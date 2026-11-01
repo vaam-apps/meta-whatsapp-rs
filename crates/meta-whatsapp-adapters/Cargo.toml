@@ -18,8 +18,18 @@ memory = ["tokio/sync"]
 reqwest = ["dep:reqwest"]
 # Postgres KvStore + ConversationStore (sqlx), with embedded migrations.
 postgres = ["dep:sqlx", "dep:serde"]
-# Redis KvStore.
-redis = ["dep:redis"]
+# Redis KvStore, over `redis://` or `rediss://` (TLS: rustls with an
+# explicit aws-lc-rs provider, never the process default; roadmap L21c).
+redis = [
+  "dep:redis",
+  "dep:rustls",
+  "dep:tokio-rustls",
+  "dep:rustls-platform-verifier",
+  "dep:url",
+  "tokio/net",
+  "tokio/rt",
+  "tokio/sync",
+]
 # Channel, broadcast, fan-out, filter, fn and tracing sinks, and event streams.
 sinks = ["tokio/sync", "dep:tokio-stream"]
 
@@ -55,11 +65,22 @@ sqlx = { workspace = true, optional = true, features = [
   "time",
   "json",
 ] }
-# No TLS feature: redis builds its rustls config from the process-default
-# crypto provider, which is ambiguous (and panics) when reqwest's aws-lc-rs
-# and another crate's ring are both linked. Integrators who need `rediss://`
-# enable `redis/tokio-rustls-comp` themselves and hand us the connection.
+# No TLS feature of redis: redis-rs builds its rustls configuration with
+# `rustls::ClientConfig::builder()`, the process-default crypto provider,
+# which panics when reqwest's aws-lc-rs and another crate's ring are both
+# linked and the application installed none. `rediss://` is ours instead
+# (`store::RedisTls`): the handshake is done here, with the provider chosen
+# explicitly, and the stream handed to redis-rs.
 redis = { workspace = true, optional = true, features = ["tokio-comp", "connection-manager", "script"] }
+# `aws_lc_rs` (the provider reqwest and sqlx already use here), `std`, and
+# `tls12` (managed Redis offerings still accept TLS 1.2). No `logging`.
+rustls = { workspace = true, optional = true, features = ["aws_lc_rs", "std", "tls12"] }
+tokio-rustls = { workspace = true, optional = true }
+# The platform's trust store by default, as reqwest's transport does.
+rustls-platform-verifier = { workspace = true, optional = true }
+# `rediss://` is parsed here: redis-rs refuses the scheme without its TLS
+# features.
+url = { workspace = true, optional = true }
 
 [dev-dependencies]
 meta-whatsapp-core = { workspace = true, features = ["testing"] }
@@ -69,6 +90,11 @@ axum = { workspace = true, features = ["http1", "http2", "tokio", "multipart", "
 bytes.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "test-util", "net", "io-util", "sync"] }
 url.workspace = true
+# tests/redis_tls*.rs: rustls with its `ring` provider as well, so those test
+# binaries link both providers: the case in which the process default is
+# ambiguous and `rustls::ClientConfig::builder()` panics (roadmap L21c). A
+# dev-dependency only: no library build links ring.
+rustls = { workspace = true, features = ["ring", "aws_lc_rs", "std", "tls12"] }
 
 [lints]
 workspace = true

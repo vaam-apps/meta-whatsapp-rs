@@ -956,15 +956,23 @@ Logs carry sizes, digests and field names only — never payload values.
   memory store does the same; `OPEN_QUESTIONS.md` #33).
 - Redis: per-namespace version counter (a per-key counter would leak one key
   per dedup marker forever); every mutating op is one Lua script. **TLS**
-  (`rediss://`) is not wired: redis-rs uses the process-wide rustls provider,
-  which panics when both aws-lc-rs and ring are linked — pass your own
-  connection with a provider installed at startup.
+  (`rediss://`, roadmap L21c) is `store::RedisTls`, not redis-rs's TLS:
+  redis-rs builds its rustls configuration from the process-wide default
+  provider, which panics when both aws-lc-rs and ring are linked and none
+  was installed. `RedisTls` builds the configuration on an explicit
+  aws-lc-rs provider, does the handshake (tokio-rustls) and hands the
+  stream to redis-rs's `MultiplexedConnection::new_with_config`;
+  `RedisTlsConnection` reconnects on its own. An integrator-built
+  connection still works.
 - reqwest: errors never carry the request URL; redirects send no `Referer`
   (it would carry the query to the redirect target), and a request that
   carries a credential header follows no redirect that would keep it (see
   "Credentials never leave Meta"); `HTTP(S)_PROXY` is honoured.
 - Live tests are named `live_*`, read `META_WHATSAPP_RS_TEST_POSTGRES_URL` /
-  `META_WHATSAPP_RS_TEST_REDIS_URL`, skip when unset, and **fail** when unset under
+  `META_WHATSAPP_RS_TEST_REDIS_URL` / `META_WHATSAPP_RS_TEST_REDISS_URL` (a
+  TLS Redis requiring client certificates; its CA and client PEM files in
+  `META_WHATSAPP_RS_TEST_REDISS_CA`, `…_CLIENT_CERT`, `…_CLIENT_KEY`),
+  skip when unset, and **fail** when unset under
   `META_WHATSAPP_RS_REQUIRE_LIVE=1` (`just test-live` sets it). Every `KvStore`
   adapter runs `store::conformance`, every `ConversationStore` adapter runs
   `store::conversation_conformance` (including concurrency, collation and

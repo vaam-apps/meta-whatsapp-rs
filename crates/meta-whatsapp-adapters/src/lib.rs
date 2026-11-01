@@ -11,18 +11,19 @@
 //! | `sinks` (default) | `sink`: channel, broadcast, fan-out, filter, fn, tracing sinks | `EventSink` | tokio `sync`, tokio-stream |
 //! | `reqwest` | `http::ReqwestTransport` | `HttpTransport` | reqwest (rustls, aws-lc-rs, HTTP/2) |
 //! | `postgres` | `store::PostgresKvStore`, `store::PostgresConversationStore`, `store::postgres::migrate` | `KvStore`, `ConversationStore` | sqlx (Postgres, tokio, rustls) |
-//! | `redis` | `store::RedisKvStore` | `KvStore` | redis (tokio, connection manager; no TLS) |
+//! | `redis` | `store::RedisKvStore`, `store::RedisTls` (`rediss://`) | `KvStore` | redis (tokio, connection manager; none of its TLS features), rustls and tokio-rustls (aws-lc-rs), rustls-platform-verifier |
 //!
 //! Every feature compiles on its own; none is required by another.
 //!
 //! # Known limitations
 //!
-//! - **Redis over TLS (`rediss://`) is not built in.** redis-rs configures
-//!   rustls from the process-wide default crypto provider and panics when
-//!   both `aws-lc-rs` and `ring` are linked and none was installed. Enable
-//!   `redis/tokio-rustls-comp` in your application, install a provider at
-//!   startup, and hand the connection to `RedisKvStore::new`; its docs show
-//!   how.
+//! - **Redis over TLS (`rediss://`) goes through `store::RedisTls`, not
+//!   redis-rs's TLS**, which configures rustls from the process-wide default
+//!   crypto provider and panics when both `aws-lc-rs` and `ring` are linked
+//!   and none was installed. `RedisTls` names aws-lc-rs explicitly; its
+//!   connection reconnects on its own but is not redis-rs's
+//!   `ConnectionManager`, and Redis Cluster and Sentinel over TLS are not
+//!   covered.
 //! - **Postgres refuses U+0000 in identifiers**: a message id, contact or
 //!   phone number id, or a `StoreKey`, holding one is rejected with
 //!   `StorageError::Backend`. Message content (kind, text, payload, status

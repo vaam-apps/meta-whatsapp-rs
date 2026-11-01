@@ -195,6 +195,25 @@ of its own, after an HTML comment; keep that when you add one.
     connections stay the way, documented. Swappable: an integrator can
     still pass its own connection. Roadmap L21c.
 
+    **Found with L21c (2026-11-01, implementer):** redis-rs 1.7 cannot
+    take an explicit provider: its rustls path (`tls-rustls`,
+    `tokio-rustls-comp`) always calls `rustls::ClientConfig::builder()`;
+    `Client::build_with_tls` takes PEM certificates only, `TlsConnParams`
+    has no public constructor, and nothing accepts a `ClientConfig` or a
+    connector. It does take any stream:
+    `MultiplexedConnection::new_with_config(&RedisConnectionInfo, stream,
+    AsyncConnectionConfig)`. **Proposed, for the coordinator to record:**
+    wire `rediss://` here anyway, without redis-rs's TLS features:
+    `store::RedisTls` builds the `ClientConfig` on
+    `rustls::crypto::aws_lc_rs::default_provider()` (the platform's trust
+    store through `rustls-platform-verifier` by default, as reqwest does;
+    a private CA or a client certificate as PEM), does the handshake with
+    tokio-rustls, and hands the stream to that constructor;
+    `RedisTlsConnection` reconnects as `ConnectionManager` does, never
+    replaying a command. Swappable: `RedisTls::from_client_config` takes
+    any `ClientConfig`, and an integrator-built connection still goes to
+    `RedisKvStore::new`. Not covered: Cluster and Sentinel over TLS.
+
 ## Security posture
 
 21. **quick-xml advisories (RUSTSEC-2026-0194/0195)** are ignored in
