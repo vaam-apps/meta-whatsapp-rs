@@ -22,7 +22,7 @@ pub use meta_whatsapp_server::auth::{
     guard, tenant_guard,
 };
 pub use meta_whatsapp_server::model::{KeyOwner, Scope, TenantId};
-pub use meta_whatsapp_server::state::AppState;
+pub use meta_whatsapp_server::state::{AppState, Grant};
 pub use meta_whatsapp_server::store::{MemoryStore, RecordStore};
 pub use serde_json::json;
 
@@ -146,6 +146,31 @@ pub fn admin_routes() -> Router<AppState> {
         "/admin",
         get(|admin: AdminCaller| async move { admin.key_id().to_owned() }),
     )
+}
+
+/// [`tenant_routes`] and [`admin_routes`] served with the state's
+/// [`Grant`], as the API adapter's handlers are since roadmap S7: the
+/// `Caller` and `AdminCaller` extractors on a grant are impls of their
+/// own (`FromRequestParts<Grant>`), the owned number's and WABA's the
+/// state's, through the grant.
+pub fn granted_routes() -> Router<Grant> {
+    Router::new()
+        .route(
+            "/caller",
+            get(|caller: Caller| async move { caller.tenant().as_str().to_owned() }),
+        )
+        .route(
+            "/numbers/{pn}",
+            get(|owned: OwnedNumber| async move { token(owned.client()) }),
+        )
+        .route(
+            "/wabas/{waba_id}",
+            get(|owned: OwnedWaba| async move { token(owned.client()) }),
+        )
+        .route(
+            "/admin",
+            get(|admin: AdminCaller| async move { admin.key_id().to_owned() }),
+        )
 }
 
 /// The operations [`tenant_routes`] stand for, for the guard's rate

@@ -966,3 +966,191 @@ fn live_postgres_cli_vault_rotate_fails_when_a_record_does() {
         .unwrap();
     assert_eq!(token.token.expose_secret(), "TOKEN-201");
 }
+
+// ─── Migration continuity across the crate split (roadmap S7) ───────────
+
+/// The service's migration history table as `main` (dda06c9, before the
+/// split) named it: a stable identifier (docs/architecture.md, § Stable
+/// identifiers).
+const MAIN_MIGRATIONS_TABLE: &str = "wa_server_sqlx_migrations";
+
+/// The advisory lock `main`'s `migrate` held: SHA-256 of
+/// `meta-whatsapp-server/migrate`, its first eight bytes.
+const MAIN_MIGRATION_LOCK: i64 = 0x4609_2c1b_ffac_b625;
+
+/// `main`'s service migrations as its sqlx recorded them: version,
+/// description, file (moved, byte for byte, to
+/// `crates/meta-whatsapp-server-store-postgres/migrations/`) and the
+/// SHA-384 of the file `main` embedded.
+const MAIN_MIGRATIONS: [(i64, &str, &str, &str); 3] = [
+    (
+        1,
+        "tenants keys bindings",
+        include_str!(
+            "../../meta-whatsapp-server-store-postgres/migrations/0001_tenants_keys_bindings.sql"
+        ),
+        "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
+    ),
+    (
+        2,
+        "idempotency",
+        include_str!("../../meta-whatsapp-server-store-postgres/migrations/0002_idempotency.sql"),
+        "07f54d21a6d32d8a87420469f6f5e35d3b93f47ce7a5aec34ed526ca13d7b7fb08b9858065b74c1d522b3a88b82f24b2",
+    ),
+    (
+        3,
+        "events",
+        include_str!("../../meta-whatsapp-server-store-postgres/migrations/0003_events.sql"),
+        "ca0cec491b00af0a22afff8e45913f1f4f1e59d08250804c1eb1f85306d33ae577c050208ad6a0c67ab8e3066296a1cd",
+    ),
+];
+
+/// Migrate `pool` as `main`'s binary did (its `store::postgres::migrate`):
+/// under [`MAIN_MIGRATION_LOCK`], the library's migrations, then the
+/// service's, with sqlx's migrator in [`MAIN_MIGRATIONS_TABLE`], each
+/// recorded with the checksum `main` recorded. A file edited since makes
+/// the split binary's own run refuse the database (sqlx compares each
+/// applied version's checksum), as it would refuse every database `main`
+/// migrated.
+async fn migrate_as_main(pool: &meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool) {
+    use std::borrow::Cow;
+
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx::migrate::{
+        Migration, MigrationType, Migrator,
+    };
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx::{self, SqlSafeStr as _};
+    let mut lock = pool.acquire().await.unwrap();
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(MAIN_MIGRATION_LOCK)
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+    meta_whatsapp_rs::adapters::store::postgres::migrate(pool)
+        .await
+        .unwrap();
+    let migrations = MAIN_MIGRATIONS
+        .iter()
+        .map(|(version, description, sql, checksum)| Migration {
+            version: *version,
+            description: Cow::Borrowed(*description),
+            migration_type: MigrationType::Simple,
+            sql: (*sql).into_sql_str(),
+            checksum: Cow::Owned(hex::decode(checksum).unwrap()),
+            no_tx: false,
+        })
+        .collect();
+    let mut migrator = Migrator::with_migrations(migrations);
+    migrator.dangerous_set_table_name(MAIN_MIGRATIONS_TABLE);
+    migrator.run(pool).await.unwrap();
+    sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(MAIN_MIGRATION_LOCK)
+        .execute(&mut *lock)
+        .await
+        .unwrap();
+}
+
+/// Every row of a sqlx history table: version, description, success,
+/// checksum (hex), when it was installed and how long it took. A
+/// migration run again would change `installed_on`; a new one adds a row.
+async fn history(
+    pool: &meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool,
+    table: &str,
+) -> Vec<(i64, String, bool, String, String, i64)> {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx;
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT version, description, success, encode(checksum, 'hex'), \
+         installed_on::text, execution_time FROM {table} ORDER BY version"
+    )))
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// Roadmap S7's continuity: a database `main`'s binary migrated (the
+/// service's migrations moved to `meta-whatsapp-server-store-postgres`)
+/// starts this binary with no migration run again and no checksum error.
+/// `migrate`, then `serve`, both migrating by default
+/// (`WA_SERVER_MIGRATE=auto`), succeed, `/readyz` answers 200, and both
+/// history tables (the service's and the library's) are row for row what
+/// `main` left, `installed_on` included. Decisive: an edited migration
+/// file (`VersionMismatch`), a renamed history table (its migrations run
+/// again, on tables that exist), or a renumbered migration fails it; the
+/// lock key and the table name are compared to `main`'s too.
+#[test]
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+fn live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration() {
+    let Some(url) = common::postgres_url() else {
+        return;
+    };
+    assert_eq!(
+        meta_whatsapp_server::store::MIGRATIONS_TABLE,
+        MAIN_MIGRATIONS_TABLE
+    );
+    assert_eq!(
+        meta_whatsapp_server::store::MIGRATION_LOCK,
+        MAIN_MIGRATION_LOCK
+    );
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let db = runtime.block_on(common::TestDb::new()).unwrap();
+    let pool = runtime.block_on(db.pool(4));
+    runtime.block_on(migrate_as_main(&pool));
+    let before = runtime.block_on(async {
+        (
+            history(&pool, MAIN_MIGRATIONS_TABLE).await,
+            history(&pool, "wa_sqlx_migrations").await,
+        )
+    });
+    assert_eq!(
+        before.0.iter().map(|row| row.0).collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    assert!(
+        before.0.iter().all(|row| row.2),
+        "every migration succeeded"
+    );
+    assert!(!before.1.is_empty(), "the library's migrations ran too");
+
+    let separator = if url.contains('?') { '&' } else { '?' };
+    let url = format!("{url}{separator}options=-c%20search_path%3D{}", db.schema);
+    let ports = two_ports();
+    let (public, internal) = (ports.public, ports.internal);
+    let with_db = |command: &mut Command| {
+        base(command, public, internal)
+            .env("DATABASE_URL", &url)
+            .env(
+                "WA_VAULT_KEY",
+                "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+            )
+            .env("WA_OTP_PEPPER", "a-pepper-of-at-least-thirty-two-bytes");
+    };
+    let mut migrate = Command::new(BIN);
+    with_db(&mut migrate);
+    let migrated = migrate.arg("migrate").output().unwrap();
+    assert!(
+        migrated.status.success(),
+        "`migrate` on main's database: {}",
+        String::from_utf8_lossy(&migrated.stderr)
+    );
+    let mut serving = Command::new(BIN);
+    with_db(&mut serving);
+    let mut server = serve(serving.arg("serve"), ports);
+    server.wait_live(internal);
+    let (status, body) = http(internal, "GET", "/readyz", &[], "").unwrap();
+    assert_eq!(status, 200, "{body}");
+    let stderr = server.terminate().join("\n");
+    assert!(
+        !stderr.contains("migrations failed") && !stderr.contains("previously applied"),
+        "{stderr}"
+    );
+    let after = runtime.block_on(async {
+        (
+            history(&pool, MAIN_MIGRATIONS_TABLE).await,
+            history(&pool, "wa_sqlx_migrations").await,
+        )
+    });
+    assert_eq!(after, before, "a migration ran again, or a new one ran");
+    runtime.block_on(pool.close());
+}

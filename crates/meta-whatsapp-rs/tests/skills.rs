@@ -2871,12 +2871,27 @@ const SERVER_SKILLS: &str = "meta-whatsapp-rs-server";
 const SERVER_SPEC: &str = "crates/meta-whatsapp-server/openapi/v1.json";
 
 /// The service's source: the environment variables it reads are string
-/// literals there.
-const SERVER_SRC: &str = "crates/meta-whatsapp-server/src";
+/// literals there. The binary and the crates it composes (roadmap S7):
+/// the HTTP layer, the API adapter and the two backends.
+const SERVER_SRC: &str =
+    "crates/meta-whatsapp-server{,-http,-api-axum,-store-memory,-store-postgres}/src";
+
+/// [`SERVER_SRC`], one directory each.
+const SERVER_SRCS: &[&str] = &[
+    "crates/meta-whatsapp-server/src",
+    "crates/meta-whatsapp-server-http/src",
+    "crates/meta-whatsapp-server-api-axum/src",
+    "crates/meta-whatsapp-server-store-memory/src",
+    "crates/meta-whatsapp-server-store-postgres/src",
+];
+
+/// The service's routers, where `PUBLIC_OPERATIONS` is declared (the HTTP
+/// crate's since roadmap S7).
+const SERVER_ROUTERS: &str = "crates/meta-whatsapp-server-http/src/api/mod.rs";
 
 /// The public listener's operations, which the document leaves out
 /// (Meta's contract, not the callers'); `PUBLIC_OPERATIONS` in
-/// crates/meta-whatsapp-server/src/api/mod.rs, checked below (and the
+/// crates/meta-whatsapp-server-http/src/api/mod.rs, checked below (and the
 /// service's own test sends each to its router).
 const SERVER_PUBLIC_ROUTES: &[(&str, &str)] = &[
     ("GET", "/webhooks/meta"),
@@ -3049,7 +3064,9 @@ fn server_sources() -> Vec<String> {
         }
     }
     let mut out = Vec::new();
-    walk(&repo().join(SERVER_SRC), &mut out);
+    for dir in SERVER_SRCS {
+        walk(&repo().join(dir), &mut out);
+    }
     assert!(!out.is_empty(), "no service source found");
     out
 }
@@ -3267,7 +3284,7 @@ fn server_skills_cite_the_document_and_the_source() {
     let spec = Spec::load();
     // The public operations this test adds are the service's, method and
     // path (compared without whitespace: rustfmt lays the list out).
-    let api = read(&repo().join(SERVER_SRC).join("api/mod.rs"));
+    let api = read(&repo().join(SERVER_ROUTERS));
     let squeeze = |s: &str| s.split_whitespace().collect::<String>().replace(",]", "]");
     let declared = api
         .split_once("pub const PUBLIC_OPERATIONS")
