@@ -766,9 +766,14 @@ of credit).
 > one the vault holds, before any request (a `ValidationError` on
 > `waba_id`), rather than replace its token and record; to onboard such a
 > WABA again on purpose, delete it from the vault first
-> (`TokenVault::delete`, or `offboard`). The check is a read, not a lock:
-> a code-flow onboarding still running when the webhook arrives can store
-> after it, so reserve the WABA for a merchant atomically in the approval.
+> (`TokenVault::delete`, or `offboard`). The check is a read, and
+> `store_token` then stores only where the vault still holds no record: a
+> code-flow or multi-WABA onboarding that stores the WABA after the read
+> is never replaced, and `onboard_hosted` fails at `store_token` instead
+> (nothing stored by it; release what your approval reserved). The other
+> way round, a code-flow onboarding still running when the webhook
+> arrives can store after it and replace it, as re-onboarding does, so
+> reserve the WABA for a merchant atomically in the approval.
 
 ```text
 Meta's hosted page ──► account_update PARTNER_ADDED {waba_id, owner_business_id}

@@ -238,7 +238,11 @@ stored data, the owner's).
   request, when that owner is unknown); another grant the vault already
   holds is left as it is, and one stored by another onboarding while
   this one runs is not replaced (stored with `put_if_absent`; it fails
-  at `store_token`). The result,
+  at `store_token`). `onboard_hosted` and `onboard_hosted_with_approval`
+  now store the same way: their `holds` read was not a lock, and a
+  code-flow or multi-WABA onboarding storing the WABA after it was
+  replaced; such a hosted run now fails at `store_token`, the other
+  record kept. The result,
   `WabasOnboarded` (`#[must_use]`; `is_complete`, `failures`,
   `onboarded`, `primary`, `get`), has one `WabaOnboarding` per WABA, its
   `WabaOutcome` `Onboarded`, `Held` or `Failed { error, steps_completed }`

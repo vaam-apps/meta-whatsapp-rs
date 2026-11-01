@@ -1963,7 +1963,11 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     other grants are now stored with `put_if_absent`
     (`TokenVault::store_new`, crate-private, the phone index untouched
     when it loses) and fail at `store_token` when the vault came to hold
-    them (`a_grant_stored_meanwhile_is_not_replaced`). A read of the
+    them (`a_grant_stored_meanwhile_is_not_replaced`); `onboard_hosted`,
+    whose `holds` read had the same window the other way round (a
+    code-flow or multi-WABA onboarding storing after it was replaced),
+    now stores the same way and fails at `store_token`
+    (`a_hosted_signup_never_replaces_a_record_stored_meanwhile`). A read of the
     vault that fails fails the grant closed
     (`a_grant_whose_record_cannot_be_read_fails_closed`); the others keep
     the request's subscription override

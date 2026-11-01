@@ -466,6 +466,12 @@ pub(super) struct Granted<'a> {
     /// (hosted signup: the webhook's `owner_business_id`): the WABA's owner
     /// as Meta reports it must not be another.
     pub(super) owner: Option<&'a BusinessId>,
+    /// Whether `store_token` replaces a record the vault holds for the
+    /// WABA (the code flow's claimed WABA: re-onboarding must), or stores
+    /// only where it holds none ([`TokenVault::store_new`]: hosted signup,
+    /// whose `PARTNER_ADDED` also comes for WABAs other onboardings
+    /// store, and a signup's other grants), failing the step otherwise.
+    pub(super) replaces: bool,
 }
 
 /// One WABA of a signup whose grant `verify_grant` checked: what
@@ -488,15 +494,15 @@ pub(super) enum WabaRole<'a> {
     /// The only WABA onboarded ([`EmbeddedSignup::onboard`],
     /// [`EmbeddedSignup::onboard_hosted`](super::EmbeddedSignup::onboard_hosted)):
     /// its owner checked against [`Granted::owner`] when the flow names
-    /// one, its record replacing any.
+    /// one, its record stored as [`Granted::replaces`] says.
     Only,
     /// The primary WABA of [`EmbeddedSignup::onboard_wabas`]: as
     /// [`Self::Only`], and the owner Meta reports for it, once it is
     /// verified, is written here: the business the signup is about.
     Primary(&'a mut Option<BusinessId>),
     /// Another grant of [`EmbeddedSignup::onboard_wabas`]: Meta must report
-    /// this owner for it (the primary WABA's), and its record is stored
-    /// only where the vault holds none ([`TokenVault::store_new`]).
+    /// this owner for it (the primary WABA's). Its [`Granted`] does not
+    /// replace a record.
     Other(&'a BusinessId),
 }
 
@@ -657,6 +663,7 @@ impl EmbeddedSignup {
             expires_in: token.expires_in,
             session: &request.session,
             owner: None,
+            replaces: true,
         };
         self.onboard_granted(granted, request, vault, plan, approve, done)
             .await
@@ -756,14 +763,9 @@ impl EmbeddedSignup {
         .await
         .map_err(|e| e.in_step(VERIFY_ASSETS))?;
         done.push(VERIFY_ASSETS);
-        let replace = match role {
-            WabaRole::Primary(seen) => {
-                seen.clone_from(&assets.business_id);
-                true
-            }
-            WabaRole::Only => true,
-            WabaRole::Other(_) => false,
-        };
+        if let WabaRole::Primary(seen) = role {
+            seen.clone_from(&assets.business_id);
+        }
 
         // The token record stored below: an approval is recorded for it.
         let created_at = vault.now();
@@ -791,7 +793,7 @@ impl EmbeddedSignup {
         stored.phone_number_ids.clone_from(&assets.phone_number_ids);
         stored.expires_at = expires_at;
         stored.created_at = Some(created_at);
-        if replace {
+        if granted.replaces {
             vault
                 .store(&stored)
                 .await
@@ -802,12 +804,12 @@ impl EmbeddedSignup {
             .map_err(|e| e.in_step(STORE_TOKEN))?
             .is_none()
         {
-            // Held since `onboard_wabas` looked (another signup, a hosted
-            // `PARTNER_ADDED`): a grant this signup did not claim never
-            // replaces it.
+            // Held since the caller looked (another signup, a hosted
+            // `PARTNER_ADDED`): a WABA this onboarding did not claim, or
+            // a hosted one, never replaces it.
             return Err(Error::from(ValidationError::new(
                 "waba_id",
-                "another onboarding stored this WABA while this signup onboarded it: its record is left as it is, nothing was stored for this signup, and what your approval reserved for it is yours to release",
+                "another onboarding stored this WABA while this one ran: its record is left as it is, nothing was stored by this one, and what your approval reserved for it is yours to release",
             ))
             .in_step(STORE_TOKEN));
         }

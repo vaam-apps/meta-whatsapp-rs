@@ -263,6 +263,7 @@ impl EmbeddedSignup {
             expires_in: token.expires_in,
             session: &request.session,
             owner: None,
+            replaces: true,
         };
         let debug = self
             .debug_token(&granted.token)
@@ -382,6 +383,7 @@ impl EmbeddedSignup {
             expires_in: signup.granted.expires_in,
             session: &other.session,
             owner: None,
+            replaces: false,
         };
         let waba = GrantedWaba {
             granted: &granted,

@@ -681,7 +681,8 @@ system token's `appsecret_proof` in a form body) in place of
 `exchange_code`, then the same steps, writing the same vault record; the
 WABA's owner as Meta reports it must be the webhook's, and a WABA the vault
 already holds is refused before any request (`PARTNER_ADDED` also comes for
-the code flow's onboardings). Several WABAs in one signup (roadmap L11b,
+the code flow's onboardings), and one stored after that read is not replaced
+(`store_token` stores only where none is, `put_if_absent`). Several WABAs in one signup (roadmap L11b,
 `OPEN_QUESTIONS.md` #5): with `OnboardingRequest::every_granted_waba(true)`
 (off by default), `onboard_wabas(&request, &vault) → WabasOnboarded` (and
 `onboard_wabas_with_approval`, its approval called once per WABA) exchanges
