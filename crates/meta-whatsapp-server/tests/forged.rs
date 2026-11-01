@@ -15,12 +15,15 @@
 //!
 //! Steps 1 and 2 no longer compile: the handlers, and
 //! `idempotency::run`, over the service's own records, are crate-private
-//! (`tests/visibility/fail/api_*.rs` and `idempotency_run.rs` pin it, with
-//! the compiler's `E0603`). Step 3 needs step 2's key. What remains is a
-//! forged capability put straight into a request's extensions, in front of
-//! the service's own extractors: refused, `403 forbidden`, and the vault
-//! never read (this file). Decisive: the `admit` calls in the `Caller` and
-//! `AdminCaller` extractors (`src/auth.rs`).
+//! (since roadmap S7 `meta-whatsapp-server-api-axum`'s
+//! `tests/visibility/fail/api_*.rs` and `meta-whatsapp-server-http`'s
+//! `idempotency_run.rs` pin it, with the compiler's `E0603`). Step 3 needs
+//! step 2's key. What remains is a forged capability put straight into a
+//! request's extensions, in front of the service's own extractors, on a
+//! route served with the state or with its grant (the API adapter's):
+//! refused, `403 forbidden`, and the vault never read (this file).
+//! Decisive: the `admit` calls in the `Caller` and `AdminCaller`
+//! extractors (`meta-whatsapp-server-http`'s `src/auth.rs`).
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 
 mod common;
@@ -46,6 +49,29 @@ async fn a_forged_capability_in_a_requests_extensions_is_403_at_every_extractor(
         caller,
         admin,
     );
+    let reads = h.kv.vault_reads();
+    for path in paths() {
+        let reply = send(&app, Call::get(&path).build()).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::FORBIDDEN, "forbidden"),
+            "{path}: {}",
+            reply.text
+        );
+        assert!(!reply.text.contains(VICTIM_TOKEN), "{path}: {}", reply.text);
+    }
+    assert_eq!(h.kv.vault_reads(), reads, "the vault was read");
+}
+
+/// The same on routes served with the state's grant, as the API adapter's
+/// handlers are since roadmap S7 (`Caller` and `AdminCaller` extract on a
+/// grant through impls of their own). Decisive: the `admit` in the
+/// grant's `Caller` and `AdminCaller` extractors.
+#[tokio::test]
+async fn a_forged_capability_is_403_at_every_extractor_on_a_grant_too() {
+    let h = service().await;
+    let (caller, admin) = forged().await;
+    let app = planted(granted_routes().with_state(h.grant.clone()), caller, admin);
     let reads = h.kv.vault_reads();
     for path in paths() {
         let reply = send(&app, Call::get(&path).build()).await;

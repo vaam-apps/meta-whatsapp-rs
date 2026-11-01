@@ -24,17 +24,19 @@
 //!
 //! | Decision | Trait | Default |
 //! | --- | --- | --- |
-//! | how many sends a number may start, and when | [`RateLimiter`] | [`TokenBucket`] (in this process) |
+//! | how many sends a number may start, and when | [`RateLimiter`] | [`TokenBucket`] (in this process; [`KvRateLimiter`] shares one budget between replicas) |
 //! | which errors mean the number sends too fast | [`SlowDownRule`] | [`ThrottlingErrors`] |
 //! | what "now" is and how to wait | [`Timer`] (a `Clock` that can sleep) | `SystemClock` (Tokio's sleep) |
 //!
-//! **One budget per process.** [`TokenBucket`] counts the sends of this
-//! process only: two replicas at 80 a second each send 160 a second from
-//! one number. Give each replica its share of the rate
-//! (`Rate::per_second(80 / replicas)`), or plug in a [`RateLimiter`] that
-//! keeps its schedule in a store every replica shares (none ships yet:
-//! roadmap B2b; a reservation is one atomic read-modify-write, see
-//! [`TokenBucket`]).
+//! **One budget per process, or one for every replica.** [`TokenBucket`]
+//! counts the sends of this process only: two replicas at 80 a second each
+//! send 160 a second from one number. Give each replica its share of the
+//! rate (`Rate::per_second(80 / replicas)`), or pace every replica with a
+//! [`KvRateLimiter`] over the same `KvStore` (Redis, Postgres): each
+//! number's schedule is a record there (namespace [`PACER_NAMESPACE`],
+//! `wa.bot.pacer`), booked by `compare_and_swap`, so the replicas share one
+//! budget. It assumes their clocks are synchronized (NTP), fails closed
+//! when the store does, and is opt-in: see [`KvRateLimiter`].
 //!
 //! What goes through the pacer is what calls it: a [`Broadcast`] reserves
 //! a slot before each send (retries included); [`PacedOutbound`] (set on a
@@ -79,6 +81,10 @@ use meta_whatsapp_core::{Error, ErrorKind, Result};
 use time::OffsetDateTime;
 
 use crate::outbound::Outbound;
+
+mod kv;
+
+pub use kv::{KvRateLimiter, PACER_NAMESPACE};
 
 /// A business number's send rate, in messages a second.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -206,8 +212,10 @@ impl Reservation {
 /// slot and says how long to wait for it, so the caller waits on its own
 /// [`Timer`] (and can stop waiting when a broadcast is cancelled, handing
 /// the slot back with [`RateLimiter::release`]). The default is
-/// [`TokenBucket`], in this process. A limiter shared by several replicas
-/// (a Redis script, a row in a database) implements the same methods.
+/// [`TokenBucket`], in this process; [`KvRateLimiter`] keeps the schedules
+/// in a `KvStore` every replica shares. Another limiter shared by several
+/// replicas (a Redis script, a row in a database) implements the same
+/// methods.
 #[async_trait]
 pub trait RateLimiter: Send + Sync + fmt::Debug + 'static {
     /// Book the next slot of `request.from` for `request.cost` sends, as of
@@ -230,6 +238,18 @@ pub trait RateLimiter: Send + Sync + fmt::Debug + 'static {
     /// `130429` among them, `131048` and `131057`): send slower for a
     /// while.
     async fn slow_down(&self, from: &PhoneNumberId, now: OffsetDateTime) -> Result<()>;
+
+    /// Raise `from`'s rate to `rate` unless it is already at or above it,
+    /// checked and set in one atomic step, so a rate raised higher
+    /// meanwhile is never lowered: Meta upgraded the number's throughput
+    /// ([`crate::ThroughputUpgrades`]). Whether it rose. The default raises
+    /// nothing (`Ok(false)`), for a limiter without rates of its own;
+    /// [`TokenBucket`] raises it in this process, [`KvRateLimiter`] for
+    /// every replica.
+    async fn raise_rate(&self, from: &PhoneNumberId, rate: Rate) -> Result<bool> {
+        let _ = (from, rate);
+        Ok(false)
+    }
 }
 
 #[async_trait]
@@ -244,6 +264,10 @@ impl<T: RateLimiter + ?Sized> RateLimiter for Arc<T> {
 
     async fn slow_down(&self, from: &PhoneNumberId, now: OffsetDateTime) -> Result<()> {
         (**self).slow_down(from, now).await
+    }
+
+    async fn raise_rate(&self, from: &PhoneNumberId, rate: Rate) -> Result<bool> {
+        (**self).raise_rate(from, rate).await
     }
 }
 
@@ -630,6 +654,12 @@ impl RateLimiter for TokenBucket {
             "pacer slowed a business number down"
         );
         Ok(())
+    }
+
+    /// [`TokenBucket::set_rate`] only if the number's configured rate is
+    /// below `rate`, under one lock: in this process only.
+    async fn raise_rate(&self, from: &PhoneNumberId, rate: Rate) -> Result<bool> {
+        Ok(TokenBucket::raise_rate(self, from, rate))
     }
 }
 

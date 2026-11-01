@@ -269,6 +269,7 @@ coding agents of those apps: the `meta-whatsapp-rs-server` skill.
 | `meta-whatsapp-bot` | Bot framework over webhooks: commands, guards, cooldowns, middleware, compile-time plugins, Markdown → WhatsApp formatting, paced broadcasts. |
 | `meta-whatsapp-server` | The HTTP service (a binary, not a dependency): tenants, keys, the `/v1` API over the facade. See [Not writing Rust? Run the service](#not-writing-rust-run-the-service). |
 | `meta-whatsapp-server-core` | The service's framework-free core (not a dependency either): its domain, authorization order, error model as data, and the storage ports its memory and Postgres backends implement. No axum, sqlx or utoipa. |
+| `meta-whatsapp-server-http`, `-api-axum`, `-store-memory`, `-store-postgres` | The crates the service's binary composes by its Cargo features: the HTTP layer (listeners, authentication, Meta's webhook, media, operations), the `/v1` API and its OpenAPI document, and the memory and Postgres backends. |
 
 ## Development
 

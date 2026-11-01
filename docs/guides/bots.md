@@ -602,7 +602,8 @@ upgrades an eligible number to 1,000 messages a second by itself, then
 sends a `phone_number_quality_update` webhook whose `event` is
 `THROUGHPUT_UPGRADE` (`throughput`, "Higher throughput"). A
 `ThroughputUpgrades` hears it and raises that number's rate in the
-bucket you give it to `Rate::HIGHER_THROUGHPUT` (`TokenBucket::set_rate`),
+limiter you give it to `Rate::HIGHER_THROUGHPUT` (`RateLimiter::raise_rate`:
+a `TokenBucket` in this process, a `KvRateLimiter` for every replica),
 so its next sends go 1 ms apart instead of 12.5 ms (the first of them
 still waits out the 12.5 ms the last send before the upgrade booked).
 Give it to the bot with
@@ -646,13 +647,17 @@ pub fn following_upgrades(
 - **Headroom.** `ThroughputUpgrades::rate` sets the rate an upgrade
   gives (`Rate::per_second(800)` leaves a fifth for inbound messages,
   see below).
-- **In memory only.** The rate lives in the bucket. A restart, or a
-  replica the webhook did not reach, is back at the configured rate, and
-  Meta sends the webhook once per upgrade. To keep it, store the number
-  yourself (`ThroughputUpgrades::observe` returns it, called from a
-  listener or sink of your own) and set it at startup with
-  `TokenBucket::rate_for`. The library keeps no
-  record of it: a store namespace would be a stable identifier.
+- **Where the rate is kept.** With a `TokenBucket` it lives in the
+  bucket: a restart, or a replica the webhook did not reach, is back at
+  the configured rate, and Meta sends the webhook once per upgrade. With
+  a `KvRateLimiter` (below) it is in the number's record, for every
+  replica on the store, and survives restarts until the record expires
+  (`KvRateLimiter::idle_expiry`, 24 hours after the number's last slot by
+  default). To keep it longer, store the number yourself
+  (`ThroughputUpgrades::observe` returns it, called from a listener or
+  sink of your own) and set it at startup with `TokenBucket::rate_for`
+  or `KvRateLimiter::rate_for`. A limiter whose store fails raises
+  nothing, and the error goes where a failed directory's goes.
 - **What else loses an upgrade**, which Meta does not send again. As
   the bot's listener it runs after the middleware: a middleware that
   stops the event (one ignoring everything outside business hours, or
@@ -691,13 +696,61 @@ pub fn following_upgrades(
   `Pacer::acquire(&number)` paces any other call. Every call costs one
   slot (`SlotRequest::cost`): Meta documents no lower cost for a read
   receipt or a typing indicator.
-- **Several replicas** each count their own sends: two replicas at 80 a
-  second send 160. Give each its share of the rate
-  (`Rate::per_second`), or implement `RateLimiter` over a store they
-  share (`RateLimiter::reserve` books a slot and returns the wait,
-  `RateLimiter::release` takes an unused one back,
-  `RateLimiter::slow_down` hears Meta's throttling). None ships yet: a
-  shared limiter on `KvStore` is [roadmap](../roadmap.md) item B2b.
+- **Several replicas** with a `TokenBucket` each count their own sends:
+  two replicas at 80 a second send 160. Give each its share of the rate
+  (`Rate::per_second`), or pace every replica with a `KvRateLimiter`
+  over the `KvStore` they share (Redis, Postgres; opt-in):
+  `Pacer::new(KvRateLimiter::new(kv, Rate::DEFAULT))`. Each number's
+  schedule is then a record in the store (namespace `wa.bot.pacer`,
+  `PACER_NAMESPACE`, the key a SHA-256 of the phone number id), booked
+  by `compare_and_swap` on the version read, so the replicas book from
+  one budget; a slow-down and a raised rate are shared too, and a raised
+  rate is never lowered. What to know:
+  - **Configure every replica alike**: the rates
+    (`KvRateLimiter::rate_for`, `KvRateLimiter::set_rate`) and settings
+    are each replica's, the schedule is shared. A number's rate is the
+    higher of its configured one and the one raised in the store.
+  - **Clocks.** Each replica books by its own clock against the shared
+    schedule, so their clocks must be synchronized (NTP). Two replicas
+    whose clocks differ by a skew may start two sends up to that skew
+    closer than the rate spaces them: a one-second window can hold up to
+    `⌈skew × rate⌉` more (at 80 a second, one more per 12.5 ms of skew),
+    and a store round trip counts the same way. Pace below Meta's rate
+    by that headroom. The schedule never moves back: a replica whose
+    clock is behind waits longer, never sends early; one whose clock
+    jumped ahead books slots everyone then waits for (delete the
+    number's record, `KvRateLimiter::store_key`, to drop them).
+  - **Contention.** A booking that loses the swap reads again after a
+    backoff (1 ms doubling to 64 ms, jittered), 8 times at most
+    (`KvRateLimiter::contention`), then fails with `StorageError::Busy`.
+    One key takes a read and a swap per booking: about one booking per
+    two store round trips, so 1,000 a second needs a store answering
+    well within half a millisecond.
+  - **Failures fail closed.** A store that fails, contention past the
+    bound, or a record of a version this release cannot read fails the
+    booking: nothing is sent (a broadcast ends
+    `BroadcastEnd::LimiterFailed`, a `PacedOutbound` fails the call
+    before sending). It never falls back to a budget of its own.
+  - **Expiry.** A record expires `KvRateLimiter::idle_expiry` (24 hours)
+    after its last slot, and its raised rate with it, silently. Redis
+    drops it; with the memory or Postgres store, call `purge_expired`
+    now and then.
+  - **Resetting a number**: delete its record
+    (`kv.delete(&KvRateLimiter::store_key(&number))`). It is the remedy
+    for a record this release cannot read (never overwritten: the
+    number sends nothing until it expires or is deleted), for slots a
+    clock stepped forward booked, and for a raised rate to lower
+    (nothing else lowers it). It drops the slots booked too: those
+    waiting still start when booked and new ones from now, so for the
+    schedule's length the number can send up to twice its rate.
+  - A slot given back (`RateLimiter::release`) is reused only while no
+    replica booked after it.
+
+  Another shared limiter (a Redis script, a row in a database) implements
+  `RateLimiter` (`RateLimiter::reserve` books a slot and returns the
+  wait, `RateLimiter::release` takes an unused one back,
+  `RateLimiter::slow_down` hears Meta's throttling,
+  `RateLimiter::raise_rate` takes an upgrade).
 - **Concurrency.** Up to `BroadcastBuilder::concurrency` sends (default
   32) are in flight at once, so the rate is reached when each send
   takes a while: about the rate times a send's duration. On a number at
@@ -708,8 +761,10 @@ pub fn following_upgrades(
 - **Zero** where it means nothing is a `ConfigError` when given:
   `Rate::per_second(0)`, `TokenBucket::burst(0)`,
   `TokenBucket::recovery` of zero, a `TokenBucket::slow_down_factor`
-  below two, `Backoff::max_attempts(0)`, and a concurrency of zero at
-  `BroadcastBuilder::build`.
+  below two (and the same settings of `KvRateLimiter`, with its
+  `KvRateLimiter::idle_expiry` of zero and `KvRateLimiter::contention`
+  with zero attempts or a zero delay), `Backoff::max_attempts(0)`, and a
+  concurrency of zero at `BroadcastBuilder::build`.
 
 **Failed sends.** A `BroadcastPolicy` decides, from the error's kind
 (its code, never its text), given a `SendFailure` (the error, how many
