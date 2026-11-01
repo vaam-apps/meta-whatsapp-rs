@@ -1,6 +1,6 @@
 # Replying from the inbox
 
-> **Verified against meta-whatsapp-rs 36c0ab0d28670d9078d14150cae2f67ac0c1e552 (2026-11-01).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, tag `inbox`), `docs/guides/server.md` section "The inbox" and [examples/send.ts](../examples/send.ts).
+> **Verified against meta-whatsapp-rs 73e660893a3c034b3b9193db949390f92a8c1bef (2026-11-01).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, tag `inbox`), `docs/guides/server.md` section "The inbox" and [examples/send.ts](../examples/send.ts).
 
 The inbox (scope `inbox`) holds what the service received for your
 number: a customer's message is there once Meta's delivery is answered.
