@@ -103,6 +103,92 @@ async fn upload_sends_the_documented_multipart_fields() {
 }
 
 #[tokio::test]
+async fn upload_converted_sends_the_format_s_type_and_name() {
+    let t = ScriptedTransport::new();
+    // business-phone-numbers/media, "Example response".
+    t.push_json(200, json!({"id": "1037543291543636"}));
+    let note = ConvertedMedia::new(Bytes::from_static(b"OggS opus"), TargetFormat::OggOpus);
+    let id = client(&t)
+        .media(PhoneNumberId::new(PNID).unwrap())
+        .upload_converted(note, "voice-note")
+        .await
+        .unwrap();
+    assert_eq!(id, media_id());
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method, Method::POST);
+    assert_eq!(req.path(), "/v25.0/106540352242922/media");
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    let (fname, ctype, data) = req.multipart_field("messaging_product").unwrap();
+    assert_eq!((fname, ctype, &data[..]), (None, None, &b"whatsapp"[..]));
+    let (fname, ctype, data) = req.multipart_field("type").unwrap();
+    assert_eq!((fname, ctype, &data[..]), (None, None, &b"audio/ogg"[..]));
+    let (fname, ctype, data) = req.multipart_field("file").unwrap();
+    assert_eq!(fname, Some("voice-note.ogg"));
+    assert_eq!(ctype, Some("audio/ogg"));
+    assert_eq!(&data[..], b"OggS opus");
+    let RecordedBody::Multipart(parts) = &req.body else {
+        panic!("expected multipart");
+    };
+    assert_eq!(parts.len(), 3);
+    assert_eq!(t.remaining(), 0);
+}
+
+#[tokio::test]
+async fn upload_converted_is_checked_like_upload() {
+    let t = ScriptedTransport::new();
+    let big = ConvertedMedia::new(
+        vec![0u8; usize::try_from(TargetFormat::OggOpus.max_bytes()).unwrap() + 1],
+        TargetFormat::OggOpus,
+    );
+    let err = client(&t)
+        .media(PhoneNumberId::new(PNID).unwrap())
+        .upload_converted(big, "note")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Validation(v) if v.field == "file"),
+        "{err}"
+    );
+    assert!(t.requests().is_empty(), "nothing is sent");
+}
+
+/// Core carries the formats' MIME types and size limits on its own (it
+/// cannot see this crate's table): they must be the ones the upload check
+/// takes, at the limit and not past it.
+#[test]
+fn every_target_format_is_what_the_upload_check_takes() {
+    // A format core adds goes here too.
+    const FORMATS: &[TargetFormat] = &[TargetFormat::OggOpus];
+    for &format in FORMATS {
+        let mime = format.mime_type();
+        assert_eq!(
+            MediaKind::for_mime_type(mime),
+            Some(MediaKind::Audio),
+            "{format:?}"
+        );
+        assert_eq!(
+            format.max_bytes(),
+            MediaKind::Audio.max_bytes(),
+            "{format:?}"
+        );
+        assert_eq!(
+            validate_upload(mime, format.max_bytes()),
+            Ok(MediaKind::Audio)
+        );
+        assert_eq!(
+            validate_upload(mime, format.max_bytes() + 1)
+                .unwrap_err()
+                .field,
+            "file"
+        );
+    }
+    assert_eq!(
+        meta_whatsapp_core::media::AUDIO_MAX_BYTES,
+        MediaKind::Audio.max_bytes()
+    );
+}
+
+#[tokio::test]
 async fn upload_rejects_unsupported_types_and_oversized_files_locally() {
     let t = ScriptedTransport::new();
     let media = client(&t).media(PhoneNumberId::new(PNID).unwrap());

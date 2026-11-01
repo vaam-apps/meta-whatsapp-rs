@@ -13,7 +13,7 @@ its tests run the conformance suites on the memory stores.
 ## When to use
 
 Before production: everything stateful in meta-whatsapp-rs sits on two ports, and the typed
-stores (vault, OTP, dedup, sessions, bot cooldowns) are built on `KvStore`, so one adapter serves them all.
+stores (vault, OTP, dedup, sessions, bot cooldowns and jobs) are built on `KvStore`, so one adapter serves them all.
 
 | Data | Port | Namespace | Lose it and |
 | --- | --- | --- | --- |
@@ -23,6 +23,7 @@ stores (vault, OTP, dedup, sessions, bot cooldowns) are built on `KvStore`, so o
 | webhook dedup (`DedupGuard`) | `KvStore` | `wa.webhook.dedup` | Meta's retries delivered again |
 | bot cooldowns (`KvCooldowns`) | `KvStore` | `wa.bot.cooldown` | running cooldowns reset |
 | shared pacer (`KvRateLimiter`) | `KvStore` | `wa.bot.pacer` | schedules, slow-downs, raised rates reset |
+| bot jobs (`KvJobs`; names pending the owner) | `KvStore` | `wa.bot.jobs`, `wa.bot.jobs.due`, `.sent`, `.message`, `.limited` | scheduled jobs; resumed ones resend |
 | inbox history (`InboxSink`, `Inbox`) | `ConversationStore` | tables `wa_*` | the history |
 
 | | Memory (`memory`) | Postgres (`postgres`) | Redis (`redis`) |
@@ -92,7 +93,7 @@ Ok(Arc::new(RedisKvStore::new(conn).with_prefix("shop:wa:")))
 
 Only with persistence (AOF or RDB): a Redis that forgets on restart forgets every merchant's token.
 Only with `maxmemory-policy noeviction`, on an instance of its own: every key with a TTL enforces a
-limit (OTP issue logs and cooldowns, dedup markers, sessions), and a `volatile-*` policy evicts them
+limit (OTP issue logs and cooldowns, dedup markers, sessions, job markers), and a `volatile-*` policy evicts them
 silently. Size `maxmemory` for 7 days of dedup markers. No `ConversationStore` on Redis. `redis`
 here is meta-whatsapp-rs's re-export (`meta_whatsapp_rs::adapters::store::redis`, feature `redis`),
 so the connection types always match `RedisKvStore::new` — no redis dependency of your own. For
@@ -101,8 +102,7 @@ so the connection types always match `RedisKvStore::new` — no redis dependency
 `build` and `connect(url)`, and hand that to `RedisKvStore::new`. It names aws-lc-rs itself: no redis
 TLS feature, no provider to install (redis-rs's own TLS panics when two rustls providers are linked).
 
-~~`noeviction` or `volatile-*`~~: wrong until 1a3cfc6 (2026-09-24);
-`volatile-*` evicts OTP limits and dedup markers.
+~~`noeviction` or `volatile-*`~~: wrong until 1a3cfc6 (2026-09-24); `volatile-*` evicts OTP limits and dedup markers.
 
 ## Your own adapter
 
