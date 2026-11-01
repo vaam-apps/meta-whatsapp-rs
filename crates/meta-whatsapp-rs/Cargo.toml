@@ -28,7 +28,8 @@ typst = ["dep:meta-whatsapp-typst"]
 bot = ["dep:meta-whatsapp-bot"]
 flows-endpoint = ["meta-whatsapp-client/flows-endpoint"]
 # `adapters::media::FfmpegConverter`: converts media (a recording into a voice
-# message's Ogg Opus) by running an `ffmpeg` you install; links nothing.
+# message's Ogg Opus, an image into a sticker's WebP or under the image
+# limit) by running an `ffmpeg` you install; links nothing.
 ffmpeg = ["meta-whatsapp-adapters/ffmpeg"]
 # Test doubles for your own tests (`meta_whatsapp_rs::core::testing::ScriptedTransport`),
 # so you don't need a second dependency pinned to the same revision.
