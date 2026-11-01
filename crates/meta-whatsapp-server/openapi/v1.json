@@ -1782,6 +1782,485 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/conversations": {
+      "get": {
+        "tags": [
+          "inbox"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/conversations`: the number's conversations.",
+        "operationId": "list_conversations",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The conversations, most recent activity first; of a number whose WABA moved from another tenant, only what is dated from its binding's start on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`limit`, `cursor`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`: retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/conversations/{contact}/messages": {
+      "get": {
+        "tags": [
+          "inbox"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/conversations/{contact}/messages`: a\nconversation's history.",
+        "operationId": "list_conversation_messages",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "contact",
+            "in": "path",
+            "description": "The conversation's `contact` (a BSUID, a `wa_id` or a group id), percent-encoded",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The messages, newest first; of a number whose WABA moved from another tenant, only those dated from its binding's start on. A contact with no conversation has an empty history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxMessageList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`contact`, `limit`, `cursor`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`: retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "inbox"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/conversations/{contact}/messages`: reply to the\nconversation's contact.",
+        "operationId": "reply_to_conversation",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "contact",
+            "in": "path",
+            "description": "The conversation's `contact` (a BSUID, a `wa_id` or a group id), percent-encoded: the reply goes to it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never send twice (a repeat gets the kept answer, with `Idempotent-Replayed: true`)",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReplyMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted by Meta and recorded `accepted` in the conversation; delivery arrives as status events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageAccepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`customer_service_window_closed` (a free-form reply outside the 24-hour window: send a template) or `thread_owned_elsewhere` (another app owns the thread), both refused before any request; `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, …",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`contact`, `body`, a field of the content), `unsupported_message_type`, `idempotency_key_reused`, Meta's `template_*`, …: nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests` (the service's limits, `Retry-After`) or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the reply may have been sent (`may_have_been_sent: true`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/media": {
       "post": {
         "tags": [
@@ -4182,6 +4661,73 @@
         },
         "additionalProperties": false
       },
+      "Conversation": {
+        "type": "object",
+        "description": "A conversation of the number: one contact.",
+        "required": [
+          "contact",
+          "last_message_at",
+          "last_inbound_at",
+          "last_text",
+          "unread"
+        ],
+        "properties": {
+          "contact": {
+            "type": "string",
+            "description": "The contact: the customer's BSUID (`US.13491208655302741918`), else\ntheir `wa_id` (digits, no `+`), else a group's id. Percent-encode it\nin a path."
+          },
+          "last_inbound_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the customer last wrote (RFC 3339): what opens the 24-hour\nwindow, with the calls that reopen it. `null` when they never did\nsince the number's binding began."
+          },
+          "last_message_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When its latest message was sent or received (RFC 3339)."
+          },
+          "last_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A text preview of the latest message, when it has one."
+          },
+          "unread": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The customer's messages since the conversation was last read.",
+            "minimum": 0
+          }
+        }
+      },
+      "ConversationList": {
+        "type": "object",
+        "description": "A page of conversations.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Conversation"
+            },
+            "description": "The conversations, most recent activity first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      },
       "Coordinate": {
         "oneOf": [
           {
@@ -4592,6 +5138,96 @@
           }
         },
         "additionalProperties": false
+      },
+      "InboxMessage": {
+        "type": "object",
+        "description": "A message of a conversation, as the inbox recorded it.",
+        "required": [
+          "id",
+          "direction",
+          "kind",
+          "text",
+          "payload",
+          "status",
+          "timestamp",
+          "status_at",
+          "error"
+        ],
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/MessageDirection",
+            "description": "Which way it went."
+          },
+          "error": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The error object of a `failed` status, as Meta sent it (`code`, `title`, …); `null` otherwise.",
+            "additionalProperties": true
+          },
+          "id": {
+            "type": "string",
+            "description": "The message's id (`wamid.…`): the key of its status events."
+          },
+          "kind": {
+            "type": "string",
+            "description": "Its type as Meta names it (`text`, `image`, `template`, …), or one\nof the library's own: `revoked` (deleted before it was recorded),\n`erased`, `media_placeholder` (a coexistence history's media, not\nyet filled in)."
+          },
+          "payload": {
+            "type": "object",
+            "description": "The message as Meta sent it (the webhook's message object) or as it was sent (the request body Meta received). Its fields are Meta's; new fields may appear.",
+            "additionalProperties": true
+          },
+          "status": {
+            "type": "string",
+            "description": "Where it stands: `received` (inbound), `accepted` (Meta accepted\nthe send, no status yet), then `sent`, `delivered`, `read`,\n`played`, `failed` or `deleted`, as status events arrive. A value\nnot listed here may appear: treat it as unknown."
+          },
+          "status_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When its status last changed (RFC 3339)."
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A plain-text rendering, when there is one."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was sent or received (RFC 3339): Meta's time when known."
+          }
+        }
+      },
+      "InboxMessageList": {
+        "type": "object",
+        "description": "A page of a conversation's history.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InboxMessage"
+            },
+            "description": "The messages, newest first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
       },
       "InteractiveAction": {
         "type": "object",
@@ -5144,6 +5780,14 @@
           }
         }
       },
+      "MessageDirection": {
+        "type": "string",
+        "description": "Which way a message went.",
+        "enum": [
+          "inbound",
+          "outbound"
+        ]
+      },
       "MessageRecipient": {
         "type": "object",
         "description": "Who receives a message: a phone number, a business-scoped user id\n(BSUID), both (Meta then uses the phone number), or a group.",
@@ -5566,6 +6210,154 @@
           "type": {
             "type": "string",
             "description": "`reply`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReplyMessage": {
+        "type": "object",
+        "description": "A reply to a conversation: a message's content as `POST\n/v1/numbers/{pn}/messages` takes it, without `to` (the conversation's\ncontact receives it). `type` names the one content object present.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "audio": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AudioContent",
+                "description": "For `audio`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "callback_data": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Echoed in this message's status events: set it to your own\nreference (the `Idempotency-Key`, say) to reconcile."
+          },
+          "contacts": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ContactCard"
+            },
+            "description": "For `contacts`: 1 to 257 cards."
+          },
+          "document": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DocumentContent",
+                "description": "For `document`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "image": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ImageContent",
+                "description": "For `image`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "interactive": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InteractiveContent",
+                "description": "For `interactive`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "location": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LocationContent",
+                "description": "For `location`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reaction": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReactionContent",
+                "description": "For `reaction`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reply_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reply to this message of the conversation (`wamid.…`); not with\n`reaction`."
+          },
+          "sticker": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StickerContent",
+                "description": "For `sticker`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "template": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "For `template`: Meta's template object (`name`, `language`,\n`components`), as the send-template pages write it.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "text": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TextContent",
+                "description": "For `text`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/MessageType",
+            "description": "Which content object follows."
+          },
+          "video": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/VideoContent",
+                "description": "For `video`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -6215,6 +7007,10 @@
     {
       "name": "templates",
       "description": "Listing, creating and deleting message templates (scope `templates`)"
+    },
+    {
+      "name": "inbox",
+      "description": "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"
     },
     {
       "name": "events",

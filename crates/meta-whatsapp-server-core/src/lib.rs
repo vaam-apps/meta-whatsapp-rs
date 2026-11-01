@@ -15,6 +15,7 @@
 //! | [`messages`] | the message operations as services: the send request (free of any API toolkit), the recipient and E.164 rules, sending (the accepted message) and marking read |
 //! | [`numbers`] | the number operations as services: a number's live details, its business profile read and changed, disconnecting a WABA |
 //! | [`media`] | the media operations as services: an upload checked (type, size, file name) before any request, a download verified against Meta's SHA-256 (whole, or as a framework-free byte stream that ends before its last chunk on a mismatch), a deletion of the number's own media only |
+//! | [`inbox`] | the inbox operations as services: a number's conversations and one conversation's history, from its binding's start on (decision D10: a moved number's history hidden from its new tenant, never purged), and a reply through the library's inbox, checked against the 24-hour window and the thread's owner first ([`inbox::ReplyChecksByNumber`]: the checks per number) |
 //! | [`templates`] | the template operations as services: the list (cached per WABA, [`templates::TemplateCache`]), the lookup of an id in a WABA, creation (the definition checked first), deletion |
 //! | [`request`] | what the requests share: a Meta object read into the library's type, no key dropped; a Meta object id checked before it reaches a Graph path |
 //! | [`keys`] | the API key format, digests, constant-time comparison |
@@ -66,6 +67,7 @@ pub mod events;
 pub mod housekeeping;
 pub mod idempotency;
 pub mod inbound;
+pub mod inbox;
 pub mod keys;
 pub mod media;
 pub mod messages;

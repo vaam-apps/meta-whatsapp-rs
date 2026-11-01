@@ -47,7 +47,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
 | 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
-| 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2f |
+| 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2h |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
@@ -1314,7 +1314,7 @@ and `store-postgres`.
     replica set; removing the version check from compare-and-swap fails
     them.
 - [ ] **S18. `meta-whatsapp-server-store-mongodb`**, the whole bundle.
-  - **After:** S9, S17, M2a–M2f.
+  - **After:** S9, S17, M2a–M2h.
   - **Decisive:** the core conformance suite passes live; the service's
     M1–M2 acceptance tests pass on it.
 
@@ -3500,7 +3500,7 @@ design's (§9).
 
 ### M2. Inbox, live updates, webhooks out
 
-- [ ] **M2a. Inbox routes** (rows 91, 111, 119): conversation list,
+- [x] **M2a. Inbox routes** (rows 91, 111, 119): conversation list,
   history, a reply checked against the window, all filtered by the
   number's binding epoch; retention per store (D10): the inbox store
   built `with_retention` from a setting, and `apply_retention` run by
@@ -3523,6 +3523,98 @@ design's (§9).
     S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. If M2a lands before the first
     release, the next item of the service's to land after it carries
     this line.
+  - **Landed:** three routes in `meta-whatsapp-server-api-axum`
+    (`api::inbox`, tag and scope `inbox`), each a core service
+    (`meta_whatsapp_server_core::inbox::Conversations`, opened on an
+    `OwnedNumber` its `Authorizer` admits, so key, tenant, scope,
+    ownership, then the vault, as every number route): `GET
+    /v1/numbers/{pn}/conversations` (`list_conversations`, read class)
+    and `GET /v1/numbers/{pn}/conversations/{contact}/messages`
+    (`list_conversation_messages`, read class), `?limit=&cursor=` and
+    `next_cursor` as every list but the events (the store's exclusive
+    `(time, id)` cursor, wrapped opaquely), and `POST
+    /v1/numbers/{pn}/conversations/{contact}/messages`
+    (`reply_to_conversation`, send class, `Idempotency-Key` over
+    `Fingerprint::reply_to_conversation`: the number, the contact decoded,
+    the canonical body; no legacy fingerprint), whose body is
+    `ReplyMessage` (a `SendMessage` without `to`) and whose answer is `202
+    MessageAccepted`. The reply goes through the library's `Inbox::send`
+    (what `Inbox::reply` calls, so `reply_to` and `callback_data` pass),
+    addressed to `Inbox::recipient`: a free-form reply outside the window
+    is `409 customer_service_window_closed`, one while another app owns
+    the thread `409 thread_owned_elsewhere` (`ErrorKind::ThreadOwnedElsewhere`,
+    already in §5.2), both before any request; a template is exempt. The
+    binding epoch is `authz::history_from` (a WABA with a previous
+    tenant shows its holder nothing dated before `attached_at`; `None`, all
+    of it, for a first onboarding, whose synced history predates its
+    binding), carried by the `OwnedNumber` from the binding it was made
+    from; a page is answered only if that binding still holds once read
+    (`503 storage_unavailable` otherwise); a conversation whose customer
+    last wrote before the cut shows no `last_inbound_at` and no `unread`.
+    Retention: `WA_SERVER_INBOX_RETENTION` (`keep` by default, or a
+    positive duration), the inbox store built with it
+    (`MemoryBackend::with_inbox_retention`, `PgBackend::with_inbox_retention`,
+    through `BackendFactory::open_with`, which `serve` calls), and
+    `housekeeping::round` runs `ConversationStore::apply_retention` under
+    its turn; `serve` refuses a backend whose inbox applies another
+    retention than the setting. `ReplyChecks` per number:
+    `WA_SERVER_INBOX_REPLY_CHECKS` (`inbox::ReplyChecksByNumber`). The
+    OpenAPI document is additive only (796 lines added, none removed:
+    two paths, the tag `inbox`, six schemas). Decisive tests:
+    `conformance::inbox` (in `conformance::run`: M2.1 with no HTTP layer,
+    the binding epoch, `control_taken`, the order's own number, the
+    retention) on the core's memory backend, the memory crate's (built
+    with a 30-day retention, and without one) and live on Postgres; over
+    HTTP, the service's `tests/inbox.rs` (M2.1, the epoch, the reply's
+    key, the ownership refusal and the setting, the scope, pages) and
+    `live_postgres_m2_1_an_inbound_message_is_listed_read_and_answered`
+    and `live_postgres_a_moved_numbers_history_is_hidden_from_its_new_tenant`;
+    the start's refusal (`composed.rs`), the settings (`config.rs`), the
+    M1.3 table, M1.5's sentinel and M1.7's log capture over the new
+    routes. By mutation: the epoch filter removed fails the memory and
+    core suites and the HTTP epoch test; the `apply_retention` call
+    removed fails the retention case on the memory backend and live on
+    Postgres; the window check, or the ownership refusal's mapping,
+    removed fails M2.1 and the ownership cases. Left, and why: a number
+    Meta migrated from one tenant's WABA to another tenant's WABA, the
+    WABA itself not moving, is not cut (the store records a WABA's moves,
+    not a number's: M2h); a conversation the customer continued after a
+    move counts the previous holder's unread messages in `unread` until
+    it is marked read (no read route yet: M2g); the window and the
+    thread's owner a reply checks are read whole, across the cut (they
+    are Meta's state for the number and the customer, which Meta applies
+    anyway); a reply is dated by the service's clock, so one recorded in
+    the seconds after a move by a replica whose clock is behind the
+    database's could be hidden from its own tenant; the reads open an
+    `OwnedNumber`, so they read the vault and answer `409
+    reconnect_required` for a number whose token lapsed, although they
+    ask Meta nothing; the design's window and read routes, a message by
+    id, and the list's `window` are M2g's; `ReplyChecks` and the
+    retention are per deployment (by number id, and for every number),
+    not per tenant. No new stored identifier: the two settings are
+    environment variables.
+  - **Proposed** (for the coordinator, under the owner's delegation,
+    each swappable): `ReplyChecks` per number as a deployment setting
+    keyed by phone number id (`WA_SERVER_INBOX_REPLY_CHECKS`), not a
+    field on the binding (no schema change; to swap, a column read into
+    `ReplyChecksByNumber` instead, which `Conversations::new` takes as a
+    value); the cut at the binding's `attached_at` when its WABA had a
+    previous tenant (a binding made before migration 4, which reads
+    `UNRECORDED_MOVE`, counts as moved: fail closed, hiding a
+    pre-migration coexistence history older than its binding; to swap,
+    `authz::history_from`); a refused or failed page (`503`) when the
+    binding moved while it was read; the reads behind the whole
+    authorization order, vault included (to swap, a token-less
+    capability for reads); the retention's refusal at start rather than
+    a warning; the reply through `Inbox::send` rather than
+    `Inbox::reply`, to carry `reply_to` and `callback_data`.
+  - **Also, after the first release** (from S7, carried by M2a, which
+    landed before it): drop the legacy fingerprint (S6's window:
+    `Fingerprint::legacy_v1_json`, `legacy_v1_upload`, `or_legacy`, and
+    the handlers' `Uri`), once every deployment has run a release with
+    S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. The next item of the
+    service's to land after the first release carries this line if it
+    lands before it.
 - [ ] **M2b. Live updates** (row 10): SSE through an `EventNotifier`
   port (Postgres `LISTEN/NOTIFY`, memory broadcast; resume by
   `Last-Event-ID`); `GET /v1/events/{id}`.
@@ -3566,6 +3658,34 @@ design's (§9).
     as the library's live test does), and removing the outbox clause
     fails it; the journal and the audit event hold no identity in
     clear; a tenant's key cannot erase on another tenant's number.
+
+- [ ] **M2g. The inbox's other routes** (row 111; **Proposed** by M2a,
+  for the coordinator): the design's `GET
+  /v1/numbers/{pn}/conversations/{contact}/window` (`{open, closes_at}`,
+  `Inbox::check_reply`'s answer beside the recorded window) and `POST
+  …/{contact}/read` (unread reset, `notify_customer` marking the latest
+  inbound message read on Meta), the list's `window`, and a message by
+  id on the number (`ConversationStore::message`), each from the binding
+  epoch on.
+  - **After:** M2a.
+  - **Decisive:** a message of the number's previous holder is `404` by
+    id to the new holder (removing the epoch from the lookup fails it);
+    after the read route, `unread` is 0 and Meta got one read receipt for
+    the latest inbound message only with `notify_customer`.
+- [ ] **M2h. A number's own move record** (row 111; **Proposed** by M2a,
+  for the coordinator): the binding epoch for a number Meta migrated from
+  one tenant's WABA to another tenant's WABA, the WABA not moving (M2a
+  cuts by the WABA's move record only): a per-number record of the last
+  tenant that held it, written with every number a binding drops (an
+  unbind, a refresh that no longer lists it), read when a binding takes
+  it, on both backends; its names are stable identifiers, the owner's
+  to confirm (§ Owner touchpoints).
+  - **Kind:** port change (`RecordStore`, an additive migration).
+  - **After:** M2a.
+  - **Decisive:** a number dropped by tenant A's WABA and listed by
+    tenant B's WABA, bound long before, shows B none of A's history;
+    removing the number's record from the cut fails it, on memory and
+    live on Postgres.
 
 ### M3. Embedded Signup, OTP, coexistence
 

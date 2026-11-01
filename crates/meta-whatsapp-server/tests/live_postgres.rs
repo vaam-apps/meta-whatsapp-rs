@@ -38,6 +38,29 @@ async fn harness(db: &TestDb) -> Harness {
     Harness::with(Stores::postgres(&pool))
 }
 
+/// Acceptance test M2.1 on Postgres (roadmap M2a): an inbound webhook,
+/// the conversation list, the history, a reply within the window recorded
+/// `accepted`, which a status webhook moves to `delivered`; a free-form
+/// reply outside the window `409` with zero requests
+/// (`common::inbox::m2_1`).
+#[tokio::test]
+async fn live_postgres_m2_1_an_inbound_message_is_listed_read_and_answered() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::inbox::m2_1(&harness(&db).await).await;
+}
+
+/// The binding epoch on Postgres (roadmap M2a, decision D10): a moved
+/// number's history is hidden from its new tenant, and kept.
+#[tokio::test]
+async fn live_postgres_a_moved_numbers_history_is_hidden_from_its_new_tenant() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::inbox::a_moved_numbers_history_is_hidden_from_its_new_tenant(&harness(&db).await).await;
+}
+
 /// The attach's confirmation on Postgres (records and vault): an attach
 /// whose WABA moves to another tenant while it binds and stores leaves no
 /// token of its own under the other tenant's binding, and answers `503`

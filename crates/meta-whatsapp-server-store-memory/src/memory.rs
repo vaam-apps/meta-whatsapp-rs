@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use async_trait::async_trait;
 use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
-use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
+use meta_whatsapp_rs::core::store::{ConversationStore, KvStore, Retention};
 use time::{Duration, OffsetDateTime};
 
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
@@ -718,6 +718,17 @@ impl MemoryBackend {
             kv: Arc::new(MemoryKvStore::new()),
             conversations: Arc::new(MemoryConversationStore::new()),
         }
+    }
+
+    /// Its inbox built anew, empty, with `retention`
+    /// (`MemoryConversationStore::with_retention`: what housekeeping's
+    /// `ConversationStore::apply_retention` purges; the service's
+    /// `WA_SERVER_INBOX_RETENTION`, roadmap M2a). Call it while building:
+    /// the inbox it replaces is dropped with what it held.
+    #[must_use]
+    pub fn with_inbox_retention(mut self, retention: Retention) -> Self {
+        self.conversations = Arc::new(MemoryConversationStore::new().with_retention(retention));
+        self
     }
 }
 

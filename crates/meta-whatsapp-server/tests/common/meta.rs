@@ -30,6 +30,9 @@ pub fn fixture(name: &str) -> Value {
         "messages/status_sent.json" => {
             include_str!("../../../meta-whatsapp-webhooks/tests/fixtures/messages/status_sent.json")
         }
+        "messages/status_delivered_cbp.json" => include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/messages/status_delivered_cbp.json"
+        ),
         "messages/errors.json" => {
             include_str!("../../../meta-whatsapp-webhooks/tests/fixtures/messages/errors.json")
         }
@@ -116,6 +119,14 @@ pub fn text(waba: &str, pn: &str, wamid: &str) -> Value {
 /// Meta's text example with its ids, dated [`sent_now`], as bytes.
 pub fn example_text() -> Vec<u8> {
     serde_json::to_vec(&dated(fixture("messages/text.json"), sent_now())).unwrap()
+}
+
+/// Meta's `delivered` status example, for message `wamid` sent from `pn`
+/// of `waba` to [`EXAMPLE_WA_ID`].
+pub fn delivered(waba: &str, pn: &str, wamid: &str) -> Value {
+    let mut payload = with_ids(fixture("messages/status_delivered_cbp.json"), waba, pn);
+    payload["entry"][0]["changes"][0]["value"]["statuses"][0]["id"] = json!(wamid);
+    payload
 }
 
 /// Meta's `sent` status example, for `pn` of `waba`.

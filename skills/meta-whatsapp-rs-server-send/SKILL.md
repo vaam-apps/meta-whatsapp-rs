@@ -1,6 +1,6 @@
 ---
 name: meta-whatsapp-rs-server-send
-description: "Sending WhatsApp messages, media and templates through meta-whatsapp-server over HTTP from an app not written in Rust (a Medusa store, a CMS backend) - the message body (to, type, the object Meta documents), E.164 recipients and BSUIDs, templates outside the 24-hour window, read receipts, the Idempotency-Key header and what may_have_been_sent means for a job queue, media uploads and verified downloads, listing and creating templates, and the service's 429 rate limits. Load when a non-Rust backend sends WhatsApp messages or media, or manages templates, through the service."
+description: "Sending WhatsApp messages, media and templates, and replying from the inbox, through meta-whatsapp-server over HTTP from an app not written in Rust (a Medusa store, a CMS backend) - the message body (to, type, the object Meta documents), E.164 recipients and BSUIDs, templates outside the 24-hour window, read receipts, the Idempotency-Key header and what may_have_been_sent means for a job queue, media uploads and verified downloads, listing and creating templates, and the service's 429 rate limits. Load when a non-Rust backend sends WhatsApp messages or media, or manages templates, through the service."
 ---
 
 # meta-whatsapp-rs-server-send
@@ -13,7 +13,7 @@ Reference code: [examples/send.ts](examples/send.ts) (type-checked against the s
 
 Your backend is not Rust, reaches WhatsApp through meta-whatsapp-server
 (`meta-whatsapp-rs-server`: deploying it, keys, errors) and sends order
-notifications, replies, files or templates (scopes `send`, `media`, `templates`).
+notifications, replies, files or templates (scopes `send`, `media`, `templates`, `inbox`).
 
 | Route | Does |
 | --- | --- |
@@ -22,6 +22,7 @@ notifications, replies, files or templates (scopes `send`, `media`, `templates`)
 | `POST /v1/numbers/{pn}/media` | upload (a multipart form: `type`, then `file`); `201` with `media_id` |
 | `GET /v1/numbers/{pn}/media/{media_id}`, `DELETE /v1/numbers/{pn}/media/{media_id}` | download, verified; delete |
 | `GET /v1/wabas/{waba_id}/templates`, `GET /v1/wabas/{waba_id}/templates/{id}`, `POST /v1/wabas/{waba_id}/templates`, `DELETE /v1/wabas/{waba_id}/templates` | list (cached 60 s per WABA), one, create, delete by `name` (and `id`) |
+| `GET /v1/numbers/{pn}/conversations`, `GET` and `POST /v1/numbers/{pn}/conversations/{contact}/messages` | the inbox (scope `inbox`): conversations, a history, a reply checked against the 24-hour window and the thread's owner: [references/inbox.md](references/inbox.md) |
 
 ## Send a message
 
@@ -150,8 +151,7 @@ sent; a platform key shares the tenant's budget. Meta's own limits answer
   and pace your own sends.
 - Meta documents its per-number media check for uploads only: a file
   received by webhook answering `not_found` may be that; report it.
-- No Direct Send, Flows, product or carousel messages, and no
-  authentication templates yet; no documents route (M4).
+- No Direct Send, Flows, product or carousel messages, and no authentication templates yet; no documents route (M4).
 
 ## Related skills
 

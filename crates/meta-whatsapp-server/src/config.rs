@@ -32,6 +32,14 @@
 //! | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | 20, 40 | per tenant and replica, a second ([`crate::ratelimit`]) |
 //! | `WA_SERVER_RATE_READ`, `WA_SERVER_RATE_READ_BURST` | 50, 50 | the same, for reads |
 //! | `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | 2, 2 | the same, for template management |
+//! | `WA_SERVER_INBOX_REPLY_CHECKS` | none listed: every check on every number | the local checks an inbox reply makes, per number: `<phone_number_id>:<checks>` entries, comma-separated, `<checks>` being `all`, `none` or the checks left on joined by `+` (`window`, `trust_handover`, `thread_owner`; `trust_handover` only with `window`): `106540352242922:window+trust_handover` turns the ownership check off on that number (the core's `inbox::ReplyChecksByNumber`; roadmap M2a) |
+//!
+//! And the inbox's retention, the store's own setting, which housekeeping
+//! applies: `WA_SERVER_INBOX_RETENTION`, `keep` (the default: the inbox
+//! keeps everything, decision D10) or a positive duration such as `90d`,
+//! past which a customer's messages, window events and thread ownership
+//! records are purged ([`Config::inbox_retention`]). Which one a deployment
+//! sets follows its privacy obligations: the deployer's call.
 //!
 //! And the routing of a moved WABA's events ([`MoveRules`], roadmap S2b,
 //! design D36; none applies to a WABA no other tenant held):
@@ -57,6 +65,8 @@ use meta_whatsapp_rs::client::embedded_signup::{VaultKey, VaultKeys};
 use meta_whatsapp_rs::core::config::{ApiVersion, GraphEndpoint};
 use meta_whatsapp_rs::core::ids::AppId;
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, VerifyToken};
+use meta_whatsapp_rs::core::store::Retention;
+use meta_whatsapp_server_core::inbox::{InvalidReplyChecks, ReplyChecksByNumber};
 
 use crate::events::{
     DEFAULT_MOVE_SKEW_MARGIN, DEFAULT_UNDATED_AFTER_MOVE_WINDOW, MoveRules, UndatedAfterMove,
@@ -259,6 +269,12 @@ pub struct Config {
     /// event (default [`crate::events::DEFAULT_OUTBOX_RETENTION`], 7 days,
     /// until the owner decides retention, the design's decision D10).
     pub outbox_retention: Duration,
+    /// `WA_SERVER_INBOX_RETENTION`: how long the inbox keeps a customer's
+    /// messages, the store's own setting (`with_retention`), which
+    /// housekeeping applies ([`Retention::Keep`] unset, the default of
+    /// decision D10; roadmap M2a). The backend must be built with it: the
+    /// start refuses one whose inbox applies another.
+    pub inbox_retention: Retention,
     /// `WA_SERVER_LOG_FORMAT`.
     pub log_format: LogFormat,
     /// `RUST_LOG`.
@@ -286,6 +302,7 @@ impl fmt::Debug for Config {
             .field("graph_endpoint", &self.graph_endpoint)
             .field("migrate", &self.migrate)
             .field("outbox_retention", &self.outbox_retention)
+            .field("inbox_retention", &self.inbox_retention)
             .field("settings", &self.settings)
             .field("move_rules", &self.move_rules)
             .finish_non_exhaustive()
@@ -465,6 +482,7 @@ impl Config {
             migrate: runtime.migrate,
             shutdown_grace: runtime.shutdown_grace,
             outbox_retention: runtime.outbox_retention,
+            inbox_retention: runtime.inbox_retention,
             log_format: runtime.log_format,
             log_filter: runtime.log_filter,
             settings,
@@ -565,7 +583,9 @@ fn rate(
 }
 
 /// `WA_SERVER_IDEMPOTENCY_TTL`, `WA_SERVER_MEDIA_MAX_BYTES`,
-/// `WA_SERVER_MEDIA_CONCURRENCY` and the rate limits.
+/// `WA_SERVER_MEDIA_CONCURRENCY`, the rate limits and
+/// `WA_SERVER_INBOX_REPLY_CHECKS` (the core's
+/// `inbox::ReplyChecksByNumber::parse`).
 fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
     let defaults = Settings::default();
     let idempotency_ttl = match r.plain("WA_SERVER_IDEMPOTENCY_TTL")? {
@@ -624,6 +644,17 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
             .unwrap_or(defaults.media_max_bytes),
         media_concurrency,
         media_streams,
+        inbox_reply_checks: match r.plain("WA_SERVER_INBOX_REPLY_CHECKS")? {
+            None => ReplyChecksByNumber::new(),
+            Some(value) => {
+                ReplyChecksByNumber::parse(&value).map_err(|InvalidReplyChecks(reason)| {
+                    ConfigError::Invalid {
+                        name: "WA_SERVER_INBOX_REPLY_CHECKS",
+                        reason,
+                    }
+                })?
+            }
+        },
         ..defaults
     })
 }
@@ -702,6 +733,7 @@ struct Runtime {
     migrate: MigrateMode,
     shutdown_grace: Duration,
     outbox_retention: Duration,
+    inbox_retention: Retention,
     log_format: LogFormat,
     log_filter: String,
 }
@@ -718,7 +750,8 @@ fn migrate_mode(r: &Reader<'_>) -> Result<MigrateMode, ConfigError> {
 }
 
 /// `WA_SERVER_MIGRATE`, `WA_SERVER_SHUTDOWN_GRACE`,
-/// `WA_SERVER_OUTBOX_RETENTION`, `WA_SERVER_LOG_FORMAT`, `RUST_LOG`.
+/// `WA_SERVER_OUTBOX_RETENTION`, `WA_SERVER_INBOX_RETENTION`,
+/// `WA_SERVER_LOG_FORMAT`, `RUST_LOG`.
 fn runtime(r: &Reader<'_>) -> Result<Runtime, ConfigError> {
     let shutdown_grace = match r.plain("WA_SERVER_SHUTDOWN_GRACE")? {
         None => DEFAULT_SHUTDOWN_GRACE,
@@ -737,6 +770,20 @@ fn runtime(r: &Reader<'_>) -> Result<Runtime, ConfigError> {
             retention => retention,
         },
     };
+    // `keep` (the default), or a positive duration: zero would purge the
+    // whole inbox at the next housekeeping.
+    let inbox_retention = match r.plain("WA_SERVER_INBOX_RETENTION")?.as_deref() {
+        None | Some("keep") => Retention::Keep,
+        Some(value) => match duration("WA_SERVER_INBOX_RETENTION", value) {
+            Ok(retention) if !retention.is_zero() => Retention::For(retention),
+            _ => {
+                return Err(ConfigError::Invalid {
+                    name: "WA_SERVER_INBOX_RETENTION",
+                    reason: "expected keep, or a positive duration such as 7d",
+                });
+            }
+        },
+    };
     let log_format = match r.plain("WA_SERVER_LOG_FORMAT")?.as_deref() {
         None | Some("json") => LogFormat::Json,
         Some("text") => LogFormat::Text,
@@ -751,6 +798,7 @@ fn runtime(r: &Reader<'_>) -> Result<Runtime, ConfigError> {
         migrate: migrate_mode(r)?,
         shutdown_grace,
         outbox_retention,
+        inbox_retention,
         log_format,
         log_filter: r.plain("RUST_LOG")?.unwrap_or_else(|| "info".to_owned()),
     })

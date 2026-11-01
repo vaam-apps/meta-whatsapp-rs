@@ -36,6 +36,7 @@
 //! | [`templates`] | the core's template services over the bundle's records and vault, with no HTTP layer (roadmap S5c): tenant B's caller on tenant A's template id is not found with zero vault reads (A's WABA not B's, A's capability refused to B, A's id not in B's WABA, nothing deleted); another authorizer's caller or capability refused; Meta's documented requests, the cache and its invalidation (by a creation or deletion Meta refuses too); a template id past the lookup's 5 pages not found, nothing deleted |
 //! | [`media`] | the core's media services over the bundle's records and vault, with no HTTP layer (roadmap S5d): a download through the core's stream ends before its last chunk on a digest mismatch (M1b's rule), passes the file on while it arrives (one chunk held), and stops past `max_bytes`; a failed or oddly chunked download (empty chunks, a cut connection, one chunk, none) never yields its last chunk unverified, and gives its slot back on every path; a `190` from Meta's URL marks the number; a whole download answers no byte of a tampered file; the reported size, digest and URL checked before the download; another number's media id not found, nothing deleted; Meta's documented upload and deletion; only the order's own capability; a slot of the tenant's share first |
 //! | [`numbers`] | the core's number services over the bundle's records and vault, with no HTTP layer (roadmap S5c): only the order's own capabilities; a number's details and profile, a change of it (an empty one only reads, a refused one sends nothing); a disconnection deleting nothing until Meta unsubscribed the app, and nothing for a WABA that moved |
+//! | [`inbox`] | the core's inbox services over the bundle's records, vault and inbox, the webhooks recorded by the core's pipeline, with no HTTP layer (roadmap M2a): M2.1 (an inbound message listed, read, answered within its window, Meta's documented request, recorded `accepted`, then `delivered` by its status; a free-form reply outside the window `409` with zero requests, a template not; pages by the store's cursor); the binding epoch (a moved number's history hidden from its new tenant and kept, its own shown, a first onboarding's synced history shown; a capability made before the move reads nothing); `control_taken` refusing a free-form reply `409 thread_owned_elsewhere` with zero requests, unless the number's ownership check is off; only the order's own number; housekeeping applying the inbox store's retention |
 //! | [`webhooks`] | the core's webhook pipeline over the bundle's records, key/value store, inbox and outbox, with no listener (roadmap S5e, M1.2): routing is an allow-list (an unowned number's event, a stale binding's, a replay's are operator-only, whatever the payload says of a tenant; an event dated before its binding, or seen past the replay window, too; a number moved while its event records gives it to neither tenant); the signature checked before any store is touched or a turn waited for; at most `MAX_DELIVERIES_RECORDING` deliveries recording, another waiting with no lease claimed (its `503 busy` after the wait is `webhooks::a_delivery_with_no_turn_is_busy_after_the_wait`, on a paused clock, not in `run`); each event once, under its dedup lease; the answer only once every event is recorded, a failed or busy outbox refused and redelivered once; `unknown` and `unparsed` acknowledged as operator-only rows; after a move, undated events (a history chunk, an error, an undated group update) reaching no tenant within the window, the new holder under `CurrentHolder` or past it, a first onboarding always, and an event of the binding's first second a first onboarding's only (roadmap S2b, design D36) |
 //!
 //! Every case panics on a broken contract, with what broke: this is test
@@ -55,6 +56,7 @@
 
 pub mod admin;
 pub mod capabilities;
+pub mod inbox;
 pub mod invariants;
 pub mod media;
 pub mod messages;
@@ -117,6 +119,10 @@ where
 
     let backend = fresh().await;
     webhooks::run(backend.as_ref()).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    inbox::run(backend.as_ref()).await;
     backend.close().await;
     report
 }

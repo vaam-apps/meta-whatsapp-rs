@@ -44,7 +44,12 @@ async fn live_postgres_backend_passes_the_conformance_suite() {
         let pool = db.pool(10).await;
         migrate(&pool).await.unwrap();
         schemas.lock().unwrap().push(db);
-        Arc::new(PgBackend::new(pool)) as Arc<dyn Backend>
+        // A retention, so that the inbox suite's housekeeping case purges
+        // (roadmap M2a).
+        Arc::new(
+            PgBackend::new(pool)
+                .with_inbox_retention(meta_whatsapp_rs::core::store::Retention::days(30)),
+        ) as Arc<dyn Backend>
     })
     .await;
     eprintln!("postgres, the races: {report:?}");

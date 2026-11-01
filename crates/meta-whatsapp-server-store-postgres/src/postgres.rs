@@ -23,7 +23,7 @@ use meta_whatsapp_rs::adapters::store::postgres::{self as library};
 use meta_whatsapp_rs::adapters::store::{PostgresConversationStore, PostgresKvStore};
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
-use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
+use meta_whatsapp_rs::core::store::{ConversationStore, KvStore, Retention};
 use sha2::{Digest, Sha256};
 
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
@@ -1057,6 +1057,17 @@ impl PgBackend {
             conversations: Arc::new(PostgresConversationStore::new(pool.clone())),
             pool,
         }
+    }
+
+    /// Its inbox applying `retention` (`PostgresConversationStore::with_retention`:
+    /// what housekeeping's `ConversationStore::apply_retention` purges; the
+    /// service's `WA_SERVER_INBOX_RETENTION`, roadmap M2a). The same tables:
+    /// nothing is lost.
+    #[must_use]
+    pub fn with_inbox_retention(mut self, retention: Retention) -> Self {
+        self.conversations =
+            Arc::new(PostgresConversationStore::new(self.pool.clone()).with_retention(retention));
+        self
     }
 }
 

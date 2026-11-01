@@ -615,6 +615,7 @@ impl Authorizer {
             phone_number_id: pn,
             waba_id: binding.waba_id,
             issuer: self.issuer.clone(),
+            history_from: history_from(&waba),
             epoch: waba.epoch(),
         })
     }
@@ -869,6 +870,22 @@ impl Authorizer {
     }
 }
 
+/// From when a number's inbox history is the tenant of `binding` (its
+/// WABA's) to read (docs/design/server.md, decision D10; roadmap M2a): a
+/// WABA that moved from another tenant ([`WabaBinding::previous_tenant_unbound_at`]
+/// set, a binding made before the store recorded moves included) shows
+/// its holder nothing dated before its binding began
+/// ([`WabaBinding::attached_at`]): the previous holder's messages stay
+/// hidden, never purged. `None` for a WABA no other tenant held (a first
+/// onboarding, or a tenant's own WABA attached again): all of it, its
+/// coexistence history synced from before the binding included. A refresh
+/// keeps both fields, so the cut does not move with it.
+pub fn history_from(binding: &WabaBinding) -> Option<OffsetDateTime> {
+    binding
+        .previous_tenant_unbound_at
+        .map(|_| binding.attached_at)
+}
+
 /// Step 5 for one WABA: the token, or why there is none to use at `now`.
 fn usable(
     token: Option<StoredBusinessToken>,
@@ -897,6 +914,8 @@ pub struct OwnedNumber {
     client: Client,
     issuer: Issuer,
     epoch: BindingEpoch,
+    /// The binding's history cut ([`history_from`]).
+    history_from: Option<OffsetDateTime>,
 }
 
 impl std::fmt::Debug for OwnedNumber {
@@ -931,6 +950,29 @@ impl OwnedNumber {
     /// maker's word.
     pub(crate) fn tenant(&self) -> &TenantId {
         &self.epoch.tenant_id
+    }
+
+    /// From when the number's inbox history is its tenant's to read
+    /// ([`history_from`], for the binding this was made from): `None`,
+    /// all of it. Crate-private, read by the inbox services
+    /// ([`crate::inbox`]).
+    pub(crate) fn history_from(&self) -> Option<OffsetDateTime> {
+        self.history_from
+    }
+
+    /// Whether the WABA is still bound as it was when this was made (its
+    /// [`BindingEpoch`]: no unbinding, no attach since), read now: what the
+    /// inbox services ask once they read a page, so that a page read while
+    /// the number moved is never answered (`503 storage_unavailable`,
+    /// retryable, as a capability met by a move answers). Through an
+    /// `authz` that did not make it: `403 forbidden`.
+    pub(crate) async fn still_held(&self, authz: &Authorizer) -> Result<(), ServiceError> {
+        authz.check(&self.issuer, "OwnedNumber::still_held")?;
+        if authz.holds(&self.epoch).await? {
+            return Ok(());
+        }
+        tracing::info!("a number's binding moved while its inbox was being read");
+        Err(ServiceError::from(StorageError::Busy))
     }
 
     /// The error of a failed Graph call made with this number's token

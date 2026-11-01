@@ -14,7 +14,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::FutureExt as _;
 use meta_whatsapp_rs::adapters::store::MemoryKvStore;
-use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
+use meta_whatsapp_rs::core::store::{ConversationStore, KvStore, Retention};
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::conformance;
 use meta_whatsapp_server_core::outbox::{
@@ -29,9 +29,22 @@ use meta_whatsapp_server_store_memory::MemoryBackend;
 /// four threads (`conformance::races`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_memory_backend_passes_the_conformance_suite() {
-    let report =
-        conformance::run(async || Arc::new(MemoryBackend::new()) as Arc<dyn Backend>).await;
+    // A retention, so that the inbox suite's housekeeping case purges
+    // (roadmap M2a); its `Keep` case is the next test's.
+    let report = conformance::run(async || {
+        Arc::new(MemoryBackend::new().with_inbox_retention(Retention::days(30))) as Arc<dyn Backend>
+    })
+    .await;
     eprintln!("memory, the races: {report:?}");
+}
+
+/// Roadmap M2a: under `Retention::Keep` (a backend built without one, the
+/// default), housekeeping purges nothing of the inbox.
+#[tokio::test]
+async fn the_memory_backends_inbox_keeps_everything_by_default() {
+    let backend = MemoryBackend::new();
+    assert_eq!(backend.conversations().retention(), Retention::Keep);
+    conformance::inbox::housekeeping_applies_the_inbox_stores_retention(&backend).await;
 }
 
 /// A memory backend with one port swapped: what the suites must refuse.

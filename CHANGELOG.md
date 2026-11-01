@@ -293,6 +293,42 @@ stored data, the owner's).
   `live_postgres_trims_racing_appends_keep_every_new_message`,
   `live_postgres_a_trim_and_a_history_chunk_never_deadlock`, and the
   trims added to `live_postgres_the_locks_are_the_documented_ones`.
+
+- **The service's inbox routes** (roadmap M2a; parity row 119 now done on
+  the service's side, rows 91 and 111 partial; design D10). Scope `inbox`:
+  `GET /v1/numbers/{pn}/conversations` (`list_conversations`) and `GET
+  /v1/numbers/{pn}/conversations/{contact}/messages`
+  (`list_conversation_messages`), paged by `limit` and `cursor`
+  (`next_cursor`), and `POST
+  /v1/numbers/{pn}/conversations/{contact}/messages`
+  (`reply_to_conversation`), a reply to the conversation's contact
+  (`ReplyMessage`: a `SendMessage` without `to`) through the library's
+  inbox, `202 MessageAccepted`, recorded `accepted`, under an
+  `Idempotency-Key`; refused before any request with `409
+  customer_service_window_closed` outside the 24-hour window and `409
+  thread_owned_elsewhere` while another app owns the thread, templates
+  exempt. A number whose WABA moved from another tenant shows its holder
+  nothing dated before its binding began (hidden, never purged:
+  `server_core::authz::history_from`). The core's services are
+  `meta_whatsapp_server_core::inbox` (`Conversations`,
+  `ReplyChecksByNumber`, `conversation_key`) and
+  `messages::{ReplyMessage, reply_message}`, with the conformance suite
+  `conformance::inbox` (in `conformance::run`); `Operation` gains the
+  three operations (`Operation::ALL` has 19). Two settings:
+  `WA_SERVER_INBOX_RETENTION` (`keep`, the default, or a positive
+  duration: the inbox store's own retention, which housekeeping now
+  applies with `ConversationStore::apply_retention` under its turn) and
+  `WA_SERVER_INBOX_REPLY_CHECKS` (the library's `ReplyChecks` per phone
+  number id). The backends gain `MemoryBackend::with_inbox_retention`
+  and `PgBackend::with_inbox_retention`, the binary
+  `BackendFactory::open_with` (provided: it opens with `open` by
+  default), `Config::inbox_retention` and `Settings::inbox_reply_checks`,
+  and the HTTP crate `Grant::conversations` and `AppState::clock`. The
+  OpenAPI document gains the two paths, the tag `inbox` and the schemas
+  `Conversation`, `ConversationList`, `InboxMessage`, `InboxMessageList`,
+  `MessageDirection` and `ReplyMessage` (additions only). No stored name
+  is added.
+
 - **The service's routing after a move, and the bind generation**
   (roadmap S2b, design D36; parity rows 9 and 112 now done on the
   service's side). Three settings, documented in the server guide:
@@ -1995,6 +2031,16 @@ stored data, the owner's).
   each conversation's history"); implement it and run
   `conversation_conformance::run` again. The in-tree memory and Postgres
   stores implement it; nothing else changes for their users.
+
+- **`meta-whatsapp-server serve` refuses a backend whose inbox applies
+  another retention than `WA_SERVER_INBOX_RETENTION`** (roadmap M2a): a
+  backend an integrator serves with `serve_with` or `serve_until`, or
+  opens through a `BackendFactory` of their own that does not implement
+  `open_with`, must be built with the configured retention (the default,
+  `keep`, is what every backend applies unless built otherwise, so a
+  deployment that sets nothing is unaffected). Housekeeping rounds now
+  also purge the inbox by the store's retention.
+
 - **The service routes a moved WABA's events by the rules of D36**
   (roadmap S2b). Behaviour: after a WABA moved to a tenant from another
   one, its undated tenant-visible events (errors, history chunks,

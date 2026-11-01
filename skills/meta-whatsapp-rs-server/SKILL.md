@@ -15,12 +15,12 @@ Your app is not Rust and reaches WhatsApp through meta-whatsapp-server:
 you deploy it, hold its keys, call its /v1 API and handle its errors.
 Rust code uses the library directly (`meta-whatsapp-rs`).
 
-## What the service does today (milestones M1a, M1b and M1c)
+## What the service does today (milestones M1a to M1c, and M2a)
 
-The inbox routes, live events (SSE), webhooks to your backend,
-Embedded Signup and OTP do not exist yet: write no code against them.
-Sends, media and templates do (load `meta-whatsapp-rs-server-send`), and
-so do Meta's webhooks and polling events (load
+Live events (SSE), webhooks to your backend, Embedded Signup and OTP do
+not exist yet: write no code against them. Sends, media, templates and
+the inbox (conversations, replies) do (load `meta-whatsapp-rs-server-send`),
+and so do Meta's webhooks and polling events (load
 `meta-whatsapp-rs-server-events`).
 
 | Route | Needs | Does |
@@ -29,7 +29,7 @@ so do Meta's webhooks and polling events (load
 | `GET /v1/numbers/{pn}` | scope `numbers` | live details from Meta: `display_phone_number`, `verified_name`, `quality_rating`, `name_status`, `throughput` |
 | `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `websites`, `vertical`) |
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
-| `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, … | scopes `send`, `media`, `templates` | sends, media, templates: `meta-whatsapp-rs-server-send` |
+| `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, `GET /v1/numbers/{pn}/conversations`, … | scopes `send`, `media`, `templates`, `inbox` | sends, media, templates, the inbox: `meta-whatsapp-rs-server-send` |
 | `GET /v1/events` | scope `events` | Meta's webhook events for the tenant, after a cursor: `meta-whatsapp-rs-server-events` |
 | `POST /v1/admin/tenants`, `POST /v1/admin/tenants/{id}/keys`, `POST /v1/admin/platform-keys` | admin key | tenants and keys |
 | `POST /v1/admin/tenants/{id}/wabas`, `GET /v1/admin/wabas/{waba_id}`, `DELETE /v1/admin/wabas/{waba_id}/binding` | admin key | attach the platform's own WABA (numbers listed by Meta, app subscribed); who holds one; unbind it (token deleted too) |
