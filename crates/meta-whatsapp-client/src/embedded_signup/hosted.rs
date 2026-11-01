@@ -94,9 +94,11 @@ impl EmbeddedSignup {
     /// [`OnboardingRequest::register_with_pin`] to register: the hosted
     /// page asks for no PIN, so the PIN is yours to choose and keep, as the
     /// onboarding guides' `<DESIRED_PIN>`). Refused before any request: a
-    /// request with a code, one naming another WABA, a blank system token
-    /// or app secret, a token request that does not validate, and **a WABA
-    /// `vault` already holds** (a [`ValidationError`] on `waba_id`).
+    /// request with a code, one naming another WABA, one with
+    /// [`OnboardingRequest::every_granted_waba`] on (Meta sends a
+    /// `PARTNER_ADDED` per WABA: onboard each from its own), a blank system
+    /// token or app secret, a token request that does not validate, and **a
+    /// WABA `vault` already holds** (a [`ValidationError`] on `waba_id`).
     ///
     /// **`PARTNER_ADDED` is not only hosted signup's**: Meta sends it for
     /// every WABA shared with you, the code flow's onboardings and
@@ -243,6 +245,11 @@ fn check_hosted(
             "hosted Embedded Signup exchanges no code: build the request with OnboardingRequest::for_hosted",
         ));
     }
+    // `PARTNER_ADDED` comes once per WABA shared with the app: each is
+    // onboarded from its own webhook, and a WABA held is refused.
+    request.refuse_every_granted_waba(
+        "a PARTNER_ADDED webhook names one WABA, and Meta sends one for each WABA shared with your app: onboard each from its own webhook",
+    )?;
     if request
         .session
         .primary_waba_id()

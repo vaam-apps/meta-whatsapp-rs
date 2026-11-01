@@ -705,6 +705,40 @@ The skill's
 [`business_verification.rs`](../../skills/meta-whatsapp-rs-embedded-signup/examples/business_verification.rs)
 does all three: look, then submit; read the webhook; check the status.
 
+## Several WABAs in one signup
+
+A multi-WABA flow's session info lists the customer's WABAs in `waba_ids`
+(`embedded-signup/implementation`), and `debug_token` on the business
+token lists every WABA it was granted, newest first
+(`solution-providers/manage-accounts`). `onboard` onboards one: the
+claimed `waba_id`, else the first of `waba_ids`, else the newest grant.
+To onboard every grant (`OPEN_QUESTIONS.md` #5), opt in on the request
+and call `onboard_wabas` (`onboard_wabas_with_approval` in Solution
+Partner mode, where the approval is required):
+
+- the code is exchanged and the token inspected once; a WABA the session
+  info names that the token was not granted refuses the whole signup,
+  before anything is stored;
+- each granted WABA is then verified, approved (your closure runs once
+  per WABA: reserve each for the tenant), stored under its own vault
+  record and phone index, subscribed and, for a Solution Partner, funded
+  with its own credit line, **on its own**: a WABA that fails is reported
+  and the next one runs;
+- the claimed WABA gets the request as it is (its number registered with
+  the PIN, a coexistence sync); the others register no number and sync
+  nothing, and one your vault already holds is left as it is
+  (`WabaOutcome::Held`).
+
+The call succeeds when the shared steps do, so read the result:
+`WabasOnboarded::is_complete()`, then each `WabaOnboarding`: record each
+onboarded `waba_id` against the tenant, and resume (§ 6) each one whose
+`WabaOutcome::is_resumable()`, with `OnboardingRequest::for_resume` of a
+session naming it (add `register_with_pin` to register its number). A
+WABA that failed before `store_token` was not stored and needs a new
+signup. `onboard` and `onboard_hosted` refuse a request with the option
+on; hosted signup sends one `PARTNER_ADDED` per WABA, each onboarded from
+its own webhook.
+
 ## Hosted Embedded Signup: no page code
 
 `embedded-signup/hosted-es`: instead of `FB.login` on your page, a link to
@@ -870,7 +904,7 @@ share, and to keep marking a business on offboarding, all above):
 | # | Question | Today | Decided |
 | --- | --- | --- | --- |
 | 4 | Two-step PIN policy | you pass a 6-digit PIN on every `onboard`/`resume`; nothing generates or stores it (the example asks the merchant each time) | keep it so |
-| 5 | Multi-WABA signups | only the claimed (or first, or newest granted) WABA is onboarded | the default stays; every granted WABA as an option (roadmap L11b) |
+| 5 | Multi-WABA signups | by default only the claimed (or first, or newest granted) WABA is onboarded; with `OnboardingRequest::every_granted_waba(true)`, `onboard_wabas` onboards every granted WABA, each on its own, reporting each in `WabasOnboarded` (L11b) | the default stays; every granted WABA as an option (roadmap L11b, landed) |
 | 6 | One WABA shared by several tenants | the vault is keyed by WABA; the last onboarding wins unless your `onboard_with_approval` refuses it (required for a Solution Partner, whose approval is recorded; the policy is still yours) | keep it so: no tenant policy in the library |
 | 7 | Coexistence sync | the last two steps of a coexistence onboarding (`sync_contacts`, `sync_history`), each posted once; `OnboardingRequest::coexistence_sync(false)` turns them off (L11d) | automatic after a coexistence onboarding, with an option to turn it off (roadmap L11d) |
 | 8 | Token expiry and refresh | expiry recorded and reported a lead time ahead (`TokenVault::token_expiry`, roadmap L11e); nothing refreshes | no refresh; the expiry surfaced before it lapses (roadmap L11e, landed; the service's event, M3e) |

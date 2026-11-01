@@ -1888,7 +1888,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     stays in the skill's `hosted_signup.rs`); the skill not re-stamped.
     The library's side of OPEN_QUESTIONS #11 is decided; the service's
     is M3f.
-- [ ] **L11b. Several WABAs in one signup** (`client::embedded_signup`;
+- [x] **L11b. Several WABAs in one signup** (`client::embedded_signup`;
   row 122; OPEN_QUESTIONS #5): opt-in onboarding of every granted WABA,
   each bound and resumable on its own.
   - **Kind:** additive.
@@ -1896,6 +1896,75 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** with the option off, a signup granting two WABAs
     onboards only the claimed one; with it on, both, and a failure on
     the second leaves the first stored and resumable.
+  - **Landed:** row 122 done in the library (the service's side stays
+    with M3f). `OnboardingRequest::every_granted_waba` (field and
+    setter, off by default) and `EmbeddedSignup::onboard_wabas` /
+    `onboard_wabas_with_approval` (module `embedded_signup::multi`):
+    `exchange_code` and `debug_token` once; with the option on, a
+    session info naming a WABA (`waba_id`, `waba_ids`) the token was not
+    granted fails the call at `verify_assets` before anything is read or
+    stored; then the claimed WABA (else the newest grant: what `onboard`
+    picks) with the request as it is, and every other grant of
+    `granular_scopes`' `whatsapp_business_management`, in Meta's order
+    (newest first), each through its own `verify_assets`, `approve`,
+    `store_token` and tail (its own vault record, phone index,
+    subscription, system user and credit line; the shared steps refactored
+    out of `onboard_granted` into `onboard_waba`, so `onboard` runs the
+    same code). The result is `WabasOnboarded` (`#[must_use]`), one
+    `WabaOnboarding` per WABA with a `WabaOutcome`: `Onboarded`, `Held`
+    or `Failed { error, steps_completed }` (an `Error::Step`;
+    `is_resumable` once `store_token` ran). Meta documents the
+    session info's `waba_ids` (`embedded-signup/implementation`) and the
+    grants, newest first (`solution-providers/manage-accounts`), and no
+    more: nothing on which grants a multi-WABA flow's token carries
+    beyond those, and no multi-WABA hosted flow. Nothing new is stored.
+    The decisive tests, in `embedded_signup::multi`:
+    `with_the_option_off_only_the_claimed_waba_is_onboarded` (through
+    `onboard` and `onboard_wabas`; the other grant never read),
+    `with_the_option_on_every_granted_waba_is_onboarded` (each request
+    exact: one exchange, one `debug_token`, the claimed WABA's owner,
+    numbers, subscription and registration, then the other's owner,
+    numbers and subscription, each record and phone index under its own
+    WABA), `a_failure_on_the_second_waba_leaves_the_first_and_both_resume`;
+    with `a_failure_on_the_claimed_waba_does_not_stop_the_others`,
+    `another_granted_waba_the_vault_holds_is_left_as_it_is`,
+    `a_claimed_waba_the_token_was_not_granted_refuses_the_signup`,
+    `one_waba_calls_refuse_the_option_before_any_request` (`onboard`,
+    `onboard_with_approval`, `onboard_hosted`),
+    `only_the_claimed_number_of_a_coexistence_signup_syncs`,
+    `a_solution_partner_approves_records_and_funds_each_waba` (one
+    approval per WABA, each recorded for its own token record, a share
+    for each though the business-wide lookup lists the first's
+    allocation, and a plain `resume` of the second sharing nothing
+    again) and `a_refused_approval_skips_that_waba_only`. Mutations that
+    each fail them: the option ignored, a WABA's failure returned as the
+    call's, a failure stopping the next WABAs, the other WABAs onboarded
+    without the approval, a held WABA replaced, the claimed session's
+    phone given to the others, an unbacked claim accepted, the others
+    registering or keeping the finish, `onboard` or `onboard_hosted`
+    accepting the option, `is_resumable` ignoring `store_token`.
+  - **Proposed** (for the coordinator, AGENTS.md § Decisions; each
+    swappable): the option is the request's (OPEN_QUESTIONS #5), acted on
+    by two new calls, because `onboard`'s result names one WABA and its
+    approval is an `FnOnce` (the new approval is an `FnMut`, called once
+    per WABA); `onboard` and `onboard_hosted` refuse the option rather
+    than drop the others, and `resume` ignores it (it resumes the WABA it
+    is given); the set onboarded is the token's grants (Meta's), not the
+    browser's `waba_ids`, which must all be among them or the signup is
+    refused; the claimed WABA first, then the grants in Meta's order;
+    the others register no number and request no coexistence sync (the
+    PIN, region and finish are the claimed number's; registering counts
+    against 10 per 72 hours, the sync is once per number), and keep the
+    request's subscription override and credit settings; another grant
+    the vault holds is reported `Held` and left alone (a read, not a
+    lock, as `onboard_hosted`'s), while the claimed one is replaced as
+    `onboard` replaces it; a per-WABA failure is an outcome, not the
+    call's error (`WabasOnboarded` is `#[must_use]`), and a failure in
+    the shared steps fails the call; hosted signup stays one WABA per
+    `PARTNER_ADDED`. Swappable by the option (off: `onboard`'s
+    behaviour), and by calling `onboard` per signup instead. Not
+    offered, a follow-up if wanted: onboarding a WABA that failed before
+    `store_token` from the token another WABA of the same signup stored.
 - [ ] **L11c. Pre-verified numbers** (`client::embedded_signup` and
   `client::waba`; row 123): pools, adding, codes, sharing, partners
   (`reference/business/*pre-verified*`,
