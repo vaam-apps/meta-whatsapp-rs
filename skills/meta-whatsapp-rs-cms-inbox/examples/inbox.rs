@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use meta_whatsapp_rs::client::embedded_signup::TokenVault;
 use meta_whatsapp_rs::client::messages::{MessageContent, OutboundMessage, Text};
+use meta_whatsapp_rs::client::thread_control::{Pass, TargetRole};
 use meta_whatsapp_rs::core::store::{Erased, StoredMessage, ThreadOwner};
 use meta_whatsapp_rs::inbox::{ReplyChecks, is_thread_owned_elsewhere};
 use meta_whatsapp_rs::prelude::*;
@@ -124,10 +125,19 @@ pub fn standby_partner_inbox(inbox: Inbox) -> Inbox {
     inbox.with_reply_checks(ReplyChecks::ALL.trust_handover(false))
 }
 
-/// Record your own `pass`: Meta tells only the new owner (`control_passed`).
-pub async fn passed_to_the_ai_agent(inbox: &Inbox, contact: &str) -> meta_whatsapp_rs::Result<()> {
+/// Pass the thread to the AI agent, then record it: Meta tells only the
+/// new owner (`control_passed`).
+pub async fn pass_to_the_ai_agent(
+    inbox: &Inbox,
+    merchant: &Client, // the client the inbox was built with
+    contact: &str,
+) -> meta_whatsapp_rs::Result<()> {
     let key = inbox.key(contact);
-    // After your thread control `pass` succeeded (the API is not wrapped yet: roadmap L15).
+    let pass = Pass::to_role(TargetRole::AiAgent).metadata("Customer asked about sizes");
+    merchant
+        .thread_control(inbox.phone_number_id().clone())
+        .pass(&inbox.recipient(&key), &pass) // never replayed: a second pass is a second transfer
+        .await?;
     inbox
         .record_thread_owner(&key, ThreadOwner::AnotherApp, Some("ai_agent".to_owned()))
         .await?;
@@ -367,7 +377,7 @@ mod tests {
             .access_token("MERCHANT")
             .build()
             .unwrap();
-        let inbox = Inbox::new(client, PhoneNumberId::new(NUMBER).unwrap(), store);
+        let inbox = Inbox::new(client.clone(), PhoneNumberId::new(NUMBER).unwrap(), store);
         let sent = reply_unless_handled_elsewhere(&inbox, CUSTOMER, "Hi, I'm Ana")
             .await
             .unwrap();
@@ -378,7 +388,24 @@ mod tests {
             .unwrap_err();
         assert_eq!(refused.kind(), ErrorKind::CustomerServiceWindowClosed);
 
-        passed_to_the_ai_agent(&inbox, CUSTOMER).await.unwrap();
+        // conversation-routing/thread-control: the targeted pass and its response.
+        transport.push_json(
+            200,
+            json!({"messaging_product": "whatsapp", "request_id": "<REQUEST_ID>"}),
+        );
+        pass_to_the_ai_agent(&inbox, &client, CUSTOMER)
+            .await
+            .unwrap();
+        let pass = transport.last_request().unwrap();
+        assert_eq!(pass.path(), format!("/v25.0/{NUMBER}/thread_control"));
+        assert_eq!(pass.bearer(), Some("MERCHANT"));
+        assert_eq!(
+            pass.json(),
+            Some(
+                json!({"messaging_product": "whatsapp", "recipient": CUSTOMER, "action": "pass",
+                "control_pass": {"target_role": "ai_agent"}, "metadata": "Customer asked about sizes"})
+            )
+        );
         let after = reply_unless_handled_elsewhere(&inbox, CUSTOMER, "One more thing")
             .await
             .unwrap();

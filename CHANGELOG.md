@@ -217,6 +217,26 @@ stored data, the owner's).
 
 ### Added
 
+- **Thread control** (`meta_whatsapp_client::thread_control`, roadmap
+  L15, parity row 139, from `conversation-routing/thread-control`):
+  `client.thread_control(phone_number_id)` with `ThreadControl::pass`,
+  `take` and `release`, each a `POST /{phone-number-id}/thread_control`
+  with its `action`, answering `ThreadControlResponse` (`request_id`, to
+  quote to support). A `Pass` goes to the escalation partner
+  (`Pass::to_escalation_partner`, the default, sends no `control_pass`)
+  or to a `TargetRole` (`Pass::to_role`: `ai_agent`, `ctwa`,
+  `customer_service`, `escalation`, `marketing`, `utility`, and
+  `Other(String)` for a later one), with `metadata` for the new owner's
+  `control_passed` event; `take` (the escalation partner only) carries
+  `metadata` too; `release` sends none (no event follows a release). The
+  user is a `Recipient`: a phone number or `wa_id` as `to`, a BSUID as
+  `recipient`. Checked before any request: exactly one non-empty
+  identifier (`Recipient::PhoneAndUser` and groups are refused),
+  `metadata` at most 2,000 characters
+  (`thread_control::METADATA_MAX_CHARS`, Unicode scalar values), a
+  non-empty target role. None of the three is replayed after a timeout.
+  The `meta-whatsapp-rs-cms-inbox` skill's example now makes the pass
+  before recording it.
 - **Call recording and transcription** (`meta_whatsapp_client::calling`,
   roadmap L14, parity row 135, from `calling/call-recording` and
   `calling/call-transcription`): the per-call `recording` and

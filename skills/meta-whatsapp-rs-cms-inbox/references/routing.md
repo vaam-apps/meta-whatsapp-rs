@@ -49,9 +49,22 @@ latest of the last inbound message and the latest window event.
 | `control_taken` | `ThreadOwner::AnotherApp` |
 | a standby copy of the customer's message | `AnotherApp`, dated 1 ms before it (never over a handover of its second, even when replicas race), and a window event |
 | a message on `messages` after the record | `ThisApp`, when read; not a call permission reply (Meta sends it to the Incoming Call primary and the standby partners too) |
-| your own `release` | `inbox.record_release(&key)`: `Idle` |
-| your own `pass`, or `take` as the escalation partner | `inbox.record_thread_owner(&key, owner, role)`: Meta reports neither to you |
+| your own `release` (`ThreadControl::release`) | `inbox.record_release(&key)`: `Idle` |
+| your own `pass`, or `take` as the escalation partner (`ThreadControl::pass`, `ThreadControl::take`) | `inbox.record_thread_owner(&key, owner, role)`: Meta reports neither to you |
 | 24 hours without the customer | `Idle`, when read (`Inbox::THREAD_IDLE_AFTER`; `Inbox::with_thread_idle_after` sets another) |
+
+Record your own call once Meta accepted it (none of the three is
+replayed after a timeout):
+
+```rust
+merchant
+    .thread_control(inbox.phone_number_id().clone())
+    .pass(&inbox.recipient(&key), &pass) // never replayed: a second pass is a second transfer
+    .await?;
+inbox
+    .record_thread_owner(&key, ThreadOwner::AnotherApp, Some("ai_agent".to_owned()))
+    .await?;
+```
 
 `inbox.thread_owner(&key)` is `None` when nothing was ever recorded (no
 routing). A handover names the customer by phone number only; it is

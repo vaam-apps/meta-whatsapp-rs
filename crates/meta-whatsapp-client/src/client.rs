@@ -53,6 +53,7 @@ pub(crate) struct Shared {
 /// | [`Client::block_users`] | block list |
 /// | [`Client::groups`] | Groups API |
 /// | [`Client::calling`] | Calling API signalling |
+/// | [`Client::thread_control`] | Conversation Routing: pass, take, release a thread |
 ///
 /// Anything not wrapped yet is reachable through [`Client::get`],
 /// [`Client::post`] and [`Client::delete`].

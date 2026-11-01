@@ -797,7 +797,7 @@ deprecates them on 2026-10-15.
 
 Coexistence: `smb_app_data` sync (contacts, history) within 24h.
 
-### In-App Signup (`meta_whatsapp_client::signups`), WABA (`waba`), phone numbers (`phone_numbers`), business profile, QR codes, block users, commerce, analytics, marketing (MM API), flows, groups, calling
+### In-App Signup (`meta_whatsapp_client::signups`), WABA (`waba`), phone numbers (`phone_numbers`), business profile, QR codes, block users, commerce, analytics, marketing (MM API), flows, groups, calling, thread control (`thread_control`)
 
 Typed endpoint wrappers per the rules above. Flows additionally provides
 the data-endpoint crypto (feature `flows-endpoint`): decrypt
