@@ -427,6 +427,94 @@ mod processes {
         }
     }
 
+    /// The image tests' stand-ins, and the files they answer, written in
+    /// `dir`.
+    fn image_scripts(dir: &Path) -> Vec<(&'static str, String)> {
+        std::fs::write(dir.join("webp.bin"), webp(*b"VP8 ", &[7; 64])).unwrap();
+        std::fs::write(dir.join("animated.bin"), webp(*b"VP8X", &[0x12; 10])).unwrap();
+        // A static sticker of exactly the limit.
+        std::fs::write(
+            dir.join("webp_at_limit.bin"),
+            webp(*b"VP8 ", &vec![7; 99_980]),
+        )
+        .unwrap();
+        let d = dir.display();
+        vec![
+            // The image tests' own: `marker` runs in one of the voice
+            // tests, which may come first.
+            ("image_marker", format!("touch '{d}/image_marker.ran'\n")),
+            // Counts its runs and records their arguments, one line
+            // each; answers more than a static sticker takes twice,
+            // then a WebP.
+            (
+                "ladder",
+                format!(
+                    "n=$(cat '{d}/ladder.count' 2>/dev/null || echo 0)\nn=$((n + 1))\necho $n > '{d}/ladder.count'\n\
+                     echo \"$*\" >> '{d}/ladder.args'\ncat > /dev/null\n\
+                     if [ $n -le 2 ]; then head -c 100001 /dev/zero; else cat '{d}/webp.bin'; fi\n"
+                ),
+            ),
+            // Counts its runs; always answers too much.
+            (
+                "too_much",
+                format!(
+                    "n=$(cat '{d}/too_much.count' 2>/dev/null || echo 0)\necho $((n + 1)) > '{d}/too_much.count'\n\
+                     cat > /dev/null\nexec cat /dev/zero\n"
+                ),
+            ),
+            // Counts its runs; the first takes 1.2 s and answers too
+            // much, the next ones hang.
+            (
+                "slow_ladder",
+                format!(
+                    "n=$(cat '{d}/slow_ladder.count' 2>/dev/null || echo 0)\nn=$((n + 1))\necho $n > '{d}/slow_ladder.count'\n\
+                     cat > /dev/null\nif [ $n -eq 1 ]; then sleep 1.2; exec cat /dev/zero; fi\nexec sleep 30\n"
+                ),
+            ),
+            // Records its arguments and its input, answers a static
+            // sticker of exactly the limit.
+            (
+                "record_image",
+                format!(
+                    "printf '%s\\n' \"$@\" >> '{d}/record_image.args'\ncat > '{d}/record_image.stdin'\ncat '{d}/webp_at_limit.bin'\n"
+                ),
+            ),
+            // Records its pid, answers more than a static sticker
+            // takes, then hangs on, deaf to the closed pipe: only a
+            // kill ends it.
+            (
+                "overflow_then_hang",
+                format!(
+                    "echo $$ >> '{d}/overflow_then_hang.pids'\ncat > /dev/null\ntrap '' PIPE\n\
+                     head -c 100001 /dev/zero\nexec sleep 30\n"
+                ),
+            ),
+            // Counts its runs; fails.
+            (
+                "image_fails",
+                format!(
+                    "n=$(cat '{d}/image_fails.count' 2>/dev/null || echo 0)\necho $((n + 1)) > '{d}/image_fails.count'\n\
+                     cat > /dev/null\nexit 1\n"
+                ),
+            ),
+            // Each encoder name, each of the wrong kind.
+            (
+                "encoders_wrong_kind",
+                "printf ' A....D libwebp   libwebp\\n A....D mjpeg   MJPEG\\n A....D png   PNG\\n V....D libopus   libopus\\n'\n"
+                    .to_owned(),
+            ),
+            (
+                "animated",
+                format!("cat > /dev/null\ncat '{d}/animated.bin'\n"),
+            ),
+            (
+                "encoders_images",
+                "printf ' V....D libwebp   libwebp WebP image (codec webp)\\n VFS... mjpeg   MJPEG\\n VF...D png   PNG\\n A....D opus   Opus\\n'\n"
+                    .to_owned(),
+            ),
+        ]
+    }
+
     /// Every stand-in, written once before any test starts one: writing
     /// an executable while another thread forks can make its exec fail
     /// with "text file busy", so no test spawns until all are written.
@@ -442,80 +530,7 @@ mod processes {
             let d = dir.display();
             std::fs::write(dir.join("opus.bin"), opus_page(1)).unwrap();
             std::fs::write(dir.join("stereo.bin"), opus_page(2)).unwrap();
-            std::fs::write(dir.join("webp.bin"), webp(*b"VP8 ", &[7; 64])).unwrap();
-            std::fs::write(dir.join("animated.bin"), webp(*b"VP8X", &[0x12; 10])).unwrap();
-            // A static sticker of exactly the limit.
-            std::fs::write(dir.join("webp_at_limit.bin"), webp(*b"VP8 ", &vec![7; 99_980])).unwrap();
             let scripts = [
-                // Counts its runs and records their arguments, one line
-                // each; answers more than a static sticker takes twice,
-                // then a WebP.
-                (
-                    "ladder",
-                    format!(
-                        "n=$(cat '{d}/ladder.count' 2>/dev/null || echo 0)\nn=$((n + 1))\necho $n > '{d}/ladder.count'\n\
-                         echo \"$*\" >> '{d}/ladder.args'\ncat > /dev/null\n\
-                         if [ $n -le 2 ]; then head -c 100001 /dev/zero; else cat '{d}/webp.bin'; fi\n"
-                    ),
-                ),
-                // Counts its runs; always answers too much.
-                (
-                    "too_much",
-                    format!(
-                        "n=$(cat '{d}/too_much.count' 2>/dev/null || echo 0)\necho $((n + 1)) > '{d}/too_much.count'\n\
-                         cat > /dev/null\nexec cat /dev/zero\n"
-                    ),
-                ),
-                // Counts its runs; the first takes 1.2 s and answers too
-                // much, the next ones hang.
-                (
-                    "slow_ladder",
-                    format!(
-                        "n=$(cat '{d}/slow_ladder.count' 2>/dev/null || echo 0)\nn=$((n + 1))\necho $n > '{d}/slow_ladder.count'\n\
-                         cat > /dev/null\nif [ $n -eq 1 ]; then sleep 1.2; exec cat /dev/zero; fi\nexec sleep 30\n"
-                    ),
-                ),
-                // Records its arguments and its input, answers a static
-                // sticker of exactly the limit.
-                (
-                    "record_image",
-                    format!(
-                        "printf '%s\\n' \"$@\" >> '{d}/record_image.args'\ncat > '{d}/record_image.stdin'\ncat '{d}/webp_at_limit.bin'\n"
-                    ),
-                ),
-                // Records its pid, answers more than a static sticker
-                // takes, then hangs on, deaf to the closed pipe: only a
-                // kill ends it.
-                (
-                    "overflow_then_hang",
-                    format!(
-                        "echo $$ >> '{d}/overflow_then_hang.pids'\ncat > /dev/null\ntrap '' PIPE\n\
-                         head -c 100001 /dev/zero\nexec sleep 30\n"
-                    ),
-                ),
-                // Counts its runs; fails.
-                (
-                    "image_fails",
-                    format!(
-                        "n=$(cat '{d}/image_fails.count' 2>/dev/null || echo 0)\necho $((n + 1)) > '{d}/image_fails.count'\n\
-                         cat > /dev/null\nexit 1\n"
-                    ),
-                ),
-                // Each encoder name, each of the wrong kind.
-                (
-                    "encoders_wrong_kind",
-                    "printf ' A....D libwebp   libwebp\\n A....D mjpeg   MJPEG\\n A....D png   PNG\\n V....D libopus   libopus\\n'\n"
-                        .to_owned(),
-                ),
-                (
-                    "animated",
-                    format!("cat > /dev/null\ncat '{d}/animated.bin'\n"),
-                ),
-                (
-                    "encoders_images",
-                    "printf ' V....D libwebp   libwebp WebP image (codec webp)\\n VFS... mjpeg   MJPEG\\n VF...D png   PNG\\n A....D opus   Opus\\n'\n"
-                        .to_owned(),
-                ),
                 // Records what it was given, answers mono Ogg Opus.
                 (
                     "record",
@@ -546,9 +561,6 @@ mod processes {
                 ("flood", "exec cat /dev/zero\n".to_owned()),
                 ("signal", "kill -9 $$\n".to_owned()),
                 ("marker", format!("touch '{d}/marker.ran'\n")),
-                // The image tests' own: `marker` runs in one of the voice
-                // tests, which may come first.
-                ("image_marker", format!("touch '{d}/image_marker.ran'\n")),
                 (
                     "encoders_ok",
                     "printf ' V....D libx264   H.264\\n A....D libopus   libopus Opus (codec opus)\\n'\n"
@@ -559,7 +571,7 @@ mod processes {
                     "printf ' A....D opus   Opus\\n A....D libvorbis   Vorbis\\n'\n".to_owned(),
                 ),
             ];
-            for (name, body) in scripts {
+            for (name, body) in scripts.into_iter().chain(image_scripts(&dir)) {
                 let path = dir.join(name);
                 std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
