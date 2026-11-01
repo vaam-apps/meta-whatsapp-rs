@@ -5,6 +5,7 @@
 //! meta-whatsapp-server migrate                create or upgrade the tables, then exit
 //! meta-whatsapp-server openapi                print the OpenAPI document
 //! meta-whatsapp-server healthcheck            GET /livez on the internal listener (container HEALTHCHECK)
+//! meta-whatsapp-server doctor                 check the configuration, database, webhook subscription, tokens (read-only)
 //! meta-whatsapp-server admin create-admin-key [--name N] [--expires-at RFC3339]
 //! meta-whatsapp-server admin create-platform-key --tenants '*'|a,b --scopes numbers,… [--name N] [--expires-at RFC3339]
 //! meta-whatsapp-server admin list-keys [--tenant ID]
@@ -35,6 +36,7 @@ use time::format_description::well_known::Rfc3339;
 use meta_whatsapp_server_core::admin::{TenantsInput, allowed_tenants, is_valid_name, mint};
 
 use crate::config::{self, Config, Env, MigrateMode, ProcessEnv, Storage};
+use crate::doctor::{Doctor, Status};
 use crate::model::{
     AllowedTenants, ApiKeyRecord, KeyOwner, KeyScope, MAX_NAME_CHARS, MAX_PAGE_SIZE, PageRequest,
     Scope, TenantId,
@@ -66,6 +68,11 @@ pub enum Command {
     Openapi,
     /// Exit 0 when `GET /livez` on the internal listener answers 200.
     Healthcheck,
+    /// Check, read-only, the configuration (every refusal, not only the
+    /// first), the database and its migrations, the Meta app's webhook
+    /// subscription and fields, and each token's reach; one line per
+    /// check (OK, WARN, FAIL, SKIP). Exits non-zero when one failed.
+    Doctor,
     /// Keys, from the database directly (the first admin key).
     #[command(subcommand)]
     Admin(AdminCommand),
@@ -162,6 +169,17 @@ pub async fn run_with(cli: Cli, backends: &dyn BackendFactory) -> anyhow::Result
             Ok(())
         }
         Command::Healthcheck => healthcheck(&ProcessEnv).await,
+        Command::Doctor => {
+            init_cli_logs();
+            let report = Doctor::new(backends).run(&ProcessEnv).await;
+            print!("{report}");
+            anyhow::ensure!(
+                !report.failed(),
+                "doctor: {} checks failed",
+                report.count(Status::Fail)
+            );
+            Ok(())
+        }
         Command::Admin(command) => {
             init_cli_logs();
             admin(command, &ProcessEnv, backends).await
