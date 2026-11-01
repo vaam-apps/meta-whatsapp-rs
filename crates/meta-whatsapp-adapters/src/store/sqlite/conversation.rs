@@ -1432,6 +1432,7 @@ mod tests {
     /// Every write method refuses an identifier holding U+0000 and stores
     /// nothing, as on Postgres.
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // one case per write method and identifier
     async fn every_write_refuses_nul_in_an_identifier() {
         let store = store().await;
         let at = time::macros::datetime!(2026-09-24 12:00 UTC);
@@ -1447,7 +1448,9 @@ mod tests {
             at,
         };
         refused(
-            store.record_window_event(event("US.\01", "wacid.1")).await,
+            store
+                .record_window_event(event("US.\u{0}1", "wacid.1"))
+                .await,
             "event contact",
         );
         refused(
@@ -1461,7 +1464,7 @@ mod tests {
             since: at,
         };
         refused(
-            store.set_thread_owner(&key("US.\01"), owner).await,
+            store.set_thread_owner(&key("US.\u{0}1"), owner).await,
             "owner contact",
         );
         let contact = StoredContact {
@@ -1478,7 +1481,7 @@ mod tests {
             (
                 "contact key",
                 StoredContact {
-                    key: key("US.\01"),
+                    key: key("US.\u{0}1"),
                     ..contact.clone()
                 },
             ),
@@ -1507,7 +1510,7 @@ mod tests {
             refused(store.put_contact(bad).await, what);
         }
         refused(
-            store.remove_contact(&key("US.\01"), at).await,
+            store.remove_contact(&key("US.\u{0}1"), at).await,
             "removal key",
         );
         for (what, link) in [

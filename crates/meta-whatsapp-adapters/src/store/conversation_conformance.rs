@@ -279,6 +279,7 @@ pub async fn ids_are_stored_once_per_store<S: ConversationStore + ?Sized>(store:
 ///
 /// When the erasure does not reach a record through the port, or the other
 /// person's records do not stay — this is a test helper.
+#[allow(clippy::too_many_lines)] // one scenario: a record of every kind, then the erasure
 pub async fn erase_one_person_of_every_record<S: ConversationStore + ?Sized>(
     store: &S,
 ) -> Vec<String> {
@@ -430,13 +431,12 @@ pub async fn erase_one_person_of_every_record<S: ConversationStore + ?Sized>(
     );
     let left = store.messages(&r.key(&group), None, 10).await.unwrap();
     assert!(left.iter().any(|m| m.id == r.id("kept-in-group")));
-    match store.erasure_mode() {
-        ErasureMode::Delete => assert_eq!(left.len(), 1, "the group message went"),
-        _ => {
-            let redacted = left.iter().find(|m| m.id == in_group.id).unwrap();
-            assert_eq!(redacted.kind, StoredMessage::ERASED);
-            assert_eq!(redacted.text, None);
-        }
+    if store.erasure_mode() == ErasureMode::Delete {
+        assert_eq!(left.len(), 1, "the group message went");
+    } else {
+        let redacted = left.iter().find(|m| m.id == in_group.id).unwrap();
+        assert_eq!(redacted.kind, StoredMessage::ERASED);
+        assert_eq!(redacted.text, None);
     }
     let mut needles = vec![
         bsuid,
