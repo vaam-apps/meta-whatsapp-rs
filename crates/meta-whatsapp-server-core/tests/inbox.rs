@@ -50,3 +50,13 @@ async fn the_services_open_on_their_own_number_only() {
     let backend = memory::Memory::default();
     conformance::inbox::the_services_open_on_their_own_number_only(&backend).await;
 }
+
+/// Decisive (roadmap M2h): a number migrated between two tenants' WABAs,
+/// neither WABA moving, shows its new tenant none of the previous one's
+/// history.
+#[tokio::test]
+async fn a_number_migrated_between_two_tenants_wabas_hides_its_history() {
+    let backend = memory::Memory::default();
+    conformance::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history(&backend)
+        .await;
+}

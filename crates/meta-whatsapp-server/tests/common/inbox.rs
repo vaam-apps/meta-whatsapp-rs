@@ -265,3 +265,78 @@ pub async fn a_moved_numbers_history_is_hidden_from_its_new_tenant(h: &Harness) 
         "{read_history}"
     );
 }
+
+/// Roadmap M2h over HTTP: Meta migrated merchant-a's number to
+/// merchant-b's WABA, neither WABA moving (merchant-b's bound before,
+/// merchant-a's still its own). merchant-b's key lists no conversation and
+/// reads no history of merchant-a's on the number (kept in the inbox), and
+/// reads its own once the customer writes under its WABA.
+pub async fn a_number_migrated_between_two_tenants_wabas_hides_its_history(h: &Harness) {
+    const WABA_B: &str = "102290129340399";
+    let (waba_a, pn) = (EXAMPLE_WABA, EXAMPLE_PN);
+    h.tenant("merchant-a").await;
+    h.tenant("merchant-b").await;
+    h.connect("merchant-b", WABA_B, &[], "TOKEN-OF-B").await;
+    h.connect("merchant-a", waba_a, &[pn], "TOKEN-OF-A").await;
+    let a_key = h.tenant_key("merchant-a", &[Scope::Inbox]).await;
+    let mut before = dated(text(waba_a, pn, "wamid.NMOVE-A"), now());
+    before["entry"][0]["changes"][0]["value"]["messages"][0]["text"]["body"] =
+        json!("My address is 1 Hacker Way");
+    assert_eq!(h.webhook(&bytes(&before)).await.status, StatusCode::OK);
+    let conversations = format!("/v1/numbers/{pn}/conversations");
+    let history = format!("/v1/numbers/{pn}/conversations/{EXAMPLE_WA_ID}/messages");
+    let seen = read(h, &a_key, &conversations).await;
+    assert_eq!(seen["data"].as_array().unwrap().len(), 1, "{seen}");
+
+    // The migration: merchant-a's WABA no longer lists the number,
+    // merchant-b's does.
+    let a = meta_whatsapp_server::model::TenantId::parse("merchant-a").unwrap();
+    h.store
+        .bind_waba(&a, &WabaId::new(waba_a).unwrap(), &[])
+        .await
+        .unwrap();
+    h.connect("merchant-b", WABA_B, &[pn], "TOKEN-OF-B").await;
+    let b_key = h.tenant_key("merchant-b", &[Scope::Inbox]).await;
+    assert_eq!(
+        read(h, &b_key, &conversations).await,
+        json!({"data": [], "next_cursor": null}),
+        "the previous holder's conversation is shown to the new one"
+    );
+    assert_eq!(
+        read(h, &b_key, &history).await,
+        json!({"data": [], "next_cursor": null}),
+        "the previous holder's history is shown to the new one"
+    );
+    let key = ConversationKey::new(PhoneNumberId::new(pn).unwrap(), EXAMPLE_WA_ID);
+    assert_eq!(
+        h.conversations
+            .messages(&key, None, 10)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "hidden, never purged"
+    );
+    let gone = h.call(Call::get(&conversations).key(&a_key)).await;
+    assert_eq!(gone.status, StatusCode::NOT_FOUND, "{}", gone.text);
+
+    let mut after = dated(text(WABA_B, pn, "wamid.NMOVE-B"), now() + 1);
+    after["entry"][0]["changes"][0]["value"]["messages"][0]["text"]["body"] = json!("Hello again");
+    assert_eq!(h.webhook(&bytes(&after)).await.status, StatusCode::OK);
+    let read_history = read(h, &b_key, &history).await;
+    let ids: Vec<&str> = read_history["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        ["wamid.NMOVE-B"],
+        "merchant-b's own message, not merchant-a's"
+    );
+    assert!(
+        !read_history.to_string().contains("1 Hacker Way"),
+        "{read_history}"
+    );
+}

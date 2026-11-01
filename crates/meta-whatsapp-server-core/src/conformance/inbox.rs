@@ -15,7 +15,9 @@
 //!   to another tenant, its new holder lists and reads nothing of the
 //!   previous holder's (which stays stored: hidden, never purged), and
 //!   reads its own; a first onboarding reads history synced from before
-//!   its binding.
+//!   its binding. And a number Meta migrated from one tenant's WABA to
+//!   another tenant's, neither WABA moving, shows the new tenant none of
+//!   the previous one's (roadmap M2h).
 //! - The thread's owner: after Meta's `control_taken`, a free-form reply
 //!   is `409 thread_owned_elsewhere` with zero requests; with the
 //!   number's ownership check off ([`ReplyChecks`] per number), it goes
@@ -68,6 +70,7 @@ const TOKEN: &str = "EAAG-the-merchants-token";
 pub async fn run(backend: &dyn Backend) {
     an_inbound_message_is_listed_read_and_answered_within_its_window(backend).await;
     a_moved_numbers_history_is_hidden_from_its_new_tenant(backend).await;
+    a_number_migrated_between_two_tenants_wabas_hides_its_history(backend).await;
     a_reply_while_another_app_owns_the_thread_is_refused_unless_its_number_turns_the_check_off(
         backend,
     )
@@ -527,8 +530,19 @@ pub async fn a_moved_numbers_history_is_hidden_from_its_new_tenant(backend: &dyn
         .unwrap()
         .unwrap();
     assert!(binding.previous_tenant_unbound_at.is_some(), "a move");
+    // The number moved with its WABA (released by the unbind), so it has
+    // a cut of its own too, at its own start: the later one counts.
+    let number = records
+        .number(&PhoneNumberId::new(pn).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(number.previous_tenant_released_at.is_some(), "a move");
     let inbox = b.inbox(backend, ReplyChecks::ALL, &clock);
-    assert_eq!(inbox.history_from(), Some(binding.attached_at));
+    assert_eq!(
+        inbox.history_from(),
+        Some(binding.attached_at.max(number.attached_at))
+    );
     let listed = inbox.list(&first(50)).await.unwrap();
     assert!(
         listed.items.is_empty(),
@@ -603,6 +617,112 @@ pub async fn a_moved_numbers_history_is_hidden_from_its_new_tenant(backend: &dyn
         "a first onboarding's synced history"
     );
     assert_eq!(inbox.list(&first(50)).await.unwrap().items.len(), 1);
+}
+
+/// Roadmap M2h, decisive: Meta migrated a number from tenant A's WABA to
+/// tenant B's WABA, neither WABA moving (B's bound long before, A's still
+/// A's). B lists and reads none of A's history on the number (kept in the
+/// store: hidden, never purged), and reads its own; B's cut is the
+/// number's own start under B. Decisive: the number's cut in
+/// `authz::history_from` (the WABA's cut alone shows A's history to B).
+pub async fn a_number_migrated_between_two_tenants_wabas_hides_its_history(backend: &dyn Backend) {
+    let (waba_a, waba_b, pn) = ("102290129340358", "102290129340357", "106540352242872");
+    let records = backend.records();
+    let tenant_b = TenantId::parse("inbox-nmove-b").unwrap();
+    records.create_tenant(&tenant_b, "").await.unwrap();
+    assert_eq!(
+        records
+            .bind_waba(&tenant_b, &WabaId::new(waba_b).unwrap(), &[])
+            .await
+            .unwrap(),
+        BindOutcome::Bound,
+        "B's WABA, bound before the number reaches it"
+    );
+    let a = merchant(backend, "inbox-nmove-a", waba_a, pn).await;
+    let pipeline = pipeline(backend);
+    let clock = ManualClock::new(OffsetDateTime::now_utc());
+    // A's customer, in the binding's own second (a first onboarding's).
+    deliver(
+        &pipeline,
+        &text(
+            waba_a,
+            pn,
+            CONTACT,
+            "wamid.NMOVE-A",
+            "My address is 1 Hacker Way",
+            now(),
+        ),
+    )
+    .await;
+    let seen = a.inbox(backend, ReplyChecks::ALL, &clock);
+    assert_eq!(seen.list(&first(50)).await.unwrap().items.len(), 1);
+
+    // The migration: A's WABA no longer lists the number, B's does.
+    let tenant_a = TenantId::parse("inbox-nmove-a").unwrap();
+    assert_eq!(
+        records
+            .bind_waba(&tenant_a, &WabaId::new(waba_a).unwrap(), &[])
+            .await
+            .unwrap(),
+        BindOutcome::Bound
+    );
+    let b = merchant(backend, "inbox-nmove-b", waba_b, pn).await;
+    let number = records
+        .number(&PhoneNumberId::new(pn).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(number.previous_tenant_released_at.is_some(), "a move");
+    let waba = records
+        .waba(&WabaId::new(waba_b).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        waba.previous_tenant_unbound_at, None,
+        "B's WABA never moved"
+    );
+    let inbox = b.inbox(backend, ReplyChecks::ALL, &clock);
+    assert_eq!(inbox.history_from(), Some(number.attached_at));
+    let listed = inbox.list(&first(50)).await.unwrap();
+    assert!(
+        listed.items.is_empty(),
+        "the previous holder's conversation is shown to the new one: {listed:?}"
+    );
+    let history = inbox.history(CONTACT, &first(50)).await.unwrap();
+    assert!(
+        history.items.is_empty(),
+        "the previous holder's history is shown to the new one: {history:?}"
+    );
+    let key = ConversationKey::new(PhoneNumberId::new(pn).unwrap(), CONTACT);
+    let kept = backend
+        .conversations()
+        .messages(&key, None, 50)
+        .await
+        .unwrap();
+    assert_eq!(kept.len(), 1, "hidden, never purged");
+    drop(inbox);
+
+    // The customer writes to B, under B's WABA.
+    deliver(
+        &pipeline,
+        &text(
+            waba_b,
+            pn,
+            CONTACT,
+            "wamid.NMOVE-B",
+            "Hello again",
+            now() + 1,
+        ),
+    )
+    .await;
+    let inbox = b.inbox(backend, ReplyChecks::ALL, &clock);
+    let history = inbox.history(CONTACT, &first(50)).await.unwrap();
+    let ids: Vec<_> = history.items.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["wamid.NMOVE-B"], "B's own message, and not A's");
+    let listed = inbox.list(&first(50)).await.unwrap();
+    assert_eq!(listed.items.len(), 1);
+    assert_eq!(listed.items[0].last_text.as_deref(), Some("Hello again"));
 }
 
 /// Meta's `control_taken`: another app owns the thread.

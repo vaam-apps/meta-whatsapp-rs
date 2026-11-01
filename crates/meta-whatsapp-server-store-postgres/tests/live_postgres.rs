@@ -55,6 +55,78 @@ async fn live_postgres_backend_passes_the_conformance_suite() {
     eprintln!("postgres, the races: {report:?}");
 }
 
+/// Roadmap M2h: migration 5 rewrites no table (its columns are metadata
+/// only on Postgres 11 and later: one without a default, one with a
+/// constant default, and a default set for the rows to come), so a
+/// database with many numbers migrates without holding its numbers table
+/// for a copy; and a number bound before it reads its WABA's start and a
+/// previous tenant unknown (`UNRECORDED_MOVE`). Decisive: a volatile
+/// default or a column's type changed in the migration (either rewrites
+/// the table into a new file). An update of the existing rows would not
+/// change the file; the migration has none.
+#[tokio::test]
+async fn live_postgres_migration_5_rewrites_no_table() {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx::migrate::Migrator;
+    use meta_whatsapp_rs::core::ids::PhoneNumberId;
+    use meta_whatsapp_server_core::model::UNRECORDED_MOVE;
+    use meta_whatsapp_server_core::store::RecordStore as _;
+    use meta_whatsapp_server_store_postgres::migrations;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(3).await;
+    meta_whatsapp_rs::adapters::store::postgres::migrate(&pool)
+        .await
+        .unwrap();
+    let before_5: Vec<_> = migrations().into_iter().filter(|m| m.version < 5).collect();
+    assert_eq!(before_5.len(), 4);
+    let mut migrator = Migrator::with_migrations(before_5);
+    migrator.dangerous_set_table_name(MIGRATIONS_TABLE);
+    migrator.run(&pool).await.unwrap();
+    sqlx::query("INSERT INTO wa_server_tenants (id, name) VALUES ('legacy', '')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let attached_at: time::OffsetDateTime = sqlx::query_scalar(
+        "INSERT INTO wa_server_wabas (waba_id, tenant_id) VALUES ('5001', 'legacy') \
+         RETURNING attached_at",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO wa_server_numbers (phone_number_id, waba_id, tenant_id) \
+         VALUES ('6001', '5001', 'legacy')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let file = || async {
+        let node: i64 = sqlx::query_scalar(
+            "SELECT relfilenode::bigint FROM pg_class \
+             WHERE oid = 'wa_server_numbers'::regclass",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        node
+    };
+    let before = file().await;
+    migrate(&pool).await.unwrap();
+    assert_eq!(
+        file().await,
+        before,
+        "migration 5 rewrote wa_server_numbers"
+    );
+    let number = PgStore::new(pool.clone())
+        .number(&PhoneNumberId::new("6001").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(number.attached_at, attached_at, "its WABA's start");
+    assert_eq!(number.previous_tenant_released_at, Some(UNRECORDED_MOVE));
+}
+
 /// Two instances starting at once on an empty database both migrate, and
 /// each migration is applied once.
 #[tokio::test]
@@ -75,7 +147,7 @@ async fn live_postgres_parallel_migrations_succeed() {
     .fetch_all(&first)
     .await
     .unwrap();
-    assert_eq!(service, [1, 2, 3, 4]);
+    assert_eq!(service, [1, 2, 3, 4, 5]);
     let library: Vec<i64> =
         sqlx::query_scalar("SELECT version FROM wa_sqlx_migrations WHERE success ORDER BY version")
             .fetch_all(&first)

@@ -344,3 +344,12 @@ async fn pages_and_what_a_request_may_name() {
     );
     assert!(h.graph.requests().is_empty());
 }
+
+/// Decisive (roadmap M2h): a number Meta migrated between two tenants'
+/// WABAs, neither WABA moving, shows its new tenant none of the previous
+/// one's history.
+#[tokio::test]
+async fn a_number_migrated_between_two_tenants_wabas_hides_its_history() {
+    common::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history(&Harness::new())
+        .await;
+}

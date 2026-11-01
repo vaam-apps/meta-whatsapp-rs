@@ -104,8 +104,8 @@ use time::OffsetDateTime;
 use crate::error::{ErrorCode, ServiceError};
 use crate::keys::PresentedKey;
 use crate::model::{
-    ApiKeyRecord, BindingEpoch, KeyOwner, MAX_PAGE_SIZE, NumberStatus, PageRequest, Scope,
-    TenantId, TenantStatus, WabaBinding,
+    ApiKeyRecord, BindingEpoch, KeyOwner, MAX_PAGE_SIZE, NumberBinding, NumberStatus, PageRequest,
+    Scope, TenantId, TenantStatus, WabaBinding,
 };
 use crate::store::RecordStore;
 
@@ -613,9 +613,9 @@ impl Authorizer {
         Ok(OwnedNumber {
             client: self.client.with_token(token.token),
             phone_number_id: pn,
+            history_from: history_from(&waba, &binding),
             waba_id: binding.waba_id,
             issuer: self.issuer.clone(),
-            history_from: history_from(&waba),
             epoch: waba.epoch(),
         })
     }
@@ -870,20 +870,29 @@ impl Authorizer {
     }
 }
 
-/// From when a number's inbox history is the tenant of `binding` (its
-/// WABA's) to read (docs/design/server.md, decision D10; roadmap M2a): a
-/// WABA that moved from another tenant ([`WabaBinding::previous_tenant_unbound_at`]
-/// set, a binding made before the store recorded moves included) shows
-/// its holder nothing dated before its binding began
-/// ([`WabaBinding::attached_at`]): the previous holder's messages stay
-/// hidden, never purged. `None` for a WABA no other tenant held (a first
-/// onboarding, or a tenant's own WABA attached again): all of it, its
-/// coexistence history synced from before the binding included. A refresh
-/// keeps both fields, so the cut does not move with it.
-pub fn history_from(binding: &WabaBinding) -> Option<OffsetDateTime> {
-    binding
-        .previous_tenant_unbound_at
-        .map(|_| binding.attached_at)
+/// From when the inbox history of `number`, bound under `waba`, is their
+/// tenant's to read (docs/design/server.md, decision D10; roadmaps M2a,
+/// M2h): the later of two cuts. A WABA that moved from another tenant
+/// ([`WabaBinding::previous_tenant_unbound_at`] set) shows nothing dated
+/// before its binding began ([`WabaBinding::attached_at`]), and a number
+/// another tenant released ([`NumberBinding::previous_tenant_released_at`]
+/// set: Meta migrated it from that tenant's WABA, its WABA not moving)
+/// nothing dated before it came under this tenant
+/// ([`NumberBinding::attached_at`]). A binding made before the store
+/// recorded moves ([`UNRECORDED_MOVE`]) counts as moved: fail closed. The
+/// previous holders' messages stay hidden, never purged. `None` when
+/// neither moved (a first onboarding, or a tenant's own WABA or number
+/// bound again): all of it, its coexistence history synced from before the
+/// binding included. A refresh keeps every field, so the cut does not move
+/// with it.
+///
+/// [`UNRECORDED_MOVE`]: crate::model::UNRECORDED_MOVE
+pub fn history_from(waba: &WabaBinding, number: &NumberBinding) -> Option<OffsetDateTime> {
+    let waba_cut = waba.previous_tenant_unbound_at.map(|_| waba.attached_at);
+    let number_cut = number
+        .previous_tenant_released_at
+        .map(|_| number.attached_at);
+    waba_cut.max(number_cut)
 }
 
 /// Step 5 for one WABA: the token, or why there is none to use at `now`.

@@ -61,6 +61,20 @@ async fn live_postgres_a_moved_numbers_history_is_hidden_from_its_new_tenant() {
     common::inbox::a_moved_numbers_history_is_hidden_from_its_new_tenant(&harness(&db).await).await;
 }
 
+/// Roadmap M2h on Postgres: a number migrated between two tenants' WABAs,
+/// neither WABA moving, shows its new tenant none of the previous one's
+/// history, and keeps it.
+#[tokio::test]
+async fn live_postgres_a_number_migrated_between_two_tenants_wabas_hides_its_history() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history(
+        &harness(&db).await,
+    )
+    .await;
+}
+
 /// The attach's confirmation on Postgres (records and vault): an attach
 /// whose WABA moves to another tenant while it binds and stores leaves no
 /// token of its own under the other tenant's binding, and answers `503`
