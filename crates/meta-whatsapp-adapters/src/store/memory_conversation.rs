@@ -868,6 +868,18 @@ mod tests {
             .await;
     }
 
+    /// The no-trace scenarios' port-level checks (the SQL and Redis
+    /// adapters' tests also scan their storage after them).
+    #[tokio::test]
+    async fn an_erasure_or_a_purge_of_every_record_holds_through_the_port() {
+        for mode in [ErasureMode::Redact, ErasureMode::Delete] {
+            let store = MemoryConversationStore::new().with_erasure_mode(mode);
+            conversation_conformance::erase_one_person_of_every_record(&store).await;
+        }
+        conversation_conformance::purge_one_person_of_every_record(&MemoryConversationStore::new())
+            .await;
+    }
+
     #[tokio::test]
     async fn debug_shows_counts_not_messages() {
         let store = MemoryConversationStore::new();

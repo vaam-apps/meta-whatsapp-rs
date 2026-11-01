@@ -1371,6 +1371,179 @@ mod tests {
         conversation_conformance::ids_are_stored_once_per_store(&store().await).await;
     }
 
+    /// Every `table.column` of the store's tables holding one of
+    /// `needles`' bytes, as text or blob.
+    async fn traces(store: &SqliteConversationStore, needles: &[String]) -> Vec<String> {
+        let tables: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' \
+             AND substr(name, 1, length(?1)) = ?1 AND name <> ?2",
+        )
+        .bind(store.prefix().as_str())
+        .bind(store.prefix().table("sqlx_migrations"))
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+        assert!(tables.len() >= 6, "{tables:?}");
+        let mut found = Vec::new();
+        for table in tables {
+            let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info(?1)")
+                .bind(&table)
+                .fetch_all(&store.pool)
+                .await
+                .unwrap();
+            for column in columns {
+                for needle in needles {
+                    let n: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+                        "SELECT count(*) FROM \"{table}\" \
+                         WHERE instr(CAST(\"{column}\" AS BLOB), CAST(?1 AS BLOB)) > 0"
+                    )))
+                    .bind(needle.as_bytes())
+                    .fetch_one(&store.pool)
+                    .await
+                    .unwrap();
+                    if n > 0 {
+                        found.push(format!("{table}.{column} holds {needle}"));
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// An erasure leaves nothing of the person in any table (a redacted
+    /// group message's sender included), in both erasure modes; a purge
+    /// leaves nothing of what it purged.
+    #[tokio::test]
+    async fn an_erasure_or_a_purge_leaves_no_trace_in_any_table() {
+        for mode in [ErasureMode::Redact, ErasureMode::Delete] {
+            let store = store().await.with_erasure_mode(mode);
+            let needles = conversation_conformance::erase_one_person_of_every_record(&store).await;
+            assert_eq!(
+                traces(&store, &needles).await,
+                Vec::<String>::new(),
+                "{mode:?}"
+            );
+        }
+        let store = store().await;
+        let needles = conversation_conformance::purge_one_person_of_every_record(&store).await;
+        assert_eq!(traces(&store, &needles).await, Vec::<String>::new());
+    }
+
+    /// Every write method refuses an identifier holding U+0000 and stores
+    /// nothing, as on Postgres.
+    #[tokio::test]
+    async fn every_write_refuses_nul_in_an_identifier() {
+        let store = store().await;
+        let at = time::macros::datetime!(2026-09-24 12:00 UTC);
+        let pn = PhoneNumberId::new("1").unwrap();
+        let key = |c: &str| ConversationKey::new(pn.clone(), c);
+        let refused = |r: Result<bool, StorageError>, what: &str| {
+            assert!(matches!(r, Err(StorageError::Backend(_))), "{what}: {r:?}");
+        };
+        let event = |c: &str, id: &str| WindowEvent {
+            conversation: key(c),
+            kind: WindowEventKind::CustomerCall,
+            id: id.to_owned(),
+            at,
+        };
+        refused(
+            store.record_window_event(event("US.\01", "wacid.1")).await,
+            "event contact",
+        );
+        refused(
+            store.record_window_event(event("US.1", "wacid.\0")).await,
+            "event id",
+        );
+        let owner = ThreadOwnership {
+            owner: meta_whatsapp_core::store::ThreadOwner::ThisApp,
+            role: None,
+            app_id: None,
+            since: at,
+        };
+        refused(
+            store.set_thread_owner(&key("US.\01"), owner).await,
+            "owner contact",
+        );
+        let contact = StoredContact {
+            key: key("US.1"),
+            full_name: Some("names keep \0".to_owned()),
+            first_name: None,
+            phone_number: None,
+            user_id: None,
+            parent_user_id: None,
+            username: None,
+            synced_at: at,
+        };
+        for (what, bad) in [
+            (
+                "contact key",
+                StoredContact {
+                    key: key("US.\01"),
+                    ..contact.clone()
+                },
+            ),
+            (
+                "contact phone",
+                StoredContact {
+                    phone_number: Some("1\0".to_owned()),
+                    ..contact.clone()
+                },
+            ),
+            (
+                "contact user id",
+                StoredContact {
+                    user_id: Some(UserId::new("US.\0")),
+                    ..contact.clone()
+                },
+            ),
+            (
+                "contact parent user id",
+                StoredContact {
+                    parent_user_id: Some(UserId::new("US.ENT.\0")),
+                    ..contact.clone()
+                },
+            ),
+        ] {
+            refused(store.put_contact(bad).await, what);
+        }
+        refused(
+            store.remove_contact(&key("US.\01"), at).await,
+            "removal key",
+        );
+        for (what, link) in [
+            (
+                "link previous",
+                IdentityLink::new(pn.clone(), "1\0", "US.1", at),
+            ),
+            (
+                "link current",
+                IdentityLink::new(pn.clone(), "1", "US.\0", at),
+            ),
+        ] {
+            refused(store.link_identity(link).await, what);
+        }
+        refused(
+            store
+                .revoke(
+                    &key("US.1"),
+                    &MessageId::new("wamid.\0"),
+                    Direction::Inbound,
+                    at,
+                )
+                .await,
+            "revoke id",
+        );
+        let needles = ["US.", "wacid.", "wamid."].map(str::to_owned);
+        assert_eq!(
+            traces(&store, &needles).await,
+            Vec::<String>::new(),
+            "nothing stored"
+        );
+        // The content keeps it.
+        assert!(store.put_contact(contact.clone()).await.unwrap());
+        assert_eq!(store.contact(&contact.key).await.unwrap(), Some(contact));
+    }
+
     #[tokio::test]
     async fn identifiers_with_nul_are_refused_and_content_keeps_it() {
         let store = store().await;

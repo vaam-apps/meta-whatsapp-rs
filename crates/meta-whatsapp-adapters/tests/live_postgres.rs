@@ -169,6 +169,64 @@ async fn live_postgres_a_second_append_of_one_id_on_another_number_is_refused() 
     .await;
 }
 
+/// Every row of the conversation tables (as JSON, `BYTEA` in hex) holding
+/// one of `needles`, as `table holds needle`.
+async fn traces(pool: &PgPool, needles: &[String]) -> Vec<String> {
+    let mut found = Vec::new();
+    for table in [
+        "messages",
+        "conversations",
+        "window_events",
+        "thread_owners",
+        "synced_contacts",
+        "identity_links",
+    ] {
+        let table = TablePrefix::DEFAULT.as_str().to_owned() + table;
+        for needle in needles {
+            let hex = needle.bytes().fold(String::new(), |mut hex, b| {
+                write!(hex, "{b:02x}").unwrap();
+                hex
+            });
+            let n: i64 = sqlx::query_scalar(AssertSqlSafe(format!(
+                "SELECT count(*) FROM {table} AS r \
+                 WHERE strpos(row_to_json(r)::text, $1) > 0 \
+                    OR strpos(row_to_json(r)::text, $2) > 0"
+            )))
+            .bind(needle)
+            .bind(hex)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if n > 0 {
+                found.push(format!("{table} holds {needle}"));
+            }
+        }
+    }
+    found
+}
+
+/// An erasure leaves nothing of the person in any row, in both erasure
+/// modes; a purge leaves nothing of what it purged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_an_erasure_or_a_purge_leaves_no_trace() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    for mode in [ErasureMode::Redact, ErasureMode::Delete] {
+        let store = PostgresConversationStore::new(db.pool.clone()).with_erasure_mode(mode);
+        let needles = conversation_conformance::erase_one_person_of_every_record(&store).await;
+        assert_eq!(
+            traces(&db.pool, &needles).await,
+            Vec::<String>::new(),
+            "{mode:?}"
+        );
+    }
+    let store = PostgresConversationStore::new(db.pool.clone());
+    let needles = conversation_conformance::purge_one_person_of_every_record(&store).await;
+    assert_eq!(traces(&db.pool, &needles).await, Vec::<String>::new());
+}
+
 /// The search recipe of `store::postgres`' module docs finds a row holding a
 /// NUL (the one `live_postgres_keeps_nul_in_content_and_refuses_it_in_ids`
 /// stores), and the conversions they warn against fail on it.

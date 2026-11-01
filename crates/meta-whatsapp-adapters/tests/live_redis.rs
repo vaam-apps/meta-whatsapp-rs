@@ -289,3 +289,87 @@ async fn live_redis_conversation_debug_is_redacted() {
         r#"RedisConversationStore { prefix: "wa:", retention: Keep, erasure_mode: Redact, .. }"#
     );
 }
+
+/// Every key under `prefix` (its name, or a value, field or member it
+/// holds) containing one of `needles`' bytes.
+async fn traces(
+    conn: &mut redis::aio::MultiplexedConnection,
+    prefix: &str,
+    needles: &[String],
+) -> Vec<String> {
+    let keys: Vec<Vec<u8>> = redis::cmd("KEYS")
+        .arg(format!("{prefix}*"))
+        .query_async(conn)
+        .await
+        .unwrap();
+    assert!(!keys.is_empty(), "the scenario wrote under {prefix}");
+    let mut found = Vec::new();
+    for key in keys {
+        let kind: String = redis::cmd("TYPE")
+            .arg(&key)
+            .query_async(conn)
+            .await
+            .unwrap();
+        let mut blobs: Vec<Vec<u8>> = match kind.as_str() {
+            "string" => vec![redis::cmd("GET").arg(&key).query_async(conn).await.unwrap()],
+            "hash" => redis::cmd("HGETALL")
+                .arg(&key)
+                .query_async(conn)
+                .await
+                .unwrap(),
+            "set" => redis::cmd("SMEMBERS")
+                .arg(&key)
+                .query_async(conn)
+                .await
+                .unwrap(),
+            "zset" => redis::cmd("ZRANGE")
+                .arg(&key)
+                .arg(0)
+                .arg(-1)
+                .query_async(conn)
+                .await
+                .unwrap(),
+            other => panic!("unexpected {other} at {}", String::from_utf8_lossy(&key)),
+        };
+        blobs.push(key.clone());
+        for needle in needles {
+            if blobs
+                .iter()
+                .any(|b| b.windows(needle.len()).any(|w| w == needle.as_bytes()))
+            {
+                found.push(format!("{} holds {needle}", String::from_utf8_lossy(&key)));
+            }
+        }
+    }
+    found
+}
+
+/// An erasure leaves nothing of the person in any key, field or member (a
+/// redacted group message's sender, the indexes of their window events,
+/// thread owner and contact removal included), in both erasure modes; a
+/// purge leaves nothing of what it purged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_redis_an_erasure_or_a_purge_leaves_no_trace() {
+    let Some(client) = client() else { return };
+    for mode in [ErasureMode::Redact, ErasureMode::Delete] {
+        let (prefix, _cleanup) = prefix(&client);
+        let mut conn = client.get_multiplexed_async_connection().await.unwrap();
+        let store = RedisConversationStore::new(conn.clone())
+            .with_prefix(prefix.clone())
+            .with_erasure_mode(mode);
+        let needles = conversation_conformance::erase_one_person_of_every_record(&store).await;
+        assert_eq!(
+            traces(&mut conn, &prefix, &needles).await,
+            Vec::<String>::new(),
+            "{mode:?}"
+        );
+    }
+    let (prefix, _cleanup) = prefix(&client);
+    let mut conn = client.get_multiplexed_async_connection().await.unwrap();
+    let store = RedisConversationStore::new(conn.clone()).with_prefix(prefix.clone());
+    let needles = conversation_conformance::purge_one_person_of_every_record(&store).await;
+    assert_eq!(
+        traces(&mut conn, &prefix, &needles).await,
+        Vec::<String>::new()
+    );
+}

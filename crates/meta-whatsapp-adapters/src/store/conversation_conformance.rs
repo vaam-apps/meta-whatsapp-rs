@@ -27,6 +27,8 @@
 //!   the same cursor rule, scoped to one business number;
 //! - the inbox summary follows the newest message by `(timestamp, id)`, not
 //!   the most recently appended one;
+//! - a limit of `usize::MAX` (past `i64::MAX`, where a database counts)
+//!   reads every row, in every listing;
 //! - unread counts inbound messages appended since the last `mark_read`, by
 //!   arrival, and concurrent appends are all counted;
 //! - synced history (`append_synced`) is stored and ordered like any
@@ -151,6 +153,7 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
     unread_counting(store).await;
     last_inbound_at(store).await;
     zero_limit(store).await;
+    an_unbounded_limit_reads_everything(store).await;
     concurrent_appends(store).await;
     concurrent_status_updates(store).await;
     synced_history_opens_no_window_and_is_never_unread(store).await;
@@ -186,8 +189,10 @@ pub async fn run<S: ConversationStore + ?Sized>(store: &S) {
 /// there changes nothing (and leaves no tombstone), and the first number
 /// keeps its message as it was. Every adapter of this crate passes it.
 ///
-/// Not part of [`run`]: the port allows either answer, and a store keeping
-/// ids once per number (the other answer to #33) fails this case only.
+/// Not part of [`run`]: the port allows either answer. A store keeping ids
+/// once per number (the other answer to #33) fails this case, and today
+/// also `run`'s revoke case (a revoke on another number leaves no tombstone
+/// there, the id being taken), which #33's answer revisits.
 ///
 /// # Panics
 ///
@@ -252,6 +257,293 @@ pub async fn ids_are_stored_once_per_store<S: ConversationStore + ?Sized>(store:
         first,
         "the first number keeps its message"
     );
+}
+
+/// One person's records of every kind on one number, erased: what an
+/// adapter's own test must then find **nowhere** in its storage (every
+/// table, key, field and member), which the port's reads cannot show. The
+/// person has a BSUID, a phone number and an earlier BSUID (linked), their
+/// own conversations (live, synced, a tombstone), a window event, a thread
+/// owner, a synced contact naming the phone number, a contact removal
+/// kept under the earlier BSUID, and a message in a group's conversation
+/// (latest there); another person's records stay. Returns the strings that
+/// must be gone: the three identifiers, the person's message, window event
+/// and tombstone ids, their text and their synced names (the group
+/// message's id stays under [`ErasureMode::Redact`], its content and sender
+/// gone).
+///
+/// Not part of [`run`]: only the adapter can scan its storage. The memory,
+/// SQLite, Postgres and Redis adapters' tests call it.
+///
+/// # Panics
+///
+/// When the erasure does not reach a record through the port, or the other
+/// person's records do not stay — this is a test helper.
+pub async fn erase_one_person_of_every_record<S: ConversationStore + ?Sized>(
+    store: &S,
+) -> Vec<String> {
+    let r = Run::new("trace");
+    let bsuid = format!("US.erased-{}", r.tag);
+    let phone = format!("erased-phone-{}", r.tag);
+    let earlier = format!("US.erased-earlier-{}", r.tag);
+    let secret = format!("erased-secret-{}", r.tag);
+    let name = format!("erased-name-{}", r.tag);
+    let kept = format!("US.kept-{}", r.tag);
+    let group = format!("group-{}", r.tag);
+    let sent_by = |c: &str, local: &str, secs: i64, who: &str| StoredMessage {
+        payload: serde_json::json!({"from_user_id": who, "from": "kept", "text": {"body": local}}),
+        ..r.msg(c, local, Direction::Inbound, secs, local)
+    };
+    let theirs = |c: &str, local: &str, secs: i64| StoredMessage {
+        text: Some(secret.clone()),
+        payload: serde_json::json!({"from_user_id": bsuid, "from": phone, "text": {"body": secret}}),
+        ..r.msg(c, local, Direction::Inbound, secs, "")
+    };
+    assert!(
+        store
+            .append(theirs(&bsuid, "erased-live", 1))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .append(StoredMessage {
+                direction: Direction::Outbound,
+                status: DeliveryStatus::Accepted,
+                ..theirs(&bsuid, "erased-reply", 2)
+            })
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .append_synced(vec![theirs(&phone, "erased-synced", 0)])
+            .await
+            .unwrap(),
+        [true]
+    );
+    assert!(
+        store
+            .revoke(
+                &r.key(&bsuid),
+                &r.id("erased-revoked"),
+                Direction::Inbound,
+                at(3)
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .record_window_event(r.event(
+                &bsuid,
+                "erased-call",
+                WindowEventKind::CustomerCall,
+                at(4)
+            ))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .set_thread_owner(
+                &r.key(&bsuid),
+                ownership(ThreadOwner::ThisApp, Some("erased-role"), at(4))
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .put_contact(StoredContact {
+                full_name: Some(name.clone()),
+                first_name: Some(name.clone()),
+                phone_number: Some(phone.clone()),
+                user_id: Some(UserId::new(bsuid.clone())),
+                username: Some(name.clone()),
+                ..r.contact(&bsuid, 5)
+            })
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .put_contact(StoredContact {
+                full_name: Some(name.clone()),
+                ..r.contact(&earlier, 1)
+            })
+            .await
+            .unwrap()
+    );
+    assert!(store.remove_contact(&r.key(&earlier), at(2)).await.unwrap());
+    for (previous, current) in [(&phone, &bsuid), (&earlier, &bsuid)] {
+        assert!(
+            store
+                .link_identity(IdentityLink::new(
+                    r.pn.clone(),
+                    previous.clone(),
+                    current.clone(),
+                    at(6)
+                ))
+                .await
+                .unwrap()
+        );
+    }
+    // The group: the other person first, then the erased one's (latest).
+    assert!(
+        store
+            .append(sent_by(&group, "kept-in-group", 7, &kept))
+            .await
+            .unwrap()
+    );
+    let in_group = theirs(&group, "group-message", 8);
+    assert!(store.append(in_group.clone()).await.unwrap());
+    // The other person's own conversation.
+    let other = sent_by(&kept, "kept-own", 9, &kept);
+    assert!(store.append(other.clone()).await.unwrap());
+
+    let found = store.identities(&r.key(&bsuid)).await.unwrap();
+    for id in [&bsuid, &phone, &earlier] {
+        assert!(found.contains(id), "identities reach {id}");
+    }
+    let ids: Vec<String> = found.into_iter().collect();
+    let erased = store.erase_all(&r.pn, &ids).await.unwrap();
+    assert_eq!(
+        (
+            erased.messages,
+            erased.window_events,
+            erased.thread_owners,
+            erased.group_messages
+        ),
+        (4, 1, 1, 1),
+        "{erased:?}"
+    );
+    assert_eq!(erased.identity_links, 2, "{erased:?}");
+    assert!(
+        erased.contacts >= 2,
+        "the contact and the kept removal: {erased:?}"
+    );
+    assert_eq!(
+        only_message(store, &r.key(&kept)).await,
+        other,
+        "the other person's stays"
+    );
+    let left = store.messages(&r.key(&group), None, 10).await.unwrap();
+    assert!(left.iter().any(|m| m.id == r.id("kept-in-group")));
+    match store.erasure_mode() {
+        ErasureMode::Delete => assert_eq!(left.len(), 1, "the group message went"),
+        _ => {
+            let redacted = left.iter().find(|m| m.id == in_group.id).unwrap();
+            assert_eq!(redacted.kind, StoredMessage::ERASED);
+            assert_eq!(redacted.text, None);
+        }
+    }
+    let mut needles = vec![
+        bsuid,
+        phone,
+        earlier,
+        secret,
+        name,
+        "erased-role".to_owned(),
+    ];
+    needles.extend(
+        [
+            "erased-live",
+            "erased-reply",
+            "erased-synced",
+            "erased-revoked",
+        ]
+        .map(|local| r.id(local).as_str().to_owned()),
+    );
+    needles.push(r.event_id("erased-call"));
+    needles
+}
+
+/// One person's purgeable records of every kind on one number, all older
+/// than the cutoff, purged (`purge_before` on that number): what the
+/// adapter's own test must then find nowhere in its storage, as for
+/// [`erase_one_person_of_every_record`]. The records: their conversation
+/// (a live message, a synced one, a tombstone, its summary), a window
+/// event, a thread owner and a kept contact removal; synced contacts and
+/// identity links are not purged by age, so the case has none. Another
+/// conversation, newer than the cutoff, stays. Returns the strings that
+/// must be gone: the person's key, their message, tombstone and window
+/// event ids, and their text.
+///
+/// Not part of [`run`], for the same reason.
+///
+/// # Panics
+///
+/// When the purge does not reach a record through the port, or the newer
+/// conversation does not stay — this is a test helper.
+pub async fn purge_one_person_of_every_record<S: ConversationStore + ?Sized>(
+    store: &S,
+) -> Vec<String> {
+    let r = Run::new("purged");
+    let person = format!("US.purged-{}", r.tag);
+    let secret = format!("purged-secret-{}", r.tag);
+    let key = r.key(&person);
+    let old = |local: &str, secs: i64| StoredMessage {
+        payload: serde_json::json!({"from_user_id": person, "text": {"body": secret}}),
+        ..r.msg(&person, local, Direction::Inbound, secs, &secret)
+    };
+    assert!(store.append(old("purged-live", 1)).await.unwrap());
+    assert_eq!(
+        store
+            .append_synced(vec![old("purged-synced", 0)])
+            .await
+            .unwrap(),
+        [true]
+    );
+    assert!(
+        store
+            .revoke(&key, &r.id("purged-revoked"), Direction::Inbound, at(2))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .record_window_event(r.event(
+                &person,
+                "purged-call",
+                WindowEventKind::CustomerCall,
+                at(3)
+            ))
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .set_thread_owner(
+                &key,
+                ownership(ThreadOwner::ThisApp, Some("purged-role"), at(3))
+            )
+            .await
+            .unwrap()
+    );
+    assert!(!store.remove_contact(&key, at(4)).await.unwrap());
+    let newer = r.msg("kept", "kept", Direction::Inbound, 200, "kept");
+    assert!(store.append(newer.clone()).await.unwrap());
+
+    let purged = store.purge_before(Some(&r.pn), at(100)).await.unwrap();
+    assert_eq!(
+        purged,
+        Purged {
+            messages: 3,
+            conversations: 1,
+            window_events: 1,
+            thread_owners: 1,
+            contact_removals: 1,
+        }
+    );
+    assert_eq!(only_message(store, &r.key("kept")).await, newer);
+    let mut needles = vec![person, secret, "purged-role".to_owned()];
+    needles.extend(
+        ["purged-live", "purged-synced", "purged-revoked"]
+            .map(|local| r.id(local).as_str().to_owned()),
+    );
+    needles.push(r.event_id("purged-call"));
+    needles
 }
 
 const T0: OffsetDateTime = datetime!(2026-09-24 12:00 UTC);
@@ -998,6 +1290,52 @@ async fn zero_limit<S: ConversationStore + ?Sized>(store: &S) {
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+/// `usize::MAX` reads every row of each listing: a backend whose limit is
+/// a signed 64-bit count saturates it rather than refusing the call.
+async fn an_unbounded_limit_reads_everything<S: ConversationStore + ?Sized>(store: &S) {
+    let r = Run::new("unbounded");
+    for (i, c) in ["a", "b"].into_iter().enumerate() {
+        let secs = i64::try_from(i).unwrap();
+        store
+            .append(r.msg(c, c, Direction::Inbound, secs, "x"))
+            .await
+            .unwrap();
+        store
+            .record_window_event(r.event(c, c, WindowEventKind::CustomerCall, at(secs)))
+            .await
+            .unwrap();
+        store.put_contact(r.contact(c, secs)).await.unwrap();
+    }
+    assert_eq!(
+        store
+            .messages(&r.key("a"), None, usize::MAX)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .conversations(&r.pn, None, usize::MAX)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        store
+            .window_events(&r.key("b"), None, usize::MAX)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        store.contacts(&r.pn, None, usize::MAX).await.unwrap().len(),
+        2
     );
 }
 

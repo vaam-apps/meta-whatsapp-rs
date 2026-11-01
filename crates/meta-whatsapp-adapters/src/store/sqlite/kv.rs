@@ -391,6 +391,44 @@ mod tests {
         assert!(store.get(&long).await.unwrap().is_some());
     }
 
+    /// A record is gone at its deadline exactly, as in `MemoryKvStore`
+    /// (and as `purge_expired` deletes it): not readable, free for
+    /// `put_if_absent`, not swappable.
+    #[tokio::test]
+    async fn a_record_expires_at_its_deadline_exactly() {
+        let clock = Arc::new(ManualClock::new(
+            time::macros::datetime!(2026-09-24 12:00 UTC),
+        ));
+        let store = store().await.with_clock(clock.clone());
+        let key = StoreKey::new("wa.test", "deadline");
+        let ttl = Expiry::After(std::time::Duration::from_secs(1));
+        let v = store.put(&key, b"a".to_vec(), ttl).await.unwrap();
+        clock.advance(std::time::Duration::from_micros(999_999));
+        assert!(
+            store.get(&key).await.unwrap().is_some(),
+            "a microsecond before"
+        );
+        clock.advance(std::time::Duration::from_micros(1));
+        assert_eq!(store.get(&key).await.unwrap(), None, "at the deadline");
+        assert_eq!(
+            store
+                .compare_and_swap(&key, v, Some(b"b".to_vec()), Expiry::Keep)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(!store.delete(&key).await.unwrap(), "nothing live to delete");
+        let v = store.put(&key, b"a".to_vec(), ttl).await.unwrap();
+        clock.advance(std::time::Duration::from_secs(1));
+        assert!(
+            store
+                .put_if_absent(&key, b"c".to_vec(), Expiry::Never)
+                .await
+                .unwrap()
+                .is_some_and(|w| w > v)
+        );
+    }
+
     #[tokio::test]
     async fn debug_names_the_prefix_only() {
         assert_eq!(
