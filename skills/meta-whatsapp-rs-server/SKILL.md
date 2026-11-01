@@ -55,8 +55,8 @@ meta-whatsapp-server serve
 It **refuses to start** on an unsafe setting (a blank `WA_APP_SECRET` or
 `WA_VERIFY_TOKEN`, no `WA_VAULT_KEY` or a short `WA_OTP_PEPPER` with
 Postgres, no `DATABASE_URL` outside `WA_SERVER_ENV=development`), naming
-the variable. Every secret may come from a file (`WA_APP_SECRET_FILE`).
-Back `WA_VAULT_KEY` up apart from the database.
+the variable. `meta-whatsapp-server doctor` names every one at once, then the database, the app's missing webhook fields (messages, account_update) and each WABA token's reach, read-only, exiting non-zero on a `FAIL` line.
+Every secret may come from a file (`WA_APP_SECRET_FILE`); back `WA_VAULT_KEY` up apart from the database.
 
 ## Credentials
 

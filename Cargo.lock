@@ -2401,6 +2401,7 @@ dependencies = [
  "meta-whatsapp-server-store-memory",
  "meta-whatsapp-server-store-postgres",
  "pretty_assertions",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror",
