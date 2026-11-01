@@ -12,8 +12,15 @@
 //! served without a change here: hand it to [`serve_with`], or run the
 //! whole command line on it with a [`BackendFactory`] of theirs
 //! ([`crate::cli::run_with`]). [`BuiltinBackends`] opens the in-tree
-//! ones, Postgres and memory.
+//! ones this build has (the `store-postgres` and `store-memory` features).
+//!
+//! **The process composes the service's crates** (roadmap S7): the state
+//! and the public listener are `meta-whatsapp-server-http`'s, the internal
+//! listener's routes the API adapter's (`meta-whatsapp-server-api-axum`,
+//! the `api-axum` feature), handed the state's grant, which only this
+//! composition holds.
 
+#[cfg(feature = "store-postgres")]
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,25 +28,35 @@ use std::time::Duration;
 use anyhow::Context as _;
 use async_trait::async_trait;
 use meta_whatsapp_rs::Client;
+#[cfg(feature = "store-postgres")]
 use meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool;
+#[cfg(feature = "store-postgres")]
 use meta_whatsapp_rs::adapters::store::postgres::sqlx::postgres::{
     PgConnectOptions, PgPoolOptions,
 };
 use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
 use meta_whatsapp_rs::core::store::KvStore;
+use meta_whatsapp_server_api_axum::api::internal_router;
+use meta_whatsapp_server_core::admin::mint;
 use meta_whatsapp_server_core::housekeeping;
+use meta_whatsapp_server_http::api::public_router;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::api::admin::mint;
-use crate::config::{Config, DatabaseUrl, MigrateMode, Storage};
+#[cfg(feature = "store-postgres")]
+use crate::config::DatabaseUrl;
+use crate::config::{Config, MigrateMode, Storage};
 use crate::events::{HOUSEKEEPING_INTERVAL, Inbound};
+use crate::listen;
 use crate::metrics::Metrics;
 use crate::model::KeyOwner;
 use crate::state::AppState;
-use crate::store::{Backend, MemoryBackend, PgBackend};
-use crate::{api, listen};
+use crate::store::Backend;
+#[cfg(feature = "store-memory")]
+use crate::store::MemoryBackend;
+#[cfg(feature = "store-postgres")]
+use crate::store::PgBackend;
 
 /// Connections per replica.
 const POOL_SIZE: u32 = 10;
@@ -50,6 +67,7 @@ const _: () = assert!(crate::events::MAX_DELIVERIES_RECORDING < POOL_SIZE as usi
 
 /// A pool on `url`, with at least two connections (migrations hold one for
 /// their lock).
+#[cfg(feature = "store-postgres")]
 pub async fn connect(url: &DatabaseUrl) -> anyhow::Result<PgPool> {
     // The error could quote the URL: say which variable, not what it held.
     let options = PgConnectOptions::from_str(url.expose_secret())
@@ -63,6 +81,7 @@ pub async fn connect(url: &DatabaseUrl) -> anyhow::Result<PgPool> {
 }
 
 /// A sqlx error's category, never its text (which may quote the URL).
+#[cfg(feature = "store-postgres")]
 fn redacted(error: &meta_whatsapp_rs::adapters::store::postgres::sqlx::Error) -> &'static str {
     use meta_whatsapp_rs::adapters::store::postgres::sqlx::Error as E;
     match error {
@@ -88,9 +107,10 @@ pub trait BackendFactory: Send + Sync {
     async fn open(&self, storage: &Storage) -> anyhow::Result<Arc<dyn Backend>>;
 }
 
-/// The in-tree backends: [`PgBackend`] for a database URL, on a pool of
-/// ten connections ([`connect`]), and [`MemoryBackend`] for memory
-/// storage.
+/// The in-tree backends this build has: `PgBackend` for a database URL,
+/// on a pool of ten connections (`connect`; the `store-postgres` feature),
+/// and `MemoryBackend` for memory storage (`store-memory`). Storage whose
+/// backend the build left out is refused, naming the feature.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BuiltinBackends;
 
@@ -98,8 +118,20 @@ pub struct BuiltinBackends;
 impl BackendFactory for BuiltinBackends {
     async fn open(&self, storage: &Storage) -> anyhow::Result<Arc<dyn Backend>> {
         Ok(match storage {
+            #[cfg(feature = "store-postgres")]
             Storage::Postgres(url) => Arc::new(PgBackend::new(connect(url).await?)),
+            #[cfg(not(feature = "store-postgres"))]
+            Storage::Postgres(_) => anyhow::bail!(
+                "DATABASE_URL is set, but this build has no Postgres backend \
+                 (meta-whatsapp-server's `store-postgres` feature)"
+            ),
+            #[cfg(feature = "store-memory")]
             Storage::Memory => Arc::new(MemoryBackend::new()),
+            #[cfg(not(feature = "store-memory"))]
+            Storage::Memory => anyhow::bail!(
+                "memory storage, but this build has no memory backend \
+                 (meta-whatsapp-server's `store-memory` feature): set DATABASE_URL"
+            ),
         })
     }
 }
@@ -240,22 +272,23 @@ async fn run<S: Future<Output = ()>>(
         ..
     } = config;
     let inbound = Inbound::new(app_secrets, verify_token)?;
-    let state = AppState::from_backend(
-        backend,
+    // The state and its grant: the internal listener's API adapter is
+    // served with the grant, which no one else is given.
+    let (state, grant) = AppState::from_backend(
+        backend.clone(),
         vault_keys,
         client,
         inbound,
         Metrics::new(),
         settings,
     )?;
-    let backend = state.backend().clone();
     if backend.kind().is_process_local() {
         // Memory storage exists in development only (the configuration
         // refuses it elsewhere), and the CLI cannot reach it: the first
         // admin key is minted here and written once to standard error,
         // never through the logs.
         let (minted, _) = mint(
-            state.store(),
+            grant.store(),
             KeyOwner::Admin,
             Vec::new(),
             "development".to_owned(),
@@ -291,13 +324,13 @@ async fn run<S: Future<Output = ()>>(
     ));
     let public_task = tokio::spawn(listen::serve(
         public,
-        api::public_router(&state),
+        public_router(&state),
         listen::PUBLIC_LIMITS,
         stop_signal(stopped.clone()),
     ));
     let internal_task = tokio::spawn(listen::serve(
         internal,
-        api::internal_router(&state),
+        internal_router(&grant),
         listen::INTERNAL_LIMITS,
         stop_signal(stopped),
     ));
@@ -470,7 +503,39 @@ fn shutdown_signal() -> impl Future<Output = ()> + Send + 'static {
 mod tests {
     use std::future::pending;
 
+    // Whatever the build's features: a dev-dependency.
+    use meta_whatsapp_server_store_memory::MemoryBackend as Memory;
+
     use super::*;
+
+    /// A state on a memory backend, with a Graph client scripted to answer
+    /// nothing (the HTTP crate's unit tests have their own:
+    /// `AppState::for_tests` is private to them).
+    fn for_tests() -> AppState {
+        use meta_whatsapp_rs::client::embedded_signup::VaultKey;
+        use meta_whatsapp_rs::core::secret::{AppSecret, VerifyToken};
+        use meta_whatsapp_rs::core::testing::ScriptedTransport;
+
+        let client = Client::builder()
+            .transport(ScriptedTransport::new())
+            .build()
+            .unwrap();
+        let inbound = Inbound::new(
+            vec![AppSecret::new("app-secret-for-unit-tests")],
+            VerifyToken::new("verify-token-for-unit-tests"),
+        )
+        .unwrap();
+        AppState::from_backend(
+            Arc::new(Memory::new()),
+            VaultKeys::new(VaultKey::generate("test").unwrap()),
+            client,
+            inbound,
+            Metrics::new(),
+            crate::state::Settings::default(),
+        )
+        .unwrap()
+        .0
+    }
 
     fn never() -> ListenerTask {
         tokio::spawn(pending())
@@ -517,7 +582,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let task = tokio::spawn(listen::serve(
             listener,
-            api::public_router(state),
+            public_router(state),
             listen::PUBLIC_LIMITS,
             stop_signal(stop.subscribe()),
         ));
@@ -534,7 +599,7 @@ mod tests {
     async fn serve_stops_when_either_listener_stops() {
         let _ports = crate::LOOPBACK_PORTS.lock().await;
         for (which, panics) in [("internal", false), ("public", true), ("internal", true)] {
-            let state = AppState::for_tests();
+            let state = for_tests();
             let (stop, _) = watch::channel(false);
             let (healthy, addr) = listening(&state, &stop).await;
             let broken: ListenerTask = if panics {
@@ -576,7 +641,7 @@ mod tests {
     #[tokio::test]
     async fn serve_stops_both_listeners_on_the_signal() {
         let _ports = crate::LOOPBACK_PORTS.lock().await;
-        let state = AppState::for_tests();
+        let state = for_tests();
         let (stop, _) = watch::channel(false);
         let (public, public_addr) = listening(&state, &stop).await;
         let (internal, internal_addr) = listening(&state, &stop).await;
@@ -666,7 +731,7 @@ mod tests {
         let unbound = Arc::new(std::sync::Mutex::new(None));
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
         let made = unbound.clone();
-        let served = tokio::spawn(run(config, Arc::new(MemoryBackend::new()), move || {
+        let served = tokio::spawn(run(config, Arc::new(Memory::new()), move || {
             let refused = |addr| std::net::TcpStream::connect(addr).is_err();
             *made.lock().unwrap() = Some(refused(public) && refused(internal));
             async move {

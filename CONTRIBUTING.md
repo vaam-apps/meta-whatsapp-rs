@@ -132,7 +132,7 @@ Say in the PR description what happened to each, with a link or
   routes, schemas, error codes and field names, the routes of their
   `curl` lines and their JSON error bodies must be in that document, and
   their backticked environment variables must be read by the service's
-  source (`crates/meta-whatsapp-rs/tests/skills.rs`). A change to the
+  source, the binary's and its composed crates' (`crates/meta-whatsapp-rs/tests/skills.rs`). A change to the
   document updates them in the same PR.
 - Developer skills in `.claude/skills/` carry `metadata: internal: true`
   so the installer does not offer them. Check what it offers from your

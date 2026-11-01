@@ -206,14 +206,9 @@ pub enum MigrateMode {
     Skip,
 }
 
-/// Log output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogFormat {
-    /// One JSON object per line (the default).
-    Json,
-    /// Human-readable.
-    Text,
-}
+/// Log output: the HTTP crate's, which installs the subscriber
+/// (`meta_whatsapp_server_http::telemetry::init`).
+pub use meta_whatsapp_server_http::telemetry::LogFormat;
 
 /// The service's settings. `Debug` shows no secret.
 pub struct Config {

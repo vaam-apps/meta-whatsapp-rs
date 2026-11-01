@@ -37,9 +37,14 @@ crates/
                            feature flags, runnable examples. What integrators depend on.
   meta-whatsapp-server-core  the service's framework-free core: its domain, authorization,
                            error model as data, and the ports its backends implement.
-  meta-whatsapp-server     the HTTP service (a binary on the facade and the core): tenants,
-                           keys, the /v1 API for apps not written in Rust, its backends.
-                           See "Service" below.
+  meta-whatsapp-server-store-memory    the service's memory backend (development).
+  meta-whatsapp-server-store-postgres  the service's Postgres backend and its migrations.
+  meta-whatsapp-server-http  the service's HTTP layer: listeners, authentication before
+                           the body, the error renderer, Meta's webhook, media, operations.
+  meta-whatsapp-server-api-axum  the service's /v1 routes on axum and their OpenAPI document.
+  meta-whatsapp-server     the HTTP service (a binary composing the four above by its Cargo
+                           features, on the facade and the core): tenants, keys, the /v1 API
+                           for apps not written in Rust. See "Service" below.
 .xtask                     repo automation (`cargo xtask meta-docs`): a workspace of its own,
                            with its own Cargo.lock, excluded from the root one, so its ureq
                            (rustls with `ring`) never enters a library or test build.
@@ -136,8 +141,8 @@ rewrite them along with the code.
 | `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
 | `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server-core/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
 | `meta-whatsapp-server/event-id/v1`, `evt_` + 32 hex digits | `EventIdKey`, same file | HMAC label of the key event ids are derived with under the app secret, and the id's shape: stored as `wa_server_events.id` and what receivers deduplicate on | `event_ids_are_pinned` (known answers) |
-| `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `lock_key`, `meta-whatsapp-server/src/store/postgres.rs` | Postgres advisory lock keys (the first 8 bytes of their SHA-256; `lock_key` derives the leader lock's the same way, so its `housekeeping` turn is `HOUSEKEEPING_LOCK`): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented`, `the_leader_locks_keys_are_the_services_locks` |
-| the service's migration files, `wa_server_sqlx_migrations` | `meta-whatsapp-server/migrations/*.sql`, `MIGRATIONS_TABLE` | the service's `wa_server_*` tables (the operator-only event stream `''` included) and its migration history; an edited file makes `migrate` refuse every database migrated before | `the_migrations_and_their_checksums_are_pinned` |
+| `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `lock_key`, `meta-whatsapp-server-store-postgres/src/postgres.rs` (`meta-whatsapp-server/src/store/postgres.rs` until roadmap S7) | Postgres advisory lock keys (the first 8 bytes of their SHA-256; `lock_key` derives the leader lock's the same way, so its `housekeeping` turn is `HOUSEKEEPING_LOCK`): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented`, `the_leader_locks_keys_are_the_services_locks` |
+| the service's migration files, `wa_server_sqlx_migrations` | `meta-whatsapp-server-store-postgres/migrations/*.sql` (moved byte for byte from `meta-whatsapp-server/migrations/` in roadmap S7: sqlx knows a migration by its version and checksum, never its path), `MIGRATIONS_TABLE` | the service's `wa_server_*` tables (the operator-only event stream `''` included) and its migration history; an edited file makes `migrate` refuse every database migrated before | `the_migrations_and_their_checksums_are_pinned`, `live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration` |
 | `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server-core/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
 | `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key; for a subcommand, the command part is its path, `order status`). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed`, `a_subcommands_cooldown_key_is_over_its_path` |
 | `wa.bot.pacer` (added by roadmap B2b; the namespace and the record layout **pending the owner's confirmation**, roadmap § Owner touchpoints) | `PACER_NAMESPACE`, `meta-whatsapp-bot/src/pacer/kv.rs` | store namespace of `KvRateLimiter`'s per-number schedules (key: SHA-256 hex of the length-prefixed phone number id, `<len>:<id>,`; value: the 49-byte version 1 record, its first byte the version). **Ephemeral**: changing it forgets each number's schedule, slow-down and raised rate (records expire 24 hours after their last slot by default), so while replicas of two releases run side by side they book from two budgets; no data is stranded | `the_pacer_key_is_pinned_and_hashed` (known answer), `the_pacer_record_is_pinned` |
@@ -1314,14 +1319,47 @@ decisions and the delivery milestones, is
     (the `http` crate is in its graph only through the library, whose
     `HttpTransport` port and client speak it; no `http` type crosses the
     core's API).
+  - The backends (roadmap S7), each on the core and the facade alone:
+    `crates/meta-whatsapp-server-store-memory` (`MemoryBackend`,
+    development and tests) and `crates/meta-whatsapp-server-store-postgres`
+    (`PgBackend` through sqlx, the facade's
+    `meta_whatsapp_rs::adapters::store::postgres::sqlx`, with the
+    service's migrations and their migrator). Each runs the core's
+    conformance suite in its own tests (live for Postgres).
+  - `crates/meta-whatsapp-server-http`: what every API adapter shares
+    over HTTP (axum through `meta_whatsapp_rs::webhooks::axum`): the
+    state (`AppState`, composed from a `Backend`, and the `Grant` its
+    composer is handed, the only way an API adapter's handlers reach the
+    records, the authorization order and the idempotency engine), the
+    listeners' accept loop, telemetry and metrics, authentication before
+    the body (the guards and extractors), the §5 renderer of the core's
+    errors, the webhook listener (the signature header's shape before
+    the body, the places, the body's size and read time, the refusals'
+    log, over the core's pipeline), media, and the operations routes.
+  - `crates/meta-whatsapp-server-api-axum`: today's `/v1` resource routes
+    and the OpenAPI document generated from them (utoipa), with the HTTP
+    crate's media and operations groups; permanent, the swap target
+    (design D26).
   - `crates/meta-whatsapp-server` (binary `meta-whatsapp-server`): the
-    HTTP API (axum and the OpenAPI document, through the facade's
-    re-exports `meta_whatsapp_rs::webhooks::axum` and
-    `meta_whatsapp_rs::adapters::store::postgres::sqlx`), which renders
-    the core's errors, the webhook listener (the signature header's shape
-    before the body, the places, the body's size and read time, the
-    refusals' log, over the core's pipeline), configuration, and the
-    backends.
+    process (configuration, `serve`, the command line), composing one
+    API adapter (feature `api-axum`) and the backends the command line
+    can open (`store-memory`, `store-postgres`), all three by default.
+    It re-exports the moved modules under their old paths
+    (`meta_whatsapp_server::api`, `::state`, `::store`, …), and keeps
+    the committed `openapi/v1.json`, which its `openapi` command prints.
+
+  ```text
+  meta-whatsapp-server (binary) ─┬─► meta-whatsapp-server-api-axum ─► meta-whatsapp-server-http ─┐
+                                 ├─► meta-whatsapp-server-http ──────────────────────────────────┤
+                                 ├─► meta-whatsapp-server-store-memory ──────────────────────────┤
+                                 └─► meta-whatsapp-server-store-postgres ────────────────────────┴─► meta-whatsapp-server-core ─► meta-whatsapp-rs (facade)
+  ```
+
+  No store crate depends on the HTTP crates, and the HTTP crate depends
+  on no API adapter or backend (dev-dependencies aside: its unit tests
+  run on the memory backend). Every log line of a moved module keeps its
+  target, `meta_whatsapp_server::<module>` as it was before the split
+  (explicit since S7): an operator's filters name them.
 - **Ports, and a backend as the unit of swapping.** The core stores
   through ports: `RecordStore` (tenants, keys, bindings),
   `IdempotencyRecords`, `Outbox`, `LeaderLock` (a lease,

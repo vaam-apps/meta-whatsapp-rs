@@ -45,6 +45,30 @@ cargo build --release -p meta-whatsapp-server
 ./target/release/meta-whatsapp-server --help
 ```
 
+The binary composes the service's crates by its Cargo features, all on
+by default:
+
+| Feature | Compiles in | Without it |
+| --- | --- | --- |
+| `api-axum` | the `/v1` API and its OpenAPI document (`meta-whatsapp-server-api-axum`) | the build fails: it is the only API adapter |
+| `store-postgres` | the Postgres backend and its migrations (`meta-whatsapp-server-store-postgres`), and sqlx | a set `DATABASE_URL` is refused at start, naming the feature |
+| `store-memory` | memory storage, `WA_SERVER_ENV=development` only (`meta-whatsapp-server-store-memory`) | development without `DATABASE_URL` is refused at start, naming the feature |
+
+A production binary without memory storage, or a development one
+without sqlx in its build:
+
+```bash
+cargo build --release -p meta-whatsapp-server --no-default-features --features api-axum,store-postgres
+cargo build --release -p meta-whatsapp-server --no-default-features --features api-axum,store-memory
+```
+
+The HTTP layer every API adapter shares (listeners, authentication,
+the error body, Meta's webhook, media, health and metrics) is
+`meta-whatsapp-server-http`, always compiled in. A database migrated by
+an earlier binary is the same database to this one: the migrations,
+their history table and their lock did not change when the crates
+split (roadmap S7).
+
 The commands:
 
 | Command | Does |

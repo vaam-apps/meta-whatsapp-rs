@@ -1,0 +1,43 @@
+[package]
+name = "meta-whatsapp-server-api-axum"
+description = "The meta-whatsapp-rs service's /v1 API on axum and its OpenAPI document."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# Part of the service (roadmap S7), never a library dependency: no crate of
+# the library depends on it.
+publish = false
+
+[lib]
+name = "meta_whatsapp_server_api_axum"
+
+[dependencies]
+# The library, through the facade alone: axum through
+# `meta_whatsapp_rs::webhooks::axum`.
+meta-whatsapp-rs = { workspace = true, features = ["axum"] }
+# The service's framework-free core: the operations every route calls.
+meta-whatsapp-server-core.workspace = true
+# The HTTP layer this adapter's routes are served in: the state and its
+# grant, the guards, the error renderer, the idempotency header, and the
+# media and operations route groups.
+meta-whatsapp-server-http.workspace = true
+
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
+utoipa.workspace = true
+utoipa-axum.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+# tests/visibility.rs: what does not compile outside this crate.
+trybuild.workspace = true
+
+[lints]
+workspace = true
