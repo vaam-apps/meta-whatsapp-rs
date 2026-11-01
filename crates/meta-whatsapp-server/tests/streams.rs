@@ -7,9 +7,11 @@
 //! reaches one) and M2.2's tenant clause (a stream of tenant B, or on its
 //! number, sees none of A's); `Last-Event-ID` resumes exactly after; a lost
 //! notification still delivers; the cursor's `410` and `422` before the
-//! stream; the per-tenant bound (`429 too_many_streams`); heartbeats; a
-//! slow client dropped with `lagged`; a shutdown ends every stream with
-//! `shutdown`; one event by id, the tenant's only. The core's suites hold
+//! stream; the per-tenant bound (`429 too_many_streams`, with
+//! `Retry-After`); heartbeats; a slow client dropped with `lagged`, its
+//! place given back though it never reads again; a stream ending once its
+//! key is revoked; the open streams as a metric; a shutdown ends every
+//! stream with `shutdown`; one event by id, the tenant's only. The core's suites hold
 //! the same rules over each backend (`conformance::live`).
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 
@@ -313,10 +315,16 @@ async fn streams_are_bounded_per_tenant() {
     let b_key = h.tenant_key(B, &[Scope::Events]).await;
     let first = opened(&h, stream(&a_key)).await;
     let _second = opened(&h, stream(&a_key)).await;
-    let (status, body) = refused(&h, stream(&a_key)).await;
-    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    let reply = match open(&h.internal, stream(&a_key)).await {
+        Ok(_) => panic!("the stream opened"),
+        Err(reply) => reply,
+    };
+    let body = reply.json();
+    assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS, "{body}");
     assert_eq!(body["error"]["code"], "too_many_streams");
     assert_eq!(body["error"]["retryable"], true);
+    // A limit of the service's own, as `too_many_requests` is.
+    assert_eq!(reply.headers["retry-after"], "5");
     let (status, _) = refused(
         &h,
         Call::get(format!("/v1/numbers/{EXAMPLE_PN}/events/stream")).key(&a_key),
@@ -350,12 +358,17 @@ async fn an_idle_stream_sends_heartbeats() {
 }
 
 /// A client that reads nothing is dropped once its buffer stayed full for
-/// the slow-client wait: what it held, then `event: lagged` with the last
-/// sequence sent, and the stream ends; resumed from there it gets the
-/// rest. Decisive: the bounded buffer and the drop.
+/// the slow-client wait. It gives its place back at once, though it never
+/// reads again (stalled on a full TCP window): the tenant's only place
+/// opens another stream, and no stream is open. When it reads, it gets
+/// `event: lagged` naming the last sequence it took (none here: the cursor
+/// it started after), and the stream ends; resumed from there it gets
+/// every event. Decisive: the bounded buffer, the drop, and the slot given
+/// back when the stream ends rather than when its body is dropped.
 #[tokio::test]
 async fn a_slow_client_is_dropped_with_lagged() {
     let h = two_tenants(Harness::with_settings(settings(|l| LiveSettings {
+        per_tenant: 1,
         buffer_frames: 2,
         slow_client: Duration::from_millis(200),
         ..l
@@ -367,23 +380,75 @@ async fn a_slow_client_is_dropped_with_lagged() {
         deliver_text(&h, EXAMPLE_WABA, EXAMPLE_PN, &format!("wamid.s.{i}")).await;
     }
     tokio::time::sleep(Duration::from_millis(600)).await;
-    let mut sent = Vec::new();
-    let lagged = loop {
-        let frame = slow.next(WITHIN).await.expect("lagged");
-        match frame.event.as_deref() {
-            Some("whatsapp") => sent.push(frame.sequence()),
-            Some("lagged") => break frame.json(),
-            other => panic!("{other:?}"),
-        }
-    };
-    assert!(!sent.is_empty() && sent.len() < 8, "{sent:?}");
-    assert_eq!(lagged, json!({"after": sent.last().unwrap()}));
+    assert_eq!(h.state.open_streams(), 0, "a stalled client kept its place");
+    drop(opened(&h, stream(&key)).await);
+    let lagged = slow.next(WITHIN).await.expect("lagged");
+    assert_eq!(lagged.event.as_deref(), Some("lagged"), "{lagged:?}");
+    assert_eq!(lagged.json(), json!({"after": 0}));
     assert!(slow.ended(WITHIN).await, "lagged is the last frame");
-    let after = sent.last().unwrap().to_string();
-    let mut resumed = opened(&h, stream(&key).header("last-event-id", &after)).await;
-    for expected in i64::try_from(sent.len()).unwrap() + 1..=8 {
+    drop(slow);
+    let mut resumed = opened(&h, stream(&key).header("last-event-id", "0")).await;
+    for expected in 1..=8 {
         assert_eq!(resumed.event(WITHIN).await.sequence(), expected);
     }
+}
+
+/// A stream asks again whether its key would be admitted before it reads:
+/// once the key is revoked (the admin API), the stream ends with no last
+/// frame and sends nothing delivered after (the event before is the
+/// control), and its client reconnecting is `401`. Decisive: the check
+/// before a read (the core's `Recheck`).
+#[tokio::test]
+async fn a_stream_ends_once_its_key_is_revoked() {
+    let h = two_tenants(Harness::with_settings(settings(|l| LiveSettings {
+        recheck: Duration::ZERO,
+        ..l
+    })))
+    .await;
+    let admin = h.admin_key().await;
+    let key = h.tenant_key(A, &[Scope::Events]).await;
+    let key_id = key.split('_').nth(1).unwrap().to_owned();
+    let mut live = opened(&h, stream(&key)).await;
+    deliver_text(&h, EXAMPLE_WABA, EXAMPLE_PN, "wamid.before").await;
+    assert_eq!(live.event(WITHIN).await.sequence(), 1);
+    let revoked = h
+        .call(
+            Call::new(
+                meta_whatsapp_rs::webhooks::axum::http::Method::DELETE,
+                format!("/v1/admin/tenants/{A}/keys/{key_id}"),
+            )
+            .key(&admin),
+        )
+        .await;
+    assert_eq!(revoked.status, StatusCode::NO_CONTENT, "{}", revoked.text);
+    deliver_text(&h, EXAMPLE_WABA, EXAMPLE_PN, "wamid.after").await;
+    assert!(live.ended(WITHIN).await, "the stream outlived its key");
+    assert_eq!(h.state.open_streams(), 0);
+    let (status, _) = refused(&h, stream(&key).header("last-event-id", "1")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// `/metrics` counts the live streams open on the replica
+/// (`wa_server_event_streams_open`, design section 7.3), never by tenant.
+#[tokio::test]
+async fn the_open_streams_are_a_metric() {
+    let h = two_tenants(Harness::with_settings(settings(|l| l))).await;
+    let a_key = h.tenant_key(A, &[Scope::Events]).await;
+    let b_key = h.tenant_key(B, &[Scope::Events]).await;
+    let first = opened(&h, stream(&a_key)).await;
+    let _second = opened(&h, stream(&b_key)).await;
+    let metrics = h.call(Call::get("/metrics")).await.text;
+    assert!(
+        metrics.contains("\nwa_server_event_streams_open 2\n"),
+        "{metrics}"
+    );
+    assert!(!metrics.contains(A) && !metrics.contains(B), "{metrics}");
+    drop(first);
+    let metrics = h.call(Call::get("/metrics")).await.text;
+    assert!(
+        metrics.contains("\nwa_server_event_streams_open 1\n"),
+        "{metrics}"
+    );
 }
 
 /// Shutting down ends every stream with `event: shutdown` (the last

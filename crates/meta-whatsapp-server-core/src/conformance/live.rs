@@ -6,7 +6,9 @@
 //! tenant's events, never an `unknown` or an `unparsed` one; a lost
 //! notification still delivers (the re-poll); its cursor is checked before
 //! it starts (`410`, `422`); streams are bounded per tenant and replica; a
-//! slow client is dropped with its buffer bounded; a shutdown ends every
+//! slow client is dropped with its buffer bounded, and its place and
+//! buffer given back whether or not it ever reads again; a stream ends
+//! once its key is revoked or its tenant suspended; a shutdown ends every
 //! stream; an event is read by id in its tenant's stream only; a stream
 //! behind a purge ends lagged. What crosses replicas (one database, two
 //! pools) is the Postgres backend's own live test.
@@ -28,7 +30,7 @@ use crate::admin::mint;
 use crate::authz::{Authorizer, Caller};
 use crate::backend::Backend;
 use crate::live::{Frame, LiveSettings, LiveStream, StreamQuery, Streams};
-use crate::model::{KeyOwner, Scope, TenantId};
+use crate::model::{KeyOwner, KeyScope, Scope, TenantId, TenantStatus};
 use crate::notify::{EventNotifier, Hub, Subscription, Wakeup};
 use crate::outbox::NewEvent;
 use crate::store::StoreResult;
@@ -60,6 +62,7 @@ pub async fn run(backend: &dyn Backend) {
     a_cursor_past_the_newest_sequence_is_refused_before_the_stream(backend).await;
     streams_are_bounded_per_tenant_and_per_replica(backend).await;
     a_slow_client_is_dropped_with_its_buffer_bounded(backend).await;
+    a_stream_ends_once_its_key_or_tenant_is_no_longer_admitted(backend).await;
     shutting_down_ends_every_stream(backend).await;
     an_event_is_read_by_id_in_its_tenants_stream_only(backend).await;
     a_number_stream_needs_the_tenants_number(backend).await;
@@ -553,6 +556,8 @@ pub async fn streams_are_bounded_per_tenant_and_per_replica(backend: &dyn Backen
         (429, "too_many_streams")
     );
     assert!(refused.is_retryable());
+    // A limit of the service's own: it says when to try again.
+    assert_eq!(refused.retry_after(), Some(5));
     assert_eq!(streams.open_for(&tenant("live-bound-a")), 2);
     let _of_b = open(&b).await.unwrap();
     let full = open(&c).await.unwrap_err();
@@ -563,10 +568,16 @@ pub async fn streams_are_bounded_per_tenant_and_per_replica(backend: &dyn Backen
 }
 
 /// A client that takes nothing is dropped once its buffer stayed full for
-/// `slow_client`: its stream ends with `lagged` after what it held, naming
-/// the last sequence it sent, and never held more than its byte budget
-/// (one event larger than the budget alone). A client that reads keeps
-/// up. Decisive: the budget and the drop.
+/// `slow_client`, and never held more than its byte budget meanwhile (one
+/// event larger than the budget alone). Once dropped, its stream gives
+/// its place among the bounds and its buffer back at once, though its
+/// client never takes another frame (stalled on a full TCP window): a
+/// stream of the same tenant opens past a bound of one, and nothing is
+/// held for it. When it does read again, it gets `lagged`, naming the
+/// last sequence it took (here the cursor it started after), and nothing
+/// more; resumed from there, it gets every event, in order. Decisive: the
+/// budget, the drop, the slot held by the producer, and the queue emptied
+/// when it lags.
 pub async fn a_slow_client_is_dropped_with_its_buffer_bounded(backend: &dyn Backend) {
     const T: &str = "live-slow";
     const PN: &str = "106540352243016";
@@ -578,6 +589,7 @@ pub async fn a_slow_client_is_dropped_with_its_buffer_bounded(backend: &dyn Back
         backend.outbox(),
         backend.notifier(),
         LiveSettings {
+            per_tenant: 1,
             buffer_bytes: budget,
             buffer_frames: 8,
             slow_client: Duration::from_millis(500),
@@ -588,6 +600,7 @@ pub async fn a_slow_client_is_dropped_with_its_buffer_bounded(backend: &dyn Back
         .open_stream(&authz, &caller, StreamQuery::default())
         .await
         .unwrap();
+    let started_after = slow.last();
     let mut written = Vec::new();
     for _ in 0..40 {
         let mut event = row(Some(T), "message_received", PN, None);
@@ -602,44 +615,135 @@ pub async fn a_slow_client_is_dropped_with_its_buffer_bounded(backend: &dyn Back
             "{} bytes held for one client",
             streams.buffered_bytes()
         );
+        // What it holds, counted apart from the budget's own count: four
+        // events of a kibibyte at most, though eight frames would fit.
+        assert!(slow.pending() <= 4, "{} frames held", slow.pending());
     }
     tokio::time::sleep(Duration::from_millis(900)).await;
-    assert!(streams.buffered_bytes() <= budget);
-    let mut got = Vec::new();
-    let lagged = loop {
-        match next_frame(&mut slow, WITHIN).await {
-            Some(Frame::Event(event)) => got.push(event.sequence),
-            Some(Frame::Lagged { after }) => break after,
-            other => panic!("expected the buffer, then lagged; got {other:?}"),
-        }
-    };
-    assert!(!got.is_empty() && got.len() < written.len(), "{got:?}");
-    assert_eq!(got, written[..got.len()], "what it held, in order");
+    // Dropped, though `slow` was never polled again: its place and its
+    // buffer are back.
     assert_eq!(
-        lagged,
-        *got.last().unwrap(),
-        "lagged names the last one sent"
+        streams.open_for(&tenant(T)),
+        0,
+        "a stalled client kept its place"
+    );
+    assert_eq!(
+        streams.buffered_bytes(),
+        0,
+        "a stalled client's buffer held"
+    );
+    let other = streams
+        .open_stream(&authz, &caller, StreamQuery::default())
+        .await
+        .expect("the tenant's only place, given back");
+    drop(other);
+    assert_eq!(
+        next_frame(&mut slow, WITHIN).await,
+        Some(Frame::Lagged {
+            after: started_after
+        }),
+        "lagged first, naming what it took"
     );
     assert!(slow.next().await.is_none(), "lagged is the last frame");
-    assert_eq!(streams.buffered_bytes(), 0, "its buffer given back");
-    // Resumed from there, it gets the rest.
+    drop(slow);
+    // Resumed from there, it gets every event.
     let mut resumed = streams
         .open_stream(
             &authz,
             &caller,
             StreamQuery {
-                after: Some(lagged),
+                after: Some(started_after),
                 ..StreamQuery::default()
             },
         )
         .await
         .unwrap();
-    for expected in &written[got.len()..] {
+    for expected in &written {
         assert_eq!(
-            next_event(&mut resumed, WITHIN, "the rest").await,
+            next_event(&mut resumed, WITHIN, "the events after it").await,
             *expected
         );
     }
+}
+
+/// A stream asks again, before it reads, whether its key would still be
+/// admitted: once the key is revoked, or its tenant suspended, the stream
+/// ends with no last frame and sends nothing recorded after (the event
+/// before is the control: it arrives); an idle stream ends by its
+/// re-poll. Its place is given back. Decisive: the check before a read.
+pub async fn a_stream_ends_once_its_key_or_tenant_is_no_longer_admitted(backend: &dyn Backend) {
+    const T: &str = "live-revoked";
+    const S: &str = "live-suspended";
+    const PN_T: &str = "106540352243041";
+    const PN_S: &str = "106540352243042";
+    bind(backend.records().as_ref(), T, PN_T).await;
+    bind(backend.records().as_ref(), S, PN_S).await;
+    let authz = authorizer(backend);
+    let records = backend.records();
+    let streams = Streams::new(
+        backend.outbox(),
+        backend.notifier(),
+        LiveSettings {
+            recheck: Duration::ZERO,
+            ..woken_only()
+        },
+    );
+    // Revoked, then suspended: each ends its tenant's stream.
+    for (t, pn) in [(T, PN_T), (S, PN_S)] {
+        let caller = caller(backend, &authz, t).await;
+        let mut live = streams
+            .open_stream(&authz, &caller, StreamQuery::default())
+            .await
+            .unwrap();
+        let before = record(backend, &row(Some(t), "message_received", pn, None)).await;
+        assert_eq!(next_event(&mut live, WITHIN, "the control").await, before);
+        if t == T {
+            assert!(
+                records
+                    .revoke_key(&KeyScope::Tenant(tenant(t)), caller.key_id())
+                    .await
+                    .unwrap()
+            );
+        } else {
+            records
+                .update_tenant(&tenant(t), None, Some(TenantStatus::Suspended))
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        record(backend, &row(Some(t), "message_received", pn, None)).await;
+        assert_eq!(
+            tokio::time::timeout(WITHIN, live.next()).await,
+            Ok(None),
+            "{t}: the stream went on"
+        );
+        assert_eq!(streams.open_for(&tenant(t)), 0, "{t}");
+    }
+    // An idle stream: no event wakes it, its re-poll checks.
+    let idle_streams = Streams::new(
+        backend.outbox(),
+        backend.notifier(),
+        LiveSettings {
+            recheck: Duration::ZERO,
+            repoll: Duration::from_millis(200),
+            ..woken_only()
+        },
+    );
+    let caller = caller(backend, &authz, T).await;
+    let mut idle = idle_streams
+        .open_stream(&authz, &caller, StreamQuery::default())
+        .await
+        .unwrap();
+    assert!(next_frame(&mut idle, QUIET).await.is_none(), "still open");
+    records
+        .revoke_key(&KeyScope::Tenant(tenant(T)), caller.key_id())
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(WITHIN, idle.next()).await,
+        Ok(None),
+        "an idle stream outlived its key"
+    );
 }
 
 /// [`Streams::shut_down`] ends every open stream with `shutdown`, naming

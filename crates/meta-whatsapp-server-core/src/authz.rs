@@ -571,6 +571,27 @@ impl Authorizer {
         })
     }
 
+    /// What [`Recheck::still_admitted`] asks again, later, of `caller`
+    /// (steps 1 to 3, the secret apart: its key, its tenant, `scope`), for
+    /// an operation that outlives its request: a live event stream
+    /// ([`crate::live`]), which a key revoked or expired, a scope or a
+    /// platform key's tenant withdrawn, or a tenant suspended or deleted
+    /// must end.
+    ///
+    /// # Errors
+    ///
+    /// `caller` another [`Authorizer`] made: `403 forbidden`.
+    pub(crate) fn recheck(&self, caller: &Caller, scope: Scope) -> Result<Recheck, ServiceError> {
+        self.check(&caller.issuer, "recheck")?;
+        Ok(Recheck {
+            records: self.records.clone(),
+            clock: self.clock.clone(),
+            key_id: caller.key_id.clone(),
+            tenant: caller.tenant.clone(),
+            scope,
+        })
+    }
+
     /// Step 4 alone for the number `pn`: bound to `caller`'s tenant, else
     /// `404 not_found` (it does not exist for them). For an operation that
     /// reads only the service's own records of the number (its live event
@@ -893,6 +914,49 @@ impl Authorizer {
             }
         }
         ServiceError::from_library(error)
+    }
+}
+
+/// A [`Caller`]'s authorization, asked again ([`Authorizer::recheck`]):
+/// what a live event stream checks before it reads, so that it ends once
+/// its key or its tenant no longer would be admitted.
+pub(crate) struct Recheck {
+    records: Arc<dyn RecordStore>,
+    clock: Arc<dyn Clock>,
+    key_id: String,
+    tenant: TenantId,
+    scope: Scope,
+}
+
+impl Recheck {
+    /// Whether the caller's key would still be admitted for its tenant
+    /// and scope now: the key stored, neither revoked nor expired, still
+    /// holding the scope and acting as the tenant (a platform key's
+    /// allowed tenants), and the tenant stored and not suspended.
+    ///
+    /// # Errors
+    ///
+    /// `503 storage_unavailable`: it could not be told.
+    pub(crate) async fn still_admitted(&self) -> Result<bool, ServiceError> {
+        let Some(key) = self.records.key(&self.key_id).await? else {
+            return Ok(false);
+        };
+        if !key.is_usable(self.clock.now()) || !key.scopes.contains(&self.scope) {
+            return Ok(false);
+        }
+        let acts_as_tenant = match &key.owner {
+            KeyOwner::Tenant(own) => *own == self.tenant,
+            KeyOwner::Platform(allowed) => allowed.allows(&self.tenant),
+            KeyOwner::Admin => false,
+        };
+        if !acts_as_tenant {
+            return Ok(false);
+        }
+        Ok(self
+            .records
+            .tenant(&self.tenant)
+            .await?
+            .is_some_and(|tenant| tenant.status != TenantStatus::Suspended))
     }
 }
 

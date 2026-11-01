@@ -23,24 +23,38 @@
 //! and never match), and a subscription hears that tenant's wake-ups
 //! only.
 //!
+//! **Only while it would still be admitted.** Before it reads, at most
+//! every [`LiveSettings::recheck`] and at least every
+//! [`LiveSettings::repoll`], a stream asks again whether its key would
+//! still be admitted for its tenant and scope `events` (not revoked nor
+//! expired, the tenant not suspended nor deleted, a platform key still
+//! allowed it): once not, it ends with no last frame and drops what it
+//! held, and its client, reconnecting, is answered `401` or `403`.
+//!
 //! **Bounded.** At most [`LiveSettings::per_tenant`] streams of one
 //! tenant and [`LiveSettings::per_replica`] in all are open on a replica
-//! (the next is `429 too_many_streams`). A stream reads at most
+//! (the next is `429 too_many_streams`, with `Retry-After`,
+//! [`LiveSettings::retry_after`]). A stream reads at most
 //! [`LiveSettings::buffer_bytes`] of data at a time and holds at most that
 //! much (and [`LiveSettings::buffer_frames`] frames) its client has not
 //! taken yet (an event larger than the budget alone): a client that takes
-//! nothing for [`LiveSettings::slow_client`] is dropped, its stream ending
-//! with [`Frame::Lagged`] after what it holds, so it resumes from its last
-//! sequence (or polls from it). A stream whose cursor fell below what
-//! housekeeping purged ends with [`Frame::Lagged`] too: its client lost
-//! events, and reloads them. Every [`LiveSettings::heartbeat`] a stream
-//! sends a [`Frame::Heartbeat`]. When the service shuts down
-//! ([`Streams::shut_down`]) every stream ends with [`Frame::Shutdown`]:
-//! its client resumes on another replica.
+//! nothing for [`LiveSettings::slow_client`] is dropped, its stream
+//! ending with [`Frame::Lagged`] naming the last sequence its client took,
+//! so it resumes from there (or polls from it). What the stream held is
+//! dropped with it, and its place among the bounds given back, when it
+//! ends, whether or not its client ever takes the last frame (a client
+//! stalled on a full TCP window takes nothing more: its connection is the
+//! listener's to close, `listen::Limits::write_timeout` in the HTTP
+//! crate). A stream whose cursor fell below what housekeeping purged ends
+//! with [`Frame::Lagged`] too: its client lost events, and reloads them.
+//! Every [`LiveSettings::heartbeat`] a stream sends a
+//! [`Frame::Heartbeat`]. When the service shuts down
+//! ([`Streams::shut_down`]) every stream ends with [`Frame::Shutdown`],
+//! after what it holds: its client resumes on another replica.
 
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -51,9 +65,9 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use crate::ServiceError;
-use crate::authz::{Authorizer, Caller};
+use crate::authz::{Authorizer, Caller, Recheck};
 use crate::error::ErrorCode;
-use crate::model::TenantId;
+use crate::model::{Scope, TenantId};
 use crate::notify::{EventNotifier, Subscription};
 use crate::outbox::{EventPage, EventQuery, Outbox, StoredEvent};
 
@@ -87,6 +101,14 @@ pub const DEFAULT_BUFFER_FRAMES: usize = 64;
 /// nothing while its buffer is full before it is dropped.
 pub const DEFAULT_SLOW_CLIENT: Duration = Duration::from_secs(30);
 
+/// Default [`LiveSettings::recheck`]: how long a stream goes on reading
+/// on one check of its key and tenant.
+pub const DEFAULT_RECHECK: Duration = Duration::from_secs(1);
+
+/// Default [`LiveSettings::retry_after`]: the `Retry-After` of `429
+/// too_many_streams`.
+pub const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(5);
+
 /// Events a stream reads at once (with [`LiveSettings::buffer_bytes`]).
 pub const READ_PAGE: usize = 100;
 
@@ -108,6 +130,13 @@ pub struct LiveSettings {
     /// How long a full buffer may wait for its client before the client
     /// is dropped.
     pub slow_client: Duration,
+    /// How long a stream reads on one check that its key would still be
+    /// admitted ([module](self)); it checks again before its next read
+    /// once this is past.
+    pub recheck: Duration,
+    /// The `Retry-After` of `429 too_many_streams` (whole seconds,
+    /// rounded up, at least 1).
+    pub retry_after: Duration,
 }
 
 impl Default for LiveSettings {
@@ -120,6 +149,8 @@ impl Default for LiveSettings {
             buffer_bytes: DEFAULT_BUFFER_BYTES,
             buffer_frames: DEFAULT_BUFFER_FRAMES,
             slow_client: DEFAULT_SLOW_CLIENT,
+            recheck: DEFAULT_RECHECK,
+            retry_after: DEFAULT_RETRY_AFTER,
         }
     }
 }
@@ -167,6 +198,8 @@ pub enum Frame {
 const RUNNING: u8 = 0;
 const LAGGED: u8 = 1;
 const SHUTDOWN: u8 = 2;
+/// Its key or tenant would no longer be admitted: no last frame.
+const REVOKED: u8 = 3;
 
 /// A replica's live streams: their slots, their shutdown, and what they
 /// read (the backend's outbox and notifier). Cheap to clone.
@@ -206,14 +239,36 @@ impl Shared {
 }
 
 /// A stream's place among [`LiveSettings::per_tenant`] and
-/// [`LiveSettings::per_replica`], given back when dropped.
+/// [`LiveSettings::per_replica`], given back once ([`Self::release`]):
+/// by whichever of its stream's producer and its [`LiveStream`] ends
+/// first ([`SlotHold`]).
 struct StreamSlot {
     shared: Arc<Shared>,
     tenant: TenantId,
+    released: AtomicBool,
+}
+
+/// A hold on a [`StreamSlot`], which gives it back when dropped.
+struct SlotHold(Arc<StreamSlot>);
+
+impl Drop for SlotHold {
+    fn drop(&mut self) {
+        self.0.release();
+    }
 }
 
 impl Drop for StreamSlot {
     fn drop(&mut self) {
+        self.release();
+    }
+}
+
+impl StreamSlot {
+    /// Give the place back, the first time only.
+    fn release(&self) {
+        if self.released.swap(true, Ordering::AcqRel) {
+            return;
+        }
         let mut open = self.shared.lock();
         open.total = open.total.saturating_sub(1);
         if let Some(count) = open.by_tenant.get_mut(&self.tenant) {
@@ -285,13 +340,16 @@ impl Streams {
         let mut open = self.shared.lock();
         let mine = open.by_tenant.get(tenant).copied().unwrap_or_default();
         if open.total >= settings.per_replica || mine >= settings.per_tenant {
-            return Err(ServiceError::new(ErrorCode::TOO_MANY_STREAMS).retryable(true));
+            return Err(ServiceError::too_many_streams(
+                crate::ratelimit::retry_after_secs(settings.retry_after),
+            ));
         }
         open.total += 1;
         *open.by_tenant.entry(tenant.clone()).or_default() += 1;
         Ok(StreamSlot {
             shared: self.shared.clone(),
             tenant: tenant.clone(),
+            released: AtomicBool::new(false),
         })
     }
 
@@ -315,8 +373,8 @@ impl Streams {
         caller: &Caller,
         query: StreamQuery,
     ) -> Result<LiveStream, ServiceError> {
-        authz.admit(caller)?;
-        self.start(caller.tenant().clone(), query).await
+        let recheck = authz.recheck(caller, Scope::Events)?;
+        self.start(caller.tenant().clone(), recheck, query).await
     }
 
     /// [`Self::open_stream`] for one of the tenant's numbers, `pn`: bound
@@ -336,19 +394,21 @@ impl Streams {
         mut query: StreamQuery,
     ) -> Result<LiveStream, ServiceError> {
         authz.tenant_number(caller, &pn).await?;
+        let recheck = authz.recheck(caller, Scope::Events)?;
         query.phone_number_id = Some(pn);
-        self.start(caller.tenant().clone(), query).await
+        self.start(caller.tenant().clone(), recheck, query).await
     }
 
     async fn start(
         &self,
         tenant: TenantId,
+        recheck: Recheck,
         query: StreamQuery,
     ) -> Result<LiveStream, ServiceError> {
         if *self.shared.shutdown.borrow() {
             return Err(ServiceError::new(ErrorCode::SHUTTING_DOWN).retryable(true));
         }
-        let slot = self.slot(&tenant)?;
+        let slot = Arc::new(self.slot(&tenant)?);
         // Subscribed before the first read: an event committed after that
         // read wakes the stream.
         let subscription = self.shared.notifier.subscribe(&tenant).await?;
@@ -384,26 +444,31 @@ impl Streams {
             None => (reader.read(i64::MAX).await?.high_water, None),
         };
         let (sender, receiver) = mpsc::channel(settings.buffer_frames.max(1));
+        let queue = Arc::new(Mutex::new(receiver));
         let end = Arc::new(AtomicU8::new(RUNNING));
         let producer = Producer {
+            slot: SlotHold(slot.clone()),
             reader,
             settings,
             cursor,
             subscription,
             sender,
+            queue: queue.clone(),
             budget: Arc::new(Semaphore::new(budget_permits(settings.buffer_bytes))),
             shared: self.shared.clone(),
             end: end.clone(),
             shutdown: self.shared.shutdown.subscribe(),
+            recheck,
+            checked_at: Instant::now(),
         };
         let task = tokio::spawn(producer.run(first));
         Ok(LiveStream {
-            receiver,
+            queue,
             end,
             last: cursor,
             done: false,
             task,
-            _slot: slot,
+            _slot: SlotHold(slot),
         })
     }
 }
@@ -460,6 +525,16 @@ enum Handed {
     Gone,
 }
 
+/// The frames handed over that the client has not taken yet: the
+/// [`LiveStream`] takes them, and its producer drops them when the stream
+/// ends lagged or revoked, so that what a stalled client never takes is
+/// not held for it.
+type Queue = Mutex<mpsc::Receiver<Item>>;
+
+fn lock_queue(queue: &Queue) -> MutexGuard<'_, mpsc::Receiver<Item>> {
+    queue.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// What a producer does after reading.
 enum Flow {
     /// Wait for a wake-up, the re-poll or the heartbeat.
@@ -468,6 +543,14 @@ enum Flow {
     End(u8),
     /// The client is gone.
     Gone,
+}
+
+/// Whether a stream's caller would still be admitted.
+enum Admitted {
+    Yes,
+    No,
+    /// It could not be told (storage): read nothing this time.
+    Unknown,
 }
 
 /// What a waiting producer woke for.
@@ -482,17 +565,28 @@ enum Wait {
 }
 
 /// The task behind a [`LiveStream`]: reads the outbox after its cursor
-/// when woken or due, and hands the frames over.
+/// when woken or due, and hands the frames over. It holds the stream's
+/// slot: the stream's place among the bounds goes when it ends, however
+/// it ends, whatever its client does.
 struct Producer {
+    /// First, so that it goes before the sender does: a stream that ended
+    /// has given its place back by the time its [`LiveStream`] sees the
+    /// end.
+    slot: SlotHold,
     reader: Reader,
     settings: LiveSettings,
     cursor: i64,
     subscription: Subscription,
     sender: mpsc::Sender<Item>,
+    /// The receiving end, to drop what it holds on a lag or a revocation.
+    queue: Arc<Queue>,
     budget: Arc<Semaphore>,
     shared: Arc<Shared>,
     end: Arc<AtomicU8>,
     shutdown: watch::Receiver<bool>,
+    recheck: Recheck,
+    /// When its caller was last found admitted.
+    checked_at: Instant,
 }
 
 impl Producer {
@@ -503,6 +597,16 @@ impl Producer {
         // subscribed already: what comes next wakes it.
         let mut read = first.is_some();
         loop {
+            if read && first.is_none() {
+                match self.admitted().await {
+                    Admitted::Yes => {}
+                    Admitted::No => {
+                        self.end(REVOKED);
+                        return;
+                    }
+                    Admitted::Unknown => read = false,
+                }
+            }
             if read {
                 match self.drain(first.take()).await {
                     Flow::Wait => {}
@@ -592,14 +696,53 @@ impl Producer {
         }
     }
 
+    /// Whether its caller would still be admitted, asked again once
+    /// [`LiveSettings::recheck`] passed since it last was.
+    async fn admitted(&mut self) -> Admitted {
+        if self.checked_at.elapsed() < self.settings.recheck {
+            return Admitted::Yes;
+        }
+        match self.recheck.still_admitted().await {
+            Ok(true) => {
+                self.checked_at = Instant::now();
+                Admitted::Yes
+            }
+            Ok(false) => Admitted::No,
+            Err(error) => {
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    code = error.code(),
+                    "an event stream could not check its key: it reads nothing until it can"
+                );
+                Admitted::Unknown
+            }
+        }
+    }
+
+    /// End the stream `how`. Lagged or revoked, what its client has not
+    /// taken is dropped now (its buffer given back), not when the client
+    /// takes the last frame: a stalled client may never take it. The slot
+    /// goes when the producer returns.
     fn end(&self, how: u8) {
+        self.slot.0.release();
         self.end.store(how, Ordering::Release);
-        if how == LAGGED {
-            tracing::info!(
+        if how == LAGGED || how == REVOKED {
+            let mut queue = lock_queue(&self.queue);
+            queue.close();
+            while queue.try_recv().is_ok() {}
+        }
+        match how {
+            LAGGED => tracing::info!(
                 target: LOG_TARGET,
                 tenant = self.reader.query.tenant.as_str(),
                 "an event stream lagged: ended for its client to resume"
-            );
+            ),
+            REVOKED => tracing::info!(
+                target: LOG_TARGET,
+                tenant = self.reader.query.tenant.as_str(),
+                "an event stream ended: its key or its tenant is no longer admitted"
+            ),
+            _ => {}
         }
     }
 
@@ -639,16 +782,17 @@ impl Producer {
 
 /// A live stream of a tenant's events ([module](self)): a `futures`
 /// stream of [`Frame`]s, ending after a [`Frame::Lagged`] or a
-/// [`Frame::Shutdown`]. Holds its slot until dropped; dropping it stops
-/// its reads.
+/// [`Frame::Shutdown`] (or with no last frame, its caller no longer
+/// admitted). Its slot is held until it ends or is dropped, whichever
+/// comes first; dropping it stops its reads.
 pub struct LiveStream {
-    receiver: mpsc::Receiver<Item>,
+    queue: Arc<Queue>,
     end: Arc<AtomicU8>,
     /// The last event's sequence yielded, or the cursor it started after.
     last: i64,
     done: bool,
     task: JoinHandle<()>,
-    _slot: StreamSlot,
+    _slot: SlotHold,
 }
 
 impl std::fmt::Debug for LiveStream {
@@ -665,6 +809,13 @@ impl LiveStream {
     pub fn last(&self) -> i64 {
         self.last
     }
+
+    /// Frames handed over to it and not taken yet: at most
+    /// [`LiveSettings::buffer_frames`], their data within
+    /// [`LiveSettings::buffer_bytes`] (one event larger alone).
+    pub fn pending(&self) -> usize {
+        lock_queue(&self.queue).len()
+    }
 }
 
 impl futures::Stream for LiveStream {
@@ -674,7 +825,8 @@ impl futures::Stream for LiveStream {
         if self.done {
             return Poll::Ready(None);
         }
-        match self.receiver.poll_recv(cx) {
+        let polled = lock_queue(&self.queue).poll_recv(cx);
+        match polled {
             Poll::Ready(Some(Item { frame, _held: held })) => {
                 // Taken: its share of the budget goes back.
                 drop(held);

@@ -910,6 +910,56 @@ async fn live_postgres_the_channel_is_the_deployments() {
     theirs.close().await;
 }
 
+/// The listening connection killed (an operator, a failover, a
+/// connection limit): the notifier listens again on a new one, wakes every
+/// subscription once it listens (what was sent meanwhile was lost to it),
+/// not before, and a notification sent after that wake-up reaches the
+/// subscription. A channel of the test's own, so only its session is
+/// killed. Decisive: `listen`'s reconnect, and its wake-up after `LISTEN`
+/// (woken before it, a notification sent at once could be lost).
+#[tokio::test]
+async fn live_postgres_a_killed_listener_listens_again() {
+    use meta_whatsapp_server_core::notify::{EventNotifier, Wakeup};
+    use meta_whatsapp_server_store_postgres::PgNotifier;
+    use std::time::Duration;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(2).await;
+    let channel = format!("wa_server_events_killed_{}", support::unique());
+    let notifier = PgNotifier::with_channel(pool.clone(), &channel);
+    let tenant = TenantId::parse(&format!("live-killed-{}", support::unique())).unwrap();
+    let mut subscription = notifier.subscribe(&tenant).await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_millis(200), subscription.woken()).await;
+    let killed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+         WHERE pid <> pg_backend_pid() AND query LIKE 'LISTEN %' AND query LIKE $1) AS t",
+    )
+    .bind(format!("%{channel}%"))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(killed, 1, "the listening session");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), subscription.woken())
+            .await
+            .is_ok(),
+        "not woken once listening again"
+    );
+    let wakeup = Wakeup {
+        tenant: tenant.clone(),
+        sequence: 1,
+    };
+    notifier.notify(&wakeup).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), subscription.woken())
+            .await
+            .is_ok(),
+        "a notification after it was lost"
+    );
+    notifier.close().await;
+}
+
 /// M2.5 live: 200 open streams (ten tenants of 20, half never read) at 100
 /// events a second for 3 seconds, on a pool of ten: every read stream gets
 /// every event of its tenant in order, and the data held for clients never

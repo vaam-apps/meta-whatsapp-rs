@@ -209,8 +209,20 @@ async fn listen(pool: PgPool, channel: String, hub: Hub, tell: watch::Sender<boo
                         );
                     }
                 }
-                // The connection was lost, and listens again.
-                Ok(None) => hub.wake_all(),
+                // The connection was lost. `PgListener` would listen again
+                // on its next call, unseen: it is listened again here, so
+                // that every stream reads once the new session listens
+                // (above), not before, when what is committed meanwhile
+                // would wait for the re-poll.
+                Ok(None) => {
+                    tell.send_replace(false);
+                    tracing::warn!(
+                        target: LOG_TARGET,
+                        "the connection listening for event notifications was lost: listening again"
+                    );
+                    tokio::time::sleep(RETRY).await;
+                    break;
+                }
                 Err(error) => {
                     tell.send_replace(false);
                     tracing::warn!(
@@ -218,7 +230,6 @@ async fn listen(pool: PgPool, channel: String, hub: Hub, tell: watch::Sender<boo
                         error = %error,
                         "listening for event notifications failed: listening again"
                     );
-                    hub.wake_all();
                     tokio::time::sleep(RETRY).await;
                     break;
                 }
