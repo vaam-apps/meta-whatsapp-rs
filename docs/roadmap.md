@@ -1733,12 +1733,72 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
   - **After:** B3.
   - **Decisive:** `KvJobs` implements it, and a second, in-memory
     implementation passes the same job suite.
-- [ ] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
+- [x] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
   age and a cap per chat, through `ConversationStore`'s erasure.
   - **After:** B1, L5.
   - **Decisive:** removing the age filter fails the test; the erased
     messages are gone from `messages` and `conversations` on memory and,
     live, on Postgres.
+  - **Landed:** L5 gave the age (`purge_before`, `apply_retention`);
+    the cap per chat is a new port method,
+    `ConversationStore::trim_conversations(phone_number_id, keep_last)`
+    (no composition of the existing ones deletes some rows of one
+    conversation): each conversation keeps its newest rows by
+    `(timestamp, id)`, every row counting (tombstones and redacted group
+    messages too), and the summary goes when its latest message does
+    (the newest rows all tombstones, or a cap of 0), as under a purge;
+    window events, ownership records, contact removals, synced contacts
+    and identity links stay (D35). Memory under its lock; Postgres in
+    one statement under the existing purge lock, ranking on the
+    existing `messages_conversation_idx`: no migration and no new stable
+    identifier. In the bot, module `retention`: `RetentionPolicy`
+    (`max_age`, `max_messages_per_chat`), applied once
+    (`RetentionPolicy::apply`) or on the bot's `Timer`
+    (`RetentionSweeper`, every hour by default, restricted to the bot's
+    numbers with `number`). The decisive tests:
+    `the_age_filter_deletes_exactly_what_is_older_in_memory` and its
+    `live_postgres_` twin (`crates/meta-whatsapp-bot/tests/retention.rs`:
+    disabling the policy's age, setting its cutoff to now, or removing
+    the memory store's age filter fails them), and
+    `a_sweep_deletes_by_age_and_cap_from_messages_and_conversations_*`
+    (the chats gone from both, memory and live). The cap's off-by-ones,
+    a trim that leaves the summary, and a reversed tie order fail the
+    conformance case `trim_keeps_the_newest_rows_of_each_conversation`
+    (memory, and live under both erasure modes); a trim deleting the
+    summary from its own snapshot fails
+    `live_postgres_a_trim_keeps_the_summary_an_append_moved`; a trim in
+    two statements, which loses the message appended between them,
+    fails `live_postgres_trims_racing_appends_keep_every_new_message`
+    (three runs of three); a trim without the purge lock fails
+    `live_postgres_the_locks_are_the_documented_ones`. Not caught: the
+    key order of the summaries' locks (the ranking already yields them
+    in key order); in memory a trim cannot race an append (one lock).
+    The server compiles and passes unchanged (it implements no
+    `ConversationStore`); retention over HTTP is M5k. The sabotage
+    review added what three surviving mutations showed missing: a cap
+    shared by the same contact on two numbers fails the conformance
+    case (its every-number part), a sweeper sweeping only its first
+    number fails `the_sweeper_sweeps_every_number_given_and_no_other`,
+    and a sweeper stopping at its first failed sweep (or logging more
+    than counts) fails `retention_logs.rs`. A trim of one number deletes
+    by that number's range of the index, no longer by a scan of every
+    number's rows; the cost of a trim, and that a deleted summary
+    takes its open window with it, are documented on the port and the
+    Postgres store.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable: the policy is the
+    bot's, over the port, and a deployment calls the port itself for
+    another): the name `RetentionPolicy`; a store-wide method shape
+    mirroring `purge_before` (one number or every number); a required
+    port method, no default; every row of a history counting toward the
+    cap, tombstones and redacted group messages too; the summary rule of
+    a purge (deleted with its latest message), a cap of 0 allowed; both
+    `RetentionPolicy::apply` and `RetentionSweeper`; the age applied
+    first, then the cap, a sweep stopping at its first error. Not
+    changed, the owner's (§ Owner touchpoints): D35 and L5's erasure
+    semantics; a trim applies L5's rules (identity links and synced
+    contacts kept, a deleted message's id free again, the summary going
+    with its latest message), and adds no rule of its own.
 
 ## 3. Library gap batches
 

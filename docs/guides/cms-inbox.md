@@ -575,6 +575,22 @@ your platform), call
 `ConversationStore::purge_before(Some(&phone_number_id), cutoff)`
 yourself.
 
+To cap each conversation instead (or as well),
+`ConversationStore::trim_conversations(Some(&phone_number_id), n)` keeps
+each conversation's newest `n` rows (tombstones and redacted group
+messages count) and deletes the others, and the summary of a
+conversation whose latest message went (its newest rows all tombstones,
+or `n` is 0), and with it the customer service window it holds, open or
+not, until the customer's next message; window events, ownership records, contacts and links stay,
+and a conversation keeping its latest message keeps its summary as it
+was (its unread count may include deleted messages until `mark_read`).
+An append at the same time is never lost, and on Postgres trims take
+turns with purges and erasures. To run either on a schedule, the bot
+framework's `RetentionPolicy` and `RetentionSweeper`
+(`meta_whatsapp_rs::bot::retention`, feature `bot`;
+[bots.md § 11](bots.md#11-retention-and-auto-delete)) apply an age and a
+cap together.
+
 ## Pitfalls
 
 - Mounting the inbox routes without the ownership check: any merchant could

@@ -1,6 +1,6 @@
 [package]
 name = "meta-whatsapp-bot"
-description = "Bot framework over WhatsApp Cloud API webhooks: commands, guards, cooldowns, middleware, compile-time plugins, Markdown and rich replies (images, buttons, lists, carousels) and paced broadcasts."
+description = "Bot framework over WhatsApp Cloud API webhooks: commands, guards, cooldowns, middleware, compile-time plugins, Markdown and rich replies (images, buttons, lists, carousels), paced broadcasts and retention of the stored chat history."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -39,8 +39,11 @@ tracing.workspace = true
 
 [dev-dependencies]
 meta-whatsapp-core = { workspace = true, features = ["testing"] }
-# The in-memory KvStore, for the cooldown store's and the jobs' tests.
-meta-whatsapp-adapters = { workspace = true, features = ["memory"] }
+# The in-memory KvStore, for the cooldown store's and the jobs' tests; the
+# memory and Postgres conversation stores, for retention's
+# (`tests/retention.rs`, live on Postgres when
+# `META_WHATSAPP_RS_TEST_POSTGRES_URL` is set).
+meta-whatsapp-adapters = { workspace = true, features = ["memory", "postgres"] }
 pretty_assertions.workspace = true
 # `test-util`: the pacing tests run on Tokio's paused clock, where concurrent
 # sleeps overlap as they do for real (a `ManualClock` adds them up).
