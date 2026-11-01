@@ -2566,7 +2566,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     (`GET /{waba-id}/subscribed_apps`), plus the Solution Partner's
     system token. Read-only (no migration, no re-encryption on read,
     `GET`s only); no secret printed. `tests/doctor.rs` scripts each
-    misconfiguration (34 tests, two live) and runs the binary for its
+    misconfiguration (36 tests, four live) and runs the binary for its
     exit code; its test backend panics on any key/value write and on
     the ports doctor has no use for (migrator, locks, janitor, outbox),
     so a vault re-encrypting on read fails it, and the live tests show

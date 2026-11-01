@@ -1066,16 +1066,14 @@ async fn live_postgres_doctor_reads_the_migration_histories_without_migrating() 
     assert!(graph.requests().is_empty());
 }
 
-/// A recorded checksum that differs, a half-applied migration (the
-/// service's or the library's), a version newer than the binary and a
-/// pending one are each reported, read-only: with `auto`, the pending
-/// migration is still pending after the run.
-#[tokio::test]
-async fn live_postgres_doctor_reports_a_changed_dirty_newer_or_pending_history() {
-    use meta_whatsapp_rs::adapters::store::postgres::sqlx;
-    let Some(db) = common::TestDb::new().await else {
-        return;
-    };
+/// A migrated schema on the test database, and the configuration on it
+/// with `WA_SERVER_MIGRATE=skip`; `None` when no database is configured.
+async fn live_schema() -> Option<(
+    common::TestDb,
+    meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool,
+    Vars,
+)> {
+    let db = common::TestDb::new().await?;
     let separator = if db.url.contains('?') { '&' } else { '?' };
     let url = format!(
         "{}{separator}options=-c%20search_path%3D{}",
@@ -1085,29 +1083,45 @@ async fn live_postgres_doctor_reports_a_changed_dirty_newer_or_pending_history()
         .unset("WA_APP_ID")
         .set("DATABASE_URL", &url)
         .set("WA_SERVER_MIGRATE", "skip");
-    let auto = skip.clone().unset("WA_SERVER_MIGRATE");
     let pool = db.pool(2).await;
     meta_whatsapp_server::store::migrate(&pool).await.unwrap();
+    Some((db, pool, skip))
+}
+
+/// `sql` on `pool`.
+async fn exec(pool: &meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool, sql: &str) {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx;
+    sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// `database.migrations` on `env` (no Graph call: `WA_APP_ID` is unset).
+async fn migrations(env: &Vars) -> (Status, String) {
     let graph = ScriptedTransport::new();
-    let migrations = |env: Vars| {
-        let graph = graph.clone();
-        async move {
-            let report = Doctor::new(&BuiltinBackends)
-                .transport(Arc::new(graph))
-                .run(&env)
-                .await;
-            assert_eq!(check(&report, "database").0, Status::Ok, "{report}");
-            check(&report, "database.migrations")
-        }
+    let report = Doctor::new(&BuiltinBackends)
+        .transport(Arc::new(graph.clone()))
+        .run(env)
+        .await;
+    assert_eq!(check(&report, "database").0, Status::Ok, "{report}");
+    assert!(graph.requests().is_empty());
+    check(&report, "database.migrations")
+}
+
+/// A recorded checksum that differs and a half-applied migration (the
+/// service's or the library's) fail, whatever `WA_SERVER_MIGRATE` says.
+#[tokio::test]
+async fn live_postgres_doctor_reports_a_changed_or_half_applied_history() {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx;
+    let Some((_db, pool, skip)) = live_schema().await else {
+        return;
     };
-    let exec = |sql: &'static str| {
-        let pool = pool.clone();
-        async move {
-            sqlx::query(sql).execute(&pool).await.unwrap();
-        }
-    };
-    let service = meta_whatsapp_server::store::MIGRATIONS_TABLE;
-    assert_eq!(service, "wa_server_sqlx_migrations");
+    let auto = skip.clone().unset("WA_SERVER_MIGRATE");
+    assert_eq!(
+        meta_whatsapp_server::store::MIGRATIONS_TABLE,
+        "wa_server_sqlx_migrations"
+    );
 
     // A checksum that differs from the binary's.
     let original: Vec<u8> =
@@ -1115,8 +1129,12 @@ async fn live_postgres_doctor_reports_a_changed_dirty_newer_or_pending_history()
             .fetch_one(&pool)
             .await
             .unwrap();
-    exec("UPDATE wa_server_sqlx_migrations SET checksum = '\\x00'::bytea WHERE version = 1").await;
-    for env in [skip.clone(), auto.clone()] {
+    exec(
+        &pool,
+        "UPDATE wa_server_sqlx_migrations SET checksum = '\\x00'::bytea WHERE version = 1",
+    )
+    .await;
+    for env in [&skip, &auto] {
         let (status, detail) = migrations(env).await;
         assert_eq!(status, Status::Fail, "{detail}");
         assert!(detail.contains("service migrations 1 differ"), "{detail}");
@@ -1126,53 +1144,82 @@ async fn live_postgres_doctor_reports_a_changed_dirty_newer_or_pending_history()
         .execute(&pool)
         .await
         .unwrap();
-    assert_eq!(migrations(skip.clone()).await.0, Status::Ok);
+    assert_eq!(migrations(&skip).await.0, Status::Ok);
 
     // Half-applied: the service's, then the library's.
-    exec("UPDATE wa_server_sqlx_migrations SET success = false WHERE version = 3").await;
-    let (status, detail) = migrations(auto.clone()).await;
+    exec(
+        &pool,
+        "UPDATE wa_server_sqlx_migrations SET success = false WHERE version = 3",
+    )
+    .await;
+    let (status, detail) = migrations(&auto).await;
     assert_eq!(status, Status::Fail, "{detail}");
     assert!(
         detail.contains("service migration 3 was left half-applied"),
         "{detail}"
     );
-    exec("UPDATE wa_server_sqlx_migrations SET success = true WHERE version = 3").await;
     exec(
+        &pool,
+        "UPDATE wa_server_sqlx_migrations SET success = true WHERE version = 3",
+    )
+    .await;
+    exec(
+        &pool,
         "UPDATE wa_sqlx_migrations SET success = false \
          WHERE version = (SELECT max(version) FROM wa_sqlx_migrations)",
     )
     .await;
-    let (status, detail) = migrations(auto.clone()).await;
+    let (status, detail) = migrations(&auto).await;
     assert_eq!(status, Status::Fail, "{detail}");
     assert!(detail.contains("library migration"), "{detail}");
     assert!(detail.contains("half-applied"), "{detail}");
-    exec("UPDATE wa_sqlx_migrations SET success = true").await;
+    pool.close().await;
+}
+
+/// A version newer than the binary warns; a pending one fails with
+/// `skip` and warns with `auto`, and is still pending after the run.
+#[tokio::test]
+async fn live_postgres_doctor_reports_a_newer_or_pending_history_and_applies_nothing() {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx;
+    let Some((_db, pool, skip)) = live_schema().await else {
+        return;
+    };
+    let auto = skip.clone().unset("WA_SERVER_MIGRATE");
 
     // A version this binary does not have: a later release migrated.
     exec(
+        &pool,
         "INSERT INTO wa_server_sqlx_migrations \
          (version, description, success, checksum, execution_time) \
          VALUES (999, 'later', true, '\\x00'::bytea, 0)",
     )
     .await;
-    let (status, detail) = migrations(skip.clone()).await;
+    let (status, detail) = migrations(&skip).await;
     assert_eq!(status, Status::Warn, "{detail}");
     assert!(
         detail.contains("service migrations 999 are newer"),
         "{detail}"
     );
-    exec("DELETE FROM wa_server_sqlx_migrations WHERE version = 999").await;
+    exec(
+        &pool,
+        "DELETE FROM wa_server_sqlx_migrations WHERE version = 999",
+    )
+    .await;
 
     // Pending: a failure with `skip`, a warning with `auto`, and the
     // doctor applies nothing.
-    exec("DELETE FROM wa_server_sqlx_migrations WHERE version = 3").await;
-    let (status, detail) = migrations(skip.clone()).await;
+    exec(
+        &pool,
+        "DELETE FROM wa_server_sqlx_migrations WHERE version = 3",
+    )
+    .await;
+    let (status, detail) = migrations(&skip).await;
     assert_eq!(status, Status::Fail, "{detail}");
     assert!(
         detail.contains("service migrations 3 are pending"),
         "{detail}"
     );
-    let (status, detail) = migrations(auto.clone()).await;
+    let (status, detail) = migrations(&auto).await;
     assert_eq!(status, Status::Warn, "{detail}");
     assert!(
         detail.contains("service migrations 3 are pending"),
@@ -1184,19 +1231,28 @@ async fn live_postgres_doctor_reports_a_changed_dirty_newer_or_pending_history()
             .await
             .unwrap();
     assert_eq!(recorded, 0, "the doctor migrated");
-    assert!(graph.requests().is_empty());
+    pool.close().await;
+}
 
-    // The bound WABAs cannot be listed, the database's error quoting what
-    // it should not: the report names the failure, not the text.
-    exec("ALTER TABLE wa_server_wabas RENAME TO wa_server_wabas_hidden").await;
+/// The bound WABAs cannot be listed, the database's error quoting what it
+/// should not: the report names the failure, not the text.
+#[tokio::test]
+async fn live_postgres_a_waba_listing_failure_shows_no_database_text() {
+    let Some((_db, pool, skip)) = live_schema().await else {
+        return;
+    };
     exec(
-        "CREATE FUNCTION wa_doctor_refuses() RETURNS SETOF wa_server_wabas_hidden \
-         LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'SENTINEL-DATABASE-TEXT'; END $$",
+        &pool,
+        "ALTER TABLE wa_server_wabas RENAME TO wa_server_wabas_hidden; \
+         CREATE FUNCTION wa_doctor_refuses() RETURNS SETOF wa_server_wabas_hidden \
+         LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'SENTINEL-DATABASE-TEXT'; END $$; \
+         CREATE VIEW wa_server_wabas AS SELECT * FROM wa_doctor_refuses()",
     )
     .await;
-    exec("CREATE VIEW wa_server_wabas AS SELECT * FROM wa_doctor_refuses()").await;
+    pool.close().await;
+    let graph = ScriptedTransport::new();
     graph.push_json(200, subscriptions(&all_fields()));
-    let env = auto.clone().set("WA_APP_ID", APP_ID);
+    let env = skip.set("WA_APP_ID", APP_ID);
     // `doctor` asserts no sentinel reaches the report.
     let report = doctor(&env, &BuiltinBackends, &graph).await;
     assert_fails(
@@ -1205,5 +1261,4 @@ async fn live_postgres_doctor_reports_a_changed_dirty_newer_or_pending_history()
         "the bound WABAs cannot be listed: the storage backend failed",
     );
     assert_eq!(graph.remaining(), 0);
-    pool.close().await;
 }
