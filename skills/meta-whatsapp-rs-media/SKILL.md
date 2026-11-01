@@ -120,7 +120,8 @@ files: `start_upload_session`, `upload_chunk`, `upload_session_status`.
   and libwebp that you install; call its `check_for` with the formats
   you use (or `check()`, voice only) at startup. It reads images as PNG
   or JPEG only, and animations as GIF only (no animated PNG or WebP), of
-  at most 500 frames, 30 s and 2 Mi pixels a frame. Its failures are
+  at most 500 frames (100 of 512 × 512 or larger), 10 s and 2 Mi
+  pixels a frame. Its failures are
   `Error::Conversion` (`ConversionError`): retry only `Timeout`.
 
 ## Related skills

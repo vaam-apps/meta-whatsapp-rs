@@ -1098,9 +1098,10 @@ keyed by business number and contact, and
   animated PNG or WebP from a pipe), walked block by block first: one
   cut short or with a block GIF does not define is refused, and so is
   one out of bounds (a canvas over 2 Mi pixels, fewer than 2 frames or
-  more than 500, longer than 30 s), and ffmpeg gets it without its
-  comments, plain text and application extensions and without anything
-  after its trailer (ffmpeg holds them in memory with the first frame);
+  more than 500, more than 100 of 512 × 512 or larger, longer than
+  10 s), and ffmpeg gets it without its comments, plain text and
+  application extensions, with only the last graphic control extension
+  before each frame, and without anything after its trailer (ffmpeg holds them in memory with the first frame);
   `libwebp_anim` on a fixed ladder of sizes, frame rates and qualities,
   256 MiB a single allocation (the whole file is one packet), and the
   result's chunks checked (`VP8X` with the animation flag, `ANIM`

@@ -500,8 +500,8 @@ notification queue on top must be idempotent itself: tag each message with
   queues nothing). It caps each allocation in `ffmpeg` (16 MiB for
   audio, 256 MiB for an image, which may have up to 32 Mi pixels, and
   for an animation, whose whole file is one packet: a GIF of up to 2 Mi
-  pixels, 500 frames and 30 s, which took a few hundred megabytes at
-  worst) but not the process's total memory: give it a cgroup, or point
+  pixels, 500 frames (100 of 512 × 512 or larger) and 10 s, which took
+  some 170 MB at worst) but not the process's total memory: give it a cgroup, or point
   `with_program` at a wrapper script that sets `ulimit -v` and then
   `exec`s `ffmpeg` (`exec`, so that a timeout kills `ffmpeg` itself). The
   process inherits no environment but `PATH`; a build that needs
