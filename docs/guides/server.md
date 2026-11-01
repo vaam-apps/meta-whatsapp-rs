@@ -169,10 +169,14 @@ migrated forward on the next `serve` or `migrate`, adding columns and a
 table and rewriting nothing. The WABAs bound before it keep the routing
 they had (an event of their binding's own second stays operator-only,
 their undated events reach their tenant): the service does not know
-whether another tenant held them. During the rolling deploy that brings
-it, a WABA moved between tenants through a replica of the earlier
-release is not recorded as a move: move WABAs before or after the
-deploy, not during it.
+whether another tenant held them. A WABA unbound by an earlier release
+leaves no record, before the upgrade as during its rolling deploy: bound
+afterwards to another tenant, it counts as a first onboarding, and its
+previous holder's undated events that Meta still redelivers reach the
+new holder (as they did before this release); a WABA moved wholly before
+the upgrade keeps the earlier rules, with the same result. Do not move
+WABAs between tenants in the 7 days and an hour before the deploy, nor
+during it.
 
 The inbox tables are kept forever for now: the service sets no
 retention on them (roadmap M2a wires one into housekeeping) and has no

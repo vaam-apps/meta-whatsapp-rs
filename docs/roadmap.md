@@ -314,10 +314,17 @@ and `store-postgres`.
     alone; the skew margin applied without a previous tenant fails its
     unit test and the margin case on memory and live.
     `openapi/v1.json` and the event data snapshots are unchanged.
-    Left, and why: a move made through a replica of the previous
-    release during the rolling deploy that brings S2b is not recorded
-    (the old replica writes no tombstone: the guide says to move WABAs
-    before or after it); the window runs from the previous tenant's
+    Left, and why: an unbind made by a binary of an earlier release
+    leaves no tombstone, before the upgrade as during its rolling
+    deploy, so a WABA unbound that way and bound afterwards to another
+    tenant reads as a first onboarding, and its previous holder's
+    undated events reach the new holder for what remains of the window
+    (as before S2b); a move made wholly before migration 4 keeps S2's
+    rules, which give them to the new holder too; and a replica of the
+    earlier release unbinding after a tombstone was written leaves that
+    older tombstone in place, so the window runs from an earlier
+    unbinding (the guide says not to move WABAs between tenants in the 7
+    days and an hour before the deploy, nor during it); the window runs from the previous tenant's
     unbinding, not from the new attach, so an undated event of the
     interval between them is the new holder's once the window from the
     unbinding passed; a moved WABA's new holder loses its own undated
@@ -325,6 +332,43 @@ and `store-postgres`.
     onboarded within it: D36's cost); a binding made before migration 4
     keeps S2's strict first second for good, until it is unbound; the
     window and the margin are per deployment, not per tenant.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a setting, or behind the
+    `RecordStore` port and its conformance suite; recorded in design
+    D36): the window runs from the previous tenant's unbinding, not from
+    the new attach; the skew margin defaults to `0s`; a binding made
+    before migration 4 reads the Unix epoch (`UNRECORDED_MOVE`), not
+    NULL, so it keeps S2's rules; a tenant deleted and created again
+    under its id counts as another tenant; the generation starts at 1
+    for every binding; the undated check sits in `events::owner` and
+    `RouteGuard::admits` and covers every undated event; a capability
+    or an attach meeting a refresh answers `503 storage_unavailable`,
+    retryable; tombstones are never purged (one row per WABA ever
+    unbound). **Pending the owner** (stable identifiers): the names of
+    migration 4's columns and table, its description, and the epoch
+    default's meaning (§ Owner touchpoints).
+  - **Sabotage review** (isolation, the migration, the routing rules):
+    on Postgres a new binding's `attached_at` was its transaction's
+    start, which can precede the previous tenant's unbinding when that
+    commits while the bind runs, so an event Meta dated while the
+    previous tenant still held the WABA fell in a second the new binding
+    began before (the memory backend never did): the bind now moves it
+    past `clock_timestamp()` and the tombstone's time, and the race
+    suite's `a_binding_racing_an_unbind_records_the_move` (which failed
+    3 live runs of 3 before) holds every backend to it. An attach
+    meeting a refresh of its own tenant took back the token it stored,
+    which could leave the binding with none while the other attach
+    answered success: it now keeps it (`503` still,
+    `capabilities::an_attach_meeting_a_refresh_keeps_its_tenants_token`).
+    A skew margin reaching before the Unix epoch failed every dated
+    insert on Postgres (`to_timestamp` out of range, folded at plan
+    time): `RouteGuard::dated_bounds` stops at the epoch. Added to the
+    suites: undated rounds in the insert-against-a-move race (a tenant
+    created again under its id kept out by the window alone),
+    `capabilities::a_capability_made_while_its_binding_is_refreshed_is_refused`,
+    a WABA moved twice in `records::a_move_is_recorded`. The rolling
+    deploy's gap is wider than first written (an unbind by an earlier
+    release before the upgrade is not recorded either): Left, above.
 - [x] **S3. Conformance into core** (`meta-whatsapp-server-core`,
   `meta_whatsapp_server_core::conformance`, a feature, like the
   library's `store::conformance`, run over a `&dyn Backend`): the store

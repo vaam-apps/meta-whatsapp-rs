@@ -802,6 +802,102 @@ pub async fn a_capability_made_while_its_binding_is_refreshed_is_refused(backend
     }
 }
 
+/// Roadmap S2b's sabotage review: two attaches of one WABA to its own
+/// tenant at once (an operator's reconnect sent twice, a token rotation
+/// beside it), the second landing whole between the first's read of its
+/// binding and its store: it refreshes the binding (the next generation)
+/// and stores its token, and the first then overwrites that token. The
+/// first's confirmation finds the binding refreshed, not moved: it answers
+/// `503 storage_unavailable` (retryable, decision 7 of 2026-11-01) and
+/// keeps its write, a token of the binding's own tenant, instead of taking
+/// it back and leaving the binding with no token while the second attach
+/// answered success. A move to another tenant still takes it back
+/// (`a_capability_made_while_its_waba_moves_is_refused` and the service's
+/// `an_attach_whose_waba_moves_takes_back_its_token`). Decisive: the
+/// tenant and start compared apart from the generation in
+/// `Authorizer::store_token`'s confirmation.
+pub async fn an_attach_meeting_a_refresh_keeps_its_tenants_token(backend: &dyn Backend) {
+    let (store, kv) = (backend.records(), backend.kv());
+    let s = Arc::new(Setup::new(store.clone(), kv).await);
+    let moving = Arc::new(MovesAfterRead {
+        inner: store.clone(),
+        hook: std::sync::Mutex::new(None),
+        after_number: std::sync::Mutex::new(None),
+    });
+    let records: Arc<dyn RecordStore> = moving.clone();
+    let authz = Authorizer::new(
+        records,
+        s.vault.clone(),
+        Client::builder()
+            .transport(ScriptedTransport::new())
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+    let (key, _) = mint(
+        store.as_ref(),
+        KeyOwner::Admin,
+        Vec::new(),
+        String::new(),
+        None,
+    )
+    .await
+    .unwrap();
+    let admin = authz
+        .admin_caller(Some(&format!("Bearer {}", key.expose_key())))
+        .await
+        .unwrap();
+    let (waba, pn) = ids("attach-meets-a-refresh");
+    s.attach(A, &waba, &pn, Some("TOKEN-HELD")).await;
+    // The first attach's binding (a refresh of A's), then the second
+    // attach whole, right after the first reads its binding back.
+    assert_eq!(
+        store
+            .bind_waba(
+                &TenantId::parse(A).unwrap(),
+                &waba,
+                std::slice::from_ref(&pn)
+            )
+            .await
+            .unwrap(),
+        BindOutcome::Bound
+    );
+    let before = store.waba(&waba).await.unwrap().unwrap();
+    moving.arm({
+        let (s, waba, pn) = (s.clone(), waba.clone(), pn.clone());
+        Box::pin(async move { s.attach(A, &waba, &pn, Some("TOKEN-SECOND")).await })
+    });
+    let stored = authz
+        .store_token(
+            &admin,
+            &TenantId::parse(A).unwrap(),
+            &StoredBusinessToken::new(waba.clone(), AccessToken::new("TOKEN-FIRST"))
+                .phone_number_ids([pn.clone()]),
+        )
+        .await;
+    assert_eq!(
+        stored.map_err(|e| e.code()),
+        Err("storage_unavailable"),
+        "the first attach, its binding refreshed since"
+    );
+    let after = store.waba(&waba).await.unwrap().unwrap();
+    assert_eq!(after.tenant_id.as_str(), A);
+    assert_eq!(after.attached_at, before.attached_at);
+    assert_eq!(after.generation, before.generation + 1, "the second attach");
+    assert_eq!(
+        s.token(&waba).await.as_deref(),
+        Some("TOKEN-FIRST"),
+        "the binding left with no token of its tenant's"
+    );
+    let by_number = s
+        .vault
+        .get_by_phone_number(&pn)
+        .await
+        .unwrap()
+        .map(|t| t.token.expose_secret().to_owned());
+    assert_eq!(by_number.as_deref(), Some("TOKEN-FIRST"), "its number's");
+}
+
 /// M1 (the security review of S2), before the new holder's token is
 /// stored: the WABA moves as the service moves one (the old token deleted,
 /// then the binding; bound to another tenant, whose attach has not stored
@@ -1099,5 +1195,6 @@ pub async fn run(backend: &dyn Backend) {
     a_vault_failure_while_its_waba_moves_is_answered_as_the_move(backend).await;
     a_capability_made_while_its_waba_moves_is_refused(backend).await;
     a_capability_made_while_its_binding_is_refreshed_is_refused(backend).await;
+    an_attach_meeting_a_refresh_keeps_its_tenants_token(backend).await;
     an_admins_vault_writes_take_an_admitted_admin(backend).await;
 }

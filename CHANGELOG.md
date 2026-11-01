@@ -1552,9 +1552,13 @@ stored data, the owner's).
   `reconnect_required`; a capability made while a refresh lands, and an
   attach whose confirmation finds another attach of its tenant landed
   after its binding, are `503 storage_unavailable` (retryable), as for
-  a move. The WABAs bound before migration 4 keep S2's rules (their
-  history unknown); a move made through a replica of an earlier release
-  during the rolling deploy is not recorded. `openapi/v1.json` and the
+  a move (that attach keeps the token it stored, its tenant's own); a
+  new binding on Postgres begins no earlier than the unbinding it
+  follows. The WABAs bound before migration 4 keep S2's rules (their
+  history unknown); an unbind made by an earlier release, before the
+  upgrade or during its rolling deploy, is not recorded, so do not move
+  WABAs between tenants in the 7 days and an hour before the deploy nor
+  during it. `openapi/v1.json` and the
   event data are unchanged.
   **Breaking** in the service's crates (`publish = false`):
   `outbox::RouteGuard` has a new field `after_move` (`outbox::AfterMove`;
