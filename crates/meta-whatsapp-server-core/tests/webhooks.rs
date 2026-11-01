@@ -98,6 +98,14 @@ async fn unknown_and_unparsed_bodies_are_acknowledged_as_operator_only_rows() {
     .await;
 }
 
+/// The address book reaches its tenant; the inbox keeps no synced contact
+/// before roadmap M3b.
+#[tokio::test]
+async fn an_address_book_change_reaches_its_tenant_and_no_inbox() {
+    let backend = memory::Memory::default();
+    conformance::webhooks::an_address_book_change_reaches_its_tenant_and_no_inbox(&backend).await;
+}
+
 /// The whole suite, on one backend, as `conformance::run` runs it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_webhook_suite_runs_on_one_backend() {

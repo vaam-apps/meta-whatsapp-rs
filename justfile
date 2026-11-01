@@ -210,6 +210,7 @@ features:
     cargo check -p meta-whatsapp-adapters --no-default-features --features sinks
     cargo check -p meta-whatsapp-adapters --no-default-features --features reqwest
     cargo check -p meta-whatsapp-adapters --no-default-features --features postgres
+    cargo check -p meta-whatsapp-adapters --no-default-features --features sqlite
     cargo check -p meta-whatsapp-adapters --no-default-features --features redis
     cargo check -p meta-whatsapp-adapters --no-default-features --features ffmpeg
     cargo check -p meta-whatsapp-webhooks --no-default-features --all-targets
@@ -222,6 +223,7 @@ features:
     cargo check -p meta-whatsapp-rs --no-default-features --features memory
     cargo check -p meta-whatsapp-rs --no-default-features --features sinks
     cargo check -p meta-whatsapp-rs --no-default-features --features postgres
+    cargo check -p meta-whatsapp-rs --no-default-features --features sqlite
     cargo check -p meta-whatsapp-rs --no-default-features --features redis
     cargo check -p meta-whatsapp-rs --no-default-features --features axum
     cargo check -p meta-whatsapp-rs --no-default-features --features typst

@@ -25,6 +25,7 @@
 //! | [`SignupSessions`] | binds an attempt to the merchant that started it (single-use state) |
 //! | [`EmbeddedSignupEvent`] | parses the `WA_EMBEDDED_SIGNUP` message event the page forwards |
 //! | [`EmbeddedSignup::onboard`] | code → verified, stored, subscribed, (credit line shared,) registered business |
+//! | [`EmbeddedSignup::onboard_wabas`] | the same for every WABA the signup grants, each on its own, when [`OnboardingRequest::every_granted_waba`] is on ([`WabasOnboarded`], [`WabaOutcome`]) |
 //! | [`HostedSignup`], [`EmbeddedSignup::onboard_hosted`] | Meta's hosted page: a `PARTNER_ADDED` webhook → the business token from `system_user_access_tokens` → the same steps and record |
 //! | [`crate::waba::Business::add_pre_verified_number`], [`crate::waba::PreVerifiedPhoneNumber`] | your pool of pre-verified numbers (add, verify, list, share), offered by [`LaunchOptions::pre_verified_phone_ids`] ([`crate::waba`] § Pre-verified phone numbers) |
 //! | [`TokenVault`] | business tokens encrypted at rest, by WABA and by phone number; [`TokenVault::token_expiry`] reports one due to lapse ([`TokenExpiry`]) without decrypting it |
@@ -258,6 +259,40 @@
 //! decide what a second tenant onboarding an already-mapped
 //! [`Onboarded::waba_id`] means for your product.
 //!
+//! # Several WABAs in one signup
+//!
+//! A multi-WABA flow's session info names its WABAs in `waba_ids`
+//! (`embedded-signup/implementation`), and `debug_token` lists every WABA
+//! the business token was granted, newest first
+//! (`solution-providers/manage-accounts`). [`EmbeddedSignup::onboard`]
+//! onboards one: the claimed `waba_id`, else the first of `waba_ids`, else
+//! the newest grant. To onboard every grant, set
+//! [`OnboardingRequest::every_granted_waba`] (off by default,
+//! `OPEN_QUESTIONS.md` #5) and call [`EmbeddedSignup::onboard_wabas`], or
+//! [`EmbeddedSignup::onboard_wabas_with_approval`] (required in Solution
+//! Partner mode; the approval runs, and is recorded, once per WABA):
+//!
+//! - the code is exchanged and the token inspected once; every WABA the
+//!   session info names must be among the grants, or nothing is onboarded;
+//! - then each WABA runs `verify_assets` to the end of the tail **on its
+//!   own**: its own vault record and phone index, approval, subscription
+//!   and (Solution Partner) credit line. A WABA that fails is reported in
+//!   its [`WabaOutcome`] and the next one runs; the call does not fail for
+//!   it, so check [`WabasOnboarded::is_complete`]. One that failed after
+//!   `store_token` is resumed on its own with [`EmbeddedSignup::resume`];
+//! - the claimed WABA is onboarded with the request as it is; the others
+//!   register no number and request no coexistence sync (the PIN and the
+//!   finish are the claimed number's), and one the vault already holds is
+//!   left as it is ([`WabaOutcome::Held`]; one stored by another
+//!   onboarding meanwhile fails at `store_token`, its record kept);
+//! - the others are the claimed WABA's business's: one Meta reports
+//!   another owner for, or none, fails at `verify_assets`, and all fail
+//!   there, with no request, when the claimed WABA's owner is unknown.
+//!
+//! `onboard` and `onboard_hosted` refuse a request with the option on;
+//! hosted signup gets one `PARTNER_ADDED` per WABA, each onboarded from its
+//! own webhook.
+//!
 //! # Hosted Embedded Signup
 //!
 //! `embedded-signup/hosted-es`: a link to Meta's own onboarding page, no
@@ -376,6 +411,7 @@ mod event;
 mod hosted;
 mod launch;
 mod ledger;
+mod multi;
 mod onboard;
 mod partner;
 mod session;
@@ -394,6 +430,7 @@ pub use launch::{
     PreVerifiedPhone, Setup, WabaPrefill,
 };
 pub use ledger::{ClearedShare, RevokedBusiness, StoredCredit};
+pub use multi::{WabaOnboarding, WabaOutcome, WabasOnboarded};
 pub use onboard::{Onboarded, OnboardingRequest, VerifiedOnboarding, steps};
 pub use partner::{
     CreditSharing, MAX_CLEARED_BY_CHARS, Offboarded, PendingShareClearance, SharesFound,

@@ -584,12 +584,7 @@ impl TokenVault {
     ///
     /// As [`Self::store`].
     pub async fn store_versioned(&self, token: &StoredBusinessToken) -> Result<TokenVersion> {
-        if token.waba_id.as_str().is_empty() {
-            return Err(ValidationError::new("waba_id", "required").into());
-        }
-        if token.token.expose_secret().is_empty() {
-            return Err(ValidationError::new("token", "required").into());
-        }
+        check_storable(token)?;
         let key = waba_key(&token.waba_id);
         // Best effort: only used to unlink phone numbers that were dropped.
         let previous = self.read_record(&key).await.ok().flatten();
@@ -599,15 +594,7 @@ impl TokenVault {
             .kv
             .put(&key, encode(&key, &record)?, Expiry::Never)
             .await?;
-        for phone in &token.phone_number_ids {
-            let pkey = phone_key(phone);
-            let index = PhoneIndex {
-                waba_id: token.waba_id.clone(),
-            };
-            self.kv
-                .put(&pkey, encode(&pkey, &index)?, Expiry::Never)
-                .await?;
-        }
+        self.index_phones(token).await?;
         if let Some((prev, _)) = previous {
             for phone in prev
                 .phone_number_ids
@@ -618,6 +605,45 @@ impl TokenVault {
             }
         }
         Ok(TokenVersion(written))
+    }
+
+    /// [`Self::store`], only where no record is stored for the WABA,
+    /// readable or not (`put_if_absent`): `None`, and nothing written, the
+    /// phone index included, when one is. For a WABA the caller did not
+    /// claim ([`EmbeddedSignup::onboard_wabas`](super::EmbeddedSignup::onboard_wabas)'s
+    /// other grants): a record another onboarding stored since the caller
+    /// last looked is never replaced.
+    pub(super) async fn store_new(
+        &self,
+        token: &StoredBusinessToken,
+    ) -> Result<Option<TokenVersion>> {
+        check_storable(token)?;
+        let key = waba_key(&token.waba_id);
+        let created_at = token.created_at.unwrap_or_else(|| self.clock.now());
+        let record = self.seal(token, created_at)?;
+        let Some(written) = self
+            .kv
+            .put_if_absent(&key, encode(&key, &record)?, Expiry::Never)
+            .await?
+        else {
+            return Ok(None);
+        };
+        self.index_phones(token).await?;
+        Ok(Some(TokenVersion(written)))
+    }
+
+    /// Point each of `token`'s phone numbers at its WABA.
+    async fn index_phones(&self, token: &StoredBusinessToken) -> Result<()> {
+        for phone in &token.phone_number_ids {
+            let pkey = phone_key(phone);
+            let index = PhoneIndex {
+                waba_id: token.waba_id.clone(),
+            };
+            self.kv
+                .put(&pkey, encode(&pkey, &index)?, Expiry::Never)
+                .await?;
+        }
+        Ok(())
     }
 
     /// The token stored for `waba_id`, decrypted.
@@ -1106,6 +1132,17 @@ pub(super) fn decode_json<T: serde::de::DeserializeOwned>(
     v: &Versioned,
 ) -> Result<T> {
     decode(key, v)
+}
+
+/// What [`TokenVault::store`] refuses before writing anything.
+fn check_storable(token: &StoredBusinessToken) -> Result<()> {
+    if token.waba_id.as_str().is_empty() {
+        return Err(ValidationError::new("waba_id", "required").into());
+    }
+    if token.token.expose_secret().is_empty() {
+        return Err(ValidationError::new("token", "required").into());
+    }
+    Ok(())
 }
 
 fn waba_key(waba_id: &WabaId) -> StoreKey {
