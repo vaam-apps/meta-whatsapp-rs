@@ -423,6 +423,62 @@ async fn the_sweeper_keeps_its_settings() {
     );
 }
 
+/// The sweeper sweeps each number given, every one of them, in turn, and
+/// adds up what each sweep deleted; a number not given keeps everything.
+#[tokio::test]
+async fn the_sweeper_sweeps_every_number_given_and_no_other() {
+    let store = Arc::new(MemoryConversationStore::new());
+    let numbers = [
+        number("106540352242922"),
+        number("106540352242923"),
+        number("106540352242924"),
+    ];
+    for pn in &numbers {
+        record(store.as_ref(), pn).await;
+    }
+    let sweeper = RetentionSweeper::new(
+        store.clone(),
+        RetentionPolicy::default()
+            .max_age(WEEK)
+            .max_messages_per_chat(3),
+    )
+    .number(numbers[0].clone())
+    .number(numbers[1].clone())
+    .timer(Arc::new(ManualClock::new(NOW)));
+    let mut both = Swept::default();
+    both.by_age = Purged {
+        messages: 2 * 3,
+        conversations: 2,
+        ..Purged::default()
+    };
+    both.by_cap = Purged {
+        messages: 2 * 3,
+        ..Purged::default()
+    };
+    assert_eq!(
+        sweeper.sweep().await.unwrap(),
+        both,
+        "each of the two numbers' share, added up"
+    );
+    for pn in &numbers[..2] {
+        assert_eq!(listed(store.as_ref(), pn).await, ["US.mixed", "HBgGROUP"]);
+        assert_eq!(
+            texts(store.as_ref(), pn, "US.mixed").await,
+            ["10 min", "30 min", "1 hour"],
+            "{pn}"
+        );
+    }
+    assert_eq!(
+        listed(store.as_ref(), &numbers[2]).await,
+        ["US.mixed", "HBgGROUP", "US.old"],
+        "the number not given keeps everything"
+    );
+    assert_eq!(
+        texts(store.as_ref(), &numbers[2], "US.mixed").await.len(),
+        6
+    );
+}
+
 /// The same scenarios on Postgres, each in a schema of its own.
 mod live {
     use std::str::FromStr;

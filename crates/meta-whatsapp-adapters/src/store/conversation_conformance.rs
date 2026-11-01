@@ -3942,8 +3942,20 @@ async fn trim_keeps_the_newest_rows_of_each_conversation<S: ConversationStore + 
         .append(all.msg("small", "s", Direction::Inbound, 0, "small"))
         .await
         .unwrap();
+    // The same contact on another number is another conversation, with a
+    // cap of its own: its five rows, older than every row of "big", are
+    // under it, though the two together are not.
+    let twin_run = Run::new("trim-all-twin");
+    let twin = twin_run.key("big");
+    for i in 0..5 {
+        store
+            .append(twin_run.msg("big", &format!("t{i}"), Direction::Inbound, i - 10, "twin"))
+            .await
+            .unwrap();
+    }
     let big_summary = summary(store, &big).await;
     let small_before = recorded(store, &small).await;
+    let twin_before = recorded(store, &twin).await;
     // Counts are not checked: a concurrent run of this suite on the same
     // store may trim its own big conversation, and ours, first.
     store.trim_conversations(None, 300).await.unwrap();
@@ -3961,6 +3973,10 @@ async fn trim_keeps_the_newest_rows_of_each_conversation<S: ConversationStore + 
     recorded(store, &small).await.assert_same(
         &small_before,
         "a conversation under the cap, on another number",
+    );
+    recorded(store, &twin).await.assert_same(
+        &twin_before,
+        "the same contact on another number: a conversation of its own, under the cap",
     );
     recorded(store, &other_key)
         .await
