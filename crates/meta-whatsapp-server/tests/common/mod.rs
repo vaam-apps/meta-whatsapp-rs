@@ -34,7 +34,7 @@ use meta_whatsapp_server::events::Inbound;
 use meta_whatsapp_server::metrics::Metrics;
 use meta_whatsapp_server::model::{AllowedTenants, KeyOwner, Scope, TenantId};
 use meta_whatsapp_server::ratelimit::{Rate, RateLimits};
-use meta_whatsapp_server::state::{AppState, Settings};
+use meta_whatsapp_server::state::{AppState, Grant, Settings};
 use meta_whatsapp_server::store::events::{EventPage, EventQuery, NewEvent};
 use meta_whatsapp_server::store::{
     Backend, BackendKind, IdempotencyRecords, Janitor, LeaderLock, MemoryBackend, MemoryStore,
@@ -291,6 +291,9 @@ pub fn vault_keys() -> VaultKeys {
 /// The service under test.
 pub struct Harness {
     pub state: AppState,
+    /// The state's grant, which [`Self::internal`] is served with (roadmap
+    /// S7): what the API adapter's handlers extract their capabilities on.
+    pub grant: Grant,
     pub internal: Router,
     pub public: Router,
     pub graph: ScriptedTransport,
@@ -605,6 +608,7 @@ impl Harness {
             internal: internal_router(&grant),
             public: public_router(&state),
             state,
+            grant,
             graph,
             kv,
             vault,
