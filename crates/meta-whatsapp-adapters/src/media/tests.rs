@@ -791,13 +791,23 @@ fn animated_webp() -> Vec<u8> {
 fn the_animation_output_check_reads_the_chunks() {
     let a = TargetFormat::AnimatedSticker;
     assert_eq!(check_output(a, &animated_webp()), Ok(()));
-    // An unknown chunk, and one frame, are fine.
+    // An unknown chunk is fine; one frame is a still image.
     assert_eq!(
         check_output(
             a,
-            &riff(&[vp8x(0x02), anim(), anmf(), (*b"XYZW", vec![1, 2, 3])])
+            &riff(&[
+                vp8x(0x02),
+                anim(),
+                anmf(),
+                (*b"XYZW", vec![1, 2, 3]),
+                anmf()
+            ])
         ),
         Ok(())
+    );
+    assert_eq!(
+        check_output(a, &riff(&[vp8x(0x12), anim(), anmf()])),
+        Err("an animated WebP of one frame (ANMF): a still image")
     );
     let not_animated = Err("a WebP that is not animated");
     // A still image, simple or extended, even with an animation's chunks.

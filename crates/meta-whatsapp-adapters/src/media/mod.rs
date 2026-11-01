@@ -216,7 +216,8 @@
 //! is checked before it is returned: a WebP file whose RIFF size is its
 //! length, its chunks ending with it, the first an extended header
 //! (`VP8X`) with the animation flag, an `ANIM` chunk before the frames, at
-//! least one `ANMF` chunk, and no image outside them. Converting an
+//! least two `ANMF` chunks (one is a still image labelled animated), and
+//! no image outside them. Converting an
 //! animation is slower than an image, each attempt encoding every frame
 //! again (on a 4-core machine, against ffmpeg 6.1.1): a 10 s, 512 × 512
 //! GIF of 250 busy frames took about 15 s, four attempts; 500 frames of a

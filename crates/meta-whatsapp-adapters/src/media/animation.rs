@@ -340,7 +340,8 @@ fn sub_blocks(data: &[u8], mut at: usize) -> Result<usize, &'static str> {
 /// Check that `out` is an animated WebP: a RIFF file whose size is its
 /// length, its chunks ending with the file, the first the extended header
 /// (`VP8X`) with the animation flag, an animation header (`ANIM`) before
-/// any frame, at least one frame (`ANMF`), and no image outside the frames
+/// any frame, at least two frames (`ANMF`: one is a still image labelled
+/// animated, which libwebp never makes), and no image outside the frames
 /// (`VP8 `, `VP8L`, `ALPH`). What it found instead, in words.
 pub(super) fn check(out: &[u8]) -> Result<(), &'static str> {
     if out.get(..4) != Some(&b"RIFF"[..]) || out.get(8..12) != Some(&b"WEBP"[..]) {
@@ -409,8 +410,9 @@ pub(super) fn check(out: &[u8]) -> Result<(), &'static str> {
     if !header {
         return Err("a WebP without its animation header (ANIM)");
     }
-    if frames == 0 {
-        return Err("an animated WebP without frames (ANMF)");
+    match frames {
+        0 => Err("an animated WebP without frames (ANMF)"),
+        1 => Err("an animated WebP of one frame (ANMF): a still image"),
+        _ => Ok(()),
     }
-    Ok(())
 }
