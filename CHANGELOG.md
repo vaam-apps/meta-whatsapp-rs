@@ -257,6 +257,65 @@ stored data, the owner's).
   existing limiters compile unchanged; `TokenBucket` raises it in this
   process, `KvRateLimiter` in the record, for every replica (checked
   against the record read, under the same compare-and-swap).
+- **WABA administration** (`meta_whatsapp_client::waba`, roadmap L10b,
+  parity rows 127 and 146–148, row 90's Meta side; the service's side is
+  M5c4, M5j and M5k). Every one checked before any request, and every
+  creation a `POST` never replayed after a timeout (only an error that
+  proves Meta refused it is resent, `RetryPolicy`):
+  - `Business::create_whatsapp_business_account(&NewWaba)`
+    (`POST /{BUSINESS_ID}/whatsapp_business_accounts`: `name`,
+    `primary_funding_id`, `purchase_order_number`, an ISO 4217
+    `currency`, `timezone_id`, `business_type` as `WabaBusinessType`;
+    the deprecated `on_behalf_of_business_id` is not offered), answering
+    a `CreatedWaba` (`id`, `payment_account_id`). Partner-initiated
+    creation is a Meta Business Suite flow: the page documents no API
+    call for it.
+  - `Business::system_user_access_token(&AppSecret,
+    &SystemUserTokenRequest)` (`POST /{BUSINESS_ID}/system_user_access_tokens`):
+    a client business's token, asked for with the partner's system user
+    token. The `appsecret_proof` (hex HMAC-SHA256 of the token the request
+    carries, the partner's, under the app secret) is computed here and sent in a form body with
+    `fetch_only`, `system_user_id`, `scope`, `asset` (both
+    comma-separated) and `set_token_expires_in_60_days`, never in the
+    URL. The answer, a `SystemUserAccessToken`, holds an `AccessToken`
+    (redacted in `Debug`); no error quotes the answer's body (one that
+    does not decode, or a non-2xx one that is not Meta's error envelope),
+    and a blank token is refused. A `fetch_only` request, read-only by Meta's
+    page, is replayed as a read; a generation is not.
+  - `Business::system_users` (and `_stream`; `SystemUser`,
+    `SystemUserRole`): on the business portfolio, as the Marketing API's
+    Business node documents the edge and the guide's prose says, not on
+    the WABA its request prints (`manage-system-users`);
+    `Waba::activities` and `Waba::solutions` (and `_stream`s, taking a
+    `ListWabaRecords`; `WabaActivity` with `ActivityCategory` and the 51
+    `ActivityEventType`s, `WabaSolution`, with `partners::solutions`'
+    `SolutionStatus`, `PendingRequestStatus` and `SolutionApp`), and
+    `Client::business_user(id).assigned_whatsapp_business_accounts`
+    (and `_stream`, `ListAssignedWabas`; `BusinessUser`).
+  - The billing currency or payment method migration
+    (`pricing/change-billing-currency`):
+    `Waba::set_payment_method_migration_intent(&PaymentMethodMigrationIntent)`
+    answering a `MigrationStarted`, then
+    `Client::payment_method_migration(id)`'s `status()` and
+    `resume_migration()` (a `MigrationState`, `PaymentMigrationStatus`). The
+    intent clones the WABA and the resume switches billing to the clone:
+    two explicit calls no other call of the library makes.
+  - `Client::message_history(id).events(&ListMessageHistoryEvents)` (and
+    `_stream`): a message history entry's delivery events
+    (`MessageHistoryEvent`, `DeliveryStatusOccurrence`, `DeliveryStatus`,
+    `WebhookUpdateState`). Where the id comes from is documented nowhere.
+  - Meta's campaign schedules: `Waba::schedules` (and `_stream`;
+    `CampaignSchedule`, `ScheduleStatus`) and
+    `Waba::create_schedule(&NewSchedule)` (`hsm_id`, `audience_id`,
+    `waba_cs_id`, `name`, `description`, `delivery_time`), answering a
+    `CreatedSchedule`.
+
+  The new paged reads are in the enumeration of paged answers withheld
+  from decode errors (`request::paging_withheld_tests`). Not wrapped:
+  `GET /{BUSINESS_ID}/whatsapp_business_accounts` (the owned list is
+  `owned_whatsapp_business_accounts`; its array filter's encoding is not
+  shown).
+
 - **Multi-Partner Solutions and migration intents**
   (`meta_whatsapp_client::partners`, roadmap L12, parity rows 144 and
   145, from `solution-providers/multi-partner-solutions`,

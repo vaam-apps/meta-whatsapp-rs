@@ -2357,7 +2357,10 @@ mod paging_withheld_tests {
     use crate::retry::RetryPolicy;
     use crate::signups::ListSignups;
     use crate::templates::{LibraryQuery, TemplateListQuery};
-    use crate::waba::{ListAssignedUsers, PhoneNumbersQuery, WabaListQuery};
+    use crate::waba::{
+        ListAssignedUsers, ListAssignedWabas, ListMessageHistoryEvents, ListWabaRecords,
+        PhoneNumbersQuery, WabaListQuery,
+    };
 
     /// A `next` link holding the token, as Meta can send it. Values ours.
     const NEXT: &str = "https://graph.facebook.com/v25.0/1/x?access_token=LEAKED&after=c1";
@@ -2439,6 +2442,32 @@ mod paging_withheld_tests {
             "waba.assigned_users",
             c.waba(waba())
                 .assigned_users(&ListAssignedUsers::new(business()))
+        );
+        read!(
+            "business.system_users",
+            c.business(business()).system_users()
+        );
+        read!(
+            "waba.activities",
+            c.waba(waba()).activities(&ListWabaRecords::new())
+        );
+        read!(
+            "waba.solutions",
+            c.waba(waba()).solutions(&ListWabaRecords::new())
+        );
+        read!(
+            "waba.schedules",
+            c.waba(waba()).schedules(&ListWabaRecords::new())
+        );
+        read!(
+            "business_user.assigned_whatsapp_business_accounts",
+            c.business_user("10")
+                .assigned_whatsapp_business_accounts(&ListAssignedWabas::new())
+        );
+        read!(
+            "message_history.events",
+            c.message_history("11")
+                .events(&ListMessageHistoryEvents::new())
         );
         read!(
             "business.client_whatsapp_business_accounts",
