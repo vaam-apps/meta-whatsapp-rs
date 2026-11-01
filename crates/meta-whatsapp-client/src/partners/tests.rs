@@ -15,9 +15,10 @@ use serde_json::json;
 use super::migration::{MigrationIntentInfo, MigrationStatus};
 use super::solutions::{
     CreateSolution, ListAppSolutions, ListConnectedClientBusinesses, ListSolutionPartners,
-    PartnerStatus, PendingRequestStatus, PermissionTask, SolutionInfo, SolutionRole,
-    SolutionStatus, TOKEN_WITHHELD,
+    PartnerStatus, PendingRequestStatus, SolutionInfo, SolutionRole, SolutionStatus,
+    TOKEN_WITHHELD,
 };
+use crate::waba::WabaTask;
 use crate::{Client, RetryPolicy};
 
 /// The solution of the guide's accept, reject and deactivation examples.
@@ -68,8 +69,8 @@ async fn create_sends_the_embedded_creation_body() {
     let request = CreateSolution::new(
         "Social OVD with Lucky Shrub",
         AppId::new("21202248997039").unwrap(),
-        vec![PermissionTask::Messaging],
-        vec![PermissionTask::Messaging],
+        vec![WabaTask::Messaging],
+        vec![WabaTask::Messaging],
     );
     let created = client(&t)
         .with_token("TECH_PROVIDER_USER".into())
@@ -104,11 +105,11 @@ async fn create_is_checked_locally_first() {
     let app = || AppId::new("21202248997039").unwrap();
     let cases = [
         (
-            CreateSolution::new(" ", app(), vec![PermissionTask::Messaging], vec![]),
+            CreateSolution::new(" ", app(), vec![WabaTask::Messaging], vec![]),
             "solution_name",
         ),
         (
-            CreateSolution::new("S", app(), vec![], vec![PermissionTask::Develop]),
+            CreateSolution::new("S", app(), vec![], vec![WabaTask::Develop]),
             "owner_permissions",
         ),
         (
@@ -131,7 +132,7 @@ async fn create_is_checked_locally_first() {
     assert!(t.requests().is_empty());
     // Either side alone may have MESSAGING.
     assert!(
-        CreateSolution::new("S", app(), vec![], vec![PermissionTask::Messaging])
+        CreateSolution::new("S", app(), vec![], vec![WabaTask::Messaging])
             .validate()
             .is_ok()
     );
@@ -168,7 +169,7 @@ async fn state_changes_are_never_replayed() {
                         &CreateSolution::new(
                             "S",
                             AppId::new("2").unwrap(),
-                            vec![PermissionTask::Messaging],
+                            vec![WabaTask::Messaging],
                             vec![],
                         ),
                     )
@@ -258,8 +259,8 @@ async fn get_before_accepting_matches_the_guide() {
     assert_eq!(info.name.as_deref(), Some("Social OVD with Lucky Shrub"));
     let owner = info.owner_permissions.unwrap();
     assert_eq!(owner.len(), 10);
-    assert_eq!(owner[0], PermissionTask::Manage);
-    assert_eq!(owner[9], PermissionTask::ViewInsights);
+    assert_eq!(owner[0], WabaTask::Manage);
+    assert_eq!(owner[9], WabaTask::ViewInsights);
     let partners = info.partners.unwrap();
     let partner = &partners.data[0];
     assert_eq!(partner.id.as_deref(), Some("795033099391057"));
@@ -268,7 +269,7 @@ async fn get_before_accepting_matches_the_guide() {
     assert_eq!(app.name.as_deref(), Some("Lucky Shrub"));
     assert_eq!(
         partner.partner_permissions.as_ref().unwrap()[2],
-        PermissionTask::ManageTemplates
+        WabaTask::ManageTemplates
     );
     assert_eq!(t.remaining(), 0);
 }
@@ -330,7 +331,7 @@ async fn get_without_fields_sends_none_and_keeps_new_values() {
     t.push_json(
         200,
         json!({"id": "1", "status": "PAUSED", "status_for_pending_request": "NONE",
-               "owner_permissions": ["MANAGE_USERS"], "something_new": 1}),
+               "owner_permissions": ["FUTURE_TASK"], "something_new": 1}),
     );
     let info = client(&t)
         .partner_solutions()
@@ -345,7 +346,7 @@ async fn get_without_fields_sends_none_and_keeps_new_values() {
     );
     assert_eq!(
         info.owner_permissions,
-        Some(vec![PermissionTask::Other("MANAGE_USERS".into())])
+        Some(vec![WabaTask::Other("FUTURE_TASK".into())])
     );
     assert_eq!(t.remaining(), 0);
 }
@@ -487,7 +488,7 @@ async fn deactivation_answers_decode_in_both_shapes() {
         assert_eq!(after.status, Some(SolutionStatus::Deactivated));
         assert_eq!(
             after.owner_permissions,
-            Some(vec![PermissionTask::Develop, PermissionTask::Manage])
+            Some(vec![WabaTask::Develop, WabaTask::Manage])
         );
         for req in t.requests() {
             assert_eq!(req.method, Method::POST, "{edge}");

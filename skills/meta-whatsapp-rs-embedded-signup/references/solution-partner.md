@@ -439,7 +439,7 @@ let agreed = info.partners.iter().flat_map(|p| &p.data).any(|partner| {
     let messaging = partner
         .partner_permissions
         .as_ref()
-        .is_some_and(|tasks| tasks.contains(&PermissionTask::Messaging));
+        .is_some_and(|tasks| tasks.contains(&WabaTask::Messaging));
     ours && messaging
 });
 if !agreed {

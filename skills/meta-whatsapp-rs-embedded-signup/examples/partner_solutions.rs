@@ -7,7 +7,7 @@
 //! meta-whatsapp-rs compiles this file and runs its tests in its own gate
 //! (`crates/meta-whatsapp-rs/tests/skills.rs`).
 
-use meta_whatsapp_rs::client::partners::solutions::PermissionTask;
+use meta_whatsapp_rs::client::waba::WabaTask;
 use meta_whatsapp_rs::core::ids::{AppId, BusinessId, MigrationIntentId, SolutionId};
 use meta_whatsapp_rs::prelude::*;
 
@@ -33,7 +33,7 @@ pub async fn accept_if_agreed(
         let messaging = partner
             .partner_permissions
             .as_ref()
-            .is_some_and(|tasks| tasks.contains(&PermissionTask::Messaging));
+            .is_some_and(|tasks| tasks.contains(&WabaTask::Messaging));
         ours && messaging
     });
     if !agreed {

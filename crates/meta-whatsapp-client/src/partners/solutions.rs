@@ -94,6 +94,7 @@ use serde::{Deserialize, Serialize};
 use crate::phone_numbers::fields_param;
 use crate::request::{paginate_or_error, reject_cursors, send_checked};
 use crate::templates::macros::string_enum;
+use crate::waba::WabaTask;
 use crate::{Client, GraphRequest};
 
 /// Entry point, see [`Client::partner_solutions`].
@@ -142,38 +143,6 @@ string_enum! {
         PendingDeactivation => "PENDING_DEACTIVATION",
         /// Nothing pending (`NONE`).
         NoRequest => "NONE",
-    }
-}
-
-string_enum! {
-    /// A WABA permission task a solution grants
-    /// (`WhatsAppBusinessAccountPermissionTask`): `owner_permissions`,
-    /// `partner_permissions`.
-    pub enum PermissionTask {
-        /// `MANAGE`.
-        Manage => "MANAGE",
-        /// `DEVELOP`.
-        Develop => "DEVELOP",
-        /// `MANAGE_TEMPLATES`.
-        ManageTemplates => "MANAGE_TEMPLATES",
-        /// `MANAGE_PHONE`.
-        ManagePhone => "MANAGE_PHONE",
-        /// `VIEW_COST`.
-        ViewCost => "VIEW_COST",
-        /// `MANAGE_EXTENSIONS`.
-        ManageExtensions => "MANAGE_EXTENSIONS",
-        /// `VIEW_PHONE_ASSETS`.
-        ViewPhoneAssets => "VIEW_PHONE_ASSETS",
-        /// `MANAGE_PHONE_ASSETS`.
-        ManagePhoneAssets => "MANAGE_PHONE_ASSETS",
-        /// `VIEW_TEMPLATES`.
-        ViewTemplates => "VIEW_TEMPLATES",
-        /// `VIEW_INSIGHTS` (in the guide's example answer, not in the
-        /// references' enum).
-        ViewInsights => "VIEW_INSIGHTS",
-        /// `MESSAGING`: sending messages for onboarded clients. The only
-        /// permission the creation reference lets you configure.
-        Messaging => "MESSAGING",
     }
 }
 
@@ -239,7 +208,7 @@ pub struct SolutionInfo {
     /// The permissions onboarded clients grant the owner's app
     /// (`fields=owner_permissions`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_permissions: Option<Vec<PermissionTask>>,
+    pub owner_permissions: Option<Vec<WabaTask>>,
     /// The partners (`fields=partners{partner_permissions,partner_app}`,
     /// as the guide asks before accepting): one page of the edge
     /// [`PartnerSolutions::partners`] reads.
@@ -264,7 +233,7 @@ pub struct SolutionPartner {
     /// The permissions onboarded clients grant this partner's app
     /// (`partners{partner_permissions}`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub partner_permissions: Option<Vec<PermissionTask>>,
+    pub partner_permissions: Option<Vec<WabaTask>>,
 }
 
 /// Body of `POST /{APP_ID}/whatsapp_business_solution`
@@ -282,10 +251,10 @@ pub struct CreateSolution {
     pub partner_app_id: AppId,
     /// What onboarded clients grant the owner's app. The reference allows
     /// only `MESSAGING` here (or nothing).
-    pub owner_permissions: Vec<PermissionTask>,
+    pub owner_permissions: Vec<WabaTask>,
     /// What onboarded clients grant the partner's app, as
     /// `owner_permissions`.
-    pub partner_permissions: Vec<PermissionTask>,
+    pub partner_permissions: Vec<WabaTask>,
 }
 
 impl CreateSolution {
@@ -294,8 +263,8 @@ impl CreateSolution {
     pub fn new(
         solution_name: impl Into<String>,
         partner_app_id: AppId,
-        owner_permissions: Vec<PermissionTask>,
-        partner_permissions: Vec<PermissionTask>,
+        owner_permissions: Vec<WabaTask>,
+        partner_permissions: Vec<WabaTask>,
     ) -> Self {
         Self {
             solution_name: solution_name.into(),
@@ -312,7 +281,7 @@ impl CreateSolution {
         if self.solution_name.trim().is_empty() {
             return Err(ValidationError::new("solution_name", "required"));
         }
-        let messaging = |tasks: &[PermissionTask]| tasks.contains(&PermissionTask::Messaging);
+        let messaging = |tasks: &[WabaTask]| tasks.contains(&WabaTask::Messaging);
         if !messaging(&self.owner_permissions) && !messaging(&self.partner_permissions) {
             return Err(ValidationError::new(
                 "owner_permissions",
