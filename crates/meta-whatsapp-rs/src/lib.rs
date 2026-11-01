@@ -13,7 +13,7 @@
 //! | [`adapters`] | `meta-whatsapp-adapters` | reqwest transport; memory, Postgres, Redis stores; sinks |
 //! | [`core`] | `meta-whatsapp-core` | error tree, ids, secrets, the ports (`HttpTransport`, `KvStore`, `ConversationStore`, `EventSink`, `Clock`) |
 //! | `typst` (feature `typst`) | `meta-whatsapp-typst` | invoices, receipts, vouchers → PDF/PNG |
-//! | `bot` (feature `bot`) | `meta-whatsapp-bot` | commands, guards, cooldowns, middleware, compile-time plugins, Markdown replies, paced broadcasts |
+//! | `bot` (feature `bot`) | `meta-whatsapp-bot` | commands, guards, cooldowns, middleware, compile-time plugins, Markdown replies, paced broadcasts, durable scheduled jobs |
 //! | [`inbox`] | here | webhook events → conversation history; window-checked replies with a merchant's token |
 //!
 //! # Which module for which product
@@ -157,7 +157,7 @@
 //! | `typst` | | the `typst` module: invoice, receipt and voucher templates → PDF/PNG |
 //! | `flows-endpoint` | | `client::flows::endpoint`: WhatsApp Flows data-endpoint crypto (aws-lc-rs) |
 //! | `ffmpeg` | | `adapters::media::FfmpegConverter`: core's `core::media::MediaConverter` port (a recording into a voice message's Ogg Opus) over an `ffmpeg` you install; links none |
-//! | `bot` | | the `bot` module: a bot framework over webhooks (commands, middleware, plugins, Markdown replies, paced broadcasts) |
+//! | `bot` | | the `bot` module: a bot framework over webhooks (commands, middleware, plugins, Markdown replies, paced broadcasts, durable scheduled jobs) |
 //! | `testing` | | `core::testing::ScriptedTransport` for your own tests (enable in `[dev-dependencies]`) |
 //! | `full` | | all of the above |
 //!
