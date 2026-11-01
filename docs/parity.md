@@ -41,7 +41,9 @@ scheduling (roadmap B3), against its code and Meta's
 `templates/marketing-templates/per-user-limits` page of 2026-11-01; row 48 with media conversion (roadmap L19), against
 its code and Meta's `business-phone-numbers/media` and
 `messages/audio-messages` pages of 2026-11-01; row 91 with retention and
-auto-delete (roadmap B4), against its code; row 6 with the
+auto-delete (roadmap B4), against its code; row 117 with `llms.txt` and
+the service's `doctor` (roadmap L22a), against their code and tests and
+Meta's webhook pages of 2026-11-01 (§ Sources); row 6 with the
 token-expiry signal (roadmap L11e), against its code and Meta's
 `access-tokens` and `facebook-login/facebook-login-for-business` pages
 of 2026-11-01. Every cell
@@ -61,7 +63,7 @@ reached.
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
 | Library | 119 | 12 | 0 | 1 |
-| Service | 39 | 25 | 67 | 1 |
+| Service | 40 | 24 | 67 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
   over WhatsApp Web ("n/a — unofficial protocol"). The counted rows'
@@ -69,10 +71,10 @@ reached.
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
 - Each of the library's 12 partial or gap rows is cited by a
-  [roadmap](roadmap.md) item. Each of the service's 92 names, in its
+  [roadmap](roadmap.md) item. Each of the service's 91 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 8, M3 11, M4 2, M5 70, S 2 (the modular split; S2b, undated
-  events after a move), L 1 (L22a, tooling), P 2 (payments).
+  events after a move), P 2 (payments).
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
@@ -202,6 +204,18 @@ The owner's definition (2026-09-26):
   `flows/guides/flowsapi` and `flows/guides/flows-templates`. The
   examples those pages show in an interactive preview are not in their
   Markdown and were not read.
+- **Meta's webhook subscription pages**, for row 117: read on
+  2026-11-01 as Meta served them that day, not against the mirror. As
+  Markdown: `webhooks/overview` (§ Fields, the field names),
+  `webhooks/create-webhook-endpoint` (the object
+  `whatsapp_business_account`, the app token) and
+  `solution-providers/manage-webhooks` (`GET /{WABA_ID}/subscribed_apps`
+  and its example). As HTML, from the Graph API reference
+  (`developers.facebook.com/docs/`, which serves no Markdown for them):
+  `graph-api/reference/app/subscriptions` (`object`, `callback_url`,
+  `fields` as `string[]`, `active`; reading needs the app token) and
+  `graph-api/webhooks/subscriptions-edge` (its example answer gives each
+  field as `{name, version}`; the doctor reads both shapes).
 - **Us**: the code at b6fc893; for rows 17, 19 and 84–88, the bot
   framework's (B1).
 
@@ -371,7 +385,7 @@ The owner's definition (2026-09-26):
 | 114 | Ops | Logging without secrets or personal data; metrics | Partial (a custom logger) | Partial | none (ours) | `tracing`; secrets kept out of `Debug`; webhook log redaction (`webhooks::redact`) | request logs with the key id, Prometheus `/metrics` (`server_http::api::ops::metrics`) | done / done |
 | 115 | Ops | Runtimes and packaging | Yes (Node, Bun, Deno, Termux) | Yes | none | Rust with tokio; the crates are not published yet (publishing to crates.io is the owner's: roadmap § Owner touchpoints) | a binary today; the Docker image and the TypeScript client in M4 | n/a / gap (M4) |
 | 116 | Ops | Server sizing guidance | Yes (for WhatsApp Web) | — | `support/load-testing.md` | — | — | n/a — unofficial protocol (sizing for a WhatsApp Web session) |
-| 117 | Tooling | Agent skills, LLM-readable docs, a docs MCP server, a project doctor | Yes | Yes | none | consumer skills under `skills/` (`npx skills add vaam-apps/meta-whatsapp-rs`); no `llms.txt`, MCP server or doctor (L22a, L22b) | the `meta-whatsapp-rs-server*` skills; no `doctor` (L22a) | partial / partial (L22a) |
+| 117 | Tooling | Agent skills, LLM-readable docs, a docs MCP server, a project doctor | Yes | Yes | `webhooks/overview` (§ Fields), `webhooks/create-webhook-endpoint`, `solution-providers/manage-webhooks`; outside the WhatsApp docs, the Graph API reference's `app/subscriptions` and `webhooks/subscriptions-edge` (§ Sources) | consumer skills under `skills/` (`npx skills add vaam-apps/meta-whatsapp-rs`); `docs/public/llms.txt`, served at the docs site's root and checked by `tests/llms_txt.rs`; the project doctor is the service's; no docs MCP server (L22b) | the `meta-whatsapp-rs-server*` skills; `meta-whatsapp-server doctor` (`server::doctor::Doctor`: every configuration refusal by variable, the backend and its migration histories read-only, the app's `whatsapp_business_account` subscription and fields, each bound WABA's token through `debug_token` and the app's subscription to it, the Solution Partner's system token) | partial / done |
 | 118 | Documents | Invoices, receipts, vouchers rendered to PDF or PNG | — | — | none (ours) | `typst::Renderer`; `typst::Template::invoice`, `receipt`, `voucher` | `POST /v1/numbers/{pn}/documents` in M4 | done / gap (M4) |
 | 119 | Inbox | CMS inbox: store events, check the 24-hour window before a reply | — | — | `pricing.md` (the customer service window) | `inbox::InboxSink`; `inbox::Inbox::reply`; `core::store::CustomerServiceWindow`; the window counts the calls that reopen it and the customer's standby messages (window events, `inbox::Inbox::window`: L7), and a reply is refused locally while another app owns the thread (`inbox::Inbox::thread_owner`), each check turned off by `inbox::ReplyChecks` | recording since M1c; the inbox routes and the window check over HTTP in M2a | done / partial (M2a) |
 
