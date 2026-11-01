@@ -75,16 +75,26 @@ const TOKEN: &str = "EAAG-the-merchants-token";
 /// Every case, on one backend; the retention's last (it purges by age
 /// across the backend's numbers).
 pub async fn run(backend: &dyn Backend) {
-    an_inbound_message_is_listed_read_and_answered_within_its_window(backend).await;
-    a_moved_numbers_history_is_hidden_from_its_new_tenant(backend).await;
-    a_number_migrated_between_two_tenants_wabas_hides_its_history(backend).await;
-    a_capability_made_before_its_number_left_reads_nothing(backend).await;
-    a_reply_while_another_app_owns_the_thread_is_refused_unless_its_number_turns_the_check_off(
+    // Boxed: the scenarios' futures are large, and `conformance::run`
+    // holds them all (clippy's `large_futures` in the backends' crates).
+    Box::pin(an_inbound_message_is_listed_read_and_answered_within_its_window(backend)).await;
+    Box::pin(a_moved_numbers_history_is_hidden_from_its_new_tenant(
         backend,
+    ))
+    .await;
+    Box::pin(a_number_migrated_between_two_tenants_wabas_hides_its_history(backend)).await;
+    Box::pin(a_capability_made_before_its_number_left_reads_nothing(
+        backend,
+    ))
+    .await;
+    Box::pin(
+        a_reply_while_another_app_owns_the_thread_is_refused_unless_its_number_turns_the_check_off(
+            backend,
+        ),
     )
     .await;
-    the_services_open_on_their_own_number_only(backend).await;
-    housekeeping_applies_the_inbox_stores_retention(backend).await;
+    Box::pin(the_services_open_on_their_own_number_only(backend)).await;
+    Box::pin(housekeeping_applies_the_inbox_stores_retention(backend)).await;
 }
 
 /// A tenant's number, as one request sees it: the order, the caller it
