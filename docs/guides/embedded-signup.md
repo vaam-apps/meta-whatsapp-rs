@@ -789,6 +789,73 @@ if let WebhookEvent::AccountUpdated { update, .. } = &event
 - Hosted signup onboards to Cloud API only, and the flow cannot be
   customized (no pre-fill, no coexistence launch).
 
+## Pre-verified numbers: no code for the merchant
+
+`embedded-signup/pre-verified-numbers`: as a Solution Partner or Tech
+Provider, you verify numbers of your own ahead of time, in a pool on
+your business portfolio, and offer them on Embedded Signup's number
+screen; the merchant picks one and never types a one-time code. Your
+token (user or system user, with `business_management`) works on your
+portfolio, not on the merchant's.
+
+```rust
+use meta_whatsapp_client::embedded_signup::LaunchOptions;
+use meta_whatsapp_client::phone_numbers::{CodeMethod, CodeVerificationStatus, VerificationCode};
+use meta_whatsapp_client::waba::ListPreVerifiedNumbers;
+
+let pool = partner_client.business(your_business_id);
+// 1. Add a number you control to the pool; Meta answers with its id.
+let created = pool.add_pre_verified_number("+1 555 078 3881").await?;
+let number = partner_client.pre_verified_phone_number(created.id.clone());
+// 2. Have the one-time code sent to it (you receive it, not a merchant)…
+number.request_code(CodeMethod::Sms, "en_US").await?;
+// 3. …and verify it within 30 days: it is VERIFIED for 90 days.
+number.verify_code(&VerificationCode::new(received_code)?).await?;
+
+// Offer the verified ones in the launch options.
+let verified = pool
+    .pre_verified_numbers(
+        &ListPreVerifiedNumbers::new().code_verification_status(CodeVerificationStatus::Verified),
+    )
+    .await?;
+let options = LaunchOptions::new("<CONFIGURATION_ID>")
+    .pre_verified_phone_ids(verified.data.into_iter().map(|n| n.id))
+    .to_json()?;
+```
+
+- **A pre-verified id is not a phone number id.** It is a
+  `PreVerifiedPhoneNumberId`, digits only, checked when you build it and
+  again before every request. Once a merchant claims the number, Meta
+  replaces it with a business phone number of **another** id: the
+  session event's `phone_number_id`, which `onboard` registers as usual.
+  Without session logging, find it in `Waba::phone_numbers` by its
+  `display_phone_number`.
+- **Register within 90 days of your verification**, not of the claim;
+  after that its `code_verification_status` is `EXPIRED` and the number
+  needs a new code.
+- **The pool expires on its own.** A number not verified within 30 days
+  leaves it; a verified one nobody claims within 90 days becomes
+  `EXPIRED` and leaves it too. An unclaimed number can be re-verified
+  only from 45 days before its `verification_expiry_time`: read it with
+  `PreVerifiedPhoneNumber::get(&["code_verification_time",
+  "verification_expiry_time"])` and re-verify in time. The library
+  enforces none of these limits, and who claimed which number is yours
+  to record.
+- **Sharing.** `Business::share_pre_verified_number(&id, &partner)`
+  shares a number with a partner of a Multi-Partner Solution you belong
+  to, who can then offer it; `PreVerifiedPhoneNumber::partners` lists
+  who has it. Meta removed unsharing, so share deliberately; a claimed
+  number simply stops appearing in the partners' flows.
+- **Deleting** (`PreVerifiedPhoneNumber::delete`) is irreversible; Meta
+  refuses a number in use. Nothing in the library deletes or shares on
+  its own.
+- **The code is a secret.** `VerificationCode` (the phone numbers' type)
+  keeps it out of `Debug` and errors, and the client sends it in the
+  JSON body, never in the URL.
+- **Bypassing the number screen**: add a pre-verified number to an
+  onboarded WABA with `Waba::create_phone_number(&NewPhoneNumber::new(…)
+  .preverified_id(id))`, then register the phone number id it returns.
+
 ## Coexistence (merchants keeping the WhatsApp Business app)
 
 Launch with `LaunchOptions::new(id).coexistence()`. The flow finishes with
@@ -882,7 +949,8 @@ share, and to keep marking a business on offboarding, all above):
 
 Partner-led business verification, Multi-Partner Solutions and
 migration intents are their own client modules, outside this flow
-(`client::business_verification`, `client::partners`); not handled:
-pre-verified number pools, token refresh, PIN storage and recovery, your tenant model, and a
-Tech Provider merchant's billing setup ([coverage.md](../coverage.md) rows
-1 and 28).
+(`client::business_verification`, `client::partners`), and so is the
+pre-verified number pool (`client::waba`, [above](#pre-verified-numbers-no-code-for-the-merchant)).
+Not handled: token refresh, PIN storage and recovery, your tenant model,
+tracking who claimed which pre-verified number, and a Tech Provider
+merchant's billing setup ([coverage.md](../coverage.md) rows 1 and 28).
