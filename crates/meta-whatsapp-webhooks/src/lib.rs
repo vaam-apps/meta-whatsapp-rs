@@ -7,6 +7,7 @@
 //!           ─► Vec<WebhookEvent>, one per message / status / error / field change
 //!           ─► per event: DedupGuard claim (optional; 60 s lease in a KvStore)
 //!           ─► EventSink<WebhookEvent>
+//!                on a permanent sink error (optional): DeadLetters write, then acknowledged
 //!           ─► DedupGuard complete (marker kept 7 days + 1 h)
 //! ```
 //!
@@ -18,6 +19,7 @@
 //! | [`fields`] | typed values for every documented field |
 //! | [`event`] | [`WebhookEvent`] and [`events`] |
 //! | [`dedup`] | [`DedupGuard`]: claim, complete, release; replay notes |
+//! | [`deadletter`] | [`DeadLetters`]: events a sink refused permanently, bounded, replayable, erasable |
 //! | [`handler`] | [`WebhookHandler`], the framework-independent endpoint |
 //! | `server` | axum `router` and `sse` helpers (feature `axum`) |
 //!
@@ -91,6 +93,7 @@
 //! # }
 //! ```
 
+pub mod deadletter;
 pub mod dedup;
 pub mod event;
 pub mod fields;
@@ -108,6 +111,7 @@ pub mod verify;
 /// re-export rather than pinning axum yourself.
 #[cfg(feature = "axum")]
 pub use axum;
+pub use deadletter::{DeadLetter, DeadLetterId, DeadLetters, Replay, ReplayReport};
 pub use dedup::{
     Claim, ClaimTicket, DEDUP_NAMESPACE, DEFAULT_CLAIM_LEASE, DEFAULT_DEDUP_TTL, DedupGuard,
 };

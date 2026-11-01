@@ -305,9 +305,9 @@ because an error answers `500` and Meta redelivers the whole batch,
 repeating every reply already sent in it. The price: a transient failure
 (the cooldown store or your `AccessPolicy` unreachable, a Graph 5xx on a
 reply) is acknowledged too, and that event is lost but for the log
-line. The owner decided on a dead-letter store for such losses on the
-whole webhook path ([open question](../../OPEN_QUESTIONS.md#webhooks-and-live-updates)
-30, roadmap item L21); it is not built yet. Until then, an
+line. The webhook dead letters ([open question](../../OPEN_QUESTIONS.md#webhooks-and-live-updates)
+30, roadmap item L21a) take only an error a sink classifies as
+permanent, and the bot classifies none. An
 `ErrorHandler` of your own can keep the event (`ctx.event()`) and return
 `Ok`. It gets the context as the bot built it, after the ban check and
 the match, before the middleware: the command is known, values a
