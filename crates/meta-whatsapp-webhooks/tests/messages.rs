@@ -877,3 +877,127 @@ fn a_payment_method_reply_is_typed() {
             "credential_id": "1234567"}})
     );
 }
+
+/// Neither payment object can fail the change it arrives in. Before this
+/// crate typed them, a payment's status parsed as a `status_updated`
+/// event and the `payment_method` reply as a `message_received` one,
+/// whatever they held; a typed parse that failed would make them
+/// `unknown` (operator-only in the service). The page's example, edited:
+/// each shape that does not parse typed costs only its own object.
+/// Decisive: `serde_ext::lenient_option` on `Status::payment` and on the
+/// payment's amount, method and error; the `payment_method` arm of
+/// `InteractiveReply`'s `Deserialize`.
+#[test]
+fn a_payment_that_does_not_parse_typed_never_fails_its_change() {
+    use meta_whatsapp_webhooks::fields::PaymentMethodKind;
+
+    let name =
+        "pages/payments.payments-in.pg__step_4_receive_webhook_about_transaction_status.json";
+    let page: serde_json::Value = serde_json::from_slice(&common::fixture_bytes(name)).unwrap();
+    let status_of = |edit: &dyn Fn(&mut serde_json::Value)| {
+        let mut body = page.clone();
+        edit(&mut body["entry"][0]["changes"][0]["value"]["statuses"][0]);
+        let payload = WebhookPayload::from_slice(body.to_string().as_bytes()).unwrap();
+        let events = meta_whatsapp_webhooks::events(&payload);
+        let [WebhookEvent::StatusUpdated { status, .. }] = events.as_slice() else {
+            panic!("{events:?}")
+        };
+        status.clone()
+    };
+    // The payment as a whole: kept as a status, without it.
+    for payment in [
+        json!({"amount": {"value": 1, "offset": 100}}),
+        json!({"reference_id": {"id": 1}}),
+        json!({"reference_id": "r", "transaction": [{"id": "t"}]}),
+        json!({"reference_id": "r", "transaction": {"id": "t", "created_timestamp": "CREATED_TIMESTAMP"}}),
+        json!("captured"),
+    ] {
+        let status = status_of(&|s| s["payment"] = payment.clone());
+        assert_eq!(
+            (
+                status.status.clone(),
+                status.is_payment(),
+                status.payment.is_none()
+            ),
+            (MessageStatus::Captured, true, true),
+            "{payment}"
+        );
+    }
+    // Its parts: only the one that does not parse is lost.
+    let status = status_of(&|s| {
+        let p = &mut s["payment"];
+        p["amount"] = json!({"value": "21000"});
+        p["transaction"]["method"] = json!({});
+        p["transaction"]["error"] = json!({"code": 400});
+        p["refunds"][0]["amount"] = json!({"value": 100});
+    });
+    let p = status.payment.as_deref().unwrap();
+    let t = p.transaction.as_ref().unwrap();
+    assert_eq!(
+        (
+            p.amount,
+            t.method.as_ref(),
+            t.error.as_ref(),
+            p.refunds[0].amount
+        ),
+        (None, None, None, None)
+    );
+    assert_eq!(
+        (
+            p.reference_id.as_str(),
+            t.id.as_str(),
+            p.refunds[0].id.as_str()
+        ),
+        ("BM345A-12", "order_Om4Vzc8ZgFXs1D", "rfnd_Om4XkB2tQ1aV9c")
+    );
+    // `null` refunds and `[]` notes are none.
+    let status = status_of(&|s| {
+        s["payment"]["refunds"] = serde_json::Value::Null;
+        s["payment"]["notes"] = json!([]);
+    });
+    let p = status.payment.as_deref().unwrap();
+    assert!(p.refunds.is_empty() && p.notes.is_empty(), "{p:?}");
+
+    // The reply: still a message, its reply unknown.
+    let name =
+        "pages/payments.payments-br.one-click-payments__webhook_notification_payload_example.json";
+    let page: serde_json::Value = serde_json::from_slice(&common::fixture_bytes(name)).unwrap();
+    let mut body = page.clone();
+    let reply = &mut body["entry"][0]["changes"][0]["value"]["messages"][0]["interactive"];
+    reply["payment_method"]
+        .as_object_mut()
+        .unwrap()
+        .remove("reference_id");
+    let sent = reply.clone();
+    let payload = WebhookPayload::from_slice(body.to_string().as_bytes()).unwrap();
+    let events = meta_whatsapp_webhooks::events(&payload);
+    let [WebhookEvent::MessageReceived { message, .. }] = events.as_slice() else {
+        panic!("{events:?}")
+    };
+    let MessageContent::Interactive(InteractiveReply::Unknown { reply_type, raw }) =
+        &message.content
+    else {
+        panic!("{:?}", message.content)
+    };
+    assert_eq!(
+        (reply_type.as_deref(), raw),
+        (Some("payment_method"), &sent)
+    );
+    // A method this crate does not name is still typed.
+    let mut body = page;
+    body["entry"][0]["changes"][0]["value"]["messages"][0]["interactive"]["payment_method"]["payment_method"] =
+        json!("pix_redirect");
+    let payload = WebhookPayload::from_slice(body.to_string().as_bytes()).unwrap();
+    let events = meta_whatsapp_webhooks::events(&payload);
+    let [WebhookEvent::MessageReceived { message, .. }] = events.as_slice() else {
+        panic!("{events:?}")
+    };
+    let MessageContent::Interactive(InteractiveReply::PaymentMethod(reply)) = &message.content
+    else {
+        panic!("{:?}", message.content)
+    };
+    assert_eq!(
+        reply.payment_method,
+        PaymentMethodKind::Other("pix_redirect".to_owned())
+    );
+}

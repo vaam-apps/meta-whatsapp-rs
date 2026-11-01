@@ -810,9 +810,15 @@ impl<'de> Deserialize<'de> for InteractiveReply {
             Some("call_permission_reply") => {
                 CallPermissionReply::deserialize(payload).map(Self::CallPermissionReply)
             }
-            Some("payment_method") => {
-                PaymentMethodReply::deserialize(payload).map(Self::PaymentMethod)
-            }
+            // A reply that does not parse typed stays a message, as an
+            // unknown reply (what it was before this crate typed it).
+            Some("payment_method") => Ok(PaymentMethodReply::deserialize(payload).map_or_else(
+                |_| Self::Unknown {
+                    reply_type: Some("payment_method".to_owned()),
+                    raw: Value::Object(map.clone()),
+                },
+                Self::PaymentMethod,
+            )),
             other => Ok(Self::Unknown {
                 reply_type: other.map(str::to_owned),
                 raw: Value::Object(map.clone()),
@@ -1105,8 +1111,15 @@ pub struct Status {
     /// `payment` for a payment's status; absent on a message's.
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
     pub status_type: Option<StatusType>,
-    /// The payment, on a status of [`StatusType::Payment`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The payment, on a status of [`StatusType::Payment`]. `None` also
+    /// when it does not parse typed: the status is still delivered (as it
+    /// was before this crate typed the payment), and Meta asks you to look
+    /// the payment up anyway.
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::lenient_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub payment: Option<Box<StatusPayment>>,
     /// When the webhook was triggered.
     #[serde(with = "meta_whatsapp_core::timestamp::unix")]

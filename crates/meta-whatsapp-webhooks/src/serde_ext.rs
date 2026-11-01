@@ -115,7 +115,7 @@ pub(crate) mod graph_errors {
 /// A key-value object whose values Meta documents as strings (Razorpay's
 /// `notes`, echoed in a payment's status): a value of another JSON type is
 /// kept as its JSON text, as [`crate::open_enum`] keeps an enum value,
-/// rather than failing the whole change. `null` is an empty map.
+/// rather than failing the whole change. `null` and `[]` are an empty map.
 pub(crate) mod string_map {
     use std::collections::BTreeMap;
 
@@ -128,6 +128,8 @@ pub(crate) mod string_map {
     {
         match Value::deserialize(deserializer)? {
             Value::Null => Ok(BTreeMap::new()),
+            // An empty list for "no notes", as some gateways print it.
+            Value::Array(items) if items.is_empty() => Ok(BTreeMap::new()),
             Value::Object(map) => Ok(map
                 .into_iter()
                 .map(|(key, value)| match value {
@@ -140,6 +142,41 @@ pub(crate) mod string_map {
                 kind(&other)
             ))),
         }
+    }
+}
+
+/// An optional object that must never fail the value it is part of: one
+/// that does not parse typed is `None`, as if absent (a payment's status
+/// carries its `payment`; before this crate typed it, the status parsed
+/// whatever the payment held, and it still does). `null` and a missing
+/// key are `None` too. The parse error is dropped, never echoed.
+pub(crate) mod lenient_option {
+    use super::{Deserialize, DeserializeOwned, Deserializer, Value};
+
+    /// `#[serde(default, deserialize_with = "crate::serde_ext::lenient_option::deserialize")]`.
+    pub(crate) fn deserialize<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: DeserializeOwned,
+    {
+        Ok(match Value::deserialize(deserializer)? {
+            Value::Null => None,
+            value => T::deserialize(value).ok(),
+        })
+    }
+}
+
+/// A list that Meta may print as `null`: an empty `Vec`, as a missing key.
+pub(crate) mod vec_or_null {
+    use super::{Deserialize, Deserializer};
+
+    /// `#[serde(default, deserialize_with = "crate::serde_ext::vec_or_null::deserialize")]`.
+    pub(crate) fn deserialize<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        Option::<Vec<T>>::deserialize(deserializer).map(Option::unwrap_or_default)
     }
 }
 
@@ -231,6 +268,13 @@ mod tests {
                 .is_empty()
         );
         assert!(serde_json::from_str::<M>("{}").unwrap().notes.is_empty());
+        assert!(
+            serde_json::from_str::<M>(r#"{"notes":[]}"#)
+                .unwrap()
+                .notes
+                .is_empty()
+        );
+        assert!(serde_json::from_str::<M>(r#"{"notes":["Jane"]}"#).is_err());
         let e = serde_json::from_str::<M>(r#"{"notes":"Jane"}"#)
             .err()
             .unwrap()

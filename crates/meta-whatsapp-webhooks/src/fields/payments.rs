@@ -17,7 +17,16 @@
 //! change, so only the identifiers are required here: the order's
 //! `reference_id`, a transaction's and a refund's `id`, and the reply's
 //! `payment_method`. Every other property the tables call required is an
-//! `Option`.
+//! `Option`; an amount, a method and an error need all their fields, and
+//! one that lacks any (or holds another JSON type) is `None`, as if
+//! absent. `refunds` may be `null`, `notes` `[]`.
+//!
+//! Neither object can fail the change it arrives in: before this crate
+//! typed them, a payment's status parsed as a status and the reply as a
+//! message, whatever they held, and they still do. A `payment` that does
+//! not parse typed leaves [`Status::payment`](super::Status::payment)
+//! `None`; a `payment_method` reply that does not parse typed is an
+//! [`InteractiveReply::Unknown`](super::InteractiveReply::Unknown).
 //!
 //! # Where the pages disagree
 //!
@@ -68,7 +77,11 @@ pub struct StatusPayment {
     /// The `reference_id` of the `order_details` message.
     pub reference_id: String,
     /// What the buyer paid.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::lenient_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub amount: Option<PaymentAmount>,
     /// The currency: "always INR".
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -76,8 +89,12 @@ pub struct StatusPayment {
     /// The transaction attempt this status reports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transaction: Option<PaymentTransaction>,
-    /// The order's refunds.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// The order's refunds (`null` is none).
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::vec_or_null::deserialize",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub refunds: Vec<PaymentRefund>,
     /// Razorpay: the `receipt` sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -200,10 +217,18 @@ pub struct PaymentTransaction {
     )]
     pub updated_timestamp: Option<OffsetDateTime>,
     /// How the buyer paid; may be absent on a failed attempt.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::lenient_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub method: Option<TransactionMethod>,
     /// Why it failed, as the gateway says; not on every attempt.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::lenient_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub error: Option<TransactionError>,
 }
 
@@ -253,7 +278,11 @@ pub struct PaymentRefund {
     /// The refund's id.
     pub id: String,
     /// How much was refunded.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::lenient_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub amount: Option<PaymentAmount>,
     /// How fast it was processed.
     #[serde(default, skip_serializing_if = "Option::is_none")]

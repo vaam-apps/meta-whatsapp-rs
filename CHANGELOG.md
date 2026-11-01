@@ -271,7 +271,11 @@ stored data, the owner's).
     `MessageStatus::Captured` or `MessageStatus::Pending`. Brazil's
     one-click confirmation is `InteractiveReply::PaymentMethod`
     (`PaymentMethodReply`: method, time, `reference_id`, last four
-    digits, `credential_id`). Both pages joined the conformance sweep
+    digits, `credential_id`). Neither fails the change it arrives in: a
+    `payment`, or its amount, method or error, that does not parse
+    typed is `None`, a reply that does not is `InteractiveReply::Unknown`,
+    `refunds` may be `null` and `notes` `[]`. Both pages joined the
+    conformance sweep
     (their manifest status `Typed`; the `OutOfScope` status is gone
     with them), with two fixtures; the service has two new event data
     snapshots and no changed one, and no new event type.
