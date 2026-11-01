@@ -3842,6 +3842,15 @@ design's (§9).
        same; the service never sets a Direct Send `category` (`422
        unsupported_message_type`). The service adds its own check before
        them on a number with a cut (the review's, above).
+    8. On a number with a cut, a free-form reply needs a window opened
+       since the cut (an inbound message or window event dated from the
+       cut on, or, with handover trust, a `ThisApp` handover recorded
+       since it); otherwise `409 customer_service_window_closed` with no
+       request, templates and Direct Send categories exempt. A previous
+       holder's window never opens one for the new holder, and the 409
+       cannot tell B whether A's customer wrote. The cost: the new holder
+       starts with a template. Swap: drop `Conversations::reply`'s
+       `refuse_across_the_cut` call.
   - **Also, after the first release** (from S7, carried by M2a, which
     landed before it): drop the legacy fingerprint (S6's window:
     `Fingerprint::legacy_v1_json`, `legacy_v1_upload`, `or_legacy`, and
