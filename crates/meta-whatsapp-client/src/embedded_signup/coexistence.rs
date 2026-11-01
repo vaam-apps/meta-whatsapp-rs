@@ -18,7 +18,21 @@
 //! The record is keyed by phone number under [`COEXISTENCE_NAMESPACE`] and
 //! scoped to one stored token record (its WABA and `created_at`): a new
 //! onboarding stores a new token record, and with it starts a new sync
-//! (the one Meta allows after an offboarding and a new signup).
+//! (the one Meta allows after an offboarding and a new signup). The
+//! vault keeps `created_at` in whole seconds, so two onboardings of one
+//! number stored within the same second share a scope, and the second
+//! reports the first's answers without posting (an offboarding and a new
+//! signup in between take minutes). A record of a later onboarding than
+//! the attempt's is never taken over: the attempt fails at the step and
+//! posts nothing.
+//!
+//! At most once, not exactly once: the claim is written before the post,
+//! so a process that stops between the two leaves a claim with no
+//! request behind it, which `resume` treats as an answer lost (it cannot
+//! tell them apart). The way out is manual, as for a timeout: the
+//! data's webhooks show whether the request went through, and asking
+//! again with [`PhoneNumber::sync_smb_app_data`](crate::phone_numbers::PhoneNumber::sync_smb_app_data)
+//! is safe in Meta's terms (a repeat is refused, `2593107`).
 
 use meta_whatsapp_core::error::{StorageError, ValidationError};
 use meta_whatsapp_core::ids::{PhoneNumberId, WabaId};
@@ -77,9 +91,11 @@ pub enum SyncOutcome {
     },
     /// Refused with [`ErrorKind::SyncNotAllowed`]: `2593107` (already
     /// requested for this number) or `2593108` (more than 24 hours after
-    /// onboarding). Only offboarding and a new signup allow it again, so it
-    /// is recorded, reported here, and never asked again for this
-    /// onboarding.
+    /// onboarding), the codes Meta documents for the request (`2593109`,
+    /// history sharing turned off, is of that kind too, but Meta sends it
+    /// as a `history` webhook). Only offboarding and a new signup allow it
+    /// again, so it is recorded, reported here, and never asked again for
+    /// this onboarding.
     Refused {
         /// Meta's error code.
         code: i64,
@@ -356,6 +372,11 @@ async fn claim(
                 let record = decode(key, &v)?;
                 if record.belongs_to(scope) {
                     (record, Some(v.version))
+                } else if record.token_created_at > scope.token_created_at {
+                    // A later onboarding's: this attempt, of an earlier
+                    // one (a resume racing a new signup, or a WABA the
+                    // number left), must not take it over.
+                    return Err(superseded());
                 } else {
                     // An earlier onboarding's: this one starts afresh.
                     (SyncRecord::new(scope), Some(v.version))
@@ -418,12 +439,21 @@ async fn settle(
     Err(StorageError::Busy.into())
 }
 
+/// A record of a later onboarding of the number than this attempt's.
+fn superseded() -> Error {
+    ValidationError::new(
+        "coexistence_sync",
+        "the number's sync record belongs to a later onboarding of it (a newer stored token record): this attempt, of an earlier one, sends nothing",
+    )
+    .into()
+}
+
 /// A request claimed by an attempt that did not record Meta's answer.
 fn pending(kind: SyncKind) -> Error {
     ValidationError::new(
         "coexistence_sync",
         format!(
-            "a {} sync request for this number may have reached Meta without its answer being recorded (a timeout, a 5xx, or another attempt still in flight): Meta allows one per number, so it is not sent again. Its `{}` webhooks show whether it went through; resume with OnboardingRequest::coexistence_sync(false), and if none arrive request it yourself with PhoneNumber::sync_smb_app_data",
+            "a {} sync request for this number may have reached Meta without its answer being recorded (a timeout, a 5xx, a process stopped before the answer was recorded, or another attempt still in flight): Meta allows one per number, so it is not sent again. Its `{}` webhooks show whether it went through; resume with OnboardingRequest::coexistence_sync(false), and if none arrive request it yourself with PhoneNumber::sync_smb_app_data (Meta refuses a repeat with 2593107)",
             kind.label(),
             kind.webhook(),
         ),

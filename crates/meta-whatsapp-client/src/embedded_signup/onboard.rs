@@ -2438,7 +2438,8 @@ pub(super) mod tests {
 
     /// A new onboarding of the number stores a new token record and starts
     /// a new sync (what Meta allows after an offboarding and a new
-    /// signup); the earlier onboarding's record does not stop it.
+    /// signup); the earlier onboarding's record does not stop it, even one
+    /// second earlier (the scope's precision, the vault's).
     #[tokio::test]
     async fn a_new_onboarding_of_the_number_syncs_again() {
         let kv: Arc<dyn KvStore> = Arc::new(MemoryKvStore::new());
@@ -2452,7 +2453,7 @@ pub(super) mod tests {
             .await
             .unwrap();
 
-        clock.advance(Duration::from_secs(3_600));
+        clock.advance(Duration::from_secs(1));
         script_coexistence_until_subscribed(&h.t);
         h.t.push_json(200, sync_response("R3"));
         h.t.push_json(200, sync_response("R4"));
@@ -2461,7 +2462,7 @@ pub(super) mod tests {
                 .await
                 .unwrap();
         assert_eq!(sync_requests(&h.t), 4);
-        let later = NOW + time::Duration::hours(1);
+        let later = NOW + time::Duration::seconds(1);
         assert_eq!(
             done.coexistence_sync,
             Some(synced(
@@ -2544,6 +2545,252 @@ pub(super) mod tests {
             .unwrap_err();
         assert_eq!(step(&err), SYNC_CONTACTS);
         assert_eq!(sync_requests(&h.t), 2);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A store on which another writer replaces the coexistence record
+    /// right after the `nth` read of it (1-based): that read sees the
+    /// record as it was, so the write that follows it must lose.
+    #[derive(Debug)]
+    struct RacingKv {
+        inner: MemoryKvStore,
+        nth: usize,
+        reads: Mutex<usize>,
+        competitor: Vec<u8>,
+    }
+
+    impl RacingKv {
+        fn new(nth: usize, competitor: &serde_json::Value) -> Self {
+            Self {
+                inner: MemoryKvStore::new(),
+                nth,
+                reads: Mutex::new(0),
+                competitor: serde_json::to_vec(competitor).unwrap(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl KvStore for RacingKv {
+        async fn get(
+            &self,
+            key: &StoreKey,
+        ) -> Result<
+            Option<meta_whatsapp_core::store::Versioned>,
+            meta_whatsapp_core::error::StorageError,
+        > {
+            let read = self.inner.get(key).await?;
+            let race = key.namespace() == COEXISTENCE_NAMESPACE && {
+                let mut reads = self.reads.lock().unwrap();
+                *reads += 1;
+                *reads == self.nth
+            };
+            if race {
+                self.inner
+                    .put(key, self.competitor.clone(), Expiry::Never)
+                    .await?;
+            }
+            Ok(read)
+        }
+        async fn put(
+            &self,
+            key: &StoreKey,
+            value: Vec<u8>,
+            expiry: Expiry,
+        ) -> Result<u64, meta_whatsapp_core::error::StorageError> {
+            self.inner.put(key, value, expiry).await
+        }
+        async fn put_if_absent(
+            &self,
+            key: &StoreKey,
+            value: Vec<u8>,
+            expiry: Expiry,
+        ) -> Result<Option<u64>, meta_whatsapp_core::error::StorageError> {
+            self.inner.put_if_absent(key, value, expiry).await
+        }
+        async fn compare_and_swap(
+            &self,
+            key: &StoreKey,
+            expected: u64,
+            value: Option<Vec<u8>>,
+            expiry: Expiry,
+        ) -> Result<Option<u64>, meta_whatsapp_core::error::StorageError> {
+            self.inner
+                .compare_and_swap(key, expected, value, expiry)
+                .await
+        }
+        async fn delete(
+            &self,
+            key: &StoreKey,
+        ) -> Result<bool, meta_whatsapp_core::error::StorageError> {
+            self.inner.delete(key).await
+        }
+    }
+
+    /// A pending contacts claim of the onboarding stored at `created`.
+    fn pending_contacts(created: i64) -> serde_json::Value {
+        json!({
+            "v": 1, "waba_id": WABA, "token_created_at": created,
+            "contacts": {"state": "pending", "at": created}
+        })
+    }
+
+    /// The sync step failed with the record's own `ValidationError`.
+    fn assert_refused_by_the_record(err: &Error, at: &str) {
+        assert_eq!(step(err), at);
+        match err {
+            Error::Step { source, .. } => assert!(
+                matches!(&**source, Error::Validation(v) if v.field == "coexistence_sync"),
+                "{err:?}"
+            ),
+            other => panic!("{other:?}"),
+        }
+        assert!(!err.may_have_been_sent());
+    }
+
+    /// Two attempts of one onboarding claiming the same request at once
+    /// (two resumes, two replicas): the one whose write loses posts
+    /// nothing, whether the number had no record yet (`put_if_absent`) or
+    /// an earlier onboarding's (`compare_and_swap`).
+    #[tokio::test]
+    async fn a_claim_lost_to_a_concurrent_attempt_posts_nothing() {
+        let created = NOW.unix_timestamp();
+        for earlier in [None, Some(created - 86_400)] {
+            let kv: Arc<dyn KvStore> = Arc::new(RacingKv::new(1, &pending_contacts(created)));
+            if let Some(earlier) = earlier {
+                let old = json!({
+                    "v": 1, "waba_id": WABA, "token_created_at": earlier,
+                    "contacts": {"state": "requested", "at": earlier, "request_id": "R-OLD"}
+                });
+                kv.put(
+                    &StoreKey::new(COEXISTENCE_NAMESPACE, PHONE),
+                    serde_json::to_vec(&old).unwrap(),
+                    Expiry::Never,
+                )
+                .await
+                .unwrap();
+            }
+            let h = harness_on(Arc::clone(&kv), RetryPolicy::NONE);
+            script_coexistence_until_subscribed(&h.t);
+            let err =
+                h.es.onboard(&coexistence_request(), &h.vault)
+                    .await
+                    .unwrap_err();
+            assert_refused_by_the_record(&err, SYNC_CONTACTS);
+            assert_eq!(sync_requests(&h.t), 0, "the other attempt posts it");
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&sync_record(&kv).await.unwrap())
+                    .unwrap(),
+                pending_contacts(created),
+                "the winner's claim stands"
+            );
+            assert_eq!(h.t.remaining(), 0);
+        }
+    }
+
+    /// A later onboarding of the number replaced the record while this
+    /// attempt's request was in flight: Meta's answer is not written into
+    /// the later onboarding's record, and the next request is not claimed
+    /// over it.
+    #[tokio::test]
+    async fn an_answer_is_never_recorded_over_a_later_onboarding() {
+        let later = pending_contacts(NOW.unix_timestamp() + 60);
+        // Read 1: the contacts claim; read 2: recording its answer.
+        let kv: Arc<dyn KvStore> = Arc::new(RacingKv::new(2, &later));
+        let h = harness_on(Arc::clone(&kv), RetryPolicy::NONE);
+        script_coexistence_until_subscribed(&h.t);
+        h.t.push_json(200, sync_response("R-CONTACTS"));
+        let err =
+            h.es.onboard(&coexistence_request(), &h.vault)
+                .await
+                .unwrap_err();
+        assert_refused_by_the_record(&err, SYNC_HISTORY);
+        assert_eq!(sync_requests(&h.t), 1, "the contacts only");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&sync_record(&kv).await.unwrap()).unwrap(),
+            later,
+            "the later onboarding's record is left as it was"
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// A resume of an earlier onboarding of the number than the one its
+    /// record belongs to posts nothing and leaves the record alone.
+    #[tokio::test]
+    async fn a_resume_never_takes_over_a_later_onboardings_record() {
+        let h = harness();
+        script_coexistence_until_subscribed(&h.t);
+        h.t.push_json(200, sync_response("R-CONTACTS"));
+        h.t.push_json(200, sync_response("R-HISTORY"));
+        h.es.onboard(&coexistence_request(), &h.vault)
+            .await
+            .unwrap();
+        let later = pending_contacts(NOW.unix_timestamp() + 1);
+        let key = StoreKey::new(COEXISTENCE_NAMESPACE, PHONE);
+        h.kv.put(&key, serde_json::to_vec(&later).unwrap(), Expiry::Never)
+            .await
+            .unwrap();
+
+        h.t.push_json(200, success());
+        let err =
+            h.es.resume(
+                &WabaId::new(WABA).unwrap(),
+                &coexistence_request(),
+                &h.vault,
+            )
+            .await
+            .unwrap_err();
+        assert_refused_by_the_record(&err, SYNC_CONTACTS);
+        assert_eq!(sync_requests(&h.t), 2, "nothing posted by the resume");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&sync_record(&h.kv).await.unwrap())
+                .unwrap(),
+            later
+        );
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// Meta's errors page says to branch on codes, not HTTP statuses, and
+    /// gives none for this endpoint; the rule is `may_have_been_sent`:
+    /// any 4xx (a 409 included) is a refusal before Meta did anything and
+    /// releases the claim, so `resume` asks again; a 5xx, even with a
+    /// Graph error body, may have been processed, so its claim stays and
+    /// nothing posts it again.
+    #[tokio::test]
+    async fn a_4xx_releases_the_claim_and_a_5xx_keeps_it() {
+        let h = harness();
+        script_coexistence_until_subscribed(&h.t);
+        h.t.push_json(409, graph_error(100));
+        let request = coexistence_request();
+        let err = h.es.onboard(&request, &h.vault).await.unwrap_err();
+        assert_eq!(step(&err), SYNC_CONTACTS);
+        assert!(!err.may_have_been_sent());
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&sync_record(&h.kv).await.unwrap())
+                .unwrap(),
+            json!({"v": 1, "waba_id": WABA, "token_created_at": NOW.unix_timestamp()}),
+            "the claim is released"
+        );
+        assert_eq!(sync_requests(&h.t), 1);
+
+        h.t.push_json(200, success());
+        h.t.push_json(200, sync_response("R-CONTACTS"));
+        h.t.push_json(500, graph_error(1));
+        let err =
+            h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
+                .await
+                .unwrap_err();
+        assert_eq!(step(&err), SYNC_HISTORY);
+        assert!(err.may_have_been_sent());
+        assert_eq!(sync_requests(&h.t), 3, "the contacts asked again");
+
+        h.t.push_json(200, success());
+        let err =
+            h.es.resume(&WabaId::new(WABA).unwrap(), &request, &h.vault)
+                .await
+                .unwrap_err();
+        assert_refused_by_the_record(&err, SYNC_HISTORY);
+        assert_eq!(sync_requests(&h.t), 3, "the history not posted again");
         assert_eq!(h.t.remaining(), 0);
     }
 
