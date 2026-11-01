@@ -7,16 +7,19 @@ devcontainer (`github.com/anthropics/claude-code/.devcontainer`), for Rust:
 
 | Piece | What |
 | --- | --- |
-| `Dockerfile` | `node:24-bookworm` base (Claude Code is an npm package), Rust 1.98.1 via rustup, `just`, `cargo-deny`, `typst` CLI, `git-delta`, zsh, `psql`/`redis-cli` |
-| `compose.yaml` | `dev` (your shell), `postgres:18-alpine`, `redis:8-alpine`, and `redis-tls` (`redis:8-alpine` serving TLS only on 6380, client certificates required); named volumes for shell history, Claude config and the cargo registry |
+| `Dockerfile` | `node:24-bookworm` base (Claude Code is an npm package), Rust 1.98.1 via rustup, `just`, `cargo-deny`, `typst` CLI, `git-delta`, zsh, `psql`/`redis-cli`/`mongosh` |
+| `compose.yaml` | `dev` (your shell), `postgres:18-alpine`, `redis:8-alpine`, `redis-tls` (`redis:8-alpine` serving TLS only on 6380, client certificates required), and `mongodb` (`mongo:7.0.45-jammy`, a single-node replica set); named volumes for shell history, Claude config and the cargo registry |
 | `init-firewall.sh` | default-deny egress, run on every start |
 | `github-meta-snapshot.json` | GitHub's IPv4 ranges as of the date inside it: the firewall's fallback (copied to `/etc/meta-whatsapp-rs-firewall/`) |
 | `devcontainer.json` | VS Code extensions (Claude Code, rust-analyzer, tinymist for Typst, Even Better TOML, CodeLLDB, just, GitLens) |
 
 Open it with VS Code's "Reopen in Container" or `devcontainer up`. Inside,
-`META_WHATSAPP_RS_TEST_POSTGRES_URL`, `META_WHATSAPP_RS_TEST_REDIS_URL` and
-`META_WHATSAPP_RS_TEST_REDISS_URL` point at the sidecars, so `just
-test-live` (and `just ci`) use them instead of starting `compose.test.yaml`.
+`META_WHATSAPP_RS_TEST_POSTGRES_URL`, `META_WHATSAPP_RS_TEST_REDIS_URL`,
+`META_WHATSAPP_RS_TEST_REDISS_URL` and `META_WHATSAPP_RS_TEST_MONGODB_URL`
+point at the sidecars, so `just test-live` (and `just ci`) use them instead
+of starting `compose.test.yaml`. A container built before one of them
+existed lacks its variable, and `just test-live` then tries to start
+`compose.test.yaml`, which fails inside it: rebuild the container.
 
 ### The TLS Redis
 
@@ -46,6 +49,36 @@ day.
 The tests' binaries link both of rustls' crypto providers (a
 dev-dependency adds `ring`) and install no process default: the case in
 which redis-rs's own TLS panics.
+
+### MongoDB
+
+The MongoDB stores (roadmap S9, S17, S18) need multi-document
+transactions, which MongoDB runs only on a replica set, so the test server
+is a **single-node replica set** (`rs0`): `mongo:7.0.45-jammy` started with
+`--replSet rs0`, no authentication, no TLS. Its healthcheck initiates the
+set on its first run (one member, `localhost:27017`, its address inside its
+own container) and passes once that member is primary, a few seconds after
+start. As that member address is reachable only from inside the container,
+the test URL carries `directConnection=true`: the driver keeps to the
+address it was given instead of switching to the member address it
+discovers. The image is the 7.0 series, not 8.x: every 8.x release
+refuses to start on Linux 6.19 and later (MongoDB's SERVER-121912), which
+CI's runners run.
+
+- **Dev container**: the `mongodb` sidecar, and
+  `META_WHATSAPP_RS_TEST_MONGODB_URL=mongodb://mongodb:27017/?directConnection=true`.
+- **Without it**: `just test-live` starts `compose.test.yaml`, whose
+  `mongodb` listens on `127.0.0.1:57017`
+  (`mongodb://127.0.0.1:57017/?directConnection=true`).
+
+`tests/live_mongodb.rs` in meta-whatsapp-adapters is the smoke test: it
+commits a transaction across two collections, checks that nothing of it is
+visible outside it before the commit, and that an aborted one leaves
+nothing. Its driver, the `mongodb` crate (Apache-2.0), is a dev-dependency
+only, with `rustls-tls-aws-lc` (an explicit aws-lc-rs provider) as the TLS
+feature the driver requires; no library build links it until S17's
+`mongodb` feature. The server is MongoDB's, under the SSPL: it runs here as
+a test sidecar only, and nothing links or ships it.
 
 The Compose project is `meta-whatsapp-rs-dev` (it was `wa-rs-dev` before
 the rename), and named volumes are per project: a container built before
@@ -167,7 +200,7 @@ and set `META_WHATSAPP_RS_REQUIRE_FFMPEG=1` to be sure they ran:
 | `just check` / `just test` / `just doc` | all targets, all features |
 | `just features` | each adapter/client feature compiled alone |
 | `just test-live` / `just test-live-down` | live adapter, inbox and service tests; stop the services |
-| `just test-live-clean` | drop leftover live-test databases (`wa_test_*`) and schemas (`wa_test_*`, `wa_server_test_*`) on the test Postgres, and keys (`wa-test:*`) on the test Redis and the TLS Redis (the sidecars, or compose.test.yaml's), keeping them up; not during a live run |
+| `just test-live-clean` | drop leftover live-test databases (`wa_test_*`) and schemas (`wa_test_*`, `wa_server_test_*`) on the test Postgres, keys (`wa-test:*`) on the test Redis and the TLS Redis, and databases (`wa_test_*`) on the test MongoDB (the sidecars, or compose.test.yaml's), keeping them up; not during a live run |
 | `just skills-ts` | the server skills' TypeScript examples type-check against the committed OpenAPI document; needs Node of `tools/skills-ts/.nvmrc`'s major (24: the image's base, checked by `crates/meta-whatsapp-rs/tests/skills.rs`) and npm's registry (on the firewall's allowlist) |
 | `just deny` | licenses, advisories, bans, sources |
 | `just skills-check` | every skill stamp's commit is on main (directly or squash-merged) |

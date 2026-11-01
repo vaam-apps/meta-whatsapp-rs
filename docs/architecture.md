@@ -1076,8 +1076,9 @@ keyed by business number and contact, and
 - Live tests are named `live_*`, read `META_WHATSAPP_RS_TEST_POSTGRES_URL` /
   `META_WHATSAPP_RS_TEST_REDIS_URL` / `META_WHATSAPP_RS_TEST_REDISS_URL` (a
   TLS Redis requiring client certificates; its CA and client PEM files in
-  `META_WHATSAPP_RS_TEST_REDISS_CA`, `…_CLIENT_CERT`, `…_CLIENT_KEY`),
-  skip when unset, and **fail** when unset under
+  `META_WHATSAPP_RS_TEST_REDISS_CA`, `…_CLIENT_CERT`, `…_CLIENT_KEY`) /
+  `META_WHATSAPP_RS_TEST_MONGODB_URL` (a single-node replica set, with
+  `directConnection=true`; roadmap S8), skip when unset, and **fail** when unset under
   `META_WHATSAPP_RS_REQUIRE_LIVE=1` (`just test-live` sets it). Every `KvStore`
   adapter runs `store::conformance`, every `ConversationStore` adapter runs
   `store::conversation_conformance` (including concurrency, collation and

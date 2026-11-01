@@ -1144,7 +1144,7 @@ and `store-postgres`.
   - **Also, after the first release:** the legacy fingerprint's removal
     moved to M2a, the service's next item, as S7 landed before the
     first release.
-- [ ] **S8. MongoDB in the dev container and CI** (`.devcontainer/`,
+- [x] **S8. MongoDB in the dev container and CI** (`.devcontainer/`,
   the `just test-live` Compose file, `.github/workflows/ci.yml`): a
   single-node replica set (transactions need one) beside Postgres and
   Redis, and `META_WHATSAPP_RS_TEST_MONGODB_URL`, for S9, S17 and S18.
@@ -1152,6 +1152,47 @@ and `store-postgres`.
   - **Decisive:** `just test-live` with
     `META_WHATSAPP_RS_REQUIRE_LIVE=1` and no MongoDB URL fails; with it,
     a live smoke test commits a multi-document transaction.
+  - **Landed:** `mongodb` in `compose.test.yaml` (`127.0.0.1:57017`) and
+    as a devcontainer sidecar: `mongo:7.0.45-jammy` with
+    `--replSet rs0`, whose healthcheck runs `rs.initiate()` when
+    `rs.status()` reports the set not yet initiated (code 94), with one
+    member, `localhost:27017`, and passes once that member is primary
+    (a few seconds after start). The URL carries `directConnection=true`,
+    as the member address is the container's own: `just test-live`
+    exports `mongodb://127.0.0.1:57017/?directConnection=true` (and
+    starts Compose when it is unset), the devcontainer sets
+    `mongodb://mongodb:27017/?directConnection=true`, and `just
+    test-live-clean` drops the `wa_test_*` databases (through `mongosh`,
+    which the devcontainer's image gains). The smoke test is
+    `live_mongodb_replica_set_commits_a_multi_document_transaction`
+    (meta-whatsapp-adapters' `tests/live_mongodb.rs`, in `test-live`'s
+    `live_` filter): a transaction across two collections, not visible
+    outside it before the commit and all visible after, then an aborted
+    one that leaves nothing; with the URL unset under
+    `META_WHATSAPP_RS_REQUIRE_LIVE=1` it panics. Its driver, `mongodb`
+    3.9 (Apache-2.0), is a dev-dependency there, without default features
+    (`rustls-tls` is rustls on `ring`) and with `rustls-tls-aws-lc`,
+    which builds its configuration on an explicit aws-lc-rs provider: no
+    library build links it, and it enables no `ring`. CI needs no
+    workflow change (`just ci` runs `test-live`, which starts Compose).
+    The server is MongoDB's, under the SSPL, and runs as a test service
+    only.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable by its tag, line
+    or setting): the image `mongo:7.0.45-jammy`, pinned by tag: the 7.0
+    series, as every 8.x release refuses to start on Linux 6.19 and
+    later (MongoDB's SERVER-121912, an rseq incompatibility in its
+    tcmalloc; the CI runner's kernel is one), and 7.0 has transactions on
+    a replica set; back to 8.x once MongoDB ships a release that starts
+    there; the driver a dev-dependency of the adapters only,
+    with `rustls-tls-aws-lc` and `bson-3`, until S17 makes it an optional
+    dependency; the healthcheck's `start_interval` of 1 s and `interval`
+    of 30 s (a check every 2 s cost half a core); `mongosh` 2.14.1 in the
+    devcontainer image; `MongoCleanup` in `live_mongodb.rs`, so the other
+    test binaries do not build the driver (S17 may move it). The SSPL
+    server is run, never linked or shipped, as the test service for the
+    database the owner named (design §10); the owner may still rule on
+    it, and the final report lists it.
 - [ ] **S9. An `Outbox` spike on MongoDB**
   (`meta-whatsapp-server-store-mongodb`, the `Outbox` only, not composed
   into the binary), before the port shapes freeze: per-tenant commit
