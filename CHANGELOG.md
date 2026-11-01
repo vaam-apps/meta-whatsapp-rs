@@ -218,6 +218,73 @@ stored data, the owner's).
 
 ### Added
 
+- **The payment templates and the payment webhooks** (roadmap P1c,
+  parity rows 38, now done in the library, and 141; from
+  `payments/payments-in/orderdetailstemplate`, `orderstatustemplate`,
+  `payments/payments-br/orderdetailstemplate`, `payment-request-cta`,
+  `payments/payments-in/pg` and `payments/payments-br/one-click-payments`,
+  read on 2026-11-01).
+  - **Templates** (`meta_whatsapp_client::templates`, the new types
+    re-exported from `meta_whatsapp_client::payments`): the definitions'
+    `Button::OrderDetails` and `Button::PaymentRequest`
+    (`Button::order_details(text)`, `Button::payment_request(setting)`,
+    which writes the label the method requires), and
+    `TemplateDefinition::sub_category` and `display_format` (an order
+    status template is `ORDER_STATUS`, an order details one
+    `ORDER_DETAILS`); the sends' `TemplateMessage::order_details_button`
+    (an `OrderDetailsParameters`, checked by its currency's rules as an
+    `order_details` message's, the fields named in the template),
+    `payment_request_button` (a `PaymentRequest`: a
+    `PaymentRequestSetting`, Pix code, Boleto, payment link or one-click
+    `PaymentRequestCard`, with an optional `BRL` amount) and
+    `order_status` (a `TemplateOrderStatus`, India's rules), with the
+    `ButtonSubType::OrderDetails` and `PaymentRequest`,
+    `SendComponent::OrderStatus` and `Parameter::OrderStatus` they
+    build. Checked before any request: an order details template is
+    `UTILITY` or `MARKETING` with a `TEXT`, `IMAGE` or `DOCUMENT` header;
+    a payment request button has its method's label, at most three in a
+    template, each a different method, and then three buttons in all, a
+    sample value and no card at creation; a payment request's card and
+    amount (required for one-click, refused for Boleto and links, together
+    for Pix, `BRL`, `offset` 100, positive); an order status other than
+    `pending`; and a payment button or order status component whose
+    parameter did not parse typed is refused rather than sent unchecked,
+    as is any component or parameter of a send that lands in the
+    catch-all (`SendComponent::Other`, `Parameter::Other`: a `type`
+    spelled `Button`, an `index` that is not a number) holding an
+    `order_details`, `payment_request` or `order_status` object, and a
+    definition's `ORDER_DETAILS` or `PAYMENT_REQUEST` button that did
+    not parse typed.
+    Every creation and send example of the four pages is an exact-JSON
+    test, both ways. The order types (`OrderDetailsParameters`, `Order`,
+    `OrderItem`, `PaymentSetting`, `PaymentGateway`, `Currency`,
+    `OrderUpdate`, …) now also implement `Deserialize`, refusing what
+    they could not send back (an unknown currency or setting type, an
+    order `status` other than `pending`).
+  - **Webhooks** (`meta_whatsapp_webhooks::fields`): India's status of
+    type `payment` is a `status_updated` event as before, now with
+    `Status::status_type` (`StatusType::Payment`), `Status::payment`
+    (`StatusPayment`: the order's `reference_id`, amount, currency, the
+    `PaymentTransaction` with its gateway, status, method and error, the
+    `PaymentRefund`s, and the gateways' echoed fields) and
+    `Status::is_payment`; its `status` is the new
+    `MessageStatus::Captured` or `MessageStatus::Pending`. Brazil's
+    one-click confirmation is `InteractiveReply::PaymentMethod`
+    (`PaymentMethodReply`: method, time, `reference_id`, last four
+    digits, `credential_id`). Neither fails the change it arrives in: a
+    `payment`, or its amount, method or error, that does not parse
+    typed is `None`, a reply that does not is `InteractiveReply::Unknown`,
+    `refunds` may be `null` and `notes` `[]`. Both pages joined the
+    conformance sweep
+    (their manifest status `Typed`; the `OutOfScope` status is gone
+    with them), with two fixtures; the service has two new event data
+    snapshots and no changed one, and no new event type.
+  - **The service** sends the payment templates through
+    `POST /v1/messages` (`type` `template`), checked by the library:
+    until now a send's `order_details` and `payment_request` were
+    refused on their key (docs/guides/server.md). A payment template's
+    creation already passed and is now checked too.
+
 - **Pre-verified phone numbers** (`meta_whatsapp_client::waba`, roadmap
   L11c, parity row 123, from `embedded-signup/pre-verified-numbers` and
   Meta's pre-verified number reference pages, read on 2026-11-01; the
@@ -399,8 +466,11 @@ stored data, the owner's).
   one cut short of `IEND` is `InputRejected`, and ffmpeg gets it without
   its text and EXIF chunks (`tEXt`, `zTXt`, `iTXt`, `eXIf`) and without
   anything after `IEND` (ffmpeg 6.1 inflates every `zTXt` and keeps the
-  text: four 100 KB chunks took it 1.6 GB). The colour profile is kept
-  in a JPEG or PNG result. Meta gives no sticker dimensions, and none
+  text: four 100 KB chunks took it 1.6 GB). The input's colour profile,
+  one of at most 16 KiB (a JPEG's in a single chunk), is kept in a JPEG
+  or PNG result; any other is dropped before ffmpeg reads it (see
+  Security).
+  Meta gives no sticker dimensions, and none
   is imposed. New:
   `FfmpegConverter::check_for(&[TargetFormat])`, which checks each
   format's encoder (libopus, libwebp, mjpeg, png); `check()` is
@@ -2235,7 +2305,7 @@ stored data, the owner's).
 ### Changed
 
 - **Breaking — one shape for every open enum** (roadmap L20a, decided as
-  OPEN_QUESTIONS #27). Every enum Meta may extend, 190 of them in
+  OPEN_QUESTIONS #27). Every enum Meta may extend, 197 of them in
   `meta-whatsapp-client`, `meta-whatsapp-webhooks` and core, is now
   generated by one macro, `meta_whatsapp_core::open_enum!` (new): the
   documented values as variants and any other value kept verbatim in
@@ -2287,6 +2357,15 @@ stored data, the owner's).
     `Other(Value)`), `MessageProductType::Other(u16)`, and two request
     values, `WabaCurrency` (its parse still refuses an unlisted code)
     and `GatewayProvider` (its variants carry each gateway's fields).
+- **New public fields** (roadmap P1c): `templates::ParameterAction`
+  gains `order_details` and `payment_request`, and
+  `webhooks::fields::Status` gains `status_type` and `payment`. Code
+  that builds either with a struct literal and no `..` base must add
+  them (`ParameterAction` is `Default`); parsing and serialization are
+  unchanged for what parsed before, but for a payment status: its
+  `payment` and `type` were dropped and are now kept, and its `status`,
+  `MessageStatus::Other("captured")` before, is `MessageStatus::Captured`
+  (`Pending` likewise).
 - **Breaking — the durable jobs' operations are `JobStore`'s** (roadmap
   B3b): `KvJobs::schedule`, `cancel`, `rerun`, `get` and `observe` are
   no longer inherent methods but the `JobStore` trait's (bring it into
@@ -3644,6 +3723,40 @@ are marked `internal`, so `npx skills add vaam-apps/wa-rs` no longer offers
 them.
 
 ### Security
+
+**`FfmpegConverter`: a small JPEG or PNG could take `ffmpeg` to
+gigabytes of memory** (roadmap L19b, fixed before any release; measured
+against ffmpeg 6.1.1). The JPEG path passed a photo's EXIF through for
+its orientation, and ffmpeg's EXIF reader copies a value once for every
+IFD entry pointing at it, over every `APP1` segment it meets: a 67 KB
+JPEG of one crafted segment took 916 MB, a 264 KB one of four 3.6 GB,
+a 658 KB one of ten 8.4 GB in 53 s, all far inside the 64 MiB input
+bound and each allocation under `-max_alloc`. A PNG's colour profile
+(`iCCP`) was passed through too, and ffmpeg inflates it whole: one
+200 KB chunk inflating to 200 MiB took 660 MB. The converter now walks
+a JPEG's segments before ffmpeg starts and passes on only those ffmpeg
+reads whole: the tables, the frame header, the scans and their data,
+the first JFIF and Adobe segments rewritten to their fixed fields, the
+first colour profile segment (`APP2`, `ICC_PROFILE`) when it holds a
+whole profile of at most 16 KiB in one chunk, and, in place of the
+first EXIF segment, a minimal EXIF of 36 bytes carrying its Orientation
+alone (1 to 8; none without a valid one), which ffmpeg still applies.
+Every other `APP1` (EXIF, XMP), every other `APP2` (so a profile split
+over several chunks is dropped whole, and that image loses its colour
+profile), `APP13`, comments, the other application segments, markers
+ffmpeg does not decode, and anything after the end of image are
+dropped; a JPEG cut short, with a segment running past the end, or with
+a table, frame or scan header whose length is not its content, is
+`ConversionError::InputRejected` (a truncated JPEG was decoded partly
+before). A PNG keeps its first `iCCP` chunk only if it is at most
+16 KiB, and no other: a JPEG and a PNG both keep one profile of at
+most 16 KiB. Through the converter, the crafted EXIF JPEG now
+peaks at about 50 MB and the profile PNG at about 48 MB
+(`ffmpeg_applies_the_orientation_of_a_jpeg_whose_exif_is_a_bomb`,
+`ffmpeg_keeps_a_small_colour_profile_and_drops_a_large_one`, each with
+the unstripped file as its control;
+`ffmpeg_keeps_a_jpeg_s_small_colour_profile_in_one_chunk` shows a
+JPEG's profile still reaching a JPEG and a PNG result).
 
 `pulldown-cmark` (the bot's Markdown parser) is locked at 0.13.5 for
 RUSTSEC-2026-0414, exponential event growth from wikilinks with empty

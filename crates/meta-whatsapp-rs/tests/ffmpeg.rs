@@ -1282,6 +1282,433 @@ async fn ffmpeg_applies_a_jpeg_s_orientation_and_drops_its_exif() {
     assert_eq!((w.width, w.height), (480, 640));
 }
 
+/// The bound on ffmpeg's memory the bombs below are held to: far over
+/// what ffmpeg needs for a small image (about 50 MB), far under what
+/// they take it to unstripped (some 900 MB for the EXIF, 650 MB for the
+/// profile).
+#[cfg(target_os = "linux")]
+const PEAK_BOUND_KIB: u64 = 400 * 1024;
+
+/// A wrapper around the test's ffmpeg that adds its pid to `pids`, then
+/// `exec`s ffmpeg (the same process): what a converter over it, or a
+/// control run of it, does is ffmpeg's, measured by [`measured`].
+#[cfg(target_os = "linux")]
+struct Watched {
+    wrapper: PathBuf,
+    pids: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+impl Watched {
+    fn new(ffmpeg: &Path, name: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "meta-whatsapp-rs-ffmpeg-peak-{}-{name}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (wrapper, pids) = (dir.join("ffmpeg"), dir.join("pids"));
+        std::fs::write(&pids, "").unwrap();
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\necho $$ >> '{}'\nexec '{}' \"$@\"\n",
+                pids.display(),
+                ffmpeg.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Another test forking while the script was open for writing can
+        // keep it busy for a moment ("text file busy"): until it runs.
+        let started = Instant::now();
+        while run(&wrapper, &["-hide_banner", "-version"], &[]).is_none() {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the wrapper never ran"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Self { wrapper, pids }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for Watched {
+    fn drop(&mut self) {
+        if let Some(dir) = self.wrapper.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+/// `work`'s result, and the highest resident memory (`VmHWM`, KiB) of
+/// the processes `watched` started meanwhile, read from `/proc` every
+/// millisecond. A lower bound on their true peak (what happens after the
+/// last read is missed), which a bomb reaches early and keeps (the
+/// high-water mark only rises): enough for a bound, and for a control
+/// over it.
+#[cfg(target_os = "linux")]
+async fn measured<T>(watched: &Watched, work: impl std::future::Future<Output = T>) -> (T, u64) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let stop = Arc::new(AtomicBool::new(false));
+    let pids = watched.pids.clone();
+    let sampler = std::thread::spawn({
+        let stop = Arc::clone(&stop);
+        move || {
+            let mut peak = 0u64;
+            loop {
+                let last = stop.load(Ordering::SeqCst);
+                for pid in std::fs::read_to_string(&pids).unwrap_or_default().lines() {
+                    let status = std::fs::read_to_string(format!("/proc/{pid}/status"));
+                    let kib = status.ok().and_then(|s| {
+                        s.lines()
+                            .find_map(|l| l.strip_prefix("VmHWM:"))
+                            .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+                    });
+                    peak = peak.max(kib.unwrap_or(0));
+                }
+                if last {
+                    return peak;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    });
+    let out = work.await;
+    stop.store(true, Ordering::SeqCst);
+    (out, sampler.join().unwrap())
+}
+
+/// The converter's first attempt at a JPEG, literal by literal (as
+/// `image::arguments(&JPEG[0])` in the adapters): the control runs it on
+/// the file as it is, without the converter's walk.
+#[cfg(target_os = "linux")]
+const JPEG_ATTEMPT: &[&str] = &[
+    "-hide_banner",
+    "-nostdin",
+    "-nostats",
+    "-loglevel",
+    "error",
+    "-max_alloc",
+    "268435456",
+    "-abort_on",
+    "empty_output",
+    "-protocol_whitelist",
+    "pipe",
+    "-format_whitelist",
+    "png_pipe,jpeg_pipe",
+    "-max_pixels",
+    "33554432",
+    "-i",
+    "pipe:0",
+    "-map",
+    "0:v:0",
+    "-map_metadata",
+    "-1",
+    "-frames:v",
+    "1",
+    "-vf",
+    "format=yuvj420p",
+    "-c:v",
+    "mjpeg",
+    "-q:v",
+    "2",
+    "-f",
+    "image2pipe",
+    "pipe:1",
+];
+
+/// An EXIF alias bomb: one APP1 segment of the largest length, its first
+/// IFD of `entries` ASCII entries (tags from `first`) all pointing at the
+/// same value, which fills the rest of the segment: ffmpeg 6.1 copies the
+/// value once for each. With `orientation`, an Orientation entry first.
+#[cfg(target_os = "linux")]
+fn exif_bomb(entries: u16, first: u16, orientation: Option<u16>) -> Vec<u8> {
+    let n = u32::from(entries) + u32::from(orientation.is_some());
+    let value_at = 8 + 2 + 12 * n + 4;
+    // Segment length 65533: the length field, `Exif\0\0`, the TIFF data.
+    let tiff_len = 65533 - 2 - 6;
+    let value_len = tiff_len - value_at;
+    let mut tiff = b"II*\0".to_vec();
+    tiff.extend_from_slice(&8u32.to_le_bytes());
+    tiff.extend_from_slice(&u16::try_from(n).unwrap().to_le_bytes());
+    if let Some(o) = orientation {
+        tiff.extend_from_slice(&0x0112u16.to_le_bytes());
+        tiff.extend_from_slice(&3u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&o.to_le_bytes());
+        tiff.extend_from_slice(&[0, 0]);
+    }
+    for i in 0..entries {
+        tiff.extend_from_slice(&(first + i).to_le_bytes());
+        tiff.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+        tiff.extend_from_slice(&value_len.to_le_bytes());
+        tiff.extend_from_slice(&value_at.to_le_bytes());
+    }
+    tiff.extend_from_slice(&0u32.to_le_bytes());
+    tiff.resize(usize::try_from(tiff_len).unwrap() - 1, b'A');
+    tiff.push(0);
+    let mut segment = vec![0xFF, 0xE1];
+    segment.extend_from_slice(&65533u16.to_be_bytes());
+    segment.extend_from_slice(b"Exif\0\0");
+    segment.extend_from_slice(&tiff);
+    segment
+}
+
+/// A 67 KB JPEG whose one EXIF segment takes ffmpeg 6.1 to some 900 MB
+/// (the control, the file as it is) goes through the converter, with a
+/// second such segment, under [`PEAK_BOUND_KIB`]: the converter gives
+/// ffmpeg a minimal EXIF of the first segment's Orientation, which it
+/// still applies (64 × 48 comes out 48 × 64), and drops the second.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn ffmpeg_applies_the_orientation_of_a_jpeg_whose_exif_is_a_bomb() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let plain = lavfi(&ffmpeg, "testsrc2=s=64x48", &["-c:v", "mjpeg"]);
+    let first = exif_bomb(2700, 0x1000, Some(6));
+    let one = [&plain[..2], &first, &plain[2..]].concat();
+    let two = [
+        &plain[..2],
+        &first,
+        &exif_bomb(2700, 0x1000 + 2700, None),
+        &plain[2..],
+    ]
+    .concat();
+    assert!(one.len() < 70_000 && two.len() < 140_000, "{}", two.len());
+
+    let control = Watched::new(&ffmpeg, "exif-control");
+    let (_, unstripped) = measured(&control, async {
+        run(&control.wrapper, JPEG_ATTEMPT, &one)
+    })
+    .await;
+    let watched = Watched::new(&ffmpeg, "exif");
+    let c = FfmpegConverter::new().with_program(&watched.wrapper);
+    let (image, peak) = measured(
+        &watched,
+        c.convert(MediaInput::new(two), TargetFormat::Jpeg),
+    )
+    .await;
+    eprintln!(
+        "EXIF bomb: ffmpeg peaked at {} MB on the file as it is, {} MB through the converter",
+        unstripped / 1024,
+        peak / 1024
+    );
+    assert!(
+        unstripped > PEAK_BOUND_KIB,
+        "the control: {unstripped} KiB, not a bomb to this ffmpeg"
+    );
+    let image = image.unwrap();
+    assert!(peak < PEAK_BOUND_KIB, "{peak} KiB");
+    let (_, width, height, _) = jpeg_frame(&image.data);
+    assert_eq!((width, height), (48, 64));
+}
+
+/// The Adler-32 of `data` (zlib's trailer).
+#[cfg(target_os = "linux")]
+fn adler32(data: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for &byte in data {
+        a = (a + u32::from(byte)) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+/// `data` as a zlib stream of stored (uncompressed) blocks.
+#[cfg(target_os = "linux")]
+fn zlib_stored(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = data.chunks(65535).collect();
+    for (i, block) in blocks.iter().enumerate() {
+        out.push(u8::from(i + 1 == blocks.len()));
+        let len = u16::try_from(block.len()).unwrap();
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&(!len).to_le_bytes());
+        out.extend_from_slice(block);
+    }
+    out.extend_from_slice(&adler32(data).to_be_bytes());
+    out
+}
+
+/// A zlib stream inflating to `1 + 258 * copies` zero bytes, in one
+/// fixed-Huffman block: a zero, then copies of 258 bytes at distance 1
+/// (13 bits each), the end of the block, the trailer.
+#[cfg(target_os = "linux")]
+fn zlib_zeros(copies: usize) -> Vec<u8> {
+    let mut bits: Vec<bool> = Vec::with_capacity(copies * 13 + 32);
+    // Huffman codes go most significant bit first, everything else least.
+    let code = |bits: &mut Vec<bool>, code: u32, len: u32| {
+        bits.extend((0..len).rev().map(|i| code >> i & 1 == 1));
+    };
+    bits.extend([true, true, false]); // last block, fixed Huffman (01)
+    code(&mut bits, 0x30, 8); // literal 0
+    for _ in 0..copies {
+        code(&mut bits, 0xC5, 8); // length 258 (symbol 285)
+        code(&mut bits, 0, 5); // distance 1
+    }
+    code(&mut bits, 0, 7); // end of block
+    let mut out = vec![0x78, 0x01];
+    out.extend(bits.chunks(8).map(|byte| {
+        byte.iter()
+            .enumerate()
+            .fold(0u8, |acc, (i, &bit)| acc | (u8::from(bit) << i))
+    }));
+    // Adler-32 of n zeros: a stays 1, b is n.
+    let n = u32::try_from((1 + 258 * copies) % 65521).unwrap();
+    out.extend_from_slice(&((n << 16) | 1).to_be_bytes());
+    out
+}
+
+/// The CRC-32 of a PNG chunk's type and data.
+#[cfg(target_os = "linux")]
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in data {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// A colour profile chunk (`iCCP`) named `icc` of `compressed`, with its
+/// CRC: ffmpeg reads this one.
+#[cfg(target_os = "linux")]
+fn iccp(compressed: &[u8]) -> Vec<u8> {
+    let data = [&b"icc\0\0"[..], compressed].concat();
+    let mut out = u32::try_from(data.len()).unwrap().to_be_bytes().to_vec();
+    let typed = [&b"iCCP"[..], &data].concat();
+    out.extend_from_slice(&typed);
+    out.extend_from_slice(&crc32(&typed).to_be_bytes());
+    out
+}
+
+/// A PNG's small colour profile is kept: the PNG result carries one. A
+/// profile over 16 KiB is not: one of 1.3 MB inflating to 200 MiB, which
+/// takes ffmpeg 6.1 to some 650 MB (the control, the file as it is),
+/// goes through the converter under [`PEAK_BOUND_KIB`], and its result
+/// has no profile.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn ffmpeg_keeps_a_small_colour_profile_and_drops_a_large_one() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let plain = lavfi(&ffmpeg, "testsrc2=s=64x48", &["-c:v", "png"]);
+    // After the header (signature and IHDR: 33 bytes).
+    let with = |chunk: &[u8]| [&plain[..33], chunk, &plain[33..]].concat();
+    let has_profile = |png: &[u8]| png.windows(4).any(|w| w == b"iCCP");
+
+    let small = zlib_stored(&[0x5A; 3000]);
+    assert!(small.len() < 16 * 1024);
+    let out = converter
+        .convert(MediaInput::new(with(&iccp(&small))), TargetFormat::Png)
+        .await
+        .unwrap();
+    assert!(has_profile(&out.data), "the small profile was dropped");
+
+    let large = zlib_zeros(812_800);
+    assert!(large.len() < 1_400_000, "{}", large.len());
+    let bomb = with(&iccp(&large));
+    let control = Watched::new(&ffmpeg, "iccp-control");
+    let (_, unstripped) = measured(&control, async {
+        run(&control.wrapper, JPEG_ATTEMPT, &bomb)
+    })
+    .await;
+    let watched = Watched::new(&ffmpeg, "iccp");
+    let c = FfmpegConverter::new().with_program(&watched.wrapper);
+    let (out, peak) = measured(
+        &watched,
+        c.convert(MediaInput::new(bomb), TargetFormat::Png),
+    )
+    .await;
+    eprintln!(
+        "iCCP bomb: ffmpeg peaked at {} MB on the file as it is, {} MB through the converter",
+        unstripped / 1024,
+        peak / 1024
+    );
+    assert!(
+        unstripped > PEAK_BOUND_KIB,
+        "the control: {unstripped} KiB, not a bomb to this ffmpeg"
+    );
+    let out = out.unwrap();
+    assert!(peak < PEAK_BOUND_KIB, "{peak} KiB");
+    assert!(!has_profile(&out.data), "the large profile was kept");
+    assert_eq!(png_header(&out.data).0, 64);
+}
+
+/// A JPEG's colour profile in one `APP2` segment of at most 16 KiB
+/// reaches a JPEG result, its bytes whole, and a PNG result as an
+/// `iCCP` chunk; a profile in two chunks is dropped whole, and the
+/// result has none.
+#[tokio::test]
+async fn ffmpeg_keeps_a_jpeg_s_small_colour_profile_in_one_chunk() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let plain = lavfi(&ffmpeg, "testsrc2=s=64x48", &["-c:v", "mjpeg"]);
+    let bytes: Vec<u8> = (0..3000u32)
+        .map(|i| b"ICCprofile"[(i % 10) as usize])
+        .collect();
+    let chunk = |n: u8, count: u8, data: &[u8]| {
+        let body = [&b"ICC_PROFILE\0"[..], &[n, count], data].concat();
+        let mut segment = vec![0xFF, 0xE2];
+        segment.extend_from_slice(&u16::try_from(body.len() + 2).unwrap().to_be_bytes());
+        segment.extend_from_slice(&body);
+        segment
+    };
+    let one = [&plain[..2], &chunk(1, 1, &bytes), &plain[2..]].concat();
+    let image = converter
+        .convert(MediaInput::new(one.clone()), TargetFormat::Jpeg)
+        .await
+        .unwrap();
+    assert!(
+        image.data.windows(12).any(|w| w == b"ICC_PROFILE\0"),
+        "no profile in the JPEG result"
+    );
+    assert!(
+        image.data.windows(bytes.len()).any(|w| w == &bytes[..]),
+        "the profile's bytes changed"
+    );
+    let png = converter
+        .convert(MediaInput::new(one), TargetFormat::Png)
+        .await
+        .unwrap();
+    assert!(
+        png.data.windows(4).any(|w| w == b"iCCP"),
+        "no profile in the PNG result"
+    );
+
+    let (first, second) = bytes.split_at(1500);
+    let two = [
+        &plain[..2],
+        &chunk(1, 2, first),
+        &chunk(2, 2, second),
+        &plain[2..],
+    ]
+    .concat();
+    let image = converter
+        .convert(MediaInput::new(two), TargetFormat::Jpeg)
+        .await
+        .unwrap();
+    assert!(
+        !image.data.windows(11).any(|w| w == b"ICC_PROFILE"),
+        "a profile in two chunks was kept"
+    );
+}
+
 /// One PNG chunk: length, type, data and a zero CRC, never checked (the
 /// converter takes these chunks out before ffmpeg reads them).
 fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {

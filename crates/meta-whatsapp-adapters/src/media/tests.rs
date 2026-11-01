@@ -345,8 +345,6 @@ fn a_png_reaches_ffmpeg_without_its_text_and_nothing_after_its_end() {
     // Only an appended tail: a slice of it.
     let tailed = Bytes::from([&clean[..], b"tail"].concat());
     assert_eq!(&image::prepared(&tailed).unwrap()[..], &clean[..]);
-    let jpeg = Bytes::from(jpeg(8, 3));
-    assert_eq!(image::prepared(&jpeg).unwrap(), jpeg);
 
     let truncated = [
         png_of(&[ihdr.clone(), idat.clone()]),
@@ -368,6 +366,490 @@ fn a_png_reaches_ffmpeg_without_its_text_and_nothing_after_its_end() {
         image::prepared(&Bytes::from(huge)),
         Err("a PNG chunk longer than PNG allows")
     );
+}
+
+/// A PNG's first colour profile (`iCCP`) is kept when its data is at
+/// most 16 KiB; a larger one, and any second one, is not (ffmpeg
+/// inflates a profile whole: 200 KB of it inflating to 200 MiB took
+/// 660 MB).
+#[test]
+fn a_png_keeps_one_colour_profile_of_at_most_16_kib() {
+    assert_eq!(image::PNG_ICCP_MAX, 16 * 1024);
+    let ihdr = chunk(*b"IHDR", &[0, 0, 0, 16, 0, 0, 0, 16, 8, 2, 0, 0, 0]);
+    let idat = chunk(*b"IDAT", b"x\x9c pixels");
+    let iend = chunk(*b"IEND", b"");
+    // A profile chunk of `len` bytes of data: a name, the compression
+    // method, then compressed bytes.
+    let profile = |len: usize| chunk(*b"iCCP", &[&b"icc\0\0"[..], &vec![0x78; len - 5]].concat());
+    let at_cap = profile(16 * 1024);
+    let prepared = |chunks: &[Vec<u8>]| image::prepared(&Bytes::from(png_of(chunks))).unwrap();
+    assert_eq!(
+        &prepared(&[ihdr.clone(), at_cap.clone(), idat.clone(), iend.clone()])[..],
+        &png_of(&[ihdr.clone(), at_cap.clone(), idat.clone(), iend.clone()])[..]
+    );
+    // A second profile, however small, is taken out.
+    assert_eq!(
+        &prepared(&[
+            ihdr.clone(),
+            at_cap.clone(),
+            profile(100),
+            idat.clone(),
+            iend.clone()
+        ])[..],
+        &png_of(&[ihdr.clone(), at_cap, idat.clone(), iend.clone()])[..]
+    );
+    // One byte over: taken out, and the one after it too.
+    for over in [profile(16 * 1024 + 1), profile(200_000)] {
+        assert_eq!(
+            &prepared(&[ihdr.clone(), over, profile(100), idat.clone(), iend.clone()])[..],
+            &png_of(&[ihdr.clone(), idat.clone(), iend.clone()])[..]
+        );
+    }
+}
+
+/// One JPEG segment: its marker, its length (counting itself) and `body`.
+fn segment(marker: u8, body: &[u8]) -> Vec<u8> {
+    let mut out = vec![0xFF, marker];
+    out.extend_from_slice(&u16::try_from(body.len() + 2).unwrap().to_be_bytes());
+    out.extend_from_slice(body);
+    out
+}
+
+/// What ffmpeg is given of a JPEG as it is: two quantization tables (8
+/// and 16 bits), a frame header of three components, two Huffman
+/// tables, a restart interval, a scan header and its entropy-coded data
+/// (a stuffed `FF 00`, a restart marker, `FF 7F`, which is no marker to
+/// ffmpeg, fill bytes), then a second scan, progressive style. No end of
+/// image.
+fn jpeg_body() -> Vec<u8> {
+    let dqt = segment(
+        0xDB,
+        &[&[0x00][..], &[2; 64], &[0x11], &[0, 3].repeat(64)].concat(),
+    );
+    let sof = segment(
+        0xC0,
+        &[8, 0, 48, 0, 64, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1],
+    );
+    let mut dc_counts = [0u8; 16];
+    dc_counts[0] = 1;
+    let mut ac_counts = [0u8; 16];
+    ac_counts[1] = 2;
+    let dht = segment(
+        0xC4,
+        &[
+            &[0x00][..],
+            &dc_counts,
+            &[5],
+            &[0x10],
+            &ac_counts,
+            &[0x01, 0xE1],
+        ]
+        .concat(),
+    );
+    let dri = segment(0xDD, &[0, 4]);
+    let sos = segment(0xDA, &[3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0]);
+    let scan = [
+        0x12, 0xFF, 0x00, 0x34, 0xFF, 0xD0, 0x56, 0xFF, 0x7F, 0x78, 0xFF, 0xFF,
+    ];
+    let second = segment(0xDA, &[1, 1, 0x00, 1, 5, 0]);
+    [
+        dqt,
+        sof,
+        dht,
+        dri,
+        sos,
+        scan.to_vec(),
+        second,
+        vec![0x9A, 0xFF, 0x00],
+    ]
+    .concat()
+}
+
+const SOI: [u8; 2] = [0xFF, 0xD8];
+const EOI: [u8; 2] = [0xFF, 0xD9];
+
+/// A JFIF segment of 14 bytes (version 1.2, 72 dots an inch, no
+/// thumbnail), as ffmpeg is given it.
+const JFIF: &[u8] = b"\xFF\xE0\x00\x10JFIF\0\x01\x02\x01\x00\x48\x00\x48\x00\x00";
+
+/// An Adobe segment of 12 bytes (transform 1: YCbCr), as ffmpeg is given
+/// it.
+const ADOBE: &[u8] = b"\xFF\xEE\x00\x0EAdobe\x00\x64\x00\x00\x00\x00\x01";
+
+/// The minimal EXIF of `orientation`, byte by byte.
+fn exif_of(orientation: u8) -> Vec<u8> {
+    [
+        &b"\xFF\xE1\x00\x22"[..], // APP1, 34 bytes
+        b"Exif\0\0",
+        b"MM\x00\x2A\x00\x00\x00\x08", // big-endian TIFF, IFD0 at 8
+        b"\x00\x01",                   // one entry
+        b"\x01\x12\x00\x03\x00\x00\x00\x01\x00", // Orientation, SHORT, one
+        &[orientation],
+        b"\x00\x00",         // padding
+        b"\x00\x00\x00\x00", // no next IFD
+    ]
+    .concat()
+}
+
+/// An EXIF segment's body: `Exif\0\0`, a TIFF header in either byte
+/// order, one IFD of `entries` (tag, type, count, the value field as
+/// written), no next IFD, then `tail` (where entries' offsets point).
+fn exif_body(big: bool, entries: &[(u16, u16, u32, [u8; 4])], tail: &[u8]) -> Vec<u8> {
+    let u16b = |v: u16| {
+        if big {
+            v.to_be_bytes()
+        } else {
+            v.to_le_bytes()
+        }
+    };
+    let u32b = |v: u32| {
+        if big {
+            v.to_be_bytes()
+        } else {
+            v.to_le_bytes()
+        }
+    };
+    let mut out = b"Exif\0\0".to_vec();
+    out.extend_from_slice(if big { b"MM" } else { b"II" });
+    out.extend_from_slice(&u16b(42));
+    out.extend_from_slice(&u32b(8));
+    out.extend_from_slice(&u16b(u16::try_from(entries.len()).unwrap()));
+    for (tag, kind, count, value) in entries {
+        out.extend_from_slice(&u16b(*tag));
+        out.extend_from_slice(&u16b(*kind));
+        out.extend_from_slice(&u32b(*count));
+        out.extend_from_slice(value);
+    }
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(tail);
+    out
+}
+
+/// One SHORT, left-justified in an entry's four-byte value field.
+fn short(big: bool, v: u16) -> [u8; 4] {
+    let b = if big {
+        v.to_be_bytes()
+    } else {
+        v.to_le_bytes()
+    };
+    [b[0], b[1], 0, 0]
+}
+
+/// An EXIF segment whose first IFD holds a camera maker (an ASCII value
+/// stored after the IFD) and `orientation`.
+fn exif_with(big: bool, orientation: u16) -> Vec<u8> {
+    let u32b = |v: u32| {
+        if big {
+            v.to_be_bytes()
+        } else {
+            v.to_le_bytes()
+        }
+    };
+    // The header (8), the count (2), two entries (24), no next IFD (4).
+    let maker = b"Jane's phone\0";
+    segment(
+        0xE1,
+        &exif_body(
+            big,
+            &[
+                (0x010F, 2, 13, u32b(38)),
+                (0x0112, 3, 1, short(big, orientation)),
+            ],
+            maker,
+        ),
+    )
+}
+
+/// A JPEG carrying everything the walk takes out (and one thing it
+/// keeps): three EXIF segments
+/// (the first little-endian with Orientation 6, the second big-endian
+/// with 3, the third `Exif` without its two zeros, which ffmpeg reads as
+/// EXIF all the same), XMP, a colour profile in one chunk (kept) and a
+/// second one, a multi-picture `APP2`, a JFIF segment with a thumbnail
+/// and a second one, Photoshop's `APP13`, an Adobe segment
+/// padded past its fields, a comment, `APP3`, bytes between segments, a
+/// segment ffmpeg does not decode (`DAC`) holding what looks like an
+/// EXIF segment, then a second image and more after its end. And what
+/// ffmpeg is given of it.
+fn jpeg_to_strip() -> (Vec<u8>, Vec<u8>) {
+    let body = jpeg_body();
+    let clean = [&SOI[..], &body, &EOI].concat();
+    let file = [
+        &SOI[..],
+        &exif_with(false, 6),
+        &segment(
+            0xE1,
+            b"http://ns.adobe.com/xap/1.0/\0<x:xmpmeta>Jane Doe</x:xmpmeta>",
+        ),
+        &exif_with(true, 3),
+        &segment(0xE1, b"ExifXXMM\x00\x2A\x00\x00\x00\x08"),
+        &segment(0xE2, b"ICC_PROFILE\0\x01\x01profile bytes"),
+        &segment(0xE2, b"ICC_PROFILE\0\x01\x01another profile"),
+        &segment(0xE2, b"MPF\0MM\x00\x2A\x00\x00\x00\x08"),
+        &segment(0xE0, b"JFIF\0\x01\x02\x01\x00\x48\x00\x48\x02\x01RGBRGB"),
+        &segment(0xE0, b"JFIF\0\x01\x01\x00\x00\x01\x00\x01\x00\x00"),
+        &segment(0xED, b"Photoshop 3.0\08BIM\x04\x04Jane Doe"),
+        &segment(0xEE, b"Adobe\x00\x64\x00\x00\x00\x00\x01 and some more"),
+        &segment(0xFE, b"Jane Doe's holiday"),
+        &segment(0xE3, b"_JPSJPS_\x00\x04\x00\x00\x01\x01"),
+        &[0x00, 0x12, 0xFF, 0x00, 0xFF],
+        &segment(0xCC, b"\xFF\xE1\x00\x08Exif\0\0"),
+        &body,
+        &EOI,
+        &clean,
+        b"trailing",
+    ]
+    .concat();
+    let given = [
+        &SOI[..],
+        &exif_of(6),
+        &segment(0xE2, b"ICC_PROFILE\0\x01\x01profile bytes"),
+        JFIF,
+        ADOBE,
+        &body,
+        &EOI,
+    ]
+    .concat();
+    (file, given)
+}
+
+/// What ffmpeg gets of a JPEG: its tables, frame, scans and their data,
+/// the first JFIF and Adobe segments rewritten to their fixed fields, the
+/// first EXIF segment reduced to a minimal one of its Orientation, the
+/// end of image; nothing else. A JPEG with nothing to take out is passed
+/// on uncopied.
+#[test]
+fn a_jpeg_reaches_ffmpeg_with_only_what_ffmpeg_reads_whole() {
+    let (file, given) = jpeg_to_strip();
+    assert_eq!(
+        &image::prepared(&Bytes::from(file)).unwrap()[..],
+        &given[..]
+    );
+
+    // Nothing to take out (the EXIF minimal already): the same bytes.
+    let clean = Bytes::from([&SOI[..], &exif_of(8), JFIF, ADOBE, &jpeg_body(), &EOI].concat());
+    let prepared = image::prepared(&clean).unwrap();
+    assert_eq!(
+        (prepared.as_ptr(), prepared.len()),
+        (clean.as_ptr(), clean.len())
+    );
+    // Only a tail: a slice of it.
+    let tailed = Bytes::from([&clean[..], b"tail"].concat());
+    assert_eq!(&image::prepared(&tailed).unwrap()[..], &clean[..]);
+    // ffmpeg's own JPEG: a comment naming the encoder, taken out.
+    let lavc = [
+        &SOI[..],
+        JFIF,
+        &segment(0xFE, b"Lavc60.31.102\0"),
+        &jpeg_body(),
+        &EOI,
+    ]
+    .concat();
+    assert_eq!(
+        &image::prepared(&Bytes::from(lavc)).unwrap()[..],
+        &[&SOI[..], JFIF, &jpeg_body(), &EOI].concat()[..]
+    );
+    // A JFIF or Adobe segment too short for its fields: taken out.
+    let short = [
+        &SOI[..],
+        &segment(0xE0, b"JFIF\0\x01\x02\x01\x00\x48\x00\x48\x00"),
+        &segment(0xEE, b"Adobe\x00\x64\x00\x00\x00\x00"),
+        &jpeg_body(),
+        &EOI,
+    ]
+    .concat();
+    assert_eq!(
+        &image::prepared(&Bytes::from(short)).unwrap()[..],
+        &[&SOI[..], &jpeg_body(), &EOI].concat()[..]
+    );
+}
+
+/// The minimal EXIF of each orientation, byte by byte, read from an EXIF
+/// segment in either byte order; with no valid orientation, no EXIF at
+/// all, even when a later EXIF segment has one.
+#[test]
+fn a_jpeg_s_exif_is_its_orientation_alone() {
+    let body = jpeg_body();
+    let with = |exif: &[Vec<u8>]| {
+        let file = [&SOI[..], &exif.concat(), &body, &EOI].concat();
+        image::prepared(&Bytes::from(file)).unwrap().to_vec()
+    };
+    for orientation in 1..=8u8 {
+        let expected = exif_of(orientation);
+        assert_eq!(&image::minimal_exif(orientation)[..], &expected[..]);
+        assert_eq!(expected.len(), 36);
+        for big in [false, true] {
+            assert_eq!(
+                with(&[exif_with(big, orientation.into())]),
+                [&SOI[..], &expected, &body, &EOI].concat(),
+                "orientation {orientation}, big-endian {big}"
+            );
+        }
+    }
+    let none = [&SOI[..], &body, &EOI].concat();
+    let one =
+        |big: bool, entry: (u16, u16, u32, [u8; 4])| segment(0xE1, &exif_body(big, &[entry], b""));
+    let invalid = [
+        exif_with(false, 0),
+        exif_with(true, 9),
+        exif_with(true, 0x0106),
+        // A LONG, two values, another tag.
+        one(true, (0x0112, 4, 1, [0, 0, 0, 6])),
+        one(false, (0x0112, 3, 2, [6, 0, 6, 0])),
+        one(false, (0x0110, 3, 1, [6, 0, 0, 0])),
+        // A TIFF header of neither order; the first IFD out of the data;
+        // an IFD of more entries than there are.
+        segment(0xE1, b"Exif\0\0MX\x00\x2A\x00\x00\x00\x08\x00\x01\x01\x12\x00\x03\x00\x00\x00\x01\x00\x06\x00\x00"),
+        segment(0xE1, b"Exif\0\0MM\x00\x2A\x00\x00\x01\x00"),
+        segment(0xE1, b"Exif\0\0MM\x00\x2A\x00\x00\x00\x08\x00\x02\x01\x10\x00\x03\x00\x00\x00\x01\x00\x06\x00\x00\x01\x12\x00\x03"),
+        segment(0xE1, b"Exif\0\0"),
+    ];
+    for exif in invalid {
+        assert_eq!(with(std::slice::from_ref(&exif)), none, "{exif:x?}");
+        // The first EXIF segment decides: a valid one after it is taken
+        // out as well.
+        assert_eq!(
+            with(&[exif.clone(), exif_with(false, 6)]),
+            none,
+            "{exif:x?}"
+        );
+    }
+}
+
+/// A JPEG's colour profile segment (`APP2`, `ICC_PROFILE\0`): the first
+/// is kept when it holds a whole profile (chunk 1 of 1) of 1 byte to
+/// 16 KiB, as a PNG's is; anything else is taken out, a profile in
+/// several chunks whole, and every later profile segment with it.
+#[test]
+fn a_jpeg_keeps_one_colour_profile_of_at_most_16_kib() {
+    assert_eq!(image::JPEG_ICC_MAX, 16 * 1024);
+    let body = jpeg_body();
+    let profile = |chunk: u8, count: u8, len: usize| {
+        segment(
+            0xE2,
+            &[&b"ICC_PROFILE\0"[..], &[chunk, count], &vec![0x50; len]].concat(),
+        )
+    };
+    let given = |segments: &[Vec<u8>]| {
+        let file = [&SOI[..], &segments.concat(), &body, &EOI].concat();
+        image::prepared(&Bytes::from(file)).unwrap().to_vec()
+    };
+    let with = |profile: &[u8]| [&SOI[..], profile, &body, &EOI].concat();
+    let none = [&SOI[..], &body, &EOI].concat();
+    let at_cap = profile(1, 1, 16 * 1024);
+    assert_eq!(at_cap.len(), 4 + 14 + 16 * 1024);
+    // Kept: one byte, the cap; a second profile after a kept one is not.
+    for kept in [profile(1, 1, 1), at_cap.clone()] {
+        assert_eq!(given(std::slice::from_ref(&kept)), with(&kept));
+        assert_eq!(given(&[kept.clone(), profile(1, 1, 100)]), with(&kept));
+    }
+    let dropped = [
+        // One byte over; empty; a header cut short.
+        profile(1, 1, 16 * 1024 + 1),
+        profile(1, 1, 0),
+        segment(0xE2, b"ICC_PROFILE\0\x01"),
+        // Chunk 1 of 2, 2 of 2, 2 of 1, 0 of 1.
+        profile(1, 2, 100),
+        profile(2, 2, 100),
+        profile(2, 1, 100),
+        profile(0, 1, 100),
+        // Not `ICC_PROFILE\0`, which ffmpeg would still read.
+        segment(0xE2, &[&b"ICC_PROFILEX\x01\x01"[..], &[0x50; 100]].concat()),
+    ];
+    for first in dropped {
+        assert_eq!(
+            given(std::slice::from_ref(&first)),
+            none,
+            "{:x?}",
+            &first[..20]
+        );
+        // The first profile segment decides: a valid one after it goes.
+        assert_eq!(
+            given(&[first.clone(), profile(1, 1, 100)]),
+            none,
+            "{:x?}",
+            &first[..20]
+        );
+    }
+    // A profile in two chunks loses both.
+    assert_eq!(given(&[profile(1, 2, 100), profile(2, 2, 100)]), none);
+}
+
+/// A JPEG that stops before its end of image, a segment running past the
+/// end or shorter than its length field, a table, frame or scan header
+/// whose length is not its content, or a second start of image, is
+/// refused before ffmpeg reads it.
+#[test]
+fn a_jpeg_cut_short_or_with_a_wrong_length_is_refused() {
+    const TRUNCATED: &str = "a JPEG that stops before its end of image (a truncated file)";
+    const PAST_END: &str = "a JPEG segment whose length runs past the end of the file";
+    const UNDER_TWO: &str =
+        "a JPEG segment whose length is under the two bytes of its length field";
+    const HEADER: &str = "a JPEG table, frame or scan header whose length is not its content";
+    const SECOND: &str = "a JPEG with a second start of image before its end";
+    let body = jpeg_body();
+    let whole = [&SOI[..], JFIF, &body, &EOI].concat();
+    let refused = |file: &[u8]| image::prepared(&Bytes::from(file.to_vec())).unwrap_err();
+    // Cut anywhere: within a segment (its length runs past the end),
+    // within the scan, between the two bytes of a marker or of a length.
+    let jfif_end = 2 + JFIF.len();
+    for cut in [
+        3,
+        4,
+        5,
+        jfif_end - 1,
+        jfif_end + 1,
+        jfif_end + 3,
+        whole.len() - 1,
+        whole.len() - 2,
+        whole.len() - 5,
+    ] {
+        let why = refused(&whole[..cut]);
+        assert!(why == TRUNCATED || why == PAST_END, "cut at {cut}: {why}");
+    }
+    assert_eq!(refused(&whole[..whole.len() - 2]), TRUNCATED);
+    assert_eq!(refused(&whole[..jfif_end + 3]), TRUNCATED);
+    assert_eq!(refused(&whole[..jfif_end + 10]), PAST_END);
+    let mut long = segment(0xE1, b"Exif\0\0MM\x00\x2A");
+    long[2..4].copy_from_slice(&0x1000u16.to_be_bytes());
+    assert_eq!(refused(&[&SOI[..], &long, &body, &EOI].concat()), PAST_END);
+    assert_eq!(
+        refused(&[&SOI[..], &[0xFF, 0xE1, 0x00, 0x01], &body, &EOI].concat()),
+        UNDER_TWO
+    );
+    assert_eq!(
+        refused(&[&SOI[..], JFIF, &SOI, &body, &EOI].concat()),
+        SECOND
+    );
+    let headers = [
+        // A quantization table and a byte left over (ffmpeg would look
+        // for a marker in it); precision 2; table 4; a 16-bit table cut
+        // to 65 bytes.
+        segment(0xDB, &[&[0x00][..], &[1; 64], &[0xFF]].concat()),
+        segment(0xDB, &[&[0x20][..], &[1; 64]].concat()),
+        segment(0xDB, &[&[0x04][..], &[1; 64]].concat()),
+        segment(0xDB, &[&[0x10][..], &[1; 64]].concat()),
+        // Huffman tables: values missing; class 2; 17 counts of 16 and
+        // 272 values (over 256).
+        segment(0xC4, &[&[0x00][..], &[1; 16], &[0; 15]].concat()),
+        segment(0xC4, &[&[0x20][..], &[0; 16]].concat()),
+        segment(0xC4, &[&[0x00][..], &[17; 16], &[0; 272]].concat()),
+        segment(0xC4, &[0x00, 0, 0]),
+        // Frame headers (baseline and JPEG-LS) of three components with
+        // the bytes of two; of one with a byte more.
+        segment(0xC0, &[8, 0, 16, 0, 16, 3, 1, 0x11, 0, 2, 0x11, 0]),
+        segment(0xF7, &[8, 0, 16, 0, 16, 1, 1, 0x11, 0, 0]),
+        segment(0xC2, &[8, 0, 16]),
+        // A scan header with a byte more; one with an `FF` in it.
+        segment(0xDA, &[1, 1, 0x00, 0, 63, 0, 0]),
+        segment(0xDA, &[1, 0xFF, 0xE1, 0, 63, 0]),
+        // A restart interval of three bytes.
+        segment(0xDD, &[0, 4, 0]),
+    ];
+    for header in headers {
+        let file = [&SOI[..], &header, &body, &EOI].concat();
+        assert_eq!(refused(&file), HEADER, "{header:x?}");
+    }
 }
 
 #[tokio::test]
@@ -478,6 +960,11 @@ mod processes {
                 format!(
                     "printf '%s\\n' \"$@\" >> '{d}/record_image.args'\ncat > '{d}/record_image.stdin'\ncat '{d}/webp_at_limit.bin'\n"
                 ),
+            ),
+            // Records its input (the JPEG test's), answers a WebP.
+            (
+                "record_jpeg",
+                format!("cat > '{d}/record_jpeg.stdin'\ncat '{d}/webp.bin'\n"),
             ),
             // Records its pid, answers more than a static sticker
             // takes, then hangs on, deaf to the closed pipe: only a
@@ -984,6 +1471,47 @@ mod processes {
             "{err:?}"
         );
         assert!(err.to_string().contains("truncated"), "{err}");
+        assert!(!f.path("image_marker.ran").exists(), "ffmpeg was started");
+    }
+
+    /// ffmpeg reads a JPEG of several EXIF segments, XMP, a profile, a
+    /// comment and what follows its end as only its tables, frame and
+    /// scans, with a minimal EXIF of its orientation; one cut short, or
+    /// with a segment past its end, never reaches ffmpeg.
+    #[tokio::test]
+    async fn ffmpeg_gets_the_jpeg_without_its_metadata() {
+        let f = fakes();
+        let (file, given) = jpeg_to_strip();
+        convert_to(
+            &f.converter("record_jpeg"),
+            &file,
+            TargetFormat::StaticSticker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(f.path("record_jpeg.stdin")).unwrap(), given);
+
+        let c = f.converter("image_marker");
+        let body = jpeg_body();
+        let mut long = segment(0xE1, b"Exif\0\0MM\x00\x2A");
+        long[2..4].copy_from_slice(&0x1000u16.to_be_bytes());
+        for (input, why) in [
+            ([&SOI[..], &body].concat(), "truncated"),
+            ([&SOI[..], &long, &body, &EOI].concat(), "past the end"),
+        ] {
+            for target in [
+                TargetFormat::Jpeg,
+                TargetFormat::Png,
+                TargetFormat::StaticSticker,
+            ] {
+                let err = convert_to(&c, &input, target).await.unwrap_err();
+                assert!(
+                    matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+                    "{err:?}"
+                );
+                assert!(err.to_string().contains(why), "{err}");
+            }
+        }
         assert!(!f.path("image_marker.ran").exists(), "ffmpeg was started");
     }
 

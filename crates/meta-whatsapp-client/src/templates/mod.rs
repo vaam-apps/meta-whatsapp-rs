@@ -24,7 +24,13 @@
 //! `catalogs/product-card-carousel-template-messages`,
 //! `flows/guides/flows-templates`, `calling/call-button-messages-deep-links`,
 //! `marketing-messages/deep-links`,
-//! `reference/whatsapp-business-account/message-template-api`.
+//! `reference/whatsapp-business-account/message-template-api`; the payment
+//! templates (order details, order status, payment request:
+//! `payments/payments-in/orderdetailstemplate`,
+//! `payments/payments-in/orderstatustemplate`,
+//! `payments/payments-br/orderdetailstemplate`,
+//! `payments/payments-br/payment-request-cta`), whose parts
+//! [`crate::payments`] re-exports and describes.
 //!
 //! Doc paths are relative to
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
@@ -61,6 +67,7 @@
 mod definition;
 mod groups;
 mod info;
+mod payments;
 mod send;
 mod types;
 pub(crate) mod validate;
@@ -84,6 +91,9 @@ pub use info::{
     LibraryButtonType, LibraryQuery, LibraryTemplate, LibraryTemplateRequest, LibraryUrlInput,
     MigrationOptions, MigrationResult, QualityScore, TemplateCreated, TemplateInfo,
     TemplateListQuery,
+};
+pub use payments::{
+    PaymentRequest, PaymentRequestCard, PaymentRequestSetting, TemplateOrderStatus,
 };
 pub use send::{
     ButtonSubType, CarouselCardParameters, Currency, DateTime, DocumentMedia,

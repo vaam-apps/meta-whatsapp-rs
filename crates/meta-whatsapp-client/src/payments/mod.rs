@@ -1,8 +1,10 @@
 //! Payments API (India and Brazil): the `order_details` and
 //! `order_status` messages and their parts (defined with the other
 //! interactive messages, in [`crate::messages`], and re-exported here),
-//! and, in India, the payment lookup, refunds, and the payment
-//! configurations a WABA collects payments with.
+//! the payment templates' parts (defined with the templates, in
+//! [`crate::templates`], and re-exported here), and, in India, the payment
+//! lookup, refunds, and the payment configurations a WABA collects
+//! payments with.
 //!
 //! Docs: `payments/payments-in/overview`,
 //! `payments/payments-in/upi-intent/dynamic-vpa`,
@@ -10,7 +12,11 @@
 //! `payments/payments-in/pg`, `payments/payments-in/onboarding-apis`;
 //! `payments/payments-br/overview`, `payments/payments-br/orders`,
 //! `payments/payments-br/offsite-pix`, `payments/payments-br/payment-links`,
-//! `payments/payments-br/boleto`, `payments/payments-br/one-click-payments`.
+//! `payments/payments-br/boleto`, `payments/payments-br/one-click-payments`;
+//! the templates: `payments/payments-in/orderdetailstemplate`,
+//! `payments/payments-in/orderstatustemplate`,
+//! `payments/payments-br/orderdetailstemplate`,
+//! `payments/payments-br/payment-request-cta`.
 //!
 //! Doc paths are relative to
 //! `https://developers.facebook.com/documentation/business-messaging/whatsapp/`
@@ -19,6 +25,8 @@
 //! | Accessor | Meta paths |
 //! | --- | --- |
 //! | [`Client::messages`] with an [`OrderDetails`] or [`OrderStatus`] | `POST /{PHONE_NUMBER_ID}/messages` |
+//! | [`Client::messages`] with a [`TemplateMessage`](crate::templates::TemplateMessage) | `POST /{PHONE_NUMBER_ID}/messages` |
+//! | [`Client::templates`](crate::Client::templates) with a [`TemplateDefinition`](crate::templates::TemplateDefinition) | `POST /{WABA_ID}/message_templates` |
 //! | [`Client::payments`] | `GET /{PHONE_NUMBER_ID}/payments/{PAYMENT_CONFIGURATION}/{REFERENCE_ID}`, `POST /{PHONE_NUMBER_ID}/payments_refund` |
 //! | [`Client::payment_configurations`] | `GET /{WABA_ID}/payment_configurations`, `GET /{WABA_ID}/payment_configuration/{CONFIGURATION_NAME}`, `POST /{WABA_ID}/payment_configuration`, `POST /{WABA_ID}/generate_payment_configuration_oauth_link`, `DELETE /{WABA_ID}/payment_configuration` |
 //!
@@ -69,9 +77,39 @@
 //!   not reconcile payments: match them by `reference_id`. Only for Pix
 //!   with redirect does WhatsApp mark the order paid by itself.
 //!
-//! The payment template buttons and the payment webhooks (India's status
-//! of type `payment`, Brazil's `payment_method` reply) are not typed yet
-//! (roadmap P1c).
+//! # Payment templates
+//!
+//! A template reaches the buyer outside the customer service window:
+//!
+//! - **Order details** (India and Brazil): a definition with a
+//!   [`Button::order_details`](crate::templates::Button::order_details)
+//!   (a `UTILITY` or `MARKETING` template, its header `TEXT`, `IMAGE` or
+//!   `DOCUMENT`), sent with
+//!   [`TemplateMessage::order_details_button`](crate::templates::TemplateMessage::order_details_button),
+//!   whose [`OrderDetailsParameters`] are checked by their currency's
+//!   rules, as an [`OrderDetails`] message's are.
+//! - **Order status** (India): a definition with `sub_category`
+//!   `ORDER_STATUS`, sent with
+//!   [`TemplateMessage::order_status`](crate::templates::TemplateMessage::order_status)
+//!   ([`TemplateOrderStatus`]: India's `reference_id` and statuses,
+//!   `pending` refused). Brazil documents no order status template.
+//! - **Payment request** (Brazil): up to three
+//!   [`Button::payment_request`](crate::templates::Button::payment_request)
+//!   buttons, each of a different [`PaymentRequestSetting`] (Pix code,
+//!   Boleto, payment link, one-click card) and labelled as the method
+//!   requires, three buttons in all; sent with
+//!   [`TemplateMessage::payment_request_button`](crate::templates::TemplateMessage::payment_request_button)
+//!   and a [`PaymentRequest`] (the amount required for a card, optional for
+//!   Pix, refused for Boleto and links).
+//!
+//! A payment button or order status component whose parameter did not
+//! parse typed (a currency or payment method the client has no rules for)
+//! is refused by [`TemplateMessage::validate`](crate::templates::TemplateMessage::validate),
+//! not sent unchecked. The answers come back as webhooks
+//! (`meta-whatsapp-webhooks`): India's status of `type` `payment`, a
+//! `status_updated` event with its `payment`, and Brazil's
+//! `payment_method` reply, an interactive reply of a `message_received`
+//! event.
 //!
 //! # Where the pages disagree
 //!
@@ -101,6 +139,18 @@
 //!   optional (every example sends one).
 //! - Brazil's `order_status` table lists a `header`, "Optional object",
 //!   with no fields and no example: it is not modelled.
+//! - The order details template's button label: India's page fixes it
+//!   to `Review and Pay`; Brazil's example prints a placeholder
+//!   (`<COPY_PIX_CODE>`). It is not checked beyond being there.
+//! - The order details templates' examples print the button `index` as
+//!   a number, the payment request's as a string: it is sent as a string,
+//!   as every template button's, and either parses.
+//! - A payment request's Pix object has the code alone (and
+//!   `flow_type`), not the order's merchant name and key, and its card's
+//!   `credential_id` is optional, where the one-click order calls it
+//!   required: [`PaymentRequestSetting`] is its own type.
+//! - A payment request's `currency` is "used with `total_amount`" for a
+//!   Pix code: the two are required together.
 //!
 //! # What is checked locally
 //!
@@ -198,6 +248,9 @@ pub use crate::messages::payments::{
     PaymentGateway, PaymentLink, PaymentOption, PaymentSetting, PaymentType, PaymentUpdate,
     PaymentUpdateStatus, PayuFields, PixDynamicCode, PixFlowType, PixKeyType, RazorpayFields,
     UpiApp, ZaakpayFields,
+};
+pub use crate::templates::{
+    PaymentRequest, PaymentRequestCard, PaymentRequestSetting, TemplateOrderStatus,
 };
 
 use crate::Client;

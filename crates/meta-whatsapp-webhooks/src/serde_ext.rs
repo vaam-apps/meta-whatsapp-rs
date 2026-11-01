@@ -112,6 +112,75 @@ pub(crate) mod graph_errors {
     }
 }
 
+/// A key-value object whose values Meta documents as strings (Razorpay's
+/// `notes`, echoed in a payment's status): a value of another JSON type is
+/// kept as its JSON text, as [`open_enum!`](meta_whatsapp_core::open_enum!)
+/// keeps an enum value, rather than failing the whole change. `null` and
+/// `[]` are an empty map.
+pub(crate) mod string_map {
+    use std::collections::BTreeMap;
+
+    use super::{Deserialize, Deserializer, Error, Value, kind};
+
+    /// `#[serde(default, deserialize_with = "crate::serde_ext::string_map::deserialize")]`.
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match Value::deserialize(deserializer)? {
+            Value::Null => Ok(BTreeMap::new()),
+            // An empty list for "no notes", as some gateways print it.
+            Value::Array(items) if items.is_empty() => Ok(BTreeMap::new()),
+            Value::Object(map) => Ok(map
+                .into_iter()
+                .map(|(key, value)| match value {
+                    Value::String(s) => (key, s),
+                    other => (key, other.to_string()),
+                })
+                .collect()),
+            other => Err(D::Error::custom(format!(
+                "expected an object, found {}",
+                kind(&other)
+            ))),
+        }
+    }
+}
+
+/// An optional object that must never fail the value it is part of: one
+/// that does not parse typed is `None`, as if absent (a payment's status
+/// carries its `payment`; before this crate typed it, the status parsed
+/// whatever the payment held, and it still does). `null` and a missing
+/// key are `None` too. The parse error is dropped, never echoed.
+pub(crate) mod lenient_option {
+    use super::{Deserialize, DeserializeOwned, Deserializer, Value};
+
+    /// `#[serde(default, deserialize_with = "crate::serde_ext::lenient_option::deserialize")]`.
+    pub(crate) fn deserialize<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: DeserializeOwned,
+    {
+        Ok(match Value::deserialize(deserializer)? {
+            Value::Null => None,
+            value => T::deserialize(value).ok(),
+        })
+    }
+}
+
+/// A list that Meta may print as `null`: an empty `Vec`, as a missing key.
+pub(crate) mod vec_or_null {
+    use super::{Deserialize, Deserializer};
+
+    /// `#[serde(default, deserialize_with = "crate::serde_ext::vec_or_null::deserialize")]`.
+    pub(crate) fn deserialize<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de>,
+    {
+        Option::<Vec<T>>::deserialize(deserializer).map(Option::unwrap_or_default)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use meta_whatsapp_core::GraphApiError;
@@ -179,5 +248,38 @@ mod tests {
         assert!(serde_json::from_str::<E>("{}").unwrap().errors.is_empty());
         // A code that is not a number at all still fails, as before.
         assert!(serde_json::from_str::<E>(r#"{"errors":[{"code":"ERROR_CODE"}]}"#).is_err());
+    }
+
+    #[derive(Deserialize)]
+    struct M {
+        #[serde(default, deserialize_with = "super::string_map::deserialize")]
+        notes: std::collections::BTreeMap<String, String>,
+    }
+
+    #[test]
+    fn a_string_map_keeps_other_values_as_their_json_text() {
+        let m: M = serde_json::from_str(r#"{"notes":{"a":"x","b":2,"c":{"d":[1]}}}"#).unwrap();
+        assert_eq!(m.notes["a"], "x");
+        assert_eq!(m.notes["b"], "2");
+        assert_eq!(m.notes["c"], r#"{"d":[1]}"#);
+        assert!(
+            serde_json::from_str::<M>(r#"{"notes":null}"#)
+                .unwrap()
+                .notes
+                .is_empty()
+        );
+        assert!(serde_json::from_str::<M>("{}").unwrap().notes.is_empty());
+        assert!(
+            serde_json::from_str::<M>(r#"{"notes":[]}"#)
+                .unwrap()
+                .notes
+                .is_empty()
+        );
+        assert!(serde_json::from_str::<M>(r#"{"notes":["Jane"]}"#).is_err());
+        let e = serde_json::from_str::<M>(r#"{"notes":"Jane"}"#)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(e.contains("found a string") && !e.contains("Jane"), "{e}");
     }
 }

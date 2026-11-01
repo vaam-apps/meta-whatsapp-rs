@@ -15,7 +15,10 @@
 //! `webhooks/reference/history` (`media_placeholder`),
 //! `conversation-routing/conversation-context` (`conversation_context`),
 //! `direct-send/supported-message-types` (a status's `template_id`),
-//! `marketing-messages/track-click-events` (`user_actions`).
+//! `marketing-messages/track-click-events` (`user_actions`),
+//! `payments/payments-in/pg` (a status of `type` `payment`) and
+//! `payments/payments-br/one-click-payments` (the `payment_method` reply);
+//! the payment objects themselves are in [`super::payments`].
 //!
 //! # Where the pages disagree with each other
 //!
@@ -45,6 +48,7 @@ use serde_json::{Map, Value};
 use time::OffsetDateTime;
 
 use super::common::{Contact, Metadata};
+use super::payments::{PaymentMethodReply, StatusPayment};
 use super::routing::ConversationContext;
 
 /// `value` of a `messages` change.
@@ -782,6 +786,9 @@ pub enum InteractiveReply {
     NfmReply(NfmReply),
     /// `call_permission_reply`: the user answered a call permission request.
     CallPermissionReply(CallPermissionReply),
+    /// `payment_method`: the buyer confirmed a one-click card payment
+    /// (Payments API, Brazil: `payments/payments-br/one-click-payments`).
+    PaymentMethod(PaymentMethodReply),
     /// An `interactive.type` this crate does not know.
     Unknown {
         /// `interactive.type`, if present.
@@ -803,6 +810,15 @@ impl<'de> Deserialize<'de> for InteractiveReply {
             Some("call_permission_reply") => {
                 CallPermissionReply::deserialize(payload).map(Self::CallPermissionReply)
             }
+            // A reply that does not parse typed stays a message, as an
+            // unknown reply (what it was before this crate typed it).
+            Some("payment_method") => Ok(PaymentMethodReply::deserialize(payload).map_or_else(
+                |_| Self::Unknown {
+                    reply_type: Some("payment_method".to_owned()),
+                    raw: Value::Object(map.clone()),
+                },
+                Self::PaymentMethod,
+            )),
             other => Ok(Self::Unknown {
                 reply_type: other.map(str::to_owned),
                 raw: Value::Object(map.clone()),
@@ -829,6 +845,7 @@ impl Serialize for InteractiveReply {
             Self::ListReply(p) => tagged(serializer, "list_reply", p),
             Self::NfmReply(p) => tagged(serializer, "nfm_reply", p),
             Self::CallPermissionReply(p) => tagged(serializer, "call_permission_reply", p),
+            Self::PaymentMethod(p) => tagged(serializer, "payment_method", p),
             Self::Unknown { raw, .. } => raw.serialize(serializer),
         }
     }
@@ -1049,20 +1066,61 @@ open_enum! {
         Played => "played",
         /// Could not be sent or delivered; see [`Status::errors`].
         Failed => "failed",
+        /// A status of [`StatusType::Payment`]: the payment succeeded
+        /// (`payments/payments-in/pg`).
+        Captured => "captured",
+        /// A status of [`StatusType::Payment`]: the buyer tried to pay, and
+        /// no successful transaction is reported yet
+        /// (`payments/payments-in/pg`).
+        Pending => "pending",
     }
 }
 
-/// One `statuses[]` entry: the status of a message the business sent.
+open_enum! {
+    /// `statuses[].type`: what the status is about. Absent on a message's
+    /// status.
+    pub enum StatusType {
+        /// A payment of the Payments API (India): the status names no
+        /// message, and carries [`Status::payment`]
+        /// (`payments/payments-in/pg`).
+        Payment => "payment",
+    }
+}
+
+/// One `statuses[]` entry: the status of a message the business sent, or,
+/// with [`Self::status_type`] [`StatusType::Payment`], of a payment
+/// (Payments API, India: `payments/payments-in/pg`).
 ///
 /// The user's `username`, `user_id` and `parent_user_id` are not on this
 /// object: they are in the change's `contacts` array, which
 /// [`crate::WebhookEvent::StatusUpdated`] matches for you.
+///
+/// A payment's status is a [`crate::WebhookEvent::StatusUpdated`] too: its
+/// [`Self::id`] is the notification's id, not a message's, its
+/// [`Self::status`] is [`MessageStatus::Captured`] or
+/// [`MessageStatus::Pending`], and [`Self::payment`] says which order and
+/// transaction. Meta asks not to rely on it alone: look the payment up
+/// (`meta_whatsapp_client::payments::Payments::lookup`) before shipping.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Status {
-    /// Id of the message this status is about.
+    /// Id of the message this status is about; for a payment's status,
+    /// the notification's id.
     pub id: MessageId,
     /// The status.
     pub status: MessageStatus,
+    /// `payment` for a payment's status; absent on a message's.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub status_type: Option<StatusType>,
+    /// The payment, on a status of [`StatusType::Payment`]. `None` also
+    /// when it does not parse typed: the status is still delivered (as it
+    /// was before this crate typed the payment), and Meta asks you to look
+    /// the payment up anyway.
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_ext::lenient_option::deserialize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub payment: Option<Box<StatusPayment>>,
     /// When the webhook was triggered.
     #[serde(with = "meta_whatsapp_core::timestamp::unix")]
     pub timestamp: OffsetDateTime,
@@ -1130,6 +1188,12 @@ pub struct Status {
 }
 
 impl Status {
+    /// Whether this is a payment's status ([`StatusType::Payment`]), not a
+    /// message's.
+    pub fn is_payment(&self) -> bool {
+        self.status_type == Some(StatusType::Payment)
+    }
+
     /// [`Self::pricing`], or the `pricing` that some `groups/webhooks`
     /// examples nest inside `conversation`.
     pub fn effective_pricing(&self) -> Option<&Pricing> {
