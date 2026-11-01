@@ -18,29 +18,39 @@ test:
 
 # Adapter, inbox (meta-whatsapp-rs's tests/inbox_events.rs), bot retention
 # (meta-whatsapp-bot's tests/retention.rs) and service tests against real
-# Postgres and Redis. The facade's filter is `live_postgres_`, not
+# Postgres, Redis and MongoDB. The facade's filter is `live_postgres_`, not
 # `live_`: its unit and skill tests have names containing `live_`
 # (`…_live_duplicates_…`, the `live_updates` skill), which would keep its count
 # above zero with no live test run. Uses META_WHATSAPP_RS_TEST_POSTGRES_URL /
-# META_WHATSAPP_RS_TEST_REDIS_URL / META_WHATSAPP_RS_TEST_REDISS_URL when set (the
+# META_WHATSAPP_RS_TEST_REDIS_URL / META_WHATSAPP_RS_TEST_REDISS_URL /
+# META_WHATSAPP_RS_TEST_MONGODB_URL when set (the
 # devcontainer sets them to its sidecars), otherwise generates the test-only
 # TLS certificates (tools/test-tls/generate.sh, into .test-tls/) and starts
 # compose.test.yaml. The `rediss://` tests (roadmap L21c) also read the PEM
 # files in META_WHATSAPP_RS_TEST_REDISS_CA, `…_CLIENT_CERT` and `…_CLIENT_KEY`.
+# The MongoDB URL (roadmap S8) is a single-node replica set's, with
+# `directConnection=true`: the set's member address is the container's own.
 # META_WHATSAPP_RS_REQUIRE_LIVE=1 turns a missing service into a failure
 # instead of a skip.
 test-live:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -z "${META_WHATSAPP_RS_TEST_POSTGRES_URL:-}" ] || [ -z "${META_WHATSAPP_RS_TEST_REDIS_URL:-}" ] || [ -z "${META_WHATSAPP_RS_TEST_REDISS_URL:-}" ]; then
+    if [ -z "${META_WHATSAPP_RS_TEST_POSTGRES_URL:-}" ] || [ -z "${META_WHATSAPP_RS_TEST_REDIS_URL:-}" ] || [ -z "${META_WHATSAPP_RS_TEST_REDISS_URL:-}" ] || [ -z "${META_WHATSAPP_RS_TEST_MONGODB_URL:-}" ]; then
         tools/test-tls/generate.sh
-        docker compose -f compose.test.yaml up -d --wait
+        if ! docker compose -f compose.test.yaml up -d --wait; then
+            # A service that exits or never turns healthy says why only in
+            # its own log: print the last lines of each before failing.
+            docker compose -f compose.test.yaml ps -a || true
+            docker compose -f compose.test.yaml logs --no-color --tail 40 || true
+            exit 1
+        fi
         export META_WHATSAPP_RS_TEST_POSTGRES_URL="postgres://wa:wa@127.0.0.1:55432/wa"
         export META_WHATSAPP_RS_TEST_REDIS_URL="redis://127.0.0.1:56379"
         export META_WHATSAPP_RS_TEST_REDISS_URL="rediss://localhost:56380"
         export META_WHATSAPP_RS_TEST_REDISS_CA="$PWD/.test-tls/ca.crt"
         export META_WHATSAPP_RS_TEST_REDISS_CLIENT_CERT="$PWD/.test-tls/client.crt"
         export META_WHATSAPP_RS_TEST_REDISS_CLIENT_KEY="$PWD/.test-tls/client.key"
+        export META_WHATSAPP_RS_TEST_MONGODB_URL="mongodb://127.0.0.1:57017/?directConnection=true"
     fi
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-adapters --all-features live_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-rs --all-features live_postgres_ -- --test-threads=4
@@ -54,12 +64,12 @@ test-live-down:
 
 # Drop what live tests left on the test services: `wa_test_*` databases and
 # `wa_test_*` / `wa_server_test_*` schemas on Postgres, `wa-test:*` keys on
-# Redis and the TLS Redis. The live tests delete their own, when they panic too (the
+# Redis and the TLS Redis, `wa_test_*` databases on MongoDB. The live tests delete their own, when they panic too (the
 # adapters' tests/common PgCleanup and RedisCleanup, tests/redis_tls.rs's
-# RedissCleanup, the server's TestDb);
+# RedissCleanup, tests/live_mongodb.rs's MongoCleanup, the server's TestDb);
 # this clears older runs and killed ones (SIGKILL and abort skip Drop). Uses META_WHATSAPP_RS_TEST_POSTGRES_URL,
-# META_WHATSAPP_RS_TEST_REDIS_URL and META_WHATSAPP_RS_TEST_REDISS_URL (with
-# its CA and client files) when set (the devcontainer's sidecars),
+# META_WHATSAPP_RS_TEST_REDIS_URL, META_WHATSAPP_RS_TEST_REDISS_URL (with
+# its CA and client files) and META_WHATSAPP_RS_TEST_MONGODB_URL when set (the devcontainer's sidecars),
 # otherwise the compose.test.yaml servers. Not during a live run: it would
 # delete that run's objects too.
 #
@@ -124,6 +134,34 @@ test-live-clean:
         echo "test-live-clean: deleted ${deleted#(integer) } keys on the TLS Redis"
     else
         echo "test-live-clean: no TLS Redis (META_WHATSAPP_RS_TEST_REDISS_URL is not set)"
+    fi
+    # MongoDB (roadmap S8), as the TLS Redis: its URL when set, through a
+    # mongosh on PATH (the devcontainer has one); compose.test.yaml's when the
+    # plain Redis's URL is unset too; none otherwise (a devcontainer built
+    # before it).
+    if [ -n "${META_WHATSAPP_RS_TEST_MONGODB_URL:-}" ]; then
+        if ! command -v mongosh >/dev/null; then
+            echo "test-live-clean: META_WHATSAPP_RS_TEST_MONGODB_URL is set but mongosh is not on PATH" >&2
+            exit 1
+        fi
+        mongo=(mongosh "$META_WHATSAPP_RS_TEST_MONGODB_URL")
+    elif [ -z "${META_WHATSAPP_RS_TEST_REDIS_URL:-}" ]; then
+        mongo=(docker compose -f compose.test.yaml exec -T mongodb mongosh)
+    else
+        mongo=()
+    fi
+    # Names come from the server and go back to it as values, through no shell.
+    js='
+      const leftover = () => db.adminCommand({ listDatabases: 1, nameOnly: true,
+        filter: { name: { $regex: "^wa_test_" } } }).databases.map((d) => d.name);
+      const names = leftover();
+      print("test-live-clean: dropping " + names.length + " MongoDB databases");
+      for (const name of names) db.getSiblingDB(name).dropDatabase();
+      print("test-live-clean: " + leftover().length + " left");'
+    if [ "${#mongo[@]}" -gt 0 ]; then
+        "${mongo[@]}" --quiet --eval "$js"
+    else
+        echo "test-live-clean: no MongoDB (META_WHATSAPP_RS_TEST_MONGODB_URL is not set)"
     fi
 
 # Formatting and clippy, warnings are errors. `.xtask` is a workspace of its

@@ -62,7 +62,9 @@ capability table) and `docs/categories.md` (Meta's platform categories).
   `tests/inbox_events.rs`), bot (retention's `live_postgres_*`) and service
   tests need real services: `just test-live` (or set
   `META_WHATSAPP_RS_TEST_POSTGRES_URL` / `META_WHATSAPP_RS_TEST_REDIS_URL`
-  and `META_WHATSAPP_RS_REQUIRE_LIVE=1`).
+  / `META_WHATSAPP_RS_TEST_MONGODB_URL`, the last a single-node replica
+  set's with `directConnection=true`, and `META_WHATSAPP_RS_REQUIRE_LIVE=1`);
+  `just test-live-clean` drops what killed runs left on all of them.
 
 A filtered run is feedback, not verification — `just ci` still has to pass.
 

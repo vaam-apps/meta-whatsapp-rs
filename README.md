@@ -279,13 +279,13 @@ coding agents of those apps: the `meta-whatsapp-rs-server` skill.
 just            # list recipes
 just ci         # the gate CI runs: lint, check, test, skills-check, skills-ts, doc, features, deny, test-live
 just test       # unit and in-process tests (live adapter tests skip)
-just test-live  # adapter, inbox, bot retention and service tests against real Postgres and Redis
+just test-live  # adapter, inbox, bot retention and service tests against real Postgres, Redis and MongoDB
 just meta-docs  # mirror Meta's docs locally (gitignored) for grep
 ```
 
 Open the repo in the dev container (`.devcontainer/`) for a sandboxed
 Claude Code environment: pinned toolchain, default-deny egress firewall,
-Postgres and Redis sidecars.
+Postgres, Redis and MongoDB sidecars.
 
 Agents: see [AGENTS.md](AGENTS.md). Claude Code project skills and agents
 live in `.claude/`.

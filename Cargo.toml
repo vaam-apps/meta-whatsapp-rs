@@ -143,6 +143,13 @@ rustls-platform-verifier = "0.7"
 # meta-whatsapp-adapters' tests/redis_tls_handshake.rs (a name or an IP
 # address the server's certificate does not carry, an untrusted issuer).
 rcgen = { version = "0.14", default-features = false }
+# Test-only, for now: meta-whatsapp-adapters' tests/live_mongodb.rs, the
+# replica-set smoke test of roadmap S8 (a dev-dependency there, so no
+# library build links it). No default features: the default TLS feature,
+# `rustls-tls`, is rustls on `ring`, and `dns-resolver` (hickory, for
+# `mongodb+srv://`) is not needed. Members choose `rustls-tls-aws-lc`
+# (rustls with an explicit aws-lc-rs provider, never the process default).
+mongodb = { version = "3.9.1", default-features = false }
 
 # Typst rendering.
 typst = "0.15"
