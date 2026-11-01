@@ -3417,6 +3417,32 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     fields and of Flow JSON, `WebhookEvent::Unparsed`, the templates'
     `Other(Value)`, `EmbeddedSignupEvent::Unknown`) and
     `MessageProductType::Other(u16)`.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable):
+    1. a JSON value that is not a string is kept as its JSON text in
+       `Other` by default, so a number where the prose says string never
+       fails a response or a webhook; Flow JSON's enums are
+       `#![string_only]`, as a document this crate writes and reads back
+       must keep a wrongly typed component raw. Swappable per enum: the
+       option is one line of its `open_enum!`;
+    2. the documented `OTHER` values are `FlowCategory::OtherCategory`
+       and `Vertical::OtherVertical`, since `Other` is the catch-all; the
+       wire value stays `"OTHER"`. Swappable: a variant's name is its
+       line of the macro;
+    3. `#![normalize = fn]`, a rewrite for the comparison only (spaces
+       and underscores, in `RejectionReason` and
+       `PaymentConfigurationStatus`), never applied to the value kept in
+       `Other`. Swappable per enum, by dropping or replacing the
+       function;
+    4. `WabaCurrency` and `GatewayProvider` stay hand-written, in the
+       test's `NOT_OPEN` with the reason: a request value whose parse
+       refuses an unlisted code, and a request union whose variants carry
+       each gateway's fields. Swappable: converting one is moving it into
+       the macro and out of `NOT_OPEN`;
+    5. the macro puts `#[non_exhaustive]` on every enum it generates, so
+       naming a value Meta adds is not a breaking change; this settles
+       L20b's rule for open enums ahead of it (below). Swappable: one
+       attribute in the macro.
 - [ ] **L20b. The `#[non_exhaustive]` rule** (`meta-whatsapp-client`,
   `meta-whatsapp-webhooks`, docs/architecture.md; OPEN_QUESTIONS #28): on
   every response struct, webhook payload struct and open enum, never on
@@ -3426,6 +3452,10 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a source scan over the crates fails on a response or
     webhook struct, or an open enum, without the attribute; removing it
     from one type fails the scan.
+  - **Overlap with L20a:** the open enums already carry it, every one
+    from `open_enum!`, which adds it (decided 2026-11-01, L20a's
+    Landed note); L20b's scan only has to keep it there, and its work is
+    the structs.
 - [x] **L20c. Ids checked against their documented shape**
   (`meta-whatsapp-core` ids and `client::GraphRequest`; OPEN_QUESTIONS
   #20): digits for numeric ids; whole-segment percent-encoding kept for
