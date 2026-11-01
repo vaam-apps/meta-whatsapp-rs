@@ -502,12 +502,16 @@ A definition breaking a documented limit is `422 invalid_request` with
 on to Meta (a misspelling, or a field it does not know): never silently
 dropped. The template definitions and sends of Meta's examples pass,
 `body_text` as a flat list (`["Pablo", "860198"]`, the positional
-parameters syntax) included, but for shapes the library cannot carry
-yet, refused on the key named:
+parameters syntax) included, the payment templates among them (roadmap
+P1c: the order details and payment request buttons, the order status
+component, each checked by the library's payment rules; a payment button
+of a currency or payment method the library has no rules for is `422
+invalid_request` on its `parameters`, and an `order_details`,
+`payment_request` or `order_status` object in a component or parameter
+the library does not type, a `type` spelled `Button` for one, on that
+component or parameter), but for shapes the library cannot carry yet,
+refused on the key named:
 
-- in a send's `template`, the payment buttons' `order_details` and
-  `payment_request` (India and Brazil payments are out of scope,
-  docs/coverage.md row 32);
 - in a definition, `optimization_spec` (Marketing Messages API
   bidding), and `package_name` and `signature_hash` on a one-tap or zero-tap
   button itself, which Meta accepts on Graph API v20.0 and older only:

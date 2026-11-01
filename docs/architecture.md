@@ -884,10 +884,18 @@ token a solution gives is an `AccessToken`, decoded so that a body that
 fails to parse reaches no error; no call there is replayed after a
 timeout but the reads.
 
-Payments (India so far, roadmap P1a) are `meta_whatsapp_client::payments`:
-the `order_details` and `order_status` messages are `Interactive`
-variants of `messages` (re-exported there), checked against every rule
-the pages state, with amounts as `{value, offset}`; the payment lookup
+Payments (India and Brazil, roadmap P1a to P1c) are
+`meta_whatsapp_client::payments`: the `order_details` and `order_status`
+messages are `Interactive` variants of `messages` (re-exported there),
+checked against every rule the pages state for their currency (`INR`
+India's, `BRL` Brazil's), with amounts as `{value, offset}`; the payment
+templates' order details and payment request buttons and order status
+component are `templates` parts, checked by the same rules, and a
+payment object the client does not type is refused, never sent
+unchecked. The payment webhooks (India's status of type `payment`,
+Brazil's `payment_method` reply) are typed in
+`meta_whatsapp_webhooks::fields::payments`, and never fail their change.
+The payment lookup
 and refunds hang off the phone number (`Client::payments`), the payment
 configurations off the WABA (`Client::payment_configurations`). A refund,
 a configuration's creation and an OAuth link are never replayed after a
@@ -1090,8 +1098,18 @@ keyed by business number and contact, and
   checked by the input's first bytes before ffmpeg starts, and by
   ffmpeg's own detection (`-format_whitelist png_pipe,jpeg_pipe`); a
   PNG walked chunk by chunk first (one cut short refused, its text and
-  EXIF chunks and anything after its end not passed on: ffmpeg inflates
-  every `zTXt` and keeps the text); the
+  EXIF chunks, any colour profile over 16 KiB or after the first, and
+  anything after its end not passed on: ffmpeg inflates every `zTXt`
+  and every profile and keeps them); a JPEG walked segment by segment
+  (one cut short, or with a length running past the end, refused; only
+  the segments ffmpeg reads whole passed on, its tables, frame header,
+  scans and their data, the JFIF and Adobe segments at their fixed
+  size, its colour profile when it is one chunk of at most 16 KiB (as a
+  PNG's: each keeps one profile of at most 16 KiB; a profile in several
+  chunks is dropped), and in place of its EXIF a minimal one of the
+  Orientation alone:
+  ffmpeg copies an EXIF value once for every entry pointing at it, and
+  reads every `APP1`); the
   first frame, no metadata, at most 32 Mi pixels (`-max_pixels`) and
   256 MiB a single allocation; brought under the format's limit by a
   fixed ladder of sizes and qualities (each attempt killed once past

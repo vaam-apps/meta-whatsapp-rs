@@ -316,10 +316,8 @@ pub const PAGES: &[Page] = &[
     },
     Page {
         path: "payments/payments-br/one-click-payments",
-        status: Status::OutOfScope(
-            "Payments API Brazil (coverage row 32): an interactive `payment_method` reply",
-        ),
-        examples: &[],
+        status: Status::Typed,
+        examples: &["Webhook notification payload example"],
         unusable: &[],
     },
     Page {
@@ -330,10 +328,8 @@ pub const PAGES: &[Page] = &[
     },
     Page {
         path: "payments/payments-in/pg",
-        status: Status::OutOfScope(
-            "Payments API India (coverage row 32): a status of `type` `payment` with a `payment` object and transaction statuses such as `captured`",
-        ),
-        examples: &[],
+        status: Status::Typed,
+        examples: &["Step 4: Receive webhook about transaction status"],
         unusable: &[],
     },
     Page {
@@ -3972,6 +3968,21 @@ pub const CASES: &[Case] = &[
         )],
     },
     Case {
+        fixture: "pages/payments.payments-br.one-click-payments__webhook_notification_payload_example.json",
+        sources: &[(
+            Origin::Filled,
+            "payments/payments-br/one-click-payments",
+            "Webhook notification payload example",
+        )],
+        events: &[ev(
+            "message_received",
+            Some("102290129340398"),
+            Some("106540352242922"),
+            None,
+            Some("5511912345678"),
+        )],
+    },
+    Case {
         fixture: "pages/payments.payments-in.onboarding-apis__sample_payment_configuration_webhook.json",
         sources: &[(
             Origin::Verbatim,
@@ -3982,6 +3993,21 @@ pub const CASES: &[Case] = &[
             "payment_configuration_updated",
             Some("0"),
             None,
+            None,
+            None,
+        )],
+    },
+    Case {
+        fixture: "pages/payments.payments-in.pg__step_4_receive_webhook_about_transaction_status.json",
+        sources: &[(
+            Origin::Filled,
+            "payments/payments-in/pg",
+            "Step 4: Receive webhook about transaction status",
+        )],
+        events: &[ev(
+            "status_updated",
+            Some("102290129340398"),
+            Some("106540352242922"),
             None,
             None,
         )],

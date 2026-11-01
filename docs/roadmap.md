@@ -51,7 +51,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3g; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
-| last | P1a–P1c, P2 (payments) |
+| last | P1a–P1d, P2 (payments) |
 
 ## 1. The service's modular split (design §8, D26)
 
@@ -3264,7 +3264,21 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
        are L19c. The service's side stays M5c1's.
     8. An input's ICC profile passes into a JPEG or PNG result, so its
        colours stay right; its size is bounded by the output limit.
-       Stripping it is one filter in the fixed table.
+       Stripping it is one filter in the fixed table. **Decided
+       2026-11-01** (coordinator): iCCP kept only up to 16 KiB
+       compressed, after a 660 MB measurement (`image::PNG_ICCP_MAX`,
+       one literal; the first `iCCP` chunk only). **Decided
+       2026-11-01** (coordinator): a JPEG's profile is kept likewise,
+       for parity with the PNG side: its first `APP2` `ICC_PROFILE`
+       segment, when it is a whole profile in one chunk (1 of 1) of at
+       most 16 KiB (`image::JPEG_ICC_MAX`, the same value); every other
+       `APP2` is dropped, so a profile split over several chunks is
+       dropped whole and that image loses its colour profile. JPEG and
+       PNG each keep one profile of at most 16 KiB. One chunk costs
+       ffmpeg nothing measurable (51.6 MB at 16 KiB, 51.9 MB at 64 KiB,
+       against 51.5 MB without); the largest profile in chunks (255 of
+       64 KiB, a 16.7 MB file) took 198 MB, bounded but some nine times
+       its size, and is dropped.
     9. The allocation bound stays 256 MiB, its edge documented (a 16-bit
        RGBA frame of 8192 × 4096 is refused by ffmpeg's padding, 8192 ×
        4094 converts); headroom is one literal.
@@ -3305,6 +3319,53 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     4-core machine, encoding a WebP far over the limit, so a timeout
     under the default can fail a large photo; an image over 256:1 can
     fail at a smaller attempt (a side scaled to nothing).
+  - **Fix: EXIF and colour profile bombs** (2026-11-01, found by L19c's
+    implementer, against ffmpeg 6.1.1). The JPEG path passed EXIF
+    through for its orientation, and ffmpeg copies an EXIF value once
+    for every IFD entry pointing at it, over every `APP1`: a 67 KB JPEG
+    of one crafted segment took 916 MB, 264 KB of four 3.6 GB, 658 KB of
+    ten 8.4 GB; a PNG's 200 KB `iCCP` inflating to 200 MiB took 660 MB.
+    The converter now walks a JPEG's segments before ffmpeg starts
+    (`image::jpeg_prepared`) and passes on only what ffmpeg reads by the
+    segment's length, since ffmpeg moves on by the bytes it read, not by
+    the length (a scan header it skips, a JFIF thumbnail, which it does
+    not skip, would otherwise hide a segment from the walk): `DQT`,
+    `DHT`, `SOF0`–`SOF3`, `SOF55`, `DRI` and `SOS`, each refused unless
+    its length is exactly its content (a scan header with no `FF`), and
+    the scans' entropy-coded data; the first JFIF and Adobe segments at
+    their fixed fields; the first colour profile segment when it is one
+    chunk of at most 16 KiB (decision 8 above); in place of the first
+    EXIF segment a minimal
+    EXIF of 36 bytes (`image::minimal_exif`: big-endian TIFF, one IFD,
+    the Orientation alone, 1 to 8; no EXIF without a valid one); the end
+    of image. Everything else is dropped (every other `APP1` and `APP2`,
+    `APP13`, comments, other `APPn`, markers ffmpeg does not decode,
+    bytes between segments, anything after the end of image), and a
+    JPEG cut short or with a segment past its end is `InputRejected`,
+    which replaces the review's "a truncated JPEG decodes partly". A
+    PNG keeps its first `iCCP` only up to 16 KiB (decision 8 above).
+    Decisive: `ffmpeg_applies_the_orientation_of_a_jpeg_whose_exif_is_a_bomb`
+    (the 67 KB file as it is peaks at about 980 MB, the control; with a
+    second segment, through the converter, about 50 MB, under a 400 MB
+    bound, and Orientation 6 still applied) and
+    `ffmpeg_keeps_a_small_colour_profile_and_drops_a_large_one` (650 MB
+    against 48 MB; a 3 KB profile still reaches a PNG result), both
+    reading `VmHWM` from `/proc`; the bytes ffmpeg is given, exactly, in
+    `a_jpeg_reaches_ffmpeg_with_only_what_ffmpeg_reads_whole`,
+    `a_jpeg_s_exif_is_its_orientation_alone` (each orientation, both
+    byte orders), `a_jpeg_cut_short_or_with_a_wrong_length_is_refused`,
+    `a_png_keeps_one_colour_profile_of_at_most_16_kib`,
+    `a_jpeg_keeps_one_colour_profile_of_at_most_16_kib` and the stand-in
+    `ffmpeg_gets_the_jpeg_without_its_metadata`; a JPEG's small profile
+    reaching a JPEG and a PNG result, one in two chunks reaching neither,
+    in `ffmpeg_keeps_a_jpeg_s_small_colour_profile_in_one_chunk`. Removing the EXIF
+    rewrite, keeping a second `APP1`, dropping the length check, raising
+    the `iCCP` cap or keeping a second profile, raising or removing the
+    JPEG profile's cap, keeping a profile in chunks or a second one, or
+    never keeping one, dropping the scan
+    header's `FF` check or a table's exact length, keeping the JFIF
+    thumbnail, the tail after the end of image or an unknown marker, or
+    the orientation's range check, fails a test.
 - [ ] **L19c. Animated stickers** (`meta-whatsapp-core`: an
   `AnimatedSticker` `TargetFormat`; `meta-whatsapp-adapters`: its
   conversion behind the `ffmpeg` feature, or another converter; row 48):
@@ -4584,7 +4645,7 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
        there.
     7. The `header` Brazil's `order_status` table lists, with no fields
        and no example, is not modelled (a gap).
-- [ ] **P1c. The payment template buttons and the payment webhooks**
+- [x] **P1c. The payment template buttons and the payment webhooks**
   (`meta-whatsapp-client`, `meta-whatsapp-webhooks`; rows 38, 141): a
   template's `order_details` button and `order_status` component
   (`payments-in/orderdetailstemplate`, `orderstatustemplate`,
@@ -4599,6 +4660,116 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     conformance sweep (their manifest status moves from `OutOfScope` to
     `Typed`), with new event data snapshots only (no changed one); exact
     JSON of the template pages' examples.
+  - **Landed:** webhooks: a status's `type` and `payment`
+    (`webhooks::fields::Status::payment`, `StatusPayment`: the
+    transaction, its method and error, the refunds, the gateways' echoed
+    fields), `MessageStatus::Captured` and `Pending`, and
+    `InteractiveReply::PaymentMethod` (`PaymentMethodReply`); both pages
+    `Typed` in the conformance manifest (the `OutOfScope` status, with no
+    page left, is gone), two fixtures, two new event data snapshots, no
+    existing one changed, no new event kind. Client: the
+    `ORDER_DETAILS` and `PAYMENT_REQUEST` buttons of a definition
+    (`client::templates::Button::OrderDetails`, `Button::PaymentRequest`),
+    `TemplateDefinition::sub_category` and `display_format`, and the send
+    side (`TemplateMessage::order_details_button`,
+    `payment_request_button`, `order_status`;
+    `client::payments::PaymentRequest`, `PaymentRequestSetting`,
+    `PaymentRequestCard`, `TemplateOrderStatus`), the order checked by
+    its currency's rules (P1a's and P1b's, with the template's field
+    paths), every example of the four pages an exact-JSON test both ways
+    (`payments/tests/templates.rs`). The order types now also
+    deserialize (the service reads a send through them). The service's
+    send refusal is lifted here, not in M5b: it read sends through the
+    library type, so typing them lifts it; creation was never refused
+    (the buttons parsed as `Button::Other`), and is now checked
+    (`request::tests::the_payment_templates_pass_with_no_key_dropped`,
+    the service's `payment_templates_are_sent_as_metas_objects_and_checked`).
+    Not done here: India's checkout button templates
+    (`payments-in/checkout-button-templates`, their checkout endpoint and
+    the configuration's data endpoint) and the alpha third-party
+    validation, P1d's (row 141 stays partial in the library).
+  - **Review (fields, parsing, the send path, mutations):** a payment
+    object in a catch-all was sent unchecked: a component `type` spelled
+    `Button` or `Order_Status`, an `index` that is not a number, a
+    parameter `type` `ACTION` or `ORDER_STATUS` land in
+    `SendComponent::Other` or `Parameter::Other`, which reach Meta as
+    written, so an order in `USD` (or a `pending` order status) skipped
+    every rule, through the service too. One holding `order_details`,
+    `payment_request` or `order_status` at any depth is now refused, as
+    is a definition's `ORDER_DETAILS` or `PAYMENT_REQUEST` button that
+    did not parse typed
+    (`a_payment_object_in_a_catch_all_is_refused`; the service's
+    `payment_templates_are_sent_as_metas_objects_and_checked`). And a
+    payment webhook that failed its typed parse turned an event tenants
+    received before P1c (`status_updated`, `message_received`) into an
+    operator-only `unknown`: the `payment`, and its amount, method and
+    error, are `None` when they do not parse, the reply an unknown reply,
+    `refunds` may be `null` and `notes` `[]`
+    (`a_payment_that_does_not_parse_typed_never_fails_its_change`).
+    Three guards survived their deletion and are now pinned
+    (`a_payment_button_carries_its_own_object_in_a_known_currency`): a
+    payment button's `action` without its own object, and `Currency`
+    refusing an unknown code (the catch-all tests' `USD` order lacked
+    required fields, so it failed to parse whatever its currency).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions):
+    1. No new event kind. India's payment status stays a
+       `status_updated` event (tenants of the service receive it so
+       today, as a status `captured` or `pending`: a new kind, which
+       would start operator-only, would take it from them), with `type`
+       and `payment` added (`Status::is_payment` tells it from a
+       message's); the `payment_method` reply stays a `message_received`
+       event. Both already were tenant types.
+    2. `MessageStatus` gains `Captured` and `Pending`, the payment
+       statuses; the inbox ignores them (no delivery status maps), the
+       bot's 131049 feedback needs an error code they never carry.
+    3. The webhook types require only the identifiers (`reference_id`,
+       a transaction's and a refund's `id`, the reply's
+       `payment_method`); Razorpay's `notes` keep a non-string value as
+       its JSON text, as `open_enum!` does. Tightened by the review: no
+       payment object can fail the change it arrives in (a `payment`, an
+       amount, a method or an error that does not parse typed is `None`,
+       a reply that does not is `InteractiveReply::Unknown`), so a new
+       field or value never costs the event.
+    4. An order details template is `UTILITY` or `MARKETING` with a
+       `TEXT`, `IMAGE` or `DOCUMENT` header, whatever its currency
+       (Brazil's page says "must"; India's is silent and its examples
+       comply); its label is not checked (India fixes `Review and Pay`,
+       Brazil's example prints a placeholder).
+    5. A payment request button: the label its method requires; at most
+       three, each a different method, and then three buttons in all; a
+       sample value, no card at creation, the card at send
+       (`credential_id` optional, as this page says); `currency` and
+       `total_amount` required for a card, refused for Boleto and links,
+       and together or not at all for Pix ("used with").
+    6. An order status template is checked by India's rules (a
+       `reference_id` of 35, no `pending`): India alone documents it.
+    7. A payment button or order status component whose parameter does
+       not parse typed (a currency or payment method the client has no
+       rules for, a required field missing) is refused by `validate`,
+       not sent unchecked as the catch-all; so is a payment object in
+       any catch-all component or parameter, and, at creation, a payment
+       button that did not parse typed (the review's extension).
+    8. The button `index` stays a string, as every template button's,
+       though the order details pages print a number.
+- [ ] **P1d. India's checkout button templates** (`meta-whatsapp-client`;
+  row 141): the checkout button templates
+  (`payments/payments-in/checkout-button-templates`: one `order_details`
+  button labelled `Buy now` per product, in a single product template or
+  a carousel, each sent with its order), the checkout endpoint they call
+  (its `get_coupons`, `apply_coupon`, `remove_coupon` and
+  `apply_shipping` sub-actions, encrypted as a Flows endpoint is), the
+  link of that endpoint to a payment configuration
+  (`payments/payments-in/onboarding-apis`, "Link or update data
+  endpoint"), and the alpha third-party validation
+  (`payments/payments-in/pg`, "Third party validation": a Razorpay or
+  `PayU` setting's `encrypted_payment_gateway_data`).
+  - **After:** P1c.
+  - **Kind:** additive.
+  - **Decisive:** exact JSON of the checkout button page's creation and
+    send examples; each endpoint sample request decrypted and answered
+    with its sample response through the Flows endpoint's crypto; the
+    two third-party validation payloads of `pg` as exact JSON.
 - [ ] **P2. Payment routes in the service** (rows 38, 141).
   - **After:** P1a, P1b, P1c.
   - **Decisive:** M1.3 over the new routes; an order-details send
