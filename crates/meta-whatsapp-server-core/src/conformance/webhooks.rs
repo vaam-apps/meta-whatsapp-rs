@@ -15,8 +15,9 @@
 //! on a paused clock: [`a_delivery_with_no_turn_is_busy_after_the_wait`],
 //! not in [`run`]); each event is
 //! recorded once, under its dedup lease; the answer comes only once every
-//! event is recorded; and what the service's metrics count is told to the
-//! [`Observer`](crate::observe::Observer).
+//! event is recorded; the inbox keeps no synced address book contact before
+//! roadmap M3b (design D38); and what the service's metrics count is told
+//! to the [`Observer`](crate::observe::Observer).
 //!
 //! The pipeline runs on a view of the backend (`Watched`) that passes
 //! everything through to the backend's own stores and records what the
@@ -703,9 +704,10 @@ pub async fn unknown_and_unparsed_bodies_are_acknowledged_as_operator_only_rows(
 /// tenant's outbox, as `app_state_synced`, and the inbox keeps no synced
 /// contact of it ([`INBOX_RECORDING`](crate::inbound::INBOX_RECORDING)):
 /// the service exposes and erases no synced contacts before roadmap M3b,
-/// which turns recording on. The same delivery's message is recorded, so
-/// the inbox is on. Decisive: the library's default switches
-/// (`RecordingSwitches::ALL`, contacts on) in the pipeline.
+/// which turns recording on. A message is recorded, and its phone number
+/// linked to its BSUID: the inbox's other switches stay on. Decisive: the
+/// library's default switches (`RecordingSwitches::ALL`, contacts on) in
+/// the pipeline, or none of them (`RecordingSwitches::NONE`).
 pub async fn an_address_book_change_reaches_its_tenant_and_no_inbox(backend: &dyn Backend) {
     hold(backend.records().as_ref(), ADDRESS_BOOK).await;
     let watched = Watched::of(backend);
@@ -744,27 +746,30 @@ pub async fn an_address_book_change_reaches_its_tenant_and_no_inbox(backend: &dy
     });
     let report = deliver(&pipeline, &body(&payload)).await.unwrap();
     assert_eq!(report.delivered, 1);
-    let report = deliver(
-        &pipeline,
-        &body(&text(
-            ADDRESS_BOOK.waba,
-            ADDRESS_BOOK.pn,
-            "wamid.address-book.1",
-        )),
-    )
-    .await
-    .unwrap();
+    // The customer's message, with their BSUID beside the phone number.
+    let bsuid = "US.13491208655302741918";
+    let mut message = text(ADDRESS_BOOK.waba, ADDRESS_BOOK.pn, "wamid.address-book.1");
+    let value = &mut message["entry"][0]["changes"][0]["value"];
+    value["contacts"][0]["user_id"] = json!(bsuid);
+    value["messages"][0]["from_user_id"] = json!(bsuid);
+    let report = deliver(&pipeline, &body(&message)).await.unwrap();
     assert_eq!(report.delivered, 1);
     assert_eq!(
         types(&polled(backend, ADDRESS_BOOK.id).await),
         ["app_state_synced", "message_received"]
     );
-    assert_eq!(
-        inbox(backend, ADDRESS_BOOK.pn).await,
-        1,
-        "the inbox records"
-    );
     let conversations = backend.conversations();
+    let key = ConversationKey::new(phone.clone(), bsuid);
+    assert_eq!(
+        conversations.messages(&key, None, 10).await.unwrap().len(),
+        1,
+        "the inbox records the message"
+    );
+    assert_eq!(
+        conversations.identity_links(&key).await.unwrap().len(),
+        1,
+        "and links the phone number to the BSUID: the inbox's other switches are on"
+    );
     assert_eq!(
         conversations.contacts(&phone, None, 10).await.unwrap(),
         [],
