@@ -1885,11 +1885,78 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     without one), and only `ENABLED` requires a `purpose`
     (`only_enabled_needs_a_purpose_and_length_counts_characters`, which
     also pins the count in Unicode scalar values).
-- [ ] **L15. The thread control API** (`meta-whatsapp-client`, a new
+- [x] **L15. The thread control API** (`meta-whatsapp-client`, a new
   client module; row 139): pass, take, release.
   - **Kind:** additive.
   - **After:** nothing.
   - **Decisive:** exact JSON from `conversation-routing/thread-control`.
+  - **Landed:** `meta_whatsapp_client::thread_control`, reached with
+    `client.thread_control(phone_number_id)`: `ThreadControl::pass(&user,
+    &Pass)`, `take(&user, metadata)` and `release(&user)`, each a `POST
+    /{phone-number-id}/thread_control` with its `action`, answering
+    `ThreadControlResponse` (`messaging_product`, `request_id`). `Pass`
+    is untargeted (`Pass::to_escalation_partner`, the default: no
+    `control_pass`) or names a `TargetRole` (`Pass::to_role`: the page's
+    six values, `Other(String)` for a later one), with `metadata`. Row
+    139 stays partial for the library: the Routing Roles API (L15a).
+    Decisive tests (`thread_control::tests`): the page's four request
+    examples and its response as exact JSON
+    (`untargeted_pass_matches_docs_example`,
+    `targeted_pass_matches_docs_example`,
+    `release_matches_docs_example`, `take_matches_docs_example`), the two
+    handover examples' `metadata` as sent by the pass and the take, every
+    target role's wire name (`every_target_role_has_its_wire_name`) and a
+    BSUID in `recipient` on all three
+    (`a_bsuid_is_sent_as_recipient`). Checked locally, before any
+    request: `metadata` at most 2,000 characters
+    (`thread_control::METADATA_MAX_CHARS`, Unicode scalar values);
+    exactly one non-empty identifier, so `Recipient::PhoneAndUser` and a
+    group are refused (`exactly_one_user_identifier_is_required`); a
+    non-empty target role; `control_pass` on `pass` only, by
+    construction. None of the three is replayed after a timeout
+    (`no_action_is_replayed_after_a_timeout`). Not checked locally: who
+    owns the thread, the escalation role, whether a target is enabled
+    (Meta's errors say which). The `control_passed` and `control_taken`
+    events were already typed (`ThreadControlChanged`, with fixtures of
+    this page's examples); the inbox does not call the API itself (its
+    callers record their own calls: the `meta-whatsapp-rs-cms-inbox`
+    example now makes the pass). With it, the page's error `131070` (a
+    service message without owning the thread, idle threads included)
+    maps to `ErrorKind::ThreadOwnedElsewhere`, the inbox's local
+    refusal's kind, so the service answers it `409
+    thread_owned_elsewhere` instead of `502 unknown`
+    (`metas_ownership_refusal_has_the_local_refusals_kind`,
+    `classification_table_spot_checks`, and the service's
+    `each_kind_answers_its_code_and_no_meta_text`); `2494191` (a `take`
+    by a caller that is not the escalation partner) stays `Unknown`, not
+    `Permission`, which names the token's permissions and asset access
+    while this is the business's routing role
+    (`take_by_a_non_escalation_partner_keeps_its_code`).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation; each swappable as noted): the module and accessor names,
+    `meta_whatsapp_client::thread_control` and `client.thread_control`;
+    `release` not idempotent although Meta documents a release of an
+    idle thread as a success (a replay can release a thread a new
+    message routed back in between; a caller that wants a replay calls
+    it again); `release` sends no `metadata` (Meta forwards it only on a
+    handover event, and a release has none; a parameter is an additive
+    change); `Recipient::PhoneAndUser` and groups refused locally,
+    rather than reduced to the BSUID or the phone number (the caller
+    picks its identifier; Meta refuses both); `#[non_exhaustive]` on
+    `TargetRole` and `ThreadControlResponse` only, not on `Pass`, a
+    request type (OPEN_QUESTIONS #28); and L15a kept as its own item,
+    with row 139 partial until it lands.
+- [ ] **L15a. The Routing Roles API** (`meta-whatsapp-client`, next to
+  `client::thread_control`; row 139): `GET
+  /{phone-number-id}/routing_roles`, the roles the caller's business
+  holds on a number (`roles`, `is_standby`), which say which thread
+  control actions it may take (`conversation-routing/routing-roles`).
+  Proposed by L15's implementation; decided with it (2026-11-01).
+  - **Kind:** additive.
+  - **After:** L15.
+  - **Decisive:** exact response JSON from
+    `conversation-routing/routing-roles` (both examples, the empty
+    `roles` among them).
 - [x] **L16a. The Messaging Account a send bills**
   (`meta-whatsapp-client`, `client::messages`; row 140). Meta's account
   model evolution (`account-model-evolution`) is generally available

@@ -55,6 +55,7 @@ pub(crate) struct Shared {
 /// | [`Client::calling`] | Calling API signalling |
 /// | [`Client::partner_solutions`] | Multi-Partner Solutions, a client's business token |
 /// | [`Client::migration_intents`] | WABA migration intents |
+/// | [`Client::thread_control`] | Conversation Routing: pass, take, release a thread |
 ///
 /// Anything not wrapped yet is reachable through [`Client::get`],
 /// [`Client::post`] and [`Client::delete`].

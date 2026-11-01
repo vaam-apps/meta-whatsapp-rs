@@ -69,13 +69,14 @@ Error ─ Api(GraphApiError) → .kind(): ErrorKind   (branch here)
   `Error::kind`, and a test in the style of
   `a_local_window_refusal_has_the_same_kind_as_131047`. The two today:
   `CUSTOMER_SERVICE_WINDOW` → `CustomerServiceWindowClosed` (Meta's
-  131047 too) and `THREAD_OWNER` → `ThreadOwnedElsewhere` (no Graph code
-  yet: when Meta documents one, `from_code` maps it there). A kind with no
-  Graph code goes in the service test's `local_only` list
-  (`crates/meta-whatsapp-server/tests/errors.rs`) instead of
-  `REPRESENTATIVE` (the test fails once `from_code` maps a code to a kind
-  still listed there: move it then), and the service's `classify` gives
-  it its code. A
+  131047 too) and `THREAD_OWNER` → `ThreadOwnedElsewhere` (Meta's
+  131070 too, from `conversation-routing/thread-control` § Errors). Both
+  are in the service test's `local_refusals` list
+  (`crates/meta-whatsapp-server/tests/errors.rs`), and the service's
+  `classify` gives each its code. A kind with no Graph code goes in its
+  `local_only` list instead of `REPRESENTATIVE` (the test fails once
+  `from_code` maps a code to a kind still listed there: move it then;
+  none is left). A
   helper that recognizes the refusal looks through `Step`
   (`meta_whatsapp_rs::inbox::is_thread_owned_elsewhere`).
 - New leaf variants need a reason in `docs/architecture.md`. Prefer an

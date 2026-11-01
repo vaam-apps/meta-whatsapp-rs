@@ -182,8 +182,9 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   `CustomerServiceWindowClosed`, like Meta's `131047`, so one condition has
   one kind; a thread another app owns under Conversation Routing
   (`ValidationError::thread_owned_elsewhere()`) is `ThreadOwnedElsewhere`,
-  which no Graph code maps to yet (Meta documents none; `from_code` maps
-  one there when it does). `Error::kind` looks through `Step`, and so does
+  like Meta's `131070` (a service message without owning the thread,
+  `conversation-routing/thread-control` § Errors). `Error::kind` looks
+  through `Step`, and so does
   `meta_whatsapp_rs::inbox::is_thread_owned_elsewhere`. The service answers
   both `409`.
 - Two questions about a failed send, two methods.
@@ -813,7 +814,7 @@ deprecates them on 2026-10-15.
 
 Coexistence: `smb_app_data` sync (contacts, history) within 24h.
 
-### In-App Signup (`meta_whatsapp_client::signups`), WABA (`waba`), phone numbers (`phone_numbers`), business profile, QR codes, block users, commerce, analytics, marketing (MM API), flows, groups, calling
+### In-App Signup (`meta_whatsapp_client::signups`), WABA (`waba`), phone numbers (`phone_numbers`), business profile, QR codes, block users, commerce, analytics, marketing (MM API), flows, groups, calling, thread control (`thread_control`)
 
 Typed endpoint wrappers per the rules above. Flows additionally provides
 the data-endpoint crypto (feature `flows-endpoint`): decrypt

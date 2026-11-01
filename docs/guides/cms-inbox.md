@@ -347,10 +347,10 @@ let escalation = inbox.with_reply_checks(ReplyChecks::ALL.thread_owner(false));
   (`inbox::handover_key` is the inbox's mapping, public).
 - The refusal is `Error::Validation` on field `thread_owner`
   (`ValidationError::thread_owned_elsewhere()`), whose `kind()` is
-  `ErrorKind::ThreadOwnedElsewhere`: a kind of its own, although Meta
-  documents no error code for a service message from a non-owner yet
-  (when it does, `ErrorKind::from_code` is to map that code to this
-  kind). Branch on the kind,
+  `ErrorKind::ThreadOwnedElsewhere`, a kind of its own, the same as
+  Meta's `131070` (a service message from a responder that does not own
+  the thread, idle threads included:
+  `conversation-routing/thread-control` § Errors). Branch on the kind,
   or on `is_thread_owned_elsewhere` for the local refusal alone (it looks
   through `Error::Step`). An HTTP layer answers it like the window's
   refusal, `409` (the `cms_inbox` example does, and the service's code is
@@ -395,9 +395,10 @@ let escalation = inbox.with_reply_checks(ReplyChecks::ALL.thread_owner(false));
   (`ReplyChecks::ALL.thread_owner(false)`).
 - A pass by your own app is not reported to you (the new owner gets
   `control_passed`), nor a take (the previous owner gets
-  `control_taken`): until the thread control API is wrapped (roadmap
-  L15), record them with `inbox.record_thread_owner` once your request
-  succeeded.
+  `control_taken`): record them with `inbox.record_thread_owner` once
+  your `ThreadControl::pass` or `ThreadControl::take`
+  (`client.thread_control(number)`, roadmap L15) succeeded, and your
+  `ThreadControl::release` with `inbox.record_release`.
 - Standby echoes and receipts record nothing, and a group's standby copy
   records no owner (the routing pages describe threads with one
   customer).
