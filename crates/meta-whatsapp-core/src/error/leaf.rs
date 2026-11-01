@@ -90,6 +90,30 @@ pub enum SinkError {
     /// The sink's backend failed.
     #[error("sink delivery failed: {0}")]
     Delivery(#[source] anyhow::Error),
+    /// The sink will never accept this event, however often it is
+    /// redelivered (a value its database refuses, a shape its code cannot
+    /// handle): the sink's own classification. A webhook handler with a
+    /// dead-letter store records the event there and acknowledges the
+    /// delivery, so the rest of the batch is not held back
+    /// (`meta_whatsapp_webhooks::deadletter`); without one it answers
+    /// non-`200`, as for every other variant. Every other variant is
+    /// transient: an error a sink does not classify stays one.
+    #[error("sink refused the event permanently: {0}")]
+    Permanent(#[source] anyhow::Error),
+}
+
+impl SinkError {
+    /// A [`Self::Permanent`] wrapping `error`.
+    pub fn permanent(error: impl Into<anyhow::Error>) -> Self {
+        Self::Permanent(error.into())
+    }
+
+    /// Whether the sink classified this error as permanent
+    /// ([`Self::Permanent`]): redelivering the same event would fail the
+    /// same way.
+    pub fn is_permanent(&self) -> bool {
+        matches!(self, Self::Permanent(_))
+    }
 }
 
 /// Input rejected locally, before any request.

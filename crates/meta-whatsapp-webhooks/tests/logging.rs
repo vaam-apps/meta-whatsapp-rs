@@ -170,3 +170,54 @@ async fn rejected_deliveries_log_no_content_either() {
     assert_no_pii(&logs);
     assert!(!logs.contains(SECRET), "{logs}");
 }
+
+/// The dead-letter alert (roadmap L21a) names the letter, the kind and the
+/// business number, never the event's content or the sink's error text.
+#[tokio::test]
+async fn a_dead_letter_alert_carries_no_content() {
+    let capture = Capture::default();
+    let _guard = tracing::subscriber::set_default(capture.clone());
+    let kv = Arc::new(meta_whatsapp_adapters::store::MemoryKvStore::new());
+    let store = meta_whatsapp_webhooks::DeadLetters::new(kv);
+    let h = WebhookHandler::builder(
+        SignatureVerifier::new(vec![AppSecret::new(SECRET)]).unwrap(),
+        VerifyToken::new("vibecoding"),
+        Arc::new(RecordingSink::failing_permanently_on(0)),
+    )
+    .dead_letters(store.clone())
+    .build();
+    let body = json!({"object": "whatsapp_business_account", "entry": [{"id": "1", "changes": [{
+        "field": "messages",
+        "value": {"messaging_product": "whatsapp",
+                  "metadata": {"display_phone_number": "15550783881", "phone_number_id": "106540352242922"},
+                  "contacts": [{"profile": {"name": "Jane"}, "wa_id": "4915112345678"}],
+                  "messages": [{"from": "4915112345678", "id": "wamid.X", "timestamp": "1749416383",
+                                "type": "text", "text": {"body": "write to jane@example.com"}}]}
+    }]}]})
+    .to_string()
+    .into_bytes();
+    let report = h
+        .deliver(Some(&sign(&AppSecret::new(SECRET), &body)), &body)
+        .await
+        .unwrap();
+    assert_eq!(report.dead_lettered, 1);
+
+    // Not vacuous: the letter holds the content.
+    let letter = &store.list().await.unwrap()[0];
+    assert!(
+        letter
+            .event
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("jane@example.com")
+    );
+
+    let logs = capture.text();
+    assert!(logs.contains("ERROR"), "{logs}");
+    assert!(logs.contains("webhook event dead-lettered"), "{logs}");
+    assert!(logs.contains("kind=\"message_received\""), "{logs}");
+    assert!(logs.contains("letter=0"), "{logs}");
+    assert!(!logs.contains("refused for good"), "{logs}");
+    assert_no_pii(&logs);
+}

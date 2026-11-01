@@ -134,9 +134,9 @@ let ids: Vec<String> = inbox.identities(&key).await?.into_iter().collect();
 inbox.erase_all(&ids).await // `Erased` holds counts only: log those, never the ids
 ```
 
-Group messages are redacted in place (`ErasureMode::Delete` deletes them); `Inbox::erase` and
-`Inbox::identities` refuse another number's key. Procedure and limits: [references/erasure.md](references/erasure.md).
-History is kept unless the store has `with_retention` and you schedule `apply_retention`.
+Group messages are redacted in place (`ErasureMode::Delete` deletes them); `Inbox::erase` and `Inbox::identities`
+refuse another number's key. Webhook dead letters need `meta_whatsapp_rs::erasure::Eraser` instead. Procedure and limits:
+[references/erasure.md](references/erasure.md). History is kept unless the store has `with_retention` and you schedule `apply_retention`.
 
 ## Pitfalls
 
