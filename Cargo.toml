@@ -16,6 +16,9 @@ members = [
   "crates/meta-whatsapp-server-http",
   "crates/meta-whatsapp-server-api-axum",
   "crates/meta-whatsapp-server",
+  # The docs MCP server (roadmap L22b): a tool, a binary only, on
+  # serde_json alone. Not a default member, and no crate depends on it.
+  "tools/docs-mcp",
 ]
 # Repository automation is its own workspace (own Cargo.lock): its HTTP
 # client (ureq → rustls with `ring`) must not be resolved into the
@@ -29,7 +32,8 @@ exclude = [".xtask"]
 # meta-whatsapp-server-http; the API adapter, meta-whatsapp-server-api-axum;
 # and the binary, meta-whatsapp-server: roadmap S7) are members (every `--workspace` recipe, and so `just ci`, covers them)
 # but not default ones: a bare `cargo build` or `cargo test` in the root
-# builds the library alone, with the features its crates choose.
+# builds the library alone, with the features its crates choose. The docs
+# MCP server under tools/ is a member on the same terms.
 default-members = [
   "crates/meta-whatsapp-core",
   "crates/meta-whatsapp-client",
@@ -143,6 +147,13 @@ rustls-platform-verifier = "0.7"
 # meta-whatsapp-adapters' tests/redis_tls_handshake.rs (a name or an IP
 # address the server's certificate does not carry, an untrusted issuer).
 rcgen = { version = "0.14", default-features = false }
+# Test-only, for now: meta-whatsapp-adapters' tests/live_mongodb.rs, the
+# replica-set smoke test of roadmap S8 (a dev-dependency there, so no
+# library build links it). No default features: the default TLS feature,
+# `rustls-tls`, is rustls on `ring`, and `dns-resolver` (hickory, for
+# `mongodb+srv://`) is not needed. Members choose `rustls-tls-aws-lc`
+# (rustls with an explicit aws-lc-rs provider, never the process default).
+mongodb = { version = "3.9.1", default-features = false }
 
 # Typst rendering.
 typst = "0.15"

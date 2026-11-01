@@ -104,16 +104,22 @@ files: `start_upload_session`, `upload_chunk`, `upload_session_status`.
 ## What meta-whatsapp-rs does not do
 
 - No storage of media: the bytes are yours to keep.
-- No virus scanning or image resizing, and no conversion of its own:
-  unsupported types are refused rather than converted. A recording can
-  become a voice message's Ogg Opus through
-  `meta_whatsapp_client::media::MediaConverter` (core's port, re-exported;
-  `TargetFormat::OggOpus`; upload the result with
-  `Media::upload_converted` and send `Audio::new(id).voice()`), which
-  `meta_whatsapp_rs::adapters::media::FfmpegConverter` implements
+- No virus scanning, and no conversion of its own: unsupported types
+  are refused rather than converted. A converter does it before the
+  upload, through `meta_whatsapp_client::media::MediaConverter` (core's
+  port, re-exported), into a `TargetFormat`: `OggOpus` (a recording into
+  a voice message's Ogg Opus: send `Audio::new(id).voice()`),
+  `StaticSticker` (a PNG or JPEG into a static WebP within 100 000
+  bytes: send it with `OutboundMessage::sticker_id`), or `Jpeg` and `Png`
+  (an 8-bit image within 5 000 000 bytes, scaled down if it has to be);
+  upload the result with `Media::upload_converted`.
+  `meta_whatsapp_rs::adapters::media::FfmpegConverter` implements it
   (feature `ffmpeg`, off by default) by running an `ffmpeg` with libopus
-  that you install; call its `check()` at startup. Its failures are
-  `Error::Conversion` (`ConversionError`): retry only `Timeout`.
+  and libwebp that you install; call its `check_for` with the formats
+  you use (or `check()`, voice only) at startup. It reads images as PNG
+  or JPEG only (a GIF is refused) and makes no animated sticker. Its
+  failures are `Error::Conversion` (`ConversionError`): retry only
+  `Timeout`.
 
 ## Related skills
 

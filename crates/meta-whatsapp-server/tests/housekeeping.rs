@@ -16,7 +16,7 @@ use meta_whatsapp_rs::core::ids::WabaId;
 use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use meta_whatsapp_server::model::{IdempotencyClaim, IdempotencyKey, TenantId};
 use meta_whatsapp_server::store::events::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, RouteGuard,
+    AfterMove, EventPage, EventQuery, GuardedBinding, NewEvent, RouteGuard,
 };
 use meta_whatsapp_server::store::{
     Backend, BackendKind, HOUSEKEEPING, HOUSEKEEPING_LEASE, IdempotencyRecords, Janitor,
@@ -126,6 +126,7 @@ fn row(id: &str) -> NewEvent {
         route_guard: Some(RouteGuard {
             binding: GuardedBinding::Waba(WabaId::new(WABA).unwrap()),
             not_after: None,
+            after_move: AfterMove::default(),
         }),
         phone_number_id: None,
         waba_id: Some(WabaId::new(WABA).unwrap()),

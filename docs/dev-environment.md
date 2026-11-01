@@ -7,16 +7,19 @@ devcontainer (`github.com/anthropics/claude-code/.devcontainer`), for Rust:
 
 | Piece | What |
 | --- | --- |
-| `Dockerfile` | `node:24-bookworm` base (Claude Code is an npm package), Rust 1.98.1 via rustup, `just`, `cargo-deny`, `typst` CLI, `git-delta`, zsh, `psql`/`redis-cli` |
-| `compose.yaml` | `dev` (your shell), `postgres:18-alpine`, `redis:8-alpine`, and `redis-tls` (`redis:8-alpine` serving TLS only on 6380, client certificates required); named volumes for shell history, Claude config and the cargo registry |
+| `Dockerfile` | `node:24-bookworm` base (Claude Code is an npm package), Rust 1.98.1 via rustup, `just`, `cargo-deny`, `typst` CLI, `git-delta`, zsh, `psql`/`redis-cli`/`mongosh` |
+| `compose.yaml` | `dev` (your shell), `postgres:18-alpine`, `redis:8-alpine`, `redis-tls` (`redis:8-alpine` serving TLS only on 6380, client certificates required), and `mongodb` (`mongo:7.0.45-jammy`, a single-node replica set); named volumes for shell history, Claude config and the cargo registry |
 | `init-firewall.sh` | default-deny egress, run on every start |
 | `github-meta-snapshot.json` | GitHub's IPv4 ranges as of the date inside it: the firewall's fallback (copied to `/etc/meta-whatsapp-rs-firewall/`) |
 | `devcontainer.json` | VS Code extensions (Claude Code, rust-analyzer, tinymist for Typst, Even Better TOML, CodeLLDB, just, GitLens) |
 
 Open it with VS Code's "Reopen in Container" or `devcontainer up`. Inside,
-`META_WHATSAPP_RS_TEST_POSTGRES_URL`, `META_WHATSAPP_RS_TEST_REDIS_URL` and
-`META_WHATSAPP_RS_TEST_REDISS_URL` point at the sidecars, so `just
-test-live` (and `just ci`) use them instead of starting `compose.test.yaml`.
+`META_WHATSAPP_RS_TEST_POSTGRES_URL`, `META_WHATSAPP_RS_TEST_REDIS_URL`,
+`META_WHATSAPP_RS_TEST_REDISS_URL` and `META_WHATSAPP_RS_TEST_MONGODB_URL`
+point at the sidecars, so `just test-live` (and `just ci`) use them instead
+of starting `compose.test.yaml`. A container built before one of them
+existed lacks its variable, and `just test-live` then tries to start
+`compose.test.yaml`, which fails inside it: rebuild the container.
 
 ### The TLS Redis
 
@@ -46,6 +49,36 @@ day.
 The tests' binaries link both of rustls' crypto providers (a
 dev-dependency adds `ring`) and install no process default: the case in
 which redis-rs's own TLS panics.
+
+### MongoDB
+
+The MongoDB stores (roadmap S9, S17, S18) need multi-document
+transactions, which MongoDB runs only on a replica set, so the test server
+is a **single-node replica set** (`rs0`): `mongo:7.0.45-jammy` started with
+`--replSet rs0`, no authentication, no TLS. Its healthcheck initiates the
+set on its first run (one member, `localhost:27017`, its address inside its
+own container) and passes once that member is primary, a few seconds after
+start. As that member address is reachable only from inside the container,
+the test URL carries `directConnection=true`: the driver keeps to the
+address it was given instead of switching to the member address it
+discovers. The image is the 7.0 series, not 8.x: every 8.x release
+refuses to start on Linux 6.19 and later (MongoDB's SERVER-121912), which
+CI's runners run.
+
+- **Dev container**: the `mongodb` sidecar, and
+  `META_WHATSAPP_RS_TEST_MONGODB_URL=mongodb://mongodb:27017/?directConnection=true`.
+- **Without it**: `just test-live` starts `compose.test.yaml`, whose
+  `mongodb` listens on `127.0.0.1:57017`
+  (`mongodb://127.0.0.1:57017/?directConnection=true`).
+
+`tests/live_mongodb.rs` in meta-whatsapp-adapters is the smoke test: it
+commits a transaction across two collections, checks that nothing of it is
+visible outside it before the commit, and that an aborted one leaves
+nothing. Its driver, the `mongodb` crate (Apache-2.0), is a dev-dependency
+only, with `rustls-tls-aws-lc` (an explicit aws-lc-rs provider) as the TLS
+feature the driver requires; no library build links it until S17's
+`mongodb` feature. The server is MongoDB's, under the SSPL: it runs here as
+a test sidecar only, and nothing links or ships it.
 
 The Compose project is `meta-whatsapp-rs-dev` (it was `wa-rs-dev` before
 the rename), and named volumes are per project: a container built before
@@ -145,8 +178,8 @@ Docker for `just test-live`.
 ## ffmpeg (media conversion tests)
 
 The media conversion tests (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`,
-roadmap L19) run `adapters::media::FfmpegConverter` against a real
-`ffmpeg` with libopus. Neither the dev container nor the service's image
+roadmap L19 and L19b) run `adapters::media::FfmpegConverter` against a real
+`ffmpeg` with libopus and libwebp (Ubuntu's package has both). Neither the dev container nor the service's image
 carries one, on purpose (its licence is the deployer's choice): without
 one the tests print why and skip. CI installs `ffmpeg` on its runner
 (`.github/workflows/ci.yml`, before `just ci`) and sets
@@ -166,13 +199,97 @@ and set `META_WHATSAPP_RS_REQUIRE_FFMPEG=1` to be sure they ran:
 | `just lint` | `cargo fmt --check`, clippy pedantic with `-D warnings` |
 | `just check` / `just test` / `just doc` | all targets, all features |
 | `just features` | each adapter/client feature compiled alone |
-| `just test-live` / `just test-live-down` | live adapter, inbox and service tests; stop the services |
-| `just test-live-clean` | drop leftover live-test databases (`wa_test_*`) and schemas (`wa_test_*`, `wa_server_test_*`) on the test Postgres, and keys (`wa-test:*`) on the test Redis and the TLS Redis (the sidecars, or compose.test.yaml's), keeping them up; not during a live run |
+| `just test-live` / `just test-live-down` | live adapter, inbox, bot retention and service tests; stop the services |
+| `just test-live-clean` | drop leftover live-test databases (`wa_test_*`) and schemas (`wa_test_*`, `wa_server_test_*`) on the test Postgres, keys (`wa-test:*`) on the test Redis and the TLS Redis, and databases (`wa_test_*`) on the test MongoDB (the sidecars, or compose.test.yaml's), keeping them up; not during a live run |
 | `just skills-ts` | the server skills' TypeScript examples type-check against the committed OpenAPI document; needs Node of `tools/skills-ts/.nvmrc`'s major (24: the image's base, checked by `crates/meta-whatsapp-rs/tests/skills.rs`) and npm's registry (on the firewall's allowlist) |
 | `just deny` | licenses, advisories, bans, sources |
 | `just skills-check` | every skill stamp's commit is on main (directly or squash-merged) |
 | `just squash-body <pr>` | the squash commit body for a PR (CONTRIBUTING.md § Merging) |
 | `just meta-docs [--force]` | mirror Meta's docs into `.meta-docs/` |
+| `just docs-mcp` | the docs MCP server over stdio, for an MCP client to launch ([below](#the-docs-mcp-server)) |
 
 Builds are heavy (typst, aws-lc-sys, sqlx). On a shared machine, cap
 parallelism: `CARGO_BUILD_JOBS=4 RUST_TEST_THREADS=4 just ci`.
+
+## The docs MCP server
+
+`tools/docs-mcp` (roadmap L22b) serves this repository's docs and
+consumer skills to a coding agent over the
+[Model Context Protocol](https://modelcontextprotocol.io)'s stdio
+transport: the agent launches it, sends JSON-RPC on its stdin, and reads
+the answers on its stdout. It is a tool, not part of the library: a
+binary only, on `serde_json` alone, a member of the workspace but not a
+default one (`just test`, `just lint`, `just doc` and `just deny` cover
+it; a bare `cargo build` does not build it), and no crate depends on it.
+
+**Tools.** All three are read-only.
+
+| Tool | Arguments | Answers |
+| --- | --- | --- |
+| `list` | `under` (a directory prefix, e.g. `skills`) | every page: its path, title and, for a skill, the `description` of its front matter |
+| `search` | `query` (terms that must all appear; ASCII case-insensitive; `Idempotency-Key` is one term), `under`, `limit` (1 to 25, default 10) | the matching sections, best first: path, heading, line, a snippet |
+| `read` | `path`, `section` (a heading's text, `Idempotency keys`, or its anchor, `idempotency-keys`), `from_line` | the page, or the section through the line before the next heading of its level; at most 40 KiB, a longer text ending with the `from_line` to continue and the page's headings |
+
+`search`'s hits name the heading to pass to `read`: search, then read
+the one section, rather than whole pages (`docs/roadmap.md` is over
+200 KB).
+
+**What it serves.** The root's `README.md`, `AGENTS.md`,
+`CONTRIBUTING.md`, `CHANGELOG.md` and `OPEN_QUESTIONS.md`; under
+`docs/`, every `.md` and `.txt` (the guides, the design, the planning
+docs, `public/llms.txt`); under `skills/`, every `.md`, `.rs` and `.ts`
+(the skills, their references and examples). Never `.meta-docs/` (Meta's
+pages, which this repository does not redistribute), hidden directories,
+`node_modules/`, generated `*.d.ts` files, files over 1 MiB, or a
+symbolic link. The files are read on every call, so an edit shows at
+once. A `read` takes only a path the listing has (relative,
+`/`-separated, no `..`, `.`, `\`, `:` or leading `/`), and only if the
+file system resolves it to that very path under the root. A path that is
+not a page, a missing section or a wrong argument is a tool error (the
+result's `isError: true`, with what to do instead), not a JSON-RPC one:
+the agent can correct it.
+
+**Protocol.** Revision 2026-07-28, the current one: every request
+carries `_meta` with `io.modelcontextprotocol/protocolVersion` and
+`io.modelcontextprotocol/clientCapabilities`, and `server/discover`
+gives the versions, capabilities and instructions. A client of an
+earlier revision sends `initialize` first and is answered in 2025-11-25
+or 2025-06-18 for the rest of the process. A request with neither is
+`-32602`; a version it does not speak, `-32022` with the ones it does.
+
+**Running it.** Build it once, so a client's first launch does not wait
+for cargo:
+
+```bash
+cargo build --release -p meta-whatsapp-docs-mcp
+```
+
+Then register `target/release/meta-whatsapp-docs-mcp` with your MCP
+client. It serves the checkout it was built from; `--root <checkout>`
+names another one. With Claude Code, for this checkout (the server is
+then yours, not the project's: none is committed):
+
+```bash
+claude mcp add meta-whatsapp-rs-docs -- "$PWD/target/release/meta-whatsapp-docs-mcp"
+```
+
+In a client configured by JSON (an `mcpServers` map), with the paths of
+your checkout:
+
+```json
+{
+  "mcpServers": {
+    "meta-whatsapp-rs-docs": {
+      "command": "/path/to/meta-whatsapp-rs/target/release/meta-whatsapp-docs-mcp",
+      "args": ["--root", "/path/to/meta-whatsapp-rs"]
+    }
+  }
+}
+```
+
+`just docs-mcp` runs it through `cargo run -q` instead (`"command":
+"just", "args": ["--justfile", "/path/to/meta-whatsapp-rs/justfile",
+"docs-mcp"]`), rebuilding it first when its source changed; cargo's
+messages go to stderr, so stdout carries only MCP messages. By hand, it
+waits for JSON-RPC on stdin and exits when stdin closes.
+

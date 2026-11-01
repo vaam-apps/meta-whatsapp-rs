@@ -312,9 +312,36 @@ pub struct WabaBinding {
     /// Solution Partner credit allocation config id, when a line was
     /// shared.
     pub credit_allocation_id: Option<String>,
-    /// When it was bound.
+    /// When it was bound: when this binding began. An attach of the WABA to
+    /// the tenant that holds it (a refresh) keeps it.
     pub attached_at: OffsetDateTime,
+    /// How many attaches this binding has had: 1 when it began, one more on
+    /// every attach of the WABA to the tenant holding it (a refresh: the
+    /// operator's reconnect, a token rotation), which keeps
+    /// [`Self::attached_at`]. A binding made after an unbind starts again at
+    /// 1 (it begins later). Part of the [`BindingEpoch`] (roadmap S2b).
+    pub generation: i64,
+    /// When the WABA was last unbound from a tenant other than this
+    /// binding's: the record of its last move (roadmap S2b, design D36),
+    /// read from its [`WabaTombstone`] when this binding began and kept by a
+    /// refresh. `None`: no other tenant held it before (a first
+    /// onboarding, or the tenant's own WABA attached again after an unbind
+    /// of its own). A tenant deleted since counts as another tenant, even
+    /// one created again under its id. A binding made before the store
+    /// recorded moves (on Postgres, before migration 4) reads
+    /// [`UNRECORDED_MOVE`]: a move may have come before it, long ago.
+    pub previous_tenant_unbound_at: Option<OffsetDateTime>,
 }
+
+/// What [`WabaBinding::previous_tenant_unbound_at`] reads for a binding
+/// made before the store recorded moves (Postgres: its rows from before
+/// migration 4, and those a replica of an earlier release writes during a
+/// rolling deploy): the Unix epoch, as "a previous tenant may have held
+/// the WABA, unbound before the records began". So such a binding keeps
+/// the rules of before roadmap S2b: an event of its own second stays
+/// operator-only (the rule of a WABA with a previous tenant), and its
+/// undated events reach it (a move, if any, is past every window).
+pub const UNRECORDED_MOVE: OffsetDateTime = OffsetDateTime::UNIX_EPOCH;
 
 impl WabaBinding {
     /// This binding's epoch: what a write conditioned on it compares.
@@ -323,18 +350,72 @@ impl WabaBinding {
             waba_id: self.waba_id.clone(),
             tenant_id: self.tenant_id.clone(),
             attached_at: self.attached_at,
+            generation: self.generation,
+        }
+    }
+}
+
+/// The record a WABA's last unbinding leaves (roadmap S2b): which tenant
+/// held it (`None` once that tenant was deleted: any tenant, one created
+/// again under its id included, is another), when it was unbound, and when
+/// it had last been unbound from a tenant other than that one. A store
+/// keeps one per WABA ever unbound (Postgres: `wa_server_waba_tombstones`),
+/// written atomically with every unbind
+/// ([`RecordStore::unbind_waba`](crate::store::RecordStore::unbind_waba),
+/// [`RecordStore::unbind_waba_if`](crate::store::RecordStore::unbind_waba_if)),
+/// and reads it when it binds the WABA anew ([`Self::previous_for`]). The
+/// memory backends apply these rules as written here, the Postgres one in
+/// its SQL; the conformance suite holds both to them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WabaTombstone {
+    /// The tenant it was unbound from; `None` once that tenant was deleted.
+    pub tenant_id: Option<TenantId>,
+    /// When it was unbound.
+    pub unbound_at: OffsetDateTime,
+    /// The unbound binding's [`WabaBinding::previous_tenant_unbound_at`].
+    pub previous_tenant_unbound_at: Option<OffsetDateTime>,
+}
+
+impl WabaTombstone {
+    /// The record `binding`'s unbinding at `at` leaves.
+    pub fn of(binding: &WabaBinding, at: OffsetDateTime) -> Self {
+        Self {
+            tenant_id: Some(binding.tenant_id.clone()),
+            unbound_at: at,
+            previous_tenant_unbound_at: binding.previous_tenant_unbound_at,
+        }
+    }
+
+    /// When the WABA was last unbound from a tenant other than `tenant`,
+    /// for a new binding of it to `tenant`: this unbinding, when it was
+    /// another tenant's (or a deleted tenant's); else the one before it,
+    /// which the unbound binding carried.
+    pub fn previous_for(&self, tenant: &TenantId) -> Option<OffsetDateTime> {
+        if self.tenant_id.as_ref() == Some(tenant) {
+            self.previous_tenant_unbound_at
+        } else {
+            Some(self.unbound_at)
+        }
+    }
+
+    /// `tenant` was deleted: from now on, any tenant is another.
+    pub fn forget_tenant(&mut self, tenant: &TenantId) {
+        if self.tenant_id.as_ref() == Some(tenant) {
+            self.tenant_id = None;
         }
     }
 }
 
 /// A WABA's binding as it was read (by a capability, when it was made):
-/// which tenant held the WABA, since when. A write conditioned on it
-/// (`RecordStore::unbind_waba_if`, `RecordStore::set_waba_status_if`)
-/// does nothing once the WABA was unbound since, and bound again or not,
-/// to the same tenant or another: a binding made later begins later.
-/// A binding refreshed for its own tenant (`RecordStore::bind_waba` on a
-/// WABA the tenant holds) keeps its epoch. `attached_at` is compared as
-/// the store gave it (a backend returns what it stored).
+/// which tenant held the WABA, since when, after how many attaches. A
+/// write conditioned on it (`RecordStore::unbind_waba_if`,
+/// `RecordStore::set_waba_status_if`) does nothing once the WABA was
+/// unbound since, and bound again or not, to the same tenant or another (a
+/// binding made later begins later), nor once the binding was refreshed
+/// for its own tenant (`RecordStore::bind_waba` on a WABA the tenant
+/// holds moves [`Self::generation`], roadmap S2b): a capability made
+/// before a refresh is told apart from one made after it. `attached_at` is
+/// compared as the store gave it (a backend returns what it stored).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindingEpoch {
     /// The WABA.
@@ -343,6 +424,8 @@ pub struct BindingEpoch {
     pub tenant_id: TenantId,
     /// When that binding began.
     pub attached_at: OffsetDateTime,
+    /// Its [`WabaBinding::generation`] then.
+    pub generation: i64,
 }
 
 /// The connection status of a bound number.
@@ -418,7 +501,8 @@ pub struct Listing<T> {
 /// Whether a WABA and its numbers could be bound to a tenant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindOutcome {
-    /// Bound (or already bound to that tenant, numbers refreshed).
+    /// Bound (or already bound to that tenant: numbers refreshed, the
+    /// binding's generation moved).
     Bound,
     /// The WABA, or one of its numbers, belongs to another tenant: nothing
     /// changed (decision D4: refuse).

@@ -269,9 +269,10 @@ async fn run<S: Future<Output = ()>>(
         shutdown_grace,
         outbox_retention,
         settings,
+        move_rules,
         ..
     } = config;
-    let inbound = Inbound::new(app_secrets, verify_token)?;
+    let inbound = Inbound::new(app_secrets, verify_token)?.with_move_rules(move_rules);
     // The state and its grant: the internal listener's API adapter is
     // served with the grant, which no one else is given.
     let (state, grant) = AppState::from_backend(

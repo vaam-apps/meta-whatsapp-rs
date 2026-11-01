@@ -223,7 +223,7 @@ and `store-postgres`.
     after attaching, stay unconditioned (no capability was made from a
     binding); the memory stores read the system clock, not the injected
     one (one process).
-- [ ] **S2b. Undated events after a move, and the bind generation**
+- [x] **S2b. Undated events after a move, and the bind generation**
   (`meta-whatsapp-server-core` and both in-tree backends; one PR with
   both schema changes, on both backends, and an additive migration: a
   new migration file, never an edit to one on `main`). S2's security
@@ -261,6 +261,114 @@ and `store-postgres`.
     reaches the tenant of a first onboarding, and no tenant after a
     move; a `190` from a capability made before a same-tenant refresh
     does not mark the numbers `reconnect_required`.
+  - **Landed:** every bullet, in the core and both in-tree backends,
+    with the decisive tests on memory and live on Postgres. The
+    tombstone is `model::WabaTombstone` (its tenant, `None` once that
+    tenant is deleted, when, and the unbound binding's own record),
+    written with every unbind in the same step and read by a new
+    binding into `WabaBinding::previous_tenant_unbound_at` (the
+    unbinding's time when another tenant left, else the time it
+    carried; a refresh keeps it), the window measured from it. The
+    settings are `events::MoveRules` and `events::UndatedAfterMove`
+    (`Inbound::with_move_rules`; the service's
+    `WA_SERVER_UNDATED_AFTER_MOVE`, `…_WINDOW`, 169 h, and
+    `WA_SERVER_MOVE_SKEW_MARGIN`, 0 s by default). The rules are one
+    function, `outbox::RouteGuard::admits`, which the routing
+    (`events::owner`, `after_move` its new reason for an undated event
+    held back) and the memory outboxes apply, and whose bounds
+    (`RouteGuard::dated_bounds`, `AfterMove`) the Postgres insert binds:
+    it picks between them by the binding's row, under the same `FOR KEY
+    SHARE` lock. The generation is `WabaBinding::generation`, compared by
+    `BindingEpoch` in every conditioned write and capability check.
+    Postgres: migration 4 (`0004_waba_moves.sql`, additive), whose
+    defaults give the rows written before it generation 1 and a move
+    recorded as unknown (`UNRECORDED_MOVE`, the Unix epoch), so they
+    keep S2's rules; its names are stable identifiers pending the
+    owner's confirmation (§ Owner touchpoints). The decisive tests:
+    `conformance::webhooks::undated_events_after_a_move_reach_no_tenant_within_the_window`
+    (a history chunk, an error and an undated group update: no tenant
+    within the window, B under `CurrentHolder` and past it, a first
+    onboarding always) and
+    `an_event_of_its_bindings_first_second_reaches_a_first_onboarding_only`,
+    the service's `an_event_of_its_bindings_own_second_reaches_a_first_onboarding_only`
+    over HTTP, and `capabilities::failed_before_a_refresh_marks_nothing`;
+    the records suite's `a_move_is_recorded` and
+    `a_refresh_moves_the_generation`, and the invariants' guard cases
+    (`a_first_onboarding_keeps_its_first_second`,
+    `the_skew_margin_applies_after_a_move_only`,
+    `an_undated_event_after_a_move_waits_out_the_window`), which the
+    memory crate also shows an outbox bending the guard fails. S7's
+    continuity test now migrates `main`'s database forward (migrations
+    1 to 3 unchanged, 4 added once, none on `serve`) and routes `main`'s
+    binding as before. By mutation: the window check removed from
+    `RouteGuard::admits` fails its unit test, the webhooks case (a
+    history chunk within the window reaches B) and the invariants'
+    undated case on memory, and removed from the Postgres insert, that
+    case live; the first onboarding's exemption removed, dated, fails
+    the unit tests, the first-second cases through the core's pipeline
+    and over HTTP, and `a_first_onboarding_keeps_its_first_second` on
+    memory and live; undated, the routing suite's error of a first
+    onboarding and the invariants' undated case, on memory and live; the
+    generation not moved on a refresh fails `a_refresh_moves_the_generation`
+    on memory and live, and `failed_before_a_refresh_marks_nothing` run
+    alone; the skew margin applied without a previous tenant fails its
+    unit test and the margin case on memory and live.
+    `openapi/v1.json` and the event data snapshots are unchanged.
+    Left, and why: an unbind made by a binary of an earlier release
+    leaves no tombstone, before the upgrade as during its rolling
+    deploy, so a WABA unbound that way and bound afterwards to another
+    tenant reads as a first onboarding, and its previous holder's
+    undated events reach the new holder for what remains of the window
+    (as before S2b); a move made wholly before migration 4 keeps S2's
+    rules, which give them to the new holder too; and a replica of the
+    earlier release unbinding after a tombstone was written leaves that
+    older tombstone in place, so the window runs from an earlier
+    unbinding (the guide says not to move WABAs between tenants in the 7
+    days and an hour before the deploy, nor during it); the window runs from the previous tenant's
+    unbinding, not from the new attach, so an undated event of the
+    interval between them is the new holder's once the window from the
+    unbinding passed; a moved WABA's new holder loses its own undated
+    events within the window (its history sync among them, when it
+    onboarded within it: D36's cost); a binding made before migration 4
+    keeps S2's strict first second for good, until it is unbound; the
+    window and the margin are per deployment, not per tenant.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a setting, or behind the
+    `RecordStore` port and its conformance suite; recorded in design
+    D36): the window runs from the previous tenant's unbinding, not from
+    the new attach; the skew margin defaults to `0s`; a binding made
+    before migration 4 reads the Unix epoch (`UNRECORDED_MOVE`), not
+    NULL, so it keeps S2's rules; a tenant deleted and created again
+    under its id counts as another tenant; the generation starts at 1
+    for every binding; the undated check sits in `events::owner` and
+    `RouteGuard::admits` and covers every undated event; a capability
+    or an attach meeting a refresh answers `503 storage_unavailable`,
+    retryable; tombstones are never purged (one row per WABA ever
+    unbound). **Pending the owner** (stable identifiers): the names of
+    migration 4's columns and table, its description, and the epoch
+    default's meaning (§ Owner touchpoints).
+  - **Sabotage review** (isolation, the migration, the routing rules):
+    on Postgres a new binding's `attached_at` was its transaction's
+    start, which can precede the previous tenant's unbinding when that
+    commits while the bind runs, so an event Meta dated while the
+    previous tenant still held the WABA fell in a second the new binding
+    began before (the memory backend never did): the bind now moves it
+    past `clock_timestamp()` and the tombstone's time, and the race
+    suite's `a_binding_racing_an_unbind_records_the_move` (which failed
+    3 live runs of 3 before) holds every backend to it. An attach
+    meeting a refresh of its own tenant took back the token it stored,
+    which could leave the binding with none while the other attach
+    answered success: it now keeps it (`503` still,
+    `capabilities::an_attach_meeting_a_refresh_keeps_its_tenants_token`).
+    A skew margin reaching before the Unix epoch failed every dated
+    insert on Postgres (`to_timestamp` out of range, folded at plan
+    time): `RouteGuard::dated_bounds` stops at the epoch. Added to the
+    suites: undated rounds in the insert-against-a-move race (a tenant
+    created again under its id kept out by the window alone),
+    `capabilities::a_capability_made_while_its_binding_is_refreshed_is_refused`,
+    a WABA moved twice in `records::a_move_is_recorded`. The rolling
+    deploy's gap is wider than first written (an unbind by an earlier
+    release before the upgrade is not recorded either): Left, above.
 - [x] **S3. Conformance into core** (`meta-whatsapp-server-core`,
   `meta_whatsapp_server_core::conformance`, a feature, like the
   library's `store::conformance`, run over a `&dyn Backend`): the store
@@ -1036,7 +1144,7 @@ and `store-postgres`.
   - **Also, after the first release:** the legacy fingerprint's removal
     moved to M2a, the service's next item, as S7 landed before the
     first release.
-- [ ] **S8. MongoDB in the dev container and CI** (`.devcontainer/`,
+- [x] **S8. MongoDB in the dev container and CI** (`.devcontainer/`,
   the `just test-live` Compose file, `.github/workflows/ci.yml`): a
   single-node replica set (transactions need one) beside Postgres and
   Redis, and `META_WHATSAPP_RS_TEST_MONGODB_URL`, for S9, S17 and S18.
@@ -1044,6 +1152,47 @@ and `store-postgres`.
   - **Decisive:** `just test-live` with
     `META_WHATSAPP_RS_REQUIRE_LIVE=1` and no MongoDB URL fails; with it,
     a live smoke test commits a multi-document transaction.
+  - **Landed:** `mongodb` in `compose.test.yaml` (`127.0.0.1:57017`) and
+    as a devcontainer sidecar: `mongo:7.0.45-jammy` with
+    `--replSet rs0`, whose healthcheck runs `rs.initiate()` when
+    `rs.status()` reports the set not yet initiated (code 94), with one
+    member, `localhost:27017`, and passes once that member is primary
+    (a few seconds after start). The URL carries `directConnection=true`,
+    as the member address is the container's own: `just test-live`
+    exports `mongodb://127.0.0.1:57017/?directConnection=true` (and
+    starts Compose when it is unset), the devcontainer sets
+    `mongodb://mongodb:27017/?directConnection=true`, and `just
+    test-live-clean` drops the `wa_test_*` databases (through `mongosh`,
+    which the devcontainer's image gains). The smoke test is
+    `live_mongodb_replica_set_commits_a_multi_document_transaction`
+    (meta-whatsapp-adapters' `tests/live_mongodb.rs`, in `test-live`'s
+    `live_` filter): a transaction across two collections, not visible
+    outside it before the commit and all visible after, then an aborted
+    one that leaves nothing; with the URL unset under
+    `META_WHATSAPP_RS_REQUIRE_LIVE=1` it panics. Its driver, `mongodb`
+    3.9 (Apache-2.0), is a dev-dependency there, without default features
+    (`rustls-tls` is rustls on `ring`) and with `rustls-tls-aws-lc`,
+    which builds its configuration on an explicit aws-lc-rs provider: no
+    library build links it, and it enables no `ring`. CI needs no
+    workflow change (`just ci` runs `test-live`, which starts Compose).
+    The server is MongoDB's, under the SSPL, and runs as a test service
+    only.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable by its tag, line
+    or setting): the image `mongo:7.0.45-jammy`, pinned by tag: the 7.0
+    series, as every 8.x release refuses to start on Linux 6.19 and
+    later (MongoDB's SERVER-121912, an rseq incompatibility in its
+    tcmalloc; the CI runner's kernel is one), and 7.0 has transactions on
+    a replica set; back to 8.x once MongoDB ships a release that starts
+    there; the driver a dev-dependency of the adapters only,
+    with `rustls-tls-aws-lc` and `bson-3`, until S17 makes it an optional
+    dependency; the healthcheck's `start_interval` of 1 s and `interval`
+    of 30 s (a check every 2 s cost half a core); `mongosh` 2.14.1 in the
+    devcontainer image; `MongoCleanup` in `live_mongodb.rs`, so the other
+    test binaries do not build the driver (S17 may move it). The SSPL
+    server is run, never linked or shipped, as the test service for the
+    database the owner named (design §10); the owner may still rule on
+    it, and the final report lists it.
 - [ ] **S9. An `Outbox` spike on MongoDB**
   (`meta-whatsapp-server-store-mongodb`, the `Outbox` only, not composed
   into the binary), before the port shapes freeze: per-tenant commit
@@ -1584,12 +1733,72 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
   - **After:** B3.
   - **Decisive:** `KvJobs` implements it, and a second, in-memory
     implementation passes the same job suite.
-- [ ] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
+- [x] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
   age and a cap per chat, through `ConversationStore`'s erasure.
   - **After:** B1, L5.
   - **Decisive:** removing the age filter fails the test; the erased
     messages are gone from `messages` and `conversations` on memory and,
     live, on Postgres.
+  - **Landed:** L5 gave the age (`purge_before`, `apply_retention`);
+    the cap per chat is a new port method,
+    `ConversationStore::trim_conversations(phone_number_id, keep_last)`
+    (no composition of the existing ones deletes some rows of one
+    conversation): each conversation keeps its newest rows by
+    `(timestamp, id)`, every row counting (tombstones and redacted group
+    messages too), and the summary goes when its latest message does
+    (the newest rows all tombstones, or a cap of 0), as under a purge;
+    window events, ownership records, contact removals, synced contacts
+    and identity links stay (D35). Memory under its lock; Postgres in
+    one statement under the existing purge lock, ranking on the
+    existing `messages_conversation_idx`: no migration and no new stable
+    identifier. In the bot, module `retention`: `RetentionPolicy`
+    (`max_age`, `max_messages_per_chat`), applied once
+    (`RetentionPolicy::apply`) or on the bot's `Timer`
+    (`RetentionSweeper`, every hour by default, restricted to the bot's
+    numbers with `number`). The decisive tests:
+    `the_age_filter_deletes_exactly_what_is_older_in_memory` and its
+    `live_postgres_` twin (`crates/meta-whatsapp-bot/tests/retention.rs`:
+    disabling the policy's age, setting its cutoff to now, or removing
+    the memory store's age filter fails them), and
+    `a_sweep_deletes_by_age_and_cap_from_messages_and_conversations_*`
+    (the chats gone from both, memory and live). The cap's off-by-ones,
+    a trim that leaves the summary, and a reversed tie order fail the
+    conformance case `trim_keeps_the_newest_rows_of_each_conversation`
+    (memory, and live under both erasure modes); a trim deleting the
+    summary from its own snapshot fails
+    `live_postgres_a_trim_keeps_the_summary_an_append_moved`; a trim in
+    two statements, which loses the message appended between them,
+    fails `live_postgres_trims_racing_appends_keep_every_new_message`
+    (three runs of three); a trim without the purge lock fails
+    `live_postgres_the_locks_are_the_documented_ones`. Not caught: the
+    key order of the summaries' locks (the ranking already yields them
+    in key order); in memory a trim cannot race an append (one lock).
+    The server compiles and passes unchanged (it implements no
+    `ConversationStore`); retention over HTTP is M5k. The sabotage
+    review added what three surviving mutations showed missing: a cap
+    shared by the same contact on two numbers fails the conformance
+    case (its every-number part), a sweeper sweeping only its first
+    number fails `the_sweeper_sweeps_every_number_given_and_no_other`,
+    and a sweeper stopping at its first failed sweep (or logging more
+    than counts) fails `retention_logs.rs`. A trim of one number deletes
+    by that number's range of the index, no longer by a scan of every
+    number's rows; the cost of a trim, and that a deleted summary
+    takes its open window with it, are documented on the port and the
+    Postgres store.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable: the policy is the
+    bot's, over the port, and a deployment calls the port itself for
+    another): the name `RetentionPolicy`; a store-wide method shape
+    mirroring `purge_before` (one number or every number); a required
+    port method, no default; every row of a history counting toward the
+    cap, tombstones and redacted group messages too; the summary rule of
+    a purge (deleted with its latest message), a cap of 0 allowed; both
+    `RetentionPolicy::apply` and `RetentionSweeper`; the age applied
+    first, then the cap, a sweep stopping at its first error. Not
+    changed, the owner's (§ Owner touchpoints): D35 and L5's erasure
+    semantics; a trim applies L5's rules (identity links and synced
+    contacts kept, a deleted message's id free again, the summary going
+    with its latest message), and adds no rule of its own.
 
 ## 3. Library gap batches
 
@@ -2723,7 +2932,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     - Row 48 stays partial, its rest planned in L19b.
     - CI proves the conversion: its runner installs `ffmpeg`, which no
       image or dev container does.
-- [ ] **L19b. Stickers and image resizing** (`meta-whatsapp-core`: new
+- [x] **L19b. Stickers and image resizing** (`meta-whatsapp-core`: new
   `TargetFormat`s; `meta-whatsapp-adapters`: their conversion behind the
   `ffmpeg` feature, or another converter; row 48): an image into a WebP
   sticker within Meta's limits (`image/webp`, 100 KB static, 500 KB
@@ -2740,6 +2949,148 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     5 MB comes out under it, both against a real
     converter in CI; a GIF or a crafted file off the format list is a
     `ConversionError::InputRejected`.
+  - **Landed:** three `TargetFormat`s in core, `StaticSticker` (a
+    static WebP, `image/webp`, `.webp`, at most
+    `media::STATIC_STICKER_MAX_BYTES`, 100 000 bytes), `Jpeg` and `Png`
+    (8-bit, `image/jpeg` and `image/png`, `.jpeg` and `.png`, at most
+    `media::IMAGE_MAX_BYTES`, 5 000 000 bytes), read from
+    `messages/sticker-messages` and `business-phone-numbers/media` on
+    2026-11-01; the client's test keeps each within its upload table.
+    `FfmpegConverter` makes them from a PNG or a JPEG only: the input's
+    first bytes (a PNG's signature, a JPEG's start of image) are checked
+    before ffmpeg starts, and ffmpeg's own detection may land on nothing
+    but `png_pipe` or `jpeg_pipe` (`-format_whitelist`). Each attempt
+    runs fixed literal arguments: the L19 prefix (`-protocol_whitelist
+    pipe`, `-abort_on empty_output`, environment reduced to `PATH`,
+    stderr drained and withheld), `-max_alloc 268435456`, `-max_pixels
+    33554432` (32 Mi pixels), the first video frame, no metadata, a
+    filter and an encoder from a fixed table, `-f image2pipe` on stdout.
+    Each format is brought under its limit by a ladder of sizes and
+    qualities (sticker: its own size at quality 80, then 1024 at 80 and
+    50, 512 at 75 and 50, 256 at 50; JPEG: its own size at `-q:v` 2, 5,
+    10, then 2048 at 5, 1024 at 10; PNG: its own size, 2048, 1024), the
+    aspect ratio kept and never enlarged, each attempt killed once its
+    output passes the limit, the whole ladder within `with_timeout`; an
+    image no attempt brings under is a `ValidationError` on `input`. The
+    result's header is checked (a WebP whose RIFF size is its length and
+    whose first chunk is `VP8 `, `VP8L`, or `VP8X` without the animation
+    flag; a JPEG of 8 bits and 3 components; a PNG of 8-bit RGB or RGBA
+    ending in `IEND`). `FfmpegConverter::check_for(&[TargetFormat])`
+    checks each format's encoder; `check()` is it for `OggOpus`.
+    Decisive (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`, against ffmpeg
+    6.1.1, Ubuntu 24.04's package, the one CI's runner installs, built
+    with libwebp, a hard dependency of its `libavcodec60`):
+    `ffmpeg_turns_a_png_into_a_static_webp_sticker_that_upload_accepts`
+    (a 1600 × 1200 picture with noise, a 4 MB PNG whose own-size WebP is
+    nearly 700 KB, comes out as a 1024 × 768 static WebP within 100 000
+    bytes, its RIFF header, chunks and size read in the test, ffprobe
+    agreeing, `validate_upload` taking it as a sticker, and its upload's
+    exact request), `ffmpeg_brings_a_jpeg_over_five_megabytes_under_the_image_limit`
+    (a 10 MB, 4000 × 3000 JPEG, which `validate_upload` refuses, comes out
+    as an 8-bit colour JPEG under 5 000 000 bytes, 4:3 kept), and
+    `ffmpeg_refuses_a_gif_a_jpeg_ls_an_animated_png_and_a_crafted_png`
+    (each `InputRejected` for every image format; the JPEG-LS image
+    passes the first-bytes check, and without the whitelist ffmpeg reads
+    it from a pipe and converts it: the control). Also: a small
+    transparent PNG keeps its size and alpha; a 16-bit PNG over 5 MB
+    comes out 8-bit RGBA under it; a 6000 × 6000 PNG is refused by the
+    pixel bound (ffmpeg without it converts it); a JPEG whose EXIF says
+    Orientation 6 comes out rotated (640 × 480 to 480 × 640), its EXIF
+    gone. The inputs are made by the tests (`lavfi` sources, an EXIF
+    segment written in Rust); nothing is committed. Removing the
+    first-bytes check, the whitelist (or widening it to `jpegls_pipe`),
+    `-max_pixels`, the ladder (an overflow ending it), the aspect ratio,
+    the 8-bit PNG format, the WebP check or its RIFF-size or animation
+    test, the ladder-wide timeout, or setting the sticker limit to the
+    animated one fails a test (the first-bytes check only in the
+    adapters' tests: for a GIF, the whitelist is a second wall). Not
+    done: animated stickers (L19c; a GIF or an animated PNG is refused;
+    ffmpeg 6.1.1 cannot read an APNG from a pipe at all), WebP or HEIC
+    as an input, and a photo of more than 32 Mi pixels (a 48-megapixel
+    one), which has to be scaled down before it comes here.
+  - **Decided 2026-11-01** (coordinator, under the owner's delegation,
+    AGENTS.md § Decisions; each swappable by another `MediaConverter`,
+    or a literal of this one):
+    1. Meta's "100 KB" and "5 MB" read as decimal (100 000 and
+       5 000 000) for what a converter makes, under the upload check's
+       binary reading: a converted file then fits whichever Meta means.
+       `AUDIO_MAX_BYTES` keeps its binary reading (16 MiB), as L19
+       decided: a voice note is far under either.
+    2. Inputs: PNG and JPEG only, the formats of Meta's image table; no
+       GIF, WebP, HEIC or animation.
+    3. Static stickers only: no `AnimatedSticker` target here (L19c).
+    4. No sticker dimensions imposed (Meta gives none): a sticker that
+       fits keeps its size; the ladder's sizes (1024, 512, 256) are where
+       it steps down, not a requirement.
+    5. Bounds: 32 Mi pixels, 256 MiB a single allocation, the existing
+       64 MiB of input and 60 s, the timeout covering the whole ladder.
+    6. The ladders as built; a result over the limit after every attempt
+       is a `ValidationError` on `input`, as L19's result over the limit
+       is.
+    7. Row 48 stays partial on the library's side: L19b's text names
+       Meta's 500 KB animated limit and the row's capability is "stickers
+       from images", which Zaileys makes animated too; animated stickers
+       are L19c. The service's side stays M5c1's.
+    8. An input's ICC profile passes into a JPEG or PNG result, so its
+       colours stay right; its size is bounded by the output limit.
+       Stripping it is one filter in the fixed table.
+    9. The allocation bound stays 256 MiB, its edge documented (a 16-bit
+       RGBA frame of 8192 × 4096 is refused by ffmpeg's padding, 8192 ×
+       4094 converts); headroom is one literal.
+  - **Review** (adversarial, 2026-11-01, against ffmpeg 6.1.1): a PNG's
+    `zTXt` chunks were a memory bomb inside every bound (ffmpeg inflates
+    each and keeps the text until the frame is decoded: four 100 KB
+    chunks inflating to 100 MiB each took 1.6 GB for a 16 × 16 image).
+    The converter now walks a PNG's chunks before ffmpeg starts, refuses
+    one cut short of `IEND`, and passes it on without `tEXt`, `zTXt`,
+    `iTXt` and `eXIf` and without anything after `IEND`
+    (`a_png_reaches_ffmpeg_without_its_text_and_nothing_after_its_end`,
+    `ffmpeg_gets_the_png_without_its_text_and_the_limit_is_inclusive`);
+    the PNG output check wants one image ending the file. Also found and
+    tested: the allocation bound refuses a 16-bit RGBA PNG of exactly
+    32 Mi pixels (ffmpeg's padding; the docs said it fits;
+    `ffmpeg_refuses_a_frame_over_the_allocation_bound`, its first
+    behavioural test on images), a result of exactly the limit is taken,
+    and only the first of two images in a row comes out. Three guards
+    survived their mutation and now have a test: the kill of an attempt
+    over the limit (`kill_on_drop` and SIGPIPE hid its removal;
+    `an_attempt_over_the_limit_is_killed_and_reaped`, a stand-in deaf to
+    SIGPIPE, each attempt reaped before the conversion returns), a failed
+    attempt ending the ladder (`a_failed_attempt_ends_the_ladder`) and the
+    encoder's kind in `check_for`
+    (`check_for_wants_the_encoder_s_kind_too`). `-map_metadata -1`
+    survives in behaviour (the `image2pipe` muxer and these encoders
+    write no tags) and is pinned by the arguments' literal test. Probed and
+    holding: a JPEG-LS image with an `APP0` segment first, or a `SOF0`
+    copy before its own frame header, still never reaches `jpeg_pipe`
+    (ffmpeg's probe lands on `mjpeg` or nothing, both off the list); an
+    animated PNG reaches only its default image at worst; the ladder's
+    last attempts stay far under their limits on noise with noisy
+    transparency (42 774 bytes for a sticker, 3.8 MB for a PNG); killed
+    attempts are reaped (`Child::kill` waits). Left as they are,
+    documented: the colour profile (ICC) passes into a JPEG or PNG
+    result; a truncated JPEG decodes partly, grey below the cut; the
+    first sticker attempt of a 24-megapixel photo takes about 18 s on a
+    4-core machine, encoding a WebP far over the limit, so a timeout
+    under the default can fail a large photo; an image over 256:1 can
+    fail at a smaller attempt (a side scaled to nothing).
+- [ ] **L19c. Animated stickers** (`meta-whatsapp-core`: an
+  `AnimatedSticker` `TargetFormat`; `meta-whatsapp-adapters`: its
+  conversion behind the `ffmpeg` feature, or another converter; row 48):
+  an animation (an animated GIF, PNG or WebP) into an animated WebP
+  sticker within Meta's 500 KB (`messages/sticker-messages`), through
+  the same port and the same safety rules as L19 and L19b (fixed
+  arguments, input formats restricted, bounded in pixels, frames and
+  time, diagnostics withheld). The input formats it adds are a decision
+  of its own (AGENTS.md § Decisions).
+  - **Kind:** additive.
+  - **After:** L19b.
+  - **Decisive:** an animated GIF comes out as a WebP whose `VP8X`
+    header has the animation flag and whose `ANIM` and `ANMF` chunks are
+    read apart from the converter, within 500 KB, which `Media::upload`'s
+    type check accepts as a sticker, against a real converter in CI; an
+    animation over the frame bound is refused, and removing that bound
+    fails a test.
 - [ ] **L20a. One catch-all shape for open enums** (`meta-whatsapp-core`
   and every crate with an open enum; OPEN_QUESTIONS #27): `Other(String)`,
   generated by one macro in core.
@@ -3140,7 +3491,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     library's migration versions compared, not only counted (their list
     is private to the adapters crate: it needs a public accessor there);
     the subscriptions read moved into the client.
-- [ ] **L22b. A docs MCP server** (a tool under `tools/`, outside the
+- [x] **L22b. A docs MCP server** (a tool under `tools/`, outside the
   library; row 117): search and read the docs and skills over MCP's
   stdio transport.
   - **Kind:** additive.
@@ -3148,6 +3499,58 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a scripted MCP client lists the tools, searches
     `Idempotency-Key` and gets the server guide's section; a missing
     page is an MCP error, not a panic.
+  - **Landed:** row 117 done in the library too. `tools/docs-mcp`
+    (package and binary `meta-whatsapp-docs-mcp`, run by `just
+    docs-mcp`) serves three read-only tools over stdio: `list` (every
+    page, with its title and a skill's description), `search` (the
+    sections holding every term of a query, best first, each with its
+    heading, line and snippet) and `read` (a page, or one section by its
+    heading or anchor, to the next heading of its level). It speaks MCP
+    revision 2026-07-28, the current one on 2026-11-01 (no handshake:
+    `_meta` on every request, `server/discover`, `resultType`, the
+    caching hints, `-32022` for a version it does not speak) and, after
+    an `initialize`, 2025-11-25 and 2025-06-18, the revisions clients
+    shipped with until then (dual-era, as 2026-07-28's versioning page
+    defines it). A missing page, a missing section, a path outside the
+    corpus and bad arguments are tool execution errors (a result with
+    `isError: true`, as the tools page sorts them: the model can correct
+    them); an unknown tool or malformed params are JSON-RPC `-32602`.
+    `tools/docs-mcp/tests/stdio.rs` runs the binary as a subprocess:
+    a legacy client and a modern one each list the tools, search
+    `Idempotency-Key`, read `docs/guides/server.md`'s `Idempotency keys`
+    section and get a missing page as `isError: true` with the server
+    still answering; twelve escapes (`..`, absolute paths, repository
+    files outside the corpus, `.meta-docs/`, `\`) and symbolic links out
+    of a corpus tree are refused, and the corpus covers every Markdown
+    page `llms.txt` links. Each guard was removed in turn and a test
+    failed: the path syntax check, the listing membership, the
+    resolved-path check, the walk's refusal of links and of hidden
+    directories, the missing page's `isError`, the read and search
+    bounds.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a constant or a list in one
+    file of the tool, swapped by changing it): Rust, in the root workspace as a non-default member
+    (its tests, clippy, rustdoc and `cargo deny` run in `just ci`'s
+    `--workspace` recipes), a binary only so no crate can depend on it,
+    with no MCP SDK and no dependency but `serde_json` (no new crate in
+    `Cargo.lock`); dual-era rather than 2026-07-28 alone; the corpus
+    (`corpus::ROOT_FILES` and `corpus::TREES` in the tool): the root's
+    README, AGENTS, CONTRIBUTING, CHANGELOG and OPEN_QUESTIONS, `docs/`'s
+    Markdown and text, `skills/`'s Markdown and example sources, never
+    `.meta-docs/`, hidden directories, `node_modules/`, generated
+    `*.d.ts` or a symbolic link, read from disk on every call (no
+    state, no stale index); the bounds: 40 KiB a read (a longer one ends
+    with its `from_line` to continue and the page's headings), 10 hits
+    a search by default and 25 at most, 240-character snippets, files
+    over 1 MiB and messages over 1 MiB refused; search ASCII
+    case-insensitive, every term required, ranked by occurrences with a
+    bonus for the heading; no `.mcp.json` committed (registering the
+    server stays each developer's choice: docs/dev-environment.md shows
+    how).
+  - **Left:** MCP resources and prompts (the pages as `resources/read`
+    too); a search that folds Unicode case or ranks by more than counts;
+    `subscriptions/listen` for a changed page (the tool list never
+    changes).
 - [ ] **L23. Template groups and archiving** (`meta-whatsapp-client`,
   `client::templates`; rows 101, 153): template groups' create, read,
   update and delete, after reading the reference Meta's changelog links
@@ -3648,7 +4051,12 @@ everything else goes into the parity-completion report.
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
   with their keys' derivations and their records' shapes, added and
-  awaiting confirmation before the first release; L11d's
+  awaiting confirmation before the first release; S2b's Postgres
+  migration 4, "waba moves": the columns `wa_server_wabas.generation` and
+  `wa_server_wabas.previous_tenant_unbound_at` with its default, the Unix
+  epoch read as "a move before the records began" (`UNRECORDED_MOVE`),
+  and the table `wa_server_waba_tombstones` with its columns and its
+  `ON DELETE SET NULL` rule, added and awaiting confirmation; L11d's
   `wa.es.coexistence` and its record layout, added and awaiting
   confirmation; and L21a's
   `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their

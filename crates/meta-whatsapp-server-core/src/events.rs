@@ -10,14 +10,19 @@
 //! number is bound to, and only when the event's WABA, if it names one, is
 //! the number's WABA in the bindings; an event naming only a WABA belongs
 //! to the WABA's tenant. And, for an event Meta dated ([`meta_time`]), only
-//! when that WABA's binding began in a second before the event's: a WABA
-//! moved from one tenant to another does not bring the first one's dated
-//! events, which Meta retries for up to 7 days, to the second. An
-//! **undated** event (an error, a history chunk, a group update without a
-//! date) has no date to compare: it goes to whoever holds the binding when
-//! it arrives, so after a move to another tenant the previous holder's
-//! undated events that Meta redelivers reach the new holder, until roadmap
-//! S2b makes them operator-only for a window after a move.
+//! when that WABA's binding began by the event's second, and, when the
+//! WABA had a previous tenant, in a second before it, by the skew margin
+//! more ([`MoveRules`]): a WABA moved from one tenant to another does not
+//! bring the first one's dated events, which Meta retries for up to 7
+//! days, to the second, and a first onboarding keeps the events of its
+//! first second. An **undated** event (an error, a history chunk, a group
+//! update without a date) has no date to compare: after a move from
+//! another tenant it is operator-only until the window after the move has
+//! passed (`undated_after_move`, design D36: [`UndatedAfterMove`]), since
+//! the previous holder's undated events that Meta redelivers would
+//! otherwise reach the new holder; for a WABA no other tenant held, and
+//! with [`UndatedAfterMove::CurrentHolder`], it goes to whoever holds the
+//! binding when it arrives. Roadmap S2b.
 //! The outbox row carries that tenant only for the types in
 //! [`TENANT_EVENT_TYPES`]; `unknown`, `unparsed`, `partner_solution_updated`,
 //! the types not yet reviewed for tenants ([`OPERATOR_EVENT_TYPES`]), any
@@ -45,7 +50,7 @@ use time::OffsetDateTime;
 use crate::error::{ErrorCode, ServiceError};
 use crate::model::TenantId;
 use crate::outbox::{
-    DedupWindow, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
+    AfterMove, DedupWindow, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
 };
 use crate::store::{RecordStore, StoreResult};
 
@@ -67,6 +72,104 @@ pub const KEYLESS_DEDUP_WINDOW: Duration = Duration::from_hours(1);
 /// Retention is decision D10 of the design, still open: this default
 /// stands until the owner decides.
 pub const DEFAULT_OUTBOX_RETENTION: Duration = Duration::from_hours(7 * 24);
+
+/// The default window of [`UndatedAfterMove::OperatorOnly`]: 7 days and an
+/// hour, Meta's retry window (`webhooks/create-webhook-endpoint`) plus the
+/// dedup lease's margin, the library's `DEFAULT_DEDUP_TTL` (design D36).
+pub const DEFAULT_UNDATED_AFTER_MOVE_WINDOW: Duration = Duration::from_hours(7 * 24 + 1);
+
+/// The default [`MoveRules::skew_margin`]: none beyond the strict second
+/// (roadmap S2, L3), which already makes an event of a moved WABA's first
+/// second operator-only.
+pub const DEFAULT_MOVE_SKEW_MARGIN: Duration = Duration::ZERO;
+
+/// Who receives an undated tenant-visible event (an error, a history
+/// chunk, a group update without a date) of a WABA that moved to its
+/// holder from another tenant: the setting `undated_after_move` (design
+/// D36; the service's `WA_SERVER_UNDATED_AFTER_MOVE`). Such an event
+/// carries no date to compare with the binding, and Meta redelivers a
+/// failed delivery for up to 7 days, so within that time after a move it
+/// may be the previous holder's. A WABA no other tenant held (a first
+/// onboarding) is never concerned: its history sync reaches it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndatedAfterMove {
+    /// Operator-only until `window` has passed since the WABA was last
+    /// unbound from another tenant (the default, with
+    /// [`DEFAULT_UNDATED_AFTER_MOVE_WINDOW`]): fail closed. A moved WABA's
+    /// new holder does not get its own undated events in that window
+    /// either (its own history sync among them, when it onboarded within
+    /// it); the operator sees them in the operator-only stream.
+    OperatorOnly {
+        /// How long after the move.
+        window: Duration,
+    },
+    /// The holder when it arrives: the rule before roadmap S2b, under
+    /// which the previous holder's redelivered undated events reach the
+    /// new holder.
+    CurrentHolder,
+}
+
+impl Default for UndatedAfterMove {
+    fn default() -> Self {
+        Self::OperatorOnly {
+            window: DEFAULT_UNDATED_AFTER_MOVE_WINDOW,
+        }
+    }
+}
+
+/// The rules for the events of a WABA that moved between tenants (roadmap
+/// S2b, design D36): settings of the webhook pipeline
+/// (`crate::inbound::Inbound::with_move_rules`), applied by the routing
+/// ([`owner`]) and handed to the outbox's check ([`RouteGuard::after_move`]).
+/// Neither applies to a WABA no other tenant held. Swap them through the
+/// service's settings (`WA_SERVER_UNDATED_AFTER_MOVE`,
+/// `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW`, `WA_SERVER_MOVE_SKEW_MARGIN`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MoveRules {
+    /// Undated events after a move ([`UndatedAfterMove`]).
+    pub undated_after_move: UndatedAfterMove,
+    /// How far past the second its binding began in an event of a moved
+    /// WABA must be dated to reach the holder, for a clock of Meta's ahead
+    /// of the store's (whole seconds, a fraction rounded up;
+    /// [`DEFAULT_MOVE_SKEW_MARGIN`] by default).
+    pub skew_margin: Duration,
+}
+
+impl MoveRules {
+    /// The outbox's part of these rules for an event received at `now`
+    /// (on the webhook pipeline's clock): the margin, and the instant a
+    /// previous tenant must have left by for an undated event (`now` less
+    /// the window, never before the Unix epoch: a database may not hold an
+    /// earlier instant, and no move it recorded is older).
+    pub fn after_move(&self, now: OffsetDateTime) -> AfterMove {
+        AfterMove {
+            skew_margin: self.skew_margin,
+            undated_moved_by: match self.undated_after_move {
+                UndatedAfterMove::OperatorOnly { window } => {
+                    let window = time::Duration::try_from(window).unwrap_or(time::Duration::MAX);
+                    Some(
+                        now.saturating_sub(window)
+                            .max(crate::model::UNRECORDED_MOVE),
+                    )
+                }
+                UndatedAfterMove::CurrentHolder => None,
+            },
+        }
+    }
+}
+
+/// When an event is routed, and by which rules ([`route`], [`owner`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Routing {
+    /// When it was received, on the webhook pipeline's clock: the window
+    /// after a move ([`UndatedAfterMove::OperatorOnly`]) is measured from it.
+    pub now: OffsetDateTime,
+    /// An event Meta dated before this is a replay (security review L3):
+    /// the dedup lease's memory before [`Self::now`].
+    pub not_before: OffsetDateTime,
+    /// The rules after a move.
+    pub moves: MoveRules,
+}
 
 /// How often a replica runs housekeeping (the outbox purge, the library's
 /// expired key/value rows on Postgres, and expired idempotency records).
@@ -173,8 +276,11 @@ pub struct Route {
     pub tenant: Option<TenantId>,
     /// Why the row is operator-only (a fixed set, for the log): `unowned`
     /// (no binding holds its number or WABA, or a stale one), `before_binding`
-    /// (Meta dated it before its binding began, or in the second it began:
-    /// maybe a previous holder's), `stale`
+    /// (Meta dated it before its binding began, or, the WABA having had a
+    /// previous tenant, in the second it began or within the skew margin
+    /// after it: maybe a previous holder's), `after_move` (undated, within
+    /// the window after the WABA moved from another tenant: roadmap S2b),
+    /// `stale`
     /// (Meta dated it before the dedup lease's memory: a replay), or `type`
     /// (a type no tenant receives). `None` for a tenant's row.
     pub operator_only: Option<&'static str>,
@@ -200,7 +306,8 @@ pub struct Holder {
 /// no date of their own: history syncs (they carry the past on purpose), a
 /// contact sync or a group update without a date, errors, bodies that are
 /// not webhooks. An undated event reaches whoever holds its binding when it
-/// arrives (see the [module](self)).
+/// arrives, except within the window after a move (see the
+/// [module](self)).
 pub fn meta_time(event: &WebhookEvent) -> Option<OffsetDateTime> {
     use WebhookEvent as E;
     match event {
@@ -271,13 +378,19 @@ pub fn event_number(event: &WebhookEvent) -> Option<PhoneNumberId> {
 /// - Number first: the event's number (or an untyped change's
 ///   `metadata.phone_number_id`), bound under the WABA the event names;
 ///   else, naming no number, its WABA.
-/// - Since before the event: Meta's date for it ([`meta_time`]) is in a
-///   later second than the one the WABA's binding began in (the event's
-///   own second is too close to tell: `crate::outbox::began_by`). A WABA
-///   unbound from one tenant and bound to another does not bring the first
-///   one's dated events (Meta retries for up to 7 days) to the second. An
-///   undated event is the current holder's: the previous holder's, after a
-///   move, reach the new one (roadmap S2b).
+/// - Since before the event: Meta's date for it ([`meta_time`]) is no
+///   earlier than the second the WABA's binding began in, and, when the
+///   WABA had a previous tenant, in a later second, by the skew margin
+///   more (the event's own second is too close to tell after a move:
+///   [`RouteGuard::admits`]). A WABA unbound from one tenant and bound to
+///   another does not bring the first one's dated events (Meta retries for
+///   up to 7 days) to the second; a first onboarding keeps the events of
+///   its first second (roadmap S2b).
+/// - An undated event, after a move: past the window
+///   ([`UndatedAfterMove::OperatorOnly`]) since the WABA was last unbound
+///   from another tenant, else nobody's (`after_move`); with
+///   [`UndatedAfterMove::CurrentHolder`], or for a WABA no other tenant
+///   held, the current holder's.
 ///
 /// # Errors
 ///
@@ -285,11 +398,11 @@ pub fn event_number(event: &WebhookEvent) -> Option<PhoneNumberId> {
 pub async fn owner(
     store: &dyn RecordStore,
     event: &WebhookEvent,
-    not_before: OffsetDateTime,
+    at: &Routing,
 ) -> StoreResult<Result<Holder, &'static str>> {
     let dated = meta_time(event);
     // A replay: dated before what the dedup lease remembers.
-    if dated.is_some_and(|at| at < not_before) {
+    if dated.is_some_and(|dated| dated < at.not_before) {
         return Ok(Err("stale"));
     }
     let (binding, guarded) = if let Some(pn) = event_number(event) {
@@ -316,21 +429,28 @@ pub async fn owner(
     let Some(binding) = binding else {
         return Ok(Err("unowned"));
     };
-    if !crate::outbox::began_by(binding.attached_at, dated) {
-        return Ok(Err("before_binding"));
+    let guard = RouteGuard {
+        binding: guarded,
+        not_after: dated,
+        after_move: at.moves.after_move(at.now),
+    };
+    if !guard.admits(binding.attached_at, binding.previous_tenant_unbound_at) {
+        return Ok(Err(if dated.is_some() {
+            "before_binding"
+        } else {
+            "after_move"
+        }));
     }
     Ok(Ok(Holder {
         tenant: binding.tenant_id,
-        guard: RouteGuard {
-            binding: guarded,
-            not_after: dated,
-        },
+        guard,
     }))
 }
 
 /// Where `event` goes: its owner, and the outbox row's tenant. An event
-/// Meta dated before `not_before` is a replay (security review L3), no
-/// tenant's.
+/// Meta dated before `at.not_before` is a replay (security review L3), no
+/// tenant's; an undated one within the window after a move, too
+/// ([`owner`]).
 ///
 /// # Errors
 ///
@@ -338,9 +458,9 @@ pub async fn owner(
 pub async fn route(
     store: &dyn RecordStore,
     event: &WebhookEvent,
-    not_before: OffsetDateTime,
+    at: &Routing,
 ) -> StoreResult<Route> {
-    Ok(match owner(store, event, not_before).await? {
+    Ok(match owner(store, event, at).await? {
         Ok(Holder { tenant, guard }) if tenant_visible(event.kind()) => Route {
             owner: Some(tenant.clone()),
             tenant: Some(tenant),

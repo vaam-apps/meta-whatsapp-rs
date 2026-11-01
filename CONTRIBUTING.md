@@ -15,8 +15,10 @@ Either open the repo in the dev container (see
 - Rust via rustup — `rust-toolchain.toml` pins 1.98.1 and rustup fetches it.
 - [`just`](https://github.com/casey/just) ≥ 1.58 and
   [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) 0.20.
-- Docker, for `just test-live` (Postgres 18, Redis 8 and a TLS-only Redis
-  8 from `compose.test.yaml`, on ports 55432/56379/56380), and `openssl`
+- Docker, for `just test-live` (Postgres 18, Redis 8, a TLS-only Redis
+  8 and MongoDB 7.0 as a single-node replica set, from `compose.test.yaml`,
+  on ports 55432/56379/56380/57017; MongoDB's image is a 320 MB download,
+  about 1 GB unpacked), and `openssl`
   (or LibreSSL), with which `tools/test-tls/generate.sh` writes the TLS
   Redis' test-only certificates to `.test-tls/` first.
 - Node 24 (the exact version CI uses is `tools/skills-ts/.nvmrc`), for
@@ -31,7 +33,7 @@ just ci        # lint, check, test, skills-check, skills-ts, doc, features, deny
 
 CI runs exactly this. A change is verified when `just ci` exits 0 on its
 final head — not when a subset passes, and not when a reconstruction of the
-commands passes. `just test` *skips* the live Postgres/Redis tests; only
+commands passes. `just test` *skips* the live Postgres/Redis/MongoDB tests; only
 `just test-live` (which sets `META_WHATSAPP_RS_REQUIRE_LIVE=1`) proves them.
 
 ## Meta's docs
@@ -57,6 +59,10 @@ pages; copy their example payloads into tests.
 - Errors: `.claude/skills/error-tree`. Branch on `ErrorKind`, never on
   message text.
 - Typst templates: `.claude/skills/typst-templates`.
+- Looking up this repository's own docs and skills from a coding agent:
+  the docs MCP server, `just docs-mcp`
+  ([docs/dev-environment.md](docs/dev-environment.md#the-docs-mcp-server)).
+  It serves our docs, never `.meta-docs/`.
 - Tests use `meta_whatsapp_core::testing::ScriptedTransport` and assert method, path,
   query, auth header, exact JSON body and `remaining() == 0`.
 - Secrets never reach `Debug`, logs, errors or logged URLs.

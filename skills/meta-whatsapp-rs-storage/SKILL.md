@@ -67,7 +67,7 @@ your own objects on those columns, run `migrate` once from a job, in that order
 ([references/lossless-upgrade.md](references/lossless-upgrade.md)).
 
 Inbox history is kept unless you set a retention (`with_retention(Retention::days(90))` on the
-conversation store) and schedule `apply_retention(now)` (from any replica: purges take turns).
+conversation store) and schedule `apply_retention(now)` (from any replica: purges take turns); a cap per chat is `trim_conversations`.
 Migration 4 adds four tables, a `wa_messages.sender` column it back-fills, and indexes (reads and
 writes of `wa_messages` wait meanwhile: migrate a large inbox from a one-off job with a `lock_timeout`).
 A row it cannot back-fill, or that an older instance writes, gets its sender from the next erasure.
@@ -126,7 +126,7 @@ direction and stores `StoredMessage::tombstone` when the id is unknown, as histo
 never sees it). Since roadmap L5: `message` (scoped to the number), window events, thread ownership
 and synced contacts (the latest record wins; a removal is kept, key and time only, and refuses an
 older sync), identity links, `identities`, `erase_all` (one step; group messages per `erasure_mode`;
-`erase` is provided) and `purge_before`. The suite checks all of it, and that content (kind, text,
+`erase` is provided) and `purge_before`; since B4, `trim_conversations`. The suite checks all of it, and that content (kind, text,
 payload strings and keys, status error, preview) reads back exactly, U+0000 included. A `KvStore`
 keeps values as any bytes; a key holding U+0000 may be refused, never stored as another key. ~~Six
 methods to implement~~: until 6d50701 and a9593f3 (2026-09-24), which added `append_synced`,

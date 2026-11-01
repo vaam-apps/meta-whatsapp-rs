@@ -253,6 +253,143 @@ stored data, the owner's).
   `every_granted_waba`, before any request); `resume` ignores it.
   Nothing new is stored. Additive: with the option off nothing changes.
   Tests in `embedded_signup::multi`.
+- **A docs MCP server** (roadmap L22b, parity row 117, now done in the
+  library too; from the MCP specification, revision 2026-07-28, and
+  2025-11-25's lifecycle, read on 2026-11-01). `tools/docs-mcp`, the
+  binary `meta-whatsapp-docs-mcp` (`just docs-mcp`), serves this
+  repository's docs and consumer skills over MCP's stdio transport:
+  `list` (every page, with its title and a skill's description),
+  `search` (the sections holding every term of a query, each with its
+  heading, line and a snippet) and `read` (a page, or one section by its
+  heading or anchor). It speaks revision 2026-07-28 (per-request
+  `_meta`, `server/discover`) and, after an `initialize`, 2025-11-25 and
+  2025-06-18. A missing page or section, or a path outside the corpus,
+  is a result with `isError: true`; no read leaves the corpus (no `..`,
+  no absolute path, no file the walk did not list, no symbolic link),
+  and every answer is bounded (40 KiB a read, 25 hits a search). A
+  workspace member but not a default one, a binary only, on
+  `serde_json` alone; no library crate depends on it. Setting it up in
+  an MCP client: docs/dev-environment.md § The docs MCP server.
+- **Stickers and image resizing** (roadmap L19b, parity row 48, from
+  `messages/sticker-messages` and `business-phone-numbers/media`, read
+  on 2026-11-01): three new `meta_whatsapp_core::media::TargetFormat`s,
+  `StaticSticker` (a static WebP, uploaded as `image/webp`, at most
+  `media::STATIC_STICKER_MAX_BYTES`, 100 000 bytes), `Jpeg` and `Png`
+  (8-bit, `image/jpeg` and `image/png`, at most `media::IMAGE_MAX_BYTES`,
+  5 000 000 bytes): Meta's "100 KB" and "5 MB" read as decimal, under the
+  upload check's binary reading, so that a converted file fits whichever
+  Meta means. `FfmpegConverter` makes them from a PNG or a JPEG only,
+  checked by its first bytes before `ffmpeg` starts (anything else is
+  `ConversionError::InputRejected`) and again by ffmpeg's own detection
+  (`-format_whitelist png_pipe,jpeg_pipe`: a JPEG-LS image or an
+  animated PNG is refused there); with fixed arguments, the first frame
+  only and no metadata (a JPEG's EXIF orientation applied to the
+  pixels), at most 32 Mi pixels (`-max_pixels`) and 256 MiB a single
+  allocation; brought under the limit by a fixed ladder of sizes and
+  qualities (each attempt killed once past it, the aspect ratio kept,
+  never enlarged, the whole ladder within `with_timeout`; an image no
+  attempt brings under is `Error::Validation` on `input`), the result's
+  header checked (a WebP whose RIFF size is its length and that is not
+  animated, an 8-bit colour JPEG, an 8-bit RGB or RGBA PNG ending with
+  its end chunk). A PNG is walked chunk by chunk before ffmpeg reads it:
+  one cut short of `IEND` is `InputRejected`, and ffmpeg gets it without
+  its text and EXIF chunks (`tEXt`, `zTXt`, `iTXt`, `eXIf`) and without
+  anything after `IEND` (ffmpeg 6.1 inflates every `zTXt` and keeps the
+  text: four 100 KB chunks took it 1.6 GB). The colour profile is kept
+  in a JPEG or PNG result. Meta gives no sticker dimensions, and none
+  is imposed. New:
+  `FfmpegConverter::check_for(&[TargetFormat])`, which checks each
+  format's encoder (libopus, libwebp, mjpeg, png); `check()` is
+  `check_for(&[TargetFormat::OggOpus])`, as before. `with_timeout` now
+  bounds a whole conversion, every attempt of an image's ladder together
+  (a voice note's single run, as before). Animated stickers are not made
+  yet (roadmap L19c).
+- **Retention and auto-delete** in `meta-whatsapp-bot` (roadmap B4,
+  parity row 91; over HTTP, M5k): module `retention`. A
+  `RetentionPolicy` (`max_age`, `max_messages_per_chat`; keeps
+  everything by default) deletes the stored chat history through the
+  `ConversationStore` it is in, by age (`purge_before` at
+  `now - max_age`) then by a cap per chat (the new
+  `trim_conversations`, below), of one business number or every number:
+  once (`RetentionPolicy::apply(store, number, now)`, what `Swept`
+  says it deleted) or on a schedule (`RetentionSweeper`: a sweep at
+  once, then every hour by default, on the bot's `Timer`, until its
+  stop future completes; failures logged, retried next time; restricted
+  with `number`). It is not the store's own `Retention`
+  (`with_retention`, which `apply_retention` applies), and it is not
+  erasure. Tests: `crates/meta-whatsapp-bot/tests/retention.rs` (memory,
+  and live on Postgres), the decisive one
+  `the_age_filter_deletes_exactly_what_is_older_*` (disabling the age,
+  or the store's age filter, fails it).
+- **A cap on each conversation's history**:
+  `ConversationStore::trim_conversations(phone_number_id, keep_last)`
+  (`meta-whatsapp-core`, roadmap B4), on both adapters. Each
+  conversation keeps its newest `keep_last` rows by `(timestamp, id)`,
+  every row counting (live and synced messages, revokes' tombstones,
+  messages an erasure redacted in a group), and the others are deleted,
+  with the summary of a conversation whose latest message went (its
+  newest rows all tombstones, or a cap of 0); every other summary stays
+  as it was. Window events, ownership records, contact removals, synced
+  contacts and identity links stay (design D35). Returns a `Purged`
+  (messages and conversations; `Purged` now adds with `+=`). Memory:
+  under the store's lock. Postgres: one statement under the existing
+  purge lock (trims, purges and erasures take turns), ranking rows on
+  the existing `messages_conversation_idx` (no migration, no new stable
+  identifier) and deleting only rows of its snapshot, so an append at
+  the same time is never lost; a summary is deleted only while it still
+  names a deleted message (`FOR UPDATE`, in key order), so an append
+  that moved it keeps it. Conformance:
+  `trim_keeps_the_newest_rows_of_each_conversation` and
+  `trims_racing_appends_lose_nothing`; live:
+  `live_postgres_a_trim_keeps_the_summary_an_append_moved`,
+  `live_postgres_trims_racing_appends_keep_every_new_message`,
+  `live_postgres_a_trim_and_a_history_chunk_never_deadlock`, and the
+  trims added to `live_postgres_the_locks_are_the_documented_ones`.
+- **The service's routing after a move, and the bind generation**
+  (roadmap S2b, design D36; parity rows 9 and 112 now done on the
+  service's side). Three settings, documented in the server guide:
+  `WA_SERVER_UNDATED_AFTER_MOVE` (`operator_only`, the default, or
+  `current_holder`), `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` (`169h`, 7
+  days and an hour) and `WA_SERVER_MOVE_SKEW_MARGIN` (`0s`), in the core
+  as `events::MoveRules` and `events::UndatedAfterMove`
+  (`Inbound::with_move_rules`). Every backend records each WABA's last
+  unbinding (`model::WabaTombstone`, written with every unbind; a
+  deleted tenant counts as another tenant) and reads it into a new
+  binding's `WabaBinding::previous_tenant_unbound_at`, and counts a
+  binding's attaches in `WabaBinding::generation`, which a refresh (an
+  attach of the WABA to the tenant holding it) moves and
+  `BindingEpoch::generation` carries. On Postgres, an additive migration
+  4 (`0004_waba_moves.sql`, "waba moves": the columns
+  `wa_server_wabas.generation`, default 1, and
+  `wa_server_wabas.previous_tenant_unbound_at`, default the Unix epoch,
+  `UNRECORDED_MOVE`, and the table `wa_server_waba_tombstones`), whose
+  names are new stable identifiers pending the owner's confirmation
+  (docs/architecture.md § Stable identifiers). The conformance suite
+  holds every backend to it: `records::a_move_is_recorded`,
+  `records::a_refresh_moves_the_generation`, the `invariants` guard cases
+  (`a_first_onboarding_keeps_its_first_second`,
+  `the_skew_margin_applies_after_a_move_only`,
+  `an_undated_event_after_a_move_waits_out_the_window`),
+  `capabilities::failed_before_a_refresh_marks_nothing`, and the
+  `webhooks` cases through the pipeline.
+- **MongoDB in the dev container and CI** (roadmap S8, for S9, S17 and
+  S18): a `mongodb` service in `compose.test.yaml` (`127.0.0.1:57017`) and
+  a `mongodb` sidecar in the devcontainer, both `mongo:7.0.45-jammy` run
+  as a single-node replica set (`--replSet rs0`; multi-document
+  transactions need a replica set), initiated by its healthcheck on the
+  first run and healthy once primary. `META_WHATSAPP_RS_TEST_MONGODB_URL`
+  (with `directConnection=true`: the set's member address is the
+  container's own `localhost`) is exported by `just test-live` and set in
+  the devcontainer, whose image gains `mongosh` for `just
+  test-live-clean`, which now drops `wa_test_*` databases on MongoDB too.
+  The smoke test, `live_mongodb_replica_set_commits_a_multi_document_transaction`
+  in meta-whatsapp-adapters' `tests/live_mongodb.rs`, commits a
+  transaction across two collections and aborts another; under
+  `META_WHATSAPP_RS_REQUIRE_LIVE=1` a missing URL fails it. The `mongodb`
+  driver (Apache-2.0) is a dev-dependency of meta-whatsapp-adapters only,
+  without default features and with `rustls-tls-aws-lc` (an explicit
+  aws-lc-rs provider, not `ring`): no library build links it. The server
+  image is under the SSPL and only runs as a test service.
 - **The coexistence sync inside onboarding**
   (`meta_whatsapp_client::embedded_signup`, roadmap L11d, parity rows
   124 and 69; OPEN_QUESTIONS #7; the service's side is M3b). After a
@@ -1905,6 +2042,44 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking for a custom `ConversationStore`** (roadmap B4): the port
+  gains a required method, `trim_conversations` (see Added, "A cap on
+  each conversation's history"); implement it and run
+  `conversation_conformance::run` again. The in-tree memory and Postgres
+  stores implement it; nothing else changes for their users.
+- **The service routes a moved WABA's events by the rules of D36**
+  (roadmap S2b). Behaviour: after a WABA moved to a tenant from another
+  one, its undated tenant-visible events (errors, history chunks,
+  undated group updates) are operator-only for 7 days and an hour after
+  the move by default (they reached the new holder before:
+  `WA_SERVER_UNDATED_AFTER_MOVE=current_holder` keeps that), its inbox
+  included; a WABA no other tenant held is unaffected, and keeps the
+  events of its binding's first second, which were operator-only since
+  S2 (that rule now applies after a move only, with the skew margin);
+  a `190` answered to a capability made before its binding was
+  refreshed for its own tenant no longer marks the numbers
+  `reconnect_required`; a capability made while a refresh lands, and an
+  attach whose confirmation finds another attach of its tenant landed
+  after its binding, are `503 storage_unavailable` (retryable), as for
+  a move (that attach keeps the token it stored, its tenant's own); a
+  new binding on Postgres begins no earlier than the unbinding it
+  follows. The WABAs bound before migration 4 keep S2's rules (their
+  history unknown); an unbind made by an earlier release, before the
+  upgrade or during its rolling deploy, is not recorded, so do not move
+  WABAs between tenants in the 7 days and an hour before the deploy nor
+  during it. `openapi/v1.json` and the
+  event data are unchanged.
+  **Breaking** in the service's crates (`publish = false`):
+  `outbox::RouteGuard` has a new field `after_move` (`outbox::AfterMove`;
+  `AfterMove::default()` is the rule before for an undated event), and
+  `outbox::began_by` is gone (`RouteGuard::admits`, `dated_bounds`);
+  `events::route` and `events::owner` take a `&events::Routing` (the
+  arrival, the replay bound and the `MoveRules`) instead of the replay
+  bound; `model::WabaBinding` and `model::BindingEpoch` have new fields
+  (`generation`, `previous_tenant_unbound_at`), and a backend of your
+  own must keep the tombstone and the generation as the port's docs say
+  (`RecordStore::bind_waba`, `unbind_waba`, `unbind_waba_if`,
+  `delete_tenant`), which the conformance suite checks.
 - **`FanoutSink` returns the first transient error before any permanent
   one** (`meta-whatsapp-adapters`, roadmap L21a): it returned the first
   error in the order the sinks were added. A fan-out is permanent only

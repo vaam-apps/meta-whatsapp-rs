@@ -1,11 +1,14 @@
 //! `adapters::media::FfmpegConverter` against a real `ffmpeg`, its result
-//! through `client::media::Media::upload_converted` (roadmap L19's decisive
-//! test). In the facade, where the adapters and the client meet: neither
-//! depends on the other.
+//! through `client::media::Media::upload_converted` (roadmap L19's and
+//! L19b's decisive tests: voice, then stickers and images). In the facade,
+//! where the adapters and the client meet: neither depends on the other.
+//! The tests make their inputs themselves (in Rust, or with ffmpeg's
+//! `lavfi` sources); no media file is committed.
 //!
 //! The binary is `META_WHATSAPP_RS_TEST_FFMPEG` when set, else `ffmpeg` on
 //! `PATH` (and `META_WHATSAPP_RS_TEST_FFPROBE`, else `ffprobe`). Without
-//! one that starts and has libopus, every test here skips, printing why,
+//! one that starts and has libopus (and, for the image tests, libwebp,
+//! mjpeg and png), every test here skips, printing why,
 //! unless `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`, which turns the skip into a
 //! failure. CI installs `ffmpeg` on its runner and sets it, so the tests
 //! count there; no image or dev container carries one. That variable is
@@ -44,8 +47,18 @@ fn program(var: &str, default: &str) -> PathBuf {
 ///
 /// Without one when `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`.
 async fn converter() -> Option<FfmpegConverter> {
+    converter_for(&[TargetFormat::OggOpus]).await
+}
+
+/// The converter over the test's `ffmpeg`, checked for `targets`' encoders,
+/// or `None` (skip) without them.
+///
+/// # Panics
+///
+/// Without them when `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`.
+async fn converter_for(targets: &[TargetFormat]) -> Option<FfmpegConverter> {
     let c = FfmpegConverter::new().with_program(program("META_WHATSAPP_RS_TEST_FFMPEG", "ffmpeg"));
-    match c.check().await {
+    match c.check_for(targets).await {
         Ok(()) => Some(c),
         Err(e) if required() => panic!(
             "{e}; META_WHATSAPP_RS_REQUIRE_FFMPEG=1 turns a skipped ffmpeg test into a failure"
@@ -713,4 +726,694 @@ async fn ffmpeg_refuses_a_header_that_inflates_the_input() {
         "{:?}",
         started.elapsed()
     );
+}
+
+// Images (roadmap L19b).
+
+/// The image formats the converter makes.
+const IMAGES: [TargetFormat; 3] = [
+    TargetFormat::StaticSticker,
+    TargetFormat::Jpeg,
+    TargetFormat::Png,
+];
+
+const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+/// One frame of a `lavfi` source, encoded with `encoder`: the tests'
+/// images, made here rather than committed.
+fn lavfi(ffmpeg: &PathBuf, source: &str, encoder: &[&str]) -> Vec<u8> {
+    let mut args = vec![
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        source,
+        "-frames:v",
+        "1",
+    ];
+    args.extend_from_slice(encoder);
+    args.extend_from_slice(&["-f", "image2pipe", "pipe:1"]);
+    run(ffmpeg, &args, &[]).unwrap_or_else(|| panic!("making {source}"))
+}
+
+fn le16(b: &[u8], at: usize) -> u32 {
+    u32::from(u16::from_le_bytes([b[at], b[at + 1]]))
+}
+
+fn le24(b: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([b[at], b[at + 1], b[at + 2], 0])
+}
+
+fn le32(b: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
+}
+
+/// A WebP file, read here apart from the converter's own check (Google's
+/// "WebP Container Specification"): its chunks, its size, and whether it
+/// has an alpha channel.
+#[derive(Debug)]
+struct Webp {
+    chunks: Vec<[u8; 4]>,
+    width: u32,
+    height: u32,
+    alpha: bool,
+}
+
+fn webp(file: &[u8]) -> Webp {
+    assert_eq!(&file[..4], b"RIFF", "not a RIFF file");
+    assert_eq!(&file[8..12], b"WEBP", "not a WebP file");
+    assert_eq!(
+        usize::try_from(le32(file, 4)).unwrap() + 8,
+        file.len(),
+        "the RIFF size is not the file's"
+    );
+    let mut chunks = Vec::new();
+    let mut at = 12;
+    while at < file.len() {
+        chunks.push(<[u8; 4]>::try_from(&file[at..at + 4]).unwrap());
+        let len = usize::try_from(le32(file, at + 4)).unwrap();
+        at += 8 + len + len % 2;
+    }
+    assert_eq!(at, file.len(), "chunks past the end");
+    let data = &file[20..];
+    let (width, height, alpha) = match &chunks[0] {
+        b"VP8 " => {
+            assert_eq!(&data[3..6], &[0x9d, 0x01, 0x2a], "no VP8 start code");
+            (le16(data, 6) & 0x3fff, le16(data, 8) & 0x3fff, false)
+        }
+        b"VP8L" => {
+            assert_eq!(data[0], 0x2f, "no VP8L signature");
+            let bits = le32(data, 1);
+            (
+                (bits & 0x3fff) + 1,
+                ((bits >> 14) & 0x3fff) + 1,
+                bits >> 28 & 1 == 1,
+            )
+        }
+        b"VP8X" => {
+            assert_eq!(data[0] & 0x02, 0, "the animation flag is set");
+            (1 + le24(data, 4), 1 + le24(data, 7), data[0] & 0x10 != 0)
+        }
+        other => panic!("first chunk {}", String::from_utf8_lossy(other)),
+    };
+    Webp {
+        chunks,
+        width,
+        height,
+        alpha,
+    }
+}
+
+/// A JPEG's frame header, read here: precision, width, height and
+/// component count.
+fn jpeg_frame(file: &[u8]) -> (u8, u32, u32, u8) {
+    assert_eq!(&file[..2], &[0xFF, 0xD8], "no start of image");
+    assert_eq!(&file[file.len() - 2..], &[0xFF, 0xD9], "no end of image");
+    let mut at = 2;
+    loop {
+        assert_eq!(file[at], 0xFF, "a marker at {at}");
+        let marker = file[at + 1];
+        let len = usize::from(u16::from_be_bytes([file[at + 2], file[at + 3]]));
+        if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) {
+            let be = |i: usize| u32::from(u16::from_be_bytes([file[at + i], file[at + i + 1]]));
+            return (file[at + 4], be(7), be(5), file[at + 9]);
+        }
+        assert_ne!(marker, 0xDA, "a scan before the frame header");
+        at += 2 + len;
+    }
+}
+
+/// A PNG's header, read here: width, height, bit depth, colour type.
+fn png_header(file: &[u8]) -> (u32, u32, u8, u8) {
+    assert!(file.starts_with(PNG_SIGNATURE), "no PNG signature");
+    assert_eq!(&file[12..16], b"IHDR", "no header first");
+    let be = |at: usize| u32::from_be_bytes(file[at..at + 4].try_into().unwrap());
+    (be(16), be(20), file[24], file[25])
+}
+
+/// `ffprobe`'s view of one image's stream (`codec|width|height|pix_fmt`),
+/// or `None` (skip) without `ffprobe`.
+fn probe_image(data: &[u8]) -> Option<String> {
+    let ffprobe = program("META_WHATSAPP_RS_TEST_FFPROBE", "ffprobe");
+    let out = run(
+        &ffprobe,
+        &[
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_name,width,height,pix_fmt",
+            "-of",
+            "compact=p=0:nk=1",
+            "pipe:0",
+        ],
+        data,
+    );
+    match out {
+        Some(out) => Some(String::from_utf8(out).unwrap().trim().to_owned()),
+        None if required() => panic!("{} did not run", ffprobe.display()),
+        None => {
+            eprintln!("ffprobe not run: {} did not start", ffprobe.display());
+            None
+        }
+    }
+}
+
+/// Upload `media` as `stem` and assert the exact request: its format's
+/// type, its name, its bytes.
+async fn assert_uploaded(media: meta_whatsapp_rs::client::media::ConvertedMedia, stem: &str) {
+    let t = ScriptedTransport::new();
+    t.push_json(200, json!({"id": "1013859600285441"}));
+    let client = Client::builder()
+        .transport(t.clone())
+        .access_token("TOKEN")
+        .build()
+        .unwrap();
+    let id = client
+        .media(PhoneNumberId::new("106540352242922").unwrap())
+        .upload_converted(media.clone(), stem)
+        .await
+        .unwrap();
+    assert_eq!(id.as_str(), "1013859600285441");
+    let req = t.last_request().unwrap();
+    assert_eq!(req.method.as_str(), "POST");
+    assert_eq!(req.path(), "/v25.0/106540352242922/media");
+    assert_eq!(req.bearer(), Some("TOKEN"));
+    let (_, _, product) = req.multipart_field("messaging_product").unwrap();
+    assert_eq!(&product[..], b"whatsapp");
+    let mime = media.format.mime_type();
+    let (_, _, kind) = req.multipart_field("type").unwrap();
+    assert_eq!(&kind[..], mime.as_bytes());
+    let (name, ctype, data) = req.multipart_field("file").unwrap();
+    let file_name = format!("{stem}.{}", media.format.extension());
+    assert_eq!((name, ctype), (Some(file_name.as_str()), Some(mime)));
+    assert_eq!(data, &media.data);
+    let RecordedBody::Multipart(parts) = &req.body else {
+        panic!("expected multipart");
+    };
+    assert_eq!(parts.len(), 3);
+    assert_eq!(t.remaining(), 0);
+}
+
+/// A busy picture whose PNG is megabytes, and whose WebP at its own size is
+/// several times the static sticker limit, comes out as a static WebP
+/// within 100 000 bytes, scaled down with its aspect ratio kept, which
+/// `Media::upload`'s type check takes as a sticker.
+#[tokio::test]
+async fn ffmpeg_turns_a_png_into_a_static_webp_sticker_that_upload_accepts() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let picture = lavfi(
+        &ffmpeg,
+        "testsrc2=s=1600x1200,noise=alls=60:allf=t+u",
+        &["-c:v", "png"],
+    );
+    assert_eq!(png_header(&picture), (1600, 1200, 8, 2));
+    assert!(picture.len() > 1_000_000, "{} bytes", picture.len());
+
+    let sticker = converter
+        .convert(MediaInput::new(picture), TargetFormat::StaticSticker)
+        .await
+        .unwrap();
+    assert_eq!(sticker.format, TargetFormat::StaticSticker);
+    let len = sticker.data.len();
+    assert!(len <= 100_000, "{len} bytes");
+    let w = webp(&sticker.data);
+    for animated in [b"ANIM", b"ANMF"] {
+        assert!(!w.chunks.contains(animated), "{w:?}");
+    }
+    assert!(
+        w.width < 1600 && w.width * 3 == w.height * 4,
+        "{}x{}",
+        w.width,
+        w.height
+    );
+    if let Some(probe) = probe_image(&sticker.data) {
+        assert_eq!(probe, format!("webp|{}|{}|yuv420p", w.width, w.height));
+    }
+
+    assert_eq!(
+        validate_upload(sticker.format.mime_type(), u64::try_from(len).unwrap()),
+        Ok(MediaKind::Sticker)
+    );
+    assert_uploaded(sticker, "sticker").await;
+}
+
+/// A small picture with transparency fits as it is: its size and its
+/// alpha channel are kept.
+#[tokio::test]
+async fn ffmpeg_keeps_a_small_sticker_s_size_and_transparency() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let logo = lavfi(
+        &ffmpeg,
+        "testsrc2=s=320x240,format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lt(X,160),255,0)'",
+        &["-c:v", "png"],
+    );
+    assert_eq!(png_header(&logo), (320, 240, 8, 6));
+    let sticker = converter
+        .convert(MediaInput::new(logo), TargetFormat::StaticSticker)
+        .await
+        .unwrap();
+    let w = webp(&sticker.data);
+    assert_eq!((w.width, w.height, w.alpha), (320, 240, true), "{w:?}");
+    assert_eq!(&w.chunks[0], b"VP8X");
+    if let Some(probe) = probe_image(&sticker.data) {
+        assert_eq!(probe, "webp|320|240|yuva420p");
+    }
+}
+
+/// A JPEG over 5 MB (more than the upload check takes, even read as MiB)
+/// comes out as an 8-bit colour JPEG under 5 000 000 bytes, its aspect
+/// ratio kept.
+#[tokio::test]
+async fn ffmpeg_brings_a_jpeg_over_five_megabytes_under_the_image_limit() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let photo = lavfi(
+        &ffmpeg,
+        "nullsrc=s=4000x3000,geq=lum='random(1)*255':cb=128:cr=128",
+        &["-c:v", "mjpeg", "-q:v", "1", "-qmin", "1"],
+    );
+    let (_, width, height, _) = jpeg_frame(&photo);
+    assert_eq!((width, height), (4000, 3000));
+    let input_len = u64::try_from(photo.len()).unwrap();
+    assert!(input_len > 5 * 1024 * 1024, "{input_len} bytes");
+    // The control: the upload check refuses it as it is.
+    assert_eq!(
+        validate_upload("image/jpeg", input_len).unwrap_err().field,
+        "file"
+    );
+
+    let image = converter
+        .convert(MediaInput::new(photo), TargetFormat::Jpeg)
+        .await
+        .unwrap();
+    assert_eq!(image.format, TargetFormat::Jpeg);
+    let len = u64::try_from(image.data.len()).unwrap();
+    assert!(len <= 5_000_000, "{len} bytes");
+    let (precision, width, height, components) = jpeg_frame(&image.data);
+    assert_eq!((precision, components), (8, 3));
+    assert!(width <= 4000 && width * 3 == height * 4, "{width}x{height}");
+    if let Some(probe) = probe_image(&image.data) {
+        assert_eq!(probe, format!("mjpeg|{width}|{height}|yuvj420p"));
+    }
+    assert_eq!(
+        validate_upload(image.format.mime_type(), len),
+        Ok(MediaKind::Image)
+    );
+    assert_uploaded(image, "photo").await;
+}
+
+/// A 16-bit PNG over 5 MB comes out as an 8-bit RGBA PNG under the limit
+/// (Meta: "Images must be 8-bit, RGB or RGBA"); a small 16-bit RGB one
+/// keeps its size and becomes 8-bit RGB.
+#[tokio::test]
+async fn ffmpeg_makes_a_png_eight_bit_and_under_the_image_limit() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let deep = lavfi(
+        &ffmpeg,
+        "testsrc2=s=1600x1200,noise=alls=60:allf=t+u,format=rgba64be",
+        &["-c:v", "png"],
+    );
+    assert_eq!(png_header(&deep), (1600, 1200, 16, 6));
+    assert!(deep.len() > 5 * 1024 * 1024, "{} bytes", deep.len());
+    let image = converter
+        .convert(MediaInput::new(deep), TargetFormat::Png)
+        .await
+        .unwrap();
+    let len = u64::try_from(image.data.len()).unwrap();
+    assert!(len <= 5_000_000, "{len} bytes");
+    let (width, height, depth, colour) = png_header(&image.data);
+    assert_eq!((depth, colour), (8, 6));
+    assert!(width < 1600 && width * 3 == height * 4, "{width}x{height}");
+    assert!(image.data.ends_with(b"IEND\xAE\x42\x60\x82"));
+    assert_eq!(
+        validate_upload(image.format.mime_type(), len),
+        Ok(MediaKind::Image)
+    );
+
+    let small = lavfi(
+        &ffmpeg,
+        "testsrc2=s=640x480,format=rgb48be",
+        &["-c:v", "png"],
+    );
+    assert_eq!(png_header(&small), (640, 480, 16, 2));
+    let image = converter
+        .convert(MediaInput::new(small), TargetFormat::Png)
+        .await
+        .unwrap();
+    assert_eq!(png_header(&image.data), (640, 480, 8, 2));
+}
+
+/// The converter's own command line for one attempt, but without its
+/// format whitelist: the control that shows a file is one ffmpeg reads
+/// from a pipe and converts, when nothing stops it.
+fn without_whitelist(ffmpeg: &PathBuf, file: &[u8]) -> Option<Vec<u8>> {
+    run(
+        ffmpeg,
+        &[
+            "-hide_banner",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-protocol_whitelist",
+            "pipe",
+            "-max_pixels",
+            "33554432",
+            "-i",
+            "pipe:0",
+            "-map",
+            "0:v:0",
+            "-frames:v",
+            "1",
+            "-vf",
+            "format=yuvj420p",
+            "-c:v",
+            "mjpeg",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+        ],
+        file,
+    )
+}
+
+/// A GIF, a JPEG-LS image, an animated PNG and a PNG signature over
+/// something else are refused, for every image format.
+///
+/// The GIF is refused by its first bytes. The JPEG-LS image and the
+/// animated PNG begin as a JPEG and a PNG do, so they pass that check, and
+/// ffmpeg's format whitelist refuses them: the JPEG-LS image is the
+/// decisive one, since without the whitelist ffmpeg reads it from a pipe
+/// and converts it (the control). ffmpeg 6.1.1 cannot read an animated PNG
+/// from a pipe at all (its reader seeks), so that one is refused even
+/// without the whitelist.
+#[tokio::test]
+async fn ffmpeg_refuses_a_gif_a_jpeg_ls_an_animated_png_and_a_crafted_png() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let animation = |muxer: &[&str]| {
+        let mut args = vec![
+            "-hide_banner",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=s=160x120:r=5",
+            "-t",
+            "1",
+        ];
+        args.extend_from_slice(muxer);
+        args.push("pipe:1");
+        run(&ffmpeg, &args, &[]).unwrap_or_else(|| panic!("making {muxer:?}"))
+    };
+    let gif = animation(&["-f", "gif"]);
+    assert!(gif.starts_with(b"GIF89a"));
+    let apng = animation(&["-plays", "0", "-f", "apng"]);
+    assert!(apng.starts_with(PNG_SIGNATURE));
+    assert!(apng.windows(4).any(|w| w == b"acTL"), "not animated");
+    let jpeg_ls = lavfi(&ffmpeg, "testsrc2=s=160x120", &["-c:v", "jpegls"]);
+    // Start of image, then JPEG-LS's own frame marker (SOF55).
+    assert_eq!(&jpeg_ls[..4], &[0xFF, 0xD8, 0xFF, 0xF7]);
+    for (what, file) in [("gif", &gif), ("jpeg-ls", &jpeg_ls)] {
+        assert!(
+            without_whitelist(&ffmpeg, file).is_some_and(|o| o.starts_with(&[0xFF, 0xD8])),
+            "ffmpeg did not read the {what}"
+        );
+    }
+    let crafted = [
+        PNG_SIGNATURE,
+        b"ffconcat version 1.0\nfile '/etc/hostname'\n",
+    ]
+    .concat();
+    for target in IMAGES {
+        for (what, file) in [
+            ("gif", &gif),
+            ("jpeg-ls", &jpeg_ls),
+            ("apng", &apng),
+            ("crafted", &crafted),
+        ] {
+            let err = converter
+                .convert(MediaInput::new(file.clone()), target)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+                "{what} to {target:?}: {err:?}"
+            );
+            assert!(!err.to_string().contains("/etc/hostname"), "{err}");
+        }
+    }
+}
+
+/// An image of 36 million pixels (6000 × 6000, a small file of one colour)
+/// is refused by the pixel bound; the control: ffmpeg without the bound
+/// converts it.
+#[tokio::test]
+async fn ffmpeg_refuses_an_image_over_the_pixel_bound() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let huge = lavfi(&ffmpeg, "color=c=red:s=6000x6000", &["-c:v", "png"]);
+    assert_eq!(png_header(&huge), (6000, 6000, 8, 2));
+    assert!(huge.len() < 5_000_000, "{} bytes", huge.len());
+    let direct = run(
+        &ffmpeg,
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            "-frames:v",
+            "1",
+            "-c:v",
+            "mjpeg",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+        ],
+        &huge,
+    );
+    assert!(
+        direct.is_some_and(|o| o.starts_with(&[0xFF, 0xD8])),
+        "ffmpeg did not convert it"
+    );
+    let started = Instant::now();
+    let err = converter
+        .convert(MediaInput::new(huge), TargetFormat::Jpeg)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// `jpeg` with an EXIF segment of one tag, Orientation, set to
+/// `orientation` (6: the camera was turned a quarter clockwise; the
+/// picture is shown rotated 90° clockwise).
+fn with_orientation(jpeg: &[u8], orientation: u16) -> Vec<u8> {
+    let mut tiff = b"II*\0".to_vec();
+    tiff.extend_from_slice(&8u32.to_le_bytes()); // the first IFD
+    tiff.extend_from_slice(&1u16.to_le_bytes()); // one entry
+    tiff.extend_from_slice(&0x0112u16.to_le_bytes()); // Orientation
+    tiff.extend_from_slice(&3u16.to_le_bytes()); // SHORT
+    tiff.extend_from_slice(&1u32.to_le_bytes()); // one value
+    tiff.extend_from_slice(&orientation.to_le_bytes());
+    tiff.extend_from_slice(&[0, 0]);
+    tiff.extend_from_slice(&0u32.to_le_bytes()); // no next IFD
+    let payload = [&b"Exif\0\0"[..], &tiff].concat();
+    let mut segment = vec![0xFF, 0xE1];
+    segment.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+    segment.extend_from_slice(&payload);
+    [&jpeg[..2], &segment, &jpeg[2..]].concat()
+}
+
+/// A photo whose EXIF says it was taken turned comes out upright: its
+/// pixels rotated (640 × 480 becomes 480 × 640), its EXIF dropped.
+#[tokio::test]
+async fn ffmpeg_applies_a_jpeg_s_orientation_and_drops_its_exif() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let plain = lavfi(&ffmpeg, "testsrc2=s=640x480", &["-c:v", "mjpeg"]);
+    let turned = with_orientation(&plain, 6);
+    let (_, width, height, _) = jpeg_frame(&turned);
+    assert_eq!((width, height), (640, 480));
+    let image = converter
+        .convert(MediaInput::new(turned.clone()), TargetFormat::Jpeg)
+        .await
+        .unwrap();
+    let (_, width, height, _) = jpeg_frame(&image.data);
+    assert_eq!((width, height), (480, 640));
+    assert!(
+        !image.data.windows(6).any(|w| w == b"Exif\0\0"),
+        "EXIF kept"
+    );
+    let sticker = converter
+        .convert(MediaInput::new(turned), TargetFormat::StaticSticker)
+        .await
+        .unwrap();
+    let w = webp(&sticker.data);
+    assert_eq!((w.width, w.height), (480, 640));
+}
+
+/// One PNG chunk: length, type, data and a zero CRC, never checked (the
+/// converter takes these chunks out before ffmpeg reads them).
+fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
+    let mut out = u32::try_from(data.len()).unwrap().to_be_bytes().to_vec();
+    out.extend_from_slice(&kind);
+    out.extend_from_slice(data);
+    out.extend_from_slice(&[0, 0, 0, 0]);
+    out
+}
+
+/// A PNG whose text chunks (a `zTXt` among them, which ffmpeg would
+/// inflate) the converter takes out, followed by a second image, and two
+/// JPEGs in a row: what ffmpeg reads of each still converts, and only the
+/// first image comes out, alone, without the text.
+#[tokio::test]
+async fn ffmpeg_converts_the_first_image_of_a_png_without_its_text() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let first = lavfi(&ffmpeg, "testsrc2=s=320x240", &["-c:v", "png"]);
+    let second = lavfi(&ffmpeg, "testsrc2=s=64x48", &["-c:v", "png"]);
+    // After the header (signature and IHDR: 33 bytes).
+    let png = [
+        &first[..33],
+        &png_chunk(*b"tEXt", b"Author\0Jane Doe"),
+        &png_chunk(*b"zTXt", b"Comment\0\0x\x9c\x03\0\0\0\0\x01"),
+        &first[33..],
+        &second,
+    ]
+    .concat();
+    for target in IMAGES {
+        let out = converter
+            .convert(MediaInput::new(png.clone()), target)
+            .await
+            .unwrap_or_else(|e| panic!("{target:?}: {e}"));
+        assert!(!out.data.windows(4).any(|w| w == b"Jane"), "{target:?}");
+        let (width, height) = match target {
+            TargetFormat::StaticSticker => {
+                let w = webp(&out.data);
+                (w.width, w.height)
+            }
+            TargetFormat::Jpeg => {
+                let (_, width, height, _) = jpeg_frame(&out.data);
+                (width, height)
+            }
+            _ => {
+                let (width, height, _, _) = png_header(&out.data);
+                assert_eq!(out.data.windows(4).filter(|w| *w == b"IEND").count(), 1);
+                (width, height)
+            }
+        };
+        assert_eq!((width, height), (320, 240), "{target:?}");
+    }
+
+    let jpeg = lavfi(&ffmpeg, "testsrc2=s=320x240", &["-c:v", "mjpeg"]);
+    let small = lavfi(&ffmpeg, "testsrc2=s=64x48", &["-c:v", "mjpeg"]);
+    let out = converter
+        .convert(
+            MediaInput::new([&jpeg[..], &small[..]].concat()),
+            TargetFormat::Jpeg,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        out.data.windows(2).filter(|w| *w == [0xFF, 0xD8]).count(),
+        1
+    );
+    let (_, width, height, _) = jpeg_frame(&out.data);
+    assert_eq!((width, height), (320, 240));
+}
+
+/// A 16-bit RGBA PNG of exactly 32 Mi pixels (8192 × 4096, a small file
+/// of one colour) decodes to a frame of 256 MiB and ffmpeg's padding: the
+/// allocation bound refuses it, two rows fewer pass. The control: ffmpeg
+/// without the bound converts it.
+#[tokio::test]
+async fn ffmpeg_refuses_a_frame_over_the_allocation_bound() {
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let deep = |size: &str| {
+        lavfi(
+            &ffmpeg,
+            &format!("color=c=red:s={size},format=rgba64be"),
+            &["-c:v", "png"],
+        )
+    };
+    let at_bound = deep("8192x4096");
+    assert_eq!(png_header(&at_bound), (8192, 4096, 16, 6));
+    let direct = run(
+        &ffmpeg,
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-max_pixels",
+            "33554432",
+            "-i",
+            "pipe:0",
+            "-frames:v",
+            "1",
+            "-vf",
+            "format=yuvj420p",
+            "-c:v",
+            "mjpeg",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+        ],
+        &at_bound,
+    );
+    assert!(
+        direct.is_some_and(|o| o.starts_with(&[0xFF, 0xD8])),
+        "ffmpeg did not convert it"
+    );
+    let err = converter
+        .convert(MediaInput::new(at_bound), TargetFormat::Jpeg)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
+    // Two rows fewer (lavfi's `color` source keeps sizes even).
+    let under = deep("8192x4094");
+    assert_eq!(png_header(&under), (8192, 4094, 16, 6));
+    let under = converter
+        .convert(MediaInput::new(under), TargetFormat::Jpeg)
+        .await
+        .unwrap();
+    let (_, width, height, _) = jpeg_frame(&under.data);
+    assert_eq!((width, height), (8192, 4094));
 }

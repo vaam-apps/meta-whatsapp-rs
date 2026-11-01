@@ -7,7 +7,11 @@
 //! encoded with the OPUS codec", and that the play icon shows only for a
 //! file of 512 KB or less (a download icon otherwise). A recording made
 //! by a browser or a phone (WAV, `WebM`, M4A, MP3) has to be converted
-//! first, on the integrator's side.
+//! first, on the integrator's side. So does an image: a **sticker** must
+//! be WebP, at most 100 KB static or 500 KB animated
+//! (`messages/sticker-messages`), and an **image** JPEG or PNG, 8-bit RGB
+//! or RGBA, at most 5 MB (the media page's table): a photo straight from
+//! a camera is often larger.
 //!
 //! Like the other ports, this is a trait and does nothing itself: no
 //! codec is linked anywhere. `meta-whatsapp-adapters` implements it
@@ -29,6 +33,21 @@ use crate::Result;
 /// two equal).
 pub const AUDIO_MAX_BYTES: u64 = 16 * 1024 * 1024;
 
+/// The most a converter makes of an image: "5 MB" in Meta's table
+/// (`business-phone-numbers/media`), read as 5 000 000 bytes, the
+/// **smaller** reading. A converter chooses the size of what it makes, so
+/// it aims under both readings, and Meta takes the result whichever one
+/// it means; `meta-whatsapp-client`'s upload check reads the larger
+/// (5 MiB), so as never to refuse a file Meta would take.
+pub const IMAGE_MAX_BYTES: u64 = 5_000_000;
+
+/// The most a converter makes of a static sticker: "100 KB" for a static
+/// sticker in Meta's table (`messages/sticker-messages`, and the media
+/// page's), read as 100 000 bytes, the smaller reading, for the reason
+/// [`IMAGE_MAX_BYTES`] gives. The upload check cannot tell a static
+/// sticker from an animated one and takes up to 500 KiB for both.
+pub const STATIC_STICKER_MAX_BYTES: u64 = 100_000;
+
 /// The format a [`MediaConverter`] produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -39,39 +58,68 @@ pub enum TargetFormat {
     /// (`messages/audio-messages`): send it as an audio message with
     /// `voice` set.
     OggOpus,
+    /// A static WebP image, at most [`STATIC_STICKER_MAX_BYTES`]: what
+    /// Meta's table takes as a static sticker (`image/webp`, "100 KB";
+    /// `messages/sticker-messages`). Send it as a sticker message: "WebP
+    /// images can only be sent in sticker messages". Meta gives no
+    /// dimensions for a sticker, so none is imposed; a converter may scale
+    /// an image down to bring it under the limit, keeping its aspect ratio.
+    StaticSticker,
+    /// A JPEG image, 8-bit, at most [`IMAGE_MAX_BYTES`]: what Meta's table
+    /// takes as `image/jpeg` ("Images must be 8-bit, RGB or RGBA", "5
+    /// MB"). A converter may lower its quality or scale it down to bring
+    /// it under the limit, keeping its aspect ratio. JPEG has no
+    /// transparency.
+    Jpeg,
+    /// A PNG image, 8-bit RGB or RGBA, at most [`IMAGE_MAX_BYTES`]: what
+    /// Meta's table takes as `image/png`. Lossless: a converter may scale
+    /// it down to bring it under the limit, keeping its aspect ratio and
+    /// its transparency.
+    Png,
 }
 
 impl TargetFormat {
-    /// The MIME type to upload it with: the one Meta's table names,
-    /// `audio/ogg`.
+    /// The MIME type to upload it with: the one Meta's table names
+    /// (`audio/ogg`, `image/webp`, `image/jpeg`, `image/png`).
     pub fn mime_type(self) -> &'static str {
         match self {
             Self::OggOpus => "audio/ogg",
+            Self::StaticSticker => "image/webp",
+            Self::Jpeg => "image/jpeg",
+            Self::Png => "image/png",
         }
     }
 
-    /// The file name extension Meta's table gives it (`ogg`), without
-    /// the dot. Meta's media page warns that a file name extension that
-    /// does not match the type is a common cause of error `131053`.
+    /// The file name extension Meta's table gives it (`ogg`, `webp`,
+    /// `jpeg`, `png`), without the dot. Meta's media page warns that a
+    /// file name extension that does not match the type is a common cause
+    /// of error `131053`.
     pub fn extension(self) -> &'static str {
         match self {
             Self::OggOpus => "ogg",
+            Self::StaticSticker => "webp",
+            Self::Jpeg => "jpeg",
+            Self::Png => "png",
         }
     }
 
-    /// The largest result an upload accepts ([`AUDIO_MAX_BYTES`] for
-    /// audio). A converter refuses a result above it rather than return
-    /// one the upload would refuse.
+    /// The largest result a converter returns: [`AUDIO_MAX_BYTES`] for
+    /// audio, [`STATIC_STICKER_MAX_BYTES`] for a static sticker,
+    /// [`IMAGE_MAX_BYTES`] for an image; each is within what the upload
+    /// accepts. A converter refuses (or shrinks) a result above it rather
+    /// than return one the upload, or Meta, would refuse.
     pub fn max_bytes(self) -> u64 {
         match self {
             Self::OggOpus => AUDIO_MAX_BYTES,
+            Self::StaticSticker => STATIC_STICKER_MAX_BYTES,
+            Self::Jpeg | Self::Png => IMAGE_MAX_BYTES,
         }
     }
 }
 
 /// The media to convert: the file's bytes, in whatever format the
 /// converter can read. A converter detects the format from the bytes
-/// and refuses one it does not read; nothing the caller sends becomes a
+/// (there is no file name to trust) and refuses one it does not read; nothing the caller sends becomes a
 /// converter option.
 ///
 /// `Debug` shows the length only: media is personal data.
@@ -171,6 +219,27 @@ mod tests {
         assert_eq!(t.extension(), "ogg");
         assert_eq!(t.max_bytes(), 16 * 1024 * 1024);
         assert_eq!(AUDIO_MAX_BYTES, 16_777_216);
+    }
+
+    #[test]
+    fn images_are_the_types_and_the_smaller_limits_of_meta_s_tables() {
+        let t = TargetFormat::StaticSticker;
+        assert_eq!(
+            (t.mime_type(), t.extension(), t.max_bytes()),
+            ("image/webp", "webp", 100_000)
+        );
+        let t = TargetFormat::Jpeg;
+        assert_eq!(
+            (t.mime_type(), t.extension(), t.max_bytes()),
+            ("image/jpeg", "jpeg", 5_000_000)
+        );
+        let t = TargetFormat::Png;
+        assert_eq!(
+            (t.mime_type(), t.extension(), t.max_bytes()),
+            ("image/png", "png", 5_000_000)
+        );
+        assert_eq!(STATIC_STICKER_MAX_BYTES, 100_000);
+        assert_eq!(IMAGE_MAX_BYTES, 5_000_000);
     }
 
     #[test]

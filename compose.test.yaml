@@ -1,5 +1,5 @@
 # Services for `just test-live`. Non-default host ports so a developer's own
-# Postgres/Redis are never touched.
+# Postgres/Redis/MongoDB are never touched.
 name: meta-whatsapp-rs-test
 services:
   postgres:
@@ -49,3 +49,34 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+  # MongoDB (roadmap S8): a single-node replica set, as multi-document
+  # transactions need one. The set's one member is `localhost:27017`, its
+  # address inside the container; `directConnection=true` in the test URL
+  # keeps the driver on the address it was given (127.0.0.1:57017 here,
+  # mongodb:27017 in the devcontainer) rather than on that member address,
+  # which only the container itself can reach. The healthcheck initiates
+  # the set on its first run (`rs.status()` throws NotYetInitialized, code
+  # 94, until then) and passes once this member is primary. Each check
+  # starts a mongosh (about a second of CPU), so it runs every second only
+  # until the first pass (`start_interval`, Docker Engine 25+; an older
+  # engine uses `interval` throughout, and is just slower to report
+  # healthy), then every 30 s, not every 2 s through the whole test run.
+  mongodb:
+    image: mongo:7.0.45-jammy
+    command: ["mongod", "--replSet", "rs0"]
+    ports: ["127.0.0.1:57017:27017"]
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - >-
+          try { rs.status() } catch (e) { if (e.code !== 94) throw e;
+          rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "localhost:27017" }] }) }
+          quit(db.hello().isWritablePrimary ? 0 : 1)
+      start_period: 60s
+      start_interval: 1s
+      interval: 30s
+      timeout: 10s
+      retries: 3

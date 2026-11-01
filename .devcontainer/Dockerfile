@@ -15,6 +15,7 @@ ARG CARGO_DENY_VERSION=0.20.2
 ARG TYPST_VERSION=0.15.1
 ARG GIT_DELTA_VERSION=0.19.2
 ARG ZSH_IN_DOCKER_VERSION=1.2.0
+ARG MONGOSH_VERSION=2.14.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   less git procps sudo fzf zsh man-db unzip gnupg2 gh \
@@ -48,6 +49,16 @@ RUN set -eux; \
   wget -qO- "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-${TRIPLE}.tar.xz" \
     | tar -xJ --strip-components=1 -C /usr/local/bin "typst-${TRIPLE}/typst"; \
   just --version; cargo-deny --version; typst --version
+
+# mongosh (Apache-2.0), for `just test-live-clean` against the mongodb
+# sidecar (roadmap S8): Debian ships none. Only its `bin/mongosh` is kept;
+# the archive's other binary, the crypt shared library, is not needed.
+RUN set -eux; \
+  ARCH="$(dpkg --print-architecture)"; \
+  case "$ARCH" in amd64) MARCH=x64 ;; arm64) MARCH=arm64 ;; *) echo "unsupported $ARCH"; exit 1 ;; esac; \
+  wget -qO- "https://downloads.mongodb.com/compass/mongosh-${MONGOSH_VERSION}-linux-${MARCH}.tgz" \
+    | tar -xz --strip-components=2 -C /usr/local/bin "mongosh-${MONGOSH_VERSION}-linux-${MARCH}/bin/mongosh"; \
+  mongosh --version
 
 USER node
 
