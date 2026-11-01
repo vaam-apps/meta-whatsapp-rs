@@ -122,8 +122,8 @@
 //!   (live, synced, tombstones, and messages an erasure redacted in a
 //!   group, whichever the store's erasure mode), and deletes the summary
 //!   of a conversation whose latest message went (its newest rows all
-//!   tombstones, or a cap of zero), keeping every other summary as it
-//!   was; window events, ownership records, synced contacts, contact
+//!   tombstones, or a cap of zero), its window with it, keeping every
+//!   other summary as it was; window events, ownership records, synced contacts, contact
 //!   removals and identity links stay; a trimmed id is free again;
 //!   scoped to one number, or to every number; and trims racing appends
 //!   of newer messages never lose one, nor leave the summary behind.
@@ -3815,6 +3815,11 @@ async fn trim_keeps_the_newest_rows_of_each_conversation<S: ConversationStore + 
         summary(store, &tombs).await,
         None,
         "a conversation whose latest message went loses its summary (and its preview)"
+    );
+    assert_eq!(
+        store.last_inbound_at(&tombs).await.unwrap(),
+        None,
+        "and the window it held, however recent (documented on `trim_conversations`)"
     );
     assert_eq!(store.message(&r.pn, &r.id("k1")).await.unwrap(), None);
     if redact {

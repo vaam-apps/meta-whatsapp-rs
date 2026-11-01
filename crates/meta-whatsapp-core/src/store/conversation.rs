@@ -1167,6 +1167,16 @@ pub trait ConversationStore: Send + Sync + fmt::Debug + 'static {
     /// keeping its latest message keeps its summary as it was: its latest
     /// message, preview and window, and an unread count that may include
     /// deleted messages until the next [`mark_read`](Self::mark_read).
+    /// A deleted summary takes its window with it:
+    /// [`last_inbound_at`](Self::last_inbound_at) is `None` (and the
+    /// unread count gone) until the conversation's next message. A purge
+    /// deletes a summary once its latest message is older than the
+    /// cutoff, when that window has usually long closed; a trim deletes it
+    /// whatever its age, so a customer service window still open closes
+    /// (its [window events](Self::window_events) stay): with `keep_last`
+    /// 0, every conversation's, on each trim, and a reply checked against
+    /// the window (the inbox's free-form reply) is refused until the
+    /// customer's next message.
     ///
     /// Only messages and summaries are deleted (the other counts of the
     /// [`Purged`] it returns are zero): window events, thread ownership

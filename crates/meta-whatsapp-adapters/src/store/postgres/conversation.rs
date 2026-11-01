@@ -137,7 +137,15 @@
 //!   moved to its newer message no longer matches, and stays. It takes no
 //!   number lock (appends never wait for it), so a message older than the
 //!   rows kept, recorded during the trim, may stay without its summary
-//!   until the next trim, as for a purge.
+//!   until the next trim, as for a purge. Its cost: each trim ranks every
+//!   row of its scope, deleting or not (one number's range of the index,
+//!   or, with `None`, the whole index), and holds the purge lock
+//!   meanwhile, so purges, other trims and every number's erasures wait
+//!   for it (appends do not). On a development machine, ranking a million
+//!   rows took about a second, and deleting half of them four. On a large
+//!   store, trim one number at a time (each its own transaction): a
+//!   `meta_whatsapp_bot::retention::RetentionSweeper` given the numbers
+//!   does.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -342,8 +350,10 @@ fn purge_sql(prefix: &TablePrefix, scope: &str) -> String {
 }
 
 /// The `trim_conversations` statement: `$1` the rows each conversation
-/// keeps, `scope` restricts the ranking to one business number (`$2`), or
-/// is empty. The rows are ranked newest first by `(ts, id)` per
+/// keeps; with `one_number`, the ranking and the deletion are restricted
+/// to business number `$2` (the deletion too, so that it reads that
+/// number's rows, on the conversation index, rather than every row of
+/// the table to find them). The rows are ranked newest first by `(ts, id)` per
 /// conversation (the history's order, which
 /// `messages_conversation_idx` holds), and those ranked beyond `$1` are
 /// deleted by id: rows of the statement's snapshot only, so a message
@@ -353,9 +363,14 @@ fn purge_sql(prefix: &TablePrefix, scope: &str) -> String {
 /// commits, so a summary an append moved to its newer message no longer
 /// matches and stays. The summaries are locked in key order, as
 /// `purge_sql`'s are.
-fn trim_sql(prefix: &TablePrefix, scope: &str) -> String {
+fn trim_sql(prefix: &TablePrefix, one_number: bool) -> String {
     let messages = prefix.table("messages");
     let conversations = prefix.table("conversations");
+    let (scope, deleted_scope) = if one_number {
+        (" WHERE phone_number_id = $2", " AND t.phone_number_id = $2")
+    } else {
+        ("", "")
+    };
     format!(
         "WITH ranked AS ( \
            SELECT id, row_number() OVER ( \
@@ -364,7 +379,7 @@ fn trim_sql(prefix: &TablePrefix, scope: &str) -> String {
            FROM {messages}{scope} \
          ), m AS ( \
            DELETE FROM {messages} AS t USING ranked AS r \
-           WHERE t.id = r.id AND r.n > $1 \
+           WHERE t.id = r.id AND r.n > $1{deleted_scope} \
            RETURNING t.id, t.phone_number_id, t.contact \
          ), c AS (DELETE FROM {conversations} WHERE (phone_number_id, contact) IN ( \
            SELECT s.phone_number_id, s.contact FROM {conversations} AS s \
@@ -715,8 +730,8 @@ impl Sql {
             )),
             purge_all: arc(purge_sql(prefix, "")),
             purge_number: arc(purge_sql(prefix, " AND phone_number_id = $2")),
-            trim_all: arc(trim_sql(prefix, "")),
-            trim_number: arc(trim_sql(prefix, " WHERE phone_number_id = $2")),
+            trim_all: arc(trim_sql(prefix, false)),
+            trim_number: arc(trim_sql(prefix, true)),
         }
     }
 }
@@ -1652,6 +1667,26 @@ mod tests {
             "{}",
             sql.append_synced
         );
+    }
+
+    /// A trim of one number ranks and deletes that number's rows only, so
+    /// the deletion reads its range of the conversation index, not every
+    /// row of the table (the plan a join on `id` alone gets: measured,
+    /// a sequential scan of every number's rows); a trim of every number
+    /// is restricted by nothing.
+    #[test]
+    fn a_trim_of_one_number_reads_its_rows_only() {
+        let sql = Sql::new(&TablePrefix::DEFAULT);
+        assert!(
+            sql.trim_number
+                .contains("FROM wa_messages WHERE phone_number_id = $2 ")
+                && sql
+                    .trim_number
+                    .contains("WHERE t.id = r.id AND r.n > $1 AND t.phone_number_id = $2 "),
+            "{}",
+            sql.trim_number
+        );
+        assert!(!sql.trim_all.contains("$2"), "{}", sql.trim_all);
     }
 
     /// The rows an erasure fills the sender of are migration 4's

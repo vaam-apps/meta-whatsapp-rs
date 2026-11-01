@@ -13,7 +13,9 @@
 //!   each chat's rows beyond its newest `n`, every row of its history
 //!   counting (revokes' tombstones and messages an erasure redacted too),
 //!   and the summary of a chat whose latest message went
-//!   ([`ConversationStore::trim_conversations`]).
+//!   ([`ConversationStore::trim_conversations`]), whatever its age: with
+//!   it goes the customer service window it holds, still open or not
+//!   (every chat's with a cap of 0), until the customer's next message.
 //!
 //! Either way, the synced address book and the links between a person's
 //! identities stay (design D35: a later erasure follows them to the
@@ -79,7 +81,10 @@ pub struct RetentionPolicy {
     /// Delete what is older than this; `None` keeps any age.
     pub max_age: Option<Duration>,
     /// Keep each chat's newest `n` rows and delete the others; `None`
-    /// keeps any number. `Some(0)` keeps no history at all.
+    /// keeps any number. `Some(0)` keeps no history at all, nor any
+    /// chat's summary: each sweep closes every customer service window
+    /// it holds, until the customer's next message (see
+    /// [`ConversationStore::trim_conversations`]).
     pub max_messages_per_chat: Option<usize>,
 }
 

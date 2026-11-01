@@ -570,7 +570,8 @@ To cap each conversation instead (or as well),
 each conversation's newest `n` rows (tombstones and redacted group
 messages count) and deletes the others, and the summary of a
 conversation whose latest message went (its newest rows all tombstones,
-or `n` is 0); window events, ownership records, contacts and links stay,
+or `n` is 0), and with it the customer service window it holds, open or
+not, until the customer's next message; window events, ownership records, contacts and links stay,
 and a conversation keeping its latest message keeps its summary as it
 was (its unread count may include deleted messages until `mark_read`).
 An append at the same time is never lost, and on Postgres trims take

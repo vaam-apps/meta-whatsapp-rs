@@ -894,8 +894,11 @@ tokio::spawn(async move { sweeper.run(shutdown_signal).await });
   counts: messages of both directions, synced history, a revoke's
   tombstone, and a group message an erasure redacted. A chat whose newest
   `n` rows are all tombstones, or a cap of 0 (no history at all), loses
-  its summary; any other keeps it as it was (the unread count may count
-  deleted messages until `mark_read`).
+  its summary, and with it the customer service window it holds, open
+  or not: `Inbox::reply` refuses free-form content (templates still go)
+  until the customer's next message (with a cap of 0, in every chat,
+  after each sweep). Any other chat keeps its summary as it was (the unread
+  count may count deleted messages until `mark_read`).
 - Either way, synced contacts and the links between a person's
   identities stay (design D35: a later erasure follows them), and a
   deleted message's id is free again. A group is a chat like the others:
