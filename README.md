@@ -326,6 +326,7 @@ workspace stays `publish = false` until a release is decided.
 | [CHANGELOG.md](CHANGELOG.md) | what changed |
 | [skills/](skills/README.md) | agent skills for code that uses meta-whatsapp-rs |
 | [docs/public/llms.txt](docs/public/llms.txt) | an index of these docs and skills for language models (the llms.txt convention), served at the docs site's root |
+| [`just docs-mcp`](docs/dev-environment.md#the-docs-mcp-server) | these docs and skills served to a coding agent over MCP (stdio): search them, read a page or one section |
 | `cargo doc --open -p meta-whatsapp-rs --all-features` | the API reference |
 
 ## License

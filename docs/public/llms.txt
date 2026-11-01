@@ -75,5 +75,5 @@ One task each, installable with `npx skills add vaam-apps/meta-whatsapp-rs`.
 
 - [Changelog](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/CHANGELOG.md): what changed, release by release
 - [Contributing](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/CONTRIBUTING.md): process, merging and how the skills are kept true
-- [Development environment](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/dev-environment.md): the Claude Code dev container, its toolchain and its firewall
+- [Development environment](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/dev-environment.md): the Claude Code dev container, its toolchain and its firewall, and the docs MCP server, which serves these docs and skills to a coding agent from a checkout
 - [Agent guide](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/AGENTS.md): conventions and commands for working on the repository itself
