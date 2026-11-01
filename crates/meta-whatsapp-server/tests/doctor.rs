@@ -1162,6 +1162,26 @@ async fn live_postgres_doctor_reports_a_changed_dirty_newer_or_pending_history()
             .await
             .unwrap();
     assert_eq!(recorded, 0, "the doctor migrated");
-    pool.close().await;
     assert!(graph.requests().is_empty());
+
+    // The bound WABAs cannot be listed, the database's error quoting what
+    // it should not: the report names the failure, not the text.
+    exec("ALTER TABLE wa_server_wabas RENAME TO wa_server_wabas_hidden").await;
+    exec(
+        "CREATE FUNCTION wa_doctor_refuses() RETURNS SETOF wa_server_wabas_hidden \
+         LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'SENTINEL-DATABASE-TEXT'; END $$",
+    )
+    .await;
+    exec("CREATE VIEW wa_server_wabas AS SELECT * FROM wa_doctor_refuses()").await;
+    graph.push_json(200, subscriptions(&all_fields()));
+    let env = auto.clone().set("WA_APP_ID", APP_ID);
+    // `doctor` asserts no sentinel reaches the report.
+    let report = doctor(&env, &BuiltinBackends, &graph).await;
+    assert_fails(
+        &report,
+        "token.wabas",
+        "the bound WABAs cannot be listed: the storage backend failed",
+    );
+    assert_eq!(graph.remaining(), 0);
+    pool.close().await;
 }
