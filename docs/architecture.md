@@ -936,10 +936,17 @@ Logs carry sizes, digests and field names only — never payload values.
   arguments; nothing is linked. The input goes on stdin and the result
   comes from stdout (no file); `-protocol_whitelist pipe` and a
   `-format_whitelist` of recording formats keep a crafted input from
-  making ffmpeg open a file or a URL; input, output (the upload limit)
-  and run time are bounded, the process killed past the last two; its
-  stderr is drained and never kept (it names files); the output is
-  checked to be mono Ogg Opus. An empty or oversized input (or result)
+  making ffmpeg open a file or a URL (MP4 data references, the one
+  reference those formats carry, are not followed: ffmpeg's defaults,
+  pinned by a test); the process gets no environment but `PATH` (no
+  `FFREPORT`); input, output (the upload limit), run time and any single
+  allocation in ffmpeg (`-max_alloc`, 16 MiB: a header declaring an
+  absurd sample rate) are bounded, the process killed past the output
+  and time bounds; an MP4 whose index follows its media data is put
+  index first in memory before ffmpeg reads it (a pipe cannot seek
+  back); its stderr is drained and never kept (it names files); an input
+  that decodes to no audio fails (`-abort_on empty_output`), and the
+  output is checked to be mono Ogg Opus. An empty or oversized input (or result)
   is a `ValidationError` on `input`; every other failure an
   `Error::Conversion` (see Error tree).
 - `store::RedisKvStore` (feature `redis`; CAS via Lua). Requires the

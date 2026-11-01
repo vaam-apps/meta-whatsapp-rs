@@ -441,7 +441,13 @@ notification queue on top must be idempotent itself: tag each message with
   path, call `check()` at startup so a missing binary or libopus fails
   there (`ConversionError::BinaryMissing`, `EncoderMissing`) rather than
   at the first upload, and bound how many conversions run at
-  once (each is a process on a CPU core; the converter queues nothing).
+  once (each is a process on about a CPU core for up to its timeout; the
+  converter queues nothing). It caps each allocation in `ffmpeg` (16 MiB)
+  but not the process's total memory: give it a cgroup, or point
+  `with_program` at a wrapper script that sets `ulimit -v` and then
+  `exec`s `ffmpeg` (`exec`, so that a timeout kills `ffmpeg` itself). The
+  process inherits no environment but `PATH`; a build that needs
+  `LD_LIBRARY_PATH` sets it in such a wrapper.
   Its input and run time are bounded (64 MiB and 60 s by default), the
   result to the 16 MiB upload limit, and `ffmpeg`'s own diagnostics are
   never logged: they name files and URLs. Its failures are

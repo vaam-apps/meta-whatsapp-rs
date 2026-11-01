@@ -1908,7 +1908,19 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     ffmpeg 6.1.1 when this landed. Removing the protocol or format
     whitelist, mono, the timeout, the kill on timeout, an input or
     output bound or the output check, or withholding stderr, changing
-    the codec, or a timeout that says `may_have_been_sent`, fails a test.
+    the codec, or a timeout that says `may_have_been_sent`, fails a test
+    (the protocol whitelist only the fixed-argument one: with these
+    formats, ffmpeg 6.1.1 opens nothing else from a pipe even without
+    it, so it is a second wall, not the first). The security review
+    added: the child's environment reduced to `PATH` (no `FFREPORT` log
+    file), `-max_alloc 16777216` (a 16 KiB WAV declaring 1 Hz otherwise
+    took 1.7 GB and a minute), `-abort_on empty_output` (an input
+    without audio came back as an empty voice note), an MP4 whose index
+    follows its media data moved index first in memory (from a pipe,
+    ffmpeg read next to nothing of one longer than a few seconds, and
+    the converter returned it as success), and real-`ffmpeg` tests for
+    each, one of them an MP4 whose data reference names a host file,
+    never read.
     Not done: images into stickers and resizing (L19b), a conversion
     sidecar over HTTP, and a limit on conversions at once (the caller's).
   - **Decided** (coordinator, under the owner's delegation, 2026-11-01;

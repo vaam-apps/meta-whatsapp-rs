@@ -303,7 +303,9 @@ pub enum ErrorKind {
     /// exist.
     NotFound,
     /// `2494165`: the API is not enabled for this account (e.g. In-App
-    /// Signup on this WABA).
+    /// Signup on this WABA). Also a media converter this deployment lacks
+    /// (`ConversionError::BinaryMissing`, `EncoderMissing`): not Meta's
+    /// answer, as [`Error::graph`](crate::Error::graph) being `None` tells.
     FeatureNotAvailable,
 
     // ── Billing ───────────────────────────────────────────────────────────

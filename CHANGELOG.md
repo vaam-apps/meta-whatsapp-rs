@@ -239,9 +239,12 @@ stored data, the owner's).
   input on stdin and the result on stdout, its input protocols
   restricted to the pipe and its input formats to recording formats,
   bounded in input (`with_max_input_bytes`, 64 MiB; refused as
-  `Error::Validation` on `input`), output (the 16 MiB upload limit) and
-  time (`with_timeout`, 60 s; killed past it), its stderr withheld, the
-  result checked to be mono Ogg Opus; `check()` finds a missing binary or
+  `Error::Validation` on `input`), output (the 16 MiB upload limit),
+  time (`with_timeout`, 60 s; killed past it) and single allocations in
+  `ffmpeg` (`-max_alloc`, 16 MiB), its environment reduced to `PATH`, its
+  stderr withheld, an MP4 whose index follows its media data put index
+  first in memory (a pipe cannot seek back to it), an input with no audio
+  refused, the result checked to be mono Ogg Opus; `check()` finds a missing binary or
   libopus at startup. Nothing is linked, and the service's image gains
   no `ffmpeg`. Images into stickers and resizing are not converted
   (roadmap L19b). For contributors: the real-`ffmpeg` tests

@@ -11,6 +11,7 @@ use super::*;
 #[test]
 fn the_arguments_are_fixed_literals() {
     let expected: Vec<&str> = "-hide_banner -nostdin -nostats -loglevel error \
+         -max_alloc 16777216 -abort_on empty_output \
          -protocol_whitelist pipe \
          -format_whitelist wav,mp3,ogg,flac,aac,mov,amr,matroska \
          -i pipe:0 \
@@ -149,6 +150,11 @@ mod processes {
                         "printf '%s\\n' \"$@\" > '{d}/record.args'\ncat > '{d}/record.stdin'\ncat '{d}/opus.bin'\n"
                     ),
                 ),
+                // Records its environment, answers mono Ogg Opus.
+                (
+                    "environment",
+                    format!("env > '{d}/environment.env'\ncat > /dev/null\ncat '{d}/opus.bin'\n"),
+                ),
                 (
                     "stereo",
                     format!("cat > /dev/null\ncat '{d}/stereo.bin'\n"),
@@ -208,6 +214,34 @@ mod processes {
         let args = std::fs::read_to_string(f.path("record.args")).unwrap();
         assert_eq!(args.lines().collect::<Vec<_>>(), OGG_OPUS_ARGS);
         assert_eq!(std::fs::read(f.path("record.stdin")).unwrap(), input);
+    }
+
+    /// The process gets `PATH` and nothing else of the test's environment
+    /// (`HOME`, `CARGO_*`): no `FFREPORT`, no `AV_LOG_FORCE_*`, no proxy
+    /// reaches it. What remains besides is the stand-in shell's own.
+    #[tokio::test]
+    async fn the_process_gets_path_and_no_other_variable() {
+        let f = fakes();
+        convert(&f.converter("environment"), b"RIFF").await.unwrap();
+        let env = std::fs::read_to_string(f.path("environment.env")).unwrap();
+        let names: Vec<&str> = env
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name))
+            .collect();
+        let shells_own = ["PWD", "OLDPWD", "SHLVL", "_"];
+        for name in &names {
+            assert!(
+                *name == "PATH" || shells_own.contains(name),
+                "{name} reached the process: {names:?}"
+            );
+        }
+        let path = std::env::var("PATH").unwrap();
+        assert!(env.lines().any(|l| l == format!("PATH={path}")), "{env}");
+        // The control: this process does have variables to pass on.
+        assert!(
+            std::env::vars_os().any(|(k, _)| k != "PATH" && !shells_own.iter().any(|s| k == *s)),
+            "the test's environment has nothing but PATH"
+        );
     }
 
     #[tokio::test]

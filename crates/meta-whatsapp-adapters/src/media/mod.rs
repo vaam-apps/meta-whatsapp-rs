@@ -18,6 +18,7 @@
 //!
 //! ```text
 //! ffmpeg -hide_banner -nostdin -nostats -loglevel error
+//!        -max_alloc 16777216 -abort_on empty_output
 //!        -protocol_whitelist pipe
 //!        -format_whitelist wav,mp3,ogg,flac,aac,mov,amr,matroska
 //!        -i pipe:0
@@ -30,7 +31,19 @@
 //!   `-protocol_whitelist pipe` stops a demuxer from opening anything
 //!   else on its behalf (a playlist or a concat script naming a local
 //!   file or an `http://` URL), so a crafted file cannot read the host's
-//!   files or reach the network.
+//!   files or reach the network. Of the formats listed below, only MP4's
+//!   data references (`dref`, an alias naming another file) open anything,
+//!   and ffmpeg's `mov` reader follows none unless told to
+//!   (`enable_drefs` and `use_absolute_path`, both off, and options the
+//!   other readers would refuse, so they cannot be set here):
+//!   `tests/ffmpeg.rs` in the facade feeds it such a file and checks that
+//!   the file it names never reaches the result.
+//! - **The environment is not passed on**: the process gets `PATH` alone
+//!   (`FFREPORT` would write ffmpeg's full log, file names in it, to the
+//!   working directory, which nothing else uses). A build that needs more
+//!   (`LD_LIBRARY_PATH`) goes behind a wrapper script set with
+//!   [`FfmpegConverter::with_program`], which must `exec` ffmpeg: a timeout
+//!   kills the process started, not its children.
 //! - **Only the audio formats a recording comes in are read**
 //!   (`-format_whitelist`: WAV, MP3, Ogg, FLAC, AAC, MP4/M4A/3GP, AMR,
 //!   Matroska and `WebM`). Anything else is refused before decoding.
@@ -39,7 +52,15 @@
 //!   dropped (they can carry personal data). At 32 kb/s a voice note
 //!   stays under the 512 KB that keeps WhatsApp's play icon
 //!   (`messages/audio-messages`) for about two minutes. The output is
-//!   checked to be mono Ogg Opus before it is returned.
+//!   checked to be mono Ogg Opus before it is returned, and an input that
+//!   decodes to no audio fails (`-abort_on empty_output`) rather than
+//!   come back as an empty voice note.
+//! - **A pipe cannot seek back**, so an MP4 or M4A whose index (`moov`)
+//!   comes after its media data, as many recorders (and ffmpeg, by
+//!   default) write it, could not be read from one. The converter moves
+//!   the index first before it starts ffmpeg, as `-movflags +faststart`
+//!   would (in memory, its chunk offsets shifted; anything it does not
+//!   understand, such as a compressed index, is passed on as it is).
 //!
 //! # Bounds and errors
 //!
@@ -51,6 +72,7 @@
 //! | no libopus ([`FfmpegConverter::check`]) | — | [`ConversionError::EncoderMissing`] |
 //! | `ffmpeg` fails (input it cannot read, a format off the list) | — | [`ConversionError::InputRejected`] |
 //! | the output is not mono Ogg Opus (a binary that is not the `ffmpeg` it should be) | — | [`ConversionError::OutputInvalid`] |
+//! | one allocation in `ffmpeg` over 16 MiB (`-max_alloc`: a header declaring an absurd sample rate) | — | [`ConversionError::InputRejected`] |
 //! | a run over [`with_timeout`](FfmpegConverter::with_timeout) | 60 s | [`ConversionError::Timeout`], the one retryable; `ffmpeg` is killed |
 //! | `ffmpeg` killed by a signal, or a pipe to it broken | — | [`ConversionError::Killed`] |
 //!
@@ -62,7 +84,9 @@
 //! failed (the exit status, a bound) and nothing of the input. Dropping
 //! a conversion in flight kills its process. Conversions are not
 //! queued: bound how many run at once yourself (each one is a process
-//! using a CPU core). Run it on a tokio runtime with I/O enabled (what
+//! using about a CPU core, for up to the timeout, and memory this crate
+//! does not cap beyond `-max_alloc`'s per allocation: a cgroup, or `ulimit
+//! -v` in a wrapper script, bounds it). Run it on a tokio runtime with I/O enabled (what
 //! `#[tokio::main]` builds): child processes need tokio's I/O driver.
 //!
 //! ```no_run
@@ -80,6 +104,7 @@
 //! # Ok(()) }
 //! ```
 
+mod mp4;
 #[cfg(test)]
 mod tests;
 
@@ -101,6 +126,10 @@ use tokio::process::Command;
 /// `WebM` (a browser's `MediaRecorder`).
 const INPUT_FORMATS: &str = "wav,mp3,ogg,flac,aac,mov,amr,matroska";
 
+/// The largest single allocation `ffmpeg` may make (`-max_alloc`), in
+/// bytes: 16 MiB.
+const MAX_ALLOC: &str = "16777216";
+
 /// The arguments for [`TargetFormat::OggOpus`], in order. Every one is a
 /// literal: nothing of the caller's reaches the command line.
 const OGG_OPUS_ARGS: &[&str] = &[
@@ -109,6 +138,16 @@ const OGG_OPUS_ARGS: &[&str] = &[
     "-nostats",
     "-loglevel",
     "error",
+    // No single allocation over 16 MiB: a crafted header (a WAV declaring
+    // one sample a second, which becomes 48 000 at the output rate)
+    // otherwise makes each small input frame a buffer of hundreds of
+    // megabytes. A recording at any real rate stays far below it.
+    "-max_alloc",
+    MAX_ALLOC,
+    // An input that decodes to no audio (no samples, or samples ffmpeg
+    // cannot reach from a pipe) is an error, not an empty voice note.
+    "-abort_on",
+    "empty_output",
     // Input options: read stdin only, and only these formats.
     "-protocol_whitelist",
     "pipe",
@@ -138,6 +177,15 @@ const OGG_OPUS_ARGS: &[&str] = &[
     "ogg",
     "pipe:1",
 ];
+
+/// The only variables of this process's environment the child gets:
+/// `PATH`, to find a bare program name (and, on Windows, `SystemRoot`,
+/// without which a process cannot start there).
+const INHERITED_ENV: &[&str] = if cfg!(windows) {
+    &["PATH", "SystemRoot"]
+} else {
+    &["PATH"]
+};
 
 /// `ffmpeg -encoders`, for [`FfmpegConverter::check`].
 const ENCODERS_ARGS: &[&str] = &[
@@ -281,7 +329,17 @@ impl FfmpegConverter {
         max_out: u64,
         overflow: Error,
     ) -> Result<(Vec<u8>, ExitStatus)> {
-        let mut child = Command::new(&self.program)
+        let mut command = Command::new(&self.program);
+        // Nothing of this process's environment but `PATH`: ffmpeg reads
+        // some (`FFREPORT` writes its full log, file names included, to a
+        // file in the working directory; `AV_LOG_FORCE_*`, proxies).
+        command.env_clear();
+        for name in INHERITED_ENV {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        let mut child = command
             .args(args)
             .stdin(if input.is_some() {
                 Stdio::piped()
@@ -378,9 +436,10 @@ impl MediaConverter for FfmpegConverter {
                 "converted to {target:?}, it exceeds {max} bytes, the most an upload of it takes"
             ),
         );
-        let (out, status) = self
-            .run(args, Some(input.data), max, overflow.into())
-            .await?;
+        // An MP4 whose index follows its media data cannot be read from a
+        // pipe: put it first (`mp4`), leaving anything else as it is.
+        let data = mp4::index_first(&input.data).map_or(input.data, Bytes::from);
+        let (out, status) = self.run(args, Some(data), max, overflow.into()).await?;
         if !status.success() {
             return Err(match status.code() {
                 Some(_) => ConversionError::InputRejected(format!(
