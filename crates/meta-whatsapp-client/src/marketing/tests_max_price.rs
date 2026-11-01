@@ -281,8 +281,12 @@ async fn no_other_max_price_call_signs_the_agreement() {
     assert_eq!(t.remaining(), 0);
 }
 
-/// The agreement's path is named in one file under `src/`: no helper,
-/// builder or send path elsewhere can reach it.
+/// The agreement is named in code by one file of the library: no helper,
+/// builder, send path or facade convenience elsewhere can reach it. Comment
+/// lines are skipped (the module docs link to the call), and any mention of
+/// the method or the path counts, called or not (a function value, a
+/// combinator, a `format!`ed path). The facade's and the bot's sources are
+/// scanned too: a convenience there would sign as surely as one here.
 #[test]
 fn only_the_agreement_module_names_the_agreement() {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
@@ -295,17 +299,30 @@ fn only_the_agreement_module_names_the_agreement() {
             }
         }
     }
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
     let mut files = Vec::new();
-    walk(&src, &mut files);
+    for krate in [
+        "meta-whatsapp-client",
+        "meta-whatsapp-rs",
+        "meta-whatsapp-bot",
+    ] {
+        let src = crates.join(krate).join("src");
+        assert!(src.is_dir(), "{} is missing", src.display());
+        walk(&src, &mut files);
+    }
     let mut naming: Vec<String> = files
         .iter()
         .filter(|path| {
-            let text = std::fs::read_to_string(path).unwrap();
-            text.contains("max_price_agreements\"") || text.contains("sign_max_price_agreement(")
+            std::fs::read_to_string(path).unwrap().lines().any(|line| {
+                !line.trim_start().starts_with("//")
+                    && (line.contains("max_price_agreements")
+                        || line.contains("sign_max_price_agreement"))
+            })
         })
         .map(|path| {
-            path.strip_prefix(&src)
+            path.strip_prefix(crates)
                 .unwrap()
                 .to_string_lossy()
                 .replace('\\', "/")
@@ -314,8 +331,95 @@ fn only_the_agreement_module_names_the_agreement() {
     naming.sort();
     assert_eq!(
         naming,
-        ["marketing/agreement.rs", "marketing/tests_max_price.rs"]
+        [
+            "meta-whatsapp-client/src/marketing/agreement.rs",
+            "meta-whatsapp-client/src/marketing/tests_max_price.rs"
+        ]
     );
+}
+
+/// Signing is sent once even when Meta throttles it: the HTTP 429 of a
+/// `POST` within 5 minutes of the last email, and a Graph throttling
+/// error, are returned, not resent by the retry policy (which resends
+/// other non-idempotent calls on them).
+#[tokio::test]
+async fn signing_is_not_replayed_on_a_429() {
+    let t = ScriptedTransport::new();
+    t.push_json(429, json!({"retry_after": 300}));
+    let err = business(&retrying_client(&t))
+        .sign_max_price_agreement(&MaxPriceAgreementSigner::new(
+            "Jane Doe",
+            "jane.doe@example.com",
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.kind(),
+        meta_whatsapp_core::ErrorKind::RateLimited,
+        "{err}"
+    );
+    assert!(matches!(err, Error::Http { status: 429, .. }), "{err:?}");
+    assert_eq!(t.requests().len(), 1);
+    assert_eq!(t.remaining(), 0);
+
+    let t = ScriptedTransport::new();
+    t.push_json(
+        429,
+        json!({"error": {"message": "(#4) Application request limit reached", "type": "OAuthException", "code": 4}}),
+    );
+    let err = business(&retrying_client(&t))
+        .sign_max_price_agreement(&MaxPriceAgreementSigner::new(
+            "Jane Doe",
+            "jane.doe@example.com",
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.kind(),
+        meta_whatsapp_core::ErrorKind::RateLimited,
+        "{err}"
+    );
+    assert_eq!(t.requests().len(), 1);
+    assert_eq!(t.remaining(), 0);
+}
+
+/// The agreement's answers name the signer: a non-2xx answer that is not
+/// Meta's error envelope is an `Error::Http` without its body, on the
+/// `POST` and the `GET`.
+#[tokio::test]
+async fn a_failed_agreement_answer_never_quotes_the_signer() {
+    let t = ScriptedTransport::new();
+    t.push_json(
+        429,
+        json!({"retry_after": 300, "status": "pending", "signer_email": "jane.doe@bsp.example"}),
+    );
+    t.push_json(
+        400,
+        json!({"status": "pending", "signer_name": "Jane Doe", "signer_email": "jane.doe@bsp.example"}),
+    );
+    t.push_bytes(
+        502,
+        "text/html",
+        "<html>Bad gateway for jane.doe@bsp.example (Jane Doe)</html>",
+    );
+    let c = client(&t);
+    let b = business(&c);
+    let signer = MaxPriceAgreementSigner::new("Jane Doe", "jane.doe@bsp.example");
+    let throttled = b.sign_max_price_agreement(&signer).await.unwrap_err();
+    let refused = b.sign_max_price_agreement(&signer).await.unwrap_err();
+    let unreadable = b.max_price_agreement().await.unwrap_err();
+    for (err, status) in [(&throttled, 429), (&refused, 400), (&unreadable, 502)] {
+        assert!(
+            matches!(err, Error::Http { status: s, .. } if *s == status),
+            "{err:?}"
+        );
+        let text = format!("{err} {err:?}");
+        assert!(!text.contains("jane.doe"), "{text}");
+        assert!(!text.contains("Jane Doe"), "{text}");
+        assert!(text.contains("withheld"), "{text}");
+    }
+    assert_eq!(throttled.kind(), meta_whatsapp_core::ErrorKind::RateLimited);
+    assert_eq!(t.remaining(), 0);
 }
 
 // ─── Duplicating a template ──────────────────────────────────────────────
@@ -324,10 +428,16 @@ fn only_the_agreement_module_names_the_agreement() {
 async fn duplicate_matches_the_documented_example() {
     let t = ScriptedTransport::new();
     // The page's example response, without its trailing comma (as printed
-    // it is not valid JSON).
+    // it is not valid JSON), plus the `source_template_id` its prose says
+    // the response includes.
     t.push_json(
         200,
-        json!({"id": "1733678867511493", "status": "APPROVED", "category": "MARKETING"}),
+        json!({
+            "id": "1733678867511493",
+            "status": "APPROVED",
+            "category": "MARKETING",
+            "source_template_id": "1234567890123456"
+        }),
     );
     let created = client(&t)
         .marketing_account(WabaId::new("102290129340398").unwrap())
@@ -356,6 +466,10 @@ async fn duplicate_matches_the_documented_example() {
     assert_eq!(created.id.as_str(), "1733678867511493");
     assert_eq!(created.status, Some(TemplateStatus::Approved));
     assert_eq!(created.category, Some(TemplateCategory::Marketing));
+    assert_eq!(
+        created.source_template_id,
+        Some(TemplateId::new("1234567890123456").unwrap())
+    );
     assert_eq!(t.remaining(), 0);
 }
 

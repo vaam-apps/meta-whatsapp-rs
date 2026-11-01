@@ -12,14 +12,36 @@
 //! deployment. This file is the only one under `src/` naming the
 //! agreement's path (a test checks).
 
-use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
+use meta_whatsapp_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{MarketingBusiness, wire_enum};
+use crate::RetryPolicy;
+
+/// [`SIGNER_WITHHELD`] as text, the snippet of an [`Error::Http`].
+const SIGNER_WITHHELD_TEXT: &str = "(withheld: the response may name the agreement's signer)";
 
 /// A decode error's placeholder: the response names the signer.
-const SIGNER_WITHHELD: &[u8] = b"(withheld: the response names the agreement's signer)";
+const SIGNER_WITHHELD: &[u8] = SIGNER_WITHHELD_TEXT.as_bytes();
+
+/// A non-2xx answer of the agreement's endpoint that is not Meta's error
+/// envelope: its snippet becomes [`SIGNER_WITHHELD_TEXT`], whatever the
+/// body says, since the endpoint's answers name the signer
+/// (`signer_name`, `signer_email`, a `message` quoting the email), and the
+/// crate's own rule (`safe_snippet`) withholds only bodies naming
+/// `paging` or `access_token`. Meta's envelope (`Error::Api`) carries
+/// Meta's message, not the body, and is kept, as for the solution token
+/// (roadmap L12).
+fn withhold_signer(error: Error) -> Error {
+    match error {
+        Error::Http { status, .. } => Error::Http {
+            status,
+            body_snippet: SIGNER_WITHHELD_TEXT.to_owned(),
+        },
+        other => other,
+    }
+}
 
 wire_enum! {
     /// Where a business is with the max price beta agreement.
@@ -106,30 +128,49 @@ impl MarketingBusiness {
     /// resends the email, to a new `signer_email` if given; within 5
     /// minutes of the last email Meta answers HTTP 429.
     ///
-    /// Not retried on timeouts: a lost answer is surfaced; check
-    /// [`Self::max_price_agreement`] rather than signing again.
+    /// Sent once, whatever the client's [`RetryPolicy`]: not replayed
+    /// after a timeout (a lost answer is surfaced; check
+    /// [`Self::max_price_agreement`] rather than signing again), nor on an
+    /// HTTP 429 or a throttling error, which the policy resends elsewhere
+    /// ([`Error::may_resend`]): Meta's 5 minutes outlast any retry's delay,
+    /// and a resend once they are over would send the email again
+    /// unasked. A 429 is returned as
+    /// [`ErrorKind::RateLimited`](meta_whatsapp_core::ErrorKind::RateLimited);
+    /// wait 5 minutes from the last email before calling again.
+    ///
+    /// The signer stays out of errors: an answer that does not decode is
+    /// an [`Error::Decode`] carrying neither the body nor serde's message,
+    /// and a non-2xx answer that is not Meta's error envelope an
+    /// [`Error::Http`] whose snippet is a placeholder, never the body
+    /// (any `retry_after` in the body included).
     pub async fn sign_max_price_agreement(
         &self,
         signer: &MaxPriceAgreementSigner,
     ) -> Result<MaxPriceAgreement> {
         signer.validate()?;
         self.client()
+            .clone()
+            .with_retry(RetryPolicy::NONE)
             .post_at(&[self.id().as_str(), "max_price_agreements"])
             .json(signer)
             .idempotent(false)
             .context("max price agreement response")
             .send_withheld(SIGNER_WITHHELD)
             .await
+            .map_err(withhold_signer)
     }
 
     /// The max price agreement's state
     /// (`GET /{BUSINESS_ID}/max_price_agreements`): `none`, `pending` or
-    /// `accepted`. Reads only: it never signs.
+    /// `accepted`. Reads only: it never signs. A read, retried as any
+    /// `GET` is; its errors withhold the signer as
+    /// [`Self::sign_max_price_agreement`]'s do.
     pub async fn max_price_agreement(&self) -> Result<MaxPriceAgreement> {
         self.client()
             .get_at(&[self.id().as_str(), "max_price_agreements"])
             .context("max price agreement status response")
             .send_withheld(SIGNER_WITHHELD)
             .await
+            .map_err(withhold_signer)
     }
 }

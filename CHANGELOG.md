@@ -226,14 +226,18 @@ stored data, the owner's).
   `MarketingBusiness::sign_max_price_agreement(&MaxPriceAgreementSigner)`
   (`POST /{BUSINESS_ID}/max_price_agreements`) **signs Meta's Max Price
   Beta Agreement on the business's behalf**, a legal act: it is its own
-  explicit call, never replayed, and no other call makes it (a max-price
-  send, a duplicate, a reach estimate or a template update never signs,
-  and Meta's "sign the agreement" refusals are returned as they come);
+  explicit call, sent once whatever the `RetryPolicy` (not replayed
+  after a timeout, nor on Meta's HTTP 429 within 5 minutes of the last
+  email), and no other call makes it (a max-price send, a duplicate, a
+  reach estimate or a template update never signs, and Meta's "sign the
+  agreement" refusals are returned as they come);
   `MarketingBusiness::max_price_agreement()` reads its state
-  (`AgreementStatus`: `none`, `pending`, `accepted`).
+  (`AgreementStatus`: `none`, `pending`, `accepted`). Neither call's
+  errors quote the signer's name or email.
   `MarketingAccount::duplicate_template(&DuplicateTemplate)` clones an
   approved marketing template at another `MaxPrice`
-  (`source_template_id`, `name`, `optimization_spec`), and
+  (`source_template_id`, `name`, `optimization_spec`; answering a
+  `DuplicatedTemplate`, with its `source_template_id`), and
   `MarketingAccount::reach_estimate(&ReachEstimateQuery)` estimates
   deliveries and costs at several max prices (`GET
   /{WABA_ID}/reachestimate`, `DateInterval` `L1D` to `L28D`).

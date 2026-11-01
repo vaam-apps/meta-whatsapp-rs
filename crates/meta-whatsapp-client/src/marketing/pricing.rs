@@ -21,7 +21,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{MarketingAccount, wire_enum};
 use crate::Client;
-use crate::templates::TemplateCreated;
+use crate::templates::{TemplateCategory, TemplateStatus};
 
 /// Most entries `bid_country_multiplier_overrides` may hold
 /// (`marketing-messages/pricing`: "Up to **240** entries", raised from 50
@@ -239,6 +239,26 @@ impl DuplicateTemplate {
     }
 }
 
+/// What [`MarketingAccount::duplicate_template`] answers: the duplicate's
+/// id, its status (`APPROVED` at once when the source is approved) and
+/// category (the source's), and `source_template_id`, which the guide
+/// says links the duplicate back to its source (its example omits it,
+/// hence the `Option`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DuplicatedTemplate {
+    /// The duplicate's template id.
+    pub id: TemplateId,
+    /// Its status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TemplateStatus>,
+    /// Its category, cloned from the source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<TemplateCategory>,
+    /// The template it was cloned from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_template_id: Option<TemplateId>,
+}
+
 wire_enum! {
     /// `date_interval` of a reach estimate: how much history the estimate
     /// is computed from.
@@ -329,7 +349,10 @@ impl MarketingAccount {
     ///
     /// Not retried on timeouts: a replay would make a second duplicate or
     /// fail on the name.
-    pub async fn duplicate_template(&self, request: &DuplicateTemplate) -> Result<TemplateCreated> {
+    pub async fn duplicate_template(
+        &self,
+        request: &DuplicateTemplate,
+    ) -> Result<DuplicatedTemplate> {
         request.validate()?;
         self.client()
             .post_at(&[self.id().as_str(), "message_templates"])

@@ -249,7 +249,8 @@ of its own, after an HTML comment; keep that when you add one.
 45. **The Marketing Messages API's max-price agreement.** Max price
     (`marketing-messages/pricing/enroll-max-price`) is a beta a WABA
     joins by signing Meta's beta agreement through the API: a legal act
-    on the business's behalf. Nothing wraps it today (parity row 137).
+    on the business's behalf. Nothing wrapped it before roadmap L13
+    (parity row 137).
 
     **Decided 2026-09-26 (coordinator, owner's delegation):** the code
     decides nothing legal. The library exposes the agreement as its own
@@ -259,23 +260,26 @@ of its own, after an HTML comment; keep that when you add one.
     their own deployment. Swappable: nothing signs unless a deployment
     calls it. Roadmap L13 and M5h.
 
-    **Found on 2026-11-01 (roadmap L13, Meta's pages of that day):** the
-    agreement is `POST /{BUSINESS_ID}/max_price_agreements` with
-    `signer_name` and `signer_email`, once per business portfolio, by an
-    admin of it, with `business_management`; Meta emails the signer an
-    acceptance link and answers `pending` until the business accepts
-    (`GET` reads `none`, `pending` or `accepted`); posting again while
-    pending resends the email (HTTP 429 within 5 minutes). Meta states
-    it uses the two fields only to execute the agreement. The partner
-    allow list is gone since the open beta (2026-10-01): a partner's
+    **Confirmed 2026-11-01 (coordinator, owner's delegation; roadmap L13
+    landed):** decided for the library, the service's side carried by
+    M5h. The library
+    exposes the agreement only as the explicit
+    `MarketingBusiness::sign_max_price_agreement` (`POST
+    /{BUSINESS_ID}/max_price_agreements` with `signer_name` and
+    `signer_email`), sent once whatever the retry policy, which no
+    other call makes: no send, duplicate, reach estimate, template
+    update or builder signs, and Meta's refusals for want of the
+    agreement (`100`, a duplicate's HTTP 403) are returned, not
+    answered by signing (`MarketingBusiness::max_price_agreement` only
+    reads its state). The partner allow list no longer exists: Meta's
+    changelog of 2026-10-01 removed it with the open beta (a partner's
     accepted agreement covers the client WABAs shared with or managed by
-    it, so no per-client act remains. The library's side is done as
-    decided: `MarketingBusiness::sign_max_price_agreement` is the one
-    call that sends the `POST`, never replayed, and no send, duplicate,
-    reach estimate or template update makes it (a test checks that no
-    other file of the client names its path); Meta's refusals for want
-    of the agreement (`100`, a duplicate's HTTP 403) are returned, not
-    answered by signing. M5h remains.
+    it), so no per-client act remains to expose. M5h exposes signing as
+    an explicit, audited operator action, off by default. Why: AGENTS.md
+    § Decisions, "Legal acts": the code decides nothing legal, and
+    signing is the deployer's act, for their own deployment. Swappable
+    by not calling it: nothing signs unless a deployment calls it.
+    Roadmap L13 (landed) and M5h.
 
 ## API conventions
 

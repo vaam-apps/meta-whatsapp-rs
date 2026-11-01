@@ -109,9 +109,9 @@ pub use onboarding::{
     OnboardingRequested, OnboardingStatus, OwnerBusinessInfo, TermsStatus,
 };
 pub use pricing::{
-    BidStrategy, DateInterval, DuplicateTemplate, MAX_COUNTRY_MULTIPLIER, MAX_COUNTRY_MULTIPLIERS,
-    MarketingTemplate, MaxPrice, OptimizationSpec, ReachEstimate, ReachEstimatePoint,
-    ReachEstimateQuery,
+    BidStrategy, DateInterval, DuplicateTemplate, DuplicatedTemplate, MAX_COUNTRY_MULTIPLIER,
+    MAX_COUNTRY_MULTIPLIERS, MarketingTemplate, MaxPrice, OptimizationSpec, ReachEstimate,
+    ReachEstimatePoint, ReachEstimateQuery,
 };
 pub use send::{
     Marketing, MarketingOptions, MessageStatus, ProductPolicy, SendResponse, SentContact,
