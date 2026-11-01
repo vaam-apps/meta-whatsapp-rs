@@ -851,6 +851,8 @@ mod tests {
             &[EXCHANGE_CODE, DEBUG_TOKEN, VERIFY_ASSETS, STORE_TOKEN]
         );
         assert!(b.is_resumable());
+        let debug_text = format!("{result:?}");
+        assert!(!debug_text.contains(TOKEN), "{debug_text}");
         assert!(stored(&h.vault, WABA_A).await.is_some());
         assert!(stored(&h.vault, WABA_B).await.is_some());
         assert_eq!(h.t.remaining(), 0);
@@ -1191,6 +1193,39 @@ mod tests {
         let reqs = h.t.requests();
         assert_owner_lookup(&reqs[2], WABA_B);
         assert_owner_lookup(&reqs[5], WABA_A);
+        assert_eq!(h.t.remaining(), 0);
+    }
+
+    /// The other grants keep the request's subscription override: their
+    /// webhooks go where the claimed WABA's go.
+    #[tokio::test]
+    async fn the_others_keep_the_subscription_override() {
+        let h = harness();
+        script_shared(&h.t, &[WABA_B, WABA_A]);
+        script_verified(&h.t, WABA_A, &[PHONE_A]);
+        h.t.push_json(200, success()); // subscribe A
+        h.t.push_json(200, success()); // register A
+        script_verified(&h.t, WABA_B, &[PHONE_B]);
+        h.t.push_json(200, success()); // subscribe B
+        let request = request(true).subscribe_override(crate::waba::CallbackOverride::new(
+            "https://hooks.example.com/wa",
+            "verify-me-secret",
+        ));
+        let result = h.es.onboard_wabas(&request, &h.vault).await.unwrap();
+        assert!(result.is_complete(), "{result:?}");
+        let reqs = h.t.requests();
+        let overridden = Some(
+            json!({"override_callback_uri": "https://hooks.example.com/wa", "verify_token": "verify-me-secret"}),
+        );
+        for (at, id) in [(4, WABA_A), (8, WABA_B)] {
+            assert_request(
+                &reqs[at],
+                &Method::POST,
+                &format!("/v25.0/{id}/subscribed_apps"),
+                TOKEN,
+            );
+            assert_eq!(reqs[at].json(), overridden, "{id}");
+        }
         assert_eq!(h.t.remaining(), 0);
     }
 
