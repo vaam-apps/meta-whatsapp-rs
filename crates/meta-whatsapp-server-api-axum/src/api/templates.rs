@@ -5,6 +5,7 @@
 //! | `GET /v1/wabas/{waba_id}/templates` | `GET /{waba_id}/message_templates?fields=name,language,status,category,components&limit=…[&status=…][&name=…][&after=…]`, cached 60 s per WABA |
 //! | `GET /v1/wabas/{waba_id}/templates/{id}` | `GET /{id}?fields=name`, then `GET /{waba_id}/message_templates?fields=…&name=…` (the id must be among them) |
 //! | `POST /v1/wabas/{waba_id}/templates` | `POST /{waba_id}/message_templates` |
+//! | `POST /v1/wabas/{waba_id}/templates/authentication` | `POST /{waba_id}/upsert_message_templates` (`templates/authentication-templates/bulk-management`): one authentication template in one or more languages, created or updated (roadmap M3c) |
 //! | `DELETE /v1/wabas/{waba_id}/templates?name=[&id=]` | `DELETE /{waba_id}/message_templates?name=…`; with an id, `GET /{waba_id}/message_templates?fields=name&name=…` first (the id must be among them), then `…&hsm_id=…` |
 //!
 //! Pages: `templates/template-management`, `templates/overview`,
@@ -48,6 +49,7 @@
 
 use std::collections::HashMap;
 
+use meta_whatsapp_rs::client::authentication::AuthenticationUpsert;
 use meta_whatsapp_rs::client::templates::TemplateDefinition;
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Path, Query, State};
@@ -370,6 +372,180 @@ pub(crate) async fn create_template(
     };
     state
         .idempotent(&caller, key, fingerprint, create(&templates, &definition))
+        .await
+}
+
+// ─── Authentication templates ────────────────────────────────────────────
+
+/// An Android app a one-tap button fills the code in (Meta's
+/// `supported_apps` entry).
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = SupportedApp)]
+pub struct SupportedAppBody {
+    /// The app's package name (`com.example.luckyshrub`).
+    pub package_name: String,
+    /// The app's signing key hash (11 characters).
+    pub signature_hash: String,
+}
+
+/// `POST /v1/wabas/{waba_id}/templates/authentication`: Meta's bulk
+/// management fields (`templates/authentication-templates/bulk-management`),
+/// the components' own fields flattened, each named as Meta names it.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = AuthenticationTemplateRequest)]
+pub struct AuthenticationTemplateBody {
+    /// The template's name (lowercase letters, digits and underscores).
+    pub name: String,
+    /// Its languages (`en_US`, `es_ES`, `fr`): each is created, or updated
+    /// when it exists.
+    pub languages: Vec<String>,
+    /// The button: `copy_code`, or `one_tap` (with `supported_apps`).
+    /// Zero-tap (`zero_tap`) is refused: creating one accepts Meta's
+    /// zero-tap terms, which the service does not do for a tenant.
+    #[schema(value_type = OtpType)]
+    pub otp_type: String,
+    /// A one-tap button's Android apps, 1 to 5.
+    pub supported_apps: Option<Vec<SupportedAppBody>>,
+    /// The body's "For your security, do not share this code."
+    pub add_security_recommendation: Option<bool>,
+    /// The footer's "This code expires in N minutes.", 1 to 90: keep it
+    /// equal to the OTP settings' `ttl_seconds`.
+    pub code_expiration_minutes: Option<u32>,
+    /// The message's time to live: 30 to 900 seconds, or -1.
+    pub message_send_ttl_seconds: Option<i64>,
+}
+
+/// An authentication template's button type.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OtpType {
+    /// The user copies the code.
+    CopyCode,
+    /// The listed Android apps fill the code in.
+    OneTap,
+}
+
+/// One language of an authentication template, as Meta answered.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = AuthenticationTemplateCreated)]
+pub struct AuthenticationTemplateCreatedView {
+    /// Template id.
+    pub id: String,
+    /// Its status, as Meta wrote it (`APPROVED`, `PENDING`).
+    #[schema(required = true)]
+    pub status: Option<String>,
+    /// Its language.
+    #[schema(required = true)]
+    pub language: Option<String>,
+}
+
+/// The languages created or updated.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AuthenticationTemplatesCreated {
+    /// One per language, as Meta answered.
+    pub data: Vec<AuthenticationTemplateCreatedView>,
+}
+
+/// The core's request for `body`, or `422` on the field.
+fn authentication_request(body: Value) -> Result<domain::AuthenticationRequest, ApiError> {
+    let body: AuthenticationTemplateBody =
+        serde_json::from_value(body).map_err(|_| ApiError::invalid("body"))?;
+    let otp_type = match body.otp_type.to_ascii_lowercase().as_str() {
+        "copy_code" => domain::OtpButtonType::CopyCode,
+        "one_tap" => domain::OtpButtonType::OneTap,
+        // `zero_tap` included: its terms are not the service's to accept.
+        _ => return Err(ApiError::invalid("otp_type")),
+    };
+    Ok(domain::AuthenticationRequest {
+        name: body.name,
+        languages: body.languages,
+        otp_type,
+        supported_apps: body
+            .supported_apps
+            .unwrap_or_default()
+            .into_iter()
+            .map(|app| (app.package_name, app.signature_hash))
+            .collect(),
+        add_security_recommendation: body.add_security_recommendation,
+        code_expiration_minutes: body.code_expiration_minutes,
+        message_send_ttl_seconds: body.message_send_ttl_seconds,
+    })
+}
+
+/// Create or update `upsert`: `201` with each language, or Meta's refusal
+/// with its `details` (the core's [`Templates::create_authentication`]).
+async fn create_authentication(
+    templates: &Templates<'_>,
+    upsert: &AuthenticationUpsert,
+) -> Result<Success, ApiError> {
+    let created = templates.create_authentication(upsert).await?;
+    Success::json(
+        StatusCode::CREATED,
+        &AuthenticationTemplatesCreated {
+            data: created
+                .into_iter()
+                .map(|template| AuthenticationTemplateCreatedView {
+                    id: template.id.as_str().to_owned(),
+                    status: template.status,
+                    language: template.language,
+                })
+                .collect(),
+        },
+    )
+}
+
+/// `POST /v1/wabas/{waba_id}/templates/authentication`: an authentication
+/// template, copy code or one-tap, in one or more languages.
+#[utoipa::path(
+    post,
+    path = "/v1/wabas/{waba_id}/templates/authentication",
+    tag = "templates",
+    security(("api_key" = [])),
+    params(
+        ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+        ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never create twice"),
+    ),
+    request_body = AuthenticationTemplateBody,
+    responses(
+        (status = 201, description = "Created or updated, one entry per language; review results arrive as `template_status_updated` events", body = AuthenticationTemplatesCreated),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such WABA for this tenant", body = ErrorBody),
+        (status = 409, description = "`template_limit_reached`, `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (`name`, `languages`, `otp_type`: `zero_tap` is refused, `supported_apps`, `code_expiration_minutes`, `message_send_ttl_seconds`, `body`), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`: the template may have been created or updated", body = ErrorBody),
+    )
+)]
+pub(crate) async fn create_authentication_template(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedWaba,
+    KeyHeader(key): KeyHeader,
+    ApiJson(body): ApiJson<Value>,
+) -> Response {
+    let fingerprint = Fingerprint::create_authentication_template(owned.waba_id(), &body);
+    let upsert = match authentication_request(body)
+        .and_then(|request| domain::authentication(request).map_err(ApiError::from))
+    {
+        Ok(upsert) => upsert,
+        Err(error) => return error.into_response(),
+    };
+    let templates = match templates(&state, &caller, &owned) {
+        Ok(templates) => templates,
+        Err(error) => return error.into_response(),
+    };
+    state
+        .idempotent(
+            &caller,
+            key,
+            fingerprint,
+            create_authentication(&templates, &upsert),
+        )
         .await
 }
 

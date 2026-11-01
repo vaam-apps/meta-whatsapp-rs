@@ -15,13 +15,13 @@ Your app is not Rust and reaches WhatsApp through meta-whatsapp-server:
 you deploy it, hold its keys, call its /v1 API and handle its errors.
 Rust code uses the library directly (`meta-whatsapp-rs`).
 
-## What the service does today (milestones M1a to M1c, and M2a)
+## What the service does today (milestones M1a to M1c, M2a and M3c)
 
-Live events (SSE), webhooks to your backend, Embedded Signup and OTP do
-not exist yet: write no code against them. Sends, media, templates and
-the inbox (conversations, replies) do (load `meta-whatsapp-rs-server-send`),
-and so do Meta's webhooks and polling events (load
-`meta-whatsapp-rs-server-events`).
+Live events (SSE), webhooks to your backend and Embedded Signup do not
+exist yet: write no code against them. The rest does, by skill: sends,
+media, templates, the inbox (`meta-whatsapp-rs-server-send`), Meta's
+webhooks and polling (`meta-whatsapp-rs-server-events`), login codes
+(`meta-whatsapp-rs-server-otp`).
 
 | Route | Needs | Does |
 | --- | --- | --- |
@@ -31,6 +31,7 @@ and so do Meta's webhooks and polling events (load
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
 | `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, `GET /v1/numbers/{pn}/conversations`, … | scopes `send`, `media`, `templates`, `inbox` | sends, media, templates, the inbox: `meta-whatsapp-rs-server-send` |
 | `GET /v1/events` | scope `events` | Meta's webhook events for the tenant, after a cursor: `meta-whatsapp-rs-server-events` |
+| `POST /v1/otp/issue`, `POST /v1/otp/verify` | scope `otp` | login codes over WhatsApp: `meta-whatsapp-rs-server-otp` |
 | `POST /v1/admin/tenants`, `POST /v1/admin/tenants/{id}/keys`, `POST /v1/admin/platform-keys` | admin key | tenants and keys |
 | `POST /v1/admin/tenants/{id}/wabas`, `GET /v1/admin/wabas/{waba_id}`, `DELETE /v1/admin/wabas/{waba_id}/binding` | admin key | attach the platform's own WABA (numbers listed by Meta, app subscribed); who holds one; unbind it (token deleted too) |
 | `/livez`, `/readyz`, `/metrics`, `/v1/version`, `/v1/openapi.json` | nothing | operations, and the document every client is generated from |
@@ -132,8 +133,7 @@ export function nextStep(error: ErrorObject): Next {
   `graph` is Meta's own text: show it, never branch on it.
 - **Repeat a request only when `may_have_been_sent` is false**; a
   `timeout` (504) or a Meta failure (502) may have taken effect. Sends,
-  uploads and template creation take an `Idempotency-Key`: the same key
-  never acts twice.
+  uploads, template creation and OTP issue take an `Idempotency-Key`.
 - `too_many_requests` (429): the tenant's rate limit; wait
   `Retry-After` seconds.
 - `invalid_request` names the culprit in `field`; `401` is always

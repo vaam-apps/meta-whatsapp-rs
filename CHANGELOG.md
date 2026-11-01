@@ -451,6 +451,42 @@ stored data, the owner's).
   `live_postgres_a_trim_and_a_history_chunk_never_deadlock`, and the
   trims added to `live_postgres_the_locks_are_the_documented_ones`.
 
+- **OTP and authentication templates in the service** (roadmap M3c;
+  parity row 98 partial on the service's side, zero-tap and previews left
+  for M3g; design D8, proposed D45–D49). Scope `otp`: `POST
+  /v1/otp/issue` (`issue_otp`) sends a code with the tenant's
+  authentication template and answers `200` with `sent` (`challenge_id`,
+  `expires_at`), `cooling_down` or `rate_limited` (`retry_after_seconds`),
+  under an optional `Idempotency-Key` whose fingerprint is keyed with
+  `WA_OTP_PEPPER`; `POST /v1/otp/verify` (`verify_otp`) answers `200`
+  with `verified`, `invalid` (`attempts_left`), `expired`,
+  `too_many_attempts` or `not_found`. Both go through the library's
+  `OtpService`, under the calling tenant's id as the namespace (tenant A's
+  code is `not_found` at any other tenant, even on one sending number);
+  the code is in no answer, log or error, and a failed send keeps Meta's
+  code and trace id, never its text or `details`. The sending number is
+  the one the tenant's OTP settings name, one of its own numbers, else
+  the default OTP tenant's (`WA_SERVER_OTP_DEFAULT_TENANT`, the
+  platform's number); none, or a number no longer its holder's, is the
+  new `409 otp_not_configured`. Admin: `GET`, `PUT` and `DELETE
+  /v1/admin/tenants/{id}/otp` (the number, the template and its
+  language, the library's limits, the issue limit never off; audited
+  `otp_settings_set`, `otp_settings_cleared`), kept in
+  `wa_server_tenants.settings` under `otp` (no migration). Scope
+  `templates`: `POST /v1/wabas/{waba_id}/templates/authentication`
+  (`create_authentication_template`), copy code or one-tap in one or
+  more languages through Meta's bulk management, zero-tap refused (`422`
+  on `otp_type`: its terms are the owner's to accept). Rate classes
+  `otp_issue` (5/s, burst 5) and `otp_verify` (20/s, burst 20),
+  `WA_SERVER_RATE_OTP_ISSUE`, `WA_SERVER_RATE_OTP_VERIFY` and their
+  `_BURST`; the metric `wa_server_otp_outcomes_total`. In the core:
+  `meta_whatsapp_server_core::otp` (`OtpCodes`, `Otp`, `OtpKeys`,
+  `OtpDeployment`), `Admin::set_otp_settings`,
+  `Templates::create_authentication`, the operations `issue_otp`,
+  `verify_otp` and `create_authentication_template`, the conformance
+  suite `otp`. The OpenAPI document gains four paths, the tag `otp` and
+  fourteen schemas, additively.
+
 - **The service's inbox routes** (roadmaps M2a and M2h; parity row 119 now done on
   the service's side, rows 91 and 111 partial; design D10). Scope `inbox`:
   `GET /v1/numbers/{pn}/conversations` (`list_conversations`) and `GET
@@ -2266,6 +2302,17 @@ stored data, the owner's).
   each conversation's history"); implement it and run
   `conversation_conformance::run` again. The in-tree memory and Postgres
   stores implement it; nothing else changes for their users.
+
+- **Breaking for a custom `RecordStore`** (roadmap M3c): two required
+  methods, `otp_settings` and `set_otp_settings` (a tenant's OTP
+  settings, in `OtpSettings::to_stored`'s layout, gone with the tenant);
+  run `conformance::run` again (its `otp` suite checks them). For a
+  custom `Observer`, the new `otp` method has a default that observes
+  nothing. `RateLimits` gains `otp_issue` and `otp_verify`, and the
+  HTTP crate's `Settings` gains `otp` (`None`: every OTP request is `409
+  otp_not_configured`; `serve` always sets it, with a throwaway pepper on
+  memory storage). The server's `Config::otp_pepper` is now the core's
+  `OtpKeys`, and `Config` gains `otp_default_tenant`.
 
 - **Breaking for a custom `RecordStore`** (roadmap M2h): `NumberBinding`
   gains two fields (`attached_at`, `previous_tenant_released_at`), and

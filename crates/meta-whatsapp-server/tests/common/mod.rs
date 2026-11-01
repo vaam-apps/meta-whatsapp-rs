@@ -7,6 +7,7 @@ pub mod capture;
 pub mod inbox;
 pub mod meta;
 pub mod moving;
+pub mod otp;
 pub mod scenarios;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -491,13 +492,35 @@ pub fn unlimited() -> RateLimits {
         send: rate,
         read: rate,
         templates: rate,
+        otp_issue: rate,
+        otp_verify: rate,
     }
 }
 
-/// The settings of a test service: the defaults, without rate limits.
+/// The OTP pepper of every test service (roadmap M3c): 32 bytes or more.
+pub const OTP_PEPPER: &str = "otp-pepper-of-the-test-services-32-bytes-or-more";
+
+/// The OTP settings of a test service: [`OTP_PEPPER`], and `default_tenant`
+/// for the tenants without settings of their own.
+pub fn otp_deployment(
+    default_tenant: Option<&str>,
+) -> meta_whatsapp_server_core::otp::OtpDeployment {
+    meta_whatsapp_server_core::otp::OtpDeployment::new(
+        meta_whatsapp_server_core::otp::OtpKeys::new(
+            meta_whatsapp_rs::core::secret::SecretBytes::new(OTP_PEPPER.as_bytes().to_vec()),
+        )
+        .unwrap(),
+        default_tenant.map(|id| TenantId::parse(id).unwrap()),
+    )
+}
+
+/// The settings of a test service: the defaults, without rate limits, and
+/// OTP set up with no default OTP tenant (a tenant without OTP settings is
+/// `409 otp_not_configured`).
 pub fn test_settings() -> Settings {
     Settings {
         rate_limits: unlimited(),
+        otp: Some(otp_deployment(None)),
         ..Settings::default()
     }
 }
@@ -528,6 +551,14 @@ impl Harness {
             kv,
             ..Stores::memory()
         };
+        Self::build(stores, settings, DEFAULT_APP_SECRETS, |graph| {
+            Arc::new(graph)
+        })
+    }
+
+    /// On `stores`, with `settings` (roadmap M3c: a default OTP tenant on
+    /// Postgres).
+    pub fn with_stores_and_settings(stores: Stores, settings: Settings) -> Self {
         Self::build(stores, settings, DEFAULT_APP_SECRETS, |graph| {
             Arc::new(graph)
         })
@@ -901,6 +932,20 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             serde_json::json!({"waba_id": "555000111", "token": "SYSTEM-TOKEN-FOR-SAMPLES"})
         }
         ("PATCH", "/v1/numbers/{pn}/profile") => serde_json::json!({"about": "Open 9 to 5"}),
+        // Roadmap M3c: OTP, its settings and authentication templates.
+        ("POST", "/v1/otp/issue") => serde_json::json!({"phone": SAMPLE_TO}),
+        ("POST", "/v1/otp/verify") => serde_json::json!({"phone": SAMPLE_TO, "code": "123456"}),
+        ("PUT", "/v1/admin/tenants/{id}/otp") => serde_json::json!({
+            "phone_number_id": "106540352242922",
+            "template": {"name": "login_code", "language": "en_US"}
+        }),
+        ("POST", "/v1/wabas/{waba_id}/templates/authentication") => serde_json::json!({
+            "name": "authentication_code_copy_code_button",
+            "languages": ["en_US", "es_ES", "fr"],
+            "otp_type": "copy_code",
+            "add_security_recommendation": true,
+            "code_expiration_minutes": 10
+        }),
         ("POST" | "PATCH" | "PUT", _) => serde_json::json!({}),
         _ => return None,
     })

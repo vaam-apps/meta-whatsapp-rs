@@ -8,7 +8,9 @@
 > rotation, the numbers routes, errors, operations, the committed OpenAPI
 > document; M1b: messages, read receipts, media, templates, idempotency
 > keys and rate limits; M1c: `POST /webhooks/meta` into the inbox and the
-> event outbox, and `GET /v1/events`; [§9](#9-delivery-plan) says which
+> event outbox, and `GET /v1/events`; since then, roadmap M2a the inbox
+> routes and M3c OTP, its per-tenant settings and authentication
+> templates ([§4.7](#47-otp)); [§9](#9-delivery-plan) says which
 > acceptance tests they meet, [coverage.md](../coverage.md) row 33 what
 > is missing); the rest is design. Written against `main` =
 > bbf24a3 (2026-09-24), Graph API v25.0; the library changes it assumed have
@@ -596,7 +598,7 @@ Rules the service implements:
 | `GET /v1/wabas/{waba_id}/templates` | list, `?status=&name=&cursor=`, cached 60 s per WABA (Meta allows 200 management calls an hour per WABA) | → page of `{id, name, language, status, category, components}` | |
 | `GET /v1/wabas/{waba_id}/templates/{id}` | one | → template | *as built in M1b*: 422 `id` (not digits); the id's name read, then the id looked for in the WABA's own list of that name (5 pages of 100 at most): 404 for another WABA's template, or one past those pages |
 | `POST /v1/wabas/{waba_id}/templates` | create from Meta's JSON shape (`TemplateDefinition` deserializes it), validated locally | → `201 {id, status, category}` | 422 `template_rejected`; 409 `template_limit_reached`; *as built in M1b*: 422 `invalid_request` on a key `TemplateDefinition` would not send (never dropped; the shapes it cannot carry are listed in the guide's Templates section) |
-| `POST /v1/wabas/{waba_id}/templates/authentication` (M3) | copy-code, one-tap or zero-tap, several languages | → 201 | |
+| `POST /v1/wabas/{waba_id}/templates/authentication` (M3) | copy-code, one-tap or zero-tap, several languages; *as built in M3c*: Meta's bulk management (`upsert_message_templates`), its fields flattened (`name`, `languages`, `otp_type`, `supported_apps`, `add_security_recommendation`, `code_expiration_minutes`, `message_send_ttl_seconds`), copy code and one-tap only, an `Idempotency-Key` as on a creation | → 201; *as built*: `{data: [{id, status, language}]}` | *as built*: 422 `invalid_request` on `otp_type` for `zero_tap` (accepting Meta's zero-tap terms is a legal act, the owner's: roadmap M3g) |
 | `DELETE /v1/wabas/{waba_id}/templates?name=[&id=]` | every language of a name, or one | → 204 | *as built in M1b*: with an id, looked for in the WABA's own list of that name first: 404 when it is not there, nothing deleted |
 
 Review results arrive as `template_status_updated` events.
@@ -635,8 +637,8 @@ receives its own tenant's events.
 | `GET /v1/signup/attempts` | the tenant's resumable attempts | → `{data: [{waba_id, failed_step, updated_at}]}` | |
 | `POST /v1/signup/resume` | rerun the steps after the stored token | `{waba_id, pin?}` → like `complete` | 404 `nothing_to_resume`; 502 `onboarding_failed` |
 | `POST /v1/numbers/{pn}/coexistence-sync` | start the contacts and history sync, once, within 24 h (D7) | `{types}` → 202 | 409 `sync_not_allowed` |
-| `POST /v1/otp/issue` | send a code with the tenant's authentication template | `{phone, purpose?}` → `{status: sent, challenge_id, expires_at}` or `{status: cooling_down \| rate_limited, retry_after_seconds}` | 422 `phone`, `recipient_not_supported`; 502/504 with `may_have_been_sent: true` |
-| `POST /v1/otp/verify` | check the typed code; always counts as an attempt | `{phone, purpose?, code}` → `{result: verified \| invalid \| expired \| too_many_attempts \| not_found, attempts_left?}` | 422 |
+| `POST /v1/otp/issue` | send a code with the tenant's authentication template; *as built in M3c*: from the sending number of the tenant's OTP settings, else the default OTP tenant's (D8, [§4.7](#47-otp)), an `Idempotency-Key` as on a send (its fingerprint keyed with the pepper), rate class `otp_issue` | `{phone, purpose?}` → `{status: sent, challenge_id, expires_at}` or `{status: cooling_down \| rate_limited, retry_after_seconds}` | 422 `phone`, `recipient_not_supported`; 502/504 with `may_have_been_sent: true`; *as built*: 409 `otp_not_configured` |
+| `POST /v1/otp/verify` | check the typed code; always counts as an attempt; *as built in M3c*: asks Meta nothing and reads no token, rate class `otp_verify`; another tenant's code is `not_found`, the namespace being the caller's tenant | `{phone, purpose?, code}` → `{result: verified \| invalid \| expired \| too_many_attempts \| not_found, attempts_left?}` | 422; *as built*: 409 `otp_not_configured` |
 
 The signup state travels in bodies only (URLs reach access logs). OTP
 outcomes are `200` with a status, as the library returns them as `Ok`:
@@ -646,7 +648,7 @@ a caller's generic error handling can never swallow `invalid`.
 
 | Method and path | Does |
 | --- | --- |
-| `POST`, `GET`, `PATCH`, `DELETE /v1/admin/tenants[/{id}]` | create, list, suspend, configure (OTP sender and template, limits), delete (disconnects every WABA) |
+| `POST`, `GET`, `PATCH`, `DELETE /v1/admin/tenants[/{id}]` | create, list, suspend, configure (OTP sender and template, limits), delete (disconnects every WABA); *as built in M3c*: the OTP settings are a resource of their own, `GET`, `PUT` and `DELETE /v1/admin/tenants/{id}/otp` (the sending number, which must be one of the tenant's, the template and language, the library's limits; audited), and `PATCH` stays name and status; per-tenant rate limits are not settable |
 | `…/tenants/{id}/keys[/{key_id}]`, `/v1/admin/platform-keys[/{key_id}]` | mint, list, revoke keys; platform keys with their allowed tenants |
 | `POST /v1/admin/tenants/{id}/wabas`; `GET /v1/admin/wabas/{waba_id}`; `DELETE /v1/admin/wabas/{waba_id}/binding` | attach an own WABA, verified with Meta and subscribed; which tenant holds a WABA, and its numbers; unbind (D4: token deleted too, [§3.4](#34-how-numbers-get-bound)) |
 | `POST /v1/admin/vault/rotate` | re-encrypt every WABA's token under the active key, walking `wa_server_wabas` (the vault cannot list itself), within the request deadline: a walk cut there answers `504 timeout` and is repeated (idempotent), and `meta-whatsapp-server vault rotate` has no deadline. It walks bound WABAs only, which holds every vault record in M1a; M3 keeps records past a binding (credit ledgers of offboarded WABAs, revocation markers), and the walk must cover those too (`TokenVault::rotate` on each such WABA, `rotate_business` on each marker) before an operator may drop an old key |
@@ -785,6 +787,22 @@ records them for tenants too).
 - The code is in no response, log or error; OTP routes drop Meta's text
   and `details` (a template error could quote a parameter: the code).
   Per-IP throttling stays the caller's (the service sees only the backend).
+- *As built in M3c*: the core's `otp` module (`OtpCodes`, opened for an
+  admitted caller) over the library's `OtpService`, built per request
+  rather than cached (it holds no connection); the namespace is the
+  calling tenant's id. A tenant's settings
+  (`wa_server_tenants.settings`, key `otp`, set by
+  `PUT /v1/admin/tenants/{id}/otp`) name one of its own numbers, checked
+  when they are set and again, through the authorization order, at every
+  issue; a tenant without settings borrows those of the deployment's
+  default OTP tenant (`WA_SERVER_OTP_DEFAULT_TENANT`, the platform's
+  number: D8's default, D45), whose number is opened for that tenant,
+  never for the caller's. No settings, no default, or a sending number
+  no longer its holder's: `409 otp_not_configured`, nothing read or sent.
+  The issue limit cannot be turned off over the API. The design's verify
+  takes the phone number and purpose (the library's `verify` is keyed
+  so), not the challenge id, so another tenant's code answers `200
+  not_found`, the namespace's answer.
 
 **Decision (D8): which number sends a tenant's codes.** (a) One
 platform number for all (the user sees the platform's name); (b) each
@@ -824,7 +842,7 @@ each new kind into `unknown` silently.
 | HTTP | Codes | Meaning |
 | --- | --- | --- |
 | 422 | `invalid_request` (local validation, with `field`), `invalid_parameter`, `unsupported_message_type`, `recipient_not_supported`, `undeliverable`, `template_parameter_mismatch`, `template_not_found`, `template_text_too_long`, `template_policy_violation`, `template_rejected`, `sample_template_not_allowed` (Meta's `hello_world` from a number that is not one of its public test numbers), `idempotency_key_reused` | fix the request; nothing was sent |
-| 409 | `customer_service_window_closed`, `thread_owned_elsewhere` (Meta's `131070`, a service message without owning the thread, and the inbox's local refusal while another app owns it), `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a stored token: a merchant's, or an attached WABA's once stored), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown` | a state must change first |
+| 409 | `customer_service_window_closed`, `thread_owned_elsewhere` (Meta's `131070`, a service message without owning the thread, and the inbox's local refusal while another app owns it), `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a stored token: a merchant's, or an attached WABA's once stored), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown`, `otp_not_configured` (roadmap M3c: no OTP settings for the tenant and no default OTP tenant, or the sending number is no longer its holder's) | a state must change first |
 | 403 | `permission`, `account_restricted`, `country_restricted`, `payment`, `feature_not_available`, `marketing_not_allowed`; `forbidden`, `tenant_suspended`, `stale_attempt` | not allowed, by Meta or the service |
 | 429 | `rate_limited` (Meta's throttling codes, `ErrorKind::RateLimited`: 4, 80007, 130429, and the Graph API's Business Use Case limits 80008, 80009, 80014), `pair_rate_limited`, `spam_rate_limited`, `ecosystem_engagement_limit`, `classification_limit_reached`, `too_many_requests`, `too_many_streams` | `Retry-After` when known (the service's own limits: Meta's wait is not forwarded); `retryable` says whether waiting helps (false for 131048, 131049) |
 | 404, 410, 413 | `not_found`, `nothing_to_resume`; `cursor_expired`; `payload_too_large`, `media_too_large` | |
@@ -900,7 +918,10 @@ the route template, not the raw path (contacts identify customers).
 
 **Rate limits** per tenant and replica, overridable by the admin: sends
 20/s (burst 40), reads 50/s, template management 2/s, OTP issue 5/s, 20
-streams; `429` with `Retry-After`. Meta's limits (80 messages/s per number,
+streams; `429` with `Retry-After`; *as built in M3c*: OTP issue is a
+class of its own (`otp_issue`, 5/s, a burst of 5) and so is checking a
+code (`otp_verify`, 20/s, a burst of 20: the service's default, D46),
+per tenant, beside the library's limits per recipient. Meta's limits (80 messages/s per number,
 portfolio limits) still apply; pacing campaigns is the caller's job.
 *As built in M1b*: token buckets keyed by tenant and route class, checked
 after the scope and before ownership; the bursts this paragraph does not
@@ -962,6 +983,8 @@ third-party licences of what it contains (M4); it contains no `ffmpeg`
 | `WA_SERVER_MEDIA_CONCURRENCY` (M1b) | 4 | uploads and whole-file downloads held in memory at once per replica (section 6's "bounded media concurrency"; the next is `429`); one tenant holds half at most (the service's default, not the design's) |
 | `WA_SERVER_MEDIA_STREAMS` (M1b) | 16 | streamed downloads at once per replica, one tenant holding half at most (the service's defaults, not the design's) |
 | `WA_SERVER_RATE_SEND`, `…_READ`, `…_TEMPLATES`, each with `…_BURST` (M1b) | 20 and 40, 50 and 50, 2 and 2 | section 6's rates, per tenant and replica; the bursts of reads and template management are the service's defaults (section 6 states none) |
+| `WA_SERVER_RATE_OTP_ISSUE`, `…_OTP_VERIFY`, each with `…_BURST` (M3c) | 5 and 5, 20 and 20 | section 6's OTP issue rate and the service's default for checks (D46), per tenant and replica |
+| `WA_SERVER_OTP_DEFAULT_TENANT` (M3c) | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number (D8's default, D45); unset, such a tenant's OTP requests are `409 otp_not_configured` |
 | `WA_SERVER_UNDATED_AFTER_MOVE` (S2b) | `operator_only` | D36's `undated_after_move`: an undated event (an error, a history chunk, an undated group update) of a WABA that moved from another tenant is operator-only within the window after the move; `current_holder` gives it to the holder, the behaviour before S2b. A WABA no other tenant held is never concerned |
 | `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` (S2b) | `169h` (7 days and an hour) | the window, from the WABA's last unbinding from another tenant; a positive duration, with `operator_only` only (refused with `current_holder`) |
 | `WA_SERVER_MOVE_SKEW_MARGIN` (S2b) | `0s` | after a move only: an event Meta dated must be this much past the second its binding began in, and more, to reach the holder (Meta's clock ahead of the database's) |
@@ -1558,6 +1581,24 @@ What it holds today, where it differs from the target above:
   The admin's unbind of a WABA without a usable token, and the admin's
   own `190` right after attaching, are not a capability's and stay
   unconditioned.
+- **OTP is the core's** (M3c). `otp` holds `OtpCodes`, built by the
+  HTTP crate's `AppState::from_backend` on the bundle's `KvStore` (the
+  library's `wa.otp` and `wa.otp.rate`, unchanged) and the service's
+  clock, with the deployment's `OtpDeployment` (the pepper's `OtpKeys`
+  and the default OTP tenant); `OtpCodes::open` admits the `Caller`, and
+  its `Otp` service issues and verifies through the library's
+  `OtpService` under the caller's tenant as the namespace. The sending
+  number is opened by `Authorizer::otp_sender`, crate-private (a UI case
+  pins it): steps 4 and 5 for the tenant whose settings name the number
+  (the caller's, or the default OTP tenant's), never a request's value.
+  The settings are a `RecordStore` port change, `otp_settings` and
+  `set_otp_settings` (a stored layout of the core's,
+  `OtpSettings::to_stored`), set by the admin services
+  (`Admin::set_otp_settings`, the number checked to be the tenant's).
+  The idempotency fingerprint of an issue is keyed
+  (`Fingerprint::issue_otp`, D47). The conformance suite `otp` holds a
+  backend to the settings' record and runs M3.5's namespace case with no
+  HTTP layer.
 - **Adapter-neutral pieces** (S6). The tenant operations are named by
   id (`operation::Operation`: the HTTP adapter's `operationId`s, with
   their scope), and what the core decides about a request follows its
@@ -1926,7 +1967,8 @@ D26–D35 are the coordinator's decisions of 2026-09-26 under the
 delegation (D30–D35, with the changes to D10 that day, came out of the
 reviews of roadmap L5), as are the changes to D15 (widened), D16 (the
 gate) and D18 (revised) that day. D38 is the coordinator's of 2026-11-01
-(roadmap L8). D20's (a), a licence, is the owner's: roadmap S10
+(roadmap L8). D45–D49 are proposed by roadmap M3c and wait for the
+coordinator's decision. D20's (a), a licence, is the owner's: roadmap S10
 asks for it. D5 is settled as "support both modes, chosen per
 deployment"; which mode a production deployment runs follows the
 platform's agreements with Meta (partner status, who pays), so that
@@ -1972,6 +2014,11 @@ choice stays the owner's.
 | D36 | Undated tenant-visible events of a WABA's previous holder (errors, history chunks, undated group updates), which Meta redelivers for up to 7 days after a failed delivery, arriving after the WABA moved to another tenant (S2's security review, M2) | the current holder (as built) / operator-only within a window after a move | **Coordinator's decision 2026-09-27 under the owner's delegation, swappable: fail closed by default.** A setting `undated_after_move`: `OperatorOnly { window }` by default, the window 7 days and an hour (Meta's retry window plus the dedup margin), and `CurrentHolder`, the behaviour before it. A first onboarding (no previous tenant) is unaffected, so its history sync reaches it. The same item adds a skew margin setting around `attached_at` for dated events, applied only when a previous tenant exists, and relaxes the same-second rule (strict since S2: an event of its binding's own second is operator-only) to `<=` when the WABA has no previous tenant, so a first onboarding keeps the events of its first second; the tombstone is what tells the two apart. Why: a new holder can be another business, and the operator still sees the events in the operator stream. Not a legal choice. **Built in S2b**: `events::UndatedAfterMove` and `events::MoveRules` (the core; `Inbound::with_move_rules`), the window measured from the WABA's last unbinding from another tenant (its tombstone: a tenant deleted and created again under its id counts as another), checked by the routing and again by the outbox with each insert (`RouteGuard::after_move`); the skew margin defaults to none beyond the strict second. Bindings made before the Postgres migration 4 keep S2's rules (a move before them unknown). *Decided 2026-11-01 (coordinator, owner's delegation), with S2b's build, swappable behind the same settings and the `RecordStore` port*: the window from the unbinding, not the new attach; a margin of `0s`; the epoch (`UNRECORDED_MOVE`), not NULL, for bindings made before migration 4; a deleted and recreated tenant another tenant; the generation from 1 per binding; the undated check in the routing (`events::owner`) and `RouteGuard::admits`, for every undated event; a refresh met by a capability or an attach `503`, retryable; tombstones never purged. The names of migration 4 stay the owner's (stable identifiers). To swap, the settings `WA_SERVER_UNDATED_AFTER_MOVE` (`operator_only`, `current_holder`), `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` (169h) and `WA_SERVER_MOVE_SKEW_MARGIN` (0s), [§7.2](#72-environment) | S2b |
 | D37 | A number under several Messaging Accounts (Meta's account model evolution, phase 1 from H2 2026: a WABA's id now names its Messaging Account, which holds templates, billing and webhook subscriptions, and a number can belong to several, one per partner or billing currency) | one binding per number in a deployment, the sends naming it / several bindings per number, keyed by `(waba_id, phone_number_id)` | **Coordinator's decision 2026-10-26 under the owner's delegation, swappable: one binding per number, as built.** A number stays under exactly one binding (`wa_server_numbers`, keyed by `phone_number_id`): an attach whose number another tenant's binding holds is refused (D4), and one whose number the same tenant holds under another binding moves the number to the new binding, and M5c5 makes the latest attach the account billed: a send from a number names its binding's WABA id as `messaging_account_id` (the library's `OutboundMessage::messaging_account_id`, L16a), which Meta requires when the access token can send from several Messaging Accounts on the number, from phase 2 (H1 2027), so the binding's account is billed whichever ones the token reaches. A tenant's send body cannot name the account itself (the send body's unknown keys are refused). Until M5c5 lands, the service's sends name none and Meta resolves the account from the stored token. Why: it is the rule the schema already has, and nothing about events routed by Messaging Account is published yet. The cost, documented: templates belong to the Messaging Account they were created in (`account-model-evolution`), so after a same-tenant move the number's template sends find only the new account's templates (the tenant creates them there, or migrates them with Meta's Template Migration API, which resets their quality rating). Several bindings per number is a primary-key migration, left to the owner (OPEN_QUESTIONS #46). To swap, the setting `send_messaging_account_id` M5c5 adds (on by default; off sends none, as today) | M5c5 |
 | D38 | The coexistence address book (`smb_app_state_sync`) in the service's inbox, which the library's `InboxSink` records by default since roadmap L8 | record it now, readable by no route / record nothing until M3b exposes it | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: record nothing until M3b.** The pipeline builds its `InboxSink` with `meta-whatsapp-server-core`'s `inbound::INBOX_RECORDING`, the library's `RecordingSwitches::ALL` with `contacts(false)`: the `app_state_synced` events still reach their tenant, but no synced contact (names, phone numbers, BSUIDs) is stored where no route reads it and no tenant can ask for it to be erased. Swap: the constant; M3b turns it on with the routes that read the contacts. Decisive: `conformance::webhooks::an_address_book_change_reaches_its_tenant_and_no_inbox` (memory and Postgres backends). | M3 |
+| D45 | Who sends the codes of a tenant without OTP settings (D8's "the platform's number by default") | a deployment-wide sending number and template / a default OTP tenant whose own settings are borrowed / none: every tenant configures its own | **Proposed by roadmap M3c, the coordinator's to decide, swappable**: a default OTP tenant (`WA_SERVER_OTP_DEFAULT_TENANT`), whose settings name one of its own numbers; its number is opened for it, so a binding that moves never lends another tenant's token; the namespace stays the caller's. To swap: unset it (every tenant configures its own), or give the platform's tenant other settings | M3 |
+| D46 | The rate class of checking a code, which section 6 does not name | the read budget / the send budget / a class of its own | **Proposed by roadmap M3c, the coordinator's to decide, swappable**: a class of its own, `otp_verify`, 20/s with a burst of 20, beside `otp_issue` (5/s, a burst of 5, the design's); brute force stays bounded per recipient by the library's attempts and issue limit. To swap: `WA_SERVER_RATE_OTP_VERIFY` and its burst | M3 |
+| D47 | An OTP issue's idempotency fingerprint, whose body names a phone number | SHA-256 of the canonical input, as every other operation (D27) / keyed with the OTP pepper | **Proposed by roadmap M3c, the coordinator's to decide**: keyed, an HMAC-SHA256 under HMAC-SHA256(`WA_OTP_PEPPER`, `meta-whatsapp-server/otp-fingerprint/v1`), since section 6 keeps numbers only as keyed hashes; the label is a stored name pending the owner (architecture.md § Stable identifiers). Rotating the pepper makes a repeat within the TTL `422 idempotency_key_reused`, never a second code | M3 |
+| D48 | Where the admin sets a tenant's OTP settings | `PATCH /v1/admin/tenants/{id}` (section 4.2) / a resource of their own | **Proposed by roadmap M3c, the coordinator's to decide, swappable**: `GET`, `PUT`, `DELETE /v1/admin/tenants/{id}/otp`, replaced whole after their checks, so a tenant's read stays one row and `PATCH` keeps its fields; adding `otp` to `PATCH` later would be additive | M3 |
+| D49 | The purpose of an OTP request that names none | required / a default | **Proposed by roadmap M3c, the coordinator's to decide, swappable**: `login`; a purpose is hashed into the code's store key, so changing the default strands the codes in flight (10 minutes by default), nothing else | M3 |
 
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** The
 questions the service inherits were decided on 2026-09-26 under the same
@@ -1979,7 +2026,8 @@ delegation, each with its roadmap item: #5 (multi-WABA signups: opt-in,
 L11b and M3f), #8 (no token refresh: the service reports
 `reconnect_required`, and the expiry is surfaced before it lapses, L11e
 and M3e), #9 (vault key custody and cadence: rotation is one call, the
-cadence documented with M3a), #13 (the OTP issue limit, kept), #26 (the
+cadence documented with M3a), #13 (the OTP issue limit, kept; M3c
+keeps it on, never settable off over the API), #26 (the
 In-App Signup terms: an explicit, audited operator action, M5i), #30
 (dead-lettering a permanently failing event, L21a), #32 (calls reopen
 the inbox's window, L5 and L7), #45 (the max-price agreement: an

@@ -6,6 +6,7 @@
 //! | [`Templates::list`] | `GET /{waba_id}/message_templates?fields=name,language,status,category,components&limit=…[&status=…][&name=…][&after=…]`, cached per WABA ([`TemplateCache`]) |
 //! | [`Templates::get`] | `GET /{id}?fields=name`, then `GET /{waba_id}/message_templates?fields=…&name=…` (the id must be among them) |
 //! | [`Templates::create`] | `POST /{waba_id}/message_templates` |
+//! | [`Templates::create_authentication`] | `POST /{waba_id}/upsert_message_templates` (`templates/authentication-templates/bulk-management`: one authentication template in one or more languages, created or updated; roadmap M3c) |
 //! | [`Templates::delete`] | `DELETE /{waba_id}/message_templates?name=…`; with an id, `GET /{waba_id}/message_templates?fields=name&name=…` first (the id must be among them), then `…&hsm_id=…` |
 //!
 //! Pages: `templates/template-management`, `templates/overview`,
@@ -46,6 +47,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use meta_whatsapp_rs::Error;
+use meta_whatsapp_rs::client::authentication::{AuthenticationUpsert, OtpButton, SupportedApp};
 use meta_whatsapp_rs::client::templates::{
     TemplateCreated as Submitted, TemplateDefinition, TemplateInfo, TemplateListQuery,
     TemplateStatus,
@@ -158,6 +160,109 @@ impl From<Submitted> for TemplateCreated {
             id: created.id,
         }
     }
+}
+
+/// An authentication template's button (roadmap M3c): Meta's `otp_type`
+/// values the service creates. Zero-tap is not among them: creating one
+/// sets Meta's `zero_tap_terms_accepted`, an acceptance of the WhatsApp
+/// Business terms for zero-tap, a legal act the service does not take for
+/// a tenant (AGENTS.md, § Decisions: the owner's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OtpButtonType {
+    /// `copy_code`: the user copies the code.
+    CopyCode,
+    /// `one_tap`: Android apps (`supported_apps`) fill the code in.
+    OneTap,
+}
+
+/// An authentication template to create or update, as the request carried
+/// it (roadmap M3c): Meta's bulk management fields
+/// (`templates/authentication-templates/bulk-management`), its components'
+/// own fields flattened, each named as Meta names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticationRequest {
+    /// The template's name.
+    pub name: String,
+    /// Its languages: each is created, or updated when it exists.
+    pub languages: Vec<String>,
+    /// The button.
+    pub otp_type: OtpButtonType,
+    /// A one-tap button's Android apps, `(package_name, signature_hash)`,
+    /// 1 to 5; none for copy code.
+    pub supported_apps: Vec<(String, String)>,
+    /// The body's "For your security, do not share this code."
+    pub add_security_recommendation: Option<bool>,
+    /// The footer's "This code expires in N minutes.", 1 to 90.
+    pub code_expiration_minutes: Option<u32>,
+    /// The message's time to live: 30 to 900 seconds, or -1.
+    pub message_send_ttl_seconds: Option<i64>,
+}
+
+/// One language of an authentication template created or updated, as Meta
+/// answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticationTemplateCreated {
+    /// Template id.
+    pub id: TemplateId,
+    /// Its status, as Meta wrote it.
+    pub status: Option<String>,
+    /// Its language.
+    pub language: Option<String>,
+}
+
+/// The library's upsert of `request`, checked against every limit the
+/// docs state before any request.
+///
+/// # Errors
+///
+/// `422 invalid_request` on `name`, `languages`, `supported_apps`,
+/// `code_expiration_minutes` or `message_send_ttl_seconds` (the field the
+/// library's check names, as this request names it; `body` otherwise).
+pub fn authentication(
+    request: AuthenticationRequest,
+) -> Result<AuthenticationUpsert, ServiceError> {
+    template_name("name", &request.name)?;
+    if request.languages.is_empty() {
+        return Err(ServiceError::invalid("languages"));
+    }
+    let otp = match request.otp_type {
+        OtpButtonType::CopyCode if request.supported_apps.is_empty() => {
+            OtpButton::CopyCode { text: None }
+        }
+        OtpButtonType::CopyCode => return Err(ServiceError::invalid("supported_apps")),
+        OtpButtonType::OneTap => OtpButton::OneTap {
+            text: None,
+            autofill_text: None,
+            supported_apps: request
+                .supported_apps
+                .into_iter()
+                .map(|(package, hash)| SupportedApp::new(package, hash))
+                .collect(),
+        },
+    };
+    let upsert = AuthenticationUpsert {
+        name: request.name,
+        languages: request.languages,
+        otp,
+        add_security_recommendation: request.add_security_recommendation,
+        code_expiration_minutes: request.code_expiration_minutes,
+        message_send_ttl_seconds: request.message_send_ttl_seconds,
+    };
+    upsert.validate().map_err(|invalid| {
+        let field = invalid.field.as_str();
+        ServiceError::invalid(
+            [
+                "supported_apps",
+                "code_expiration_minutes",
+                "message_send_ttl_seconds",
+                "languages",
+            ]
+            .into_iter()
+            .find(|name| field.contains(name))
+            .unwrap_or(if field == "name" { "name" } else { "body" }),
+        )
+    })?;
+    Ok(upsert)
 }
 
 /// A list's filters, as the request carried them.
@@ -275,7 +380,7 @@ impl TemplateCache {
 
 /// A template name: `a-z 0-9 _`, at most 512 characters, else `422
 /// invalid_request` on `field`.
-fn template_name(field: &'static str, name: &str) -> Result<(), ServiceError> {
+pub(crate) fn template_name(field: &'static str, name: &str) -> Result<(), ServiceError> {
     let valid = !name.is_empty()
         && name.len() <= MAX_NAME_LEN
         && name
@@ -552,6 +657,41 @@ impl<'a> Templates<'a> {
         self.cache.invalidate(self.waba.waba_id());
         match created {
             Ok(created) => Ok(TemplateCreated::from(created)),
+            Err(error) => Err(self.failed(&error).await),
+        }
+    }
+
+    /// Create or update the authentication template `upsert` in each of
+    /// its languages (`POST /{waba_id}/upsert_message_templates`, the
+    /// library's `Authentication::upsert`; roadmap M3c). The WABA's cached
+    /// lists go, whatever Meta answers. Not replayed on a timeout: updating
+    /// an approved template counts against its edit limit.
+    ///
+    /// # Errors
+    ///
+    /// Meta's refusal or failure, with its `details` (`422
+    /// template_rejected`, `409 template_limit_reached`; a timeout
+    /// `may_have_been_sent`).
+    pub async fn create_authentication(
+        &self,
+        upsert: &AuthenticationUpsert,
+    ) -> Result<Vec<AuthenticationTemplateCreated>, ServiceError> {
+        let upserted = self
+            .waba
+            .client()
+            .authentication(self.waba.waba_id().clone())
+            .upsert(upsert)
+            .await;
+        self.cache.invalidate(self.waba.waba_id());
+        match upserted {
+            Ok(upserted) => Ok(upserted
+                .into_iter()
+                .map(|template| AuthenticationTemplateCreated {
+                    status: wire(template.status.as_ref()),
+                    id: template.id,
+                    language: template.language,
+                })
+                .collect()),
             Err(error) => Err(self.failed(&error).await),
         }
     }

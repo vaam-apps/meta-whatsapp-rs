@@ -39,6 +39,7 @@ use meta_whatsapp_rs::core::store::{KvStore, Retention};
 use meta_whatsapp_server_api_axum::api::internal_router;
 use meta_whatsapp_server_core::admin::mint;
 use meta_whatsapp_server_core::housekeeping;
+use meta_whatsapp_server_core::otp::{OtpDeployment, OtpKeys};
 use meta_whatsapp_server_http::api::public_router;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -271,6 +272,22 @@ fn warn_about(config: &Config) {
     }
 }
 
+/// OTP's settings (roadmap M3c): the configured pepper, which Postgres
+/// requires, else (memory storage, development only) a throwaway one: the
+/// codes live in memory and die with the process anyway.
+fn otp_deployment(
+    pepper: Option<OtpKeys>,
+    default_tenant: Option<crate::model::TenantId>,
+) -> anyhow::Result<OtpDeployment> {
+    let keys = if let Some(keys) = pepper {
+        keys
+    } else {
+        tracing::warn!("WA_OTP_PEPPER is not set: throwaway OTP pepper (development only)");
+        OtpKeys::throwaway()?
+    };
+    Ok(OtpDeployment::new(keys, default_tenant))
+}
+
 /// [`serve_until`] once the configuration's warnings are out, stopping on
 /// the future `signal` makes: made before the listeners are bound, so
 /// that [`shutdown_signal`]'s handlers are in place once they answer.
@@ -307,10 +324,13 @@ async fn run<S: Future<Output = ()>>(
         internal_bind,
         shutdown_grace,
         outbox_retention,
-        settings,
+        mut settings,
         move_rules,
+        otp_pepper,
+        otp_default_tenant,
         ..
     } = config;
+    settings.otp = Some(otp_deployment(otp_pepper, otp_default_tenant)?);
     let inbound = Inbound::new(app_secrets, verify_token)?.with_move_rules(move_rules);
     // The state and its grant: the internal listener's API adapter is
     // served with the grant, which no one else is given.

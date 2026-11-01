@@ -107,6 +107,7 @@ codes! {
     TENANT_EXISTS = ("tenant_exists", 409, "A tenant with this id exists."),
     IDEMPOTENCY_IN_PROGRESS = ("idempotency_in_progress", 409, "A request with this Idempotency-Key is still running."),
     OUTCOME_UNKNOWN = ("outcome_unknown", 409, "The outcome of the request with this Idempotency-Key is unknown: reconcile before retrying."),
+    OTP_NOT_CONFIGURED = ("otp_not_configured", 409, "No OTP sender is set up for this tenant, or its sending number is no longer the sender's own: the operator sets one."),
     // 403: not allowed, by Meta or the service.
     PERMISSION = ("permission", 403, "The token lacks a permission, or access to this asset."),
     ACCOUNT_RESTRICTED = ("account_restricted", 403, "The account is restricted for a policy violation."),
