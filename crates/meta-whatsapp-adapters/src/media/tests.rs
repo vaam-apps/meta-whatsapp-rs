@@ -545,8 +545,12 @@ fn a_gif_reaches_ffmpeg_without_its_metadata_and_nothing_after_its_trailer() {
             gif_application(b"XMP DataXMP", &[b'x'; 600]),
             gif_extension(0x01, &[0; 12]),
             gif_application(b"ICCRGBG1012", &[7; 300]),
+            // Superseded by the next one, which is the frame's.
+            gif_delay(70),
             gif_delay(20),
             gif_frame(),
+            // No frame after it.
+            gif_delay(30),
             GIF_TRAILER.to_vec(),
             // After the trailer: another GIF's blocks, then anything.
             gif_extension(0xFE, b"after the end"),

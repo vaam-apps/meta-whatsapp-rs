@@ -208,20 +208,24 @@ pub(super) fn accepted(data: &[u8]) -> bool {
 const GIF_TRUNCATED: &str = "a GIF whose blocks stop before its trailer (a truncated file)";
 
 /// The extension kept: the graphic control extension (`0xF9`), which
-/// carries a frame's delay, transparency and disposal. Every other one is
-/// taken out: comments (`0xFE`), plain text (`0x01`) and application
-/// extensions (`0xFF`: the loop count, XMP, an ICC profile).
+/// carries a frame's delay, transparency and disposal, the last one
+/// before each image only (`ffmpeg` 6.1 held 64 MB of them, given in a
+/// row, as one 169 MB packet). Every other one is taken out: comments
+/// (`0xFE`), plain text (`0x01`) and application extensions (`0xFF`: the
+/// loop count, XMP, an ICC profile).
 const GRAPHIC_CONTROL: u8 = 0xF9;
 
 /// What `ffmpeg` is given of an accepted GIF: walked block by block from
 /// its header to its trailer (`0x3B`), with its header, colour tables,
-/// graphic control extensions and images, without any other extension
-/// and without anything after the trailer; the same bytes uncopied when
-/// there is nothing to take out. Refused, in words: a GIF cut short of
-/// its trailer, a block it does not know, a graphic control extension of
-/// the wrong size, a canvas of no pixels or over [`MAX_PIXELS`], fewer
-/// than two frames (no animation), more than [`MAX_FRAMES`], or longer
-/// than [`MAX_DURATION_CS`] (each frame for its delay, or
+/// images and, before each image, the last graphic control extension
+/// given for it (the one that counts, for `ffmpeg` as for a browser),
+/// without any other extension and without anything after the trailer;
+/// the same bytes uncopied when there is nothing to take out. Refused,
+/// in words: a GIF cut short of its trailer, a block it does not know, a
+/// graphic control extension of the wrong size, a canvas of no pixels or
+/// over [`MAX_PIXELS`], fewer than two frames (no animation), more than
+/// [`MAX_FRAMES`], or longer than
+/// [`MAX_DURATION_CS`] (each frame for its delay, or
 /// [`DEFAULT_DELAY_CS`] when it gives none or one under
 /// [`MIN_DELAY_CS`]).
 pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
@@ -243,8 +247,9 @@ pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
     kept.push(0..at);
     let mut frames = 0usize;
     let mut duration = 0u64;
-    // The delay the next image was given, by the extension before it.
-    let mut delay: Option<u16> = None;
+    // The last graphic control extension since the last image, and the
+    // delay it gives: kept, and counted, only when an image follows.
+    let mut control: Option<(Range<usize>, u16)> = None;
     loop {
         match data.get(at) {
             // Extension: its label, then sub-blocks.
@@ -257,8 +262,7 @@ pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
                     if block[0] != 4 || end != at + 8 {
                         return Err("a GIF graphic control extension of the wrong size");
                     }
-                    delay = Some(u16::from_le_bytes([block[2], block[3]]));
-                    image::keep(&mut kept, at..end);
+                    control = Some((at..end, u16::from_le_bytes([block[2], block[3]])));
                 }
                 at = end;
             }
@@ -269,12 +273,19 @@ pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
                 let code_size = at + 10 + colour_table(descriptor[8]);
                 data.get(code_size).ok_or(GIF_TRUNCATED)?;
                 let end = sub_blocks(data, code_size + 1)?;
+                let delay = match control.take() {
+                    Some((range, delay)) => {
+                        image::keep(&mut kept, range);
+                        Some(delay)
+                    }
+                    None => None,
+                };
                 image::keep(&mut kept, at..end);
                 frames += 1;
                 if frames > MAX_FRAMES {
                     return Err("an animation of more than 500 frames");
                 }
-                duration += match delay.take() {
+                duration += match delay {
                     Some(given) if given >= MIN_DELAY_CS => u64::from(given),
                     _ => DEFAULT_DELAY_CS,
                 };

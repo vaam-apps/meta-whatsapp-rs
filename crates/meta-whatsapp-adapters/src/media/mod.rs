@@ -169,13 +169,15 @@
 //!
 //! `ffmpeg` gets the GIF without its comments, plain text and
 //! application extensions (a loop count, XMP, an ICC profile) and without
-//! anything after its trailer: only its header, colour tables, graphic
-//! control extensions (each frame's delay, transparency and disposal) and
-//! images. None of them is compressed, so unlike a PNG's text none can
-//! inflate, but `ffmpeg` 6.1 holds them all in memory with the first
-//! frame (60 MB of comments took it 162 MB, where the same GIF without
-//! them takes 51 MB), and they carry personal data. Each attempt runs
-//! these arguments, the filter and the encoder from a fixed table:
+//! anything after its trailer: only its header, colour tables, images
+//! and, before each image, the last graphic control extension given for
+//! it (its delay, transparency and disposal). None of them is compressed,
+//! so unlike a PNG's text none can inflate, but `ffmpeg` 6.1 holds them
+//! all in memory with the first frame (60 MB of comments took it 162 MB,
+//! where the same GIF without them takes 51 MB; 64 MB of graphic control
+//! extensions in a row, 169 MB), and they carry personal data. Each
+//! attempt runs these arguments, the filter and the encoder from a fixed
+//! table:
 //!
 //! ```text
 //! ffmpeg -hide_banner -nostdin -nostats -loglevel error
