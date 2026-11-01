@@ -217,6 +217,30 @@ stored data, the owner's).
 
 ### Added
 
+- **Media conversion** (roadmap L19, parity row 48, from
+  `business-phone-numbers/media` and `messages/audio-messages`):
+  `meta_whatsapp_client::media::MediaConverter`, an object-safe async
+  trait (`convert(MediaInput, TargetFormat) -> Result<ConvertedMedia>`),
+  and `TargetFormat::OggOpus`, a voice message's mono Ogg Opus, uploaded
+  as `audio/ogg` (`mime_type`, `extension`, `kind`, `max_bytes`);
+  `MediaInput` and `ConvertedMedia` show only their length in `Debug`.
+  `meta_whatsapp_adapters::media::FfmpegConverter` implements it behind
+  a new `ffmpeg` feature of the adapters and the facade (off by default;
+  in `full`): it runs an `ffmpeg` you install (`with_program`, else
+  `ffmpeg` on `PATH`) with fixed arguments, the input on stdin and the
+  result on stdout, its input protocols restricted to the pipe and its
+  input formats to recording formats, bounded in input
+  (`with_max_input_bytes`, 64 MiB), output (the 16 MB upload limit) and
+  time (`with_timeout`, 60 s; killed past it), its stderr withheld, the
+  result checked to be mono Ogg Opus; `check()` finds a missing binary or
+  libopus at startup. A missing `ffmpeg` is `Error::Config`, unreadable
+  input `Error::Validation` on `input`, a timeout
+  `TransportError::Timeout`. Nothing is linked, and the service's image
+  gains no `ffmpeg`. Images into stickers and resizing are not
+  converted. For contributors: the real-`ffmpeg` tests
+  (`crates/meta-whatsapp-adapters/tests/ffmpeg.rs`) skip without one
+  unless `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`; `META_WHATSAPP_RS_TEST_FFMPEG`
+  names the binary.
 - **Call recording and transcription** (`meta_whatsapp_client::calling`,
   roadmap L14, parity row 135, from `calling/call-recording` and
   `calling/call-transcription`): the per-call `recording` and

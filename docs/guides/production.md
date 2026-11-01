@@ -432,6 +432,18 @@ notification queue on top must be idempotent itself: tag each message with
     recorded before an upgrade stay as they were written (synced history
     recorded before 6d50701 keeps the unread count and window it moved,
     for instance).
+- **Media conversion** (feature `ffmpeg`, off by default): Meta converts
+  nothing, so a recording becomes a voice message's Ogg Opus on your
+  side. `meta_whatsapp_adapters::media::FfmpegConverter` runs an
+  `ffmpeg` you install on the host (built with libopus; the library
+  links none, and the service's image carries none, so its licence is
+  that of the build you choose). Point `with_program` at an absolute
+  path, call `check()` at startup so a missing binary is a configuration
+  error before the first upload, and bound how many conversions run at
+  once (each is a process on a CPU core; the converter queues nothing).
+  Its input and run time are bounded (64 MiB and 60 s by default), the
+  result to the 16 MB upload limit, and `ffmpeg`'s own diagnostics are
+  never logged: they name files and URLs.
 
 ## 8. Retention and erasure on Postgres
 

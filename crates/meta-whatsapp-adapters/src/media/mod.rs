@@ -1,6 +1,5 @@
 //! Media conversion over an `ffmpeg` the integrator installs (feature
-//! `ffmpeg`): [`FfmpegConverter`], a
-//! [`MediaConverter`](meta_whatsapp_client::media::MediaConverter).
+//! `ffmpeg`): [`FfmpegConverter`], a [`MediaConverter`].
 //!
 //! Nothing is linked or bundled. The converter starts the `ffmpeg`
 //! binary as a child process, feeds it the input on stdin and reads the
@@ -57,7 +56,8 @@
 //! failed (the exit status, a bound) and nothing of the input. Dropping
 //! a conversion in flight kills its process. Conversions are not
 //! queued: bound how many run at once yourself (each one is a process
-//! using a CPU core).
+//! using a CPU core). Run it on a tokio runtime with I/O enabled (what
+//! `#[tokio::main]` builds): child processes need tokio's I/O driver.
 //!
 //! ```no_run
 //! # async fn demo(wav: Vec<u8>) -> meta_whatsapp_core::Result<()> {
@@ -313,7 +313,7 @@ impl FfmpegConverter {
                 }
                 Ok::<(), Error>(())
             };
-            let ((), out, ()) = tokio::try_join!(feed, collect, drain)?;
+            let ((), out, ()) = futures::try_join!(feed, collect, drain)?;
             let status = child
                 .wait()
                 .await

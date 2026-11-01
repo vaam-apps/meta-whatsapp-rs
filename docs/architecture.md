@@ -55,8 +55,11 @@ outside integrator would; no library crate depends on a service crate;
 other or on `meta-whatsapp-adapters` (except as a dev-dependency for
 tests); `meta-whatsapp-bot` sits above both and depends on core, client
 and webhooks only, never on the adapters (dev-dependency aside) or the
-facade, which re-exports it behind its `bot` feature. An adapter never
-leaks its library's types through a port.
+facade, which re-exports it behind its `bot` feature;
+`meta-whatsapp-adapters` depends on `meta-whatsapp-client` only behind
+its `ffmpeg` feature, for the one trait it implements that is not
+core's (`media::MediaConverter`, roadmap L19). An adapter never leaks
+its library's types through a port.
 
 ## Ports (`meta-whatsapp-core`)
 
@@ -901,6 +904,18 @@ Logs carry sizes, digests and field names only — never payload values.
   redacts or deletes are the number's, so the number lock covers them;
   `set_thread_owner` and `put_contact` one upsert
   whose update applies only when the stored record is not later.
+- `media::FfmpegConverter` (feature `ffmpeg`): `meta-whatsapp-client`'s
+  `media::MediaConverter` over an `ffmpeg` binary the integrator
+  installs, run with `tokio::process` (no shell) and fixed literal
+  arguments; nothing is linked. The input goes on stdin and the result
+  comes from stdout (no file); `-protocol_whitelist pipe` and a
+  `-format_whitelist` of recording formats keep a crafted input from
+  making ffmpeg open a file or a URL; input, output (the upload limit)
+  and run time are bounded, the process killed past the last two; its
+  stderr is drained and never kept (it names files); the output is
+  checked to be mono Ogg Opus. Errors use existing leaves: a missing
+  binary is `ConfigError`, input refused a `ValidationError` on
+  `input`, a timeout `TransportError::Timeout`.
 - `store::RedisKvStore` (feature `redis`; CAS via Lua). Requires the
   `noeviction` policy: every key with a TTL here enforces a limit (OTP
   issue logs, dedup markers), and Redis evicts silently.
