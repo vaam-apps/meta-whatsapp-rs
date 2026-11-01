@@ -1945,7 +1945,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **After:** nothing.
   - **Decisive:** exact JSON per endpoint; a pre-verified phone id is
     checked as digits before any request.
-- [ ] **L11d. The coexistence sync inside onboarding**
+- [x] **L11d. The coexistence sync inside onboarding**
   (`client::embedded_signup`; OPEN_QUESTIONS #7): a step right after a
   coexistence onboarding, on by default, that an option turns off. The
   library already carries the sync call
@@ -1957,6 +1957,71 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a coexistence onboarding requests the sync exactly
     once; with the option off, none; an onboarding without coexistence
     sends none.
+  - **Landed:** two steps, not one, because Meta's page has two
+    once-only calls: `steps::SYNC_CONTACTS` (`sync_contacts`,
+    `sync_type` `smb_app_state_sync`) then `steps::SYNC_HISTORY`
+    (`sync_history`, `history`), the last of the tail shared by
+    `onboard`, `onboard_hosted` (whose `for_hosted` request names no
+    finish, so it never reaches them) and `resume`, after `subscribe_app` and
+    a Solution Partner's credit line (Meta's order:
+    `onboarding-business-app-users` starts the sync once the
+    onboarding steps are done). They run for a coexistence
+    `finish_kind` unless `OnboardingRequest::coexistence_sync(false)`;
+    Meta's answers are `Onboarded::coexistence_sync`
+    (`CoexistenceSync`, `SyncOutcome`). Meta refuses a second request
+    (`2593107`) and a late one (`2593108`), and documents no way to
+    read whether one was made, so each request is claimed in a record
+    before it is posted (`COEXISTENCE_NAMESPACE`, `wa.es.coexistence`,
+    keyed by phone number, scoped to the stored token record so that a
+    new signup syncs again; a new stored identifier, pending the
+    owner's confirmation) and `resume` never posts one that was
+    accepted, refused, or whose answer was lost; a Meta refusal is
+    reported as `SyncOutcome::Refused`, not as a failure. The decisive
+    tests, in `embedded_signup::onboard`:
+    `coexistence_resolves_the_number_and_never_registers` (each request
+    once, exact path, bearer and body, after the subscription),
+    `with_the_option_off_no_sync_is_requested`,
+    `an_onboarding_without_coexistence_sends_no_sync` (the Cloud API and
+    WABA-only flows, `for_resume` and `for_hosted`); with
+    `a_resume_never_requests_an_accepted_sync_again` (on a clock off the
+    whole second: the record keeps the vault's seconds),
+    `resume_after_a_refused_request_asks_only_for_what_is_missing`,
+    `a_timed_out_sync_is_never_replayed` (retries on, then `resume`),
+    `a_sync_meta_refuses_is_reported_and_not_asked_again`,
+    `a_new_onboarding_of_the_number_syncs_again` (one second later: the
+    scope's precision), `the_sync_record_is_pinned`; and, from the
+    review, `a_claim_lost_to_a_concurrent_attempt_posts_nothing` (both
+    the `put_if_absent` and the `compare_and_swap` claim),
+    `an_answer_is_never_recorded_over_a_later_onboarding`,
+    `a_resume_never_takes_over_a_later_onboardings_record` and
+    `a_4xx_releases_the_claim_and_a_5xx_keeps_it` (a 409 releases, a
+    500 with a Graph body keeps). Hosted signup syncs nothing: Meta's
+    hosted page onboards to Cloud API only. M3b builds on the steps
+    rather than calling `smb_app_data` itself (OPEN_QUESTIONS #7).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): the record is
+    `wa.es.coexistence`, keyed by phone number id, plain JSON of layout
+    `v` 1 (the WABA, the token record's `created_at` in seconds, a
+    `pending`, `requested` or `refused` slot per request), its namespace
+    and layout still **pending the owner's confirmation before the first
+    release** (`docs/architecture.md` § Stable identifiers, § Owner
+    touchpoints); two steps, two names (`sync_contacts`,
+    `sync_history`), as Meta has two once-only calls; placed after the
+    credit-line steps, in Meta's order (the sync begins once onboarding
+    is done), at the cost that a failure before them holds them back
+    within Meta's 24 hours (the guide says so); Meta's refusals
+    (`SyncNotAllowed`: `2593107`, `2593108`) reported as
+    `SyncOutcome::Refused`, not as a failure; a failure releases its
+    claim only when `!may_have_been_sent()` (a 4xx: Meta's errors page
+    gives codes, not statuses, for this endpoint); a lost answer, or a
+    process stopped between claim and answer, keeps the claim, and the
+    way out is manual and documented (check the webhooks, resume with
+    the sync off, ask again yourself: Meta refuses a repeat), a call
+    that clears a pending claim being **a follow-up, not scheduled**;
+    the option is `OnboardingRequest::coexistence_sync(bool)`, on by
+    default, and the record never expires; M3b builds on these steps
+    (OPEN_QUESTIONS #7, confirmed). Swappable by the option (and by
+    `PhoneNumber::sync_smb_app_data` called yourself).
 - [x] **L11e. A token-expiry signal** (`client::embedded_signup`; row 6;
   OPEN_QUESTIONS #8): a configurable lead time before a stored business
   token's `expires_at`.
@@ -2268,7 +2333,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `TargetRole` and `ThreadControlResponse` only, not on `Pass`, a
     request type (OPEN_QUESTIONS #28); and L15a kept as its own item,
     with row 139 partial until it lands.
-- [ ] **L15a. The Routing Roles API** (`meta-whatsapp-client`, next to
+- [x] **L15a. The Routing Roles API** (`meta-whatsapp-client`, next to
   `client::thread_control`; row 139): `GET
   /{phone-number-id}/routing_roles`, the roles the caller's business
   holds on a number (`roles`, `is_standby`), which say which thread
@@ -2279,6 +2344,48 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** exact response JSON from
     `conversation-routing/routing-roles` (both examples, the empty
     `roles` among them).
+  - **Landed:** `ThreadControl::routing_roles()` on
+    `client.thread_control(phone_number_id)`, a `GET
+    /{phone-number-id}/routing_roles` with no query and no body,
+    answering `RoutingRoles` (`roles: Vec<RoutingRole>`, `is_standby:
+    bool`, and `RoutingRoles::holds`, which compares wire names).
+    `RoutingRole` is the page's six values (`calls`, `ctwa`,
+    `customer_service`, `escalation`, `marketing`, `utility`) with
+    `Other(String)` keeping any other verbatim, `ai_agent` among them
+    (the page: never returned to a partner). Row 139 is done for the
+    library; the service's side stays M2d and M5l. Decisive tests
+    (`thread_control::tests`): both of the page's responses as exact
+    JSON, with the request's method, path, absent query and body, and
+    token (`routing_roles_match_docs_example`,
+    `empty_routing_roles_match_docs_example`: an empty `roles` is a
+    success), every role's wire name (`every_routing_role_has_its_wire_name`),
+    a response missing either field refused
+    (`routing_roles_tolerate_new_fields_and_require_both`), the page's
+    two errors, both code `100`, as `ErrorKind::InvalidParameter`
+    (`routing_not_enabled_is_an_invalid_parameter`,
+    `an_unreadable_number_is_an_invalid_parameter`: no kind of their
+    own, which would be a core change and could not split one code), a
+    retry after a timeout (`routing_roles_are_retried_after_a_timeout`)
+    and the id kept one segment. Mutated by hand: the path segment, GET
+    to POST, either field's name, a default on either field, `calls`'s
+    wire name, refusing an empty `roles`, `holds` by equality, and the
+    catch-all removed; each fails a test.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable as noted): a
+    method on `ThreadControl` rather than a module and accessor of its
+    own (`client.routing_roles(id)` would be an additive accessor);
+    `RoutingRole` its own enum, not `TargetRole` (`calls` is no pass
+    target, `ai_agent` never a held role; a conversion between the two
+    is additive), with `#[non_exhaustive]` and the `Other(String)`
+    catch-all like `TargetRole`; both fields required, with no serde
+    default (the page says both are always present, and a default would
+    read as "no role" or "not standby"; relaxing it is a one-line
+    change); `roles` a `Vec` in Meta's order rather than a set (the
+    page calls it unordered; `holds` is the set test); the read retried
+    as every GET is; no local cache or rate limiting (Meta rate limits
+    the endpoint per number and per app and asks for periodic reads:
+    the caller schedules them); M5l, not this item, decides whether
+    the service exposes the roles.
 - [x] **L16a. The Messaging Account a send bills**
   (`meta-whatsapp-client`, `client::messages`; row 140). Meta's account
   model evolution (`account-model-evolution`) is generally available
@@ -3454,7 +3561,9 @@ everything else goes into the parity-completion report.
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
   with their keys' derivations and their records' shapes, added and
-  awaiting confirmation before the first release; and L21a's
+  awaiting confirmation before the first release; L11d's
+  `wa.es.coexistence` and its record layout, added and awaiting
+  confirmation; and L21a's
   `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
   keys' derivations and their records' shapes, added and awaiting
   confirmation before the first release), for the same reason as L5's.
