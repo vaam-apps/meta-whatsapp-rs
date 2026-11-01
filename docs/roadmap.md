@@ -1725,7 +1725,7 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     owner** (stable identifiers, before the first release): the five
     namespaces, their keys' derivations and their records' layouts
     (architecture.md § Stable identifiers, § Owner touchpoints below).
-- [ ] **B3b. A `JobStore` trait** (`meta-whatsapp-bot`; D29): the job
+- [x] **B3b. A `JobStore` trait** (`meta-whatsapp-bot`; D29): the job
   store's operations (schedule, cancel, re-run, get, the 131049
   feedback, and the runner's claim, markers and due index) behind a
   trait the runner takes, `KvJobs` its default, so a job queue of the
@@ -1733,6 +1733,82 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
   - **After:** B3.
   - **Decisive:** `KvJobs` implements it, and a second, in-memory
     implementation passes the same job suite.
+  - **Landed:** `JobStore` (module `jobs`), object-safe, the runner
+    holding an `Arc<dyn JobStore>` (`JobRunner::builder` takes any
+    `impl JobStore`, `JobRunner::builder_shared` an `Arc`; `Arc<T>`
+    forwards): `schedule`, `cancel`, `rerun`, `get`, the `131049`
+    feedback (`limit_message`, `observe` provided on top of it), and the
+    runner's steps: `claim_due` (the store claims each due job and hands
+    it, a `JobClaim`, to a `ClaimHandler`, the runner's pass, whose
+    `JobEnd` tells `KvJobs`'s due index whether to keep the minute),
+    `hold` (the claim still holds, renewed at half the lease),
+    `check_run` (the run unchanged, not cancelled), `recipient` (a
+    `RecipientMark`), `mark_sending`, `mark_outcome` (a `SendRecord`),
+    `unmark`, `limit_recipient`, `settle`, `retry` (each
+    `Option<JobHalt>`); `clock`, the time jobs are due and leases
+    expire by. Its rustdoc is the contract under concurrency (claims
+    atomic under a lease, a claim checked on every write, markers
+    created atomically and durably before the send and only their
+    runner's to complete or remove, a "sending" nobody completed an
+    outcome unknown, cancels winning or losing whole, the skip per job,
+    each job handed over once a call and no lock held while it sends).
+    `KvJobs` implements it with B3's code moved behind the trait (the
+    runner's cursor, claim, marker and settle steps now `KvJobs`'s; the
+    records, keys and namespaces unchanged). `MemoryJobs`, in memory
+    behind one mutex, independent of `KvStore`, is the second
+    implementation. `jobs::conformance::run` is the job suite, 24
+    checks: B3's tests that do not depend on `KvStore` (moved out of
+    `crates/meta-whatsapp-bot/tests/jobs.rs`, names kept) plus two
+    races (two to five runners on one job, four on twenty, interleaved
+    at every call they make to the store), a runner ticking during
+    another's send, a retry within a tick, and each method on its own
+    (`markers_are_exclusive_and_their_runners`,
+    `a_claim_is_checked_on_every_write`). In `tests/jobs.rs`:
+    `kv_jobs_pass_the_job_suite`, `memory_jobs_pass_the_job_suite` (the
+    decisive pair), `kv_jobs_pass_the_job_suite_raced_inside_the_store`
+    (on a `KvStore` that yields at every call: replacing the claim's
+    compare-and-swap by a plain put fails it, as it fails
+    `two_runners_on_one_store_send_a_due_job_once`), and
+    `runners_on_threads_send_each_recipient_once` (six runners on four
+    threads, twenty rounds, both stores); `KvJobs`'s own tests (the due
+    index, unreadable records, a failing store, the restart on one
+    `KvStore`) stay. Mutations of `MemoryJobs`, each failing the suite:
+    the claim checked, then an `.await`, then written
+    (`two_runners_racing_one_job_send_it_once`); the same without the
+    `.await` (only the threaded test, in three runs of four: the suite
+    runs on one task); no "sending" marker before the request
+    (`a_resumed_broadcast_never_resends_a_recipient_recorded_as_sent`),
+    a marker created over an existing one
+    (`a_runner_whose_lease_expired_mid_send_never_sends_after_the_new_claim`),
+    the `131049` skip ignored, or extended by a redelivery
+    (`a_131049_status_makes_a_rerun_within_24_hours_skip_that_recipient`),
+    the lease ignored, `check_run` blind to the run
+    (`a_send_checked_before_a_cancel_and_a_rerun_is_not_made`) or to a
+    cancel (`a_cancel_racing_a_claim_sends_nothing`), `hold` never
+    renewing (`a_long_marker_scan_keeps_the_lease`), `settle` not
+    checking the claim; and of the runner, the request made before the
+    marker. Not in it: a suite for a store on a clock of its own (a
+    database's `now()`: the suite moves a `ManualClock`), and
+    durability across processes (a restart in the suite is a new
+    runner on the same store value).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; design D29's amendment closed; each
+    swappable by implementing the trait): the trait object-safe
+    and held as `Arc<dyn JobStore>` (not a generic `JobRunner<S>`);
+    claims through a callback (`claim_due` with a `ClaimHandler`)
+    rather than a list of due ids and a `claim(id)`, which keeps
+    `KvJobs`'s cursor logic whole and fits a `FOR UPDATE SKIP LOCKED`
+    loop; recipients addressed by their index into the claimed job;
+    the store owning time (`JobStore::clock`) and the lease's
+    half-renewal rule written into `hold`'s contract; `KvJobs`
+    re-reading a marker before completing or removing it (one more
+    `KvStore` read per send) rather than carrying the marker's version
+    through the trait; the operations moved off `KvJobs` onto the trait
+    (callers import `JobStore`) rather than kept as inherent twins;
+    `MemoryJobs` public, nothing expiring in it but the `131049` skips
+    and the message ids; the suite in the library, always compiled, as
+    the adapters' `KvStore` suite is; design D29's amendment ("until
+    B3b") to be closed.
 - [x] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
   age and a cap per chat, through `ConversationStore`'s erasure.
   - **After:** B1, L5.

@@ -13,21 +13,17 @@ use async_trait::async_trait;
 use futures::future::{Either, select};
 use meta_whatsapp_client::messages::{OutboundMessage, SendResponse};
 use meta_whatsapp_client::{Client, RetryPolicy};
-use meta_whatsapp_core::error::{ConfigError, StorageError, ValidationError};
+use meta_whatsapp_core::clock::Clock;
+use meta_whatsapp_core::error::{ConfigError, ValidationError};
 use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
 use meta_whatsapp_core::recipient::Recipient;
-use meta_whatsapp_core::store::{Expiry, StoreKey};
 use meta_whatsapp_core::{Error, Result};
 use time::OffsetDateTime;
 
-use super::store::{
-    CAS_ATTEMPTS, Cursor, JobRead, JobRecord, Lease, Limited, Marker, MarkerState, MessageRecord,
-    Page, StoredState, VERSION, decode, encode, read_job_record,
-};
+use super::port::{ClaimHandler, Holding, JobClaim, JobHalt, JobStore, RecipientMark, SendRecord};
+use super::store::duration_ms;
 use super::{
-    BUCKET_SECONDS, JOBS_LIMITED_NAMESPACE, JobId, JobSummary, KvJobs, MARKETING_LIMIT_WAIT,
-    ScheduledJob, bucket_of, cursor_key, instant, is_marketing_limit, job_key, limited_digest,
-    marker_key, message_key, millis, page_key, recipient_key,
+    JobId, JobState, JobSummary, ScheduledJob, instant, is_marketing_limit, millis, recipient_key,
 };
 use crate::broadcast::{
     Backoff, Broadcast, BroadcastHandle, BroadcastPolicy, RecipientReport, ReportSink,
@@ -83,11 +79,12 @@ pub enum JobEnd {
     LeaseLost,
 }
 
-/// Claims due jobs from a [`KvJobs`] and sends them. Build one per
+/// Claims due jobs from a [`JobStore`] and sends them. Build one per
 /// process ([`Self::builder`]); any number of runners share one store.
 /// See the [module docs](super).
 pub struct JobRunner {
-    jobs: KvJobs,
+    jobs: Arc<dyn JobStore>,
+    clock: Arc<dyn Clock>,
     outbound: Arc<dyn Outbound>,
     pacer: Pacer,
     compose: Arc<Composer>,
@@ -111,16 +108,37 @@ impl fmt::Debug for JobRunner {
     }
 }
 
-/// A page of a bucket as read: its version (`None`: the first page
-/// missing, where the bucket ends) and its ids.
-struct ReadPage {
-    version: Option<u64>,
-    ids: Vec<String>,
+/// A tick's handler of the jobs the store claims: runs each, and keeps
+/// its line.
+struct Tick<'a> {
+    runner: &'a JobRunner,
+    report: TickReport,
+}
+
+#[async_trait]
+impl ClaimHandler for Tick<'_> {
+    async fn run(&mut self, claim: JobClaim) -> Result<JobEnd> {
+        let (id, run) = (claim.job.id.clone(), claim.job.run);
+        tracing::debug!(run, claim = claim.number, "job claimed");
+        let ended = self.runner.execute(claim).await?;
+        self.report.runs.push(JobRun {
+            id,
+            run,
+            ended: ended.clone(),
+        });
+        Ok(ended)
+    }
 }
 
 impl JobRunner {
-    /// Start building a runner of `jobs`.
-    pub fn builder(jobs: KvJobs) -> JobRunnerBuilder {
+    /// Start building a runner of `jobs` ([`KvJobs`](super::KvJobs),
+    /// [`MemoryJobs`](super::MemoryJobs), or a [`JobStore`] of yours).
+    pub fn builder(jobs: impl JobStore) -> JobRunnerBuilder {
+        JobRunnerBuilder::new(Arc::new(jobs))
+    }
+
+    /// Start building a runner of a store shared with other code.
+    pub fn builder_shared(jobs: Arc<dyn JobStore>) -> JobRunnerBuilder {
         JobRunnerBuilder::new(jobs)
     }
 
@@ -129,51 +147,20 @@ impl JobRunner {
         &self.id
     }
 
-    /// Claim and run every job due, from the oldest minute that may still
-    /// hold one up to now, one job after the other; each job's sends run
+    /// Claim and run every job due ([`JobStore::claim_due`]: for
+    /// [`KvJobs`](super::KvJobs), from the oldest minute that may still
+    /// hold one up to now), one job after the other; each job's sends run
     /// [`JobRunnerBuilder::concurrency`] at a time. A store error ends the
     /// tick (a job claimed stays claimed until its lease expires, then any
     /// runner resumes it). Dropping the future mid-send leaves that
     /// recipient's outcome unknown: stop with [`Self::run_until`] instead.
     pub async fn tick(&self) -> Result<TickReport> {
-        let mut report = TickReport::default();
-        let key = cursor_key();
-        let Some(mut found) = self.jobs.kv.get(&key).await? else {
-            return Ok(report);
+        let mut tick = Tick {
+            runner: self,
+            report: TickReport::default(),
         };
-        let mut cursor: Cursor = decode(&key, &found.value)?;
-        if let Some(behind) = &cursor.behind {
-            // The second read of the bucket the cursor was last moved
-            // past, in case the runner that moved it failed before its own.
-            let previous = cursor.bucket.saturating_sub(BUCKET_SECONDS);
-            if versions(&self.read_bucket(previous).await?) != *behind {
-                self.jobs.lower_cursor(previous).await?;
-                let Some(again) = self.jobs.kv.get(&key).await? else {
-                    return Ok(report);
-                };
-                cursor = decode(&key, &again.value)?;
-                found = again;
-            }
-        }
-        // The cursor's version while this tick may still move it forward.
-        let mut held = Some(found.version);
-        let last = bucket_of(millis(self.jobs.clock.now()));
-        let mut bucket = cursor.bucket;
-        while bucket <= last {
-            let pages = self.read_bucket(bucket).await?;
-            let mut settled = true;
-            for id in pages.iter().flat_map(|page| page.ids.iter()) {
-                if !self.process(id, bucket, &mut report).await? {
-                    settled = false;
-                }
-            }
-            held = match held {
-                Some(version) if settled => self.advance(version, bucket, &pages).await?,
-                _ => None,
-            };
-            bucket = bucket.saturating_add(BUCKET_SECONDS);
-        }
-        Ok(report)
+        self.jobs.claim_due(&self.id, self.lease, &mut tick).await?;
+        Ok(tick.report)
     }
 
     /// [`Self::tick`], then wait `every` on the pacer's timer, until `stop`
@@ -201,214 +188,58 @@ impl JobRunner {
         }
     }
 
-    async fn read_bucket(&self, bucket: i64) -> Result<Vec<ReadPage>> {
-        let mut pages = Vec::new();
-        let mut page = 0usize;
-        loop {
-            let key = page_key(bucket, page);
-            let Some(found) = self.jobs.kv.get(&key).await? else {
-                pages.push(ReadPage {
-                    version: None,
-                    ids: Vec::new(),
-                });
-                return Ok(pages);
-            };
-            let read: Page = decode(&key, &found.value)?;
-            pages.push(ReadPage {
-                version: Some(found.version),
-                ids: read.ids,
-            });
-            page += 1;
-        }
-    }
-
-    /// Move the cursor past `bucket`, every job of which is settled; then
-    /// read the bucket again, and move the cursor back if a job was indexed
-    /// into it meanwhile (by a writer that read the cursor before it
-    /// moved). The cursor keeps the pages' versions as read before it
-    /// moved, so a runner that fails before that second read leaves it to
-    /// the next tick (`Cursor::behind`). The cursor's new version, or
-    /// `None` when this tick no longer moves it.
-    async fn advance(&self, version: u64, bucket: i64, pages: &[ReadPage]) -> Result<Option<u64>> {
-        let key = cursor_key();
-        let next = Cursor {
-            v: VERSION,
-            bucket: bucket.saturating_add(BUCKET_SECONDS),
-            behind: Some(versions(pages)),
-        };
-        let Some(moved) = self
-            .jobs
-            .kv
-            .compare_and_swap(&key, version, Some(encode(&key, &next)?), Expiry::Never)
-            .await?
-        else {
-            return Ok(None);
-        };
-        let again = self.read_bucket(bucket).await?;
-        if versions(&again) != versions(pages) {
-            self.jobs.lower_cursor(bucket).await?;
-            return Ok(None);
-        }
-        Ok(Some(moved))
-    }
-
-    /// The job `id` met in `bucket`: claimed and run when due. Whether it
-    /// is settled as far as this bucket goes.
-    async fn process(&self, id: &str, bucket: i64, report: &mut TickReport) -> Result<bool> {
-        let key = job_key(id);
-        let Some(found) = self.jobs.kv.get(&key).await? else {
-            return Ok(true);
-        };
-        let (record, version) = match read_job_record(&key, &found) {
-            JobRead::Record(record, version) => (*record, version),
-            // A later release's: its runners run it.
-            JobRead::Newer => return Ok(false),
-            JobRead::Corrupt(_) => {
-                // Not the error itself: serde's message may quote the
-                // record (a recipient's number).
-                tracing::warn!("an unreadable job is skipped: it is never sent");
-                return Ok(true);
-            }
-        };
-        if bucket_of(record.due_at_ms) > bucket {
-            // Moved later (retried, re-run): indexed under its own minute,
-            // or indexed now if the move stopped before. A job met in a
-            // bucket later than its due time's is due: indexed under the
-            // minute it was scheduled in (a due time already past), or
-            // met on an older page (re-run to an earlier time).
-            if !record.state.settled() && !record.indexed {
-                self.jobs.index(&record.id, record.due_at_ms).await?;
-                self.jobs.mark_indexed(&key, record.due_at_ms).await?;
-            }
-            return Ok(true);
-        }
-        let now = millis(self.jobs.clock.now());
-        match record.state {
-            state if state.settled() => return Ok(true),
-            StoredState::Pending if record.due_at_ms > now => return Ok(false),
-            StoredState::Claimed
-                if record
-                    .lease
-                    .as_ref()
-                    .is_some_and(|lease| lease.until_ms > now) =>
-            {
-                return Ok(false);
-            }
-            _ => {}
-        }
-        let claim = record.claims.saturating_add(1);
-        let mut claimed = record;
-        claimed.state = StoredState::Claimed;
-        claimed.claims = claim;
-        claimed.lease = Some(Lease {
-            runner: self.id.clone(),
-            claim,
-            until_ms: now.saturating_add(duration_ms(self.lease)),
-        });
-        // The claim: only one runner's compare-and-swap from this version
-        // succeeds.
-        if self
-            .jobs
-            .kv
-            .compare_and_swap(&key, version, Some(encode(&key, &claimed)?), Expiry::Never)
-            .await?
-            .is_none()
-        {
-            return Ok(false);
-        }
-        tracing::debug!(run = claimed.run, claim, "job claimed");
-        let run = claimed.run;
-        let ended = self.execute(key, claimed).await?;
-        let settled = match &ended {
-            JobEnd::LeaseLost => false,
-            // Retried within this very minute: it is still to run here.
-            JobEnd::Retrying { at, .. } => bucket_of(millis(*at)) != bucket,
-            _ => true,
-        };
-        report.runs.push(JobRun {
-            id: JobId(id.to_owned()),
-            run,
-            ended,
-        });
-        Ok(settled)
-    }
-
     /// One pass over a job this runner just claimed.
-    async fn execute(&self, key: StoreKey, job: JobRecord) -> Result<JobEnd> {
-        let view = Arc::new(job.view());
+    async fn execute(&self, claim: JobClaim) -> Result<JobEnd> {
+        let claim = Arc::new(claim);
         let mut summary = JobSummary::default();
         let mut pending = Vec::new();
         let mut by_key = HashMap::new();
-        let claim = Claim {
-            jobs: self.jobs.clone(),
-            key,
-            runner: self.id.clone(),
-            number: job.claims,
+        let holder = Holder {
+            jobs: Arc::clone(&self.jobs),
+            clock: Arc::clone(&self.clock),
+            claim: Arc::clone(&claim),
             lease: self.lease,
-            until_ms: Arc::new(AtomicI64::new(
-                job.lease.as_ref().map_or(i64::MIN, |lease| lease.until_ms),
-            )),
+            until_ms: AtomicI64::new(millis(claim.until)),
         };
-        for (index, recipient) in view.recipients.iter().enumerate() {
+        for (index, recipient) in claim.job.recipients.iter().enumerate() {
             // Reading many markers can outlast the lease: renewed here
             // too, so another runner does not take the job over meanwhile.
-            match claim.keep().await? {
-                Some(Halt::Cancelled) => return Ok(JobEnd::Cancelled),
-                Some(Halt::Lost) => return Ok(JobEnd::LeaseLost),
+            match holder.keep().await? {
+                Some(JobHalt::Cancelled) => return Ok(JobEnd::Cancelled),
+                Some(JobHalt::Lost) => return Ok(JobEnd::LeaseLost),
                 None => {}
             }
-            let rkey = recipient_key(recipient).unwrap_or_default();
-            let marker = marker_key(&job.id, job.run, &rkey);
-            if let Some(found) = self.jobs.kv.get(&marker).await? {
-                match decode::<Marker>(&marker, &found.value).map(|read| read.state) {
-                    Ok(MarkerState::Sent) => summary.sent += 1,
-                    Ok(MarkerState::Failed) => summary.failed += 1,
-                    // A "sending" left by a runner that stopped mid-send:
-                    // it may have gone out.
-                    Ok(MarkerState::Sending | MarkerState::Unknown) => summary.unknown.push(index),
-                    // Something was written for this recipient (by a later
-                    // release, or damaged): never sent again, and not a
-                    // reason to stop every tick at this job.
-                    Err(_) => {
-                        tracing::warn!(
-                            "a recipient's unreadable marker is read as an outcome unknown: \
-                             never resent"
-                        );
-                        summary.unknown.push(index);
-                    }
+            match self.jobs.recipient(&claim, index).await? {
+                RecipientMark::Sent => summary.sent += 1,
+                RecipientMark::Failed => summary.failed += 1,
+                RecipientMark::Limited => summary.limited.push(index),
+                RecipientMark::Unmarked => {
+                    pending.push(index);
+                    by_key.insert(recipient_key(recipient).unwrap_or_default(), index);
                 }
-                continue;
+                RecipientMark::Unknown => summary.unknown.push(index),
             }
-            let limited = StoreKey::new(JOBS_LIMITED_NAMESPACE, limited_digest(&job.id, &rkey));
-            if self.jobs.kv.get(&limited).await?.is_some() {
-                summary.limited.push(index);
-                continue;
-            }
-            pending.push(index);
-            by_key.insert(rkey, index);
         }
         if !pending.is_empty() {
-            let halt = self
-                .send(&job, &view, &pending, by_key, &claim, &mut summary)
-                .await?;
+            let halt = self.send(holder, &pending, by_key, &mut summary).await?;
             match halt {
-                Some(Halt::Cancelled) => return Ok(JobEnd::Cancelled),
-                Some(Halt::Lost) => return Ok(JobEnd::LeaseLost),
+                Some(JobHalt::Cancelled) => return Ok(JobEnd::Cancelled),
+                Some(JobHalt::Lost) => return Ok(JobEnd::LeaseLost),
                 None => {}
             }
         }
         summary.unknown.sort_unstable();
         if summary.unsent == 0 {
-            return self.settle(&claim, StoredState::Done, summary).await;
+            return self.settle(&claim, JobState::Done, summary).await;
         }
-        if job.retries >= self.max_retries {
-            return self.settle(&claim, StoredState::Stopped, summary).await;
+        if claim.job.retries >= self.max_retries {
+            return self.settle(&claim, JobState::Stopped, summary).await;
         }
         let delay = self
             .retry_delay
-            .saturating_mul(2u32.saturating_pow(job.retries))
+            .saturating_mul(2u32.saturating_pow(claim.job.retries))
             .min(self.max_retry_delay);
-        let at = after(self.jobs.clock.now(), delay);
+        let at = after(self.clock.now(), delay);
         self.reschedule(&claim, at, summary).await
     }
 
@@ -417,32 +248,31 @@ impl JobRunner {
     /// if it was.
     async fn send(
         &self,
-        job: &JobRecord,
-        view: &Arc<ScheduledJob>,
+        holder: Holder,
         pending: &[usize],
         by_key: HashMap<String, usize>,
-        claim: &Claim,
         summary: &mut JobSummary,
-    ) -> Result<Option<Halt>> {
+    ) -> Result<Option<JobHalt>> {
+        let claim = Arc::clone(&holder.claim);
         let outcomes: Arc<Mutex<HashMap<usize, Outcome>>> = Arc::default();
         let by_key = Arc::new(by_key);
         let durable = Arc::new(Durable {
-            claim: claim.clone(),
+            holder,
             inner: Arc::clone(&self.outbound),
-            job_id: job.id.clone(),
-            run: job.run,
             by_key: Arc::clone(&by_key),
             outcomes: Arc::clone(&outcomes),
             handle: OnceLock::new(),
             halt: Mutex::new(None),
         });
         let compose = Arc::clone(&self.compose);
-        let composed = Arc::clone(view);
+        let composed = Arc::clone(&claim);
         let failed = Arc::clone(&outcomes);
-        let broadcast = Broadcast::builder(job.from.clone())
-            .to(pending.iter().map(|&index| view.recipients[index].clone()))
+        let broadcast = Broadcast::builder(claim.job.from.clone())
+            .to(pending
+                .iter()
+                .map(|&index| claim.job.recipients[index].clone()))
             .compose(move |recipient: &Recipient| {
-                let message = compose(&composed, recipient);
+                let message = compose(&composed.job, recipient);
                 if message.is_err()
                     && let Some(index) = recipient_key(recipient).and_then(|k| by_key.get(&k))
                 {
@@ -477,37 +307,14 @@ impl JobRunner {
     /// Settle the job this runner holds as `state` (done or stopped).
     async fn settle(
         &self,
-        claim: &Claim,
-        state: StoredState,
+        claim: &JobClaim,
+        state: JobState,
         summary: JobSummary,
     ) -> Result<JobEnd> {
-        for _ in 0..CAS_ATTEMPTS {
-            let Some((record, version)) = self.jobs.read_job(&claim.key).await? else {
-                return Ok(JobEnd::LeaseLost);
-            };
-            if record.state == StoredState::Cancelled {
-                return Ok(JobEnd::Cancelled);
-            }
-            if !record.held_by(&claim.runner, claim.number) {
-                return Ok(JobEnd::LeaseLost);
-            }
-            let mut next = record;
-            next.state = state;
-            next.lease = None;
-            next.summary = Some((&summary).into());
-            let bytes = encode(&claim.key, &next)?;
-            if self
-                .jobs
-                .kv
-                .compare_and_swap(
-                    &claim.key,
-                    version,
-                    Some(bytes),
-                    Expiry::After(self.jobs.retention),
-                )
-                .await?
-                .is_some()
-            {
+        match self.jobs.settle(claim, state, &summary).await? {
+            Some(JobHalt::Cancelled) => Ok(JobEnd::Cancelled),
+            Some(JobHalt::Lost) => Ok(JobEnd::LeaseLost),
+            None => {
                 if !summary.unknown.is_empty() {
                     tracing::warn!(
                         unknown = summary.unknown.len(),
@@ -515,144 +322,73 @@ impl JobRunner {
                          reconcile them with the status webhooks"
                     );
                 }
-                return Ok(if state == StoredState::Done {
+                Ok(if state == JobState::Done {
                     JobEnd::Done(summary)
                 } else {
                     JobEnd::Stopped(summary)
-                });
+                })
             }
         }
-        Err(StorageError::Busy.into())
     }
 
-    /// Hand the job back, pending at `at`, one retry more, and index it
-    /// there.
+    /// Hand the job back, pending at `at`, one retry more.
     async fn reschedule(
         &self,
-        claim: &Claim,
+        claim: &JobClaim,
         at: OffsetDateTime,
         summary: JobSummary,
     ) -> Result<JobEnd> {
-        // As stored: whole milliseconds.
-        let due = millis(at);
-        let at = instant(due);
-        for _ in 0..CAS_ATTEMPTS {
-            let Some((record, version)) = self.jobs.read_job(&claim.key).await? else {
-                return Ok(JobEnd::LeaseLost);
-            };
-            if record.state == StoredState::Cancelled {
-                return Ok(JobEnd::Cancelled);
-            }
-            if !record.held_by(&claim.runner, claim.number) {
-                return Ok(JobEnd::LeaseLost);
-            }
-            let mut next = record;
-            next.state = StoredState::Pending;
-            next.lease = None;
-            next.retries = next.retries.saturating_add(1);
-            next.due_at_ms = due;
-            next.indexed = false;
-            let bytes = encode(&claim.key, &next)?;
-            if self
-                .jobs
-                .kv
-                .compare_and_swap(&claim.key, version, Some(bytes), Expiry::Never)
-                .await?
-                .is_some()
-            {
+        // Whole milliseconds, as every store keeps at least.
+        let at = instant(millis(at));
+        match self.jobs.retry(claim, at, &summary).await? {
+            Some(JobHalt::Cancelled) => Ok(JobEnd::Cancelled),
+            Some(JobHalt::Lost) => Ok(JobEnd::LeaseLost),
+            None => {
                 tracing::debug!(
-                    retries = next.retries,
+                    retries = claim.job.retries.saturating_add(1),
                     unsent = summary.unsent,
                     "job retried later"
                 );
-                self.jobs.index(&next.id, due).await?;
-                self.jobs.mark_indexed(&claim.key, due).await?;
-                return Ok(JobEnd::Retrying { at, summary });
+                Ok(JobEnd::Retrying { at, summary })
             }
         }
-        Err(StorageError::Busy.into())
     }
-}
-
-/// The versions of the pages of a bucket as read.
-fn versions(pages: &[ReadPage]) -> Vec<u64> {
-    pages.iter().filter_map(|page| page.version).collect()
-}
-
-/// `d` in whole milliseconds, saturating.
-fn duration_ms(d: Duration) -> i64 {
-    i64::try_from(d.as_millis()).unwrap_or(i64::MAX)
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The claim a runner holds on a job.
-#[derive(Debug, Clone)]
-struct Claim {
-    jobs: KvJobs,
-    key: StoreKey,
-    runner: String,
-    /// The claim's number (`Lease::claim`).
-    number: u32,
+/// The claim a runner holds on a job, and its account of the lease.
+#[derive(Debug)]
+struct Holder {
+    jobs: Arc<dyn JobStore>,
+    clock: Arc<dyn Clock>,
+    claim: Arc<JobClaim>,
     lease: Duration,
     /// Until when the lease runs, as this runner last wrote or read it
     /// (unix milliseconds).
-    until_ms: Arc<AtomicI64>,
+    until_ms: AtomicI64,
 }
 
-impl Claim {
+impl Holder {
     /// Whether the job, read now, is still this runner's under this claim
     /// and not cancelled (`None`), or why not; the lease is renewed when
-    /// less than half of it is left.
-    async fn hold(&self) -> Result<Option<Halt>> {
-        let lease_ms = duration_ms(self.lease);
-        for _ in 0..CAS_ATTEMPTS {
-            let Some((record, version)) = self.jobs.read_job(&self.key).await? else {
-                return Ok(Some(Halt::Lost));
-            };
-            if record.state == StoredState::Cancelled {
-                return Ok(Some(Halt::Cancelled));
+    /// less than half of it is left ([`JobStore::hold`]).
+    async fn hold(&self) -> Result<Option<JobHalt>> {
+        Ok(match self.jobs.hold(&self.claim, self.lease).await? {
+            Holding::Held(until) => {
+                self.until_ms.store(millis(until), Ordering::Relaxed);
+                None
             }
-            if !record.held_by(&self.runner, self.number) {
-                return Ok(Some(Halt::Lost));
-            }
-            let now = millis(self.jobs.clock.now());
-            let until = record
-                .lease
-                .as_ref()
-                .map_or(i64::MIN, |lease| lease.until_ms);
-            if until.saturating_sub(now) >= lease_ms / 2 {
-                self.until_ms.store(until, Ordering::Relaxed);
-                return Ok(None);
-            }
-            let renewed = now.saturating_add(lease_ms);
-            let mut next = record;
-            next.lease = Some(Lease {
-                runner: self.runner.clone(),
-                claim: self.number,
-                until_ms: renewed,
-            });
-            let bytes = encode(&self.key, &next)?;
-            if self
-                .jobs
-                .kv
-                .compare_and_swap(&self.key, version, Some(bytes), Expiry::Never)
-                .await?
-                .is_some()
-            {
-                self.until_ms.store(renewed, Ordering::Relaxed);
-                return Ok(None);
-            }
-        }
-        Err(StorageError::Busy.into())
+            Holding::Halted(halt) => Some(halt),
+        })
     }
 
     /// [`Self::hold`], only once less than half of the lease is
     /// left by this runner's last account of it: no read before that.
-    async fn keep(&self) -> Result<Option<Halt>> {
-        let now = millis(self.jobs.clock.now());
+    async fn keep(&self) -> Result<Option<JobHalt>> {
+        let now = millis(self.clock.now());
         let left = self.until_ms.load(Ordering::Relaxed).saturating_sub(now);
         if left >= duration_ms(self.lease) / 2 {
             return Ok(None);
@@ -669,42 +405,33 @@ enum Outcome {
     Unknown,
 }
 
-/// Why a pass stopped sending.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Halt {
-    Cancelled,
-    Lost,
-}
-
 /// The outbound a pass's broadcast sends through: before each request, a
 /// check that the job is still this runner's and not cancelled, then the
 /// recipient's marker; after it, the marker's outcome.
 struct Durable {
-    claim: Claim,
+    holder: Holder,
     inner: Arc<dyn Outbound>,
-    job_id: String,
-    run: u32,
     by_key: Arc<HashMap<String, usize>>,
     outcomes: Arc<Mutex<HashMap<usize, Outcome>>>,
     handle: OnceLock<BroadcastHandle>,
-    halt: Mutex<Option<Halt>>,
+    halt: Mutex<Option<JobHalt>>,
 }
 
 impl fmt::Debug for Durable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Durable")
-            .field("runner", &self.claim.runner)
-            .field("run", &self.run)
+            .field("runner", &self.holder.claim.runner)
+            .field("run", &self.holder.claim.job.run)
             .finish_non_exhaustive()
     }
 }
 
-fn halted(why: Halt) -> Error {
+fn halted(why: JobHalt) -> Error {
     ValidationError::new(
         "job",
         match why {
-            Halt::Cancelled => "the job was cancelled: not sent",
-            Halt::Lost => "another runner holds the job: not sent",
+            JobHalt::Cancelled => "the job was cancelled: not sent",
+            JobHalt::Lost => "another runner holds the job: not sent",
         },
     )
     .into()
@@ -716,7 +443,7 @@ impl Durable {
     }
 
     /// Stop the pass for `why`: no send starts after this one.
-    fn stop(&self, why: Halt) -> Error {
+    fn stop(&self, why: JobHalt) -> Error {
         lock(&self.halt).get_or_insert(why);
         if let Some(handle) = self.handle.get() {
             handle.cancel();
@@ -730,123 +457,66 @@ impl Durable {
         if let Some(why) = *lock(&self.halt) {
             return Err(halted(why));
         }
-        match self.claim.hold().await? {
+        match self.holder.hold().await? {
             Some(why) => Err(self.stop(why)),
             None => Ok(()),
         }
     }
 
-    /// Whether the job, read now, is still in this run and not cancelled
-    /// (`None`), or why not.
-    async fn this_run(&self) -> Result<Option<Halt>> {
-        Ok(match self.claim.jobs.read_job(&self.claim.key).await? {
-            None => Some(Halt::Lost),
-            Some((record, _)) if record.state == StoredState::Cancelled => Some(Halt::Cancelled),
-            Some((record, _)) if record.run != self.run => Some(Halt::Lost),
-            Some(_) => None,
-        })
+    /// Remove the marker of a recipient nothing was sent to; one that
+    /// stays is an outcome unknown.
+    async fn unmark(&self, index: usize, why: &str) {
+        let jobs = &self.holder.jobs;
+        if !matches!(jobs.unmark(&self.holder.claim, index).await, Ok(true)) {
+            tracing::warn!(
+                why,
+                "a job's unsent recipient could not be unmarked: never resent"
+            );
+            self.record(index, Outcome::Unknown);
+        }
     }
 
-    async fn sent(
-        &self,
-        index: usize,
-        marker: &StoreKey,
-        version: u64,
-        rkey: &str,
-        response: &SendResponse,
-    ) {
-        let kv = &self.claim.jobs.kv;
-        let message_id = response.message_id().map(|id| id.as_str().to_owned());
-        let written = Marker {
-            v: VERSION,
-            state: MarkerState::Sent,
-            runner: None,
-            message_id: message_id.clone(),
-            code: None,
-        };
-        let swapped = match encode(marker, &written) {
-            Ok(bytes) => kv
-                .compare_and_swap(marker, version, Some(bytes), Expiry::Keep)
-                .await
-                .map(|v| v.is_some()),
-            Err(error) => Err(error),
-        };
-        if !matches!(swapped, Ok(true)) {
+    async fn sent(&self, index: usize, response: &SendResponse) {
+        let message_id = response.message_id().cloned();
+        let recorded = self
+            .holder
+            .jobs
+            .mark_outcome(&self.holder.claim, index, SendRecord::Sent { message_id })
+            .await;
+        if !matches!(recorded, Ok(true)) {
             tracing::warn!(
                 "a job's sent message could not be recorded: its marker says sending, read as \
                  an outcome unknown (never resent)"
             );
         }
-        if let Some(id) = message_id {
-            let key = message_key(&id);
-            let record = MessageRecord {
-                v: VERSION,
-                job: self.job_id.clone(),
-                run: self.run,
-                limited: limited_digest(&self.job_id, rkey),
-            };
-            let stored = match encode(&key, &record) {
-                Ok(bytes) => kv
-                    .put(&key, bytes, Expiry::After(self.claim.jobs.message_ttl))
-                    .await
-                    .map(drop),
-                Err(error) => Err(error),
-            };
-            if stored.is_err() {
-                tracing::warn!(
-                    "a job's message id could not be kept: a 131049 for it will not be recorded"
-                );
-            }
-        }
         self.record(index, Outcome::Sent);
     }
 
-    async fn refused(
-        &self,
-        index: usize,
-        marker: &StoreKey,
-        version: u64,
-        rkey: &str,
-        error: &Error,
-    ) {
-        let kv = &self.claim.jobs.kv;
+    async fn refused(&self, index: usize, error: &Error) {
+        let jobs = &self.holder.jobs;
         let unknown = error.may_have_been_sent();
-        let written = Marker {
-            v: VERSION,
-            state: if unknown {
-                MarkerState::Unknown
-            } else {
-                MarkerState::Failed
-            },
-            runner: None,
-            message_id: None,
-            code: error.graph().map(|graph| graph.code),
+        let code = error.graph().map(|graph| graph.code);
+        let outcome = if unknown {
+            SendRecord::Unknown { code }
+        } else {
+            SendRecord::Failed { code }
         };
-        let swapped = match encode(marker, &written) {
-            Ok(bytes) => kv
-                .compare_and_swap(marker, version, Some(bytes), Expiry::Keep)
-                .await
-                .map(|v| v.is_some()),
-            Err(error) => Err(error),
-        };
-        if !matches!(swapped, Ok(true)) {
+        if !matches!(
+            jobs.mark_outcome(&self.holder.claim, index, outcome).await,
+            Ok(true)
+        ) {
             tracing::warn!(
                 "a job's failed send could not be recorded: its marker says sending, read as an \
                  outcome unknown (never resent)"
             );
         }
-        if is_marketing_limit(error.kind()) {
-            let limited = StoreKey::new(JOBS_LIMITED_NAMESPACE, limited_digest(&self.job_id, rkey));
-            let stored = match encode(&limited, &Limited { v: VERSION }) {
-                Ok(bytes) => kv
-                    .put_if_absent(&limited, bytes, Expiry::After(MARKETING_LIMIT_WAIT))
-                    .await
-                    .map(drop),
-                Err(error) => Err(error),
-            };
-            if stored.is_err() {
-                tracing::warn!("a job's 131049 could not be recorded");
-            }
+        if is_marketing_limit(error.kind())
+            && jobs
+                .limit_recipient(&self.holder.claim, index)
+                .await
+                .is_err()
+        {
+            tracing::warn!("a job's 131049 could not be recorded");
         }
         self.record(
             index,
@@ -868,75 +538,48 @@ impl Outbound for Durable {
         };
         // Fail closed: no request unless the job is still this runner's.
         self.check().await?;
-        let kv = &self.claim.jobs.kv;
-        let marker = marker_key(&self.job_id, self.run, &rkey);
-        let intent = Marker {
-            v: VERSION,
-            state: MarkerState::Sending,
-            runner: Some(self.claim.runner.clone()),
-            message_id: None,
-            code: None,
-        };
-        // Written before the request: whoever meets it without an outcome
+        let jobs = &self.holder.jobs;
+        let claim = &self.holder.claim;
+        // Created before the request: whoever meets it without an outcome
         // reads it as unknown, and never sends again.
-        let Some(version) = kv
-            .put_if_absent(
-                &marker,
-                encode(&marker, &intent)?,
-                Expiry::After(self.claim.jobs.retention),
-            )
-            .await?
-        else {
+        if !jobs.mark_sending(claim, index).await? {
             self.record(index, Outcome::Unknown);
             return Err(ValidationError::new(
                 "recipient",
                 "another runner holds this recipient: not sent",
             )
             .into());
-        };
+        }
         // Checked again with the marker in place. A cancel, or a re-run,
         // that landed between the first check and the marker gets no
         // request from this runner: a re-run's markers are its own, so
         // this one would not stop its send. Another claim of this run
         // does not stop it: that runner meets this marker.
-        let verdict = self.this_run().await;
+        let verdict = jobs.check_run(claim).await;
         if !matches!(verdict, Ok(None)) {
             // Not sent: the marker goes, so the recipient is not left as
             // an outcome unknown (unless it cannot be removed).
-            if !matches!(
-                kv.compare_and_swap(&marker, version, None, Expiry::Keep)
-                    .await,
-                Ok(Some(_))
-            ) {
-                tracing::warn!("a job's unsent recipient could not be unmarked: never resent");
-                self.record(index, Outcome::Unknown);
-            }
+            self.unmark(index, "the job changed before the send").await;
             return Err(match verdict {
                 Ok(Some(why)) => self.stop(why),
                 Err(error) => error,
-                Ok(None) => halted(Halt::Lost),
+                Ok(None) => halted(JobHalt::Lost),
             });
         }
         match self.inner.send(from, message).await {
             Ok(response) => {
-                self.sent(index, &marker, version, &rkey, &response).await;
+                self.sent(index, &response).await;
                 Ok(response)
             }
             Err(error) if error.may_resend() => {
                 // Meta refused it before doing anything: without a marker,
                 // it is sent again (the broadcast's retry, or the job's).
-                if !matches!(
-                    kv.compare_and_swap(&marker, version, None, Expiry::Keep)
-                        .await,
-                    Ok(Some(_))
-                ) {
-                    tracing::warn!("a job's refused send could not be unmarked: never resent");
-                    self.record(index, Outcome::Unknown);
-                }
+                self.unmark(index, "Meta refused the send before doing anything")
+                    .await;
                 Err(error)
             }
             Err(error) => {
-                self.refused(index, &marker, version, &rkey, &error).await;
+                self.refused(index, &error).await;
                 Err(error)
             }
         }
@@ -972,7 +615,7 @@ static RUNNERS: AtomicU64 = AtomicU64::new(0);
 /// [`Self::outbound`]), a [`Pacer`] and a composer ([`Self::compose`]).
 #[must_use]
 pub struct JobRunnerBuilder {
-    jobs: KvJobs,
+    jobs: Arc<dyn JobStore>,
     outbound: Option<Arc<dyn Outbound>>,
     pacer: Option<Pacer>,
     compose: Option<Arc<Composer>>,
@@ -997,7 +640,7 @@ impl JobRunnerBuilder {
     /// The default lease: 2 minutes.
     pub const DEFAULT_LEASE: Duration = Duration::from_secs(120);
 
-    fn new(jobs: KvJobs) -> Self {
+    fn new(jobs: Arc<dyn JobStore>) -> Self {
         Self {
             jobs,
             outbound: None,
@@ -1127,11 +770,12 @@ impl JobRunnerBuilder {
             None => format!(
                 "{}-{}-{}",
                 std::process::id(),
-                self.jobs.clock.now().unix_timestamp_nanos(),
+                self.jobs.clock().now().unix_timestamp_nanos(),
                 RUNNERS.fetch_add(1, Ordering::Relaxed)
             ),
         };
         Ok(JobRunner {
+            clock: self.jobs.clock(),
             jobs: self.jobs,
             outbound,
             pacer,

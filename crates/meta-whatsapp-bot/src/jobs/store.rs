@@ -1,31 +1,28 @@
-//! [`KvJobs`]: the jobs' records, their due index and their markers on a
-//! `KvStore`, and the `131049` feedback ([`KvJobs::observe`]).
+//! [`KvJobs`]: the default [`JobStore`]: the jobs' records, their due
+//! index and their markers on a `KvStore`.
 
-use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use meta_whatsapp_core::Result;
 use meta_whatsapp_core::clock::Clock;
-use meta_whatsapp_core::error::{SinkError, StorageError, ValidationError};
-use meta_whatsapp_core::ids::{GroupId, PhoneNumberId, UserId};
+use meta_whatsapp_core::error::{StorageError, ValidationError};
+use meta_whatsapp_core::ids::{GroupId, MessageId, PhoneNumberId, UserId};
 use meta_whatsapp_core::recipient::Recipient;
-use meta_whatsapp_core::sink::EventSink;
 use meta_whatsapp_core::store::{Expiry, KvStore, StoreKey, Versioned};
-use meta_whatsapp_core::{Error, Result};
-use meta_whatsapp_webhooks::WebhookEvent;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use time::OffsetDateTime;
 
+use super::port::{ClaimHandler, Holding, JobClaim, JobHalt, JobStore, RecipientMark, SendRecord};
 use super::{
-    BUCKET_PAGE_CAPACITY, JOBS_LIMITED_NAMESPACE, Job, JobId, JobState, JobSummary,
-    MARKETING_LIMIT_WAIT, ScheduledJob, bucket_of, cursor_key, instant, is_marketing_limit,
-    job_key, message_key, millis, page_key,
+    BUCKET_PAGE_CAPACITY, BUCKET_SECONDS, JOBS_LIMITED_NAMESPACE, Job, JobEnd, JobFeedback, JobId,
+    JobState, JobSummary, MARKETING_LIMIT_WAIT, ScheduledJob, bucket_of, cursor_key, instant,
+    job_key, limited_digest, marker_key, message_key, millis, page_key, recipient_key,
 };
-use crate::command::CommandHandler;
-use crate::ctx::Ctx;
 use crate::pacer::after;
 
 /// The records' version (`"v"`).
@@ -316,17 +313,18 @@ pub(super) fn read_job_record(key: &StoreKey, found: &Versioned) -> JobRead {
     }
 }
 
-/// Durable jobs: a typed store on [`KvStore`] (no port of its own). See
-/// the [module docs](super) for what it stores where.
+/// Durable jobs: the default [`JobStore`], a typed store on [`KvStore`]
+/// (no port of its own). See the [module docs](super) for what it stores
+/// where.
 ///
 /// Cheap to clone; clones share the store. Every instance on the same
 /// store sees the same jobs, across processes for a shared store.
 #[derive(Clone)]
 pub struct KvJobs {
-    pub(super) kv: Arc<dyn KvStore>,
-    pub(super) clock: Arc<dyn Clock>,
-    pub(super) retention: Duration,
-    pub(super) message_ttl: Duration,
+    kv: Arc<dyn KvStore>,
+    clock: Arc<dyn Clock>,
+    retention: Duration,
+    message_ttl: Duration,
 }
 
 impl fmt::Debug for KvJobs {
@@ -337,6 +335,33 @@ impl fmt::Debug for KvJobs {
             .field("message_ttl", &self.message_ttl)
             .finish_non_exhaustive()
     }
+}
+
+/// A page of a bucket as read: its version (`None`: the first page
+/// missing, where the bucket ends) and its ids.
+struct ReadPage {
+    version: Option<u64>,
+    ids: Vec<String>,
+}
+
+/// The versions of the pages of a bucket as read.
+fn versions(pages: &[ReadPage]) -> Vec<u64> {
+    pages.iter().filter_map(|page| page.version).collect()
+}
+
+/// `d` in whole milliseconds, saturating.
+pub(super) fn duration_ms(d: Duration) -> i64 {
+    i64::try_from(d.as_millis()).unwrap_or(i64::MAX)
+}
+
+/// The recipient at `index` of the job `claim` holds, and its key.
+fn recipient_at(claim: &JobClaim, index: usize) -> Result<String> {
+    claim
+        .job
+        .recipients
+        .get(index)
+        .and_then(recipient_key)
+        .ok_or_else(|| ValidationError::new("recipient", "not a recipient of this job").into())
 }
 
 impl KvJobs {
@@ -380,199 +405,13 @@ impl KvJobs {
         self
     }
 
-    /// Store `job` and index it under its due time. Its recipients are
-    /// kept each person once (a later listing of the same person is
-    /// dropped). A `ValidationError` for a job without recipients, with a
-    /// kind of recipient it cannot store, or when another job is stored
-    /// under its id; the same job scheduled again (after an error or a
-    /// crash that may have stopped this half-way) is indexed again and
-    /// succeeds.
-    pub async fn schedule(&self, job: Job) -> Result<()> {
-        if job.recipients.is_empty() {
-            return Err(
-                ValidationError::new("recipients", "a job needs at least one recipient").into(),
-            );
-        }
-        let dropped: HashSet<usize> = crate::broadcast::duplicates(&job.recipients)
-            .into_iter()
-            .map(|(index, _)| index)
-            .collect();
-        let recipients = job
-            .recipients
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !dropped.contains(index))
-            .map(|(_, recipient)| StoredRecipient::from_recipient(recipient))
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| {
-                ValidationError::new("recipients", "a kind of recipient a job cannot store")
-            })?;
-        let record = JobRecord {
-            v: VERSION,
-            id: job.id.0.clone(),
-            from: job.from,
-            due_at_ms: millis(job.at),
-            state: StoredState::Pending,
-            run: 1,
-            retries: 0,
-            claims: 0,
-            indexed: false,
-            lease: None,
-            recipients,
-            payload: job.payload,
-            summary: None,
-        };
-        let key = job_key(&record.id);
-        let bytes = encode(&key, &record)?;
-        if self
-            .kv
-            .put_if_absent(&key, bytes, Expiry::Never)
-            .await?
-            .is_none()
-        {
-            let Some((existing, _)) = self.read_job(&key).await? else {
-                // Removed meanwhile (expired after settling): busy, try
-                // again.
-                return Err(StorageError::Busy.into());
-            };
-            if !existing.same_schedule(&record) {
-                return Err(
-                    ValidationError::new("id", "another job is stored under this id").into(),
-                );
-            }
-            if existing.state != StoredState::Pending || existing.indexed {
-                return Ok(());
-            }
-        }
-        self.index(&record.id, record.due_at_ms).await?;
-        self.mark_indexed(&key, record.due_at_ms).await
-    }
-
-    /// Cancel the job `id`: pending or claimed, it becomes cancelled (a
-    /// runner running it stops before its next send). Whether it was
-    /// cancelled now; `false` for a job unknown or already settled.
-    pub async fn cancel(&self, id: &JobId) -> Result<bool> {
-        let key = job_key(id.as_str());
-        for _ in 0..CAS_ATTEMPTS {
-            let Some((record, version)) = self.read_job(&key).await? else {
-                return Ok(false);
-            };
-            if record.state.settled() {
-                return Ok(false);
-            }
-            let mut next = record;
-            next.state = StoredState::Cancelled;
-            next.lease = None;
-            let bytes = encode(&key, &next)?;
-            if self
-                .kv
-                .compare_and_swap(&key, version, Some(bytes), Expiry::After(self.retention))
-                .await?
-                .is_some()
-            {
-                tracing::debug!("job cancelled");
-                return Ok(true);
-            }
-        }
-        Err(StorageError::Busy.into())
-    }
-
-    /// Run the settled job `id` again at `at`: a new run (its markers are
-    /// its own, so everyone is sent to again) except the recipients Meta
-    /// refused with `131049` within the last 24 hours. Whether it was
-    /// scheduled again; `false` for a job unknown, pending or claimed.
-    /// After an error, call it again: a re-run that stopped before its
-    /// index was written is indexed then (and `false` is returned, the job
-    /// being pending already).
-    pub async fn rerun(&self, id: &JobId, at: time::OffsetDateTime) -> Result<bool> {
-        let key = job_key(id.as_str());
-        for _ in 0..CAS_ATTEMPTS {
-            let Some((record, version)) = self.read_job(&key).await? else {
-                return Ok(false);
-            };
-            if !record.state.settled() {
-                if !record.indexed {
-                    // A rerun that stopped before indexing it.
-                    self.index(&record.id, record.due_at_ms).await?;
-                    self.mark_indexed(&key, record.due_at_ms).await?;
-                }
-                return Ok(false);
-            }
-            let mut next = record;
-            next.state = StoredState::Pending;
-            next.run = next.run.saturating_add(1);
-            next.retries = 0;
-            next.lease = None;
-            next.summary = None;
-            next.due_at_ms = millis(at);
-            next.indexed = false;
-            let bytes = encode(&key, &next)?;
-            if self
-                .kv
-                .compare_and_swap(&key, version, Some(bytes), Expiry::Never)
-                .await?
-                .is_some()
-            {
-                self.index(&next.id, next.due_at_ms).await?;
-                self.mark_indexed(&key, next.due_at_ms).await?;
-                return Ok(true);
-            }
-        }
-        Err(StorageError::Busy.into())
-    }
-
-    /// The job `id`, as stored.
-    pub async fn get(&self, id: &JobId) -> Result<Option<ScheduledJob>> {
-        Ok(self
-            .read_job(&job_key(id.as_str()))
-            .await?
-            .map(|(record, _)| record.view()))
-    }
-
-    /// Hear a status webhook: a status whose errors carry `131049` (Meta's
-    /// per-user marketing limit) for a message a job sent marks that
-    /// recipient limited for [`MARKETING_LIMIT_WAIT`], from now, so a
-    /// re-run of the job skips them. Whether it did; `false` for any other
-    /// event, and for a message this store did not send or whose id it no
-    /// longer keeps ([`Self::message_ttl`]). Safe to repeat (a redelivery
-    /// does not extend the 24 hours).
-    pub async fn observe(&self, event: &WebhookEvent) -> Result<bool> {
-        let WebhookEvent::StatusUpdated { status, .. } = event else {
-            return Ok(false);
-        };
-        // Meta: the status is `failed` with the code 131049
-        // (`templates/marketing-templates/per-user-limits`); the code
-        // decides.
-        if !status.errors.iter().any(|e| is_marketing_limit(e.kind())) {
-            return Ok(false);
-        }
-        let key = message_key(status.id.as_str());
-        let Some(found) = self.kv.get(&key).await? else {
-            return Ok(false);
-        };
-        let record: MessageRecord = decode(&key, &found.value)?;
-        let limited = StoreKey::new(JOBS_LIMITED_NAMESPACE, record.limited);
-        self.kv
-            .put_if_absent(
-                &limited,
-                encode(&limited, &Limited { v: VERSION })?,
-                Expiry::After(MARKETING_LIMIT_WAIT),
-            )
-            .await?;
-        tracing::info!(
-            run = record.run,
-            "a job's recipient is marketing-limited (131049): skipped by a re-run for 24 hours"
-        );
-        Ok(true)
-    }
-
     /// The `131049` feedback as a bot listener or an event sink
     /// ([`JobFeedback`]).
     pub fn feedback(&self) -> JobFeedback {
-        JobFeedback { jobs: self.clone() }
+        JobFeedback::new(self.clone())
     }
 
-    pub(super) async fn read_job(&self, key: &StoreKey) -> Result<Option<(JobRecord, u64)>> {
+    async fn read_job(&self, key: &StoreKey) -> Result<Option<(JobRecord, u64)>> {
         let Some(found) = self.kv.get(key).await? else {
             return Ok(None);
         };
@@ -590,12 +429,12 @@ impl KvJobs {
     /// Append `id` to the due index under `due_ms`'s bucket (the current
     /// one for a due time already past), then move the cursor back to that
     /// bucket if it is past it.
-    pub(super) async fn index(&self, id: &str, due_ms: i64) -> Result<()> {
+    async fn index(&self, id: &str, due_ms: i64) -> Result<()> {
         // A due time already past is due now: indexed under the current
         // minute, so a job due long ago (a year, the Unix epoch) does not
         // move the cursor back to then, every minute since read one by
         // one by the next tick. A runner meeting a job in a bucket later
-        // than its due time's runs it there (`JobRunner::process`).
+        // than its due time's runs it there (`KvJobs::claim_one`).
         let bucket = bucket_of(due_ms).max(bucket_of(millis(self.clock.now())));
         // Every page of a bucket expires at once (a reader stops at the
         // first page missing), retention after the bucket, or after now
@@ -651,7 +490,7 @@ impl KvJobs {
     }
 
     /// Move the cursor back to `bucket` when it is past it (or create it).
-    pub(super) async fn lower_cursor(&self, bucket: i64) -> Result<()> {
+    async fn lower_cursor(&self, bucket: i64) -> Result<()> {
         let key = cursor_key();
         let bytes = encode(
             &key,
@@ -695,7 +534,7 @@ impl KvJobs {
     /// Record that the job at `key` is indexed under `due_ms`, if it still
     /// is due then. Contention leaves it unrecorded, which only makes a
     /// reader index it again.
-    pub(super) async fn mark_indexed(&self, key: &StoreKey, due_ms: i64) -> Result<()> {
+    async fn mark_indexed(&self, key: &StoreKey, due_ms: i64) -> Result<()> {
         for _ in 0..CAS_ATTEMPTS {
             let Some((record, version)) = self.read_job(key).await? else {
                 return Ok(());
@@ -717,35 +556,651 @@ impl KvJobs {
         }
         Ok(())
     }
-}
 
-/// [`KvJobs::observe`] as a bot listener (`BotBuilder::listen` with
-/// `Listen::event("status_updated")`) or an `EventSink<WebhookEvent>` (next
-/// to your own sink in a `FanoutSink`). As a sink, a store that fails is
-/// `SinkError::Delivery`: the webhook answers `500` and Meta redelivers.
-/// As a bot's listener, it runs after the middleware and its errors go to
-/// the bot's `ErrorHandler` (the default logs and acknowledges them: the
-/// `131049` is then not recorded).
-#[derive(Debug, Clone)]
-pub struct JobFeedback {
-    jobs: KvJobs,
-}
+    async fn read_bucket(&self, bucket: i64) -> Result<Vec<ReadPage>> {
+        let mut pages = Vec::new();
+        let mut page = 0usize;
+        loop {
+            let key = page_key(bucket, page);
+            let Some(found) = self.kv.get(&key).await? else {
+                pages.push(ReadPage {
+                    version: None,
+                    ids: Vec::new(),
+                });
+                return Ok(pages);
+            };
+            let read: Page = decode(&key, &found.value)?;
+            pages.push(ReadPage {
+                version: Some(found.version),
+                ids: read.ids,
+            });
+            page += 1;
+        }
+    }
 
-#[async_trait]
-impl CommandHandler for JobFeedback {
-    async fn call(&self, ctx: Ctx) -> Result<()> {
-        self.jobs.observe(ctx.event()).await.map(drop)
+    /// Move the cursor past `bucket`, every job of which is settled; then
+    /// read the bucket again, and move the cursor back if a job was indexed
+    /// into it meanwhile (by a writer that read the cursor before it
+    /// moved). The cursor keeps the pages' versions as read before it
+    /// moved, so a runner that fails before that second read leaves it to
+    /// the next tick (`Cursor::behind`). The cursor's new version, or
+    /// `None` when this tick no longer moves it.
+    async fn advance(&self, version: u64, bucket: i64, pages: &[ReadPage]) -> Result<Option<u64>> {
+        let key = cursor_key();
+        let next = Cursor {
+            v: VERSION,
+            bucket: bucket.saturating_add(BUCKET_SECONDS),
+            behind: Some(versions(pages)),
+        };
+        let Some(moved) = self
+            .kv
+            .compare_and_swap(&key, version, Some(encode(&key, &next)?), Expiry::Never)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let again = self.read_bucket(bucket).await?;
+        if versions(&again) != versions(pages) {
+            self.lower_cursor(bucket).await?;
+            return Ok(None);
+        }
+        Ok(Some(moved))
+    }
+
+    /// The job `id` met in `bucket`: claimed for `runner` and handed to
+    /// `handler` when due. Whether it is settled as far as this bucket
+    /// goes.
+    async fn claim_one(
+        &self,
+        id: &str,
+        bucket: i64,
+        runner: &str,
+        lease: Duration,
+        handler: &mut dyn ClaimHandler,
+    ) -> Result<bool> {
+        let key = job_key(id);
+        let Some(found) = self.kv.get(&key).await? else {
+            return Ok(true);
+        };
+        let (record, version) = match read_job_record(&key, &found) {
+            JobRead::Record(record, version) => (*record, version),
+            // A later release's: its runners run it.
+            JobRead::Newer => return Ok(false),
+            JobRead::Corrupt(_) => {
+                // Not the error itself: serde's message may quote the
+                // record (a recipient's number).
+                tracing::warn!("an unreadable job is skipped: it is never sent");
+                return Ok(true);
+            }
+        };
+        if bucket_of(record.due_at_ms) > bucket {
+            // Moved later (retried, re-run): indexed under its own minute,
+            // or indexed now if the move stopped before. A job met in a
+            // bucket later than its due time's is due: indexed under the
+            // minute it was scheduled in (a due time already past), or
+            // met on an older page (re-run to an earlier time).
+            if !record.state.settled() && !record.indexed {
+                self.index(&record.id, record.due_at_ms).await?;
+                self.mark_indexed(&key, record.due_at_ms).await?;
+            }
+            return Ok(true);
+        }
+        let now = millis(self.clock.now());
+        match record.state {
+            state if state.settled() => return Ok(true),
+            StoredState::Pending if record.due_at_ms > now => return Ok(false),
+            StoredState::Claimed
+                if record
+                    .lease
+                    .as_ref()
+                    .is_some_and(|lease| lease.until_ms > now) =>
+            {
+                return Ok(false);
+            }
+            _ => {}
+        }
+        let number = record.claims.saturating_add(1);
+        let until_ms = now.saturating_add(duration_ms(lease));
+        let mut claimed = record;
+        claimed.state = StoredState::Claimed;
+        claimed.claims = number;
+        claimed.lease = Some(Lease {
+            runner: runner.to_owned(),
+            claim: number,
+            until_ms,
+        });
+        // The claim: only one runner's compare-and-swap from this version
+        // succeeds.
+        if self
+            .kv
+            .compare_and_swap(&key, version, Some(encode(&key, &claimed)?), Expiry::Never)
+            .await?
+            .is_none()
+        {
+            return Ok(false);
+        }
+        let ended = handler
+            .run(JobClaim::new(
+                claimed.view(),
+                runner,
+                number,
+                instant(until_ms),
+            ))
+            .await?;
+        Ok(match &ended {
+            JobEnd::LeaseLost => false,
+            // Retried within this very minute: it is still to run here.
+            JobEnd::Retrying { at, .. } => bucket_of(millis(*at)) != bucket,
+            _ => true,
+        })
+    }
+
+    /// This run's marker of the recipient at `index`, with its key.
+    fn marker_of(claim: &JobClaim, index: usize) -> Result<(StoreKey, String)> {
+        let rkey = recipient_at(claim, index)?;
+        Ok((
+            marker_key(claim.job.id.as_str(), claim.job.run, &rkey),
+            rkey,
+        ))
+    }
+
+    /// The version of the "sending" marker at `marker` that `runner`
+    /// created, if it is still that.
+    async fn sending_of(&self, marker: &StoreKey, runner: &str) -> Result<Option<u64>> {
+        let Some(found) = self.kv.get(marker).await? else {
+            return Ok(None);
+        };
+        Ok(match decode::<Marker>(marker, &found.value) {
+            Ok(read)
+                if read.state == MarkerState::Sending && read.runner.as_deref() == Some(runner) =>
+            {
+                Some(found.version)
+            }
+            _ => None,
+        })
+    }
+
+    async fn limit(&self, limited: StoreKey) -> Result<()> {
+        self.kv
+            .put_if_absent(
+                &limited,
+                encode(&limited, &Limited { v: VERSION })?,
+                Expiry::After(MARKETING_LIMIT_WAIT),
+            )
+            .await?;
+        Ok(())
     }
 }
 
 #[async_trait]
-impl EventSink<WebhookEvent> for JobFeedback {
-    async fn deliver(&self, event: WebhookEvent) -> std::result::Result<(), SinkError> {
-        self.jobs
-            .observe(&event)
-            .await
-            .map(drop)
-            .map_err(|e: Error| SinkError::Delivery(anyhow::Error::new(e)))
+impl JobStore for KvJobs {
+    fn clock(&self) -> Arc<dyn Clock> {
+        Arc::clone(&self.clock)
+    }
+
+    /// Also: the job is indexed under its due time; a job scheduled again
+    /// after an error or a crash that stopped this half-way is indexed
+    /// again.
+    async fn schedule(&self, job: Job) -> Result<()> {
+        let job = job.into_scheduled()?;
+        let recipients = job
+            .recipients
+            .iter()
+            .map(StoredRecipient::from_recipient)
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                ValidationError::new("recipients", "a kind of recipient a job cannot store")
+            })?;
+        let record = JobRecord {
+            v: VERSION,
+            id: job.id.0,
+            from: job.from,
+            due_at_ms: millis(job.due_at),
+            state: StoredState::Pending,
+            run: 1,
+            retries: 0,
+            claims: 0,
+            indexed: false,
+            lease: None,
+            recipients,
+            payload: job.payload,
+            summary: None,
+        };
+        let key = job_key(&record.id);
+        let bytes = encode(&key, &record)?;
+        if self
+            .kv
+            .put_if_absent(&key, bytes, Expiry::Never)
+            .await?
+            .is_none()
+        {
+            let Some((existing, _)) = self.read_job(&key).await? else {
+                // Removed meanwhile (expired after settling): busy, try
+                // again.
+                return Err(StorageError::Busy.into());
+            };
+            if !existing.same_schedule(&record) {
+                return Err(
+                    ValidationError::new("id", "another job is stored under this id").into(),
+                );
+            }
+            if existing.state != StoredState::Pending || existing.indexed {
+                return Ok(());
+            }
+        }
+        self.index(&record.id, record.due_at_ms).await?;
+        self.mark_indexed(&key, record.due_at_ms).await
+    }
+
+    async fn cancel(&self, id: &JobId) -> Result<bool> {
+        let key = job_key(id.as_str());
+        for _ in 0..CAS_ATTEMPTS {
+            let Some((record, version)) = self.read_job(&key).await? else {
+                return Ok(false);
+            };
+            if record.state.settled() {
+                return Ok(false);
+            }
+            let mut next = record;
+            next.state = StoredState::Cancelled;
+            next.lease = None;
+            let bytes = encode(&key, &next)?;
+            if self
+                .kv
+                .compare_and_swap(&key, version, Some(bytes), Expiry::After(self.retention))
+                .await?
+                .is_some()
+            {
+                tracing::debug!("job cancelled");
+                return Ok(true);
+            }
+        }
+        Err(StorageError::Busy.into())
+    }
+
+    /// Also: after an error, call it again: a re-run that stopped before
+    /// its index was written is indexed then (and `false` is returned, the
+    /// job being pending already).
+    async fn rerun(&self, id: &JobId, at: OffsetDateTime) -> Result<bool> {
+        let key = job_key(id.as_str());
+        for _ in 0..CAS_ATTEMPTS {
+            let Some((record, version)) = self.read_job(&key).await? else {
+                return Ok(false);
+            };
+            if !record.state.settled() {
+                if !record.indexed {
+                    // A rerun that stopped before indexing it.
+                    self.index(&record.id, record.due_at_ms).await?;
+                    self.mark_indexed(&key, record.due_at_ms).await?;
+                }
+                return Ok(false);
+            }
+            let mut next = record;
+            next.state = StoredState::Pending;
+            next.run = next.run.saturating_add(1);
+            next.retries = 0;
+            next.lease = None;
+            next.summary = None;
+            next.due_at_ms = millis(at);
+            next.indexed = false;
+            let bytes = encode(&key, &next)?;
+            if self
+                .kv
+                .compare_and_swap(&key, version, Some(bytes), Expiry::Never)
+                .await?
+                .is_some()
+            {
+                self.index(&next.id, next.due_at_ms).await?;
+                self.mark_indexed(&key, next.due_at_ms).await?;
+                return Ok(true);
+            }
+        }
+        Err(StorageError::Busy.into())
+    }
+
+    async fn get(&self, id: &JobId) -> Result<Option<ScheduledJob>> {
+        Ok(self
+            .read_job(&job_key(id.as_str()))
+            .await?
+            .map(|(record, _)| record.view()))
+    }
+
+    /// Also: a message whose id is older than [`Self::message_ttl`] is no
+    /// longer kept.
+    async fn limit_message(&self, message: &MessageId) -> Result<bool> {
+        let key = message_key(message.as_str());
+        let Some(found) = self.kv.get(&key).await? else {
+            return Ok(false);
+        };
+        let record: MessageRecord = decode(&key, &found.value)?;
+        self.limit(StoreKey::new(JOBS_LIMITED_NAMESPACE, record.limited))
+            .await?;
+        tracing::info!(
+            run = record.run,
+            "a job's recipient is marketing-limited (131049): skipped by a re-run for 24 hours"
+        );
+        Ok(true)
+    }
+
+    /// Also: the due index is read from the oldest minute that may still
+    /// hold a job to run up to now, and its cursor moved past the minutes
+    /// whose every job is settled (the [module docs](super)).
+    async fn claim_due(
+        &self,
+        runner: &str,
+        lease: Duration,
+        handler: &mut dyn ClaimHandler,
+    ) -> Result<()> {
+        let key = cursor_key();
+        let Some(mut found) = self.kv.get(&key).await? else {
+            return Ok(());
+        };
+        let mut cursor: Cursor = decode(&key, &found.value)?;
+        if let Some(behind) = &cursor.behind {
+            // The second read of the bucket the cursor was last moved
+            // past, in case the runner that moved it failed before its own.
+            let previous = cursor.bucket.saturating_sub(BUCKET_SECONDS);
+            if versions(&self.read_bucket(previous).await?) != *behind {
+                self.lower_cursor(previous).await?;
+                let Some(again) = self.kv.get(&key).await? else {
+                    return Ok(());
+                };
+                cursor = decode(&key, &again.value)?;
+                found = again;
+            }
+        }
+        // The cursor's version while this call may still move it forward.
+        let mut held = Some(found.version);
+        let last = bucket_of(millis(self.clock.now()));
+        let mut bucket = cursor.bucket;
+        while bucket <= last {
+            let pages = self.read_bucket(bucket).await?;
+            let mut settled = true;
+            for id in pages.iter().flat_map(|page| page.ids.iter()) {
+                if !self.claim_one(id, bucket, runner, lease, handler).await? {
+                    settled = false;
+                }
+            }
+            held = match held {
+                Some(version) if settled => self.advance(version, bucket, &pages).await?,
+                _ => None,
+            };
+            bucket = bucket.saturating_add(BUCKET_SECONDS);
+        }
+        Ok(())
+    }
+
+    async fn hold(&self, claim: &JobClaim, lease: Duration) -> Result<Holding> {
+        let key = job_key(claim.job.id.as_str());
+        let lease_ms = duration_ms(lease);
+        for _ in 0..CAS_ATTEMPTS {
+            let Some((record, version)) = self.read_job(&key).await? else {
+                return Ok(Holding::Halted(JobHalt::Lost));
+            };
+            if record.state == StoredState::Cancelled {
+                return Ok(Holding::Halted(JobHalt::Cancelled));
+            }
+            if !record.held_by(&claim.runner, claim.number) {
+                return Ok(Holding::Halted(JobHalt::Lost));
+            }
+            let now = millis(self.clock.now());
+            let until = record
+                .lease
+                .as_ref()
+                .map_or(i64::MIN, |lease| lease.until_ms);
+            if until.saturating_sub(now) >= lease_ms / 2 {
+                return Ok(Holding::Held(instant(until)));
+            }
+            let renewed = now.saturating_add(lease_ms);
+            let mut next = record;
+            next.lease = Some(Lease {
+                runner: claim.runner.clone(),
+                claim: claim.number,
+                until_ms: renewed,
+            });
+            let bytes = encode(&key, &next)?;
+            if self
+                .kv
+                .compare_and_swap(&key, version, Some(bytes), Expiry::Never)
+                .await?
+                .is_some()
+            {
+                return Ok(Holding::Held(instant(renewed)));
+            }
+        }
+        Err(StorageError::Busy.into())
+    }
+
+    async fn check_run(&self, claim: &JobClaim) -> Result<Option<JobHalt>> {
+        Ok(
+            match self.read_job(&job_key(claim.job.id.as_str())).await? {
+                None => Some(JobHalt::Lost),
+                Some((record, _)) if record.state == StoredState::Cancelled => {
+                    Some(JobHalt::Cancelled)
+                }
+                Some((record, _)) if record.run != claim.job.run => Some(JobHalt::Lost),
+                Some(_) => None,
+            },
+        )
+    }
+
+    async fn recipient(&self, claim: &JobClaim, index: usize) -> Result<RecipientMark> {
+        let (marker, rkey) = Self::marker_of(claim, index)?;
+        if let Some(found) = self.kv.get(&marker).await? {
+            return Ok(
+                match decode::<Marker>(&marker, &found.value).map(|read| read.state) {
+                    Ok(MarkerState::Sent) => RecipientMark::Sent,
+                    Ok(MarkerState::Failed) => RecipientMark::Failed,
+                    // A "sending" left by a runner that stopped mid-send:
+                    // it may have gone out.
+                    Ok(MarkerState::Sending | MarkerState::Unknown) => RecipientMark::Unknown,
+                    // Something was written for this recipient (by a later
+                    // release, or damaged): never sent again, and not a
+                    // reason to stop every tick at this job.
+                    Err(_) => {
+                        tracing::warn!(
+                            "a recipient's unreadable marker is read as an outcome unknown: \
+                             never resent"
+                        );
+                        RecipientMark::Unknown
+                    }
+                },
+            );
+        }
+        let limited = StoreKey::new(
+            JOBS_LIMITED_NAMESPACE,
+            limited_digest(claim.job.id.as_str(), &rkey),
+        );
+        Ok(if self.kv.get(&limited).await?.is_some() {
+            RecipientMark::Limited
+        } else {
+            RecipientMark::Unmarked
+        })
+    }
+
+    async fn mark_sending(&self, claim: &JobClaim, index: usize) -> Result<bool> {
+        let (marker, _) = Self::marker_of(claim, index)?;
+        let intent = Marker {
+            v: VERSION,
+            state: MarkerState::Sending,
+            runner: Some(claim.runner.clone()),
+            message_id: None,
+            code: None,
+        };
+        Ok(self
+            .kv
+            .put_if_absent(
+                &marker,
+                encode(&marker, &intent)?,
+                Expiry::After(self.retention),
+            )
+            .await?
+            .is_some())
+    }
+
+    async fn mark_outcome(
+        &self,
+        claim: &JobClaim,
+        index: usize,
+        outcome: SendRecord,
+    ) -> Result<bool> {
+        let (marker, rkey) = Self::marker_of(claim, index)?;
+        let Some(version) = self.sending_of(&marker, &claim.runner).await? else {
+            return Ok(false);
+        };
+        let (state, message_id, code) = match outcome {
+            SendRecord::Sent { message_id } => (MarkerState::Sent, message_id, None),
+            SendRecord::Failed { code } => (MarkerState::Failed, None, code),
+            SendRecord::Unknown { code } => (MarkerState::Unknown, None, code),
+        };
+        let written = Marker {
+            v: VERSION,
+            state,
+            runner: None,
+            message_id: message_id.as_ref().map(|id| id.as_str().to_owned()),
+            code,
+        };
+        if self
+            .kv
+            .compare_and_swap(
+                &marker,
+                version,
+                Some(encode(&marker, &written)?),
+                Expiry::Keep,
+            )
+            .await?
+            .is_none()
+        {
+            return Ok(false);
+        }
+        if let Some(id) = message_id {
+            let key = message_key(id.as_str());
+            let record = MessageRecord {
+                v: VERSION,
+                job: claim.job.id.as_str().to_owned(),
+                run: claim.job.run,
+                limited: limited_digest(claim.job.id.as_str(), &rkey),
+            };
+            let stored = match encode(&key, &record) {
+                Ok(bytes) => self
+                    .kv
+                    .put(&key, bytes, Expiry::After(self.message_ttl))
+                    .await
+                    .map(drop),
+                Err(error) => Err(error),
+            };
+            if stored.is_err() {
+                tracing::warn!(
+                    "a job's message id could not be kept: a 131049 for it will not be recorded"
+                );
+            }
+        }
+        Ok(true)
+    }
+
+    async fn unmark(&self, claim: &JobClaim, index: usize) -> Result<bool> {
+        let (marker, _) = Self::marker_of(claim, index)?;
+        let Some(version) = self.sending_of(&marker, &claim.runner).await? else {
+            return Ok(false);
+        };
+        Ok(self
+            .kv
+            .compare_and_swap(&marker, version, None, Expiry::Keep)
+            .await?
+            .is_some())
+    }
+
+    async fn limit_recipient(&self, claim: &JobClaim, index: usize) -> Result<()> {
+        let rkey = recipient_at(claim, index)?;
+        self.limit(StoreKey::new(
+            JOBS_LIMITED_NAMESPACE,
+            limited_digest(claim.job.id.as_str(), &rkey),
+        ))
+        .await
+    }
+
+    async fn settle(
+        &self,
+        claim: &JobClaim,
+        state: JobState,
+        summary: &JobSummary,
+    ) -> Result<Option<JobHalt>> {
+        let state = match state {
+            JobState::Done => StoredState::Done,
+            JobState::Stopped => StoredState::Stopped,
+            _ => {
+                return Err(
+                    ValidationError::new("state", "a job settles as done or stopped").into(),
+                );
+            }
+        };
+        let key = job_key(claim.job.id.as_str());
+        for _ in 0..CAS_ATTEMPTS {
+            let Some((record, version)) = self.read_job(&key).await? else {
+                return Ok(Some(JobHalt::Lost));
+            };
+            if record.state == StoredState::Cancelled {
+                return Ok(Some(JobHalt::Cancelled));
+            }
+            if !record.held_by(&claim.runner, claim.number) {
+                return Ok(Some(JobHalt::Lost));
+            }
+            let mut next = record;
+            next.state = state;
+            next.lease = None;
+            next.summary = Some(summary.into());
+            let bytes = encode(&key, &next)?;
+            if self
+                .kv
+                .compare_and_swap(&key, version, Some(bytes), Expiry::After(self.retention))
+                .await?
+                .is_some()
+            {
+                return Ok(None);
+            }
+        }
+        Err(StorageError::Busy.into())
+    }
+
+    /// Also: `at` is kept in whole milliseconds, and the job indexed under
+    /// its minute.
+    async fn retry(
+        &self,
+        claim: &JobClaim,
+        at: OffsetDateTime,
+        _summary: &JobSummary,
+    ) -> Result<Option<JobHalt>> {
+        let key = job_key(claim.job.id.as_str());
+        let due = millis(at);
+        for _ in 0..CAS_ATTEMPTS {
+            let Some((record, version)) = self.read_job(&key).await? else {
+                return Ok(Some(JobHalt::Lost));
+            };
+            if record.state == StoredState::Cancelled {
+                return Ok(Some(JobHalt::Cancelled));
+            }
+            if !record.held_by(&claim.runner, claim.number) {
+                return Ok(Some(JobHalt::Lost));
+            }
+            let mut next = record;
+            next.state = StoredState::Pending;
+            next.lease = None;
+            next.retries = next.retries.saturating_add(1);
+            next.due_at_ms = due;
+            next.indexed = false;
+            let bytes = encode(&key, &next)?;
+            if self
+                .kv
+                .compare_and_swap(&key, version, Some(bytes), Expiry::Never)
+                .await?
+                .is_some()
+            {
+                self.index(&next.id, due).await?;
+                self.mark_indexed(&key, due).await?;
+                return Ok(None);
+            }
+        }
+        Err(StorageError::Busy.into())
     }
 }
 
