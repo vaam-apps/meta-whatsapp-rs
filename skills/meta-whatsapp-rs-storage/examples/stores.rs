@@ -43,7 +43,7 @@ pub async fn prefixed(pool: sqlx::PgPool) -> anyhow::Result<PostgresKvStore> {
 /// Redis: persistence on, `maxmemory-policy noeviction`, an instance of its
 /// own. `redis` is meta-whatsapp-rs's re-export: no redis dependency of your own.
 pub async fn redis_kv(url: &str) -> anyhow::Result<Arc<dyn KvStore>> {
-    let client = redis::Client::open(url)?; // `rediss://`: see the skill (your TLS feature and provider)
+    let client = redis::Client::open(url)?; // `redis://`; `rediss://` goes through `RedisTls`
     let conn = client.get_connection_manager().await?;
     Ok(Arc::new(RedisKvStore::new(conn).with_prefix("shop:wa:")))
 }

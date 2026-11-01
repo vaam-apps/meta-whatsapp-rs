@@ -19,7 +19,10 @@ members = [
 ]
 # Repository automation is its own workspace (own Cargo.lock): its HTTP
 # client (ureq → rustls with `ring`) must not be resolved into the
-# library's builds and tests. See .xtask/Cargo.toml.
+# library's builds and tests. See .xtask/Cargo.toml. (Since roadmap L21c,
+# meta-whatsapp-adapters' dev-dependencies link rustls' `ring` provider on
+# purpose, into test builds only: its `rediss://` tests run with both
+# providers linked, the case the process default panics in.)
 exclude = [".xtask"]
 # The service's crates (meta-whatsapp-server-core; the backends
 # meta-whatsapp-server-store-memory and -store-postgres; the HTTP layer,
@@ -130,6 +133,16 @@ reqwest = { version = "0.13", default-features = false }
 axum = { version = "0.8", default-features = false }
 sqlx = { version = "0.9", default-features = false }
 redis = { version = "1", default-features = false }
+# `rediss://` (meta-whatsapp-adapters, feature `redis`; roadmap L21c): the
+# TLS stack reqwest already brings, configured with an explicit aws-lc-rs
+# provider, never the process default. The versions reqwest resolves.
+rustls = { version = "0.23", default-features = false }
+tokio-rustls = { version = "0.26", default-features = false }
+rustls-platform-verifier = "0.7"
+# Test-only: the certificates of the in-process TLS servers in
+# meta-whatsapp-adapters' tests/redis_tls_handshake.rs (a name or an IP
+# address the server's certificate does not carry, an untrusted issuer).
+rcgen = { version = "0.14", default-features = false }
 
 # Typst rendering.
 typst = "0.15"
