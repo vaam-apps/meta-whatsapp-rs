@@ -1,0 +1,11 @@
+error[E0423]: cannot initialize a tuple struct which contains private fields
+ --> tests/visibility/fail/grant_from_state.rs:9:5
+  |
+9 |     Grant(state.clone())
+  |     ^^^^^
+  |
+note: constructor is not visible here due to private fields
+ --> src/state.rs
+  |
+  | pub struct Grant(AppState);
+  |                  ^^^^^^^^ private field

@@ -255,6 +255,125 @@ stored data, the owner's).
   (a partner's agreement covers its shared and managed client WABAs), so
   there is none to wrap; a GIF header's send-time parameter is still
   shown by no page, so none is typed.
+- **Thread control** (`meta_whatsapp_client::thread_control`, roadmap
+  L15, parity row 139, from `conversation-routing/thread-control`):
+  `client.thread_control(phone_number_id)` with `ThreadControl::pass`,
+  `take` and `release`, each a `POST /{phone-number-id}/thread_control`
+  with its `action`, answering `ThreadControlResponse` (`request_id`, to
+  quote to support). A `Pass` goes to the escalation partner
+  (`Pass::to_escalation_partner`, the default, sends no `control_pass`)
+  or to a `TargetRole` (`Pass::to_role`: `ai_agent`, `ctwa`,
+  `customer_service`, `escalation`, `marketing`, `utility`, and
+  `Other(String)` for a later one), with `metadata` for the new owner's
+  `control_passed` event; `take` (the escalation partner only) carries
+  `metadata` too; `release` sends none (no event follows a release). The
+  user is a `Recipient`: a phone number or `wa_id` as `to`, a BSUID as
+  `recipient`. Checked before any request: exactly one non-empty
+  identifier (`Recipient::PhoneAndUser` and groups are refused),
+  `metadata` at most 2,000 characters
+  (`thread_control::METADATA_MAX_CHARS`, Unicode scalar values), a
+  non-empty target role. None of the three is replayed after a timeout.
+  The `meta-whatsapp-rs-cms-inbox` skill's example now makes the pass
+  before recording it.
+- **A pacer shared by replicas** in `meta-whatsapp-bot` (roadmap B2b,
+  parity row 89; for the service's broadcasts, M5k). Opt-in:
+  `KvRateLimiter` (module `pacer`) is a `RateLimiter` whose per-number
+  schedules are records in a `KvStore` (a typed store, no new port), so
+  every replica on the same Redis or Postgres books each number's sends
+  from one budget: `Pacer::new(KvRateLimiter::new(kv, Rate::DEFAULT))`.
+  `TokenBucket` stays the default and is unchanged. A record holds the
+  generic cell rate algorithm's due time, the slow-down (shared by every
+  replica) and a raised rate, in a 49-byte layout whose first byte is
+  its version (1), under the new namespace `wa.bot.pacer`
+  (`PACER_NAMESPACE`; ephemeral; a stable identifier pending the owner's
+  confirmation, docs/architecture.md § Stable identifiers), keyed by
+  the SHA-256 of the length-prefixed phone number id
+  (`KvRateLimiter::store_key`). A booking reads the record and writes it
+  back with `compare_and_swap` on the version read; one that loses
+  reads again after a jittered backoff (1 ms doubling to 64 ms), at
+  most 8 times (`KvRateLimiter::contention`), then fails with
+  `StorageError::Busy`. It fails closed: a store error, contention past
+  the bound or a record of another version fails the booking, so
+  nothing is sent (a broadcast ends `BroadcastEnd::LimiterFailed`). A
+  record expires `KvRateLimiter::idle_expiry` (24 hours by default)
+  after its last slot. The replicas' clocks are assumed synchronized
+  (NTP): a skew between two lets up to `⌈skew × rate⌉` more sends into a
+  one-second window, and the shared schedule never moves back. Settings
+  as `TokenBucket`'s (`rate_for`, `set_rate`, `burst`, `adaptive`,
+  `slow_down_factor`, `slow_down_spacing`, `recovery`) plus
+  `KvRateLimiter::rate_of`, `KvRateLimiter::raise_rate` and
+  `KvRateLimiter::with_timer`. A slot given back is reused only while
+  it is the last booked by any replica (a new record's slot ids start
+  at random, so a slot of a record deleted or expired since gives
+  nothing back). Deleting a number's record (`KvRateLimiter::store_key`)
+  resets it: the remedy for a record it cannot read (never
+  overwritten), for slots a clock stepped forward booked, and for a
+  raised rate to lower, at the cost of the slots booked.
+- **`RateLimiter::raise_rate`** (`meta-whatsapp-bot`): raise a number's
+  rate unless it is already at or above it, atomically, never lowering
+  it; whether it rose. Defaults to raising nothing (`Ok(false)`), so
+  existing limiters compile unchanged; `TokenBucket` raises it in this
+  process, `KvRateLimiter` in the record, for every replica (checked
+  against the record read, under the same compare-and-swap).
+- **WABA administration** (`meta_whatsapp_client::waba`, roadmap L10b,
+  parity rows 127 and 146–148, row 90's Meta side; the service's side is
+  M5c4, M5j and M5k). Every one checked before any request, and every
+  creation a `POST` never replayed after a timeout (only an error that
+  proves Meta refused it is resent, `RetryPolicy`):
+  - `Business::create_whatsapp_business_account(&NewWaba)`
+    (`POST /{BUSINESS_ID}/whatsapp_business_accounts`: `name`,
+    `primary_funding_id`, `purchase_order_number`, an ISO 4217
+    `currency`, `timezone_id`, `business_type` as `WabaBusinessType`;
+    the deprecated `on_behalf_of_business_id` is not offered), answering
+    a `CreatedWaba` (`id`, `payment_account_id`). Partner-initiated
+    creation is a Meta Business Suite flow: the page documents no API
+    call for it.
+  - `Business::system_user_access_token(&AppSecret,
+    &SystemUserTokenRequest)` (`POST /{BUSINESS_ID}/system_user_access_tokens`):
+    a client business's token, asked for with the partner's system user
+    token. The `appsecret_proof` (hex HMAC-SHA256 of the token the request
+    carries, the partner's, under the app secret) is computed here and sent in a form body with
+    `fetch_only`, `system_user_id`, `scope`, `asset` (both
+    comma-separated) and `set_token_expires_in_60_days`, never in the
+    URL. The answer, a `SystemUserAccessToken`, holds an `AccessToken`
+    (redacted in `Debug`); no error quotes the answer's body (one that
+    does not decode, or a non-2xx one that is not Meta's error envelope),
+    and a blank token is refused. A `fetch_only` request, read-only by Meta's
+    page, is replayed as a read; a generation is not.
+  - `Business::system_users` (and `_stream`; `SystemUser`,
+    `SystemUserRole`): on the business portfolio, as the Marketing API's
+    Business node documents the edge and the guide's prose says, not on
+    the WABA its request prints (`manage-system-users`);
+    `Waba::activities` and `Waba::solutions` (and `_stream`s, taking a
+    `ListWabaRecords`; `WabaActivity` with `ActivityCategory` and the 51
+    `ActivityEventType`s, `WabaSolution`, with `partners::solutions`'
+    `SolutionStatus`, `PendingRequestStatus` and `SolutionApp`), and
+    `Client::business_user(id).assigned_whatsapp_business_accounts`
+    (and `_stream`, `ListAssignedWabas`; `BusinessUser`).
+  - The billing currency or payment method migration
+    (`pricing/change-billing-currency`):
+    `Waba::set_payment_method_migration_intent(&PaymentMethodMigrationIntent)`
+    answering a `MigrationStarted`, then
+    `Client::payment_method_migration(id)`'s `status()` and
+    `resume_migration()` (a `MigrationState`, `PaymentMigrationStatus`). The
+    intent clones the WABA and the resume switches billing to the clone:
+    two explicit calls no other call of the library makes.
+  - `Client::message_history(id).events(&ListMessageHistoryEvents)` (and
+    `_stream`): a message history entry's delivery events
+    (`MessageHistoryEvent`, `DeliveryStatusOccurrence`, `DeliveryStatus`,
+    `WebhookUpdateState`). Where the id comes from is documented nowhere.
+  - Meta's campaign schedules: `Waba::schedules` (and `_stream`;
+    `CampaignSchedule`, `ScheduleStatus`) and
+    `Waba::create_schedule(&NewSchedule)` (`hsm_id`, `audience_id`,
+    `waba_cs_id`, `name`, `description`, `delivery_time`), answering a
+    `CreatedSchedule`.
+
+  The new paged reads are in the enumeration of paged answers withheld
+  from decode errors (`request::paging_withheld_tests`). Not wrapped:
+  `GET /{BUSINESS_ID}/whatsapp_business_accounts` (the owned list is
+  `owned_whatsapp_business_accounts`; its array filter's encoding is not
+  shown).
+
 - **Multi-Partner Solutions and migration intents**
   (`meta_whatsapp_client::partners`, roadmap L12, parity rows 144 and
   145, from `solution-providers/multi-partner-solutions`,
@@ -1450,6 +1569,36 @@ stored data, the owner's).
 
 ### Changed
 
+- **Graph error `131070` is `ThreadOwnedElsewhere`**
+  (`meta_whatsapp_core::ErrorKind::from_code`, roadmap L15; see Added,
+  "Thread control"). `conversation-routing/thread-control` § Errors gives
+  it for a service message from a responder that does not own the thread
+  ("another app is controlling this thread now"), idle threads included;
+  it was `Unknown`. It now has the kind of the inbox's local refusal
+  (`ValidationError::thread_owned_elsewhere()`), so branching on
+  `ErrorKind::ThreadOwnedElsewhere` matches both; still not retryable,
+  and `meta_whatsapp_rs::inbox::is_thread_owned_elsewhere` still matches
+  the local refusal only. The same table's `2494191` (a `take` by a
+  caller that is not the escalation partner) stays `Unknown`: not
+  `Permission`, which is the token's permissions or asset access. Tests:
+  `metas_ownership_refusal_has_the_local_refusals_kind`,
+  `classification_table_spot_checks` (`meta-whatsapp-core`).
+- **Behaviour change (the service) — Graph error `131070` is answered
+  `409 thread_owned_elsewhere`** (`meta-whatsapp-server`, from the
+  library change above; it answered `502 unknown`), the code the inbox's
+  local refusal already had (`docs/design/server.md` §5.2 now names
+  `131070`). Tests: `each_kind_answers_its_code_and_no_meta_text`,
+  `a_local_refusal_answers_its_kinds_code_and_status`.
+- **`ThroughputUpgrades` takes any `RateLimiter`** (`meta-whatsapp-bot`,
+  roadmap B2b): it raises a number's rate through
+  `RateLimiter::raise_rate` instead of the `TokenBucket`'s own, so a
+  `KvRateLimiter` takes an upgrade for every replica.
+  `ThroughputUpgrades::new` is generic over the limiter
+  (`Arc<L: RateLimiter>`: an `Arc<TokenBucket>` passes as before) and
+  `ThroughputUpgrades::shared` takes an `Arc<dyn RateLimiter>` (an
+  `Arc<TokenBucket>` argument coerces to it). `ThroughputUpgrades::observe`
+  now also fails when the limiter does (a `KvRateLimiter` whose store is
+  down), raising nothing; a `TokenBucket` never fails.
 - **Breaking — `ConnectCall` has two more fields**
   (`meta_whatsapp_client::calling`, roadmap L14; see Added, "Call
   recording and transcription"): `recording: Option<CallRecording>` and
@@ -2007,6 +2156,56 @@ stored data, the owner's).
   call its operations instead of the `Authorizer`'s vault writes; pass
   the guard its `Operations` (`api::tenant_operations()`, or your own
   router's).
+- **Breaking — the service is split into the crates its binary composes**
+  (roadmap S7, design §2.1 and §8; all `publish = false`, workspace
+  members but not default ones). `meta-whatsapp-server` keeps the
+  process (`config`, `serve`, `cli`) and composes, by its Cargo features
+  `api-axum`, `store-memory` and `store-postgres` (all three default):
+  - `meta-whatsapp-server-store-memory` (`MemoryBackend`, `MemoryStore`,
+    `MemoryEventStore`, `MemoryLeaderLock`) and
+    `meta-whatsapp-server-store-postgres` (`PgBackend`, `PgStore`,
+    `PgEventStore`, `PgLeaderLock`, `PgJanitor`, `PgMigrator`,
+    `migrate`, `migrations`, `lock_key`, `MIGRATION_LOCK`,
+    `MIGRATIONS_TABLE`, `HOUSEKEEPING_LOCK`, and the migration files),
+    each running the core's conformance suite in its own tests;
+  - `meta-whatsapp-server-http` (`state`, `auth`, `error`, `events`,
+    `idempotency`, `listen`, `metrics`, `ratelimit`, `telemetry`, a
+    `store` of the core's ports, and `api` with the public router, the
+    internal listener's layers, `api::common`, `api::media`, `api::ops`
+    and `api::webhooks`);
+  - `meta-whatsapp-server-api-axum` (`api`: the `/v1` routes, the
+    OpenAPI document and `internal_router`, re-exporting the HTTP
+    crate's shared routes).
+
+  `meta_whatsapp_server::{api, auth, error, events, idempotency, keys,
+  listen, metrics, model, ratelimit, state, store, telemetry}` are
+  re-exports of those, so code naming them still compiles, except:
+  `AppState::from_backend` returns `(AppState, Grant)` (it returned the
+  state), and `api::internal_router` takes the `&Grant` (it took the
+  state): the grant, `meta_whatsapp_server_http::state::Grant`, is what
+  an API adapter's routes are served with (the records, the
+  authorization order, `Grant::idempotent`), handed only to the state's
+  composer, and `OwnedNumber::capability` / `OwnedWaba::capability`
+  take it; the state no longer holds its backend (whoever composed it
+  closes it); `config::LogFormat` is the HTTP crate's
+  `telemetry::LogFormat`; `store`'s backends exist with their feature
+  only. Nothing an operator sees changes: `openapi/v1.json` is
+  byte-identical and stays at `crates/meta-whatsapp-server/openapi/v1.json`,
+  routes, statuses, bodies, metrics and every log line's target
+  (`meta_whatsapp_server::<module>`, now named explicitly) are as they
+  were, and the migrations moved byte for byte (same versions and
+  checksums in `wa_server_sqlx_migrations`, under the same lock), so a
+  database migrated by the binary before starts this one with no
+  migration run again. A build without `store-postgres` refuses
+  `DATABASE_URL` at start, one without `store-memory` refuses memory
+  storage, both naming the feature; one without `api-axum` does not
+  compile. S6's legacy idempotency fingerprint stays (its removal, after
+  the first release, is roadmap M2a's now). **Upgrade:** take the pair
+  (`let (state, grant) = AppState::from_backend(…)?;`) and serve
+  `internal_router(&grant)`; depend on the new crates directly if you
+  want one part (a backend, the HTTP layer) without the rest; for a
+  binary without memory storage, `--no-default-features --features
+  api-axum,store-postgres`.
 - **Breaking — live events are shared as `Arc<WebhookEvent>`, not cloned
   per subscriber** (`meta_whatsapp_webhooks::sse`,
   `meta_whatsapp_adapters::sink::BroadcastSink`; roadmap L21b, decided as

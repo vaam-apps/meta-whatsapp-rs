@@ -37,7 +37,9 @@
 //!   decision (D26) and open question (`OPEN_QUESTIONS` #26) exists.
 //! - **Symbols**: every backticked Rust path in a Library or Service cell
 //!   of the two tables resolves. `client::`, `webhooks::`, `core::`,
-//!   `adapters::`, `typst::`, `inbox::`, `server::` and `server_core::`
+//!   `adapters::`, `typst::`, `inbox::`, `server::`, `server_core::` and
+//!   the crates the service's binary composes (`server_http::`,
+//!   `server_api_axum::`, `server_store_memory::`, `server_store_postgres::`)
 //!   paths resolve module by module in their crate to a `pub` item, then
 //!   each member to a variant, field, method or constant of the type
 //!   before it; a path starting with any other module is refused; other
@@ -1780,6 +1782,23 @@ const PREFIXES: &[(&str, &str, Option<&str>)] = &[
     ),
     ("server", "crates/meta-whatsapp-server/src", None),
     ("server_core", "crates/meta-whatsapp-server-core/src", None),
+    // The crates the binary composes since roadmap S7.
+    ("server_http", "crates/meta-whatsapp-server-http/src", None),
+    (
+        "server_api_axum",
+        "crates/meta-whatsapp-server-api-axum/src",
+        None,
+    ),
+    (
+        "server_store_memory",
+        "crates/meta-whatsapp-server-store-memory/src",
+        None,
+    ),
+    (
+        "server_store_postgres",
+        "crates/meta-whatsapp-server-store-postgres/src",
+        None,
+    ),
 ];
 
 /// Every source file of `crates/*/src`.
@@ -2243,7 +2262,9 @@ fn the_resolver_refuses_what_does_not_exist() {
         "inbox::Inbox::reply",
         "server_core::events::TENANT_EVENT_TYPES",
         "server_core::authz::Authorizer::owned_number",
-        "server::state::DEFAULT_IDEMPOTENCY_TTL",
+        "server_http::state::DEFAULT_IDEMPOTENCY_TTL",
+        "server_api_axum::api::messages::send_message",
+        "server_store_postgres::PgBackend",
         "server::config",
         "OutboundMessage::reply_to",
         "MessageEchoed",
@@ -2259,7 +2280,7 @@ fn the_resolver_refuses_what_does_not_exist() {
         "webhooks::WebhookEvent::NoSuchEvent",
         "client::no_such_module::Thing",
         "client::messages::Interactive::Carousel2",
-        "server::events::NO_SUCH_CONST",
+        "server_http::events::NO_SUCH_CONST",
         "server_core::events::NO_SUCH_CONST",
         "server_core::authz::Authorizer::no_such_method",
         "OutboundMessage::no_such_member",

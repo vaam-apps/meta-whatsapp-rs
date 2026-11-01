@@ -63,6 +63,7 @@ secrets and the ports, and every other crate depends on it. The
 | `meta-whatsapp-bot`         | Bot framework over webhooks: commands, guards, cooldowns, middleware, compile-time plugins, Markdown to WhatsApp formatting, paced broadcasts.                                                                      |
 | `meta-whatsapp-server`      | The HTTP service (a binary, not a dependency): tenants, keys, the `/v1` API over the facade.                                                                                                                        |
 | `meta-whatsapp-server-core` | The service's framework-free core (not a dependency either): its domain, authorization order, error model as data, and the storage ports its memory and Postgres backends implement.                                |
+| `meta-whatsapp-server-http`, `-api-axum`, `-store-memory`, `-store-postgres` | The crates the service's binary composes by its features: the HTTP layer, the `/v1` API and its OpenAPI document, and the two backends.                                                       |
 
 ### API reference
 

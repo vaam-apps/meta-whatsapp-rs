@@ -1,0 +1,15 @@
+error[E0603]: function `list_wabas` is private
+ --> tests/visibility/fail/api_numbers_list_wabas.rs:5:50
+  |
+5 | use meta_whatsapp_server_api_axum::api::numbers::list_wabas;
+  |                                                  ^^^^^^^^^^ private function
+  |
+note: the function `list_wabas` is defined here
+ --> src/api/numbers.rs
+  |
+  | / pub(crate) async fn list_wabas(
+  | |     State(state): State<Grant>,
+  | |     caller: Caller,
+  | |     PageQuery(page): PageQuery,
+  | | ) -> Result<Json<WabaList>, ApiError> {
+  | |_____________________________________^

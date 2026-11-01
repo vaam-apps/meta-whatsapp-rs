@@ -143,10 +143,12 @@ impl ValidationError {
     pub const THREAD_OWNER: &'static str = "thread_owner";
 
     /// A service message refused locally because another app owns the
-    /// thread under Conversation Routing (Meta would reject it too:
-    /// `conversation-routing/thread-lifecycle`, "Sending without
-    /// ownership"). Its [`Error::kind`](crate::Error::kind) is
-    /// [`ErrorKind::ThreadOwnedElsewhere`](crate::ErrorKind::ThreadOwnedElsewhere).
+    /// thread under Conversation Routing (Meta would reject it too, with
+    /// `131070`: `conversation-routing/thread-lifecycle`, "Sending without
+    /// ownership", and `conversation-routing/thread-control` § Errors). Its
+    /// [`Error::kind`](crate::Error::kind) is
+    /// [`ErrorKind::ThreadOwnedElsewhere`](crate::ErrorKind::ThreadOwnedElsewhere),
+    /// the same as Meta's.
     pub fn thread_owned_elsewhere() -> Self {
         Self::new(
             Self::THREAD_OWNER,

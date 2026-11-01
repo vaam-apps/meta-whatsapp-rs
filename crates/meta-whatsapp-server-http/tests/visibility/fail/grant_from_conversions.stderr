@@ -1,0 +1,17 @@
+error[E0277]: the trait bound `Grant: From<AppState>` is not satisfied
+  --> tests/visibility/fail/grant_from_conversions.rs:11:6
+   |
+11 |     <Grant as From<AppState>>::from(state.clone())
+   |      ^^^^^ the trait `From<AppState>` is not implemented for `Grant`
+
+error[E0277]: the trait bound `Grant: FromRef<AppState>` is not satisfied
+  --> tests/visibility/fail/grant_from_conversions.rs:15:6
+   |
+15 |     <Grant as FromRef<AppState>>::from_ref(state)
+   |      ^^^^^ the trait `FromRef<AppState>` is not implemented for `Grant`
+   |
+help: the trait `FromRef<Grant>` is implemented for `AppState`
+  --> src/state.rs
+   |
+   | impl FromRef<Grant> for AppState {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

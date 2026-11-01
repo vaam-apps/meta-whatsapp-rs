@@ -44,7 +44,7 @@ broadcast) replays a non-idempotent request. The Business Use Case limits
 | `InvalidParameter` | 33, 100, 131008, 131009, 131021, 135000, 2494166–2494168, 2494176, 2494177, 2494179 | no | no | Fix the request; `GraphApiError::code` tells In-App Signup errors apart |
 | `UnsupportedMessageType` | 131051 | no | no | — |
 | `CustomerServiceWindowClosed` | 131047; also the inbox's local refusal (nothing sent) | no | no | >24 h since the user's last message: send a template |
-| `ThreadOwnedElsewhere` | none yet (Meta documents no code); the inbox's local refusal (nothing sent) | no | no | Another app owns the thread under Conversation Routing: send a template, or wait for the thread (`meta-whatsapp-rs-cms-inbox`) |
+| `ThreadOwnedElsewhere` | 131070 (a service message without owning the thread, also an idle one); the inbox's local refusal (nothing sent) | no | no | Another app owns the thread under Conversation Routing: send a template, or wait for the thread (`meta-whatsapp-rs-cms-inbox`) |
 | `EcosystemEngagementLimit` | 131049 | **no** | no | Per-user marketing limit; do not retry for at least 24 h |
 | `MarketingOptedOut` | 131050 | no | no | User stopped marketing: record the opt-out, never retry |
 | `MarketingNotAllowed` | 131055, 131063, 134100 | no | no | Not a marketing template on the MM API, or marketing disabled on this API |
