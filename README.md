@@ -235,7 +235,9 @@ export WA_VAULT_KEY="$(openssl rand -base64 32)" WA_OTP_PEPPER="$(openssl rand -
 ```
 
 It refuses to start on an unsafe setting (a blank secret, no vault key,
-memory storage in production). Run, configure, create tenants and keys,
+memory storage in production); `meta-whatsapp-server doctor` lists every
+such setting at once and checks the database, the app's webhook
+subscription and the tokens' reach, read-only. Run, configure, create tenants and keys,
 make a first call: [docs/guides/server.md](docs/guides/server.md). For the
 coding agents of those apps: the `meta-whatsapp-rs-server` skill.
 
@@ -321,6 +323,7 @@ workspace stays `publish = false` until a release is decided.
 | [docs/dev-environment.md](docs/dev-environment.md) | the Claude Code dev container and its firewall |
 | [CHANGELOG.md](CHANGELOG.md) | what changed |
 | [skills/](skills/README.md) | agent skills for code that uses meta-whatsapp-rs |
+| [docs/public/llms.txt](docs/public/llms.txt) | an index of these docs and skills for language models (the llms.txt convention), served at the docs site's root |
 | `cargo doc --open -p meta-whatsapp-rs --all-features` | the API reference |
 
 ## License

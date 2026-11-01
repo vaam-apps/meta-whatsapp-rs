@@ -2535,7 +2535,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     binary linking both `ring` and aws-lc-rs with no process default
     installed (the case that panics today); handing the connection the
     process default instead makes that test panic.
-- [ ] **L22a. `llms.txt` and a `doctor`** (docs; the service's CLI in
+- [x] **L22a. `llms.txt` and a `doctor`** (docs; the service's CLI in
   `meta-whatsapp-server`; row 117): `llms.txt` for the docs, and a
   `doctor` command checking the configuration, the webhook subscription
   fields and the token's reach.
@@ -2544,6 +2544,32 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** `doctor` reports each scripted misconfiguration by
     name and exits non-zero; `llms.txt` links only files that exist (a
     test reads it).
+  - **Landed:** row 117 done in the service; the library's side stays
+    partial for the MCP server (L22b). `docs/public/llms.txt`, served at
+    the docs site's root (VitePress copies `docs/public/`), indexes the
+    guides, design, planning docs and every consumer skill, each link
+    the file's Markdown on `main`; `crates/meta-whatsapp-rs/tests/llms_txt.rs`
+    refuses a link to a missing file or off the repository, and an
+    unlisted guide or skill. `meta-whatsapp-server doctor`
+    (`meta_whatsapp_server::doctor`) prints one line per check (`OK`,
+    `WARN`, `FAIL`, `SKIP`) and exits non-zero on a `FAIL`: every
+    refusal of the configuration by variable (a refused variable is
+    replaced and the reading repeated, so one does not hide the next),
+    the backend opened as `serve` opens it, the migration histories read
+    by `SELECT` (pending service migrations fail with
+    `WA_SERVER_MIGRATE=skip`, warn with `auto`), the app's
+    `whatsapp_business_account` subscription and its fields
+    (`GET /{app-id}/subscriptions`: `messages` and `account_update`
+    required, eleven more recommended), and each bound WABA's token
+    (`debug_token`: valid, this app's, not expired, both permissions, a
+    grant naming the WABA) and the app's subscription to it
+    (`GET /{waba-id}/subscribed_apps`), plus the Solution Partner's
+    system token. Read-only (no migration, no re-encryption on read,
+    `GET`s only); no secret printed. `tests/doctor.rs` scripts each
+    misconfiguration (27 tests, one live) and runs the binary for its
+    exit code. Not done: the library's migration versions are counted,
+    not compared (their list is private to the adapters crate); a JSON
+    output (`--json`) is proposed, not built.
 - [ ] **L22b. A docs MCP server** (a tool under `tools/`, outside the
   library; row 117): search and read the docs and skills over MCP's
   stdio transport.
