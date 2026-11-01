@@ -631,6 +631,23 @@ fn a_gif_cut_short_or_malformed_is_refused() {
         animation::prepared(&Bytes::from(wide_control)),
         Err("a GIF graphic control extension of the wrong size")
     );
+    // Its sub-blocks reaching eight bytes, but the first not of four (two
+    // and one: ffmpeg skips such an extension, and its "delay" is no
+    // delay); and one of four, then another.
+    for data in [
+        vec![0x21, 0xF9, 2, 0, 0x10, 1, 0x27, 0],
+        vec![0x21, 0xF9, 4, 0, 10, 0, 0, 1, 9, 0],
+    ] {
+        let file = gif(
+            16,
+            16,
+            &[data, gif_frame(), gif_frame(), GIF_TRAILER.to_vec()],
+        );
+        assert_eq!(
+            animation::prepared(&Bytes::from(file)),
+            Err("a GIF graphic control extension of the wrong size")
+        );
+    }
 }
 
 /// The frame bound: 500 frames pass, 501 are refused; one frame is no
@@ -806,13 +823,16 @@ fn the_animation_output_check_reads_the_chunks() {
         check_output(a, &riff(&[vp8x(0x12)])),
         Err("a WebP without its animation header (ANIM)")
     );
-    assert_eq!(
-        check_output(
-            a,
-            &riff(&[vp8x(0x12), anim(), anmf(), (*b"VP8 ", vec![0; 10])])
-        ),
-        Err("an animated WebP with an image outside its frames")
-    );
+    for image in [*b"VP8 ", *b"VP8L", *b"ALPH"] {
+        assert_eq!(
+            check_output(
+                a,
+                &riff(&[vp8x(0x12), anim(), anmf(), anmf(), (image, vec![0; 10])])
+            ),
+            Err("an animated WebP with an image outside its frames"),
+            "{image:?}"
+        );
+    }
     assert_eq!(
         check_output(a, &riff(&[(*b"VP8X", vec![0x12, 0, 0]), anim(), anmf()])),
         Err("a truncated WebP header")
