@@ -404,7 +404,27 @@ fn india_fields_are_refused_in_a_brl_order() {
             |m| order_of(m).items[0].importer_address = Some(importer_address()),
             "order.items[0].importer_address",
         ),
+        // payments-br/orders, the image object: `link` "Required"; a
+        // header by media id is India's (`payments-in/payment-links`).
+        (
+            |m| m.header = Some(MediaId::new(MEDIA).unwrap().into()),
+            "interactive.header.image.id",
+        ),
     ]);
+}
+
+/// The simplified order's header refusal is Brazil's: an INR message
+/// without an order is refused for the order, header or not; a BRL one by
+/// link with an order passes.
+#[test]
+fn the_header_rules_are_brazils_only() {
+    let mut inr = valid().header_image(MediaSource::link("https://x/i.png"));
+    inr.parameters.order = None;
+    assert_eq!(refused(&inr), format!("{P}.order"));
+    let inr = valid().header_image(MediaId::new(MEDIA).unwrap());
+    assert_eq!(inr.validate(), Ok(()));
+    let brl = brl_valid().header_image(MediaSource::link("https://x/i.png"));
+    assert_eq!(brl.validate(), Ok(()));
 }
 
 #[test]

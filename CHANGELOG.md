@@ -236,10 +236,12 @@ stored data, the owner's).
   price, or price, times its quantity: `Order::items_sum`; India's stays
   unchecked), a `retailer_id` on every item, an order status that may
   be `pending`. One currency's fields are refused in the other's orders
-  (India's `payment_configuration`, beneficiaries, item images,
-  importers, `quick_pay`, a payment link's success and cancel URLs and
-  settings; Brazil's settings, `payment_type` `br` and `payment`
-  update). Every example of the five Brazil pages is an exact-JSON test.
+  (India's `payment_configuration`, beneficiaries, a header by media
+  id, item images, importers, `quick_pay`, a payment link's success and
+  cancel URLs and settings; Brazil's settings, `payment_type` `br` and
+  `payment` update). Every message example of the five Brazil pages is
+  an exact-JSON test (the one-click page's `payment_method` webhook is
+  P1c's).
   None of the new fields is a secret: `Debug` shows them (the module
   docs say why, and what not to put in a `credential_id`).
 - **Payments in India** (`meta_whatsapp_client::payments`, roadmap P1a,

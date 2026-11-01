@@ -1800,7 +1800,8 @@ fn check_reference_id(id: &str, max: usize) -> Check {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderDetails {
     /// An image header; without one, Meta shows the first product's image.
-    /// A simplified BRL order (no `order`) takes none.
+    /// A simplified BRL order (no `order`) takes none, and a BRL one's is a
+    /// link (Brazil's image object has `link` alone).
     pub header: Option<MediaSource>,
     /// Body text: at most 1024 characters.
     pub body: String,
@@ -1859,7 +1860,8 @@ impl OrderDetails {
     /// gateway's `type`, a `retailer_id`, the `catalog_id`, an item
     /// image's link.
     ///
-    /// **Brazil** (`BRL`): the same body, footer and header; the
+    /// **Brazil** (`BRL`): the same body and footer; a header by link only
+    /// (Brazil's image object: `link` "Required"; a media id is India's); the
     /// `reference_id` (1 to 60 characters, the same alphabet);
     /// `payment_type` `br`; the payment settings, optional, each of
     /// Brazil's (`pix_dynamic_code` with its code, merchant name, key and
@@ -1869,12 +1871,12 @@ impl OrderDetails {
     /// total; the order, optional: without it the message takes no header,
     /// with it the total equation, a `subtotal` equal to the items' sale
     /// prices (or prices) times their quantities, at least one item, each
-    /// with a
-    /// `retailer_id` (the item table's "Required"), names of 1 to 60
-    /// characters and descriptions (60, expiration 120). India's fields
+    /// with a `retailer_id` (the item table's "Required"), names of 1 to
+    /// 60 characters and descriptions (60, expiration 120). India's fields
     /// are refused in a BRL order (`payment_configuration`, beneficiaries,
-    /// an item's image, origin and importer, an order's `quick_pay`, a
-    /// payment link's success and cancel URLs, India's payment settings),
+    /// a header's media id, an item's image, origin and importer, an
+    /// order's `quick_pay`, a payment link's success and cancel URLs,
+    /// India's payment settings),
     /// and Brazil's in an INR one (`payment_type` `br`, Brazil's payment
     /// settings): no page says Meta reads them there.
     ///
@@ -1887,13 +1889,21 @@ impl OrderDetails {
     pub fn validate(&self) -> Result<(), ValidationError> {
         if let Some(h) = &self.header {
             h.validate("interactive.header.image")?;
-            if self.parameters.currency == Currency::Brl && self.parameters.order.is_none() {
-                // payments-br/orders: "Simplified order details messages
-                // do not support an image header."
-                return Err(ValidationError::new(
-                    "interactive.header",
-                    "a simplified order (no `order`) takes no header",
-                ));
+            if self.parameters.currency == Currency::Brl {
+                if self.parameters.order.is_none() {
+                    // payments-br/orders: "Simplified order details
+                    // messages do not support an image header."
+                    return Err(ValidationError::new(
+                        "interactive.header",
+                        "a simplified order (no `order`) takes no header",
+                    ));
+                }
+                if matches!(h, MediaSource::Id(_)) {
+                    // payments-br/orders, the image object: `link`
+                    // "Required". An uploaded media id is India's
+                    // (`payments-in/payment-links`, `upi-intent`).
+                    return Err(only_for("interactive.header.image.id", Currency::Inr));
+                }
             }
         }
         validate::text("interactive.body.text", &self.body, BODY_MAX)?;

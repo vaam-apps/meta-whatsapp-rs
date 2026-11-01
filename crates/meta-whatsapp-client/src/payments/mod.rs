@@ -39,6 +39,7 @@
 //! | `payment_settings` | required (or `payment_configuration`) | optional |
 //! | settings | `upi_intent_link`, `payment_link`, `payment_gateway` | `pix_dynamic_code`, `payment_link` (`uri` alone), `boleto`, `offsite_card_pay` |
 //! | `order` | required | optional ("simplified": the total alone, no header) |
+//! | `order_details` header | an image, by media id or link | an image by link (Brazil's image object has `link` alone) |
 //! | items | origin and importer without a catalog; custom images | a `retailer_id` each; the subtotal checked |
 //! | `order_status` | `order` required, not `pending`; no `payment` | `order` and `payment` optional; `pending` allowed |
 //! | `offset` | 100 | 100 |
