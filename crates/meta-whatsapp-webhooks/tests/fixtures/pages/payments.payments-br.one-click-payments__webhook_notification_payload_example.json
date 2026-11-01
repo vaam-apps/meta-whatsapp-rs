@@ -1,0 +1,47 @@
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "102290129340398",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "15550783881",
+              "phone_number_id": "106540352242922"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "Maria Silva"
+                },
+                "wa_id": "5511912345678"
+              }
+            ],
+            "messages": [
+              {
+                "from": "5511912345678",
+                "id": "wamid.HBgNNTUxMTkxMjM0NTY3OBUCABIYFjNFQjBDNUQ3RjM4N0Q2QjE1OTJGQ0IA",
+                "timestamp": "1726170122",
+                "from_logical_id": "64244926160970",
+                "type": "interactive",
+                "interactive": {
+                  "type": "payment_method",
+                  "payment_method": {
+                    "payment_method": "offsite_card_pay",
+                    "payment_timestamp": 1726170122,
+                    "reference_id": "pix_test_webhook",
+                    "last_four_digits": "5235",
+                    "credential_id": "1234567"
+                  }
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}

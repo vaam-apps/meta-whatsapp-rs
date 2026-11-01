@@ -47,6 +47,7 @@
 //! | which number a throughput upgrade names (opt-in: [`ThroughputUpgrades`], [`BotBuilder::follow_throughput_upgrades`]) | [`NumberDirectory`] | [`KnownNumbers`] (the numbers you register, by WABA and display number) |
 //! | what a failed broadcast send becomes (a job's too: [`jobs::JobRunnerBuilder::policy`]) | [`BroadcastPolicy`] | [`Backoff`] |
 //! | where a broadcast's lines go when not kept in its report | [`ReportSink`] | none: kept in the [`BroadcastReport`] |
+//! | where scheduled jobs are kept, claimed and marked ([`JobRunner`]) | [`JobStore`] | [`KvJobs`] (a typed store on `KvStore`, namespaces `wa.bot.jobs*`; in this process: [`MemoryJobs`]; the suite a store of yours passes: [`jobs::conformance`]) |
 //!
 //! Each of these traits also has an `Arc<T>` implementation, so one
 //! instance serves several bots (handlers and plugins are registered by
@@ -149,8 +150,9 @@ pub use guard::{
 };
 pub use help::{CategoryHelp, HelpFormatter, HelpSection};
 pub use jobs::{
-    Job, JobEnd, JobFeedback, JobId, JobRun, JobRunner, JobRunnerBuilder, JobState, JobSummary,
-    KvJobs, ScheduledJob, TickReport,
+    ClaimHandler, Holding, Job, JobClaim, JobEnd, JobFeedback, JobHalt, JobId, JobRun, JobRunner,
+    JobRunnerBuilder, JobState, JobStore, JobSummary, KvJobs, MemoryJobs, RecipientMark,
+    ScheduledJob, SendRecord, TickReport,
 };
 pub use markdown::MarkdownRenderer;
 pub use middleware::{Logging, MarkRead, Middleware, Next};

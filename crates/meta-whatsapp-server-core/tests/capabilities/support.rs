@@ -181,6 +181,8 @@ impl Records {
                 tenant_id: victim(),
                 status: NumberStatus::Connected,
                 updated_at: now,
+                attached_at: now,
+                previous_tenant_released_at: None,
             },
             waba: WabaBinding {
                 waba_id: waba(),

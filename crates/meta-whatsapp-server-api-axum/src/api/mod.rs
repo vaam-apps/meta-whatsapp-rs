@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`; messages `send`; media `media`; templates `templates`), `/v1/events` (scope `events`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`; messages `send`; media `media`; templates `templates`; conversations `inbox`), `/v1/events` (scope `events`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -20,6 +20,7 @@
 
 pub mod admin;
 pub mod events;
+pub mod inbox;
 pub mod messages;
 pub mod numbers;
 pub mod templates;
@@ -84,6 +85,7 @@ impl Modify for Security {
         (name = "messages", description = "Sending messages and read receipts (scope `send`)"),
         (name = "media", description = "Uploading, downloading and deleting media (scope `media`)"),
         (name = "templates", description = "Listing, creating and deleting message templates (scope `templates`)"),
+        (name = "inbox", description = "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"),
         (name = "events", description = "Meta's webhook events, routed to their tenant (scope `events`)"),
         (name = "operations", description = "Health, metrics, this document, versions (no key)"),
     )
@@ -125,6 +127,15 @@ fn messages_routes() -> OpenApiRouter<Grant> {
     OpenApiRouter::new()
         .routes(routes!(messages::send_message))
         .routes(routes!(messages::mark_read))
+}
+
+fn inbox_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(inbox::list_conversations))
+        .routes(routes!(
+            inbox::list_conversation_messages,
+            inbox::reply_to_conversation
+        ))
 }
 
 fn templates_routes() -> OpenApiRouter<Grant> {
@@ -175,6 +186,7 @@ fn api_routes(
         .merge(tenant(messages_routes(), Scope::Send))
         .merge(tenant(media::routes(), Scope::Media))
         .merge(tenant(templates_routes(), Scope::Templates))
+        .merge(tenant(inbox_routes(), Scope::Inbox))
         .merge(tenant(events_routes(), Scope::Events))
         .merge(ops_routes())
 }
@@ -320,6 +332,7 @@ mod tests {
             ("admin.rs", include_str!("admin.rs")),
             ("numbers.rs", include_str!("numbers.rs")),
             ("events.rs", include_str!("events.rs")),
+            ("inbox.rs", include_str!("inbox.rs")),
             ("messages.rs", include_str!("messages.rs")),
             ("templates.rs", include_str!("templates.rs")),
         ];

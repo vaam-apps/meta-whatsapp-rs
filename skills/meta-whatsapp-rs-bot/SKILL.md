@@ -5,7 +5,7 @@ description: "A WhatsApp bot on Cloud API webhooks with meta-whatsapp-rs (featur
 
 # meta-whatsapp-rs-bot
 
-> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** On another revision, trust the code over this page.
+> **Verified against meta-whatsapp-rs 8a675b0eb925f90de831184ab43065009e8ad3c3 (2026-11-01).** On another revision, trust the code over this page.
 
 Reference code: [examples/bot.rs](examples/bot.rs), compiled and tested by the gate. All in
 `meta_whatsapp_rs::bot` (feature `bot`, off by default; `full` includes it), `async_trait` too.
@@ -150,7 +150,7 @@ carousels, all checked before the first send, sent until one fails (guide, secti
 
 ## What meta-whatsapp-rs does not do
 
-- No recurring schedules (a `Job` runs once; `KvJobs::rerun` runs it again), or conversation state: keep it in your store, keyed by `BotSender::key`.
+- No recurring schedules (a `Job` runs once; `JobStore::rerun` runs it again), or conversation state: keep it in your store, keyed by `BotSender::key`.
 - Per-tenant tokens: implement `Outbound` (`meta-whatsapp-rs-token-vault`).
 - Guide: [docs/guides/bots.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/bots.md).
 

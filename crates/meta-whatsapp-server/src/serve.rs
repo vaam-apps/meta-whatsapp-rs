@@ -35,7 +35,7 @@ use meta_whatsapp_rs::adapters::store::postgres::sqlx::postgres::{
     PgConnectOptions, PgPoolOptions,
 };
 use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
-use meta_whatsapp_rs::core::store::KvStore;
+use meta_whatsapp_rs::core::store::{KvStore, Retention};
 use meta_whatsapp_server_api_axum::api::internal_router;
 use meta_whatsapp_server_core::admin::mint;
 use meta_whatsapp_server_core::housekeeping;
@@ -105,6 +105,22 @@ pub trait BackendFactory: Send + Sync {
     /// errors name settings, never their values (a URL may hold a
     /// password).
     async fn open(&self, storage: &Storage) -> anyhow::Result<Arc<dyn Backend>>;
+
+    /// [`Self::open`], its inbox store applying `inbox_retention` (the
+    /// adapter's `with_retention`: `WA_SERVER_INBOX_RETENTION`, which
+    /// housekeeping applies; roadmap M2a). What `serve` opens. By default,
+    /// [`Self::open`]'s backend as it is: one whose inbox applies another
+    /// retention than the configuration's is refused at start rather than
+    /// served (a retention would otherwise be ignored), so a factory of
+    /// your own implements this for a deployment that sets one.
+    async fn open_with(
+        &self,
+        storage: &Storage,
+        inbox_retention: Retention,
+    ) -> anyhow::Result<Arc<dyn Backend>> {
+        let _ = inbox_retention;
+        self.open(storage).await
+    }
 }
 
 /// The in-tree backends this build has: `PgBackend` for a database URL,
@@ -117,16 +133,28 @@ pub struct BuiltinBackends;
 #[async_trait]
 impl BackendFactory for BuiltinBackends {
     async fn open(&self, storage: &Storage) -> anyhow::Result<Arc<dyn Backend>> {
+        self.open_with(storage, Retention::Keep).await
+    }
+
+    async fn open_with(
+        &self,
+        storage: &Storage,
+        inbox_retention: Retention,
+    ) -> anyhow::Result<Arc<dyn Backend>> {
+        #[cfg(not(any(feature = "store-postgres", feature = "store-memory")))]
+        let _ = inbox_retention;
         Ok(match storage {
             #[cfg(feature = "store-postgres")]
-            Storage::Postgres(url) => Arc::new(PgBackend::new(connect(url).await?)),
+            Storage::Postgres(url) => {
+                Arc::new(PgBackend::new(connect(url).await?).with_inbox_retention(inbox_retention))
+            }
             #[cfg(not(feature = "store-postgres"))]
             Storage::Postgres(_) => anyhow::bail!(
                 "DATABASE_URL is set, but this build has no Postgres backend \
                  (meta-whatsapp-server's `store-postgres` feature)"
             ),
             #[cfg(feature = "store-memory")]
-            Storage::Memory => Arc::new(MemoryBackend::new()),
+            Storage::Memory => Arc::new(MemoryBackend::new().with_inbox_retention(inbox_retention)),
             #[cfg(not(feature = "store-memory"))]
             Storage::Memory => anyhow::bail!(
                 "memory storage, but this build has no memory backend \
@@ -191,7 +219,9 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
 /// As [`serve_with`], or the backend failing to open.
 pub async fn serve_from(config: Config, factory: &dyn BackendFactory) -> anyhow::Result<()> {
     warn_about(&config);
-    let backend = factory.open(&config.storage).await?;
+    let backend = factory
+        .open_with(&config.storage, config.inbox_retention)
+        .await?;
     run(config, backend, shutdown_signal).await
 }
 
@@ -252,6 +282,15 @@ async fn run<S: Future<Output = ()>>(
     if backend.kind().is_process_local() {
         tracing::warn!("memory storage: everything is lost on restart (development only)");
     }
+    // Housekeeping applies the retention the inbox store was built with:
+    // a backend built without the configured one would ignore it.
+    let applied = backend.conversations().retention();
+    anyhow::ensure!(
+        applied == config.inbox_retention,
+        "WA_SERVER_INBOX_RETENTION is {:?}, but the backend's inbox store applies {applied:?}: \
+         build it with that retention (`with_inbox_retention`, or `BackendFactory::open_with`)",
+        config.inbox_retention
+    );
     if config.migrate == MigrateMode::Auto {
         backend
             .migrator()

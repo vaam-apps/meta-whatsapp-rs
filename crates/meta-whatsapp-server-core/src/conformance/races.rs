@@ -40,6 +40,9 @@ pub struct Report {
     pub binds: BindRaces,
     /// Another tenant's binding against an unbind (roadmap S2b).
     pub unbinds: UnbindRaces,
+    /// Another tenant's WABA taking a number against its release by the
+    /// WABA that listed it (roadmap M2h).
+    pub releases: UnbindRaces,
 }
 
 /// Every race, on `backend`: [`ROUNDS`] rounds of an insert against a
@@ -50,6 +53,7 @@ pub async fn run(backend: &dyn Backend) -> Report {
     let moves = an_insert_racing_a_move_never_reaches_the_new_holder(backend, ROUNDS).await;
     let binds = a_binding_racing_a_deletion_serializes(backend, ROUNDS).await;
     let unbinds = a_binding_racing_an_unbind_records_the_move(backend, ROUNDS).await;
+    let releases = a_number_taken_while_released_records_the_move(backend, ROUNDS).await;
     for act in [Act::Forget, Act::NumberFailed, Act::WabaFailed] {
         racing_a_reattach(backend, act, REATTACH_ROUNDS).await;
     }
@@ -57,6 +61,7 @@ pub async fn run(backend: &dyn Backend) -> Report {
         moves,
         binds,
         unbinds,
+        releases,
     }
 }
 
@@ -310,7 +315,9 @@ pub struct UnbindRaces {
 /// first onboarding. Decisive (when a round lands the binding while the
 /// unbind commits): on Postgres, the tombstone written in the unbinding
 /// statement and read by a statement of the binding's after its insert
-/// waited, and the new binding's start moved past the unbinding.
+/// waited, and the new binding's start moved past the unbinding. The
+/// same for the WABA's number, released with it (roadmap M2h): its
+/// tombstone read, its start past its release.
 pub async fn a_binding_racing_an_unbind_records_the_move(
     backend: &dyn Backend,
     rounds: usize,
@@ -390,6 +397,122 @@ pub async fn a_binding_racing_an_unbind_records_the_move(
             "round {round} ({bound:?}): the new binding began at {} before the unbinding it \
              follows, at {left}",
             binding.attached_at
+        );
+        // Its number moved with it (roadmap M2h): released in the
+        // unbinding statement, read by the binding's own statement after
+        // its insert waited, and begun no earlier than the release.
+        let number = store.number(&pn).await.unwrap().unwrap();
+        assert_eq!(number.tenant_id, to, "round {round}");
+        let released = number.previous_tenant_released_at.unwrap_or_else(|| {
+            panic!(
+                "round {round} ({bound:?}): a number moved from another tenant read as never held"
+            )
+        });
+        assert!(
+            began <= released && released <= number.attached_at,
+            "round {round} ({bound:?}): the number began at {} before its release at {released}",
+            number.attached_at
+        );
+    }
+    races
+}
+
+/// Roadmap M2h: Meta migrated a number from one tenant's WABA to another
+/// tenant's, and the two bindings race, on two tasks: the first WABA's
+/// refresh that no longer lists the number (its release) against the
+/// other WABA's binding that lists it, neither WABA moving. Whatever the
+/// order, the other tenant's number, once it holds (at once, or bound
+/// again after D4's refusal), reads the move (`previous_tenant_released_at`,
+/// the release's time, from the tombstone the release left in the same
+/// step) and begins no earlier than that release. Never an error, never a
+/// number that reads as never held. Decisive (when a round lands the
+/// binding while the release commits): on Postgres, the tombstone written
+/// in the releasing statement and read by a statement of the binding's
+/// after its insert waited, and the number's start moved past the release.
+pub async fn a_number_taken_while_released_records_the_move(
+    backend: &dyn Backend,
+    rounds: usize,
+) -> UnbindRaces {
+    let store = backend.records();
+    let run = super::unique();
+    let digits = super::unique_digits();
+    let (from, to) = (
+        tenant(&format!("nr-a-{run}")),
+        tenant(&format!("nr-b-{run}")),
+    );
+    store.create_tenant(&from, "").await.unwrap().unwrap();
+    store.create_tenant(&to, "").await.unwrap().unwrap();
+    let mut races = UnbindRaces::default();
+    for round in 0..rounds {
+        let (waba_a, waba_b) = (
+            WabaId::new(format!("{digits}{round:06}5")).unwrap(),
+            WabaId::new(format!("{digits}{round:06}6")).unwrap(),
+        );
+        let pn = PhoneNumberId::new(format!("{digits}{round:06}7")).unwrap();
+        assert_eq!(
+            store.bind_waba(&to, &waba_b, &[]).await.unwrap(),
+            BindOutcome::Bound
+        );
+        assert_eq!(
+            store
+                .bind_waba(&from, &waba_a, std::slice::from_ref(&pn))
+                .await
+                .unwrap(),
+            BindOutcome::Bound
+        );
+        let began = store.number(&pn).await.unwrap().unwrap().attached_at;
+        let released = {
+            let (store, from, waba_a) = (store.clone(), from.clone(), waba_a.clone());
+            tokio::spawn(async move {
+                jitter(round, 0).await;
+                store.bind_waba(&from, &waba_a, &[]).await
+            })
+        };
+        let bound = {
+            let (store, to, waba_b, pn) = (store.clone(), to.clone(), waba_b.clone(), pn.clone());
+            tokio::spawn(async move {
+                jitter(round, 1).await;
+                store.bind_waba(&to, &waba_b, &[pn]).await
+            })
+        };
+        let (released, bound) = tokio::join!(released, bound);
+        let released = released
+            .unwrap()
+            .unwrap_or_else(|e| panic!("round {round}: the release failed: {e}"));
+        assert_eq!(released, BindOutcome::Bound, "round {round}");
+        let bound = bound
+            .unwrap()
+            .unwrap_or_else(|e| panic!("round {round}: bind_waba failed: {e}"));
+        match &bound {
+            BindOutcome::Bound => races.bound += 1,
+            BindOutcome::OwnedByAnotherTenant => {
+                races.refused += 1;
+                assert_eq!(
+                    store
+                        .bind_waba(&to, &waba_b, std::slice::from_ref(&pn))
+                        .await
+                        .unwrap(),
+                    BindOutcome::Bound,
+                    "round {round}: bound once the release returned"
+                );
+            }
+            BindOutcome::NoSuchTenant => panic!("round {round}: {bound:?}"),
+        }
+        let number = store.number(&pn).await.unwrap().unwrap();
+        assert_eq!(
+            (number.tenant_id.clone(), number.waba_id.clone()),
+            (to.clone(), waba_b.clone()),
+            "round {round}"
+        );
+        let left = number.previous_tenant_released_at.unwrap_or_else(|| {
+            panic!(
+                "round {round} ({bound:?}): a number moved from another tenant read as never held"
+            )
+        });
+        assert!(
+            began <= left && left <= number.attached_at,
+            "round {round} ({bound:?}): the number began at {} before its release at {left}",
+            number.attached_at
         );
     }
     races
