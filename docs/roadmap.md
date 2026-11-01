@@ -996,10 +996,39 @@ and `store-postgres`.
     each exit 0, with both histories and the schema dump identical. An
     API adapter's handlers reach the records, the authorization order
     and the idempotency engine through the state's `Grant`, which only
-    `AppState::from_backend`'s caller is handed (UI case
-    `grant_from_state`; the state's accessors stay crate-private, and
-    the state no longer holds its backend). Every moved log line keeps
-    its target (`every_line_keeps_its_target_from_before_the_crate_split`).
+    `AppState::from_backend`'s caller is handed (UI cases
+    `grant_from_state` and `grant_from_conversions`: no constructor, no
+    `From` and no `FromRef` makes one from a state; the state's
+    accessors stay crate-private, and the state no longer holds its
+    backend). A grant proves its holder composed a state, not which
+    one: `OwnedNumber::capability` and `OwnedWaba::capability` take any,
+    and the core's services admit the capability with the authorizer
+    they are given, so another state's grant opens nothing. Every moved
+    log line keeps its target: the ones a request logs
+    (`every_line_keeps_its_target_from_before_the_crate_split`) and,
+    read from the sources, every one of the new crates
+    (`every_moved_log_line_names_its_target_from_before_the_crate_split`:
+    each module's `LOG_TARGET` is its path before the split, each line
+    names it).
+  - **Decided (coordinator, under the owner's delegation, each
+    swappable):** the `Grant`, with `AppState::from_backend` returning
+    `(AppState, Grant)` (to swap: another proof type, the same call
+    sites); the moved modules re-exported under their old paths
+    (`meta_whatsapp_server::{api, auth, state, store, …}`; to swap, drop
+    a re-export); `openapi/v1.json` committed beside the binary, which
+    prints it, rather than in the adapter's crate (to swap, move the
+    file and the paths `tests/openapi.rs`, the skills gate and
+    `just skills-ts` read); the features `api-axum`, `store-memory` and
+    `store-postgres`, all default, with no API adapter a compile error
+    and a missing backend a refusal at start naming its feature;
+    `api::common`'s four helpers (`encode_cursor`, `next_cursor`,
+    `rfc3339`, `json`) public, as the adapter's handlers use them (pure
+    functions, no capability); `From<MintError> for ApiError` in the HTTP
+    crate's `error.rs`, where both types are in reach; the legacy
+    fingerprint's removal line moved to M2a; and the docs tables'
+    resolver prefixes for the new crates (`server_http::`,
+    `server_api_axum::`, `server_store_memory::`,
+    `server_store_postgres::`, `crates/meta-whatsapp-rs/tests/docs_tables.rs`).
   - **Also, after the first release:** the legacy fingerprint's removal
     moved to M2a, the service's next item, as S7 landed before the
     first release.

@@ -128,7 +128,9 @@ flowchart LR
   `tests/errors.rs` reads the error table from the design doc's §5.2.
   Moved modules log under their old targets
   (`meta_whatsapp_server::<module>`, explicit): keep new lines' targets
-  explicit too.
+  explicit too (`target: LOG_TARGET`; a new module that logs is added
+  to `MOVED_LOG_TARGETS` in the binary's `tests/logs.rs`, which reads
+  the new crates' sources).
 - **Stable identifiers** (`wa-rs/token-vault/v1`, `wa.token`, `wa.otp.*`,
   `wa.es.session`, `wa.webhook.dedup`, table prefix `wa_`) predate the
   rename and are pinned by tests: they are encrypted/hashed into stored

@@ -1597,7 +1597,9 @@ What it holds today, where it differs from the target above:
   (`live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration`).
   Every moved module's log lines keep their target
   (`meta_whatsapp_server::<module>`, explicit since S7; the service's
-  `tests/logs.rs` checks no line carries a new crate's path), and the
+  `tests/logs.rs` checks no line a request logs carries a new crate's
+  path, and reads every log line of the new crates' sources: each names
+  its module's `LOG_TARGET`, pinned to the path it had), and the
   metrics' names and labels are unchanged. The binary re-exports the
   moved modules under their old paths.
 
