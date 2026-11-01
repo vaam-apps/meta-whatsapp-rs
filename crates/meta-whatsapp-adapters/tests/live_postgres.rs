@@ -2699,7 +2699,8 @@ async fn live_postgres_fills_racing_erasures_and_purges() {
 /// stable identifier: replicas of two revisions must take the same ones),
 /// written out here apart from the code: held from outside, the number
 /// lock holds back an append and an erasure of that number only, and the
-/// purge lock a purge and an erasure.
+/// purge lock a purge, an erasure and a trim (`trim_conversations`, which
+/// takes no lock of its own: roadmap B4).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_postgres_the_locks_are_the_documented_ones() {
     let Some(db) = TestDb::new().await else {
@@ -2721,12 +2722,17 @@ async fn live_postgres_the_locks_are_the_documented_ones() {
     for (lock, held, number_lock) in [
         (
             "SELECT pg_advisory_xact_lock('wa_messages'::regclass::oid::int4, hashtext('106540352242922'))",
-            ["append", "append_synced", "erase"],
+            &["append", "append_synced", "erase"][..],
             true,
         ),
         (
             "SELECT pg_advisory_xact_lock('wa_conversations'::regclass::oid::int4, 0)",
-            ["purge", "purge_number", "erase"],
+            &["purge", "purge_number", "erase"][..],
+            false,
+        ),
+        (
+            "SELECT pg_advisory_xact_lock('wa_conversations'::regclass::oid::int4, 0)",
+            &["trim", "trim_number"][..],
             false,
         ),
     ] {
@@ -2762,7 +2768,7 @@ async fn live_postgres_the_locks_are_the_documented_ones() {
             );
         }
         let mut waiting = Vec::new();
-        for (i, op) in held.into_iter().enumerate() {
+        for (i, &op) in held.iter().enumerate() {
             let (store, key) = (store.clone(), key.clone());
             let m = race_message(&key, &format!("{n}-{i}"), 0);
             waiting.push(tokio::spawn(async move {
@@ -2771,6 +2777,11 @@ async fn live_postgres_the_locks_are_the_documented_ones() {
                     "append_synced" => store.append_synced(vec![m]).await.map(drop),
                     "erase" => store.erase(&key).await.map(drop),
                     "purge" => store.purge_before(None, cutoff).await.map(drop),
+                    "trim" => store.trim_conversations(None, 1000).await.map(drop),
+                    "trim_number" => store
+                        .trim_conversations(Some(&key.phone_number_id), 1000)
+                        .await
+                        .map(drop),
                     _ => store
                         .purge_before(Some(&key.phone_number_id), cutoff)
                         .await
@@ -2788,6 +2799,215 @@ async fn live_postgres_the_locks_are_the_documented_ones() {
         for w in waiting {
             w.await.unwrap().unwrap();
         }
+    }
+}
+
+// Trims (`trim_conversations`, roadmap B4) racing appends.
+
+/// A trim deletes a conversation's latest message (its newest rows are
+/// tombstones) while an append of a newer one has written its message and
+/// waits on the summary row: the trim must leave the summary the append
+/// moved to its message, never delete it from what its own snapshot
+/// shows (the message would stay without its summary).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_a_trim_keeps_the_summary_an_append_moved() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    for synced in [false, true] {
+        let app = format!("race_{}", common::unique());
+        let store = PostgresConversationStore::new(racing_pool(&db, &app, &[]).await);
+        // A number per pass: the trim is the number's.
+        let key = ConversationKey::new(
+            PhoneNumberId::new(if synced {
+                "106540352242923"
+            } else {
+                "106540352242922"
+            })
+            .unwrap(),
+            format!("US.trim-synced-{synced}"),
+        );
+        // Outbound: the unread count keeps a trimmed inbound message until
+        // the next `mark_read` (documented), which the summary check
+        // below would count against the history.
+        let first = StoredMessage {
+            direction: Direction::Outbound,
+            status: DeliveryStatus::Accepted,
+            ..race_message(&key, &format!("{synced}-first"), 0)
+        };
+        assert!(store.append(first.clone()).await.unwrap());
+        for minute in [1, 2] {
+            assert!(
+                store
+                    .revoke(
+                        &key,
+                        &MessageId::new(format!("wamid.race.{synced}-gone-{minute}")),
+                        Direction::Inbound,
+                        datetime!(2026-09-24 12:00 UTC) + time::Duration::minutes(minute),
+                    )
+                    .await
+                    .unwrap()
+            );
+        }
+
+        let lock = blocker(
+            &db,
+            "SELECT 1 FROM wa_conversations WHERE phone_number_id = $1 AND contact = $2",
+            &[key.phone_number_id.as_str(), &key.contact],
+        )
+        .await;
+        let newer = race_message(&key, &format!("{synced}-newer"), 3);
+        let append = tokio::spawn({
+            let (store, m) = (store.clone(), newer.clone());
+            async move {
+                if synced {
+                    store
+                        .append_synced(vec![m])
+                        .await
+                        .map(|stored| stored == [true])
+                } else {
+                    store.append(m).await
+                }
+            }
+        });
+        until_waiting(&db, &app, 1, || false).await;
+        // Its snapshot holds the two tombstones and the first message,
+        // which it deletes, and the summary on it.
+        let trim = tokio::spawn({
+            let (store, number) = (store.clone(), key.phone_number_id.clone());
+            async move { store.trim_conversations(Some(&number), 2).await }
+        });
+        until_waiting(&db, &app, 2, || trim.is_finished()).await;
+        lock.commit().await.unwrap();
+
+        assert!(append.await.unwrap().unwrap(), "synced: {synced}");
+        let trimmed = trim.await.unwrap().unwrap();
+        assert_eq!(trimmed.messages, 1, "synced: {synced}: the first message");
+        assert_summary_matches_history(&store, &key).await;
+        let history = store.messages(&key, None, 10).await.unwrap();
+        assert_eq!(
+            history.first(),
+            Some(&newer),
+            "synced: {synced}: the newer message stays, with its summary"
+        );
+        assert!(
+            !history.contains(&first),
+            "synced: {synced}: the first message is trimmed"
+        );
+    }
+}
+
+/// Unorchestrated: appends of newer messages to one conversation from two
+/// pools, and trims from one of them at once, never lose a new message
+/// (each among the newest the trims keep) nor leave the history and the
+/// summary disagreeing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_trims_racing_appends_keep_every_new_message() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let a = PostgresConversationStore::new(db.pool.clone());
+    let b = PostgresConversationStore::new(TestDb::pool_on(&db.url, &db.schema, 10).await);
+    let number = PhoneNumberId::new("106540352242922").unwrap();
+    for round in 0..40 {
+        let key = ConversationKey::new(number.clone(), format!("US.trim-{round}"));
+        let old: Vec<_> = (0..10)
+            .map(|i| race_message(&key, &format!("trim-{round}-old-{i}"), i))
+            .collect();
+        a.append_synced(old).await.unwrap();
+        let new: Vec<_> = (0..6)
+            .map(|i| race_message(&key, &format!("trim-{round}-new-{i}"), 100 + i))
+            .collect();
+        let appends = new.iter().enumerate().map(|(i, m)| {
+            let store = if i % 2 == 0 { &a } else { &b };
+            store.append(m.clone())
+        });
+        let trims = (0..3).map(|_| async {
+            tokio::task::yield_now().await;
+            b.trim_conversations(Some(&number), 6).await
+        });
+        let (appended, trimmed) = tokio::join!(
+            futures::future::join_all(appends),
+            futures::future::join_all(trims)
+        );
+        for r in appended {
+            assert!(r.unwrap(), "round {round}");
+        }
+        for r in trimmed {
+            r.unwrap();
+        }
+        a.trim_conversations(Some(&number), 6).await.unwrap();
+        let expected: Vec<_> = new.iter().rev().cloned().collect();
+        assert_eq!(
+            a.messages(&key, None, 100).await.unwrap(),
+            expected,
+            "round {round}: the six new messages, all kept"
+        );
+        assert_summary_matches_history(&a, &key).await;
+    }
+}
+
+/// A trim deleting the summaries of two conversations (a cap of zero) and
+/// a history chunk updating both, in key order, never deadlock: the trim
+/// locks them in key order too, and leaves both summaries the chunk moved.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_a_trim_and_a_history_chunk_never_deadlock() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    postgres::migrate(&db.pool).await.unwrap();
+    let app = format!("race_{}", common::unique());
+    let store = PostgresConversationStore::new(
+        racing_pool(
+            &db,
+            &app,
+            &[("enable_seqscan", "off"), ("enable_bitmapscan", "off")],
+        )
+        .await,
+    );
+    let number = PhoneNumberId::new("106540352242922").unwrap();
+    let (first, second) = (
+        ConversationKey::new(number.clone(), "US.1"),
+        ConversationKey::new(number.clone(), "US.2"),
+    );
+    assert!(store.append(race_message(&first, "one", 2)).await.unwrap());
+    assert!(store.append(race_message(&second, "two", 1)).await.unwrap());
+
+    let lock = blocker(
+        &db,
+        "SELECT 1 FROM wa_conversations WHERE phone_number_id = $1 AND contact = $2",
+        &[first.phone_number_id.as_str(), &first.contact],
+    )
+    .await;
+    let (one, two) = (
+        race_message(&first, "one-synced", 3),
+        race_message(&second, "two-synced", 3),
+    );
+    let chunk = tokio::spawn({
+        let (store, batch) = (store.clone(), vec![one.clone(), two.clone()]);
+        async move { store.append_synced(batch).await }
+    });
+    until_waiting(&db, &app, 1, || false).await;
+    let trim = tokio::spawn({
+        let (store, number) = (store.clone(), number.clone());
+        async move { store.trim_conversations(Some(&number), 0).await }
+    });
+    until_waiting(&db, &app, 2, || trim.is_finished()).await;
+    lock.commit().await.unwrap();
+    let (chunk, trim) = (chunk.await.unwrap(), trim.await.unwrap());
+    assert!(
+        chunk.is_ok() && trim.is_ok(),
+        "both succeed: {chunk:?}, {trim:?}"
+    );
+    for (key, kept) in [(&first, one), (&second, two)] {
+        assert_eq!(
+            store.messages(key, None, 10).await.unwrap(),
+            [kept],
+            "{key}: the chunk's message, recorded during the trim, stays"
+        );
+        assert_summary_matches_history(&store, key).await;
     }
 }
 

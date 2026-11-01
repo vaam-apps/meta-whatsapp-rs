@@ -22,7 +22,8 @@ WABA administration (roadmap L10b), category 18 again with the thread
 control API (roadmap L15), categories 16 and 17 with max price and
 welcome message sequences (roadmap L13), categories 37 and 40 again with
 durable scheduling (roadmap B3), category 5's notes with media
-conversion (roadmap L19), categories 19 and 39 again with the routing
+conversion (roadmap L19), category 40 again with retention and
+auto-delete (roadmap B4), categories 19 and 39 again with the routing
 after a move and the bind generation (roadmap S2b), category 18 again
 with the Routing Roles API (roadmap L15a). The
 per-feature detail is in [coverage.md](coverage.md) (the linked rows);
@@ -33,7 +34,7 @@ the capability-level comparison with Zaileys is in [parity.md](parity.md)
 
 | 40 categories | done | partial | gap |
 | --- | --- | --- | --- |
-| Library | 29 | 11 | 0 |
+| Library | 30 | 10 | 0 |
 | Service | 1 | 24 | 15 |
 
 35 categories follow Meta's grouping, 2 are APIs Meta documents
@@ -99,7 +100,7 @@ by reference only (36, 37), and 3 are our own (38–40).
 | 37 | Scheduled campaigns (Meta's side) | `reference/whatsapp-business-account/schedules-api.md` | list and create Meta's campaign schedules (L10b); scheduling of our own besides, durable jobs (`KvJobs`, `JobRunner`, B3; category 40) | none | [12](coverage.md#row-12) | 90 | done / gap (M5k) | reference only; the audience id is explained nowhere in Meta's docs |
 | 38 | Documents (ours, not Meta's) | none | `meta-whatsapp-typst`: invoices, receipts, vouchers to PDF or PNG | the documents route in M4 | [23](coverage.md#row-23) | 118 | done / gap (M4) | — |
 | 39 | CMS inbox, adapters, the HTTP service (ours) | none | the inbox with a 24-hour window check; memory, Postgres and Redis key/value stores; memory and Postgres conversation stores; sinks; the reqwest transport | M1 (M1a–M1c) shipped; inbox routes in M2a, SSE and webhooks-out in M2b and M2c; the backend bundle and its ports in the service's core since S1, their contracts right for any backend since S2, and executable suites in core since S3, which both backends pass; the service composed from a bundle alone since S4, so an integrator's backend is served with no change to the server; since S2b every backend records a WABA's moves and a bind generation (D26) | [26](coverage.md#row-26), [27](coverage.md#row-27), [33](coverage.md#row-33) | 10, 110–112, 119 | partial / partial (M2a, M2b, M2c) | no Redis or SQLite conversation store, no MongoDB adapters yet |
-| 40 | Bot framework (ours; Zaileys parity) | none | `meta-whatsapp-bot` (B1): commands with prefixes, aliases, quoted arguments, captions, payloads, usage hints and metadata; subcommands and flags (`Command::subcommand`, `Command::flag`, B1b); guards (private or group only, owners, banned senders, cooldowns on `KvStore`); a generated help and Meta's command menu (`Bot::sync_command_menu`); middleware (`Middleware`, `Next`); compile-time plugins (`Plugin`); listeners by message type or event kind (`Listen`); reactions (`Ctx::react`); Markdown replies (`Ctx::reply_markdown`); rich replies (`Ctx::reply_rich`, B1c: images, suggestions as reply buttons or a list, product carousels); paced broadcasts (`Broadcast`, `Pacer`, B2), the bot's read receipts, typing indicators and replies in the same budget (`BotBuilder::pacer`), and the client's group operations too (`PacedGroups`, `PacedGroup`); durable scheduled jobs that survive a restart (`KvJobs`, `JobRunner`, B3). To come: auto-delete (B4) | the bot and broadcast APIs in M5k; retention per store in M2a; erasure of a customer in M2f | [34](coverage.md#row-34) | 17, 85–92 | partial / gap (M2a, M2f, M5k) | hot reload is not offered (design D28); Meta's group info gives participants no role, so owners stand in for Zaileys' group admins |
+| 40 | Bot framework (ours; Zaileys parity) | none | `meta-whatsapp-bot` (B1): commands with prefixes, aliases, quoted arguments, captions, payloads, usage hints and metadata; subcommands and flags (`Command::subcommand`, `Command::flag`, B1b); guards (private or group only, owners, banned senders, cooldowns on `KvStore`); a generated help and Meta's command menu (`Bot::sync_command_menu`); middleware (`Middleware`, `Next`); compile-time plugins (`Plugin`); listeners by message type or event kind (`Listen`); reactions (`Ctx::react`); Markdown replies (`Ctx::reply_markdown`); rich replies (`Ctx::reply_rich`, B1c: images, suggestions as reply buttons or a list, product carousels); paced broadcasts (`Broadcast`, `Pacer`, B2), the bot's read receipts, typing indicators and replies in the same budget (`BotBuilder::pacer`), and the client's group operations too (`PacedGroups`, `PacedGroup`); durable scheduled jobs that survive a restart (`KvJobs`, `JobRunner`, B3); retention and auto-delete of the stored history by age and a cap per chat (`RetentionPolicy`, `RetentionSweeper`, over `ConversationStore::trim_conversations` and `purge_before`, B4) | the bot and broadcast APIs in M5k; retention per store in M2a; erasure of a customer in M2f | [34](coverage.md#row-34) | 17, 85–92 | done / gap (M2a, M2f, M5k) | hot reload is not offered (design D28); Meta's group info gives participants no role, so owners stand in for Zaileys' group admins |
 
 ## How to keep this true
 
