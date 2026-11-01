@@ -562,6 +562,85 @@ mod tests {
     }
 
     #[test]
+    fn refuses_every_spelling_of_a_fragment_and_a_plain_scheme() {
+        for url in [
+            "REDISS://:hunter2@redis.example.com/#insecure",
+            "Rediss://:hunter2@redis.example.com#insecure",
+            "rediss://:hunter2@redis.example.com:6380/0?protocol=resp3#insecure",
+            "rediss://:hunter2@redis.example.com?insecure#insecure",
+            "rediss://:hunter2@redis.example.com#",
+            "valkeys://:hunter2@redis.example.com#insecure",
+            // Percent-encoded, it is no fragment: the path, then not a database.
+            "rediss://:hunter2@redis.example.com/%23insecure",
+            "REDIS://:hunter2@redis.example.com",
+            "valkey://:hunter2@redis.example.com",
+            "redis+unix:///tmp/redis.sock",
+            "http://:hunter2@redis.example.com",
+        ] {
+            let error = parse(url).err().expect(url);
+            assert_eq!(error.kind(), ErrorKind::InvalidClientConfig, "{url}");
+            let shown = format!("{error} {error:?}");
+            assert!(!shown.contains("hunter2"), "{url}: {shown}");
+        }
+        // A query is not a fragment, and turns nothing off.
+        let t = parse("REDISS://redis.example.com?insecure=true").unwrap();
+        assert_eq!(t.host, "redis.example.com");
+    }
+
+    #[test]
+    fn the_password_never_ends_up_in_the_host() {
+        // `@`, `:` and percent-escapes in the user info: the last `@` ends it.
+        for (url, user, password) in [
+            (
+                "rediss://user:p@ss@redis.example.com/0?protocol=resp3",
+                Some("user"),
+                "p@ss",
+            ),
+            (
+                "rediss://user:pa:ss@redis.example.com",
+                Some("user"),
+                "pa:ss",
+            ),
+            (
+                "rediss://:p%40ss%2F%23@redis.example.com:6380",
+                None,
+                "p@ss/#",
+            ),
+        ] {
+            let t = parse(url).expect(url);
+            assert_eq!(t.host, "redis.example.com", "{url}");
+            assert_eq!(
+                t.server_name,
+                ServerName::try_from("redis.example.com").unwrap()
+            );
+            assert_eq!(t.redis.username(), user, "{url}");
+            assert_eq!(t.redis.password(), Some(password), "{url}");
+        }
+        // An unescaped `/`, `?` or `#` in the password ends the authority
+        // early: refused, and not quoted.
+        for url in [
+            "rediss://:hun/ter2@redis.example.com",
+            "rediss://:hun?ter2@redis.example.com",
+            "rediss://:hun#ter2@redis.example.com",
+        ] {
+            let error = parse(url).err().expect(url);
+            let shown = format!("{error} {error:?}");
+            assert!(!shown.contains("ter2"), "{url}: {shown}");
+        }
+    }
+
+    #[test]
+    fn a_host_that_is_no_valid_server_name_is_refused() {
+        for url in [
+            "rediss://redis%2Eexample.com",
+            "rediss://redis..example.com",
+        ] {
+            let error = parse(url).err().expect(url);
+            assert_eq!(error.kind(), ErrorKind::InvalidClientConfig, "{url}");
+        }
+    }
+
+    #[test]
     fn debug_shows_no_credentials() {
         let t = parse("rediss://alice:hunter2@redis.example.com:6380/2").unwrap();
         let conn = RedisTlsConnection {

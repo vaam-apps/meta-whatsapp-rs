@@ -95,6 +95,9 @@ url.workspace = true
 # ambiguous and `rustls::ClientConfig::builder()` panics (roadmap L21c). A
 # dev-dependency only: no library build links ring.
 rustls = { workspace = true, features = ["ring", "aws_lc_rs", "std", "tls12"] }
+# tests/redis_tls_handshake.rs: its servers' certificates, made per test on
+# aws-lc-rs (none is committed).
+rcgen = { workspace = true, features = ["aws_lc_rs", "pem"] }
 
 [lints]
 workspace = true
