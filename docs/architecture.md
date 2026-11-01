@@ -140,6 +140,7 @@ rewrite them along with the code.
 | the service's migration files, `wa_server_sqlx_migrations` | `meta-whatsapp-server/migrations/*.sql`, `MIGRATIONS_TABLE` | the service's `wa_server_*` tables (the operator-only event stream `''` included) and its migration history; an edited file makes `migrate` refuse every database migrated before | `the_migrations_and_their_checksums_are_pinned` |
 | `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server-core/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
 | `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key; for a subcommand, the command part is its path, `order status`). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed`, `a_subcommands_cooldown_key_is_over_its_path` |
+| `wa.bot.pacer` (added by roadmap B2b; the namespace and the record layout **pending the owner's confirmation**, roadmap § Owner touchpoints) | `PACER_NAMESPACE`, `meta-whatsapp-bot/src/pacer/kv.rs` | store namespace of `KvRateLimiter`'s per-number schedules (key: SHA-256 hex of the length-prefixed phone number id, `<len>:<id>,`; value: the 49-byte version 1 record, its first byte the version). **Ephemeral**: changing it forgets each number's schedule, slow-down and raised rate (records expire 24 hours after their last slot by default), so while replicas of two releases run side by side they book from two budgets; no data is stranded | `the_pacer_key_is_pinned_and_hashed` (known answer), `the_pacer_record_is_pinned` |
 
 Library store namespaces are `wa.<module>[.<purpose>]` (`wa.token`,
 `wa.otp.rate`, `wa.webhook.dedup`, `wa.bot.cooldown`): a new typed store
@@ -1197,8 +1198,17 @@ for every event, after the ban and the match.
   in tests). A limiter reserves (takes a `SlotRequest`: number, now,
   cost; returns a `Reservation` with the wait) rather than waits, and
   can take an unused slot back, so a shared one, across replicas, is a
-  `RateLimiter` too; none ships (roadmap B2b), and each replica otherwise
-  has its own budget. Failed sends go to a `BroadcastPolicy` (default
+  `RateLimiter` too: `KvRateLimiter` (opt-in, roadmap B2b), a typed store
+  on `KvStore` (namespace `wa.bot.pacer`, no new port) keeping each
+  number's schedule, slow-down and raised rate as a versioned record
+  booked by `compare_and_swap`, a bounded number of attempts under
+  contention (then `StorageError::Busy`), failing closed when the store
+  does, and assuming the replicas' clocks synchronized (a skew lets up
+  to `⌈skew × rate⌉` more into a one-second window); without it each
+  replica has its own budget. `RateLimiter::raise_rate` (default: raises
+  nothing) is how a throughput upgrade reaches a limiter, in this
+  process (`TokenBucket`) or for every replica (`KvRateLimiter`), never
+  lowering a rate. Failed sends go to a `BroadcastPolicy` (default
   `Backoff`, on `ErrorKind`: the pair limit defers one recipient on
   Meta's `4^X` schedule, throughput retries, a number in maintenance
   (`131057`) is retried every 20 s, the per-user marketing limit is

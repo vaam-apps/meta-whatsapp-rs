@@ -50,10 +50,14 @@ pub fn shared_pacer(upgraded: PhoneNumberId) -> Pacer {
   middleware, so a middleware that stops non-message events stops the
   upgrade too; and a failed directory goes to the `ErrorHandler`, whose
   default acknowledges it (`PropagateErrors` to have Meta redeliver).
-  **In memory**: after a restart, or on a replica that did not get the
-  webhook, the number is back at its configured rate, and Meta sends
-  the webhook once. Record the id `ThroughputUpgrades::observe` returns
-  and set it at startup (`TokenBucket::rate_for`).
+  **In memory with a `TokenBucket`**: after a restart, or on a replica
+  that did not get the webhook, the number is back at its configured
+  rate, and Meta sends the webhook once. Record the id
+  `ThroughputUpgrades::observe` returns and set it at startup
+  (`TokenBucket::rate_for`). Given a `KvRateLimiter` instead (an
+  `Arc<KvRateLimiter>`, the same call), the raised rate is in the store
+  for every replica, until the number's record expires (24 hours after
+  its last slot by default), and never lowered.
 
 ```rust
 pub fn following_upgrades(
@@ -84,12 +88,26 @@ pub fn following_upgrades(
   `PacedGroups::new(client.groups(number), pacer)` and its `PacedGroup`
   (Meta documents no rate for those; pacing them in the same budget is a
   choice). Any other call: `Pacer::acquire` first.
-- **Several replicas** each have their own budget: give each its share
-  (`Rate::per_second`), or implement `RateLimiter` (`RateLimiter::reserve`
-  takes a `SlotRequest` and returns a `Reservation`,
-  `RateLimiter::release` takes an unused one back,
-  `RateLimiter::slow_down` hears throttling) over a store they share.
-  None ships yet.
+- **Several replicas** with a `TokenBucket` each have their own budget:
+  give each its share (`Rate::per_second`), or pace them all with a
+  `KvRateLimiter` over the `KvStore` they share (opt-in:
+  `Pacer::new(KvRateLimiter::new(kv, Rate::DEFAULT))` on every replica).
+  Each number's schedule is a record there (namespace `wa.bot.pacer`),
+  booked by compare-and-swap, so they book from one budget; slow-downs
+  and raised rates are shared. Configure every replica alike. Their
+  clocks must be synchronized (NTP): a skew lets up to `⌈skew × rate⌉`
+  more into a one-second window, so leave that headroom. Under
+  contention it retries 8 times with backoff (`KvRateLimiter::contention`),
+  then fails with `StorageError::Busy`; a store that fails fails the
+  booking too, and nothing is sent (`BroadcastEnd::LimiterFailed`), as
+  does a record it cannot read, which it never overwrites. Deleting the
+  number's record (`KvRateLimiter::store_key`) resets it: the remedy for
+  such a record, for slots a clock stepped forward booked, and for a
+  raised rate to lower, at the cost of the slots booked. Or
+  implement `RateLimiter` yourself (`RateLimiter::reserve` takes a
+  `SlotRequest` and returns a `Reservation`, `RateLimiter::release` takes
+  an unused one back, `RateLimiter::slow_down` hears throttling,
+  `RateLimiter::raise_rate` takes an upgrade).
 - Don't give a broadcast a `PacedOutbound`: it paces itself, and each
   send would take two slots. An outbound of yours must not retry inside
   a call, and must be truthful about `Error::may_have_been_sent`.

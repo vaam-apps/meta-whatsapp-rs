@@ -5,10 +5,11 @@
 //! itself (`throughput`, "Higher throughput") and then sends a
 //! `phone_number_quality_update` webhook whose `event` is
 //! `THROUGHPUT_UPGRADE` (`PhoneNumberQualityEvent::ThroughputUpgrade`).
-//! [`ThroughputUpgrades`] hears that webhook and sets the number's rate in
-//! a [`TokenBucket`] to [`Rate::HIGHER_THROUGHPUT`]
-//! ([`TokenBucket::set_rate`]), so its next sends go 1 ms apart instead of
-//! 12.5 ms. Wire it in with `BotBuilder::follow_throughput_upgrades` (a
+//! [`ThroughputUpgrades`] hears that webhook and raises the number's rate
+//! in the pacer's [`RateLimiter`] to [`Rate::HIGHER_THROUGHPUT`]
+//! ([`RateLimiter::raise_rate`]: in a [`TokenBucket`], in this process; in
+//! a [`KvRateLimiter`], for every replica), so its next sends go 1 ms apart
+//! instead of 12.5 ms. Wire it in with `BotBuilder::follow_throughput_upgrades` (a
 //! listener of the bot), or deliver events to it yourself: it is an
 //! `EventSink<WebhookEvent>` too, for a process with no bot (next to your
 //! own sink in a `FanoutSink`).
@@ -31,13 +32,17 @@
 //! warning). Only the upgraded number's rate changes: every other number,
 //! of the same WABA or not, keeps its own.
 //!
-//! **In memory only.** The rate lives in the bucket: a restart (or another
-//! replica, which did not get the webhook) is back at the bucket's
-//! configured rate, and Meta sends the webhook once per upgrade, not again
-//! after a restart. To keep it, record the number [`ThroughputUpgrades::observe`]
-//! returns in your own store and set it when you build the bucket
-//! ([`TokenBucket::rate_for`]); a store namespace of this crate's for it
-//! would be a stable identifier, not added here.
+//! **Where the rate is kept.** With a [`TokenBucket`] the rate lives in
+//! the bucket: a restart (or another replica, which did not get the
+//! webhook) is back at the bucket's configured rate, and Meta sends the
+//! webhook once per upgrade, not again after a restart. With a
+//! [`KvRateLimiter`] it is in the number's record, for every replica on the
+//! store, and survives restarts until the record expires
+//! ([`KvRateLimiter::idle_expiry`]: 24 hours after the number's last slot
+//! by default). To keep it longer, record the number
+//! [`ThroughputUpgrades::observe`] returns in your own store and set it
+//! when you build the limiter ([`TokenBucket::rate_for`],
+//! [`KvRateLimiter::rate_for`]).
 //!
 //! **What else loses an upgrade**, since Meta does not send it again:
 //!
@@ -47,7 +52,9 @@
 //!   it. Let events without a message through (`ctx.message()` is
 //!   `None`), or deliver to a `ThroughputUpgrades` as a sink next to the
 //!   bot instead.
-//! - A [`NumberDirectory`] that fails changes no rate. As a sink, that is
+//! - A [`NumberDirectory`] that fails changes no rate, nor does a limiter
+//!   that fails to raise it (a [`KvRateLimiter`] whose store is down;
+//!   nothing is raised then). As a sink, that is
 //!   `SinkError::Delivery`: the webhook answers `500` and Meta redelivers,
 //!   for up to 7 days (`throughput`, "Webhooks"). As a bot's listener the
 //!   error goes to the bot's `ErrorHandler`, and the default, `LogErrors`,
@@ -56,8 +63,11 @@
 //!   A directory answers `Ok(None)`, not an error, for a number that is
 //!   not yours, or Meta redelivers it all that time.
 //!
-//! [`TokenBucket::set_rate`]: crate::TokenBucket::set_rate
+//! [`TokenBucket`]: crate::TokenBucket
 //! [`TokenBucket::rate_for`]: crate::TokenBucket::rate_for
+//! [`KvRateLimiter`]: crate::KvRateLimiter
+//! [`KvRateLimiter::idle_expiry`]: crate::KvRateLimiter::idle_expiry
+//! [`KvRateLimiter::rate_for`]: crate::KvRateLimiter::rate_for
 
 use std::collections::HashMap;
 use std::fmt;
@@ -73,7 +83,7 @@ use meta_whatsapp_webhooks::fields::PhoneNumberQualityEvent;
 
 use crate::command::CommandHandler;
 use crate::ctx::Ctx;
-use crate::pacer::{Rate, TokenBucket};
+use crate::pacer::{Rate, RateLimiter};
 
 /// The event kind a [`ThroughputUpgrades`] listens to
 /// (`WebhookEvent::kind` of a `phone_number_quality_update`).
@@ -206,33 +216,39 @@ impl NumberDirectory for KnownNumbers {
     }
 }
 
-/// Raises a number's rate in a [`TokenBucket`] when Meta's
-/// `phone_number_quality_update` says it was upgraded to higher throughput.
-/// See the [module docs](self).
+/// Raises a number's rate in a [`RateLimiter`] ([`RateLimiter::raise_rate`])
+/// when Meta's `phone_number_quality_update` says it was upgraded to higher
+/// throughput. See the [module docs](self).
 ///
-/// Give it the bucket your [`crate::Pacer`] paces with (kept in an `Arc`,
-/// the pacer built with `Pacer::shared`): an upgrade of a bucket no pacer
-/// uses changes nothing anyone sends.
+/// Give it the limiter your [`crate::Pacer`] paces with (a [`TokenBucket`]
+/// or a [`KvRateLimiter`] kept in an `Arc`, the pacer built with
+/// `Pacer::shared`): an upgrade of a limiter no pacer uses changes nothing
+/// anyone sends. A limiter without rates of its own (the trait's default
+/// `raise_rate`) raises nothing.
+///
+/// [`TokenBucket`]: crate::TokenBucket
+/// [`KvRateLimiter`]: crate::KvRateLimiter
 #[derive(Debug, Clone)]
 pub struct ThroughputUpgrades {
-    bucket: Arc<TokenBucket>,
+    limiter: Arc<dyn RateLimiter>,
     numbers: Arc<dyn NumberDirectory>,
     rate: Rate,
 }
 
 impl ThroughputUpgrades {
-    /// Follow upgrades of the numbers `numbers` knows, into `bucket`, at
+    /// Follow upgrades of the numbers `numbers` knows, into `limiter` (an
+    /// `Arc<TokenBucket>` or an `Arc<KvRateLimiter>`), at
     /// [`Rate::HIGHER_THROUGHPUT`].
-    pub fn new(bucket: Arc<TokenBucket>, numbers: impl NumberDirectory) -> Self {
-        Self::shared(bucket, Arc::new(numbers))
+    pub fn new<L: RateLimiter>(limiter: Arc<L>, numbers: impl NumberDirectory) -> Self {
+        Self::shared(limiter, Arc::new(numbers))
     }
 
-    /// [`Self::new`] with a directory shared with other code (an
-    /// `Arc<KnownNumbers>` you keep, to [`KnownNumbers::insert`] while
+    /// [`Self::new`] with a limiter and a directory shared with other code
+    /// (an `Arc<KnownNumbers>` you keep, to [`KnownNumbers::insert`] while
     /// running).
-    pub fn shared(bucket: Arc<TokenBucket>, numbers: Arc<dyn NumberDirectory>) -> Self {
+    pub fn shared(limiter: Arc<dyn RateLimiter>, numbers: Arc<dyn NumberDirectory>) -> Self {
         Self {
-            bucket,
+            limiter,
             numbers,
             rate: Rate::HIGHER_THROUGHPUT,
         }
@@ -250,10 +266,10 @@ impl ThroughputUpgrades {
 
     /// Hear one event. For a `phone_number_quality_update` whose `event`
     /// is `THROUGHPUT_UPGRADE`, of a number the directory knows and whose
-    /// rate is below this one's: set that number's rate
-    /// ([`TokenBucket::set_rate`]) and return its id. Anything else
-    /// returns `None` and changes nothing. Fails only when the directory
-    /// does, and then changes nothing.
+    /// rate is below this one's: raise that number's rate
+    /// ([`RateLimiter::raise_rate`]) and return its id. Anything else
+    /// returns `None` and changes nothing. Fails only when the directory or
+    /// the limiter does, and then changes nothing.
     pub async fn observe(&self, event: &WebhookEvent) -> Result<Option<PhoneNumberId>> {
         let WebhookEvent::PhoneNumberQualityUpdated {
             waba_id, update, ..
@@ -280,8 +296,10 @@ impl ThroughputUpgrades {
         };
         // Checked and set in one step: a rate raised higher between a
         // separate check and set would be lowered.
-        if !self.bucket.raise_rate(&number, self.rate) {
-            tracing::debug!("throughput upgrade of a number already at its rate");
+        if !self.limiter.raise_rate(&number, self.rate).await? {
+            tracing::debug!(
+                "throughput upgrade of a number already at its rate (or a limiter without rates)"
+            );
             return Ok(None);
         }
         tracing::info!(rate = self.rate.get(), "pacer follows a throughput upgrade");
@@ -290,7 +308,7 @@ impl ThroughputUpgrades {
 }
 
 /// As a bot's listener (`BotBuilder::follow_throughput_upgrades`): a
-/// failed directory goes to the bot's `ErrorHandler`.
+/// failed directory or limiter goes to the bot's `ErrorHandler`.
 #[async_trait]
 impl CommandHandler for ThroughputUpgrades {
     async fn call(&self, ctx: Ctx) -> Result<()> {
@@ -298,8 +316,9 @@ impl CommandHandler for ThroughputUpgrades {
     }
 }
 
-/// Without a bot: [`ThroughputUpgrades::observe`]; a failed directory is
-/// `SinkError::Delivery` (the webhook answers `500`, Meta redelivers).
+/// Without a bot: [`ThroughputUpgrades::observe`]; a failed directory or
+/// limiter is `SinkError::Delivery` (the webhook answers `500`, Meta
+/// redelivers).
 #[async_trait]
 impl EventSink<WebhookEvent> for ThroughputUpgrades {
     async fn deliver(&self, event: WebhookEvent) -> std::result::Result<(), SinkError> {
