@@ -2,7 +2,8 @@
 //!
 //! `deliver` runs, in this order: size check → signature (before any
 //! parsing, and before any allocation proportional to the body) → parse →
-//! normalize → per event: dedup claim → sink → dedup complete. The `axum`
+//! normalize → per event: dedup claim → sink (→ on a permanent sink error,
+//! with a dead-letter store: the dead-letter write) → dedup complete. The `axum`
 //! router is a thin HTTP mapping of it; any other framework can call it the
 //! same way.
 //!
@@ -12,12 +13,13 @@
 
 use std::sync::Arc;
 
-use meta_whatsapp_core::error::{ConfigError, WebhookError};
+use meta_whatsapp_core::error::{ConfigError, SinkError, WebhookError};
 use meta_whatsapp_core::secret::VerifyToken;
 use meta_whatsapp_core::sink::EventSink;
 use serde_json::Value;
 
-use crate::dedup::{Claim, DedupGuard};
+use crate::deadletter::DeadLetters;
+use crate::dedup::{Claim, ClaimTicket, DedupGuard};
 use crate::event::WebhookEvent;
 use crate::payload::WebhookPayload;
 use crate::redact;
@@ -45,6 +47,10 @@ pub struct DeliveryReport {
     pub duplicates: usize,
     /// Bodies that verified but did not parse (0 or 1).
     pub unparsed: usize,
+    /// Events the sink refused permanently, written to the dead-letter
+    /// store ([`WebhookHandlerBuilder::dead_letters`]) and acknowledged.
+    /// Not counted in `delivered`. Alert on it.
+    pub dead_lettered: usize,
 }
 
 /// Verifies, parses, deduplicates and dispatches webhook deliveries.
@@ -56,6 +62,7 @@ pub struct WebhookHandler {
     verify_token: VerifyToken,
     sink: Arc<dyn EventSink<WebhookEvent>>,
     dedup: Option<DedupGuard>,
+    dead_letters: Option<DeadLetters>,
     max_body_bytes: usize,
 }
 
@@ -73,6 +80,16 @@ impl WebhookHandlerBuilder {
     /// Meta retries for 7 days and sends to every subscribed app).
     pub fn dedup(mut self, guard: DedupGuard) -> Self {
         self.handler.dedup = Some(guard);
+        self
+    }
+
+    /// Dead-letter the events the sink refuses permanently
+    /// ([`SinkError::Permanent`]) in `store`, and acknowledge them, instead
+    /// of answering `500` for the whole batch: see [`crate::deadletter`].
+    /// Use it with a [`Self::dedup`] guard, or a redelivery of the body
+    /// dead-letters the event again.
+    pub fn dead_letters(mut self, store: DeadLetters) -> Self {
+        self.handler.dead_letters = Some(store);
         self
     }
 
@@ -101,6 +118,7 @@ impl WebhookHandler {
                 verify_token,
                 sink,
                 dedup: None,
+                dead_letters: None,
                 max_body_bytes: DEFAULT_MAX_BODY_BYTES,
             },
         }
@@ -180,8 +198,8 @@ impl WebhookHandler {
     /// - [`WebhookError::PayloadTooLarge`]: body over the limit → `413`.
     /// - [`WebhookError::MissingSignature`], [`WebhookError::MalformedSignature`],
     ///   [`WebhookError::SignatureMismatch`] → `401`.
-    /// - [`meta_whatsapp_core::Error::Sink`] / [`meta_whatsapp_core::Error::Storage`]: the sink or the
-    ///   dedup store failed → `500`.
+    /// - [`meta_whatsapp_core::Error::Sink`] / [`meta_whatsapp_core::Error::Storage`]: the sink, the
+    ///   dedup store or the dead-letter store failed → `500`.
     /// - [`meta_whatsapp_core::error::WebhookError::ClaimInFlight`]: another request
     ///   is delivering one of the events right now → `503`.
     ///
@@ -193,6 +211,14 @@ impl WebhookHandler {
     /// future is dropped mid-delivery (client gone, timeout, crash), the
     /// claim expires after the guard's lease instead of swallowing the
     /// event.
+    ///
+    /// With a dead-letter store ([`WebhookHandlerBuilder::dead_letters`]),
+    /// an event the sink refuses permanently ([`SinkError::is_permanent`])
+    /// is written there, its claim marked done, and the next event
+    /// delivered: it counts in [`DeliveryReport::dead_lettered`], and the
+    /// delivery is acknowledged. If that write fails, the claim is released
+    /// and the store's error returned (`500`), so Meta redelivers. Without
+    /// one, a permanent error is answered like any other.
     pub async fn deliver(
         &self,
         signature_header: Option<&str>,
@@ -236,17 +262,62 @@ impl WebhookHandler {
         );
         let raw = serde_json::from_slice::<Value>(body)
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(body).into_owned()));
-        self.sink
-            .deliver(WebhookEvent::Unparsed {
-                raw,
-                error: error.to_string(),
-            })
-            .await?;
-        Ok(DeliveryReport {
-            delivered: 1,
-            duplicates: 0,
+        let mut report = DeliveryReport {
             unparsed: 1,
-        })
+            ..DeliveryReport::default()
+        };
+        let event = WebhookEvent::Unparsed {
+            raw,
+            error: error.to_string(),
+        };
+        match self.hand_over(event).await? {
+            Handed::Delivered => report.delivered = 1,
+            Handed::DeadLettered => report.dead_lettered = 1,
+        }
+        Ok(report)
+    }
+
+    /// Hand `event` to the sink. A permanent sink error, with a dead-letter
+    /// store, is dead-lettered; any other error is returned.
+    async fn hand_over(&self, event: WebhookEvent) -> Result<Handed, HandOverError> {
+        let Some(store) = &self.dead_letters else {
+            self.sink
+                .deliver(event)
+                .await
+                .map_err(HandOverError::Sink)?;
+            return Ok(Handed::Delivered);
+        };
+        // The sink consumes the event; a dead letter needs it after.
+        let kept = event.clone();
+        match self.sink.deliver(event).await {
+            Ok(()) => Ok(Handed::Delivered),
+            Err(error) if error.is_permanent() => match store.record(&kept, &error).await {
+                Ok(_) => Ok(Handed::DeadLettered),
+                Err(store_error) => {
+                    tracing::error!(
+                        error = %store_error,
+                        kind = kept.kind(),
+                        "could not dead-letter an event the sink refused permanently; \
+                         answering non-200 so Meta redelivers"
+                    );
+                    Err(HandOverError::Other(store_error))
+                }
+            },
+            Err(error) => Err(HandOverError::Sink(error)),
+        }
+    }
+
+    /// Release `ticket` after the event could not be handed over.
+    async fn release(ticket: Option<&(&DedupGuard, ClaimTicket)>) {
+        if let Some((guard, ticket)) = ticket
+            && let Err(release_error) = guard.release(ticket).await
+        {
+            tracing::error!(
+                error = %release_error,
+                "could not release a dedup claim after a sink failure; \
+                 Meta's redelivery of that event waits for the claim's lease to expire"
+            );
+        }
     }
 
     async fn dispatch(
@@ -288,29 +359,29 @@ impl WebhookHandler {
                 },
                 None => None,
             };
-            if let Err(error) = self.sink.deliver(event).await {
-                if let Some((guard, ticket)) = &ticket
-                    && let Err(release_error) = guard.release(ticket).await
-                {
-                    tracing::error!(
-                        error = %release_error,
-                        "could not release a dedup claim after a sink failure; \
-                         Meta's redelivery of that event waits for the claim's lease to expire"
-                    );
+            match self.hand_over(event).await {
+                Ok(Handed::Delivered) => report.delivered += 1,
+                Ok(Handed::DeadLettered) => report.dead_lettered += 1,
+                Err(error) => {
+                    Self::release(ticket.as_ref()).await;
+                    if let HandOverError::Sink(error) = &error {
+                        tracing::warn!(
+                            %error,
+                            delivered = report.delivered,
+                            "event sink failed; answering non-200 so Meta redelivers"
+                        );
+                    }
+                    return Err(error.into());
                 }
-                tracing::warn!(
-                    %error,
-                    delivered = report.delivered,
-                    "event sink failed; answering non-200 so Meta redelivers"
-                );
-                return Err(error.into());
             }
-            report.delivered += 1;
             if let Some((guard, ticket)) = &ticket {
-                // The sink has the event; failing the request now would only
-                // make Meta redeliver what we already have. Log and go on:
-                // the claim's lease expiring is the worst case (a duplicate
-                // delivery if Meta retries this body for another reason).
+                // The sink has the event (or the dead-letter store does:
+                // acknowledged, so a redelivery of the body is a duplicate
+                // rather than a second dead letter); failing the request
+                // now would only make Meta redeliver what we already have.
+                // Log and go on: the claim's lease expiring is the worst
+                // case (a duplicate delivery if Meta retries this body for
+                // another reason).
                 match guard.complete(ticket).await {
                     Ok(true) => {}
                     Ok(false) => tracing::warn!(
@@ -326,5 +397,27 @@ impl WebhookHandler {
             }
         }
         Ok(report)
+    }
+}
+
+/// Where [`WebhookHandler::hand_over`] put an event.
+enum Handed {
+    Delivered,
+    DeadLettered,
+}
+
+/// Why [`WebhookHandler::hand_over`] failed: the sink (logged by the
+/// caller), or the dead-letter store (logged already).
+enum HandOverError {
+    Sink(SinkError),
+    Other(meta_whatsapp_core::Error),
+}
+
+impl From<HandOverError> for meta_whatsapp_core::Error {
+    fn from(error: HandOverError) -> Self {
+        match error {
+            HandOverError::Sink(error) => error.into(),
+            HandOverError::Other(error) => error,
+        }
     }
 }

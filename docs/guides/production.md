@@ -379,8 +379,10 @@ notification queue on top must be idempotent itself: tag each message with
   ([cms-inbox.md](cms-inbox.md#8-erasing-a-customer-and-retention)).
 - [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md) read: its defaults (OTP
   issue limit, PIN policy, no token refresh) were decided on 2026-09-26,
-  and some decisions are not built yet (a dead-letter path for webhook
-  batches, Redis TLS). The OTP namespace is
+  and some decisions are not built yet (Redis TLS). Dead letters for
+  webhook events a sink refuses permanently are built (L21a) but off until
+  you give the handler a store
+  ([webhooks.md § 9](webhooks.md#9-dead-letters)). The OTP namespace is
   required since d67b3ac; a revoked message keeps its content in the inbox
   (decided on 2026-09-25).
 - Upgrading from an older meta-whatsapp-rs revision, per commit crossed:
@@ -560,7 +562,11 @@ The procedure, per erasure request:
    unless the store deletes them (`ErasureMode::Delete`).
 3. Delete your own copies (downloaded media, exports, SSE clients'
    caches), the service's outbox rows (roadmap M2f) and your dead
-   letters (L21a) for that customer.
+   letters for that customer: `meta_whatsapp_rs::erasure::Eraser` with
+   `with_dead_letters` does step 2 and the dead letters together (L21a;
+   [webhooks.md § 9](webhooks.md#9-dead-letters)). A dead letter is kept
+   14 days by default (`DeadLetters::with_max_age`): list that retention
+   with the inbox's.
 4. Delete the customer from Meta's contact book:
    `client.phone_number(pnid).delete_contact_book_entry(&bsuid)` for
    each of their BSUIDs, with the merchant's own client (`with_token`)

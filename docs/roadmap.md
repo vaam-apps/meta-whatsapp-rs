@@ -1036,7 +1036,7 @@ and `store-postgres`.
   - **Also, after the first release:** the legacy fingerprint's removal
     moved to M2a, the service's next item, as S7 landed before the
     first release.
-- [ ] **S8. MongoDB in the dev container and CI** (`.devcontainer/`,
+- [x] **S8. MongoDB in the dev container and CI** (`.devcontainer/`,
   the `just test-live` Compose file, `.github/workflows/ci.yml`): a
   single-node replica set (transactions need one) beside Postgres and
   Redis, and `META_WHATSAPP_RS_TEST_MONGODB_URL`, for S9, S17 and S18.
@@ -1044,6 +1044,47 @@ and `store-postgres`.
   - **Decisive:** `just test-live` with
     `META_WHATSAPP_RS_REQUIRE_LIVE=1` and no MongoDB URL fails; with it,
     a live smoke test commits a multi-document transaction.
+  - **Landed:** `mongodb` in `compose.test.yaml` (`127.0.0.1:57017`) and
+    as a devcontainer sidecar: `mongo:7.0.45-jammy` with
+    `--replSet rs0`, whose healthcheck runs `rs.initiate()` when
+    `rs.status()` reports the set not yet initiated (code 94), with one
+    member, `localhost:27017`, and passes once that member is primary
+    (a few seconds after start). The URL carries `directConnection=true`,
+    as the member address is the container's own: `just test-live`
+    exports `mongodb://127.0.0.1:57017/?directConnection=true` (and
+    starts Compose when it is unset), the devcontainer sets
+    `mongodb://mongodb:27017/?directConnection=true`, and `just
+    test-live-clean` drops the `wa_test_*` databases (through `mongosh`,
+    which the devcontainer's image gains). The smoke test is
+    `live_mongodb_replica_set_commits_a_multi_document_transaction`
+    (meta-whatsapp-adapters' `tests/live_mongodb.rs`, in `test-live`'s
+    `live_` filter): a transaction across two collections, not visible
+    outside it before the commit and all visible after, then an aborted
+    one that leaves nothing; with the URL unset under
+    `META_WHATSAPP_RS_REQUIRE_LIVE=1` it panics. Its driver, `mongodb`
+    3.9 (Apache-2.0), is a dev-dependency there, without default features
+    (`rustls-tls` is rustls on `ring`) and with `rustls-tls-aws-lc`,
+    which builds its configuration on an explicit aws-lc-rs provider: no
+    library build links it, and it enables no `ring`. CI needs no
+    workflow change (`just ci` runs `test-live`, which starts Compose).
+    The server is MongoDB's, under the SSPL, and runs as a test service
+    only.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable by its tag, line
+    or setting): the image `mongo:7.0.45-jammy`, pinned by tag: the 7.0
+    series, as every 8.x release refuses to start on Linux 6.19 and
+    later (MongoDB's SERVER-121912, an rseq incompatibility in its
+    tcmalloc; the CI runner's kernel is one), and 7.0 has transactions on
+    a replica set; back to 8.x once MongoDB ships a release that starts
+    there; the driver a dev-dependency of the adapters only,
+    with `rustls-tls-aws-lc` and `bson-3`, until S17 makes it an optional
+    dependency; the healthcheck's `start_interval` of 1 s and `interval`
+    of 30 s (a check every 2 s cost half a core); `mongosh` 2.14.1 in the
+    devcontainer image; `MongoCleanup` in `live_mongodb.rs`, so the other
+    test binaries do not build the driver (S17 may move it). The SSPL
+    server is run, never linked or shipped, as the test service for the
+    database the owner named (design §10); the owner may still rule on
+    it, and the final report lists it.
 - [ ] **S9. An `Outbox` spike on MongoDB**
   (`meta-whatsapp-server-store-mongodb`, the `Outbox` only, not composed
   into the binary), before the port shapes freeze: per-tenant commit
@@ -1904,7 +1945,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **After:** nothing.
   - **Decisive:** exact JSON per endpoint; a pre-verified phone id is
     checked as digits before any request.
-- [ ] **L11d. The coexistence sync inside onboarding**
+- [x] **L11d. The coexistence sync inside onboarding**
   (`client::embedded_signup`; OPEN_QUESTIONS #7): a step right after a
   coexistence onboarding, on by default, that an option turns off. The
   library already carries the sync call
@@ -1916,6 +1957,71 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a coexistence onboarding requests the sync exactly
     once; with the option off, none; an onboarding without coexistence
     sends none.
+  - **Landed:** two steps, not one, because Meta's page has two
+    once-only calls: `steps::SYNC_CONTACTS` (`sync_contacts`,
+    `sync_type` `smb_app_state_sync`) then `steps::SYNC_HISTORY`
+    (`sync_history`, `history`), the last of the tail shared by
+    `onboard`, `onboard_hosted` (whose `for_hosted` request names no
+    finish, so it never reaches them) and `resume`, after `subscribe_app` and
+    a Solution Partner's credit line (Meta's order:
+    `onboarding-business-app-users` starts the sync once the
+    onboarding steps are done). They run for a coexistence
+    `finish_kind` unless `OnboardingRequest::coexistence_sync(false)`;
+    Meta's answers are `Onboarded::coexistence_sync`
+    (`CoexistenceSync`, `SyncOutcome`). Meta refuses a second request
+    (`2593107`) and a late one (`2593108`), and documents no way to
+    read whether one was made, so each request is claimed in a record
+    before it is posted (`COEXISTENCE_NAMESPACE`, `wa.es.coexistence`,
+    keyed by phone number, scoped to the stored token record so that a
+    new signup syncs again; a new stored identifier, pending the
+    owner's confirmation) and `resume` never posts one that was
+    accepted, refused, or whose answer was lost; a Meta refusal is
+    reported as `SyncOutcome::Refused`, not as a failure. The decisive
+    tests, in `embedded_signup::onboard`:
+    `coexistence_resolves_the_number_and_never_registers` (each request
+    once, exact path, bearer and body, after the subscription),
+    `with_the_option_off_no_sync_is_requested`,
+    `an_onboarding_without_coexistence_sends_no_sync` (the Cloud API and
+    WABA-only flows, `for_resume` and `for_hosted`); with
+    `a_resume_never_requests_an_accepted_sync_again` (on a clock off the
+    whole second: the record keeps the vault's seconds),
+    `resume_after_a_refused_request_asks_only_for_what_is_missing`,
+    `a_timed_out_sync_is_never_replayed` (retries on, then `resume`),
+    `a_sync_meta_refuses_is_reported_and_not_asked_again`,
+    `a_new_onboarding_of_the_number_syncs_again` (one second later: the
+    scope's precision), `the_sync_record_is_pinned`; and, from the
+    review, `a_claim_lost_to_a_concurrent_attempt_posts_nothing` (both
+    the `put_if_absent` and the `compare_and_swap` claim),
+    `an_answer_is_never_recorded_over_a_later_onboarding`,
+    `a_resume_never_takes_over_a_later_onboardings_record` and
+    `a_4xx_releases_the_claim_and_a_5xx_keeps_it` (a 409 releases, a
+    500 with a Graph body keeps). Hosted signup syncs nothing: Meta's
+    hosted page onboards to Cloud API only. M3b builds on the steps
+    rather than calling `smb_app_data` itself (OPEN_QUESTIONS #7).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): the record is
+    `wa.es.coexistence`, keyed by phone number id, plain JSON of layout
+    `v` 1 (the WABA, the token record's `created_at` in seconds, a
+    `pending`, `requested` or `refused` slot per request), its namespace
+    and layout still **pending the owner's confirmation before the first
+    release** (`docs/architecture.md` § Stable identifiers, § Owner
+    touchpoints); two steps, two names (`sync_contacts`,
+    `sync_history`), as Meta has two once-only calls; placed after the
+    credit-line steps, in Meta's order (the sync begins once onboarding
+    is done), at the cost that a failure before them holds them back
+    within Meta's 24 hours (the guide says so); Meta's refusals
+    (`SyncNotAllowed`: `2593107`, `2593108`) reported as
+    `SyncOutcome::Refused`, not as a failure; a failure releases its
+    claim only when `!may_have_been_sent()` (a 4xx: Meta's errors page
+    gives codes, not statuses, for this endpoint); a lost answer, or a
+    process stopped between claim and answer, keeps the claim, and the
+    way out is manual and documented (check the webhooks, resume with
+    the sync off, ask again yourself: Meta refuses a repeat), a call
+    that clears a pending claim being **a follow-up, not scheduled**;
+    the option is `OnboardingRequest::coexistence_sync(bool)`, on by
+    default, and the record never expires; M3b builds on these steps
+    (OPEN_QUESTIONS #7, confirmed). Swappable by the option (and by
+    `PhoneNumber::sync_smb_app_data` called yourself).
 - [x] **L11e. A token-expiry signal** (`client::embedded_signup`; row 6;
   OPEN_QUESTIONS #8): a configurable lead time before a stored business
   token's `expires_at`.
@@ -2227,7 +2333,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `TargetRole` and `ThreadControlResponse` only, not on `Pass`, a
     request type (OPEN_QUESTIONS #28); and L15a kept as its own item,
     with row 139 partial until it lands.
-- [ ] **L15a. The Routing Roles API** (`meta-whatsapp-client`, next to
+- [x] **L15a. The Routing Roles API** (`meta-whatsapp-client`, next to
   `client::thread_control`; row 139): `GET
   /{phone-number-id}/routing_roles`, the roles the caller's business
   holds on a number (`roles`, `is_standby`), which say which thread
@@ -2238,6 +2344,48 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** exact response JSON from
     `conversation-routing/routing-roles` (both examples, the empty
     `roles` among them).
+  - **Landed:** `ThreadControl::routing_roles()` on
+    `client.thread_control(phone_number_id)`, a `GET
+    /{phone-number-id}/routing_roles` with no query and no body,
+    answering `RoutingRoles` (`roles: Vec<RoutingRole>`, `is_standby:
+    bool`, and `RoutingRoles::holds`, which compares wire names).
+    `RoutingRole` is the page's six values (`calls`, `ctwa`,
+    `customer_service`, `escalation`, `marketing`, `utility`) with
+    `Other(String)` keeping any other verbatim, `ai_agent` among them
+    (the page: never returned to a partner). Row 139 is done for the
+    library; the service's side stays M2d and M5l. Decisive tests
+    (`thread_control::tests`): both of the page's responses as exact
+    JSON, with the request's method, path, absent query and body, and
+    token (`routing_roles_match_docs_example`,
+    `empty_routing_roles_match_docs_example`: an empty `roles` is a
+    success), every role's wire name (`every_routing_role_has_its_wire_name`),
+    a response missing either field refused
+    (`routing_roles_tolerate_new_fields_and_require_both`), the page's
+    two errors, both code `100`, as `ErrorKind::InvalidParameter`
+    (`routing_not_enabled_is_an_invalid_parameter`,
+    `an_unreadable_number_is_an_invalid_parameter`: no kind of their
+    own, which would be a core change and could not split one code), a
+    retry after a timeout (`routing_roles_are_retried_after_a_timeout`)
+    and the id kept one segment. Mutated by hand: the path segment, GET
+    to POST, either field's name, a default on either field, `calls`'s
+    wire name, refusing an empty `roles`, `holds` by equality, and the
+    catch-all removed; each fails a test.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable as noted): a
+    method on `ThreadControl` rather than a module and accessor of its
+    own (`client.routing_roles(id)` would be an additive accessor);
+    `RoutingRole` its own enum, not `TargetRole` (`calls` is no pass
+    target, `ai_agent` never a held role; a conversion between the two
+    is additive), with `#[non_exhaustive]` and the `Other(String)`
+    catch-all like `TargetRole`; both fields required, with no serde
+    default (the page says both are always present, and a default would
+    read as "no role" or "not standby"; relaxing it is a one-line
+    change); `roles` a `Vec` in Meta's order rather than a set (the
+    page calls it unordered; `holds` is the set test); the read retried
+    as every GET is; no local cache or rate limiting (Meta rate limits
+    the endpoint per number and per app and asks for periodic reads:
+    the caller schedules them); M5l, not this item, decides whether
+    the service exposes the roles.
 - [x] **L16a. The Messaging Account a send bills**
   (`meta-whatsapp-client`, `client::messages`; row 140). Meta's account
   model evolution (`account-model-evolution`) is generally available
@@ -2794,7 +2942,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     (tests) had two cards. OPEN_QUESTIONS #22 is closed and deleted
     (CHANGELOG). No parity row changes: rows 51 and 99 already counted
     product-card carousels.
-- [ ] **L21a. Dead-lettering a permanently failing event**
+- [x] **L21a. Dead-lettering a permanently failing event**
   (`meta-whatsapp-webhooks`, `meta-whatsapp-adapters`; OPEN_QUESTIONS
   #30): sink errors classified transient or permanent (unclassified
   stays transient, today's behaviour); a permanent one written to a
@@ -2813,6 +2961,79 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     facade-level erasure of the contact removes their dead-lettered
     events (removing the dead-letter store's `erase` from it fails the
     test).
+  - **Landed:** the signal is a sink's own: `SinkError::Permanent`
+    (`SinkError::permanent`, `is_permanent`; every other variant stays
+    transient), added to core's existing leaf, with `FanoutSink`
+    returning a transient error before a permanent one. The store is
+    `meta_whatsapp_webhooks::deadletter::DeadLetters` on `KvStore`,
+    wired by `WebhookHandlerBuilder::dead_letters`: a permanent error is
+    written there, the event's dedup claim marked done, the rest of the
+    batch delivered and the delivery acknowledged, counted in
+    `DeliveryReport::dead_lettered` and alerted by a `tracing::error!`
+    naming the letter, kind and number only; a failed write releases the
+    claim and answers `500`, and without a store a permanent error
+    answers `500` as before. Bounds: a ring of 1000 slots (letter `id` in
+    slot `id % capacity`, the oldest overwritten without a scan), 14 days
+    per record and index, 256 KiB per stored event (a larger one kept
+    without its content). Replay (`replay`, `replay_all`) goes past the
+    dedup guard. Erasure: a per-contact index (every identifier the
+    event gives, BSUIDs, parent BSUIDs and phone numbers, since an
+    erasure may know the person by one only; keyed by business number
+    and contact, an event with no number under the empty one, which every
+    number's erasure reads) and `DeadLetters::erase`, called by the new
+    facade `meta_whatsapp_rs::erasure::Eraser` beside
+    `ConversationStore::erase_all`. The namespaces `wa.webhook.deadletter`
+    and `wa.webhook.deadletter.contact` and the records are pinned
+    (`the_keys_are_pinned_and_hashed`, `the_record_bytes_are_pinned`) and
+    pending the owner's confirmation (§ Owner touchpoints). The decisive
+    tests are
+    `a_batch_with_one_permanent_failure_delivers_the_others_and_dead_letters_it`
+    (`webhooks/tests/deadletter.rs`; with
+    `post_is_200_when_a_permanent_failure_is_dead_lettered` in
+    `tests/router.rs` for the status) and
+    `erasing_a_contact_removes_their_dead_letters`
+    (`meta-whatsapp-rs/src/erasure.rs`). Removing the dead-letter write
+    fails the first two, removing `erase` from the eraser the third;
+    treating a permanent error as transient fails the first, dropping
+    the count bound fails `the_count_bound_evicts_the_oldest`, and not
+    updating the index fails the erasure tests. Not done: no sink of the
+    library classifies an error as permanent yet (the inbox's U+0000 in
+    a Meta-assigned id on Postgres still answers `500`); the service
+    does not wire a store (its sink classifies nothing). No parity row
+    changes status: row 8 already counted delivery semantics as done.
+    The sabotage review indexed every identifier (the draft took the
+    BSUID alone when an object had one and missed `phone_number`,
+    `input`, `participant_recipient_id` and parent BSUIDs:
+    `every_person_a_fixture_event_names_is_indexed` walks every fixture),
+    pinned the write-before-index order and the erasure/append race
+    (`an_erasure_that_reads_an_index_entry_finds_its_letter`,
+    `an_erasure_racing_an_append_leaves_it_to_the_next_erasure`), the
+    head's compare-and-swap (`racing_appends_take_distinct_ids_and_keep_every_letter`)
+    and the take-back of an unindexed letter
+    (`a_letter_that_cannot_be_indexed_is_taken_back_and_fails_the_delivery`).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable as noted): the
+    core change, `SinkError::Permanent` with `SinkError::permanent` and
+    `is_permanent` (additive, the enum `#[non_exhaustive]`; a sink
+    classifies its own errors); a new `meta_whatsapp_rs::erasure::Eraser`
+    rather than a change to `Inbox::erase_all`, whose rustdoc says it does
+    not reach the dead letters, and the guides and the cms-inbox skill
+    point to it; the defaults of 1000 letters, 14 days and 256 KiB, an
+    oversized event kept without its content (`with_capacity`,
+    `with_max_age`, `with_max_event_bytes`); a dead-lettered event's claim
+    marked done, and replay past the dedup guard (at least once); an event
+    naming no business number erased by any number's erasure of the
+    contact (over-deleting diagnostic copies is the safe direction for an
+    erasure); `FanoutSink` returning a transient error before a permanent
+    one; and the known limits, documented in the `deadletter` module
+    (an erasure racing an append leaves that letter to the next erasure;
+    a replay racing an erasure hands the event back to the sink; more than
+    `capacity` appends at once may evict a newer letter; a capacity change
+    strands letters from `get`, `list` and `replay` until they age out;
+    a letter naming nobody is reached by the bounds only). The namespaces
+    `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, their
+    keys' derivations and their records' shapes stay pending the owner's
+    confirmation before the first release (§ Owner touchpoints).
 - [x] **L21b. Live events shared, not cloned** (`meta-whatsapp-webhooks`
   `sse`, `meta-whatsapp-adapters` `BroadcastSink`; OPEN_QUESTIONS #31):
   both over `Arc<WebhookEvent>`.
@@ -2917,7 +3138,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     -p meta-whatsapp-adapters --features redis -i ring` finds nothing);
     the test Redis requires client certificates; its certificates are
     generated, none committed (OPEN_QUESTIONS #19).
-- [ ] **L22a. `llms.txt` and a `doctor`** (docs; the service's CLI in
+- [x] **L22a. `llms.txt` and a `doctor`** (docs; the service's CLI in
   `meta-whatsapp-server`; row 117): `llms.txt` for the docs, and a
   `doctor` command checking the configuration, the webhook subscription
   fields and the token's reach.
@@ -2926,6 +3147,54 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** `doctor` reports each scripted misconfiguration by
     name and exits non-zero; `llms.txt` links only files that exist (a
     test reads it).
+  - **Landed:** row 117 done in the service; the library's side stays
+    partial for the MCP server (L22b). `docs/public/llms.txt`, served at
+    the docs site's root (VitePress copies `docs/public/`), indexes the
+    guides, design, planning docs and every consumer skill, each link
+    the file's Markdown on `main`; `crates/meta-whatsapp-rs/tests/llms_txt.rs`
+    refuses a link to a missing file or off the repository, and an
+    unlisted guide or skill. `meta-whatsapp-server doctor`
+    (`meta_whatsapp_server::doctor`) prints one line per check (`OK`,
+    `WARN`, `FAIL`, `SKIP`) and exits non-zero on a `FAIL`: every
+    refusal of the configuration by variable (a refused variable is
+    replaced and the reading repeated, so one does not hide the next),
+    the backend opened as `serve` opens it, the migration histories read
+    by `SELECT` (pending service migrations fail with
+    `WA_SERVER_MIGRATE=skip`, warn with `auto`), the app's
+    `whatsapp_business_account` subscription and its fields
+    (`GET /{app-id}/subscriptions`: `messages` and `account_update`
+    required, eleven more recommended), and each bound WABA's token
+    (`debug_token`: valid, this app's, not expired, both permissions, a
+    grant naming the WABA) and the app's subscription to it
+    (`GET /{waba-id}/subscribed_apps`), plus the Solution Partner's
+    system token. Read-only (no migration, no re-encryption on read,
+    `GET`s only); no secret printed. `tests/doctor.rs` scripts each
+    misconfiguration (36 tests, four live) and runs the binary for its
+    exit code; its test backend panics on any key/value write and on
+    the ports doctor has no use for (migrator, locks, janitor, outbox),
+    so a vault re-encrypting on read fails it, and the live tests show
+    `WA_SERVER_MIGRATE=auto` warns without migrating and that a changed
+    checksum, a half-applied migration (the service's or the library's),
+    a newer and a pending version are each reported.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a constant or a format in
+    one place, swapped by changing it): `llms.txt` at the docs site's
+    root (`docs/public/`), its links the raw Markdown on GitHub's
+    `main`; a fourth status, `SKIP`, for a check that could not run;
+    every refusal found by replacing the refused variable and reading
+    again, the limit documented (a replacement can hide a problem only
+    the intended value would show); `messages` and `account_update`
+    required (`REQUIRED_FIELDS`), the other fields only warning
+    (`RECOMMENDED_FIELDS`); pending service migrations warning with
+    `WA_SERVER_MIGRATE=auto` and failing with `skip`; at most 100 WABAs
+    a run (`MAX_WABAS`) and a warning 7 days before a token expires
+    (`EXPIRY_WARNING`); no permission check on the Solution Partner's
+    system token; the `GET /{app-id}/subscriptions` read stays in the
+    service until the client has it.
+  - **Left:** a JSON report (`doctor --json`) for deploy jobs; the
+    library's migration versions compared, not only counted (their list
+    is private to the adapters crate: it needs a public accessor there);
+    the subscriptions read moved into the client.
 - [ ] **L22b. A docs MCP server** (a tool under `tools/`, outside the
   library; row 117): search and read the docs and skills over MCP's
   stdio transport.
@@ -3434,8 +3703,12 @@ everything else goes into the parity-completion report.
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
   with their keys' derivations and their records' shapes, added and
-  awaiting confirmation before the first release; and those L21a adds),
-  for the same reason as L5's.
+  awaiting confirmation before the first release; L11d's
+  `wa.es.coexistence` and its record layout, added and awaiting
+  confirmation; and L21a's
+  `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
+  keys' derivations and their records' shapes, added and awaiting
+  confirmation before the first release), for the same reason as L5's.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored
