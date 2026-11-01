@@ -2351,7 +2351,7 @@ mod paging_withheld_tests {
     use crate::groups::{ListGroups, ListJoinRequests};
     use crate::marketing::{ListClientWabas, OnboardingStatus};
     use crate::partners::solutions::{
-        ListAppSolutions, ListConnectedClientBusinesses, ListSolutionPartners, ListWabaSolutions,
+        ListAppSolutions, ListConnectedClientBusinesses, ListSolutionPartners,
     };
     use crate::qr_codes::{ListQrCodes, QrCodeFields};
     use crate::retry::RetryPolicy;
@@ -2510,11 +2510,6 @@ mod paging_withheld_tests {
             "partner_solutions.app_solutions",
             c.partner_solutions()
                 .app_solutions(&AppId::new("10").unwrap(), &ListAppSolutions::new())
-        );
-        read!(
-            "partner_solutions.waba_solutions",
-            c.partner_solutions()
-                .waba_solutions(&waba(), &ListWabaSolutions::new())
         );
         read!(
             "partner_solutions.connected_client_businesses",

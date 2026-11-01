@@ -15,8 +15,8 @@ use serde_json::json;
 use super::migration::{MigrationIntentInfo, MigrationStatus};
 use super::solutions::{
     CreateSolution, ListAppSolutions, ListConnectedClientBusinesses, ListSolutionPartners,
-    ListWabaSolutions, PartnerStatus, PendingRequestStatus, PermissionTask, SolutionInfo,
-    SolutionRole, SolutionStatus, TOKEN_WITHHELD,
+    PartnerStatus, PendingRequestStatus, PermissionTask, SolutionInfo, SolutionRole,
+    SolutionStatus, TOKEN_WITHHELD,
 };
 use crate::{Client, RetryPolicy};
 
@@ -642,49 +642,6 @@ async fn app_solutions_match_the_guide() {
     assert_eq!(t.remaining(), 0);
 }
 
-/// `multi-partner-solutions`, "Get solutions that onboarded a Messaging
-/// account".
-#[tokio::test]
-async fn waba_solutions_match_the_guide() {
-    let t = ScriptedTransport::new();
-    t.push_json(
-        200,
-        json!({
-          "data": [
-            {
-              "name": "Social OVD with Social Brew",
-              "status": "ACTIVE",
-              "status_for_pending_request": "NONE",
-              "id": "17602267745700"
-            }
-          ],
-          "paging": {
-            "cursors": {
-              "before": "QVFIUjZACTFNmWURVTHN2NFVaM2ZApd2RaOGIxOU5wenpQZADFkbVdtSEJDSGFDelhDOU5hT28xcmJLS05TM3U0UUFmdVNGUWFfdjdJb1o2OTVNY083ZAHYtc2x3",
-              "after": "QVFIUjZACTFNmWURVTHN2NFVaM2ZApd2RaOGIxOU5wenpQZADFkbVdtSEJDSGFDelhDOU5hT28xcmJLS05TM3U0UUFmdVNGUWFfdjdJb1o2OTVNY083ZAHYtc2x3"
-            }
-          }
-        }),
-    );
-    let page = client(&t)
-        .partner_solutions()
-        .waba_solutions(
-            &WabaId::new("102290129340398").unwrap(),
-            &ListWabaSolutions::new(),
-        )
-        .await
-        .unwrap();
-    let req = t.last_request().unwrap();
-    assert_eq!(req.path(), "/v25.0/102290129340398/solutions");
-    assert_eq!(req.url.query(), None);
-    assert_eq!(
-        page.data[0].name.as_deref(),
-        Some("Social OVD with Social Brew")
-    );
-    assert_eq!(page.data[0].status, Some(SolutionStatus::Active));
-    assert_eq!(t.remaining(), 0);
-}
-
 /// `multi-partner-solutions`, "Get partners of a solution".
 #[tokio::test]
 async fn partners_match_the_guide() {
@@ -775,13 +732,9 @@ async fn limits_outside_one_to_a_hundred_are_refused() {
     let t = ScriptedTransport::new();
     let api = client(&t).partner_solutions();
     let app = AppId::new("1").unwrap();
-    let waba = WabaId::new("2").unwrap();
     for limit in [0, 101] {
         let errors = [
             api.app_solutions(&app, &ListAppSolutions::new().limit(limit))
-                .await
-                .unwrap_err(),
-            api.waba_solutions(&waba, &ListWabaSolutions::new().limit(limit))
                 .await
                 .unwrap_err(),
             api.connected_client_businesses(
@@ -815,7 +768,7 @@ async fn streams_follow_cursors_and_refuse_a_callers() {
         "paging": {"cursors": {"after": "c1"}, "next": "https://graph.facebook.com/v25.0/x?after=c1"}
     });
     let last = json!({"data": [{"id": "2"}]});
-    for call in 0..4 {
+    for call in 0..3 {
         let t = ScriptedTransport::new();
         t.push_json(200, first.clone());
         t.push_json(200, last.clone());
@@ -829,15 +782,6 @@ async fn streams_follow_cursors_and_refuse_a_callers() {
                     .await
             }
             1 => {
-                api.waba_solutions_stream(
-                    &WabaId::new("3").unwrap(),
-                    &ListWabaSolutions::new().limit(10),
-                )
-                .map(|r| r.unwrap().id.as_str().to_owned())
-                .collect()
-                .await
-            }
-            2 => {
                 api.connected_client_businesses_stream(
                     &app,
                     &ListConnectedClientBusinesses::new().limit(10),
@@ -857,7 +801,7 @@ async fn streams_follow_cursors_and_refuse_a_callers() {
         let reqs = t.requests();
         assert_eq!(reqs[0].query("after"), None, "call {call}");
         assert_eq!(reqs[1].query("after").as_deref(), Some("c1"), "call {call}");
-        if call < 3 {
+        if call < 2 {
             assert_eq!(reqs[1].query("limit").as_deref(), Some("10"), "call {call}");
         }
         assert_eq!(t.remaining(), 0);
@@ -870,12 +814,9 @@ async fn streams_follow_cursors_and_refuse_a_callers() {
         api.app_solutions_stream(&app, &ListAppSolutions::new().after("x"))
             .collect::<Vec<_>>()
             .await,
-        api.waba_solutions_stream(
-            &WabaId::new("2").unwrap(),
-            &ListWabaSolutions::new().before("x"),
-        )
-        .collect::<Vec<_>>()
-        .await,
+        api.app_solutions_stream(&app, &ListAppSolutions::new().before("x"))
+            .collect::<Vec<_>>()
+            .await,
     ];
     for items in refused {
         assert_eq!(items.len(), 1);

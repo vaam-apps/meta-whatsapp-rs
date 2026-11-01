@@ -1,6 +1,6 @@
 //! Multi-Partner Solutions: create one, accept or reject it, deactivate it
-//! (request, accept, reject), read it and its partners, list an app's and
-//! a WABA's solutions and an app's connected client businesses, and read
+//! (request, accept, reject), read it and its partners, list an app's
+//! solutions and its connected client businesses, and read
 //! an onboarded client's business token through a solution.
 //!
 //! Docs: `solution-providers/multi-partner-solutions` (the guide, with
@@ -11,15 +11,16 @@
 //! `reject-deactivation-request-api`, `access-token-api`),
 //! `reference/application/solution-creation-api`,
 //! `reference/application/application-solutions-api`,
-//! `reference/application/application-connected-client-businesses` and
-//! `reference/whatsapp-business-account/whatsapp-business-account-solutions-list-api`.
+//! and `reference/application/application-connected-client-businesses`.
+//!
+//! A WABA's solutions (`GET /{WABA_ID}/solutions`) are roadmap L10b's,
+//! in [`crate::waba`]'s family, not here.
 //!
 //! | Meta path | Method |
 //! | --- | --- |
 //! | `POST /{APP_ID}/whatsapp_business_solution` | [`PartnerSolutions::create`] |
 //! | `GET /{APP_ID}/whatsapp_business_solutions` | [`PartnerSolutions::app_solutions`], [`PartnerSolutions::app_solutions_stream`] |
 //! | `GET /{APP_ID}/connected_client_businesses` | [`PartnerSolutions::connected_client_businesses`], [`PartnerSolutions::connected_client_businesses_stream`] |
-//! | `GET /{WABA_ID}/solutions` | [`PartnerSolutions::waba_solutions`], [`PartnerSolutions::waba_solutions_stream`] |
 //! | `GET /{SOLUTION_ID}` | [`PartnerSolutions::get`] |
 //! | `GET /{SOLUTION_ID}/partners` | [`PartnerSolutions::partners`], [`PartnerSolutions::partners_stream`] |
 //! | `GET /{SOLUTION_ID}/access_token?business_id=…` | [`PartnerSolutions::access_token`] |
@@ -82,7 +83,7 @@
 
 use futures::Stream;
 use meta_whatsapp_core::error::ValidationError;
-use meta_whatsapp_core::ids::{AppId, BusinessId, SolutionId, WabaId};
+use meta_whatsapp_core::ids::{AppId, BusinessId, SolutionId};
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::secret::AccessToken;
 use meta_whatsapp_core::{Error, Result};
@@ -387,61 +388,6 @@ impl ListAppSolutions {
     pub fn role(mut self, role: SolutionRole) -> Self {
         self.role = Some(role);
         self
-    }
-
-    /// Request these fields of each solution.
-    #[must_use]
-    pub fn fields<I, S>(mut self, fields: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.fields = fields.into_iter().map(Into::into).collect();
-        self
-    }
-
-    /// Page size, 1 to 100.
-    #[must_use]
-    pub fn limit(mut self, limit: u32) -> Self {
-        self.limit = Some(limit);
-        self
-    }
-
-    /// Continue after this cursor.
-    #[must_use]
-    pub fn after(mut self, cursor: impl Into<String>) -> Self {
-        self.after = Some(cursor.into());
-        self
-    }
-
-    /// Go back before this cursor.
-    #[must_use]
-    pub fn before(mut self, cursor: impl Into<String>) -> Self {
-        self.before = Some(cursor.into());
-        self
-    }
-}
-
-/// Options of [`PartnerSolutions::waba_solutions`]
-/// (`reference/whatsapp-business-account/whatsapp-business-account-solutions-list-api`).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ListWabaSolutions {
-    /// Fields of each solution (empty = Meta's defaults).
-    pub fields: Vec<String>,
-    /// Page size, 1 to 100 (Meta's default 25 when `None`).
-    pub limit: Option<u32>,
-    /// Cursor from a previous page's `paging.cursors.after`; for the
-    /// one-page read only.
-    pub after: Option<String>,
-    /// Cursor from a previous page's `paging.cursors.before`.
-    pub before: Option<String>,
-}
-
-impl ListWabaSolutions {
-    /// Every solution that onboarded the WABA, Meta's fields and page size.
-    pub fn new() -> Self {
-        Self::default()
     }
 
     /// Request these fields of each solution.
@@ -846,47 +792,6 @@ impl PartnerSolutions {
         paginate_or_error(
             reject_cursors(query.after.as_deref(), query.before.as_deref())
                 .and_then(|()| self.app_solutions_request(app, query)),
-        )
-    }
-
-    fn waba_solutions_request(
-        &self,
-        waba: &WabaId,
-        query: &ListWabaSolutions,
-    ) -> Result<GraphRequest> {
-        check_limit(query.limit)?;
-        Ok(self
-            .client
-            .get_at(&[waba.as_str(), "solutions"])
-            .query_opt("fields", joined(&query.fields))
-            .query_opt("limit", query.limit)
-            .context("WABA solutions"))
-    }
-
-    /// `GET /{WABA_ID}/solutions`, one page: the solutions that onboarded
-    /// the WABA.
-    pub async fn waba_solutions(
-        &self,
-        waba: &WabaId,
-        query: &ListWabaSolutions,
-    ) -> Result<Page<SolutionInfo>> {
-        self.waba_solutions_request(waba, query)?
-            .query_opt("after", query.after.as_deref())
-            .query_opt("before", query.before.as_deref())
-            .send()
-            .await
-    }
-
-    /// Every solution that onboarded `waba`, following cursors (a query
-    /// with a cursor is refused, as its single item).
-    pub fn waba_solutions_stream(
-        &self,
-        waba: &WabaId,
-        query: &ListWabaSolutions,
-    ) -> impl Stream<Item = Result<SolutionInfo>> + Send + 'static + use<> {
-        paginate_or_error(
-            reject_cursors(query.after.as_deref(), query.before.as_deref())
-                .and_then(|()| self.waba_solutions_request(waba, query)),
         )
     }
 

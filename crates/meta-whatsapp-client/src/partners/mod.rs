@@ -8,9 +8,7 @@
 //! the references `reference/whatsapp-business-solution/*`,
 //! `reference/application/solution-creation-api`,
 //! `reference/application/application-solutions-api`,
-//! `reference/application/application-connected-client-businesses`,
-//! `reference/whatsapp-business-account/whatsapp-business-account-solutions-list-api`
-//! and
+//! `reference/application/application-connected-client-businesses` and
 //! `reference/whatsapp-business-account-migration-intent/migration-intent-details-api`.
 //!
 //! Doc paths are relative to
@@ -19,7 +17,7 @@
 //!
 //! | Accessor | Meta paths |
 //! | --- | --- |
-//! | [`Client::partner_solutions`](crate::Client::partner_solutions) | `POST /{APP_ID}/whatsapp_business_solution`, `GET /{APP_ID}/whatsapp_business_solutions`, `GET /{APP_ID}/connected_client_businesses`, `GET /{WABA_ID}/solutions`, `GET /{SOLUTION_ID}`, `GET /{SOLUTION_ID}/partners`, `GET /{SOLUTION_ID}/access_token`, `POST /{SOLUTION_ID}/accept`, `…/reject`, `…/send_deactivation_request`, `…/accept_deactivation_request`, `…/reject_deactivation_request` |
+//! | [`Client::partner_solutions`](crate::Client::partner_solutions) | `POST /{APP_ID}/whatsapp_business_solution`, `GET /{APP_ID}/whatsapp_business_solutions`, `GET /{APP_ID}/connected_client_businesses`, `GET /{SOLUTION_ID}`, `GET /{SOLUTION_ID}/partners`, `GET /{SOLUTION_ID}/access_token`, `POST /{SOLUTION_ID}/accept`, `…/reject`, `…/send_deactivation_request`, `…/accept_deactivation_request`, `…/reject_deactivation_request` |
 //! | [`Client::migration_intents`](crate::Client::migration_intents) | `POST /{WABA_ID}/set_solution_migration_intent`, `GET /{MIGRATION_INTENT_ID}` |
 //!
 //! # Which token
