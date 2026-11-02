@@ -5534,7 +5534,8 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     of the service's to land after the first release carries this line
     if it lands before it.
 - [ ] **P2b. The checkout endpoint's link in the service** (row 141;
-  proposed by P1d's review, for the coordinator to confirm).
+  added by P1d's review, kept by the coordinator's decision of
+  2026-11-02).
   - **After:** P1d, P2.
   - **Kind:** additive.
   - **Decisive:** M1.3 over the new route; the link
