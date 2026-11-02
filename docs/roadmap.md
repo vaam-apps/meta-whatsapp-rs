@@ -50,7 +50,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
 | 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
-| 4 | S10 (D20 (a): the owner's yes of 2026-11-02), S11, S12; M2a–M2h |
+| 4 | S10 (D20 (a): the owner's yes of 2026-11-02), S11, S12; M2a–M2m |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3g; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
@@ -4900,10 +4900,145 @@ design's (§9).
     record reads per stream and second at most, for a busy tenant's 20
     streams; webhooks-out (M2c) will need the notifier's wake-ups too,
     and gets them through the same port.
-- [ ] **M2c. Webhooks out** (row 10): endpoints, dispatcher and retries
+- [x] **M2c. Webhooks out** (row 10): endpoints, dispatcher and retries
   (Standard Webhooks, a destination allow list).
   - **After:** M2b.
   - **Decisive:** M2.4.
+  - **Landed:** the core's `webhooks_out` (design §4.4's *as built*):
+    the port `WebhookStore` in the bundle (`Backend::webhooks`, required:
+    breaking for a backend built outside the repository), memory's
+    `MemoryWebhookStore` under its store's lock and Postgres'
+    `PgWebhookStore` on migration 9, `webhooks out` (two tables,
+    `wa_server_webhook_endpoints` and `wa_server_webhook_deliveries`;
+    numbered 9, after M2f's 8, kept at the merge of PR #115), with the suite `conformance::webhooks_out` in
+    `conformance::run`. Nine routes in the axum adapter
+    (`api::webhook_endpoints`, scope `webhooks`, additive in
+    `openapi/v1.json`): `POST` and `GET /v1/webhook-endpoints`, `GET`,
+    `PATCH` and `DELETE /v1/webhook-endpoints/{id}`,
+    `POST …/{id}/rotate-secret`, `POST …/{id}/test` (`202`, a ping),
+    `GET …/{id}/deliveries` and `POST …/{id}/deliveries/{delivery_id}/retry`
+    (`202`); two new codes, `409 webhooks_not_configured` and
+    `409 webhook_endpoint_limit_reached`. An endpoint is a cursor in its
+    tenant's stream; the dispatcher (`webhooks_out::dispatch::Dispatcher`,
+    spawned by `serve` on every replica when a data key is set) fans the
+    outbox out to it (once: the cursor moves from the value it read, with
+    the deliveries), claims each tenant's oldest due delivery under a
+    60 s lease (`FOR UPDATE SKIP LOCKED`), reads its event in the
+    endpoint's tenant's stream, leaves `data` out past 256 KiB, checks the
+    destination again on a fresh lookup and connects to the checked
+    address only (`destination::pin`; the HTTP crate's `HyperSender`:
+    TCP, TLS on aws-lc-rs and the platform's store, HTTP/1.1, 10 s, 1 KiB
+    read, no redirect), signs with the endpoint's secrets (Standard
+    Webhooks, both during a 24 h rotation), retries 10 s doubling to an
+    hour with a fifth of jitter for 72 h (`WA_SERVER_WEBHOOK_RETRY_WINDOW`),
+    then `failed`, disabling an endpoint failing the whole window; bounded
+    to 32 attempts a replica, 4 an endpoint, 8 a tenant. Secrets are
+    `whsec_` and 32 random bytes, sealed with AES-256-GCM under
+    `WA_SERVER_DATA_KEY` (`WA_SERVER_DATA_KEY_ID`,
+    `WA_SERVER_DATA_PREVIOUS_KEYS`), shown once. Housekeeping purges the
+    settled deliveries after 30 days. The M2d types and the number events
+    are delivered as every tenant type
+    (`every_tenant_event_type_is_delivered`). Decisive tests (M2.4): the
+    Standard Webhooks libraries' known-answer vectors
+    (`webhooks_out::signature::the_standard_webhooks_test_vectors`, and
+    the receiver's check `a_receiver_verifies_as_the_libraries_do`); the
+    schedule under a fake clock on memory and live on Postgres
+    (`conformance::webhooks_out::the_retry_schedule_under_a_fake_clock`:
+    attempts at 0, 10, 30, 70 and 150 s, none earlier, `failed` at the
+    window, the endpoint disabled, a manual retry delivering it; and
+    `schedule`'s own waits and window); redirects not followed
+    (`server_http::webhooks_out`'s
+    `an_attempt_goes_to_the_pinned_address_and_follows_no_redirect`, the
+    `Location` never asked); a destination refused at creation and at
+    delivery (`a_destination_is_refused_at_creation_and_at_delivery`: the
+    stub's second lookup turns private, nothing is sent,
+    `destination_refused`; `destination::each_pin_checks_a_fresh_lookup`;
+    over HTTP `a_destination_outside_the_allow_list_is_refused_at_creation`);
+    two signatures during a rotation (`a_rotation_signs_twice_for_24_hours`,
+    over HTTP `a_rotation_signs_with_both_secrets`); over 256 KiB
+    truncated and fetched by its tenant only
+    (`a_large_event_is_delivered_truncated`, over HTTP
+    `a_large_event_is_delivered_truncated_and_fetched_by_its_tenant_only`).
+    Also: each delivery its tenant's event only
+    (`a_delivery_is_signed_and_carries_its_tenants_events_only`, over HTTP
+    `a_metas_webhook_reaches_its_tenants_endpoint_signed`, a Meta webhook
+    through `/webhooks/meta`); two dispatchers send each event once; a
+    slow endpoint holds its own bound only
+    (`a_slow_endpoint_does_not_starve_another`); the TLS name checked at
+    the pinned address; 1 KiB of an answer read; the sealed format pinned
+    (`seal::the_sealed_format_is_pinned`); a delivery's body the polled
+    envelope (`server_http`'s `a_deliverys_body_is_the_events_envelope`).
+    By mutation, each failing a named test: `pin` checking the first
+    address only, a non-public address admitted for a listed name, the
+    metadata addresses not forbidden, plain `http` outside development, an
+    IPv6 form not judged as the IPv4 address it carries, credentials in
+    the URL accepted (`destination`'s tests); the attempt's check against
+    another list (`a_destination_is_refused_at_creation_and_at_delivery`),
+    the creation's check skipped (the same case); no truncation
+    (`a_large_event_is_delivered_truncated`); the previous secret dropped,
+    or kept past its 24 hours (`a_rotation_signs_twice_for_24_hours`); the
+    waits uncapped, the window ignored, the jitter unbounded (`schedule`'s
+    tests); an endpoint never disabled
+    (`the_retry_schedule_under_a_fake_clock`); a claim ignoring its lease
+    or a suspended tenant (`a_claim_is_exclusive_until_its_lease_ends`), a
+    fan-out ignoring its cursor (`a_fan_out_moves_its_cursor_once`), an
+    endpoint read for any tenant (`an_endpoint_is_its_tenants_own`), the
+    endpoint bound ignored (`a_slow_endpoint_does_not_starve_another`); the
+    sealed secret not bound to its endpoint (`seal`'s tests); the whole
+    answer read, the sender resolving the host itself
+    (`server_http::webhooks_out`'s tests); the signature over another
+    layout (the vectors). One survived and is redundant by construction:
+    a ping's "tried once" rule (its `give_up_at` is its creation, so the
+    schedule fails it after one attempt anyway). The MongoDB test bundle
+    of S9 (`SpikeBackend`) serves the memory backend's `WebhookStore`, as
+    it does every port but the outbox (M2c adds no method to `Outbox` or
+    `RecordStore`).
+  - **Decided** (design D105–D113, the coordinator's decisions of
+    2026-11-02 under the owner's delegation, each swappable, as the
+    implementer proposed them): the port and its tables (D105), an
+    endpoint as a cursor with no backfill (D106), the dispatcher's clock,
+    replicas' clocks agreeing within the lease (D107), the claim and its
+    bounds, settings since the review (D108), the allow-list's rules,
+    tightened by the review (D109), the secrets and an optional data key
+    (D110), retries and disabling, the window a setting (D111), the
+    routes' small choices (D112), the attempt's wire (D113). Every stored
+    name stays pending the owner's confirmation before the first release
+    (§ Owner touchpoints).
+  - **Reviewed** (adversarial, security lens, 2026-11-02): an attempt
+    cut by its time limit left its connection's task running, and a TLS
+    one kept its socket for as long as the receiver stopped reading (a
+    slow-loris receiver held one socket per attempt); the connection's
+    task is now aborted with the attempt
+    (`server_http::webhooks_out`'s
+    `a_timed_out_attempt_closes_its_connection`, failing before the fix).
+    hyper buffered up to about 400 KiB of an answer's head; 16 KiB now
+    (`an_oversized_answer_head_is_refused`). An IPv6 address outside
+    `2000::/3` was public unless listed special: the IPv4-translated
+    `::ffff:0:127.0.0.1` passed for a listed name; every address outside
+    global unicast is now non-public, and `3fff::/20` too
+    (`destination`'s `non_public_addresses_need_a_listed_cidr_and_some_never_pass`).
+    The purge counted 30 days from a delivery's creation, not its
+    settlement, as its documentation said
+    (`deliveries_go_with_their_endpoint_and_tenant`). The dispatcher's
+    bounds and lease became settings (D108). A URL's token no longer
+    reaches `Debug` through the creation's and the change's types.
+    Tests added for what survived a mutation: a `*.` pattern matching
+    without its dot (`destination::host_spellings_are_judged_as_what_they_parse_to`),
+    a manual retry naming another endpoint's delivery, the tenant's own
+    or B's (`a_settlement_records_its_attempt`,
+    `a_delivery_is_signed_and_carries_its_tenants_events_only`), and a
+    retried ping tried for a whole window (the same case: the
+    implementer's surviving mutation, killed). The M1.7 log capture now
+    runs a dispatcher round too.
+  - **Left, and why:** `tenants` on a platform key's endpoint (an endpoint
+    is one tenant's: D112; M2m); a walk re-sealing the endpoints under a
+    new data key (a previous key keeps opening them; M2i); a connection
+    pool to the receivers (each attempt connects to the address it
+    checked; M2j); the pending webhooks-out metric of design §7.3 (M2k);
+    a fan-out reads each page's event data (up to 8 MiB) to learn ids,
+    which an id-only outbox read would spare (a port change; M2l);
+    replicas' clocks must agree within the lease (D107); a suspended
+    tenant's deliveries are still recorded, and wait (D111).
 - [x] **M2d. The reviewed event types** (rows 84, 137, 139; D25):
   `standby_observed`, `thread_control_changed` and
   `user_action_reported` made tenant-visible, with L7's inbox answer to
@@ -5354,6 +5489,55 @@ design's (§9).
   - **Landed:** with M2a, in the same pull request: see M2a's Landed
     note ("With M2h"). Migration 5's names are stable identifiers pending
     the owner (§ Owner touchpoints).
+
+- [ ] **M2i. Re-sealing the webhook secrets** (added by M2c; D110): a
+  walk that re-seals every endpoint's secret and previous secret under
+  the active `WA_SERVER_DATA_KEY`, so that a previous key can leave
+  `WA_SERVER_DATA_PREVIOUS_KEYS`: an operator command beside `vault
+  rotate`, batch by batch, each row written only if its sealed value is
+  still the one read.
+  - **After:** M2c.
+  - **Decisive:** after the walk, with the new key alone configured,
+    every endpoint's next delivery verifies with the secret its creation
+    or rotation showed; a rotation landing between the walk's read and
+    write is not overwritten; skipping the write fails it.
+
+- [ ] **M2j. A connection pool for webhooks out** (added by M2c; D109,
+  D113): connections kept between attempts to one endpoint, reused only
+  for the address the attempt's own fresh lookup checked and the same
+  host name, never past the allow-list.
+  - **After:** M2c.
+  - **Decisive:** two attempts to one endpoint within the idle time make
+    one TCP connection; when the lookup answers another address, the
+    attempt opens a connection to it, never the pooled one; a pooled
+    connection to an address the list no longer admits is never used.
+
+- [ ] **M2k. The pending webhooks-out metric** (design §7.3; added by
+  M2c): the pending deliveries and the age of the oldest due one, on
+  `/metrics`, labelled by no endpoint, URL or tenant (unless the
+  `tenant` labels are on).
+  - **After:** M2c.
+  - **Decisive:** the gauge rises with the deliveries a silent receiver
+    holds and falls to 0 once they are delivered; no label names an
+    endpoint id or a URL.
+
+- [ ] **M2l. An id-only outbox read for the fan-out** (D106; added by
+  M2c): an `Outbox` method answering the sequences, ids and types after
+  a cursor without their data, which `Dispatcher::fan_out` uses (a port
+  change: memory, Postgres and MongoDB implement it).
+  - **After:** M2c.
+  - **Decisive:** a fan-out over 100 events of 256 KiB each reads none
+    of their data (a counting outbox asserts it), and the conformance
+    suite's fan-out cases pass on every backend.
+
+- [ ] **M2m. `tenants` on a platform key's webhook endpoint** (design
+  §4.4's `{url, types, tenants?}`; D112; added by M2c): an endpoint made
+  with a platform key may name several tenants, whose events it
+  receives, each delivery read in its own tenant's stream.
+  - **After:** M2c.
+  - **Decisive:** a platform key's endpoint naming tenants A and B
+    receives A's and B's events and none of C's; `tenants` from a tenant
+    key is `422`; dropping the tenant filter from its fan-out fails it.
 
 ### M3. Embedded Signup, OTP, coexistence
 
@@ -6550,7 +6734,16 @@ everything else goes into the parity-completion report.
   `wa_server_events_contacts_idx`, the key scope `erasure`, the erasure
   journal's target `erasure_journal`, its layout, its HMAC's input
   `<phone_number_id>|<contact>`, the `era_` id and the audit action
-  `customer_erased`, added and awaiting confirmation; S9's MongoDB outbox
+  `customer_erased`, added and awaiting confirmation;
+  M2c's migration 9, `webhooks out` (numbered after M2f's
+  8), its tables `wa_server_webhook_endpoints` and
+  `wa_server_webhook_deliveries`, their columns, indexes and stored
+  values, the sealed secret's format and its associated data
+  `wa-server/webhook-secret/v1`, the ids `whe_` and `whd_`, the ping's
+  body and `WA_SERVER_DATA_KEY_ID`'s default (design D105, D110, decided by
+  the coordinator,
+  architecture.md § Stable identifiers), added and awaiting
+  confirmation; S9's MongoDB outbox
   collections `wa_server_events`, `wa_server_event_streams` and
   `wa_server_wabas`, their fields and their index names, added by a spike
   composed into no binary and awaiting confirmation, which S18 may still

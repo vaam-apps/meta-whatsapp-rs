@@ -4,7 +4,8 @@
 //!
 //! [`MemoryBackend`] is a `meta_whatsapp_server_core::backend::Backend`: the
 //! core's ports ([`MemoryStore`] for the records and the idempotency
-//! records, [`MemoryEventStore`] for the event outbox, [`MemoryLeaderLock`])
+//! records, [`MemoryEventStore`] for the event outbox,
+//! [`MemoryWebhookStore`] for webhooks out, [`MemoryLeaderLock`])
 //! over one lock, with the library's memory `KvStore` and
 //! `ConversationStore`. It passes the core's conformance suite
 //! (`meta_whatsapp_server_core::conformance::run`, this crate's
@@ -16,6 +17,8 @@
 
 mod events;
 mod memory;
+mod webhooks;
 
 pub use events::MemoryEventStore;
 pub use memory::{MemoryBackend, MemoryLeaderLock, MemoryStore};
+pub use webhooks::MemoryWebhookStore;

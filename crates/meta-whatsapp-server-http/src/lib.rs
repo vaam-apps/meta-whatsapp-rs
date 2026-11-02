@@ -46,6 +46,7 @@ pub mod ratelimit;
 pub mod state;
 pub mod store;
 pub mod telemetry;
+pub mod webhooks_out;
 
 pub use meta_whatsapp_server_core::{keys, model};
 

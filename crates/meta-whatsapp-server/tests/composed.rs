@@ -165,6 +165,9 @@ impl Backend for Integrators {
     fn notifier(&self) -> Arc<dyn EventNotifier> {
         self.memory.notifier()
     }
+    fn webhooks(&self) -> Arc<dyn meta_whatsapp_server_core::webhooks_out::store::WebhookStore> {
+        self.memory.webhooks()
+    }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         self.memory.leader_lock()
     }

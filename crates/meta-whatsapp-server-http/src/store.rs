@@ -19,6 +19,7 @@ pub use meta_whatsapp_server_core::store::{
     HOUSEKEEPING, HOUSEKEEPING_LEASE, IdempotencyRecords, Janitor, LeaderLock, LeaderTurn,
     RecordStore, SchemaMigrator, StoreResult, Turn, listing,
 };
+pub use meta_whatsapp_server_core::webhooks_out::store::WebhookStore;
 
 /// The event outbox's types (`wa_server_events`, docs/design/server.md,
 /// section 2.3): the core's port ([`Outbox`]) and what it carries.

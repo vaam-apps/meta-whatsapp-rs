@@ -95,7 +95,10 @@ impl RouteClass {
             | Operation::ListPaymentConfigurations
             | Operation::GetPaymentConfiguration
             | Operation::GetPayment
-            | Operation::ListSignupAttempts => Self::Read,
+            | Operation::ListSignupAttempts
+            | Operation::ListWebhookEndpoints
+            | Operation::GetWebhookEndpoint
+            | Operation::ListWebhookDeliveries => Self::Read,
             Operation::UpdateProfile
             | Operation::DisconnectWaba
             | Operation::SendMessage
@@ -116,7 +119,13 @@ impl RouteClass {
             | Operation::StartSignup
             | Operation::CompleteSignup
             | Operation::ResumeSignup
-            | Operation::EraseCustomer => Self::Send,
+            | Operation::EraseCustomer
+            | Operation::CreateWebhookEndpoint
+            | Operation::UpdateWebhookEndpoint
+            | Operation::DeleteWebhookEndpoint
+            | Operation::RotateWebhookSecret
+            | Operation::TestWebhookEndpoint
+            | Operation::RetryWebhookDelivery => Self::Send,
             Operation::ListTemplates
             | Operation::CreateTemplate
             | Operation::DeleteTemplates
@@ -484,6 +493,15 @@ mod tests {
             ("list_signup_attempts", RouteClass::Read),
             ("resume_signup", RouteClass::Send),
             ("erase_customer", RouteClass::Send),
+            ("create_webhook_endpoint", RouteClass::Send),
+            ("list_webhook_endpoints", RouteClass::Read),
+            ("get_webhook_endpoint", RouteClass::Read),
+            ("update_webhook_endpoint", RouteClass::Send),
+            ("delete_webhook_endpoint", RouteClass::Send),
+            ("rotate_webhook_secret", RouteClass::Send),
+            ("test_webhook_endpoint", RouteClass::Send),
+            ("list_webhook_deliveries", RouteClass::Read),
+            ("retry_webhook_delivery", RouteClass::Send),
         ];
         assert_eq!(table.len(), Operation::ALL.len(), "every operation");
         for (id, class) in table {

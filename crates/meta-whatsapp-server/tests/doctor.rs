@@ -157,6 +157,9 @@ impl Backend for Shared {
     fn notifier(&self) -> Arc<dyn EventNotifier> {
         panic!("doctor asked for the notifier")
     }
+    fn webhooks(&self) -> Arc<dyn meta_whatsapp_server_core::webhooks_out::store::WebhookStore> {
+        panic!("doctor asked for the webhook store")
+    }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         panic!("doctor asked for a lock")
     }

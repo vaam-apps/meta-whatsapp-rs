@@ -14,19 +14,22 @@
 //! the design adds (`wa_server_*`, docs/design/server.md, section 2.2).
 //! The event outbox has a port of its own: [`Outbox`], and its wake-ups
 //! another: [`EventNotifier`] (`PgNotifier`, `LocalNotifier`; roadmap
-//! M2b).
+//! M2b), and webhooks out a third: [`WebhookStore`] (`PgWebhookStore`,
+//! `MemoryWebhookStore`; roadmap M2c).
 
 pub use meta_whatsapp_server_http::store::{
     Backend, BackendKind, EventNotifier, HOUSEKEEPING, HOUSEKEEPING_LEASE, IdempotencyRecords,
     Janitor, LeaderLock, LeaderTurn, LocalNotifier, Outbox, RecordStore, SchemaMigrator, Store,
-    StoreResult, Turn, listing,
+    StoreResult, Turn, WebhookStore, listing,
 };
 #[cfg(feature = "store-memory")]
-pub use meta_whatsapp_server_store_memory::{MemoryBackend, MemoryLeaderLock, MemoryStore};
+pub use meta_whatsapp_server_store_memory::{
+    MemoryBackend, MemoryLeaderLock, MemoryStore, MemoryWebhookStore,
+};
 #[cfg(feature = "store-postgres")]
 pub use meta_whatsapp_server_store_postgres::{
     EVENTS_CHANNEL, HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, PgBackend, PgJanitor,
-    PgLeaderLock, PgMigrator, PgNotifier, PgStore, lock_key, migrate, migrations,
+    PgLeaderLock, PgMigrator, PgNotifier, PgStore, PgWebhookStore, lock_key, migrate, migrations,
 };
 
 /// The event outbox (`wa_server_events`, docs/design/server.md, section
