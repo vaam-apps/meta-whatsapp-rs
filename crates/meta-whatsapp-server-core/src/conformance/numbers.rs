@@ -8,12 +8,16 @@
 //! limits refuse sends nothing, and an empty one only reads; a WABA is
 //! disconnected only once Meta unsubscribed the app (a refusal deletes
 //! nothing), and a capability whose WABA moved since unsubscribes
-//! nothing.
+//! nothing. Roadmap M3d: the registration services
+//! ([`crate::registration`]) open on the caller's own number only.
 
 use meta_whatsapp_rs::Client;
 use meta_whatsapp_rs::client::embedded_signup::{
     StoredBusinessToken, TokenVault, VaultKey, VaultKeys,
 };
+use std::sync::Arc;
+
+use meta_whatsapp_rs::core::clock::SystemClock;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::AccessToken;
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
@@ -28,6 +32,7 @@ use crate::model::{BindOutcome, KeyOwner, NumberStatus, Scope, TenantId};
 use crate::numbers::{
     BusinessProfile, NUMBER_FIELDS, NumberDetails, Numbers, ProfileChange, Throughput, Waba,
 };
+use crate::registration::{AttemptBudget, AttemptLimits, Registration, RegistrationAttempts, pin};
 
 /// The tenant, its WABA, its number and the token in the vault.
 const TENANT: &str = "num-owner";
@@ -38,6 +43,7 @@ const TOKEN: &str = "EAAG-the-owners-token";
 /// Every case, on one backend.
 pub async fn run(backend: &dyn Backend) {
     the_number_services_read_change_and_disconnect_as_meta_documents(backend).await;
+    the_registration_services_open_on_the_callers_own_number_only(backend).await;
 }
 
 /// business-profiles, "Get your profile via the API" example response.
@@ -413,4 +419,116 @@ pub async fn the_number_services_read_change_and_disconnect_as_meta_documents(
     assert_eq!(script.requests().len(), sent, "a request was sent");
     assert_eq!(script.remaining(), 0);
     assert!(other_script.requests().is_empty());
+}
+
+/// Roadmap M3d, with no HTTP layer: the registration services open on a
+/// number of the caller's own tenant only.
+///
+/// 1. Tenant B's caller handed tenant A's number (a capability the same
+///    order made, for A): `404 not_found`, the answer for a number that
+///    does not exist, before any attempt is counted (A's budget has no
+///    record) or anything is asked of Meta.
+/// 2. A's capability through another [`Authorizer`]: `403 forbidden`.
+/// 3. A's caller on A's number: Meta's documented registration, with
+///    A's token, one attempt counted on A's number.
+///
+/// Decisive: `Registration::new`'s tenant check dropped fails step 1 (B
+/// would register A's number, with A's token, on A's budget).
+pub async fn the_registration_services_open_on_the_callers_own_number_only(backend: &dyn Backend) {
+    const OWNER: (&str, &str, &str, &str) = (
+        "reg-owner",
+        "102290129340410",
+        "106540352242940",
+        "EAAG-the-registration-owners-token",
+    );
+    const OTHER: (&str, &str, &str, &str) = (
+        "reg-other",
+        "102290129340411",
+        "106540352242941",
+        "EAAG-the-other-tenants-token",
+    );
+    let records = backend.records();
+    let vault = TokenVault::new(
+        backend.kv(),
+        VaultKeys::new(VaultKey::generate("registration-suite").unwrap()),
+    )
+    .unwrap();
+    for (tenant, waba, pn, token) in [OWNER, OTHER] {
+        let tenant = TenantId::parse(tenant).unwrap();
+        records.create_tenant(&tenant, "").await.unwrap();
+        let waba = WabaId::new(waba).unwrap();
+        let pn = PhoneNumberId::new(pn).unwrap();
+        let bound = records
+            .bind_waba(&tenant, &waba, std::slice::from_ref(&pn))
+            .await
+            .unwrap();
+        assert_eq!(bound, BindOutcome::Bound);
+        vault
+            .store(&StoredBusinessToken::new(waba, AccessToken::new(token)).phone_number_ids([pn]))
+            .await
+            .unwrap();
+    }
+    let script = ScriptedTransport::new();
+    let client = Client::builder().transport(script.clone()).build().unwrap();
+    let authz = Authorizer::new(records.clone(), vault.clone(), client).unwrap();
+    let owner = caller_of(backend, &authz, OWNER.0).await;
+    let other = caller_of(backend, &authz, OTHER.0).await;
+    let owners_pn = PhoneNumberId::new(OWNER.2).unwrap();
+    let owners_number = authz.owned_number(&owner, owners_pn.clone()).await.unwrap();
+    let attempts = RegistrationAttempts::new(
+        backend.kv(),
+        AttemptLimits::default(),
+        Arc::new(SystemClock),
+    );
+    let budget = RegistrationAttempts::store_key(AttemptBudget::Registration, &owners_pn);
+
+    // 1. B's caller, A's number.
+    let refused = Registration::new(&authz, &other, &owners_number, &attempts)
+        .map(drop)
+        .unwrap_err();
+    assert_eq!((refused.status(), refused.code()), (404, "not_found"));
+    assert!(
+        backend.kv().get(&budget).await.unwrap().is_none(),
+        "counted"
+    );
+    assert!(script.requests().is_empty(), "a request was sent");
+
+    // 2. Through another order.
+    let rival = Authorizer::new(
+        records.clone(),
+        vault.clone(),
+        Client::builder()
+            .transport(ScriptedTransport::new())
+            .build()
+            .unwrap(),
+    )
+    .unwrap();
+    let refused = Registration::new(&rival, &owner, &owners_number, &attempts)
+        .map(drop)
+        .unwrap_err();
+    assert_eq!((refused.status(), refused.code()), (403, "forbidden"));
+
+    // 3. A's own.
+    script.push_json(200, json!({"success": true}));
+    Registration::new(&authz, &owner, &owners_number, &attempts)
+        .unwrap()
+        .register(&pin("212834".to_owned()).unwrap(), None)
+        .await
+        .unwrap();
+    let requests = script.requests();
+    let [registered] = &requests[..] else {
+        panic!("one request: {requests:?}")
+    };
+    assert_eq!(
+        (registered.method.as_str(), registered.path()),
+        ("POST", format!("/v25.0/{}/register", OWNER.2).as_str())
+    );
+    assert_eq!(registered.bearer(), Some(OWNER.3));
+    let counted = backend.kv().get(&budget).await.unwrap().unwrap();
+    assert!(
+        String::from_utf8(counted.value)
+            .unwrap()
+            .ends_with(r#""count":1}"#)
+    );
+    assert_eq!(script.remaining(), 0);
 }

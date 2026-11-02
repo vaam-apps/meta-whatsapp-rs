@@ -543,6 +543,74 @@ fn the_service_limits_default_to_the_designs_and_parse() {
     }
 }
 
+/// Roadmap M3d: a number's attempt budgets. Unset, 5 registrations in 72
+/// hours (two windows back to back stay within Meta's 10 in a moving 72
+/// hours) and 10 verifications an hour; each count and window parses;
+/// zero, a count past `u32` and an unparsable or zero window are refused,
+/// naming the variable and quoting nothing. Decisive: each default, each
+/// variable, each refusal.
+#[test]
+fn a_numbers_attempt_budgets_are_set_by_four_variables() {
+    use std::time::Duration;
+
+    use meta_whatsapp_server_core::registration::{AttemptLimit, AttemptLimits};
+    let settings = Config::from_env(&production()).unwrap().settings;
+    assert_eq!(
+        settings.registration_attempts,
+        AttemptLimits {
+            registration: AttemptLimit {
+                attempts: 5,
+                window: Duration::from_hours(72)
+            },
+            verification: AttemptLimit {
+                attempts: 10,
+                window: Duration::from_hours(1)
+            },
+        }
+    );
+    let settings = Config::from_env(
+        &production()
+            .set("WA_SERVER_REGISTRATION_ATTEMPTS", "3")
+            .set("WA_SERVER_REGISTRATION_WINDOW", "7d")
+            .set("WA_SERVER_VERIFICATION_ATTEMPTS", "4")
+            .set("WA_SERVER_VERIFICATION_WINDOW", "30m"),
+    )
+    .unwrap()
+    .settings;
+    assert_eq!(
+        settings.registration_attempts,
+        AttemptLimits {
+            registration: AttemptLimit {
+                attempts: 3,
+                window: Duration::from_hours(168)
+            },
+            verification: AttemptLimit {
+                attempts: 4,
+                window: Duration::from_mins(30)
+            },
+        }
+    );
+    for (name, value) in [
+        ("WA_SERVER_REGISTRATION_ATTEMPTS", "0"),
+        ("WA_SERVER_REGISTRATION_ATTEMPTS", "4294967296"),
+        ("WA_SERVER_REGISTRATION_ATTEMPTS", "five"),
+        ("WA_SERVER_REGISTRATION_WINDOW", "0h"),
+        ("WA_SERVER_REGISTRATION_WINDOW", "three days"),
+        ("WA_SERVER_VERIFICATION_ATTEMPTS", "-1"),
+        ("WA_SERVER_VERIFICATION_WINDOW", "0"),
+    ] {
+        let error = refused(&production().set(name, value));
+        assert!(
+            matches!(error, ConfigError::Invalid { name: n, .. } if n == name),
+            "{name}={value}: {error:?}"
+        );
+        assert!(
+            !error.to_string().contains(value),
+            "{error} quotes the value"
+        );
+    }
+}
+
 /// Roadmap S2b (design D36): the routing of a moved WABA's events. Unset,
 /// `operator_only` with 7 days and an hour and no skew margin (fail
 /// closed); `current_holder`, a window and a margin parse; a window with
