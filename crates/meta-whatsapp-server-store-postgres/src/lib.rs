@@ -29,7 +29,7 @@ mod notify;
 mod postgres;
 mod webhooks;
 
-pub use events::PgEventStore;
+pub use events::{ERASE_SQL, PgEventStore};
 pub use notify::{EVENTS_CHANNEL, LISTEN_WAIT, PgNotifier};
 pub use postgres::{
     HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, PgBackend, PgJanitor, PgLeaderLock,

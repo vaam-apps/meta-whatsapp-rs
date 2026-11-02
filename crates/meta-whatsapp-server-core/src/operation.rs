@@ -134,6 +134,9 @@ pub enum Operation {
     /// `resume_signup`: an attempt's steps after the stored token run
     /// again (roadmap M3a).
     ResumeSignup,
+    /// `erase_customer`: a customer erased on a number, from the inbox and
+    /// the outbox, journaled and audited (roadmap M2f).
+    EraseCustomer,
     /// `create_webhook_endpoint`: a webhook endpoint created, its secret
     /// shown once (roadmap M2c).
     CreateWebhookEndpoint,
@@ -158,7 +161,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 53] = [
+    pub const ALL: [Self; 54] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -203,6 +206,7 @@ impl Operation {
         Self::CompleteSignup,
         Self::ListSignupAttempts,
         Self::ResumeSignup,
+        Self::EraseCustomer,
         Self::CreateWebhookEndpoint,
         Self::ListWebhookEndpoints,
         Self::GetWebhookEndpoint,
@@ -261,6 +265,7 @@ impl Operation {
             Self::CompleteSignup => "complete_signup",
             Self::ListSignupAttempts => "list_signup_attempts",
             Self::ResumeSignup => "resume_signup",
+            Self::EraseCustomer => "erase_customer",
             Self::CreateWebhookEndpoint => "create_webhook_endpoint",
             Self::ListWebhookEndpoints => "list_webhook_endpoints",
             Self::GetWebhookEndpoint => "get_webhook_endpoint",
@@ -320,6 +325,7 @@ impl Operation {
             | Self::CompleteSignup
             | Self::ListSignupAttempts
             | Self::ResumeSignup => Scope::Signup,
+            Self::EraseCustomer => Scope::Erasure,
             Self::CreateWebhookEndpoint
             | Self::ListWebhookEndpoints
             | Self::GetWebhookEndpoint

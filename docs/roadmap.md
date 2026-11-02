@@ -1284,6 +1284,33 @@ and `store-postgres`.
     `live_mongodb_received_media_reads_its_index_in_order` (no field on
     a row without media, the index's use counted by `$indexStats`, thirty
     rows of three tenants read back newest first).
+    **Brought up to M2f on 2026-11-02** (PR #115): `erase_contacts`
+    (required), as Postgres' `ERASE_SQL` does it. An insert keeps the
+    event's `NewEvent::contacts` in `contacts`, an array of strings,
+    absent when the event names nobody (Postgres' `NULL`); the erasure
+    deletes, whole, the rows whose `tenant_id` is the tenant (an
+    operator-only row has none, so it is never one; and `tenant_id`
+    rather than `stream`, which leads the stream's index, so the
+    planner's only index is the erasure's), whose `phone_number_id` is
+    the number and whose `contacts` hold one of the identities (`$in`),
+    in one `delete_many` at majority write concern, no stream's document
+    written (its sequences and `purged_through` stay), and answers how
+    many rows went; an empty list asks nothing. Its index,
+    `wa_server_events_contacts_idx`, is partial and multikey (`contacts`,
+    over the rows where it `$exists`, which an `$in` of strings implies,
+    so the erasure's filter need not repeat it and the `$in` gives the
+    bounds). Its tests: `conformance::outbox::erase_contacts` (in
+    `live_mongodb_outbox_passes_the_outbox_cases`), M2f's inbox and
+    webhook cases (in the whole suite),
+    `a_row_naming_customers_stores_its_contacts_and_no_other_row_does`
+    (offline; by mutation, the field written always, never, or only in
+    part each fail it) and
+    `live_mongodb_erase_contacts_reads_its_index_and_keeps_the_rest` (the
+    index's use counted by `$indexStats`; the number's operator-only row,
+    a previous holder's row in its own stream, another customer's row
+    and the customer's row on another number kept). The live cases were
+    not run on the branch (no MongoDB there): CI's `just test-live` runs
+    them.
     By mutation, live: the re-check dropped (the routed tenant kept), and
     `RouteGuard::admits` dropped (the binding's tenant and numbers still
     matched), each fail the invariants (`only the rows whose guard held`)
@@ -1324,9 +1351,10 @@ and `store-postgres`.
     **Pending the owner** (stored names, before the first release): the
     collections `wa_server_events`, `wa_server_event_streams` and
     `wa_server_wabas`, their fields (since the merge of 2026-11-02,
-    `media_id` and `media_order` among them) and the index names
-    (`wa_server_events_media_idx` among them; docs/architecture.md §
-    Stable identifiers). **The licence, decided by the owner on
+    `media_id` and `media_order` among them, and since M2f's, PR #115,
+    `contacts`) and the index names (`wa_server_events_media_idx` and,
+    since M2f's, `wa_server_events_contacts_idx` among them;
+    docs/architecture.md § Stable identifiers). **The licence, decided by the owner on
     2026-11-02** ("Yes, upgrade deny"): CC0-1.0 is allowed, in
     `deny.toml`'s `allow` list with the decision's date beside it, for
     `tiny-keccak` through the driver (S9, S17), and `just deny` passes;
@@ -4747,8 +4775,7 @@ design's (§9).
     `MemoryWebhookStore` under its store's lock and Postgres'
     `PgWebhookStore` on migration 9, `webhooks out` (two tables,
     `wa_server_webhook_endpoints` and `wa_server_webhook_deliveries`;
-    numbered 9 while M2f holds 8: the coordinator renumbers at merge if
-    needed), with the suite `conformance::webhooks_out` in
+    numbered 9, after M2f's 8, kept at the merge of PR #115), with the suite `conformance::webhooks_out` in
     `conformance::run`. Nine routes in the axum adapter
     (`api::webhook_endpoints`, scope `webhooks`, additive in
     `openapi/v1.json`): `POST` and `GET /v1/webhook-endpoints`, `GET`,
@@ -5091,7 +5118,7 @@ design's (§9).
     are not recorded (they are not a customer's message on a live
     number), so they keep the check; a received id older than the
     outbox's retention keeps the check (Meta keeps it about as long).
-- [ ] **M2f. Erasure in the service** (row 91; D10, D30, D31): an
+- [x] **M2f. Erasure in the service** (row 91; D10, D30, D31): an
   admin- or tenant-scoped route that erases a customer on a number
   through the library's `identities` and `erase_all`; deletes the
   tenant's outbox rows for them, through an expand-only `contacts
@@ -5107,6 +5134,112 @@ design's (§9).
     as the library's live test does), and removing the outbox clause
     fails it; the journal and the audit event hold no identity in
     clear; a tenant's key cannot erase on another tenant's number.
+  - **Landed:** `POST /v1/numbers/{pn}/erasures` (`erase_customer`,
+    tag and new scope `erasure`, rate class `send`) in
+    `meta-whatsapp-server-api-axum` (`api::erasure`), over the core's
+    `erasure::Erasures` on an `OwnedNumber` (the whole authorization
+    order, the vault included): `{confirm: <pn>, contacts: [1..16]}`
+    (`422` on `confirm`, `contacts`, `body`, never quoting a contact;
+    `409 erasure_not_configured` without `WA_SERVER_ERASURE_KEY`, a new
+    code), the binding read again (`OwnedNumber::still_held`, `503`),
+    a number with a history cut refused whole (`409
+    erasure_crosses_binding`, a new code: the library's `erase_all` has
+    no time bound, so it would reach a previous holder's hidden records),
+    the identities closed over `Inbox::identities`, a journal entry
+    (`ErasureJournal::record`: `JournalEntry`, the hex HMAC-SHA256 of
+    `<phone_number_id>|<contact>` under the key for each identity, the
+    time, the tenant, the number; by default `LogJournal`, target
+    `erasure_journal`), then the tenant's own outbox rows naming one of
+    them, never an operator-only row (`Outbox::erase_contacts`, a new
+    required port method), then `Inbox::erase_all`, then the audit event
+    `customer_erased` (`audit::erasure_audit`: ids and counts); `200
+    {erasure_id, phone_number_id, erased_at}`, nothing of what was
+    found, no `Idempotency-Key`. Postgres migration 8 (`erasure`; numbered
+    after M2e's 7): `wa_server_events.contacts TEXT[]` (no default, no
+    rewrite), filled at insert from `NewEvent::contacts`
+    (`outbox::event_contacts`: every value under the keys Meta's webhooks
+    name a customer by, the business's own numbers left out) and a partial
+    GIN index, `wa_server_events_contacts_idx`; the erasure's statement
+    (`ERASE_SQL`) reads the tenant by `tenant_id`, which no index leads
+    with, and `tenant_id = $1` never matches an operator-only row, so its
+    plan is that index or a scan: pinned live with sequential scans off,
+    and on 20,000 of the tenant's rows never analyzed, then analyzed, with
+    them on. The memory
+    backend keeps the contacts beside each row. The decisive tests:
+    `live_postgres_after_an_erasure_no_row_of_any_table_mentions_the_customer`
+    (every table of the schema swept, as the library's live test does, for
+    the customer's phone number, BSUID, parent BSUID, username and name,
+    after an erasure by the BSUID alone, every row a tenant may see; before
+    it, the inbox's tables and `wa_server_events` held them; the number's
+    operator-only row naming them (a message Meta dated before the
+    binding) stays; removing the outbox's
+    clause, the closure over the identities, or `ERASE_SQL`'s tenant clause
+    fails it, and its memory twin
+    `an_erasure_by_bsuid_leaves_nothing_of_the_customer`);
+    `an_erasure_on_a_moved_number_erases_nothing` (memory and live: on a
+    number whose WABA moved from another tenant, `409
+    erasure_crosses_binding`, the previous holder's hidden message, the
+    new holder's own and both tenants' events kept) and its core twin
+    `conformance::inbox::an_erasure_on_a_number_with_a_previous_holder_erases_nothing`
+    (both backends, no journal entry);
+    `conformance::inbox::an_erasure_failing_part_way_is_completed_by_a_repeat`
+    (the outbox before the inbox: with the inbox first, a repeat after a
+    failing outbox leaves the phone number's row);
+    `the_erasure_service_refuses_another_authorizers_caller_and_number`
+    (the core's `tests/capabilities.rs`: each of `Erasures::new`'s
+    admissions); `reads_an_erasure_key_of_at_least_32_bytes` (`config`:
+    the key's length, `_FILE`, no derivation) and
+    `erasure_is_set_up_by_its_key_or_by_a_throwaway_on_memory` (`serve`);
+    `the_journal_and_the_audit_event_hold_no_identity_in_clear`
+    (`erasure_logs.rs`: no log line at `TRACE` names the customer, the
+    journal's HMACs computed apart from the code, the audit event's ids
+    and counts); `an_erasure_stays_on_its_number_and_tenant` (memory and
+    live: another tenant's key with every scope is `404` with nothing
+    erased, a key without the scope `403`, the same customer on the
+    tenant's other number and on another tenant's number kept);
+    `conformance::outbox::erase_contacts` (both backends, and, since the
+    merge of PR #91, S9's `MongoOutbox`, live: the tenant's own
+    rows, never the number's operator-only ones, whose dedup keys stay
+    taken, nor another number's or another tenant's stream, a repeat
+    deleting nothing, the dedup key freed);
+    `conformance::inbox::an_erasure_reaches_every_identity_and_journals_first`
+    (a failing journal erases nothing) and the stale capability's refusal
+    in `a_capability_made_before_its_number_left_reads_nothing`; the
+    extractor's `every_identifier_an_event_holds_is_one_of_its_contacts`
+    over every fixture; `the_journal_and_the_audit_event_hold_no_identity_in_clear`
+    also sends malformed bodies naming the customer (a number for a
+    string, an unknown field named after them, a cut body, their number as
+    `confirm`): `422`, quoting and logging nothing of them. Left, and why:
+    the number's operator-only outbox rows naming the person (the
+    operator's, D89: the outbox's retention takes them); a number with a
+    history cut cannot be erased on through the service at all (D90: the
+    operator erases there through the library, until the owner decides
+    the reach and the library has a time-bounded erasure); the 24-hour
+    idempotency answers of
+    sends to the person keep their recipient (deleting the records would
+    let a repeat send twice; a redaction would change a replay's answer);
+    a previous holder's own outbox rows of the number (another tenant's
+    stream); rows recorded before migration 8 (the outbox's retention
+    takes them); the journal's replay after a restore is the operator's,
+    as the production guide describes it (no command does it); `doctor`
+    does not check `WA_SERVER_ERASURE_KEY`; a number whose token lapsed
+    cannot be erased on until it is reconnected (D90).
+  - **Decided** (the coordinator's, 2026-11-02, under the owner's
+    delegation, each swappable: design §10): D86 (a tenant or platform
+    key with the new scope `erasure`, which no other scope grants; no
+    admin route), D87 (the route's shape as proposed: identities in the
+    body only, `confirm`, no counts, no `Idempotency-Key`), D88 (the
+    journal as a port with a log default, under the dedicated secret
+    `WA_SERVER_ERASURE_KEY`; `409` without it, a throwaway key on memory
+    storage), D89 changed to narrow by default (the calling tenant's own
+    outbox rows only, never the number's operator-only ones), D90
+    changed to narrow by default (the outbox before the inbox, the
+    binding read again first, the inbox's erasure only from the tenant's
+    binding epoch on, which the library cannot bound, so a number with a
+    cut is refused; the whole authorization order), D91
+    (`Outbox::erase_contacts` required, no default). The wider reach of
+    D89 and D90 stays the owner's, and every new stored name is pending
+    the owner (§ Owner touchpoints).
 
 - [x] **M2g. The inbox's other routes** (row 111; added by M2a, kept as
   an item by the coordinator's decision of 2026-11-01): the design's `GET
@@ -6460,7 +6593,13 @@ everything else goes into the parity-completion report.
   `partner_app_uninstalled` and `account_deleted`, and their outbox
   key's label `meta-whatsapp-server/number-event/v1` with its layout
   (design D80, D83, decided by the coordinator), added and awaiting
-  confirmation; M2c's migration 9, `webhooks out` (numbered after M2f's
+  confirmation; M2f's migration 8, `erasure`: the column
+  `wa_server_events.contacts` and its partial GIN index
+  `wa_server_events_contacts_idx`, the key scope `erasure`, the erasure
+  journal's target `erasure_journal`, its layout, its HMAC's input
+  `<phone_number_id>|<contact>`, the `era_` id and the audit action
+  `customer_erased`, added and awaiting confirmation;
+  M2c's migration 9, `webhooks out` (numbered after M2f's
   8), its tables `wa_server_webhook_endpoints` and
   `wa_server_webhook_deliveries`, their columns, indexes and stored
   values, the sealed secret's format and its associated data
@@ -6473,6 +6612,20 @@ everything else goes into the parity-completion report.
   `wa_server_wabas`, their fields and their index names, added by a spike
   composed into no binary and awaiting confirmation, which S18 may still
   change before then), for the same reason as L5's.
+- **How far an erasure reaches in the service** (M2f, design D89 and
+  D90): the coordinator decided the narrow default, the calling tenant's
+  own data only. Two wider reaches are irreversible deletions beyond the
+  caller's own data, so whether to add either is the owner's open
+  choice: (a) the number's operator-only outbox rows naming the person
+  (today left to the outbox's retention, 7 days by default); (b) on a
+  number moved from another tenant, the previous holder's hidden inbox
+  records of the person (today such a number is refused, `409
+  erasure_crosses_binding`, and the operator erases there through the
+  library). Either could ship swappable, as a deployment setting off by
+  default or as an operator-only route over the same `Erasures`; and
+  erasing from the binding epoch on, without (b), needs a time-bounded
+  erasure in the library first (a new `ConversationStore` method, every
+  adapter's).
 - **CC0-1.0 for the MongoDB driver** (S9, then S17 and S18): the
   `mongodb` crate reaches `tiny-keccak` (CC0-1.0, a public-domain
   dedication, compiled into a proc-macro that runs at build time)

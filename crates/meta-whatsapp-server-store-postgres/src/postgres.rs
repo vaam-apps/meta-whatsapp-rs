@@ -86,7 +86,8 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
         "received media",
         include_str!("../migrations/0007_received_media.sql"),
     ),
-    // Roadmap M2c. Numbered 9: migration 8 is roadmap M2f's, in flight.
+    (8, "erasure", include_str!("../migrations/0008_erasure.sql")),
+    // Roadmap M2c, numbered after roadmap M2f's 8.
     (
         9,
         "webhooks out",
@@ -1475,6 +1476,10 @@ mod tests {
             "aafa19ce1aa066caa0464aeac5ecc436acb994873108f0d51b002bae0155e0a9f8b8e47208fecb15d2420471dd555702",
         ),
         (
+            8,
+            "d748a179ba921d88a958978e4c476c78014d815694d145bc3d293213c6a40de2d6b0669c4b5daf356af7cc56213dd8aa",
+        ),
+        (
             9,
             "0d605fa295b385137f0d6fab20501615e8621c011abadb6dfc8a16608938232351950318861db7ad5fa7ee9094650a89",
         ),
@@ -1511,6 +1516,7 @@ mod tests {
                 "number moves",
                 "signup",
                 "received media",
+                "erasure",
                 "webhooks out"
             ]
         );

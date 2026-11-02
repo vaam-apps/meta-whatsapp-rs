@@ -322,6 +322,15 @@ mod tests {
         ) -> StoreResult<Vec<crate::outbox::ReceivedMedia>> {
             panic!("the outbox was read")
         }
+
+        async fn erase_contacts(
+            &self,
+            _: &crate::model::TenantId,
+            _: &PhoneNumberId,
+            _: &[String],
+        ) -> StoreResult<u64> {
+            panic!("the outbox was erased from")
+        }
     }
 
     /// The `data` of each type, exactly: what a tenant switches on, part

@@ -1071,7 +1071,7 @@ async fn history(
 /// `meta-whatsapp-server-store-postgres`), holding a binding `main` made,
 /// is migrated forward by this binary's `migrate` with no checksum error:
 /// migrations 1 to 3 row for row what `main` left (`installed_on`
-/// included), migrations 4 to 7 and 9 (S2b's, M2h's, M3a's, M2e's and M2c's, additive)
+/// included), migrations 4 to 9 (S2b's, M2h's, M3a's, M2e's, M2f's and M2c's, additive)
 /// added once each, and `serve` then
 /// runs none (both migrating by default, `WA_SERVER_MIGRATE=auto`;
 /// `/readyz` answers 200); the library's history is unchanged. `main`'s
@@ -1208,9 +1208,10 @@ fn live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migrat
             (5, "number moves", true, checksum(5)),
             (6, "signup", true, checksum(6)),
             (7, "received media", true, checksum(7)),
+            (8, "erasure", true, checksum(8)),
             (9, "webhooks out", true, checksum(9))
         ],
-        "migrations 4 to 7 and 9, once each"
+        "migrations 4 to 9, once each"
     );
     let mut serving = Command::new(BIN);
     with_db(&mut serving);

@@ -725,6 +725,7 @@ pub const INBOX_KEYS: [&str; 3] = [
 /// by id, and the conversation marked read with a receipt to Meta; returns
 /// the key it minted and what the logs must not hold (the reply's text,
 /// the stranger, the caller's references).
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 async fn inbox(h: &Harness, admin: &str) -> Vec<String> {
     const PN: &str = "1972385232742141";
     let minted = h
@@ -805,7 +806,34 @@ async fn inbox(h: &Harness, admin: &str) -> Vec<String> {
         .await;
     assert_eq!(read.status.as_u16(), 204, "{}", read.text);
     assert_eq!(h.graph.requests().len(), asked + 1, "one read receipt");
+    // Roadmap M2f: the customer erased on the number, by a key of the
+    // scope `erasure`; the logs keep the journal's HMACs and the audit
+    // event's counts, never the identity (`check`).
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["erasure"]})),
+        )
+        .await
+        .json();
+    let erasure_key = minted["key"].as_str().unwrap().to_owned();
+    let erasure = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{PN}/erasures"))
+                .key(&erasure_key)
+                .json(&json!({"confirm": PN, "contacts": [EXAMPLE_WA_ID, INBOX_STRANGER]})),
+        )
+        .await;
+    assert_eq!(erasure.status.as_u16(), 200, "{}", erasure.text);
+    assert_eq!(
+        h.graph.requests().len(),
+        asked + 1,
+        "an erasure asks Meta nothing"
+    );
     vec![
+        erasure_key.clone(),
+        erasure_key.rsplit('_').next().unwrap().to_owned(),
         key.clone(),
         key.rsplit('_').next().unwrap().to_owned(),
         INBOX_REPLY_TEXT.to_owned(),
@@ -1576,9 +1604,12 @@ fn check_audit(logs: &str) {
         onboarded[0]
     );
     assert!(onboarded[0]["key_id"].is_string(), "{}", onboarded[0]);
+    check_erasure_audit(&events, &changes);
     let deletions: Vec<&serde_json::Value> = changes
         .into_iter()
-        .filter(|fields| fields["action"] != "signup_resumed")
+        .filter(|fields| {
+            fields["action"] != "signup_resumed" && fields["action"] != "customer_erased"
+        })
         .collect();
     let actions: Vec<&str> = deletions
         .iter()
@@ -1620,6 +1651,46 @@ fn check_audit(logs: &str) {
         assert_eq!(fields["phone_number_id"], "1972385232742141", "{fields}");
     }
     check_payment_audit(&deletions);
+}
+
+/// The erasure of `inbox` (roadmap M2f): one journal entry (target
+/// `erasure_journal`), its identities 64 hex digits each, and one audit
+/// event (`customer_erased`) with the same erasure id, the tenant, the
+/// WABA and the number by id, and counts; `check` makes sure neither, nor
+/// any other line, names the customer.
+fn check_erasure_audit(events: &[serde_json::Value], changes: &[&serde_json::Value]) {
+    let journal: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e["target"] == "erasure_journal")
+        .map(|e| &e["fields"])
+        .collect();
+    assert_eq!(journal.len(), 1, "{journal:?}");
+    let entry = journal[0];
+    assert_eq!(entry["message"], "erasure journal entry", "{entry}");
+    assert_eq!(entry["v"], 1, "{entry}");
+    assert_eq!(entry["tenant"], "merchant-42", "{entry}");
+    assert_eq!(entry["phone_number_id"], "1972385232742141", "{entry}");
+    let identities: Vec<&str> = entry["identities"].as_str().unwrap().split(',').collect();
+    assert_eq!(identities.len(), 2, "the two contacts named: {entry}");
+    for hmac in identities {
+        assert!(
+            hmac.len() == 64 && hmac.bytes().all(|b| b.is_ascii_hexdigit()),
+            "{entry}"
+        );
+    }
+    let audited: Vec<&&serde_json::Value> = changes
+        .iter()
+        .filter(|fields| fields["action"] == "customer_erased")
+        .collect();
+    assert_eq!(audited.len(), 1, "{audited:?}");
+    let audit = audited[0];
+    assert_eq!(audit["erasure_id"], entry["erasure_id"], "{audit}");
+    assert_eq!(audit["tenant"], "merchant-42", "{audit}");
+    assert_eq!(audit["waba_id"], "102290129340398", "{audit}");
+    assert_eq!(audit["phone_number_id"], "1972385232742141", "{audit}");
+    assert!(audit["key_id"].is_string(), "{audit}");
+    assert_eq!(audit["identities"], 2, "{audit}");
+    assert!(audit["messages"].as_u64().unwrap() > 0, "{audit}");
 }
 
 /// The payment changes' audit events (of the tenant changes `changes`)

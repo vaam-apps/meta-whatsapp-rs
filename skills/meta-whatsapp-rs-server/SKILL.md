@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs 3eacd0311b76b3e00610b3442a17d3827f66d6dc (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 0b037d946d4f1b4b520b1420a7f783885370101d (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -15,12 +15,11 @@ Your app is not Rust and reaches WhatsApp through meta-whatsapp-server:
 you deploy it, hold its keys, call its /v1 API and handle its errors.
 Rust code uses the library directly (`meta-whatsapp-rs`).
 
-## What the service does today (milestones M1a to M1c, M2a, M2b, M3a, M3c and M3d)
+## What the service does today (milestones M1a to M1c, M2a, M2b, M2f, M3a, M3c and M3d)
 
-Webhooks to your backend do not exist yet: write no code against them. The rest does, by skill:
-sends, media, templates, the inbox (`meta-whatsapp-rs-server-send`), Meta's webhooks, polling, one event by
-id and live events (`meta-whatsapp-rs-server-events`), login codes (`meta-whatsapp-rs-server-otp`), merchants
-connecting their number (`meta-whatsapp-rs-server-onboarding`), a number's registration (`meta-whatsapp-rs-server-registration`).
+Webhooks to your backend do not exist yet: write no code against them. The rest does, by skill: sends, media, templates, the inbox (`meta-whatsapp-rs-server-send`),
+Meta's webhooks, polling, one event by id and live events (`meta-whatsapp-rs-server-events`), login codes (`meta-whatsapp-rs-server-otp`),
+merchants connecting their number (`meta-whatsapp-rs-server-onboarding`), a number's registration (`meta-whatsapp-rs-server-registration`).
 
 | Route | Needs | Does |
 | --- | --- | --- |
@@ -33,6 +32,7 @@ connecting their number (`meta-whatsapp-rs-server-onboarding`), a number's regis
 | `POST /v1/numbers/{pn}/request-code`, `POST /v1/numbers/{pn}/register`, … | scope `numbers` | the number's verification code, registration, PIN, deregistration: `meta-whatsapp-rs-server-registration` |
 | `POST /v1/otp/issue`, `POST /v1/otp/verify` | scope `otp` | login codes over WhatsApp: `meta-whatsapp-rs-server-otp` |
 | `POST /v1/signup/sessions`, `POST /v1/signup/complete`, `GET /v1/signup/attempts`, `POST /v1/signup/resume` | scope `signup` | Embedded Signup: `meta-whatsapp-rs-server-onboarding` |
+| `POST /v1/numbers/{pn}/erasures` | scope `erasure` (no other scope grants it) | erase a customer on the number, from the inbox and the tenant's own events in the outbox (never the operator's), only when you call it: `{confirm: <pn>, contacts: [BSUIDs, wa_ids]}`, the identities the inbox links added; journaled (HMACs only) and audited; `200 {erasure_id, phone_number_id, erased_at}` whether or not they were known; `409 erasure_not_configured` without `WA_SERVER_ERASURE_KEY`; `409 erasure_crosses_binding` on a number that came from another tenant (nothing erased: ask the operator) |
 | `POST /v1/admin/tenants`, `POST /v1/admin/tenants/{id}/keys`, `POST /v1/admin/platform-keys` | admin key | tenants and keys |
 | `POST /v1/admin/tenants/{id}/wabas`, `GET /v1/admin/wabas/{waba_id}`, `DELETE /v1/admin/wabas/{waba_id}/binding` | admin key | attach the platform's own WABA (numbers listed by Meta, app subscribed); who holds one; unbind it (token deleted too) |
 | `/livez`, `/readyz`, `/metrics`, `/v1/version`, `/v1/openapi.json` | nothing | operations, and the document every client is generated from |

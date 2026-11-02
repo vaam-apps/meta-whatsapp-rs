@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`; erasing a customer `erasure`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -19,6 +19,7 @@
 //! documented either.
 
 pub mod admin;
+pub mod erasure;
 pub mod events;
 pub mod inbox;
 pub mod messages;
@@ -94,6 +95,7 @@ impl Modify for Security {
         (name = "templates", description = "Listing, creating and deleting message templates (scope `templates`)"),
         (name = "payments", description = "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"),
         (name = "inbox", description = "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"),
+        (name = "erasure", description = "Erasing a customer on a number, from the inbox and the event outbox, journaled and audited: irreversible, only when called (scope `erasure`)"),
         (name = "events", description = "Meta's webhook events, routed to their tenant (scope `events`)"),
         (name = "webhooks", description = "Webhook endpoints: the tenant's events pushed to its URLs, signed the Standard Webhooks way, retried for 72 hours; their secrets, pings and deliveries (scope `webhooks`)"),
         (name = "otp", description = "One-time passcodes sent with the tenant's authentication template, and checked (scope `otp`)"),
@@ -170,6 +172,10 @@ fn inbox_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(inbox::get_conversation_window))
         .routes(routes!(inbox::mark_conversation_read))
         .routes(routes!(inbox::get_inbox_message))
+}
+
+fn erasure_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new().routes(routes!(erasure::erase_customer))
 }
 
 fn payments_routes() -> OpenApiRouter<Grant> {
@@ -273,6 +279,7 @@ fn api_routes(
         .merge(tenant(templates_routes(), Scope::Templates))
         .merge(tenant(inbox_routes(), Scope::Inbox))
         .merge(tenant(payments_routes(), Scope::Payments))
+        .merge(tenant(erasure_routes(), Scope::Erasure))
         .merge(tenant(events_routes(), Scope::Events))
         .merge(tenant(webhook_routes(), Scope::Webhooks))
         .merge(tenant(otp_routes(), Scope::Otp))
@@ -429,6 +436,7 @@ mod tests {
         let sources = [
             ("mod.rs", include_str!("mod.rs")),
             ("admin.rs", include_str!("admin.rs")),
+            ("erasure.rs", include_str!("erasure.rs")),
             ("numbers.rs", include_str!("numbers.rs")),
             ("registration.rs", include_str!("registration.rs")),
             ("events.rs", include_str!("events.rs")),

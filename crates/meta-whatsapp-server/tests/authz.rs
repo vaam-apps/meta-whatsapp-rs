@@ -258,8 +258,9 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
 /// service's own store, and marking a conversation read without
 /// `notify_customer` (the sample's empty body). They still take the whole
 /// authorization order, the vault included, as every owned route does. A
-/// message by id A's inbox does not hold is `404`, after the vault.
-const ASK_META_NOTHING: [(Method, &str, StatusCode); 5] = [
+/// message by id A's inbox does not hold is `404`, after the vault. An
+/// erasure (roadmap M2f) too: it asks Meta nothing.
+const ASK_META_NOTHING: [(Method, &str, StatusCode); 6] = [
     (
         Method::GET,
         "/v1/numbers/{pn}/conversations",
@@ -285,6 +286,7 @@ const ASK_META_NOTHING: [(Method, &str, StatusCode); 5] = [
         "/v1/numbers/{pn}/messages/{message_id}",
         StatusCode::NOT_FOUND,
     ),
+    (Method::POST, "/v1/numbers/{pn}/erasures", StatusCode::OK),
 ];
 
 /// The control of M1.3: the counter counts, and A's own key does reach the

@@ -5,14 +5,16 @@
 //! stream's inserts commit in sequence order**, so a reader that sees
 //! sequence `n` of a tenant sees every event of that tenant before it, and
 //! `next_after` never skips one that commits later; and **an insert checks
-//! the routing again** ([`RouteGuard`]), atomically with it.
+//! the routing again** ([`RouteGuard`]), atomically with it. A row keeps
+//! the contacts its event names ([`NewEvent::contacts`], roadmap M2f),
+//! which an erasure finds it by ([`Outbox::erase_contacts`]).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use meta_whatsapp_rs::core::ids::MediaId;
+use meta_whatsapp_rs::core::ids::{MediaId, PhoneNumberId};
 use meta_whatsapp_server_core::model::TenantId;
 use meta_whatsapp_server_core::outbox::{
     EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RECEIVED_MEDIA_ROWS, ReceivedMedia,
@@ -79,6 +81,9 @@ struct MemoryRow {
     /// The media id it records as received (`NewEvent::received_media`,
     /// roadmap M2e), kept at insert.
     media_id: Option<MediaId>,
+    /// The identifiers its event names its customers by
+    /// (`NewEvent::contacts`, roadmap M2f), kept at insert.
+    contacts: Vec<String>,
     event: StoredEvent,
 }
 
@@ -189,6 +194,7 @@ impl Outbox for MemoryEventStore {
                 dedup_key: event.dedup_key.clone(),
                 dedup_until: event.dedup_window.map(|window| window.until),
                 media_id: event.received_media(),
+                contacts: event.contacts(),
                 event: StoredEvent {
                     sequence,
                     id: event.id.clone(),
@@ -313,5 +319,36 @@ impl Outbox for MemoryEventStore {
             state.dedup.remove(&key);
         }
         Ok(purged)
+    }
+
+    async fn erase_contacts(
+        &self,
+        tenant: &TenantId,
+        phone_number_id: &PhoneNumberId,
+        contacts: &[String],
+    ) -> StoreResult<u64> {
+        let mut state = self.lock();
+        let mut erased = 0u64;
+        let mut gone: Vec<String> = Vec::new();
+        // The tenant's own stream only: never the operator-only one (the
+        // operator's, design D89), nor another tenant's.
+        if let Some(stream) = state.streams.get_mut(tenant.as_str()) {
+            stream.rows.retain(|_, row| {
+                let named = row.event.phone_number_id.as_ref() == Some(phone_number_id)
+                    && row
+                        .contacts
+                        .iter()
+                        .any(|contact| contacts.contains(contact));
+                if named {
+                    erased += 1;
+                    gone.extend(row.dedup_key.clone());
+                }
+                !named
+            });
+        }
+        for key in gone {
+            state.dedup.remove(&key);
+        }
+        Ok(erased)
     }
 }

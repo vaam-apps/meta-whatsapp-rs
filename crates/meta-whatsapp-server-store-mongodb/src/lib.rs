@@ -39,6 +39,13 @@
 //!   a partial index, newest first: by the server's millisecond, then by
 //!   an `ObjectId` the inserting process drew. [`Outbox::get`] is one
 //!   lookup by the event's id, in its tenant's stream only.
+//! - **What a row names of a customer** (roadmap M2f): an insert keeps the
+//!   identifiers its event names its customers by (`NewEvent::contacts`)
+//!   beside the row, an array (absent when it names none), and
+//!   [`Outbox::erase_contacts`] deletes the tenant's own rows naming one
+//!   of them on a number, whole, through a partial multikey index on it,
+//!   as Postgres does: never an operator-only row (it has no
+//!   `tenant_id`), and no stream's sequences nor purge mark moved.
 //! - **Contention is typed**: an insert that kept meeting write conflicts
 //!   for its budget ([`MongoOutbox::with_busy_after`], 2 seconds by
 //!   default, as Postgres' `lock_timeout`) wrote nothing and answers
@@ -58,6 +65,7 @@
 //! [`Outbox::purge`]: meta_whatsapp_server_core::outbox::Outbox::purge
 //! [`Outbox::received_media`]: meta_whatsapp_server_core::outbox::Outbox::received_media
 //! [`Outbox::get`]: meta_whatsapp_server_core::outbox::Outbox::get
+//! [`Outbox::erase_contacts`]: meta_whatsapp_server_core::outbox::Outbox::erase_contacts
 
 mod outbox;
 pub mod schema;

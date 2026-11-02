@@ -241,6 +241,25 @@ impl Outbox for IgnoresTheGuard {
         Ok(0)
     }
 
+    async fn erase_contacts(
+        &self,
+        tenant: &TenantId,
+        phone_number_id: &meta_whatsapp_rs::core::ids::PhoneNumberId,
+        contacts: &[String],
+    ) -> StoreResult<u64> {
+        let mut rows = self.rows.lock().unwrap();
+        let before = rows.len();
+        rows.retain(|row| {
+            let ours = row.tenant.as_ref() == Some(tenant)
+                && row.phone_number_id.as_ref() == Some(phone_number_id);
+            !(ours
+                && meta_whatsapp_server_core::outbox::event_contacts(&row.data)
+                    .iter()
+                    .any(|c| contacts.contains(c)))
+        });
+        Ok(u64::try_from(before - rows.len()).unwrap())
+    }
+
     async fn received_media(
         &self,
         media_id: &meta_whatsapp_rs::core::ids::MediaId,
@@ -378,6 +397,17 @@ impl Outbox for RewritesTheGuard {
 
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
         self.inner.purge(older_than).await
+    }
+
+    async fn erase_contacts(
+        &self,
+        tenant: &TenantId,
+        phone_number_id: &meta_whatsapp_rs::core::ids::PhoneNumberId,
+        contacts: &[String],
+    ) -> StoreResult<u64> {
+        self.inner
+            .erase_contacts(tenant, phone_number_id, contacts)
+            .await
     }
 
     async fn received_media(
@@ -589,6 +619,17 @@ impl Outbox for IgnoresTheTenant {
 
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
         self.inner.purge(older_than).await
+    }
+
+    async fn erase_contacts(
+        &self,
+        tenant: &TenantId,
+        phone_number_id: &meta_whatsapp_rs::core::ids::PhoneNumberId,
+        contacts: &[String],
+    ) -> StoreResult<u64> {
+        self.inner
+            .erase_contacts(tenant, phone_number_id, contacts)
+            .await
     }
 
     async fn received_media(

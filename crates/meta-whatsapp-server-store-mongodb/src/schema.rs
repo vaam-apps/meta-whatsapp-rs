@@ -53,6 +53,11 @@ pub const EVENT_MEDIA_ID: &str = "media_id";
 /// id received in the same millisecond ([`EVENT_CREATED_AT`] keeps
 /// milliseconds, where Postgres keeps microseconds).
 pub const EVENT_MEDIA_ORDER: &str = "media_order";
+/// The identifiers its event names its customers by (the core's
+/// `NewEvent::contacts`, roadmap M2f), an array of strings; absent for a
+/// row that names none, which keeps it out of [`INDEX_CONTACTS`]. The
+/// Postgres column's name.
+pub const EVENT_CONTACTS: &str = "contacts";
 
 /// A stream's highest sequence, stored or purged.
 pub const STREAM_LAST: &str = "last_sequence";
@@ -80,6 +85,10 @@ pub const INDEX_CREATED_AT: &str = "wa_server_events_created_idx";
 /// The rows that record a media id, newest first (partial: those rows
 /// only; the Postgres index's name).
 pub const INDEX_MEDIA: &str = "wa_server_events_media_idx";
+/// The rows that name a customer, by each identifier they name (partial,
+/// on the rows holding [`EVENT_CONTACTS`] only, and multikey: one entry
+/// per identifier; the Postgres index's name).
+pub const INDEX_CONTACTS: &str = "wa_server_events_contacts_idx";
 
 #[cfg(test)]
 mod tests {
@@ -107,6 +116,7 @@ mod tests {
             (EVENT_CREATED_AT, "created_at"),
             (EVENT_MEDIA_ID, "media_id"),
             (EVENT_MEDIA_ORDER, "media_order"),
+            (EVENT_CONTACTS, "contacts"),
             (STREAM_LAST, "last_sequence"),
             (STREAM_PURGED, "purged_through"),
             (WABA_TENANT, "tenant_id"),
@@ -121,6 +131,7 @@ mod tests {
             (INDEX_DEDUP_KEY, "\x77a_server_events_dedup_key"),
             (INDEX_CREATED_AT, "\x77a_server_events_created_idx"),
             (INDEX_MEDIA, "\x77a_server_events_media_idx"),
+            (INDEX_CONTACTS, "\x77a_server_events_contacts_idx"),
         ];
         for (name, pinned) in names {
             assert_eq!(name, pinned);

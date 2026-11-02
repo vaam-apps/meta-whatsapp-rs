@@ -18,6 +18,7 @@ use meta_whatsapp_rs::core::secret::VerifyToken;
 use meta_whatsapp_rs::core::store::ConversationStore;
 use meta_whatsapp_rs::webhooks::axum::extract::FromRef;
 use meta_whatsapp_rs::{Client, Error};
+use meta_whatsapp_server_core::erasure::ErasureDeployment;
 use meta_whatsapp_server_core::inbox::ReplyChecksByNumber;
 use meta_whatsapp_server_core::live::{LiveSettings, Streams};
 use meta_whatsapp_server_core::otp::{OtpCodes, OtpDeployment};
@@ -99,6 +100,12 @@ pub struct Settings {
     /// number's registration and verification attempts, per number,
     /// shared by every replica (roadmap M3d).
     pub registration_attempts: AttemptLimits,
+    /// `WA_SERVER_ERASURE_KEY` (roadmap M2f): the key of the erasure
+    /// journal's HMACs, and where its entries go. `None`, every erasure is
+    /// `409 erasure_not_configured` (the default, for tests; `serve` sets
+    /// it when the key is set, and with a throwaway key on memory storage
+    /// in development). `Debug` shows no key.
+    pub erasure: Option<ErasureDeployment>,
     /// Webhooks out (roadmap M2c): the data key (`WA_SERVER_DATA_KEY`),
     /// the allow-list (`WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS`), the
     /// retry window (`WA_SERVER_WEBHOOK_RETRY_WINDOW`), the lookup and the
@@ -124,6 +131,7 @@ impl Default for Settings {
             otp: None,
             signup: None,
             registration_attempts: AttemptLimits::default(),
+            erasure: None,
             webhooks_out: None,
         }
     }
@@ -476,6 +484,14 @@ impl Grant {
     /// open only on a number the authorization order made.
     pub fn conversations(&self) -> Arc<dyn ConversationStore> {
         self.0.conversations().clone()
+    }
+
+    /// The deployment's erasure settings (roadmap M2f), for the core's
+    /// erasure service (`meta_whatsapp_server_core::erasure::Erasures`),
+    /// which opens only on a number the authorization order made: `None`,
+    /// not set up.
+    pub fn erasure(&self) -> Option<&ErasureDeployment> {
+        self.0.inner.settings.erasure.as_ref()
     }
 }
 

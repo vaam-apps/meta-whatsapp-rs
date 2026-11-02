@@ -391,6 +391,17 @@ impl MongoOutbox {
                     .partial_filter_expression(doc! { s::EVENT_MEDIA_ID: { "$type": "string" } })
                     .build(),
             ),
+            // `erase_contacts`' lookup (roadmap M2f): only the rows that
+            // name a customer, one entry per identifier (multikey). The
+            // filter is `$exists`, which an `$in` of strings implies, so
+            // that the erasure's `$in` alone gives the index's bounds.
+            index(
+                doc! { s::EVENT_CONTACTS: 1 },
+                IndexOptions::builder()
+                    .name(s::INDEX_CONTACTS.to_owned())
+                    .partial_filter_expression(doc! { s::EVENT_CONTACTS: { "$exists": true } })
+                    .build(),
+            ),
         ];
         self.events()
             .create_indexes(indexes)
@@ -880,6 +891,13 @@ fn event_document(
         row.insert(s::EVENT_MEDIA_ID, media.as_str());
         row.insert(s::EVENT_MEDIA_ORDER, ObjectId::new());
     }
+    // The identifiers the event names its customers by (roadmap M2f),
+    // absent when it names none: outside the partial index, as Postgres
+    // stores `NULL`.
+    let contacts = event.contacts();
+    if !contacts.is_empty() {
+        row.insert(s::EVENT_CONTACTS, contacts);
+    }
     row
 }
 
@@ -971,6 +989,38 @@ impl Outbox for MongoOutbox {
             });
         }
         Ok(found)
+    }
+
+    async fn erase_contacts(
+        &self,
+        tenant: &TenantId,
+        phone_number_id: &PhoneNumberId,
+        contacts: &[String],
+    ) -> StoreResult<u64> {
+        if contacts.is_empty() {
+            return Ok(0);
+        }
+        // The tenant's own rows on the number, as Postgres' `ERASE_SQL`:
+        // `tenant_id` never matches an operator-only row (it has none:
+        // design D89), and is read rather than `stream`, which leads the
+        // stream's index, so that the planner's only index is the partial
+        // multikey one on `contacts` (its `$exists` implied by the `$in`).
+        // Whole rows, each counted once however many of `contacts` it
+        // names; no stream's document is written, so its sequences and
+        // `purged_through` stay. One statement, not a transaction: each
+        // row's deletion is atomic, and a repeat deletes what is left.
+        let deleted = self
+            .events()
+            .delete_many(doc! {
+                s::EVENT_TENANT: tenant.as_str(),
+                s::EVENT_PHONE_NUMBER: phone_number_id.as_str(),
+                s::EVENT_CONTACTS: { "$in": contacts },
+            })
+            .write_concern(WriteConcern::majority())
+            .await
+            .map_err(backend)?
+            .deleted_count;
+        Ok(deleted)
     }
 
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
@@ -1088,6 +1138,54 @@ mod tests {
             let row = event_document(&event(event_type, message), "", 3, None);
             assert!(!row.contains_key(s::EVENT_MEDIA_ID), "{event_type}");
             assert!(!row.contains_key(s::EVENT_MEDIA_ORDER), "{event_type}");
+        }
+    }
+
+    /// An event naming customers (roadmap M2f) stores the identifiers
+    /// `NewEvent::contacts` gives, under the index's field; an event naming
+    /// none stores no field (not an empty array), so the partial index
+    /// holds the rows that name someone only. Decisive: the field written,
+    /// from `NewEvent::contacts`, and only when it is not empty.
+    #[test]
+    fn a_row_naming_customers_stores_its_contacts_and_no_other_row_does() {
+        let event = |data: &str| NewEvent {
+            id: "evt_1".to_owned(),
+            dedup_key: None,
+            dedup_window: None,
+            tenant: None,
+            route_guard: None,
+            phone_number_id: None,
+            waba_id: None,
+            event_type: "message_received".to_owned(),
+            data: data.to_owned(),
+        };
+        let naming = event(
+            r#"{"event":"message_received","display_phone_number":"15550783881",
+                "message":{"from":"16505551234","from_user_id":"US.13491208655302741918",
+                "type":"text","text":{"body":"16505550000"}}}"#,
+        );
+        let contacts = naming.contacts();
+        assert_eq!(
+            contacts,
+            ["16505551234", "US.13491208655302741918"],
+            "the core's contacts of the event"
+        );
+        let row = event_document(&naming, "", 1, None);
+        let stored: Vec<&str> = row
+            .get_array(s::EVENT_CONTACTS)
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        assert_eq!(stored, contacts);
+        for data in [
+            // A text quoting a number names nobody.
+            r#"{"event":"message_received","text":"16505551234"}"#,
+            // Nor does a body that is not JSON.
+            "not json",
+        ] {
+            let row = event_document(&event(data), "", 2, None);
+            assert!(!row.contains_key(s::EVENT_CONTACTS), "{data}: {row:?}");
         }
     }
 

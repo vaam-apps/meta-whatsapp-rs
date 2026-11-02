@@ -12,6 +12,7 @@
 //! | a missing or blank app secret or verify token | `Missing`, `Blank` |
 //! | a missing vault key with Postgres | `VaultKeyRequired` |
 //! | a missing OTP pepper, or one under 32 bytes, with Postgres | `PepperRequired`, `PepperTooShort` |
+//! | an erasure key (`WA_SERVER_ERASURE_KEY`) under 32 bytes | `Invalid` |
 //! | memory storage (no `DATABASE_URL`) outside `WA_SERVER_ENV=development` | `MemoryOutsideDevelopment` |
 //! | identical public and internal binds | `SameBinds` |
 //! | `WA_ONBOARDING_MODE=solution_partner` without its four settings | `PartnerSettingMissing` |
@@ -83,6 +84,7 @@ use meta_whatsapp_rs::core::config::{ApiVersion, GraphEndpoint};
 use meta_whatsapp_rs::core::ids::AppId;
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, SecretBytes, VerifyToken};
 use meta_whatsapp_rs::core::store::Retention;
+use meta_whatsapp_server_core::erasure::ErasureKey;
 use meta_whatsapp_server_core::inbox::{InvalidReplyChecks, ReplyChecksByNumber};
 use meta_whatsapp_server_core::live::LiveSettings;
 use meta_whatsapp_server_core::model::TenantId;
@@ -288,6 +290,11 @@ pub struct Config {
     /// `WA_SERVER_OTP_DEFAULT_TENANT` (roadmap M3c, decision D8): the
     /// tenant whose OTP settings a tenant without its own borrows.
     pub otp_default_tenant: Option<TenantId>,
+    /// `WA_SERVER_ERASURE_KEY` (roadmap M2f): the key of the erasure
+    /// journal's HMACs, at least 32 bytes. Unset, erasure is off (`409
+    /// erasure_not_configured`), except on memory storage, where `serve`
+    /// uses a throwaway one.
+    pub erasure_key: Option<ErasureKey>,
     /// `WA_ONBOARDING_MODE` and its settings.
     pub onboarding: OnboardingMode,
     /// `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` (roadmap M3a, proposed
@@ -533,6 +540,15 @@ impl Config {
                 reason: "expected a tenant id: 1 to 64 of [A-Za-z0-9._:-]",
             })?),
         };
+        let erasure_key = match r.optional_secret("WA_SERVER_ERASURE_KEY")? {
+            None => None,
+            Some(key) => Some(ErasureKey::new(SecretBytes::new(key.into_bytes())).map_err(
+                |_| ConfigError::Invalid {
+                    name: "WA_SERVER_ERASURE_KEY",
+                    reason: "expected at least 32 bytes, from your secret manager",
+                },
+            )?),
+        };
         let onboarding = onboarding(&r)?;
         let account_update_confirmation =
             match r.plain("WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION")?.as_deref() {
@@ -563,6 +579,7 @@ impl Config {
             vault_key_is_throwaway,
             otp_pepper,
             otp_default_tenant,
+            erasure_key,
             onboarding,
             account_update_confirmation,
             graph_endpoint,

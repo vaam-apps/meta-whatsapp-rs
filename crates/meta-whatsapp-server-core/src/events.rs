@@ -756,6 +756,15 @@ mod tests {
             panic!("the outbox was purged")
         }
 
+        async fn erase_contacts(
+            &self,
+            _: &TenantId,
+            _: &meta_whatsapp_rs::core::ids::PhoneNumberId,
+            _: &[String],
+        ) -> StoreResult<u64> {
+            panic!("the outbox was erased from")
+        }
+
         async fn received_media(
             &self,
             _: &meta_whatsapp_rs::core::ids::MediaId,

@@ -150,6 +150,236 @@ async fn live_postgres_migration_5_rewrites_no_table() {
     assert_eq!(moved.previous_tenant_released_at, Some(UNRECORDED_MOVE));
 }
 
+/// Roadmap M2f: migration 8 adds `wa_server_events.contacts` and its
+/// partial GIN index without rewriting the outbox (no default, no update),
+/// so a deployment with a large outbox migrates without holding it for a
+/// copy. A tenant's row written before it names nobody to an erasure,
+/// whatever its data says (it goes with the outbox's retention); an insert
+/// of the previous release (no `contacts`) still works after it, and names
+/// nobody either; a row this release inserts is erased by its contacts,
+/// the business's own number left out of them, and an operator-only one
+/// naming the same customer stays (design D89). Decisive: a default on
+/// the column (it rewrites the table into a new file), an update of the
+/// existing rows (they would be erased).
+#[tokio::test]
+async fn live_postgres_migration_8_rewrites_no_table_and_names_from_its_release_on() {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx::migrate::Migrator;
+    use meta_whatsapp_rs::core::ids::PhoneNumberId;
+    use meta_whatsapp_server_store_postgres::migrations;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(3).await;
+    meta_whatsapp_rs::adapters::store::postgres::migrate(&pool)
+        .await
+        .unwrap();
+    let before_8: Vec<_> = migrations().into_iter().filter(|m| m.version < 8).collect();
+    assert_eq!(before_8.len(), 7);
+    let mut migrator = Migrator::with_migrations(before_8);
+    migrator.dangerous_set_table_name(MIGRATIONS_TABLE);
+    migrator.run(&pool).await.unwrap();
+    // The tenant's number, bound by the records of migrations 1 to 7.
+    outbox_suite::bind(&PgStore::new(pool.clone()), "merchant-m8", "6101").await;
+    // A row of the previous release: the tenant's message from the
+    // customer on 6101 (its sequence far past the stream's, which a raw
+    // insert does not draw).
+    let message = |sequence: i64| {
+        format!(
+            "INSERT INTO wa_server_events \
+             (tenant_id, sequence, id, phone_number_id, event_type, data, data_bytes) \
+             VALUES ('merchant-m8', {sequence}, 'evt_m7_{sequence}', '6101', 'message_received', \
+                     '{{\"event\":\"message_received\",\"message\":{{\"from\":\"16505551234\"}}}}'::json, 10)"
+        )
+    };
+    sqlx::query(sqlx::AssertSqlSafe(message(1001)))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let file = || async {
+        let node: i64 = sqlx::query_scalar(
+            "SELECT relfilenode::bigint FROM pg_class \
+             WHERE oid = 'wa_server_events'::regclass",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        node
+    };
+    let before = file().await;
+    migrate(&pool).await.unwrap();
+    assert_eq!(file().await, before, "migration 8 rewrote wa_server_events");
+    // The previous release's insert, after the migration.
+    sqlx::query(sqlx::AssertSqlSafe(message(1002)))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let events = PgEventStore::new(pool.clone());
+    let tenant = TenantId::parse("merchant-m8").unwrap();
+    let pn = PhoneNumberId::new("6101").unwrap();
+    let contacts = ["16505551234".to_owned()];
+    assert_eq!(
+        events
+            .erase_contacts(&tenant, &pn, &contacts)
+            .await
+            .unwrap(),
+        0,
+        "a row without contacts names nobody"
+    );
+    // This release's inserts name their customer, not the business: the
+    // tenant's, and an operator-only one.
+    for tenant_id in [Some("merchant-m8"), None] {
+        events
+            .insert(&outbox_suite::from_row(
+                tenant_id,
+                "6101",
+                "16505551234",
+                None,
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    let named: Vec<Vec<String>> =
+        sqlx::query_scalar("SELECT contacts FROM wa_server_events WHERE contacts IS NOT NULL")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(named, vec![vec!["16505551234".to_owned()]; 2]);
+    assert_eq!(
+        events
+            .erase_contacts(&tenant, &pn, &contacts)
+            .await
+            .unwrap(),
+        1,
+        "the tenant's row of this release"
+    );
+    let left: Vec<(Option<String>, Option<Vec<String>>)> = sqlx::query_as(
+        "SELECT tenant_id, contacts FROM wa_server_events ORDER BY tenant_id NULLS LAST, sequence",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        left,
+        [
+            (Some("merchant-m8".to_owned()), None),
+            (Some("merchant-m8".to_owned()), None),
+            (None, Some(vec!["16505551234".to_owned()])),
+        ],
+        "the rows of before stay, and so does the operator-only one"
+    );
+}
+
+/// Roadmap M2f: the erasure's statement (`ERASE_SQL`, as
+/// `PgEventStore::erase_contacts` runs it, the tenant's own rows only)
+/// probes migration 8's GIN index, never a walk of the outbox: its
+/// definition; its plan with sequential scans off (no other index can
+/// serve it: the tenant is read by `tenant_id`, which no index leads
+/// with); its plan on an outbox of 20,000 rows of the tenant never
+/// analyzed (autovacuum off for the table, so `contacts` has no
+/// statistics, as right after the migration), with sequential scans on;
+/// and the same once analyzed. Decisive: the statement reading the tenant
+/// by `stream` (the primary key's prefix: its plan then walks the key), a
+/// B-tree index on the column, an index predicate the statement does not
+/// imply.
+#[tokio::test]
+async fn live_postgres_the_erasure_probes_the_contacts_index() {
+    use meta_whatsapp_server_store_postgres::ERASE_SQL;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(3).await;
+    migrate(&pool).await.unwrap();
+    // The tenant the rows below belong to (`tenant_id` references it).
+    outbox_suite::bind(
+        &PgStore::new(pool.clone()),
+        "merchant-42",
+        "106540352242922",
+    )
+    .await;
+    let definition: String =
+        sqlx::query_scalar("SELECT pg_get_indexdef('wa_server_events_contacts_idx'::regclass)")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        definition.ends_with("USING gin (contacts) WHERE (contacts IS NOT NULL)"),
+        "{definition}"
+    );
+    let mut conn = pool.acquire().await.unwrap();
+    let sql = format!("EXPLAIN {ERASE_SQL}");
+    let contacts = vec![
+        "16505551234".to_owned(),
+        "US.13491208655302741918".to_owned(),
+    ];
+    let probes = |plan: &[String]| {
+        plan.iter()
+            .any(|line| line.contains("Bitmap Index Scan on wa_server_events_contacts_idx"))
+    };
+    sqlx::query("SET enable_seqscan = off")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let plan: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql.clone()))
+        .bind("merchant-42")
+        .bind("106540352242922")
+        .bind(&contacts)
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap();
+    assert!(probes(&plan), "{plan:?}");
+    sqlx::query("RESET enable_seqscan")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    // Many rows, no statistics.
+    sqlx::query("ALTER TABLE wa_server_events SET (autovacuum_enabled = false)")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO wa_server_events \
+         (tenant_id, sequence, id, phone_number_id, event_type, data, data_bytes, contacts) \
+         SELECT 'merchant-42', n, 'evt_plan_' || n, '106540352242922', 'message_received', \
+                '{\"event\":\"message_received\"}'::json, 30, ARRAY['1650' || n::text] \
+         FROM generate_series(1, 20000) AS n",
+    )
+    .execute(&mut *conn)
+    .await
+    .unwrap();
+    let analyzed: Option<time::OffsetDateTime> = sqlx::query_scalar(
+        "SELECT greatest(last_analyze, last_autoanalyze) FROM pg_stat_user_tables \
+         WHERE relid = 'wa_server_events'::regclass",
+    )
+    .fetch_one(&mut *conn)
+    .await
+    .unwrap();
+    assert_eq!(analyzed, None, "the outbox was analyzed");
+    let plan: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql.clone()))
+        .bind("merchant-42")
+        .bind("106540352242922")
+        .bind(&contacts)
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap();
+    assert!(probes(&plan), "without statistics: {plan:?}");
+    // With statistics: every row the tenant's and the number's, so only
+    // the overlap is selective.
+    sqlx::query("ANALYZE wa_server_events")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let plan: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind("merchant-42")
+        .bind("106540352242922")
+        .bind(&contacts)
+        .fetch_all(&mut *conn)
+        .await
+        .unwrap();
+    assert!(probes(&plan), "with statistics: {plan:?}");
+    eprintln!("the erasure's plan, analyzed: {plan:#?}");
+}
+
 /// Roadmap M2e: migration 7 adds `wa_server_events.media_id` and its
 /// partial index without rewriting the outbox (the column has no default),
 /// so a deployment with a large outbox migrates without holding it for a
@@ -488,8 +718,7 @@ async fn live_postgres_parallel_migrations_succeed() {
     .fetch_all(&first)
     .await
     .unwrap();
-    // 8 is roadmap M2f's, in flight: M2c's is 9.
-    assert_eq!(service, [1, 2, 3, 4, 5, 6, 7, 9]);
+    assert_eq!(service, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
     let library: Vec<i64> =
         sqlx::query_scalar("SELECT version FROM wa_sqlx_migrations WHERE success ORDER BY version")
             .fetch_all(&first)

@@ -313,6 +313,7 @@ async fn live_mongodb_migrate_makes_the_named_collections_and_indexes_once() {
         indexes,
         [
             "_id_",
+            schema::INDEX_CONTACTS,
             schema::INDEX_CREATED_AT,
             schema::INDEX_DEDUP_KEY,
             schema::INDEX_MEDIA,
@@ -427,4 +428,147 @@ async fn live_mongodb_received_media_reads_its_index_in_order() {
         seen, expected,
         "not the newest {RECEIVED_MEDIA_ROWS}, newest first"
     );
+}
+
+/// How many operations used `index` of the events collection, by
+/// `$indexStats` (a query or a write that read it to find its documents).
+async fn index_uses(events: &mongodb::Collection<Document>, index: &str) -> i64 {
+    let mut cursor = events
+        .aggregate([doc! { "$indexStats": {} }])
+        .await
+        .unwrap();
+    let mut ops = None;
+    while cursor.advance().await.unwrap() {
+        let stats = cursor.deserialize_current().unwrap();
+        if stats.get_str("name").unwrap() == index {
+            let accesses = stats.get_document("accesses").unwrap();
+            ops = Some(match accesses.get("ops").unwrap() {
+                mongodb::bson::Bson::Int64(n) => *n,
+                mongodb::bson::Bson::Int32(n) => i64::from(*n),
+                other => panic!("ops: {other:?}"),
+            });
+        }
+    }
+    ops.unwrap_or_else(|| panic!("no index {index}"))
+}
+
+/// Roadmap M2f on MongoDB: a row keeps the identifiers its event names
+/// its customers by ([`schema::EVENT_CONTACTS`]), a row naming none has no
+/// such field, and `erase_contacts` finds the rows by the partial multikey
+/// index `INDEX_CONTACTS` (its use counted by `$indexStats`), never by
+/// the rows' data. It deletes the tenant's own rows naming the customer on
+/// the number, and keeps the number's operator-only row naming
+/// them, the row a previous holder of another number left in its own
+/// stream (an erasure on that number deletes nothing), another customer's
+/// row, and the customer's row on another number of the tenant. Decisive:
+/// the field written at insert, the index (without it, a scan), and the
+/// erasure's filter on `tenant_id` (without it, the operator-only row and
+/// the previous holder's go) and on `phone_number_id` (without it, the row
+/// on 52 goes).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_mongodb_erase_contacts_reads_its_index_and_keeps_the_rest() {
+    use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+    use meta_whatsapp_server_core::conformance::outbox::{from_row, waba_of};
+
+    const X: &str = "16505551234";
+    const X_BSUID: &str = "US.13491208655302741918";
+    const Y: &str = "16505550000";
+
+    let Some(live) = Live::new().await else {
+        return;
+    };
+    let backend = live.backend().await;
+    let records = backend.records();
+    let outbox = backend.outbox();
+    let a = TenantId::parse("erase-index-a").unwrap();
+    let pn = |n: &str| PhoneNumberId::new(n).unwrap();
+    // A previous holder of 51: its row naming the customer stays in its
+    // own stream once 51 moved to `a`.
+    bind(records.as_ref(), "erase-index-b", "51").await;
+    let theirs = from_row(Some("erase-index-b"), "51", X, None);
+    outbox.insert(&theirs).await.unwrap().unwrap();
+    assert!(
+        records
+            .unbind_waba(&WabaId::new(waba_of("51")).unwrap())
+            .await
+            .unwrap()
+    );
+    for number in ["51", "52", "53"] {
+        bind(records.as_ref(), "erase-index-a", number).await;
+    }
+    let gone = [
+        from_row(Some("erase-index-a"), "53", X, None),
+        from_row(Some("erase-index-a"), "53", X_BSUID, None),
+    ];
+    for event in &gone {
+        outbox.insert(event).await.unwrap().unwrap();
+    }
+    let kept = [
+        theirs,
+        // Another customer on 53.
+        from_row(Some("erase-index-a"), "53", Y, None),
+        // The customer on another number of the tenant.
+        from_row(Some("erase-index-a"), "52", X, None),
+        // The number's operator-only row naming the customer.
+        from_row(None, "53", X, None),
+        // A row naming nobody.
+        row(Some("erase-index-a"), "message_received", "53", None),
+    ];
+    for event in &kept[1..] {
+        outbox.insert(event).await.unwrap().unwrap();
+    }
+    let events = backend
+        .mongo_outbox()
+        .database()
+        .collection::<Document>(schema::EVENTS);
+    let stored = async |id: &str| events.find_one(doc! { "_id": id }).await.unwrap();
+    let first = stored(&gone[0].id).await.unwrap();
+    assert_eq!(
+        first.get_array(schema::EVENT_CONTACTS).unwrap(),
+        &vec![mongodb::bson::Bson::String(X.to_owned())],
+        "{first:?}"
+    );
+    let nobody = stored(&kept[4].id).await.unwrap();
+    assert!(!nobody.contains_key(schema::EVENT_CONTACTS), "{nobody:?}");
+
+    let contacts = [X.to_owned(), X_BSUID.to_owned()];
+    // On 51, the previous holder's row is not the tenant's to erase.
+    assert_eq!(
+        outbox
+            .erase_contacts(&a, &pn("51"), &contacts)
+            .await
+            .unwrap(),
+        0
+    );
+    let before = index_uses(&events, schema::INDEX_CONTACTS).await;
+    assert_eq!(
+        outbox
+            .erase_contacts(&a, &pn("53"), &contacts)
+            .await
+            .unwrap(),
+        2,
+        "the tenant's two rows on 53"
+    );
+    assert!(
+        index_uses(&events, schema::INDEX_CONTACTS).await > before,
+        "erase_contacts did not read its index"
+    );
+    for event in &gone {
+        assert!(stored(&event.id).await.is_none(), "{}", event.id);
+    }
+    for event in &kept {
+        assert!(stored(&event.id).await.is_some(), "{} was erased", event.id);
+    }
+    assert_eq!(
+        outbox
+            .erase_contacts(&a, &pn("53"), &contacts)
+            .await
+            .unwrap(),
+        0,
+        "a repeat deletes nothing"
+    );
+    let page = outbox.page(&query("erase-index-a")).await.unwrap();
+    assert_eq!(page.events.len(), 3, "the tenant's other rows");
+    assert_eq!(page.high_water, 5, "the stream's sequences stay");
+    assert_eq!(page.purged_through, 0, "an erasure is no purge");
 }
