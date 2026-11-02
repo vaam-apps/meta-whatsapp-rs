@@ -47,14 +47,18 @@ capability table) and `docs/categories.md` (Meta's platform categories).
   with `TRYBUILD=overwrite` and review the `.stderr` diff: each case must
   still fail for its own reason.
 - Service tests, every crate the binary composes (roadmap S7):
-  `cargo test -p meta-whatsapp-server -p meta-whatsapp-server-http -p meta-whatsapp-server-api-axum -p meta-whatsapp-server-store-memory -p meta-whatsapp-server-store-postgres --all-features`
+  `cargo test -p meta-whatsapp-server -p meta-whatsapp-server-http -p meta-whatsapp-server-api-axum -p meta-whatsapp-server-api-cratestack -p meta-whatsapp-server-store-memory -p meta-whatsapp-server-store-postgres --all-features`
   (one crate: its own `-p`; the backends' conformance runs are
   `--test conformance` in store-memory and, live, `--test live_postgres`
   in store-postgres). After changing a route, regenerate the spec with
   `cargo run -p meta-whatsapp-server -- openapi > crates/meta-whatsapp-server/openapi/v1.json`
   and review the diff (within v1 a change must be additive). The
   binary builds with `api-axum` and either backend alone
-  (`--no-default-features --features api-axum,store-memory`).
+  (`--no-default-features --features api-axum,store-memory`). With
+  `api-cratestack` (roadmap S10, not a default) its `tests/tls.rs` runs:
+  rustls' process default after start-up, and, live, Postgres with
+  `sslmode=require`, so the test Postgres must speak TLS (the
+  devcontainer's and `compose.test.yaml`'s do).
 - The MongoDB outbox spike (roadmap S9, composed into no binary):
   `cargo test -p meta-whatsapp-server-store-mongodb --all-features`;
   its `tests/live_mongodb.rs` runs the conformance suites live with its
@@ -81,7 +85,7 @@ secrets and the **ports** (`HttpTransport`, `KvStore`, `ConversationStore`,
 on core; no crate of the library depends on the `meta-whatsapp-rs` facade
 (binaries may, and the service's crates do: the `meta-whatsapp-server`
 binary, its core library `meta-whatsapp-server-core`, and the crates the
-binary composes, `meta-whatsapp-server-{http,api-axum,store-memory,store-postgres}`); `client` and
+binary composes, `meta-whatsapp-server-{http,api-axum,api-cratestack,store-memory,store-postgres}`); `client` and
 `webhooks` never depend on each other or on `adapters` (dev-deps aside);
 adapter library types (sqlx, reqwest, redis) never leak through a port.
 
@@ -128,7 +132,11 @@ flowchart LR
   `/v1` routes and the OpenAPI document; its handlers reach the records
   only through the state's `Grant`, which `AppState::from_backend`
   hands its caller), `meta-whatsapp-server-store-memory` and
-  `meta-whatsapp-server-store-postgres` (with the migrations). The
+  `meta-whatsapp-server-store-postgres` (with the migrations); since
+  S10 also, by the non-default `api-cratestack`,
+  `meta-whatsapp-server-api-cratestack` (CrateStack, one procedure,
+  not served yet), and every command installs aws-lc-rs as rustls'
+  process default first (`meta_whatsapp_server::tls`). The
   service's crates depend on the facade and on each other; the library
   never depends on them. Workspace members but not default ones; the
   OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`) is
