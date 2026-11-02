@@ -622,8 +622,8 @@ async fn malformed_keys_and_unsupported_types_send_nothing() {
     }
     for body in [
         json!({"to": {"phone": TO}, "type": "order_details", "order_details": {}}),
-        json!({"to": {"phone": TO}, "type": "text", "text": {"body": "x"}, "category": "utility"}),
-        json!({"to": {"phone": TO}, "type": "interactive", "interactive": {"type": "product"}}),
+        json!({"to": {"phone": TO}, "type": "system", "system": {"body": "x"}}),
+        json!({"to": {"phone": TO}, "type": "interactive", "interactive": {"type": "nfm_reply"}}),
     ] {
         let reply = h.call(send(&key, &body)).await;
         assert_eq!(

@@ -83,7 +83,7 @@ impl Modify for Security {
                        `error.code` (`ErrorCode`), and resend only when `may_have_been_sent` is false."
     ),
     modifiers(&Security),
-    components(schemas(ErrorBody, ErrorCodeSchema, KnownErrorCodeSchema, events::EventType, events::KnownEventType, messages::CtaUrlParameters, messages::OrderParameters)),
+    components(schemas(ErrorBody, ErrorCodeSchema, KnownErrorCodeSchema, events::EventType, events::KnownEventType, messages::CtaUrlParameters, messages::OrderParameters, messages::FlowParameters, messages::VoiceCallParameters, messages::AddressParameters, messages::CatalogParameters, messages::ListSectionObject, messages::ProductSectionObject)),
     tags(
         (name = "admin", description = "Tenants, keys, WABA bindings and the vault key (admin key)"),
         (name = "numbers", description = "WABAs, numbers and business profiles (scope `numbers`)"),

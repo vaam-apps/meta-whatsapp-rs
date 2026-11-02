@@ -1,13 +1,13 @@
 ---
 name: meta-whatsapp-rs-server-send
-description: "Sending WhatsApp messages, media and templates, and replying from the inbox, through meta-whatsapp-server over HTTP from an app not written in Rust (a Medusa store, a CMS backend) - the message body (to, type, the object Meta documents), E.164 recipients and BSUIDs, templates outside the 24-hour window, read receipts, the Idempotency-Key header and what may_have_been_sent means for a job queue, media uploads and verified downloads, listing and creating templates, and the service's 429 rate limits. Load when a non-Rust backend sends WhatsApp messages or media, or manages templates, through the service."
+description: "Sending WhatsApp messages, media and templates, and replying from the inbox, through meta-whatsapp-server over HTTP from an app not written in Rust (a Medusa store, a CMS backend) - the message body (to, type, the object Meta documents), E.164 recipients and BSUIDs, Flows, call buttons, carousels, product messages, pins and Direct Send, templates outside the 24-hour window, read receipts, the Idempotency-Key header and what may_have_been_sent means for a job queue, media uploads and verified downloads, listing and creating templates, and the service's 429 rate limits. Load when a non-Rust backend sends WhatsApp messages or media, or manages templates, through the service."
 ---
 
 # meta-whatsapp-rs-server-send
 
-> **Verified against meta-whatsapp-rs 08271f08c9e14c5a40cc558d854dc5ebb0343cdb (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 497029b011b58cfa1628f28deac9aa442f140751 (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
-Reference code: [examples/send.ts](examples/send.ts) and [examples/payments.ts](examples/payments.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
+Reference code: [examples/send.ts](examples/send.ts), [examples/payments.ts](examples/payments.ts) and [examples/interactive.ts](examples/interactive.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
 ## When to use
 
@@ -51,10 +51,10 @@ export async function send(api: WhatsApp, pn: string, message: SendMessage, refe
   phone number); both: Meta uses the phone; `group_id` alone.
 - **Types**: `text`; `image`, `video`, `audio`, `document`, `sticker` by
   uploaded `id` or an https `link` Meta fetches; `location`, `contacts`,
-  `reaction`; `template`; `interactive` of type `button`, `list`,
-  `cta_url`, `order_details` or `order_status`. Anything else is
-  `unsupported_message_type`. Limits Meta documents (4,096 characters of
-  text, 3 buttons, …) are checked first: `invalid_request` with `field`.
+  `reaction`; `template`; `pin`; `interactive` (`button`, `list`, `cta_url`,
+  payments, Flows, calls, carousels, products: [references/interactive.md](references/interactive.md)),
+  Direct Send. Else `unsupported_message_type`. Limits and keys are checked
+  first: `invalid_request` with `field` (a key is never dropped), nothing sent.
 - **The 24-hour window** is Meta's: a free-form message to a customer who
   has not written for 24 hours is `customer_service_window_closed` (409).
   Send an approved template instead:
@@ -151,7 +151,7 @@ sent; a platform key shares the tenant's budget. Meta's own limits answer
 - No campaign pacing or opt-out registry: respect `marketing_opted_out`.
 - A customer's file older than `WA_SERVER_OUTBOX_RETENTION` (7 days) goes
   through Meta's per-number check, documented for uploads only.
-- No Direct Send, Flows, product or carousel messages; no documents route (M4). India's checkout button templates are sent as any payment template (the order details button's order may offer shipping addresses); linking their checkout endpoint has no route yet. Authentication templates and login codes: `meta-whatsapp-rs-server-otp`.
+- No documents route (M4). India's checkout button templates are sent as any payment template (the order details button's order may offer shipping addresses); linking their checkout endpoint has no route yet. Authentication templates and login codes: `meta-whatsapp-rs-server-otp`.
 
 ## Related skills
 

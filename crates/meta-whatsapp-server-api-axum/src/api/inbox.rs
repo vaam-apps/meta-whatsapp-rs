@@ -34,9 +34,9 @@ use utoipa::ToSchema;
 
 use super::common::{ApiJson, PageParams, PageQuery, encode_cursor, rfc3339};
 use super::messages::{
-    AudioObject, ContactCard, DocumentObject, ImageObject, InteractiveObject, LocationObject,
-    MessageAccepted, MessageType, OptionalJson, ReactionObject, StickerObject, TextObject,
-    VideoObject, each,
+    AudioObject, ContactCard, DirectSendCategory, DirectSendConfig, DocumentObject, ImageObject,
+    InteractiveObject, LocationObject, MessageAccepted, MessageType, OptionalJson, PinObject,
+    ReactionObject, StickerObject, TextObject, VideoObject, each,
 };
 use crate::auth::{Caller, OwnedNumber};
 use crate::error::{ApiError, ErrorBody};
@@ -320,12 +320,22 @@ pub struct ReplyMessage {
     pub template: Option<Value>,
     /// For `interactive`.
     pub interactive: Option<InteractiveObject>,
+    /// For `pin`, in a group's conversation.
+    pub pin: Option<PinObject>,
     /// Reply to this message of the conversation (`wamid.…`); not with
     /// `reaction`.
     pub reply_to: Option<String>,
     /// Echoed in this message's status events: set it to your own
     /// reference (the `Idempotency-Key`, say) to reconcile.
     pub callback_data: Option<String>,
+    /// Direct Send (`direct-send`, for eligible accounts): `utility` and
+    /// `authentication` are sent as templates Meta generates, so the
+    /// 24-hour window does not hold them; `service` is a free-form reply.
+    pub category: Option<DirectSendCategory>,
+    /// Direct Send's time-to-live in seconds.
+    pub ttl_seconds: Option<u32>,
+    /// Direct Send's business-named template (`utility` only).
+    pub direct_send_config: Option<DirectSendConfig>,
 }
 
 impl From<ReplyMessage> for domain::ReplyMessage {
@@ -343,8 +353,12 @@ impl From<ReplyMessage> for domain::ReplyMessage {
             reaction,
             template,
             interactive,
+            pin,
             reply_to,
             callback_data,
+            category,
+            ttl_seconds,
+            direct_send_config,
         } = value;
         Self {
             kind: kind.into(),
@@ -359,8 +373,12 @@ impl From<ReplyMessage> for domain::ReplyMessage {
             reaction: reaction.map(Into::into),
             template,
             interactive: interactive.map(Into::into),
+            pin: pin.map(Into::into),
             reply_to,
             callback_data,
+            category: category.map(Into::into),
+            ttl_seconds,
+            direct_send_config: direct_send_config.map(Into::into),
         }
     }
 }
@@ -521,12 +539,12 @@ async fn reply(
         (status = 202, description = "Accepted by Meta and recorded `accepted` in the conversation; delivery arrives as status events", body = MessageAccepted),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
-        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant, or a Flow (`flow_id`) or catalog (`catalog_id`) the reply names that is not the number's WABA's; nothing was sent", body = ErrorBody),
         (status = 409, description = "`customer_service_window_closed` (a free-form reply outside the 24-hour window: send a template) or `thread_owned_elsewhere` (another app owns the thread), both refused before any request; `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, …", body = ErrorBody),
         (status = 422, description = "`invalid_request` (`contact`, `body`, a field of the content), `unsupported_message_type`, `idempotency_key_reused`, Meta's `template_*`, …: nothing was sent", body = ErrorBody),
         (status = 429, description = "`too_many_requests` (the service's limits, `Retry-After`) or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed: see `may_have_been_sent`", body = ErrorBody),
-        (status = 504, description = "`timeout`: the reply may have been sent (`may_have_been_sent: true`)", body = ErrorBody),
+        (status = 504, description = "`timeout`: the reply may have been sent (`may_have_been_sent: true`), unless the Flow or catalog check before it timed out (`may_have_been_sent: false`)", body = ErrorBody),
     )
 )]
 pub(crate) async fn reply_to_conversation(
@@ -735,8 +753,31 @@ mod tests {
         }))
         .unwrap_err();
         assert_eq!(to.field(), Some("body"));
-        let direct_send = parse_reply(json!({"type": "text", "category": "utility"})).unwrap_err();
-        assert_eq!(direct_send.code(), "unsupported_message_type");
+        // Direct Send rides on a reply (roadmap M5a), with Meta's three
+        // categories only.
+        let direct_send = parse_reply(json!({
+            "type": "text", "text": {"body": "Your order shipped"},
+            "category": "utility", "ttl_seconds": 600,
+            "direct_send_config": {"template_name": "order_shipped"}
+        }))
+        .unwrap();
+        assert_eq!(
+            direct_send.category,
+            Some(domain::DirectSendCategoryObject::Utility)
+        );
+        assert_eq!(direct_send.ttl_seconds, Some(600));
+        assert_eq!(
+            direct_send.direct_send_config,
+            Some(domain::DirectSendConfigObject {
+                template_name: "order_shipped".to_owned()
+            })
+        );
+        let marketing = parse_reply(json!({"type": "text", "text": {"body": "x"},
+                                           "category": "marketing"}))
+        .unwrap_err();
+        assert_eq!(marketing.field(), Some("body"));
+        let unsupported = parse_reply(json!({"type": "order_details"})).unwrap_err();
+        assert_eq!(unsupported.code(), "unsupported_message_type");
     }
 
     /// Every field of a stored message is answered, its status by the
