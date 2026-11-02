@@ -155,15 +155,16 @@ async fn upload_converted_is_checked_like_upload() {
 /// Core carries the formats' MIME types and size limits on its own (it
 /// cannot see this crate's table): they must be the ones the upload check
 /// takes, at the limit. Audio's limit is the table's own; an image's and
-/// a static sticker's are Meta's figures read as decimal ("5 MB" as
-/// 5 000 000, "100 KB" as 100 000), under the table's binary reading, so
-/// that a converted file fits whichever one Meta means.
+/// a sticker's are Meta's figures read as decimal ("5 MB" as 5 000 000,
+/// "100 KB" as 100 000, "500 KB" as 500 000), under the table's binary
+/// reading, so that a converted file fits whichever one Meta means.
 #[test]
 fn every_target_format_is_what_the_upload_check_takes() {
     // A format core adds goes here too.
     const FORMATS: &[(TargetFormat, MediaKind, u64)] = &[
         (TargetFormat::OggOpus, MediaKind::Audio, 16 * 1024 * 1024),
         (TargetFormat::StaticSticker, MediaKind::Sticker, 100_000),
+        (TargetFormat::AnimatedSticker, MediaKind::Sticker, 500_000),
         (TargetFormat::Jpeg, MediaKind::Image, 5_000_000),
         (TargetFormat::Png, MediaKind::Image, 5_000_000),
     ];
@@ -191,6 +192,10 @@ fn every_target_format_is_what_the_upload_check_takes() {
     assert_eq!(
         meta_whatsapp_core::media::STATIC_STICKER_MAX_BYTES,
         TargetFormat::StaticSticker.max_bytes()
+    );
+    assert_eq!(
+        meta_whatsapp_core::media::ANIMATED_STICKER_MAX_BYTES,
+        TargetFormat::AnimatedSticker.max_bytes()
     );
 }
 

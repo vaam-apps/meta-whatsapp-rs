@@ -11,7 +11,7 @@
 //! be WebP, at most 100 KB static or 500 KB animated
 //! (`messages/sticker-messages`), and an **image** JPEG or PNG, 8-bit RGB
 //! or RGBA, at most 5 MB (the media page's table): a photo straight from
-//! a camera is often larger.
+//! a camera is often larger, and an animation usually comes as a GIF.
 //!
 //! Like the other ports, this is a trait and does nothing itself: no
 //! codec is linked anywhere. `meta-whatsapp-adapters` implements it
@@ -48,6 +48,13 @@ pub const IMAGE_MAX_BYTES: u64 = 5_000_000;
 /// sticker from an animated one and takes up to 500 KiB for both.
 pub const STATIC_STICKER_MAX_BYTES: u64 = 100_000;
 
+/// The most a converter makes of an animated sticker: "500 KB" for an
+/// animated sticker in Meta's table (`messages/sticker-messages`, and the
+/// media page's), read as 500 000 bytes, the smaller reading, for the
+/// reason [`IMAGE_MAX_BYTES`] gives; the upload check takes up to
+/// 500 KiB (512 000 bytes).
+pub const ANIMATED_STICKER_MAX_BYTES: u64 = 500_000;
+
 /// The format a [`MediaConverter`] produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -65,6 +72,16 @@ pub enum TargetFormat {
     /// dimensions for a sticker, so none is imposed; a converter may scale
     /// an image down to bring it under the limit, keeping its aspect ratio.
     StaticSticker,
+    /// An animated WebP image, at most [`ANIMATED_STICKER_MAX_BYTES`]: what
+    /// Meta's table takes as an animated sticker (`image/webp`, "500 KB";
+    /// `messages/sticker-messages`). Its extended header (`VP8X`) has the
+    /// animation flag, and its file an `ANIM` chunk and one `ANMF` chunk a
+    /// frame (Google's WebP container specification). Send it as a
+    /// sticker message, as a static one. Meta gives no dimensions, frame
+    /// rate or length for an animated sticker; a converter may scale it
+    /// down, lower its frame rate or its quality to bring it under the
+    /// limit, keeping its aspect ratio.
+    AnimatedSticker,
     /// A JPEG image, 8-bit, at most [`IMAGE_MAX_BYTES`]: what Meta's table
     /// takes as `image/jpeg` ("Images must be 8-bit, RGB or RGBA", "5
     /// MB"). A converter may lower its quality or scale it down to bring
@@ -84,7 +101,7 @@ impl TargetFormat {
     pub fn mime_type(self) -> &'static str {
         match self {
             Self::OggOpus => "audio/ogg",
-            Self::StaticSticker => "image/webp",
+            Self::StaticSticker | Self::AnimatedSticker => "image/webp",
             Self::Jpeg => "image/jpeg",
             Self::Png => "image/png",
         }
@@ -97,7 +114,7 @@ impl TargetFormat {
     pub fn extension(self) -> &'static str {
         match self {
             Self::OggOpus => "ogg",
-            Self::StaticSticker => "webp",
+            Self::StaticSticker | Self::AnimatedSticker => "webp",
             Self::Jpeg => "jpeg",
             Self::Png => "png",
         }
@@ -105,6 +122,7 @@ impl TargetFormat {
 
     /// The largest result a converter returns: [`AUDIO_MAX_BYTES`] for
     /// audio, [`STATIC_STICKER_MAX_BYTES`] for a static sticker,
+    /// [`ANIMATED_STICKER_MAX_BYTES`] for an animated one,
     /// [`IMAGE_MAX_BYTES`] for an image; each is within what the upload
     /// accepts. A converter refuses (or shrinks) a result above it rather
     /// than return one the upload, or Meta, would refuse.
@@ -112,6 +130,7 @@ impl TargetFormat {
         match self {
             Self::OggOpus => AUDIO_MAX_BYTES,
             Self::StaticSticker => STATIC_STICKER_MAX_BYTES,
+            Self::AnimatedSticker => ANIMATED_STICKER_MAX_BYTES,
             Self::Jpeg | Self::Png => IMAGE_MAX_BYTES,
         }
     }
@@ -228,6 +247,11 @@ mod tests {
             (t.mime_type(), t.extension(), t.max_bytes()),
             ("image/webp", "webp", 100_000)
         );
+        let t = TargetFormat::AnimatedSticker;
+        assert_eq!(
+            (t.mime_type(), t.extension(), t.max_bytes()),
+            ("image/webp", "webp", 500_000)
+        );
         let t = TargetFormat::Jpeg;
         assert_eq!(
             (t.mime_type(), t.extension(), t.max_bytes()),
@@ -239,6 +263,7 @@ mod tests {
             ("image/png", "png", 5_000_000)
         );
         assert_eq!(STATIC_STICKER_MAX_BYTES, 100_000);
+        assert_eq!(ANIMATED_STICKER_MAX_BYTES, 500_000);
         assert_eq!(IMAGE_MAX_BYTES, 5_000_000);
     }
 

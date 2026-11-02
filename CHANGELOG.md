@@ -448,6 +448,38 @@ stored data, the owner's).
   workspace member but not a default one, a binary only, on
   `serde_json` alone; no library crate depends on it. Setting it up in
   an MCP client: docs/dev-environment.md § The docs MCP server.
+- **Animated stickers** (roadmap L19c, parity row 48, now done on the
+  library's side, from `messages/sticker-messages` and
+  `business-phone-numbers/media`, read on 2026-11-01): a new
+  `meta_whatsapp_core::media::TargetFormat::AnimatedSticker` (an animated
+  WebP, uploaded as `image/webp`, at most
+  `media::ANIMATED_STICKER_MAX_BYTES`, 500 000 bytes: Meta's "500 KB"
+  read as decimal, as L19b reads its figures). `FfmpegConverter` makes it
+  from a GIF only (`ConversionError::InputRejected` for anything else,
+  an animated PNG or WebP among them: ffmpeg 6.1 reads neither from a
+  pipe), checked by its first bytes and by ffmpeg's own detection
+  (`-format_whitelist gif`), and walked block by block before `ffmpeg`
+  starts: one cut short of its trailer, with a block GIF does not define,
+  a canvas over 2 Mi pixels, fewer than 2 frames or more than 500, more
+  than 100 frames of 512 × 512 or larger (frames times pixels, 25 Mi in
+  all), or longer than 10 s (WhatsApp's own rule for animated stickers)
+  is `InputRejected`, and `ffmpeg` gets it without its comments, plain
+  text and application extensions (XMP, an ICC profile, the loop count),
+  with only the last graphic control extension before each frame, and
+  without anything after its trailer (ffmpeg 6.1
+  holds them in memory with the first frame: 60 MB of comments took it
+  162 MB). Fixed arguments (`-max_pixels 2097152`, `-frames:v 500`,
+  `-fps_mode vfr`, `-max_alloc 268435456`, no metadata) and a fixed
+  ladder of sizes, frame rates and qualities on `libwebp_anim` (512 at
+  the GIF's own rate, then 512, 384, 256, 192 and 128 at 15 down to 5
+  frames a second), the aspect ratio and transparency kept, never
+  enlarged, the whole ladder within `with_timeout`; the result's chunks
+  checked (a RIFF size that is its length, `VP8X` with the animation
+  flag, `ANIM` before at least two `ANMF` frames, none outside them).
+  Frames all alike, which libwebp makes a still image of, are
+  `InputRejected`. The
+  sticker loops forever. `check_for(&[TargetFormat::AnimatedSticker])`
+  checks for `libwebp_anim`.
 - **Stickers and image resizing** (roadmap L19b, parity row 48, from
   `messages/sticker-messages` and `business-phone-numbers/media`, read
   on 2026-11-01): three new `meta_whatsapp_core::media::TargetFormat`s,
