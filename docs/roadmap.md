@@ -4615,7 +4615,7 @@ design's (§9).
     fails it; the journal and the audit event hold no identity in
     clear; a tenant's key cannot erase on another tenant's number.
 
-- [ ] **M2g. The inbox's other routes** (row 111; added by M2a, kept as
+- [x] **M2g. The inbox's other routes** (row 111; added by M2a, kept as
   an item by the coordinator's decision of 2026-11-01): the design's `GET
   /v1/numbers/{pn}/conversations/{contact}/window` (`{open, closes_at}`,
   `Inbox::check_reply`'s answer beside the recorded window) and `POST
@@ -4628,6 +4628,88 @@ design's (§9).
     id to the new holder (removing the epoch from the lookup fails it);
     after the read route, `unread` is 0 and Meta got one read receipt for
     the latest inbound message only with `notify_customer`.
+  - **Landed:** three routes in `meta-whatsapp-server-api-axum`
+    (`api::inbox`, tag and scope `inbox`), each over the core's
+    `inbox::Conversations` on an `OwnedNumber` (the whole authorization
+    order, the vault included, as M2a's decision 3), each answered only if
+    the number's binding still holds once read (`OwnedNumber::still_held`,
+    `503 storage_unavailable`): `GET
+    /v1/numbers/{pn}/conversations/{contact}/window`
+    (`get_conversation_window`, read class: `Conversations::window`,
+    `{open, closes_at}`, `open` the reply's own checks run with nothing
+    sent, the cut's then the library's `Inbox::check_reply`; `closes_at`
+    the recorded window, `null` for one opened before the cut); `POST
+    /v1/numbers/{pn}/conversations/{contact}/read` (`mark_conversation_read`,
+    send class: `Conversations::mark_read`; an optional body
+    `{notify_customer}`, unknown fields `422 body`; the receipt first, with
+    the number's token, for the latest inbound message among the
+    conversation's latest 1000 (`UNREAD_SCAN`), a revoke's tombstone
+    skipped, none for one dated before the cut or older than Meta's 30 days,
+    `inbox::READ_RECEIPT_MAX_AGE`; then `ConversationStore::mark_read`; a
+    refused receipt resets nothing; an optional `Idempotency-Key` over
+    `Fingerprint::mark_conversation_read`, the number, the contact decoded
+    and the body, `null` when empty; `204` with no body, kept and replayed
+    as such by the HTTP crate's `Success::no_content`); and `GET
+    /v1/numbers/{pn}/messages/{message_id}` (`get_inbox_message`, read
+    class: `Conversations::message`, the store's lookup on the number,
+    `{contact, message}`; dated before the cut, `404 not_found`, the body of
+    an id the number never had; `422 message_id` for a blank id, one with
+    a control character or over 256 bytes). The list's items gain
+    `window`, the window route's answer for each
+    (`Conversations::list_with_windows`; `Conversations::list` unchanged).
+    The reply's cut check is now `Conversations::cut_refuses_free_form`
+    (M2a's `refuse_across_the_cut`, split so the window shares it: the
+    swap of M2a's decision 8 drops its calls, the reply's and the window's).
+    Three tenant operations (`operation::Operation::GetConversationWindow`,
+    `MarkConversationRead`, `GetInboxMessage`). The OpenAPI document is
+    additive only (513 lines added: three paths, three schemas,
+    `Conversation`'s required `window`; the one line removed is a comma).
+    No new setting and no new stored name. Decisive tests, on the core's
+    memory backend, the memory crate's and live on Postgres:
+    `conformance::inbox::the_previous_holders_message_window_and_receipt_never_reach_the_new_holder`
+    and `marking_a_conversation_read_resets_unread_and_receipts_the_latest_inbound_message`,
+    with `the_window_is_what_a_reply_would_meet`,
+    `a_message_is_found_by_id_on_its_own_number` and the stale capability's
+    new reads in `a_capability_made_before_its_number_left_reads_nothing`;
+    over HTTP, `tests/inbox.rs`'s
+    `the_previous_holders_message_window_and_receipt_never_reach_the_new_holder`
+    and `the_read_route_resets_unread_and_receipts_the_latest_inbound_message`
+    (also live, `live_postgres.rs`), `the_window_route_answers_what_a_reply_would_meet`,
+    `a_refused_read_receipt_resets_nothing`, the scope test, M1.3's tables,
+    M1.5's sentinel and M1.7's log capture over the new routes. By
+    mutation, each failing a test: the cut removed from the lookup by id
+    (the core's and the HTTP decisive case), from the receipt's choice
+    (the same), from the window's `closes_at` or from its `open` (the
+    core's decisive case); the store's reset removed, the receipt sent
+    without `notify_customer`, the receipt's message not required inbound,
+    the receipt's age limit removed (the core's read case); the binding
+    not read again in the window, the lookup or before the receipt (the
+    stale capability's case); `open` from the recorded window alone, no
+    `check_reply` (`the_window_is_what_a_reply_would_meet`); the read
+    route's `Idempotency-Key` ignored (the HTTP read case); the window's
+    operation under another scope (the axum crate's
+    `each_tenant_route_is_one_core_operation_with_its_groups_scope`); and
+    step 4's tenant filters removed from `Authorizer::owned_number` (M1.3
+    and the HTTP scope case, over the new routes too). Left, and why: a group conversation
+    gets one receipt, for its latest message (Meta marks group messages
+    one by one); the window names no refusal reason (D62); the list reads a
+    few rows per conversation for its windows (D63). D60–D63 are the
+    coordinator's decisions of 2026-11-02, each swappable.
+  - **Review** (sabotage, security lens): the binding is read again after
+    the receipt, before the reset, so a number that moved while Meta
+    answered resets nothing (`503`; the next holder's count was the stale
+    request's to zero); three guards no test held are pinned, the receipt's
+    tombstone skip (without it the receipt named a message never
+    received), its scan past the history's first page and the 30 days'
+    bound, to the second
+    (`conformance::inbox::a_read_receipt_skips_a_tombstone_and_reads_past_the_first_page`,
+    `a_number_that_moves_during_the_receipt_resets_nothing`, in `run`);
+    the idempotency claim corrected: a `503` after the receipt went
+    releases its key, and its repeat sends the receipt again. Left: a
+    receipt for a message its customer revoked after it arrived (status
+    `deleted`) is still sent, and Meta documents neither its answer nor a
+    repeat's; the read reset and the window emit no live event (M2b's
+    stream carries Meta's events only).
 - [x] **M2h. A number's own move record** (row 111; added by M2a, and
   folded into it by the coordinator: the inbox never ships with the leak):
   the binding epoch for a number Meta migrated from

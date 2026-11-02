@@ -70,6 +70,16 @@ pub enum Operation {
     /// `reply_to_conversation`: a reply to a conversation's contact,
     /// checked against the window and the thread's owner first.
     ReplyToConversation,
+    /// `get_conversation_window`: a conversation's 24-hour window, as a
+    /// reply would meet it (roadmap M2g).
+    GetConversationWindow,
+    /// `mark_conversation_read`: a conversation's unread count reset, and
+    /// on request its latest inbound message marked read on Meta (roadmap
+    /// M2g).
+    MarkConversationRead,
+    /// `get_inbox_message`: a message of a number's inbox, by id (roadmap
+    /// M2g).
+    GetInboxMessage,
     /// `create_authentication_template`: an authentication template
     /// created or updated in one or more languages (roadmap M3c).
     CreateAuthenticationTemplate,
@@ -83,7 +93,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 28] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -106,6 +116,9 @@ impl Operation {
         Self::ListConversations,
         Self::ListConversationMessages,
         Self::ReplyToConversation,
+        Self::GetConversationWindow,
+        Self::MarkConversationRead,
+        Self::GetInboxMessage,
         Self::CreateAuthenticationTemplate,
         Self::IssueOtp,
         Self::VerifyOtp,
@@ -136,6 +149,9 @@ impl Operation {
             Self::ListConversations => "list_conversations",
             Self::ListConversationMessages => "list_conversation_messages",
             Self::ReplyToConversation => "reply_to_conversation",
+            Self::GetConversationWindow => "get_conversation_window",
+            Self::MarkConversationRead => "mark_conversation_read",
+            Self::GetInboxMessage => "get_inbox_message",
             Self::CreateAuthenticationTemplate => "create_authentication_template",
             Self::IssueOtp => "issue_otp",
             Self::VerifyOtp => "verify_otp",
@@ -168,7 +184,10 @@ impl Operation {
             }
             Self::ListConversations
             | Self::ListConversationMessages
-            | Self::ReplyToConversation => Scope::Inbox,
+            | Self::ReplyToConversation
+            | Self::GetConversationWindow
+            | Self::MarkConversationRead
+            | Self::GetInboxMessage => Scope::Inbox,
             Self::IssueOtp | Self::VerifyOtp => Scope::Otp,
         }
     }

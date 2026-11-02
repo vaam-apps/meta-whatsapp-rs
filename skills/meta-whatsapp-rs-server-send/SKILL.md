@@ -5,7 +5,7 @@ description: "Sending WhatsApp messages, media and templates, and replying from 
 
 # meta-whatsapp-rs-server-send
 
-> **Verified against meta-whatsapp-rs a8af9415a0771c8e6266c5b52f359898f79fdabf (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 293a159a69030e0df5fc597182d2963046aeba5e (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/send.ts](examples/send.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -22,7 +22,7 @@ notifications, replies, files or templates (scopes `send`, `media`, `templates`,
 | `POST /v1/numbers/{pn}/media` | upload (a multipart form: `type`, then `file`); `201` with `media_id` |
 | `GET /v1/numbers/{pn}/media/{media_id}`, `DELETE /v1/numbers/{pn}/media/{media_id}` | download, verified; delete |
 | `GET /v1/wabas/{waba_id}/templates`, `GET /v1/wabas/{waba_id}/templates/{id}`, `POST /v1/wabas/{waba_id}/templates`, `DELETE /v1/wabas/{waba_id}/templates` | list (cached 60 s per WABA), one, create, delete by `name` (and `id`) |
-| `GET /v1/numbers/{pn}/conversations`, `GET` and `POST /v1/numbers/{pn}/conversations/{contact}/messages` | the inbox (scope `inbox`): conversations, a history, a reply checked against the 24-hour window and the thread's owner: [references/inbox.md](references/inbox.md) |
+| `GET /v1/numbers/{pn}/conversations`, `GET` and `POST /v1/numbers/{pn}/conversations/{contact}/messages`, `GET /v1/numbers/{pn}/conversations/{contact}/window`, `POST /v1/numbers/{pn}/conversations/{contact}/read`, `GET /v1/numbers/{pn}/messages/{message_id}` | the inbox (scope `inbox`): conversations, a history, a reply checked against the 24-hour window and the thread's owner, the window itself, marking read, a message by id: [references/inbox.md](references/inbox.md) |
 
 ## Send a message
 

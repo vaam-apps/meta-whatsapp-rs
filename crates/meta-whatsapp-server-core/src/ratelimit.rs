@@ -17,8 +17,8 @@
 //!
 //! | Class | Operations | Default (per tenant and replica) |
 //! | --- | --- | --- |
-//! | `send` | every write that is not template management: `send_message`, `mark_read`, `upload_media`, `delete_media`, `update_profile`, `disconnect_waba`, `reply_to_conversation` | 20/s, burst 40 (the design's "sends") |
-//! | `read` | every read but templates': `list_wabas`, `list_numbers`, `get_number`, `get_profile`, `download_media`, `list_events`, `get_event`, `stream_events`, `stream_number_events`, `list_conversations`, `list_conversation_messages` (a stream is charged once, when it opens; how many stay open is bounded apart, `crate::live`) | 50/s, burst 50 (the design's "reads"; it states no burst) |
+//! | `send` | every write that is not template management: `send_message`, `mark_read`, `upload_media`, `delete_media`, `update_profile`, `disconnect_waba`, `reply_to_conversation`, `mark_conversation_read` | 20/s, burst 40 (the design's "sends") |
+//! | `read` | every read but templates': `list_wabas`, `list_numbers`, `get_number`, `get_profile`, `download_media`, `list_events`, `get_event`, `stream_events`, `stream_number_events`, `list_conversations`, `list_conversation_messages`, `get_conversation_window`, `get_inbox_message` (a stream is charged once, when it opens; how many stay open is bounded apart, `crate::live`) | 50/s, burst 50 (the design's "reads"; it states no burst) |
 //! | `templates` | every template operation: `list_templates`, `get_template`, `create_template`, `delete_templates`, `create_authentication_template` | 2/s, burst 2 (the design's "template management"; it states no burst) |
 //! | `otp_issue` | `issue_otp` (roadmap M3c) | 5/s, burst 5 (the design's "OTP issue"; it states no burst) |
 //! | `otp_verify` | `verify_otp` (roadmap M3c) | 20/s, burst 20 (the service's default: the design names no limit for checking a code, whose brute force the library's attempt and issue limits bound per recipient) |
@@ -84,14 +84,17 @@ impl RouteClass {
             | Operation::StreamEvents
             | Operation::StreamNumberEvents
             | Operation::ListConversations
-            | Operation::ListConversationMessages => Self::Read,
+            | Operation::ListConversationMessages
+            | Operation::GetConversationWindow
+            | Operation::GetInboxMessage => Self::Read,
             Operation::UpdateProfile
             | Operation::DisconnectWaba
             | Operation::SendMessage
             | Operation::MarkRead
             | Operation::UploadMedia
             | Operation::DeleteMedia
-            | Operation::ReplyToConversation => Self::Send,
+            | Operation::ReplyToConversation
+            | Operation::MarkConversationRead => Self::Send,
             Operation::ListTemplates
             | Operation::CreateTemplate
             | Operation::DeleteTemplates
@@ -436,6 +439,9 @@ mod tests {
             ("list_conversations", RouteClass::Read),
             ("list_conversation_messages", RouteClass::Read),
             ("reply_to_conversation", RouteClass::Send),
+            ("get_conversation_window", RouteClass::Read),
+            ("mark_conversation_read", RouteClass::Send),
+            ("get_inbox_message", RouteClass::Read),
             ("create_authentication_template", RouteClass::Templates),
             ("issue_otp", RouteClass::OtpIssue),
             ("verify_otp", RouteClass::OtpVerify),

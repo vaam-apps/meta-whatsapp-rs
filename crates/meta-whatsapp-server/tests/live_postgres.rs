@@ -102,6 +102,35 @@ async fn live_postgres_a_moved_numbers_history_is_hidden_from_its_new_tenant() {
     common::inbox::a_moved_numbers_history_is_hidden_from_its_new_tenant(&harness(&db).await).await;
 }
 
+/// Roadmap M2g on Postgres, decisive: a message of the number's previous
+/// holder is `404` by id to the new holder, its window is not shown, and
+/// no receipt goes for it (`common::inbox`).
+#[tokio::test]
+async fn live_postgres_the_previous_holders_message_window_and_receipt_never_reach_the_new_holder()
+{
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::inbox::the_previous_holders_message_window_and_receipt_never_reach_the_new_holder(
+        &harness(&db).await,
+    )
+    .await;
+}
+
+/// Roadmap M2g on Postgres, decisive: after the read route, `unread` is 0,
+/// and Meta got one read receipt for the latest inbound message only with
+/// `notify_customer`; its key replays (`common::inbox`).
+#[tokio::test]
+async fn live_postgres_the_read_route_resets_unread_and_receipts_the_latest_inbound_message() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::inbox::the_read_route_resets_unread_and_receipts_the_latest_inbound_message(
+        &harness(&db).await,
+    )
+    .await;
+}
+
 /// Roadmap M2h on Postgres: a number migrated between two tenants' WABAs,
 /// neither WABA moving, shows its new tenant none of the previous one's
 /// history, and keeps it.

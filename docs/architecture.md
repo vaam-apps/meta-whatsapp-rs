@@ -1740,7 +1740,8 @@ decisions and the delivery milestones, is
   characters or line separators.
 - **Sends are never repeated behind the caller's back.** The service
   adds no send retries to the library's; a caller's `Idempotency-Key`
-  (sends, uploads, template creation) keeps the answer of a request that
+  (sends, inbox replies, marking a conversation read, uploads, template
+  creation) keeps the answer of a request that
   may have taken effect and replays it, and releases the key only when
   the library's `Error::may_have_been_sent` is `false`. A key's
   fingerprint is the operation and its canonical input (the number or

@@ -70,6 +70,7 @@ use crate::store::IdempotencyRecords;
 /// | `upload_media` ([`Self::upload_media`]) | the number's id; the checked [`Upload`]'s MIME type, the file name sent to Meta, and the file's SHA-256 |
 /// | `create_template` ([`Self::create_template`]) | the WABA's id, as a [`WabaId`]; the JSON body, canonical as above |
 /// | `reply_to_conversation` ([`Self::reply_to_conversation`]) | the number's id; the conversation's contact, as the path named it decoded; the JSON body, canonical as above |
+/// | `mark_conversation_read` ([`Self::mark_conversation_read`]) | the number's id; the conversation's contact, as the path named it decoded; the JSON body, canonical as above (`null` for an empty one) |
 /// | `create_authentication_template` ([`Self::create_authentication_template`]) | the WABA's id; the JSON body, canonical as above |
 /// | `issue_otp` ([`Self::issue_otp`]) | the JSON body, canonical as above; the digest then keyed with the OTP pepper's fingerprint key (an HMAC-SHA256): the body names a phone number |
 ///
@@ -140,6 +141,23 @@ impl Fingerprint {
     ) -> Self {
         Self::json(
             Operation::ReplyToConversation,
+            &[("pn", number.as_str()), ("contact", contact)],
+            body,
+        )
+    }
+
+    /// `mark_conversation_read` on `number`, of the conversation of
+    /// `contact` (as the path named it, decoded), with the JSON body the
+    /// request carried, `null` when it had none (roadmap M2g). A release
+    /// before it had no such operation, so there is no legacy fingerprint
+    /// to match.
+    pub fn mark_conversation_read(
+        number: &PhoneNumberId,
+        contact: &str,
+        body: &serde_json::Value,
+    ) -> Self {
+        Self::json(
+            Operation::MarkConversationRead,
             &[("pn", number.as_str()), ("contact", contact)],
             body,
         )
@@ -1285,6 +1303,21 @@ mod tests {
         assert_ne!(
             Fingerprint::json(Operation::SendMessage, &[("pn", "1")], &a),
             Fingerprint::json(Operation::CreateTemplate, &[("pn", "1")], &a)
+        );
+        // A conversation's read and a reply to it, on one contact and body
+        // (roadmap M2g); another contact is another read.
+        let read = serde_json::json!({"notify_customer": true});
+        assert_ne!(
+            Fingerprint::mark_conversation_read(&one, "US.1", &read),
+            Fingerprint::reply_to_conversation(&one, "US.1", &read)
+        );
+        assert_ne!(
+            Fingerprint::mark_conversation_read(&one, "US.1", &read),
+            Fingerprint::mark_conversation_read(&one, "US.2", &read)
+        );
+        assert_ne!(
+            Fingerprint::mark_conversation_read(&one, "US.1", &read),
+            Fingerprint::mark_conversation_read(&one, "US.1", &serde_json::Value::Null)
         );
         // The parameters, by name, in any order.
         assert_eq!(
