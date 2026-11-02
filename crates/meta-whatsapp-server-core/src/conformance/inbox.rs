@@ -26,7 +26,14 @@
 //!   opened is `409 customer_service_window_closed`, with zero requests;
 //!   `unread` counts the new holder's messages only.
 //! - A capability made before its number left its binding (another WABA
-//!   of the tenant, then another tenant) reads nothing: `503`.
+//!   of the tenant, then another tenant) reads nothing, and erases
+//!   nothing (roadmap M2f): `503`.
+//! - Roadmap M2f: an erasure by one identity reaches every identity the
+//!   inbox links, in the inbox and the outbox, the other customer's
+//!   records kept; its journal entry, written first, holds keyed HMACs
+//!   only, and a journal that fails erases nothing; a deployment without
+//!   an erasure key, or a request not confirming the number, erases
+//!   nothing.
 //! - Only the order's own number opens the services.
 //! - Roadmap M2g: the window is what a free-form reply would meet (and the
 //!   list's is the same); marking a conversation read resets `unread`
@@ -66,10 +73,14 @@ use meta_whatsapp_rs::webhooks::sign;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
+use meta_whatsapp_rs::core::error::StorageError;
+use meta_whatsapp_rs::core::secret::SecretBytes;
+
 use super::messages::Told;
 use crate::admin::mint;
 use crate::authz::{Authorizer, Caller, OwnedNumber};
 use crate::backend::Backend;
+use crate::erasure::{ErasureDeployment, ErasureJournal, ErasureKey, Erasures, JournalEntry};
 use crate::housekeeping;
 use crate::inbound::{Inbound, Pipeline};
 use crate::inbox::{Conversations, READ_RECEIPT_MAX_AGE, ReplyWindow};
@@ -121,6 +132,10 @@ pub async fn run(backend: &dyn Backend) {
     Box::pin(the_previous_holders_message_window_and_receipt_never_reach_the_new_holder(backend))
         .await;
     Box::pin(housekeeping_applies_the_inbox_stores_retention(backend)).await;
+    Box::pin(an_erasure_reaches_every_identity_and_journals_first(
+        backend,
+    ))
+    .await;
 }
 
 /// A tenant's number, as one request sees it: the order, the caller it
@@ -983,6 +998,255 @@ pub async fn a_capability_made_before_its_number_left_reads_nothing(backend: &dy
     assert!(
         b.script.requests().is_empty(),
         "a receipt for the new holder's message, with the previous holder's token"
+    );
+    // Roadmap M2f: nor an erasure of C's customer on the number, which
+    // stays C's.
+    let deployment =
+        ErasureDeployment::new(ErasureKey::new(SecretBytes::new(ERASURE_KEY.to_vec())).unwrap());
+    let outbox = backend.outbox();
+    let refused = b
+        .erasures(backend, outbox.as_ref(), Some(&deployment), &clock)
+        .erase(pn, &[CONTACT.to_owned()])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (refused.status(), refused.code()),
+        (503, "storage_unavailable")
+    );
+    assert_eq!(
+        theirs
+            .history(CONTACT, &first(50))
+            .await
+            .unwrap()
+            .items
+            .len(),
+        1,
+        "C's customer was erased through B's capability"
+    );
+}
+
+/// A journal that keeps its entries, or refuses them all.
+#[derive(Default)]
+struct KeptJournal {
+    entries: std::sync::Mutex<Vec<JournalEntry>>,
+    refuse: bool,
+}
+
+#[async_trait::async_trait]
+impl ErasureJournal for KeptJournal {
+    async fn record(&self, entry: &JournalEntry) -> Result<(), StorageError> {
+        if self.refuse {
+            return Err(StorageError::Backend(anyhow::anyhow!(
+                "the suite's journal failure"
+            )));
+        }
+        self.entries.lock().unwrap().push(entry.clone());
+        Ok(())
+    }
+}
+
+impl Merchant {
+    /// The erasure on the number, with `deployment`, at `clock`'s time.
+    fn erasures<'a>(
+        &'a self,
+        backend: &dyn Backend,
+        outbox: &'a dyn crate::outbox::Outbox,
+        deployment: Option<&'a ErasureDeployment>,
+        clock: &ManualClock,
+    ) -> Erasures<'a> {
+        Erasures::new(
+            &self.authz,
+            &self.caller,
+            &self.number,
+            backend.conversations(),
+            outbox,
+            deployment,
+            Arc::new(clock.clone()),
+        )
+        .unwrap()
+    }
+}
+
+/// The erasure key of the suite.
+const ERASURE_KEY: &[u8] = b"erasure-key-of-the-inbox-suite-32b";
+
+/// Roadmap M2f: an erasure on a number, as the core runs it.
+///
+/// 1. A customer's text under their phone number, then a message carrying
+///    both their phone number and their BSUID (the inbox links the two),
+///    and another customer's text, each in the inbox and the outbox.
+/// 2. With no erasure key, `409 erasure_not_configured`; with the
+///    number's id not confirmed, `422` on `confirm`; with a journal that
+///    fails, `503`: nothing is erased in any of them.
+/// 3. Named by their BSUID alone, the person is erased: the journal's
+///    entry (before anything is deleted) holds the HMAC of each identity
+///    the inbox connects, never one in clear; both conversations and
+///    their outbox rows are gone, the other customer's stay.
+/// 4. A repeat answers the same way and erases nothing more.
+///
+/// Decisive: the closure over `identities` (the phone-keyed thread
+/// stays), the journal before the deletions (a failing one erases
+/// nothing), the outbox's erasure (its rows stay), the configuration and
+/// confirmation checks.
+#[allow(clippy::too_many_lines)] // a scenario: it reads top to bottom
+pub async fn an_erasure_reaches_every_identity_and_journals_first(backend: &dyn Backend) {
+    const BSUID: &str = "US.13491208655302741918";
+    const OTHER: &str = "12125557890";
+    let (waba, pn) = ("102290129340329", "106540352242829");
+    let m = merchant(backend, "inbox-erase", waba, pn).await;
+    let pipeline = pipeline(backend);
+    let clock = ManualClock::new(OffsetDateTime::now_utc());
+    let at = now() + 1;
+    deliver(
+        &pipeline,
+        &text(waba, pn, CONTACT, "wamid.ERASE-1", "hi", at),
+    )
+    .await;
+    // Both identities on one message (`business-scoped-user-ids`).
+    let mut linked = text(waba, pn, CONTACT, "wamid.ERASE-2", "it's me", at);
+    linked["entry"][0]["changes"][0]["value"]["contacts"][0]["user_id"] = json!(BSUID);
+    linked["entry"][0]["changes"][0]["value"]["messages"][0]["from_user_id"] = json!(BSUID);
+    deliver(&pipeline, &linked).await;
+    deliver(
+        &pipeline,
+        &text(waba, pn, OTHER, "wamid.ERASE-3", "hello", at),
+    )
+    .await;
+    let tenant = TenantId::parse("inbox-erase").unwrap();
+    let rows = || async {
+        let page = backend
+            .outbox()
+            .page(&crate::outbox::EventQuery {
+                tenant: tenant.clone(),
+                after: None,
+                types: None,
+                phone_number_id: None,
+                limit: 100,
+                max_bytes: 8 * 1024 * 1024,
+            })
+            .await
+            .unwrap();
+        page.events
+            .into_iter()
+            .map(|event| event.data)
+            .collect::<Vec<_>>()
+    };
+    let naming = |rows: &[String], id: &str| rows.iter().filter(|d| d.contains(id)).count();
+    assert_eq!(naming(&rows().await, CONTACT), 2, "{:?}", rows().await);
+    let inbox = m.inbox(backend, ReplyChecks::ALL, &clock);
+    let threads = || async {
+        let listed = inbox.list(&first(50)).await.unwrap();
+        let mut contacts: Vec<String> = listed
+            .items
+            .into_iter()
+            .map(|summary| summary.key.contact)
+            .collect();
+        contacts.sort();
+        contacts
+    };
+    let before = threads().await;
+    assert!(before.contains(&CONTACT.to_owned()), "{before:?}");
+    assert!(before.contains(&OTHER.to_owned()), "{before:?}");
+    let key = || ErasureKey::new(SecretBytes::new(ERASURE_KEY.to_vec())).unwrap();
+    let journal = Arc::new(KeptJournal::default());
+    let configured = ErasureDeployment::new(key()).with_journal(journal.clone());
+    let refusing = ErasureDeployment::new(key()).with_journal(Arc::new(KeptJournal {
+        refuse: true,
+        ..KeptJournal::default()
+    }));
+    let outbox = backend.outbox();
+    let bsuid = [BSUID.to_owned()];
+
+    // 2. Refused, nothing erased.
+    let off = m
+        .erasures(backend, outbox.as_ref(), None, &clock)
+        .erase(pn, &bsuid)
+        .await
+        .unwrap_err();
+    assert_eq!((off.status(), off.code()), (409, "erasure_not_configured"));
+    let unconfirmed = m
+        .erasures(backend, outbox.as_ref(), Some(&configured), &clock)
+        .erase("106540352242828", &bsuid)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (unconfirmed.status(), unconfirmed.field()),
+        (422, Some("confirm"))
+    );
+    let failed = m
+        .erasures(backend, outbox.as_ref(), Some(&refusing), &clock)
+        .erase(pn, &bsuid)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (failed.status(), failed.code()),
+        (503, "storage_unavailable")
+    );
+    assert_eq!(threads().await, before, "a refused erasure erased");
+    assert_eq!(
+        naming(&rows().await, CONTACT),
+        2,
+        "a refused erasure erased"
+    );
+    assert!(journal.entries.lock().unwrap().is_empty());
+
+    // 3. By the BSUID alone: every identity the inbox connects.
+    let erased = m
+        .erasures(backend, outbox.as_ref(), Some(&configured), &clock)
+        .erase(pn, &bsuid)
+        .await
+        .unwrap();
+    assert!(erased.erasure_id.starts_with("era_"), "{erased:?}");
+    assert_eq!(erased.erased_at, clock.now());
+    let entries = journal.entries.lock().unwrap().clone();
+    assert_eq!(entries.len(), 1);
+    let pn_id = PhoneNumberId::new(pn).unwrap();
+    let mut expected = vec![
+        key().journal_hmac(&pn_id, BSUID),
+        key().journal_hmac(&pn_id, CONTACT),
+    ];
+    expected.sort();
+    assert_eq!(entries[0].identities, expected, "every identity, hashed");
+    assert_eq!(entries[0].erasure_id, erased.erasure_id);
+    assert_eq!(entries[0].tenant, tenant);
+    assert_eq!(entries[0].phone_number_id, pn_id);
+    assert!(!format!("{:?}", entries[0]).contains(CONTACT), "in clear");
+    assert_eq!(
+        threads().await,
+        [OTHER.to_owned()],
+        "the other customer stays"
+    );
+    let left = rows().await;
+    assert_eq!(naming(&left, CONTACT), 0, "{left:?}");
+    assert_eq!(naming(&left, BSUID), 0, "{left:?}");
+    assert_eq!(naming(&left, OTHER), 1, "{left:?}");
+    for contact in [CONTACT, BSUID] {
+        assert!(
+            inbox
+                .history(contact, &first(50))
+                .await
+                .unwrap()
+                .items
+                .is_empty(),
+            "{contact}"
+        );
+    }
+
+    // 4. A repeat: the same answer, nothing more erased.
+    let again = m
+        .erasures(backend, outbox.as_ref(), Some(&configured), &clock)
+        .erase(pn, &bsuid)
+        .await
+        .unwrap();
+    assert_ne!(again.erasure_id, erased.erasure_id);
+    assert_eq!(threads().await, [OTHER.to_owned()]);
+    assert_eq!(naming(&rows().await, OTHER), 1);
+    let entries = journal.entries.lock().unwrap().clone();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries[1].identities,
+        [key().journal_hmac(&pn_id, BSUID)],
+        "the links went with the first erasure"
     );
 }
 

@@ -34,7 +34,18 @@
 //! caller's own number, routed to its tenant, is asked from Meta without
 //! `phone_number_id`, and one recorded anywhere else is not asked at all
 //! (`crate::media`).
+//!
+//! **What a row names of a customer** (roadmap M2f): the identifiers an
+//! event names its customers by ([`NewEvent::contacts`], from
+//! [`event_contacts`]), which a backend keeps beside the row at insert
+//! (Postgres: `wa_server_events.contacts`, a GIN index), so that an
+//! erasure finds a person's rows on a number without reading every row's
+//! data ([`Outbox::erase_contacts`], called by [`crate::erasure`] only).
+//! The column holds identifiers by design, as `data` does: it goes with
+//! its row, by the outbox's retention, its tenant's deletion or an
+//! erasure.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -163,6 +174,145 @@ pub struct ReceivedMedia {
     pub phone_number_id: Option<PhoneNumberId>,
     /// When the service received it (the row's [`StoredEvent::created_at`]).
     pub received_at: OffsetDateTime,
+}
+
+impl NewEvent {
+    /// The identifiers this event names its customers by
+    /// ([`event_contacts`] of its data): what a backend keeps beside its
+    /// row for [`Outbox::erase_contacts`].
+    pub fn contacts(&self) -> Vec<String> {
+        event_contacts(&self.data)
+    }
+}
+
+/// The keys of an event's JSON whose values name a customer (Meta's
+/// webhook references, as the library's `WebhookEvent` serializes them):
+/// a phone number (`wa_id`, `from`, `to`, `input`, a thread control
+/// event's `sender.phone_number`, an address book contact's
+/// `phone_number`), a BSUID or a parent BSUID (`user_id`,
+/// `parent_user_id`, and every key ending in `user_id`: `from_user_id`,
+/// `to_parent_user_id`, `recipient_user_id`,
+/// `recipient_participant_parent_user_id`, a `user_id_changed` event's
+/// `user_id.previous` and `.current`), a status's recipient
+/// (`recipient_id`, and any key ending in `_recipient_id` or
+/// `participant_id`), and a group (`group_id`: the inbox keys a group's
+/// conversation by it). A history chunk's thread names its customer by
+/// the thread's `id` ([`event_contacts`]).
+pub const CONTACT_KEYS: [&str; 7] = [
+    "wa_id",
+    "from",
+    "to",
+    "input",
+    "phone_number",
+    "recipient_id",
+    "group_id",
+];
+
+/// Whether the values under `key` name a customer ([`CONTACT_KEYS`], and
+/// the suffixes it lists).
+fn names_a_contact(key: &str) -> bool {
+    CONTACT_KEYS.contains(&key)
+        || key.ends_with("user_id")
+        || key.ends_with("_recipient_id")
+        || key.ends_with("participant_id")
+}
+
+/// Every identifier an event's JSON `data` (the library's `WebhookEvent`
+/// serialization) names a customer by: each string under a key of
+/// [`CONTACT_KEYS`] (or its suffixes), at any depth (an object under one,
+/// such as `user_id: {previous, current}`, gives every string in it), and
+/// the `id` of each element of a `threads` array (a history chunk's
+/// thread is its customer's phone number). Deduplicated, in byte order.
+///
+/// Left out: an empty value, the business's numbers (every value of a
+/// `display_phone_number` in the event: an echo's `from`, a history
+/// chunk's business messages; every row would name them), and
+/// a value no erasure can name (longer than
+/// [`crate::inbox::MAX_CONTACT_BYTES`], or holding a control character:
+/// [`crate::inbox::conversation_key`] refuses both), which also keeps
+/// every value storable (Postgres refuses `NUL` in `TEXT`, and an index
+/// entry has a size limit). A body that is not JSON names nobody.
+///
+/// What it does not read, as the inbox's erasure does not
+/// (`ConversationStore::erase_all`): a customer quoted in a message's
+/// content (a shared contact card's formatted phone number, a text), and
+/// a body the library could not parse (`unparsed`, whose raw body is one
+/// string).
+pub fn event_contacts(data: &str) -> Vec<String> {
+    fn take(value: &serde_json::Value, found: &mut BTreeSet<String>) {
+        match value {
+            serde_json::Value::String(s) => {
+                found.insert(s.clone());
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|item| take(item, found)),
+            serde_json::Value::Object(map) => map.values().for_each(|item| take(item, found)),
+            _ => {}
+        }
+    }
+    fn walk(value: &serde_json::Value, found: &mut BTreeSet<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, item) in map {
+                    if names_a_contact(key) {
+                        take(item, found);
+                        continue;
+                    }
+                    // A history chunk's thread is its customer's: its `id`.
+                    if key == "threads"
+                        && let serde_json::Value::Array(threads) = item
+                    {
+                        for thread in threads {
+                            if let Some(id) = thread.get("id").and_then(serde_json::Value::as_str) {
+                                found.insert(id.to_owned());
+                            }
+                        }
+                    }
+                    walk(item, found);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|item| walk(item, found)),
+            _ => {}
+        }
+    }
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else {
+        return Vec::new();
+    };
+    let mut found = BTreeSet::new();
+    walk(&event, &mut found);
+    let business = business_numbers(&event);
+    found
+        .into_iter()
+        .filter(|contact| {
+            !contact.is_empty()
+                && contact.len() <= crate::inbox::MAX_CONTACT_BYTES
+                && !contact.chars().any(char::is_control)
+                && !business.contains(contact)
+        })
+        .collect()
+}
+
+/// Every value of a `display_phone_number` key in `event`, at any depth:
+/// the business's own numbers, never a customer's.
+fn business_numbers(event: &serde_json::Value) -> BTreeSet<String> {
+    fn walk(value: &serde_json::Value, found: &mut BTreeSet<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, item) in map {
+                    if key == "display_phone_number"
+                        && let Some(number) = item.as_str()
+                    {
+                        found.insert(number.to_owned());
+                    }
+                    walk(item, found);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter().for_each(|item| walk(item, found)),
+            _ => {}
+        }
+    }
+    let mut found = BTreeSet::new();
+    walk(event, &mut found);
+    found
 }
 
 impl std::fmt::Debug for NewEvent {
@@ -518,11 +668,192 @@ pub trait Outbox: Send + Sync + 'static {
     ///
     /// The library's `StorageError`.
     async fn received_media(&self, media_id: &MediaId) -> StoreResult<Vec<ReceivedMedia>>;
+
+    /// Erase a customer's rows on one business number (roadmap M2f): delete
+    /// every row of `tenant`'s stream and of the operator-only stream
+    /// whose `phone_number_id` is `phone_number_id` and whose
+    /// [`NewEvent::contacts`], kept beside it at insert, name one of
+    /// `contacts`; how many went. Whole rows: one that also names others
+    /// (a history chunk, a group update) goes with their part. Never a row
+    /// of another tenant's stream, nor of another number; an empty
+    /// `contacts`, or ids no row names, delete nothing; a row inserted
+    /// before its backend kept contacts names nobody here. A backend keeps
+    /// the contacts indexed (Postgres: `wa_server_events.contacts`, a GIN
+    /// index), so this never reads the rows' data.
+    ///
+    /// A stream's sequences stay as they are (a poll skips the gap, and
+    /// `purged_through` does not move); a deleted row's dedup key is free
+    /// again, as after a purge: the webhook pipeline's own dedup markers
+    /// (seven days and an hour) keep Meta's redeliveries out.
+    ///
+    /// It trusts its arguments: the core's erasure service
+    /// ([`crate::erasure::Erasures`]) calls it for an owned number only.
+    ///
+    /// # Errors
+    ///
+    /// The library's `StorageError`.
+    async fn erase_contacts(
+        &self,
+        tenant: &TenantId,
+        phone_number_id: &PhoneNumberId,
+        contacts: &[String],
+    ) -> StoreResult<u64>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every event of Meta's documented webhooks (the library's fixtures,
+    /// `webhooks/reference/*`, as the service stores their events:
+    /// `crate::events::event_data`), with its data.
+    fn fixture_events() -> Vec<(String, String, String)> {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../meta-whatsapp-webhooks/tests/fixtures");
+        let mut events = Vec::new();
+        let mut dirs = vec![fixtures.clone()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "json") {
+                    continue;
+                }
+                let body = std::fs::read(&path).unwrap();
+                let Ok(payload) = meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(&body)
+                else {
+                    continue;
+                };
+                let name = path.strip_prefix(&fixtures).unwrap();
+                for event in payload.into_events() {
+                    let data = crate::events::event_data(&event).unwrap();
+                    events.push((
+                        name.to_string_lossy().into_owned(),
+                        event.kind().to_owned(),
+                        data,
+                    ));
+                }
+            }
+        }
+        events.sort();
+        assert!(events.len() > 100, "the fixtures were not read");
+        events
+    }
+
+    /// Roadmap M2f: no row names a customer that its `contacts` miss.
+    /// Every identifier any of Meta's documented events names a customer
+    /// by ([`event_contacts`] over every fixture) is, in every event whose
+    /// data holds it as a JSON string, one of that event's contacts, but
+    /// for the business's own display numbers (never a contact). Decisive: each key of
+    /// [`CONTACT_KEYS`] and each suffix (the events using it escape), and
+    /// the threads' `id`.
+    #[test]
+    fn every_identifier_an_event_holds_is_one_of_its_contacts() {
+        let events = fixture_events();
+        let mut universe = BTreeSet::new();
+        for (_, _, data) in &events {
+            universe.extend(event_contacts(data));
+        }
+        // Meta's examples' customers, by each kind of identifier.
+        for id in [
+            "16505551234",
+            "US.13491208655302741918",
+            "US.ENT.11815799212886844830",
+        ] {
+            assert!(universe.contains(id), "{id}: {universe:?}");
+        }
+        let mut missed = Vec::new();
+        for (file, kind, data) in &events {
+            let contacts = event_contacts(data);
+            let business = serde_json::from_str::<serde_json::Value>(data)
+                .map(|event| business_numbers(&event))
+                .unwrap_or_default();
+            for id in &universe {
+                let quoted = serde_json::to_string(id).unwrap();
+                if data.contains(&quoted) && !contacts.contains(id) && !business.contains(id) {
+                    missed.push(format!("{file} ({kind}): {id}"));
+                }
+            }
+        }
+        assert_eq!(missed, Vec::<String>::new());
+    }
+
+    /// The contacts of a few of Meta's examples, exactly: a text from a
+    /// phone number; a text from a BSUID with its parent; a BSUID change,
+    /// both BSUIDs and both parents; a history chunk, by its threads and
+    /// their messages' senders, the business's number left out; a status,
+    /// by its recipient. Decisive: the business's number filter, the
+    /// thread `id` rule, the subtree of a contact key.
+    #[test]
+    fn metas_examples_name_their_customers() {
+        let events = fixture_events();
+        let contacts_of = |file: &str| -> Vec<Vec<String>> {
+            events
+                .iter()
+                .filter(|(f, _, _)| f == file)
+                .map(|(_, _, data)| event_contacts(data))
+                .collect()
+        };
+        assert_eq!(contacts_of("messages/text.json"), [["16505551234"]]);
+        assert_eq!(
+            contacts_of("bsuid/text_username_no_wa_id.json"),
+            [["US.13491208655302741918", "US.ENT.11815799212886844830"]]
+        );
+        assert_eq!(
+            contacts_of("fields/user_id_update.json"),
+            [[
+                "16505551234",
+                "US.13491208655302741918",
+                "US.29847561203948576612",
+                "US.ENT.11815799212886844830",
+                "US.ENT.22926810323997955941",
+            ]]
+        );
+        assert_eq!(
+            contacts_of("fields/history_threads.json"),
+            [["12125557890", "16505551234"]]
+        );
+        assert_eq!(contacts_of("messages/status_sent.json"), [["16505551234"]]);
+    }
+
+    /// What names nobody: an empty value, one longer than an erasure may
+    /// name, one with a control character (Postgres refuses `NUL` in
+    /// `TEXT`), the event's display number, and a body that is not JSON.
+    /// A contact key's object gives every string in it; numbers and
+    /// booleans are no identifiers. Decisive: each filter of
+    /// [`event_contacts`].
+    #[test]
+    fn only_storable_nameable_identifiers_are_contacts() {
+        let long = "1".repeat(crate::inbox::MAX_CONTACT_BYTES + 1);
+        let longest = "1".repeat(crate::inbox::MAX_CONTACT_BYTES);
+        let data = serde_json::json!({
+            "display_phone_number": "15550783881",
+            "message": {
+                "from": "15550783881",
+                "to": "",
+                "wa_id": long,
+                "input": longest,
+                "user_id": {"previous": "US.1", "current": "US.2", "n": 7, "b": true},
+                "recipient_id": "a\u{0}b",
+                "group_id": "120363044662341228",
+                "text": {"body": "16505550000"}
+            }
+        })
+        .to_string();
+        let mut expected = vec![
+            longest,
+            "120363044662341228".to_owned(),
+            "US.1".to_owned(),
+            "US.2".to_owned(),
+        ];
+        expected.sort();
+        assert_eq!(event_contacts(&data), expected);
+        assert!(event_contacts("not json").is_empty());
+        assert!(event_contacts("{}").is_empty());
+    }
 
     /// The media id each of Meta's documented webhooks records as received
     /// (the library's fixtures, `webhooks/reference/*`, as the service

@@ -108,6 +108,104 @@ async fn live_postgres_another_tenants_received_media_id_is_not_found_with_no_re
     .await;
 }
 
+/// Rows of every table of the test's schema whose JSON rendering holds
+/// one of `needles`, as text or (a `BYTEA` column renders as hex) as the
+/// hex of its UTF-8 bytes, by table: `(table, rows)`, the tables with
+/// none left out. Every table, the library's and the service's: one added
+/// later is swept too (as the library's live erasure test sweeps its own).
+async fn rows_mentioning(db: &TestDb, pool: &sqlx::PgPool, needles: &[&str]) -> Vec<(String, i64)> {
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT table_name::text FROM information_schema.tables \
+         WHERE table_schema = $1 AND table_type = 'BASE TABLE' ORDER BY 1",
+    )
+    .bind(&db.schema)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert!(
+        tables.iter().any(|t| t == "wa_server_events") && tables.iter().any(|t| t == "wa_messages"),
+        "{tables:?}"
+    );
+    let mut found = Vec::new();
+    for table in tables {
+        let mut total = 0;
+        for needle in needles {
+            let hex = hex::encode(needle.as_bytes());
+            let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT count(*) FROM \"{table}\" t \
+                 WHERE position($1 IN row_to_json(t)::text) > 0 \
+                    OR position($2 IN row_to_json(t)::text) > 0"
+            )))
+            .bind(*needle)
+            .bind(hex)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            total += n;
+        }
+        if total > 0 {
+            found.push((table, total));
+        }
+    }
+    found
+}
+
+/// Roadmap M2f's decisive test on Postgres: after the erasure of a
+/// customer by their BSUID alone (`common::erasure`), no row of any table
+/// mentions them (their phone number, BSUID, parent BSUID, username or
+/// name), the inbox's tables and `wa_server_events` included; before it,
+/// both did. Decisive: the outbox's erasure (`wa_server_events` keeps
+/// their rows without it), the closure over `identities` (the
+/// phone-keyed thread stays), the inbox's erasure.
+#[tokio::test]
+async fn live_postgres_after_an_erasure_no_row_of_any_table_mentions_the_customer() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(10).await;
+    migrate(&pool).await.unwrap();
+    let h = Harness::with(Stores::postgres(&pool));
+    let needles = common::erasure::needles();
+    // Before: the customer is in the inbox and in the outbox.
+    {
+        let (_, _) = common::erasure::merchant(&h).await;
+        common::erasure::the_customer_writes(&h).await;
+        let before = rows_mentioning(&db, &pool, &needles).await;
+        let tables: Vec<&str> = before.iter().map(|(t, _)| t.as_str()).collect();
+        for table in ["wa_server_events", "wa_messages", "wa_conversations"] {
+            assert!(tables.contains(&table), "{table} before: {before:?}");
+        }
+    }
+    let db2 = TestDb::new().await.unwrap();
+    let pool2 = db2.pool(10).await;
+    migrate(&pool2).await.unwrap();
+    let h2 = Harness::with(Stores::postgres(&pool2));
+    common::erasure::an_erasure_by_bsuid_leaves_nothing_of_the_customer(&h2).await;
+    assert_eq!(
+        rows_mentioning(&db2, &pool2, &needles).await,
+        Vec::<(String, i64)>::new(),
+        "rows mention the customer after the erasure"
+    );
+    // The other customer's rows stay.
+    let other = rows_mentioning(&db2, &pool2, &[common::erasure::OTHER]).await;
+    let tables: Vec<&str> = other.iter().map(|(t, _)| t.as_str()).collect();
+    for table in ["wa_server_events", "wa_messages", "wa_conversations"] {
+        assert!(tables.contains(&table), "{table}: {other:?}");
+    }
+    drop(h);
+}
+
+/// Roadmap M2f on Postgres: another tenant's key cannot erase on the
+/// number, and an erasure stays on its number and tenant
+/// (`common::erasure`).
+#[tokio::test]
+async fn live_postgres_an_erasure_stays_on_its_number_and_tenant() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::erasure::an_erasure_stays_on_its_number_and_tenant(&harness(&db).await).await;
+}
+
 /// The binding epoch on Postgres (roadmap M2a, decision D10): a moved
 /// number's history is hidden from its new tenant, and kept.
 #[tokio::test]

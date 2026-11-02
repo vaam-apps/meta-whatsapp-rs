@@ -627,6 +627,8 @@ struct Row {
     dedup_until: Option<OffsetDateTime>,
     /// The media id it records as received (roadmap M2e).
     media_id: Option<MediaId>,
+    /// `NewEvent::contacts`, kept at insert (roadmap M2f).
+    contacts: Vec<String>,
     event: StoredEvent,
 }
 
@@ -707,6 +709,7 @@ impl Outbox for Events {
             dedup_key: event.dedup_key.clone(),
             dedup_until: event.dedup_window.map(|window| window.until),
             media_id: event.received_media(),
+            contacts: event.contacts(),
             event: StoredEvent {
                 sequence,
                 id: event.id.clone(),
@@ -760,6 +763,22 @@ impl Outbox for Events {
 
     async fn purge(&self, _: Duration) -> StoreResult<u64> {
         unimplemented!("not used by the suites this backend runs")
+    }
+
+    async fn erase_contacts(
+        &self,
+        tenant: &TenantId,
+        phone_number_id: &PhoneNumberId,
+        contacts: &[String],
+    ) -> StoreResult<u64> {
+        let mut streams = self.streams.lock().unwrap();
+        let before = streams.rows.len();
+        streams.rows.retain(|row| {
+            let ours = row.event.tenant.as_ref().is_none_or(|t| t == tenant)
+                && row.event.phone_number_id.as_ref() == Some(phone_number_id);
+            !(ours && row.contacts.iter().any(|c| contacts.contains(c)))
+        });
+        Ok((before - streams.rows.len()) as u64)
     }
 
     async fn received_media(&self, media_id: &MediaId) -> StoreResult<Vec<ReceivedMedia>> {

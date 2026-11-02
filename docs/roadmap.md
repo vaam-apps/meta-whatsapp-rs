@@ -4667,7 +4667,7 @@ design's (§9).
     are not recorded (they are not a customer's message on a live
     number), so they keep the check; a received id older than the
     outbox's retention keeps the check (Meta keeps it about as long).
-- [ ] **M2f. Erasure in the service** (row 91; D10, D30, D31): an
+- [x] **M2f. Erasure in the service** (row 91; D10, D30, D31): an
   admin- or tenant-scoped route that erases a customer on a number
   through the library's `identities` and `erase_all`; deletes the
   tenant's outbox rows for them, through an expand-only `contacts
@@ -4683,6 +4683,75 @@ design's (§9).
     as the library's live test does), and removing the outbox clause
     fails it; the journal and the audit event hold no identity in
     clear; a tenant's key cannot erase on another tenant's number.
+  - **Landed:** `POST /v1/numbers/{pn}/erasures` (`erase_customer`,
+    tag and new scope `erasure`, rate class `send`) in
+    `meta-whatsapp-server-api-axum` (`api::erasure`), over the core's
+    `erasure::Erasures` on an `OwnedNumber` (the whole authorization
+    order, the vault included): `{confirm: <pn>, contacts: [1..16]}`
+    (`422` on `confirm`, `contacts`, `body`, never quoting a contact;
+    `409 erasure_not_configured` without `WA_SERVER_ERASURE_KEY`, a new
+    code), the binding read again (`OwnedNumber::still_held`, `503`),
+    the identities closed over `Inbox::identities`, a journal entry
+    (`ErasureJournal::record`: `JournalEntry`, the hex HMAC-SHA256 of
+    `<phone_number_id>|<contact>` under the key for each identity, the
+    time, the tenant, the number; by default `LogJournal`, target
+    `erasure_journal`), then the tenant's and the number's operator-only
+    outbox rows naming one of them (`Outbox::erase_contacts`, a new
+    required port method), then `Inbox::erase_all`, then the audit event
+    `customer_erased` (`audit::erasure_audit`: ids and counts); `200
+    {erasure_id, phone_number_id, erased_at}`, nothing of what was
+    found, no `Idempotency-Key`. Postgres migration 8 (`erasure`; numbered
+    after M2e's 7): `wa_server_events.contacts TEXT[]` (no default, no
+    rewrite), filled at insert from `NewEvent::contacts`
+    (`outbox::event_contacts`: every value under the keys Meta's webhooks
+    name a customer by, the business's own numbers left out) and a partial
+    GIN index, `wa_server_events_contacts_idx`; the erasure's statement
+    (`ERASE_SQL`) reads the tenant by `tenant_id`, which no index leads
+    with, so its plan is that index or a scan: pinned live with sequential
+    scans off, and on 20,000 never-analyzed rows with them on. The memory
+    backend keeps the contacts beside each row. The decisive tests:
+    `live_postgres_after_an_erasure_no_row_of_any_table_mentions_the_customer`
+    (every table of the schema swept, as the library's live test does, for
+    the customer's phone number, BSUID, parent BSUID, username and name,
+    after an erasure by the BSUID alone; before it, the inbox's tables and
+    `wa_server_events` held them; removing the outbox's clause, or the
+    closure over the identities, fails it, and its memory twin
+    `an_erasure_by_bsuid_leaves_nothing_of_the_customer`);
+    `the_journal_and_the_audit_event_hold_no_identity_in_clear`
+    (`erasure_logs.rs`: no log line at `TRACE` names the customer, the
+    journal's HMACs computed apart from the code, the audit event's ids
+    and counts); `an_erasure_stays_on_its_number_and_tenant` (memory and
+    live: another tenant's key with every scope is `404` with nothing
+    erased, a key without the scope `403`, the same customer on the
+    tenant's other number and on another tenant's number kept);
+    `conformance::outbox::erase_contacts` (both backends: the tenant's
+    and the number's operator-only rows, never another number's or another
+    tenant's stream, a repeat deleting nothing, the dedup key freed);
+    `conformance::inbox::an_erasure_reaches_every_identity_and_journals_first`
+    (a failing journal erases nothing) and the stale capability's refusal
+    in `a_capability_made_before_its_number_left_reads_nothing`; the
+    extractor's `every_identifier_an_event_holds_is_one_of_its_contacts`
+    over every fixture. Left, and why: the 24-hour idempotency answers of
+    sends to the person keep their recipient (deleting the records would
+    let a repeat send twice; a redaction would change a replay's answer);
+    a previous holder's own outbox rows of the number (another tenant's
+    stream); rows recorded before migration 8 (the outbox's retention
+    takes them); the journal's replay after a restore is the operator's,
+    as the production guide describes it (no command does it); `doctor`
+    does not check `WA_SERVER_ERASURE_KEY`; a number whose token lapsed
+    cannot be erased on until it is reconnected (D90).
+  - **Proposed** (the implementer's, awaiting the coordinator; none
+    recorded as decided): D86 (a tenant or platform key with a new scope
+    `erasure`), D87 (the route's shape: identities in the body,
+    `confirm`, no counts, no `Idempotency-Key`), D88 (the journal: a
+    port, by default the service's log, under a new secret, not a table),
+    D89 (the outbox rows: the tenant's and the number's operator-only
+    ones, whole, found by `contacts`), D90 (the order, the binding read
+    again, the inbox's reach on a moved number, the whole authorization
+    order), D91 (`Outbox::erase_contacts` required). D89's operator-only
+    rows and D90's reach on a moved number are irreversible deletions,
+    which may be the owner's (AGENTS.md § Decisions); every new stored
+    name is pending the owner (§ Owner touchpoints).
 
 - [x] **M2g. The inbox's other routes** (row 111; added by M2a, kept as
   an item by the coordinator's decision of 2026-11-01): the design's `GET
@@ -5892,7 +5961,18 @@ everything else goes into the parity-completion report.
   confirmation; M3a's migration 6, `signup`, its tables
   `wa_server_signup_attempts` and `wa_server_vault_records`, their
   columns and the kinds `waba` and `business`, added and awaiting
-  confirmation), for the same reason as L5's.
+  confirmation; M2f's migration 8, `erasure`: the column
+  `wa_server_events.contacts` and its partial GIN index
+  `wa_server_events_contacts_idx`, the key scope `erasure`, the erasure
+  journal's target `erasure_journal`, its layout, its HMAC's input
+  `<phone_number_id>|<contact>`, the `era_` id and the audit action
+  `customer_erased`, added and awaiting confirmation), for the same
+  reason as L5's.
+- **What an erasure deletes in the service** (M2f, design D89, D90,
+  proposed): the number's operator-only outbox rows, and on a number
+  moved from another tenant the previous holder's inbox records of the
+  person, are erased with the tenant's; both are irreversible deletions,
+  so whether they belong in it is the owner's to confirm.
 - **A scope of its own for deregistering a number** (M3d, design D68):
   the coordinator decided the scope `numbers`, a confirmation in the body
   and an audit event; a separate scope would be a new stored name (keys

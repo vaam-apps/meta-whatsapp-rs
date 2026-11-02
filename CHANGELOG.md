@@ -279,6 +279,34 @@ stored data, the owner's).
     unlinking the data endpoint, a shipping address's floor number, a
     health check or error answer at the checkout endpoint.
 
+- **Erasure in the service** (roadmap M2f, parity row 91: the service's
+  part done but the bot's auto-delete over HTTP, M5k; choices D86–D91,
+  proposed, awaiting the coordinator). `POST /v1/numbers/{pn}/erasures`
+  (`erase_customer`, a new scope `erasure` that no other scope grants)
+  erases a person on one of the tenant's numbers, only when called:
+  `{confirm: <pn>, contacts: [1..16]}`, the identities closed over the
+  inbox's (`Inbox::identities`), then a journal entry (the hex
+  HMAC-SHA256 of `<phone_number_id>|<contact>` under the new secret
+  `WA_SERVER_ERASURE_KEY`, written before anything is deleted, by
+  default the log target `erasure_journal`), the tenant's and the
+  number's operator-only outbox rows naming them, their inbox records
+  (`Inbox::erase_all`), and the audit event `customer_erased`. It answers
+  `200 {erasure_id, phone_number_id, erased_at}`, nothing of what was
+  found; no `Idempotency-Key` (a repeat is harmless); no identity in any
+  answer, error, log, journal entry or audit event. Without
+  `WA_SERVER_ERASURE_KEY`, `409 erasure_not_configured` (a new code;
+  memory storage in development uses a throwaway key). Postgres migration
+  8, `erasure`: the column `wa_server_events.contacts` (`TEXT[]`, filled
+  at insert, no default, no table rewrite) and its partial GIN index
+  `wa_server_events_contacts_idx`; rows from before it name nobody.
+  Stable identifiers pending the owner's confirmation. The OpenAPI
+  document gains the route, its two schemas, the tag and the scope
+  (additive). In the core: `erasure` (`Erasures`, `ErasureJournal`,
+  `LogJournal`, `ErasureKey`, `ErasureDeployment`),
+  `outbox::event_contacts` and `NewEvent::contacts`,
+  `audit::erasure_audit`, `Scope::Erasure`, `Operation::EraseCustomer`;
+  `state::Settings::erasure` in the HTTP crate.
+
 - **Received media in the service** (roadmap M2e, OPEN_QUESTIONS #43,
   parity row 45, now done in the service too; choices D77–D79, decided
   by the coordinator under the owner's delegation).
@@ -2674,6 +2702,14 @@ stored data, the owner's).
 
 ### Changed
 
+- **The service's core** (roadmap M2f): `outbox::Outbox` gains a
+  required `erase_contacts` (a backend of your own must answer it: delete
+  the tenant's and the number's operator-only rows whose
+  `NewEvent::contacts`, kept at insert, name one of the identities; the
+  `conformance` suites check it), and `model::Scope` and
+  `operation::Operation` gain a variant each (`Erasure`,
+  `EraseCustomer`): a `match` over either outside this repository must
+  follow.
 - **The service's core** (roadmap M2e): `outbox::Outbox` gains a
   required `received_media` (a backend of your own must answer it: the
   rows that recorded a media id, kept at insert from

@@ -619,6 +619,157 @@ pub async fn received_media(backend: &dyn Backend) {
     );
 }
 
+/// A row for `tenant` on `pn` (as [`row`]) whose event names `from` as
+/// its customer (`message.from`), and `dedup` as its key.
+pub fn from_row(tenant_id: Option<&str>, pn: &str, from: &str, dedup: Option<&str>) -> NewEvent {
+    NewEvent {
+        data: serde_json::json!({
+            "event": "message_received",
+            "display_phone_number": "15550783881",
+            "message": {"from": from, "type": "text", "text": {"body": "16505550000"}}
+        })
+        .to_string(),
+        ..row(tenant_id, "message_received", pn, dedup)
+    }
+}
+
+/// Roadmap M2f: an erasure deletes the rows naming one of its contacts on
+/// its number, the tenant's and the operator-only ones, and nothing else:
+/// not another customer's row on the number, not the customer's rows on
+/// another number of the tenant (nor operator-only ones there), not
+/// another tenant's row on the same number (a previous holder's, kept in
+/// its own stream), not a row whose text quotes the number. It answers how
+/// many went; a repeat deletes nothing; an empty list deletes nothing; a
+/// deleted row's dedup key is free again. Decisive: each clause of a
+/// backend's erasure (the contacts, the number, the tenant or
+/// operator-only streams).
+#[allow(clippy::too_many_lines)] // one case, read top to bottom
+pub async fn erase_contacts(backend: &dyn Backend) {
+    const X: &str = "16505551234";
+    const X_BSUID: &str = "US.13491208655302741918";
+    const Y: &str = "16505550000";
+    let outbox = backend.outbox();
+    let store = outbox.as_ref();
+    let records = backend.records();
+    let a = tenant("suite-erase-a");
+    let pn = |n: &str| PhoneNumberId::new(n).unwrap();
+    // A previous holder's row on 33, kept in its stream after 33 moved.
+    bind(records.as_ref(), "suite-erase-b", "33").await;
+    let previous = store
+        .insert(&from_row(Some("suite-erase-b"), "33", X, None))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        records
+            .unbind_waba(&WabaId::new(waba_of("33")).unwrap())
+            .await
+            .unwrap()
+    );
+    bind(records.as_ref(), "suite-erase-a", "31").await;
+    for number in ["32", "33"] {
+        records
+            .bind_waba(&a, &WabaId::new(waba_of(number)).unwrap(), &[pn(number)])
+            .await
+            .unwrap();
+    }
+    let mut gone = Vec::new();
+    for event in [
+        from_row(Some("suite-erase-a"), "31", X, Some("erase-k1")),
+        from_row(Some("suite-erase-a"), "31", X_BSUID, None),
+    ] {
+        gone.push(store.insert(&event).await.unwrap().unwrap());
+    }
+    let mut kept = Vec::new();
+    for event in [
+        from_row(Some("suite-erase-a"), "31", Y, None),
+        from_row(Some("suite-erase-a"), "32", X, None),
+        // A text quoting the number names nobody.
+        NewEvent {
+            data: format!("{{\"event\":\"message_received\",\"text\":\"{X}\"}}"),
+            ..row(Some("suite-erase-a"), "message_received", "31", None)
+        },
+    ] {
+        kept.push(store.insert(&event).await.unwrap().unwrap());
+    }
+    for number in ["31", "32"] {
+        store
+            .insert(&from_row(None, number, X, None))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    let contacts = [X.to_owned(), X_BSUID.to_owned()];
+    assert_eq!(
+        store
+            .erase_contacts(&a, &pn("31"), &contacts)
+            .await
+            .unwrap(),
+        3,
+        "the tenant's two rows and the operator-only one, on 31"
+    );
+    let page = store
+        .page(&query("suite-erase-a", None, 100))
+        .await
+        .unwrap();
+    let left: Vec<i64> = page.events.iter().map(|e| e.sequence).collect();
+    assert_eq!(left, kept, "only the rows naming them on 31 went: {gone:?}");
+    assert_eq!(page.high_water, kept[2], "the stream's sequences stay");
+    assert_eq!(page.purged_through, 0, "an erasure is no purge");
+    assert_eq!(
+        store
+            .erase_contacts(&a, &pn("31"), &contacts)
+            .await
+            .unwrap(),
+        0,
+        "a repeat deletes nothing"
+    );
+    assert_eq!(
+        store.erase_contacts(&a, &pn("31"), &[]).await.unwrap(),
+        0,
+        "no contacts, nothing"
+    );
+    assert_eq!(
+        store
+            .erase_contacts(&a, &pn("31"), &[String::new()])
+            .await
+            .unwrap(),
+        0,
+        "an empty id names nobody"
+    );
+    // On 33, the previous holder's row is not the tenant's to erase.
+    assert_eq!(
+        store
+            .erase_contacts(&a, &pn("33"), &contacts)
+            .await
+            .unwrap(),
+        0
+    );
+    let theirs = store.page(&query("suite-erase-b", None, 10)).await.unwrap();
+    assert_eq!(
+        theirs.events.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+        [previous],
+        "another tenant's stream is untouched"
+    );
+    // On 32, the tenant's row and the operator-only one.
+    assert_eq!(
+        store
+            .erase_contacts(&a, &pn("32"), &contacts)
+            .await
+            .unwrap(),
+        2
+    );
+    // The deleted row's dedup key is free: the same event is recorded
+    // again (the webhook pipeline's dedup markers keep redeliveries out).
+    assert!(
+        store
+            .insert(&from_row(Some("suite-erase-a"), "31", X, Some("erase-k1")))
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
 /// Every case above, on `backend`, empty, the purges last: they cut every
 /// stream's older rows, not only their own case's.
 pub async fn run(backend: &dyn Backend) {
@@ -631,4 +782,5 @@ pub async fn run(backend: &dyn Backend) {
     purge_is_per_stream(backend).await;
     purge(backend).await;
     purge_keeps_a_taken_key(backend).await;
+    erase_contacts(backend).await;
 }

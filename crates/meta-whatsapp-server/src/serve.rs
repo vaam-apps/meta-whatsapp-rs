@@ -41,6 +41,7 @@ use meta_whatsapp_rs::core::secret::AppSecret;
 use meta_whatsapp_rs::core::store::{KvStore, Retention};
 use meta_whatsapp_server_api_axum::api::internal_router;
 use meta_whatsapp_server_core::admin::mint;
+use meta_whatsapp_server_core::erasure::{ErasureDeployment, ErasureKey};
 use meta_whatsapp_server_core::housekeeping;
 use meta_whatsapp_server_core::otp::{OtpDeployment, OtpKeys};
 use meta_whatsapp_server_core::signup::{AccountUpdateConfirmation, SignupDeployment};
@@ -292,6 +293,30 @@ fn otp_deployment(
     Ok(OtpDeployment::new(keys, default_tenant))
 }
 
+/// Erasure's settings (roadmap M2f): the configured key, its journal the
+/// service's log (target `erasure_journal`); without one, on memory
+/// storage (development only) a throwaway key (the records die with the
+/// process anyway), and otherwise `None`: every erasure is `409
+/// erasure_not_configured`.
+fn erasure_deployment(
+    key: Option<ErasureKey>,
+    memory: bool,
+) -> anyhow::Result<Option<ErasureDeployment>> {
+    match key {
+        Some(key) => Ok(Some(ErasureDeployment::new(key))),
+        None if memory => {
+            tracing::warn!(
+                "WA_SERVER_ERASURE_KEY is not set: throwaway erasure key (development only)"
+            );
+            Ok(Some(ErasureDeployment::new(ErasureKey::throwaway()?)))
+        }
+        None => {
+            tracing::info!("WA_SERVER_ERASURE_KEY is not set: erasure is off");
+            Ok(None)
+        }
+    }
+}
+
 /// Embedded Signup's settings (roadmap M3a): the Meta app (`WA_APP_ID` and
 /// the active `WA_APP_SECRET`), its configuration (`WA_ES_CONFIG_ID`) and
 /// the mode (`WA_ONBOARDING_MODE`: a Solution Partner's credit line, with
@@ -364,6 +389,7 @@ async fn run<S: Future<Output = ()>>(
 ) -> anyhow::Result<()> {
     prepare(&config, backend.as_ref()).await?;
     let client = graph_client(&config)?;
+    let memory = matches!(config.storage, crate::config::Storage::Memory);
     let Config {
         vault_keys,
         verify_token,
@@ -376,6 +402,7 @@ async fn run<S: Future<Output = ()>>(
         move_rules,
         otp_pepper,
         otp_default_tenant,
+        erasure_key,
         app_id,
         es_config_id,
         onboarding,
@@ -383,6 +410,7 @@ async fn run<S: Future<Output = ()>>(
         ..
     } = config;
     settings.otp = Some(otp_deployment(otp_pepper, otp_default_tenant)?);
+    settings.erasure = erasure_deployment(erasure_key, memory)?;
     settings.signup = signup_deployment(
         app_id,
         app_secrets.first(),
