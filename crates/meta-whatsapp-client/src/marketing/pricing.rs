@@ -17,9 +17,10 @@ use std::collections::BTreeMap;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::TemplateId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::{MarketingAccount, wire_enum};
+use super::MarketingAccount;
 use crate::Client;
 use crate::templates::{TemplateCategory, TemplateStatus};
 
@@ -32,12 +33,12 @@ pub const MAX_COUNTRY_MULTIPLIERS: usize = 240;
 /// than `0` and at most `10`").
 pub const MAX_COUNTRY_MULTIPLIER: f64 = 10.0;
 
-wire_enum! {
+open_enum! {
     /// `bid_strategy` of an `optimization_spec`.
     pub enum BidStrategy {
         /// The only strategy Meta supports today: charge at most the
         /// `bid_amount`.
-        LowestCostWithBidCap = "LOWEST_COST_WITH_BID_CAP",
+        LowestCostWithBidCap => "LOWEST_COST_WITH_BID_CAP",
     }
 }
 
@@ -259,18 +260,18 @@ pub struct DuplicatedTemplate {
     pub source_template_id: Option<TemplateId>,
 }
 
-wire_enum! {
+open_enum! {
     /// `date_interval` of a reach estimate: how much history the estimate
     /// is computed from.
     pub enum DateInterval {
         /// The last day.
-        LastDay = "L1D",
+        LastDay => "L1D",
         /// The last 7 days.
-        Last7Days = "L7D",
+        Last7Days => "L7D",
         /// The last 14 days.
-        Last14Days = "L14D",
+        Last14Days => "L14D",
         /// The last 28 days.
-        Last28Days = "L28D",
+        Last28Days => "L28D",
     }
 }
 

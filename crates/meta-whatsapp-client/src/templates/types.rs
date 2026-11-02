@@ -3,9 +3,10 @@
 //! `reference/whatsapp-business-account/message-template-api` (schemas
 //! section) unless noted.
 
-use super::macros::string_enum;
+use meta_whatsapp_core::open_enum;
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// Template category (`WhatsAppBusinessHSMTag`). Decides pricing and
     /// which components are allowed; see `templates/template-categorization`.
     pub enum TemplateCategory {
@@ -20,7 +21,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// Template status (`WhatsAppBusinessHSMStatus`). Only `Approved`
     /// templates can be sent (`templates/overview#template-status`).
     pub enum TemplateStatus {
@@ -49,7 +51,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `parameter_format`: how placeholders are written in component text
     /// (`templates/overview#parameter-formats`). Meta defaults to
     /// positional when it is omitted.
@@ -61,7 +64,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `sub_category` (`WhatsAppBusinessHSMTagSubCategory`).
     pub enum TemplateSubCategory {
         /// Booking status.
@@ -85,7 +89,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `display_format` (`WhatsAppBusinessMessageDisplayFormat`).
     pub enum DisplayFormat {
         /// Order details display.
@@ -93,7 +98,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `send_type` for Marketing Messages API templates
     /// (`WhatsAppBusinessMarketingMessagesHSMSendType`).
     pub enum SendType {
@@ -104,7 +110,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `source` (`WhatsAppBusinessHSMSource`): how the template was created.
     /// Direct Send's auto-generated templates are listed with
     /// `source=AUTO_GENERATED` (`direct-send/view-generated-templates`).
@@ -121,7 +128,8 @@ string_enum! {
 /// [`crate::common`]).
 pub use crate::common::QualityRating;
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `rejected_reason` (`WhatsAppBusinessHSMRejectionReason`).
     pub enum RejectionReason {
         /// Abusive content.

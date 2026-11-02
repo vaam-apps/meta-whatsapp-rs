@@ -723,7 +723,7 @@ fn dynamic_values_parse_as_what_was_sent() {
     assert_eq!(weight(json!("${data.fw}")), Dynamic::data("fw"));
     assert_eq!(
         weight(json!("heavy")),
-        Dynamic::Static(FontWeight::Unknown("heavy".into()))
+        Dynamic::Static(FontWeight::Other("heavy".into()))
     );
     for v in [json!(true), json!("${data.v}"), json!("yes")] {
         assert_eq!(serde_json::to_value(parse(v.clone())).unwrap(), v);
@@ -840,7 +840,7 @@ fn the_document_skeleton_stays_strict() {
     let flow: FlowJson = reparse(&v);
     assert_eq!(
         flow.screens[0].layout.kind,
-        LayoutType::Unknown("TwoColumnLayout".into())
+        LayoutType::Other("TwoColumnLayout".into())
     );
 }
 
@@ -924,7 +924,7 @@ async fn create_sends_the_typed_flow_json_as_its_string() {
         json!({"id": "1", "success": true, "validation_errors": []}),
     );
     let flow = base();
-    let create = CreateFlow::new("typed", [FlowCategory::Other])
+    let create = CreateFlow::new("typed", [FlowCategory::OtherCategory])
         .flow_json_typed(&flow)
         .unwrap();
     client(&t)
@@ -949,7 +949,7 @@ async fn create_sends_the_typed_flow_json_as_its_string() {
 
     let mut bad = base();
     bad.screens[0].id = "SUCCESS".into();
-    let e = CreateFlow::new("typed", [FlowCategory::Other])
+    let e = CreateFlow::new("typed", [FlowCategory::OtherCategory])
         .flow_json_typed(&bad)
         .unwrap_err();
     assert_eq!(e.field, "screens[0].id");

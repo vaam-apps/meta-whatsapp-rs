@@ -65,6 +65,7 @@
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{PhoneNumberId, UserId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::recipient::Recipient;
 use serde::{Deserialize, Serialize};
 
@@ -264,52 +265,27 @@ impl Pass {
     }
 }
 
-/// `control_pass.target_role`: the role a targeted [`ThreadControl::pass`]
-/// hands the thread to (`conversation-routing/thread-control#pass`, the six
-/// values of its table).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum TargetRole {
-    /// `ai_agent`: the account's designated AI agent, currently Meta
-    /// Business Agent; only where it is enabled. The one role the
-    /// business does not configure.
-    AiAgent,
-    /// `ctwa`: the responder for the click-to-WhatsApp ads entry point.
-    Ctwa,
-    /// `customer_service`: the responder for the customer service entry
-    /// point.
-    CustomerService,
-    /// `escalation`: the account's escalation partner (an untargeted pass
-    /// reaches it too).
-    Escalation,
-    /// `marketing`: the responder for the marketing entry point.
-    Marketing,
-    /// `utility`: the responder for the utility entry point.
-    Utility,
-    /// Any other value, sent verbatim (a role Meta adds later).
-    #[serde(untagged)]
-    Other(String),
-}
-
-impl TargetRole {
-    /// The value as sent to Meta.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::AiAgent => "ai_agent",
-            Self::Ctwa => "ctwa",
-            Self::CustomerService => "customer_service",
-            Self::Escalation => "escalation",
-            Self::Marketing => "marketing",
-            Self::Utility => "utility",
-            Self::Other(other) => other,
-        }
-    }
-}
-
-impl std::fmt::Display for TargetRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+open_enum! {
+    /// `control_pass.target_role`: the role a targeted [`ThreadControl::pass`]
+    /// hands the thread to (`conversation-routing/thread-control#pass`, the six
+    /// values of its table).
+    pub enum TargetRole {
+        /// `ai_agent`: the account's designated AI agent, currently Meta
+        /// Business Agent; only where it is enabled. The one role the
+        /// business does not configure.
+        AiAgent => "ai_agent",
+        /// `ctwa`: the responder for the click-to-WhatsApp ads entry point.
+        Ctwa => "ctwa",
+        /// `customer_service`: the responder for the customer service entry
+        /// point.
+        CustomerService => "customer_service",
+        /// `escalation`: the account's escalation partner (an untargeted pass
+        /// reaches it too).
+        Escalation => "escalation",
+        /// `marketing`: the responder for the marketing entry point.
+        Marketing => "marketing",
+        /// `utility`: the responder for the utility entry point.
+        Utility => "utility",
     }
 }
 
@@ -361,58 +337,33 @@ impl RoutingRoles {
     }
 }
 
-/// One of `roles` in [`RoutingRoles`]
-/// (`conversation-routing/routing-roles` § Role values, the six values of
-/// its table).
-///
-/// All but [`RoutingRole::Calls`] are also the role identifiers of
-/// `messaging_handovers` events (`previous_owner_role`, `new_owner_role`).
-/// `ai_agent` is never returned (a partner business cannot hold it); were
-/// Meta to send it, or a role it adds later, it reads as
-/// [`RoutingRole::Other`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum RoutingRole {
-    /// `calls`: the Call primary, which receives call webhooks and call
-    /// permission replies and alone may take call actions. Never on a
-    /// handover event: handling a call never makes it the thread's owner.
-    Calls,
-    /// `ctwa`: the primary for the click-to-WhatsApp ads entry point.
-    Ctwa,
-    /// `customer_service`: the primary for the Service entry point.
-    CustomerService,
-    /// `escalation`: the designated escalation partner, which may
-    /// [`ThreadControl::take`] any thread.
-    Escalation,
-    /// `marketing`: the primary for the Marketing Message Response entry
-    /// point.
-    Marketing,
-    /// `utility`: the primary for the Utility Response entry point.
-    Utility,
-    /// Any other value, kept verbatim (a role Meta adds later).
-    #[serde(untagged)]
-    Other(String),
-}
-
-impl RoutingRole {
-    /// The value as Meta sends it.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Calls => "calls",
-            Self::Ctwa => "ctwa",
-            Self::CustomerService => "customer_service",
-            Self::Escalation => "escalation",
-            Self::Marketing => "marketing",
-            Self::Utility => "utility",
-            Self::Other(other) => other,
-        }
-    }
-}
-
-impl std::fmt::Display for RoutingRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+open_enum! {
+    /// One of `roles` in [`RoutingRoles`]
+    /// (`conversation-routing/routing-roles` § Role values, the six values of
+    /// its table).
+    ///
+    /// All but [`RoutingRole::Calls`] are also the role identifiers of
+    /// `messaging_handovers` events (`previous_owner_role`, `new_owner_role`).
+    /// `ai_agent` is never returned (a partner business cannot hold it); were
+    /// Meta to send it, or a role it adds later, it reads as
+    /// [`RoutingRole::Other`].
+    pub enum RoutingRole {
+        /// `calls`: the Call primary, which receives call webhooks and call
+        /// permission replies and alone may take call actions. Never on a
+        /// handover event: handling a call never makes it the thread's owner.
+        Calls => "calls",
+        /// `ctwa`: the primary for the click-to-WhatsApp ads entry point.
+        Ctwa => "ctwa",
+        /// `customer_service`: the primary for the Service entry point.
+        CustomerService => "customer_service",
+        /// `escalation`: the designated escalation partner, which may
+        /// [`ThreadControl::take`] any thread.
+        Escalation => "escalation",
+        /// `marketing`: the primary for the Marketing Message Response entry
+        /// point.
+        Marketing => "marketing",
+        /// `utility`: the primary for the Utility Response entry point.
+        Utility => "utility",
     }
 }
 

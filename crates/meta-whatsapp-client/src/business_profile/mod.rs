@@ -21,6 +21,7 @@
 
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{BusinessProfileId, PhoneNumberId, UploadHandle};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
@@ -271,63 +272,61 @@ impl ProfileField {
     }
 }
 
-/// Industry of the business (`WhatsAppBusinessVertical`). The union of the
-/// values in both reference pages; an unlisted value round-trips through
-/// [`Vertical::Unknown`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Vertical {
-    /// `ALCOHOL`.
-    Alcohol,
-    /// `APPAREL`.
-    Apparel,
-    /// `AUTO`.
-    Auto,
-    /// `BEAUTY`.
-    Beauty,
-    /// `EDU`.
-    Edu,
-    /// `ENTERTAIN`.
-    Entertain,
-    /// `EVENT_PLAN`.
-    EventPlan,
-    /// `FINANCE`.
-    Finance,
-    /// `GOVT`.
-    Govt,
-    /// `GROCERY`.
-    Grocery,
-    /// `HEALTH`.
-    Health,
-    /// `HOTEL`.
-    Hotel,
-    /// `MATRIMONY_SERVICE` (profile node reference only).
-    MatrimonyService,
-    /// `NONPROFIT`.
-    Nonprofit,
-    /// `NOT_A_BIZ` — can be read, cannot be set.
-    NotABiz,
-    /// `ONLINE_GAMBLING`.
-    OnlineGambling,
-    /// `OTHER` — a real vertical, not a catch-all.
-    Other,
-    /// `OTC_DRUGS`.
-    OtcDrugs,
-    /// `PHYSICAL_GAMBLING`.
-    PhysicalGambling,
-    /// `PROF_SERVICES`.
-    ProfServices,
-    /// `RESTAURANT`.
-    Restaurant,
-    /// `RETAIL`.
-    Retail,
-    /// `TRAVEL`.
-    Travel,
-    /// `UNDEFINED` — can be read, cannot be set.
-    Undefined,
-    /// A value this crate does not know yet, kept verbatim.
-    #[serde(untagged)]
-    Unknown(String),
+open_enum! {
+    /// Industry of the business (`WhatsAppBusinessVertical`). The union of the
+    /// values in both reference pages; an unlisted value round-trips through
+    /// [`Vertical::Other`]. `OTHER` is a vertical of its own,
+    /// [`Vertical::OtherVertical`].
+    pub enum Vertical {
+        /// `ALCOHOL`.
+        Alcohol => "ALCOHOL",
+        /// `APPAREL`.
+        Apparel => "APPAREL",
+        /// `AUTO`.
+        Auto => "AUTO",
+        /// `BEAUTY`.
+        Beauty => "BEAUTY",
+        /// `EDU`.
+        Edu => "EDU",
+        /// `ENTERTAIN`.
+        Entertain => "ENTERTAIN",
+        /// `EVENT_PLAN`.
+        EventPlan => "EVENT_PLAN",
+        /// `FINANCE`.
+        Finance => "FINANCE",
+        /// `GOVT`.
+        Govt => "GOVT",
+        /// `GROCERY`.
+        Grocery => "GROCERY",
+        /// `HEALTH`.
+        Health => "HEALTH",
+        /// `HOTEL`.
+        Hotel => "HOTEL",
+        /// `MATRIMONY_SERVICE` (profile node reference only).
+        MatrimonyService => "MATRIMONY_SERVICE",
+        /// `NONPROFIT`.
+        Nonprofit => "NONPROFIT",
+        /// `NOT_A_BIZ` — can be read, cannot be set.
+        NotABiz => "NOT_A_BIZ",
+        /// `ONLINE_GAMBLING`.
+        OnlineGambling => "ONLINE_GAMBLING",
+        /// `OTHER` — a real vertical, not a catch-all.
+        OtherVertical => "OTHER",
+        /// `OTC_DRUGS`.
+        OtcDrugs => "OTC_DRUGS",
+        /// `PHYSICAL_GAMBLING`.
+        PhysicalGambling => "PHYSICAL_GAMBLING",
+        /// `PROF_SERVICES`.
+        ProfServices => "PROF_SERVICES",
+        /// `RESTAURANT`.
+        Restaurant => "RESTAURANT",
+        /// `RETAIL`.
+        Retail => "RETAIL",
+        /// `TRAVEL`.
+        Travel => "TRAVEL",
+        /// `UNDEFINED` — can be read, cannot be set.
+        Undefined => "UNDEFINED",
+    }
 }
 
 /// A business profile as returned by either `GET` (`WhatsAppBusinessProfile`
@@ -555,7 +554,7 @@ mod tests {
         assert_eq!(profile.about.as_deref(), Some("Hi"));
         assert_eq!(
             profile.vertical,
-            Some(Vertical::Unknown("SOMETHING_NEW".into()))
+            Some(Vertical::Other("SOMETHING_NEW".into()))
         );
         assert_eq!(t.remaining(), 0);
     }
@@ -763,7 +762,7 @@ mod tests {
             ("NONPROFIT", Vertical::Nonprofit),
             ("NOT_A_BIZ", Vertical::NotABiz),
             ("ONLINE_GAMBLING", Vertical::OnlineGambling),
-            ("OTHER", Vertical::Other),
+            ("OTHER", Vertical::OtherVertical),
             ("OTC_DRUGS", Vertical::OtcDrugs),
             ("PHYSICAL_GAMBLING", Vertical::PhysicalGambling),
             ("PROF_SERVICES", Vertical::ProfServices),
@@ -775,7 +774,7 @@ mod tests {
             assert_eq!(serde_json::to_value(&v).unwrap(), json!(s));
             assert_eq!(serde_json::from_value::<Vertical>(json!(s)).unwrap(), v);
         }
-        let unknown = Vertical::Unknown("NEW_ONE".into());
+        let unknown = Vertical::Other("NEW_ONE".into());
         assert_eq!(serde_json::to_value(&unknown).unwrap(), json!("NEW_ONE"));
     }
 

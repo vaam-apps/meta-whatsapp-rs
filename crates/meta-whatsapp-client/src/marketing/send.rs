@@ -8,10 +8,10 @@
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::PhoneNumberId;
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::recipient::Recipient;
 use serde::Serialize;
 
-use super::wire_enum;
 use crate::Client;
 use crate::templates::TemplateMessage;
 
@@ -35,13 +35,13 @@ impl Client {
     }
 }
 
-wire_enum! {
+open_enum! {
     /// What happens when the business has not finished MM API onboarding.
     pub enum ProductPolicy {
         /// Deliver through Cloud API instead (Meta's default).
-        CloudApiFallback = "CLOUD_API_FALLBACK",
+        CloudApiFallback => "CLOUD_API_FALLBACK",
         /// Fail rather than fall back to Cloud API.
-        Strict = "STRICT",
+        Strict => "STRICT",
     }
 }
 

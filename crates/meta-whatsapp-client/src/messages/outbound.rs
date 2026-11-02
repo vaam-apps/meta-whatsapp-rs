@@ -2,6 +2,7 @@
 
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{CatalogId, GroupId, MediaId, MessageId, WabaId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::recipient::Recipient;
 use serde::Serialize;
 use serde::ser::{SerializeMap, Serializer};
@@ -61,39 +62,21 @@ pub struct Context {
     pub message_id: MessageId,
 }
 
-/// Direct Send `category` (`direct-send/send-utility-and-authentication-messages`).
-///
-/// Direct Send is a beta that sends free-form content *outside* the
-/// customer service window by turning it into a generated template.
-/// Omitting the category is the same as [`DirectSendCategory::Service`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum DirectSendCategory {
-    /// `utility`, charged at utility rates.
-    Utility,
-    /// `authentication` (access restricted). Cannot be sent to a BSUID.
-    Authentication,
-    /// `service`: the normal service-message flow.
-    Service,
-    /// A value this crate does not know yet, sent as given.
-    Other(String),
-}
-
-impl DirectSendCategory {
-    /// Wire value.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Utility => "utility",
-            Self::Authentication => "authentication",
-            Self::Service => "service",
-            Self::Other(s) => s,
-        }
-    }
-}
-
-impl Serialize for DirectSendCategory {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
+open_enum! {
+    /// Direct Send `category` (`direct-send/send-utility-and-authentication-messages`).
+    ///
+    /// Direct Send is a beta that sends free-form content *outside* the
+    /// customer service window by turning it into a generated template.
+    /// Omitting the category is the same as [`DirectSendCategory::Service`].
+    /// A value this crate does not know yet is sent as given
+    /// ([`DirectSendCategory::Other`]).
+    pub enum DirectSendCategory {
+        /// `utility`, charged at utility rates.
+        Utility => "utility",
+        /// `authentication` (access restricted). Cannot be sent to a BSUID.
+        Authentication => "authentication",
+        /// `service`: the normal service-message flow.
+        Service => "service",
     }
 }
 

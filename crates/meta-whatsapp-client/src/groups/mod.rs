@@ -39,6 +39,7 @@ use futures::{Stream, stream};
 use http::Method;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{GroupId, MessageId, PhoneNumberId, UserId, WaId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::paging::{Page, Paging};
 use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::secret::RedactedPath;
@@ -862,18 +863,15 @@ impl GroupSettingsUpdate {
     }
 }
 
-/// Whether users who open the invite link join directly or ask first.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum JoinApprovalMode {
-    /// `approval_required`: users send a join request you approve or
-    /// reject.
-    ApprovalRequired,
-    /// `auto_approve`: users join directly.
-    AutoApprove,
-    /// A value this crate does not know yet, kept verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Whether users who open the invite link join directly or ask first.
+    pub enum JoinApprovalMode {
+        /// `approval_required`: users send a join request you approve or
+        /// reject.
+        ApprovalRequired => "approval_required",
+        /// `auto_approve`: users join directly.
+        AutoApprove => "auto_approve",
+    }
 }
 
 /// Query of [`Groups::list`].

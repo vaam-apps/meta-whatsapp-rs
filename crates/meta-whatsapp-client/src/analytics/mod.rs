@@ -49,6 +49,7 @@ use futures::Stream;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{GroupId, TemplateGroupId, TemplateId, WabaId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::paging::Page;
 use serde::{Deserialize, Deserializer, Serialize};
 use time::{Date, Month, OffsetDateTime};
@@ -647,38 +648,32 @@ fn parse_date(s: &str) -> Option<Date> {
 
 // ── Enums ────────────────────────────────────────────────────────────────
 //
-// Every enum keeps unknown values in an untagged `Other(String)` so a value
-// Meta adds never breaks parsing, and can be sent back unchanged.
+// Every enum is an `open_enum!`: a value Meta adds is kept in
+// `Other(String)`, so it never breaks parsing and is sent back unchanged.
 
-/// Granularity of messaging analytics (`analytics#messaging-analytics`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum MessagingGranularity {
-    /// `HALF_HOUR`.
-    HalfHour,
-    /// `DAY`.
-    Day,
-    /// `MONTH`.
-    Month,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Granularity of messaging analytics (`analytics#messaging-analytics`).
+    pub enum MessagingGranularity {
+        /// `HALF_HOUR`.
+        HalfHour => "HALF_HOUR",
+        /// `DAY`.
+        Day => "DAY",
+        /// `MONTH`.
+        Month => "MONTH",
+    }
 }
 
-/// Granularity of conversation, pricing and call analytics; template
-/// analytics report `DAILY`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Granularity {
-    /// `HALF_HOUR`.
-    HalfHour,
-    /// `DAILY`.
-    Daily,
-    /// `MONTHLY`.
-    Monthly,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Granularity of conversation, pricing and call analytics; template
+    /// analytics report `DAILY`.
+    pub enum Granularity {
+        /// `HALF_HOUR`.
+        HalfHour => "HALF_HOUR",
+        /// `DAILY`.
+        Daily => "DAILY",
+        /// `MONTHLY`.
+        Monthly => "MONTHLY",
+    }
 }
 
 /// `product_types` filter of messaging analytics. Sent as its numeric code.
@@ -706,318 +701,264 @@ impl MessageProductType {
     }
 }
 
-/// `metric_types` of conversation analytics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ConversationMetric {
-    /// `COST` (not returned for WABAs on a partner's credit line).
-    Cost,
-    /// `CONVERSATION`.
-    Conversation,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `metric_types` of conversation analytics.
+    pub enum ConversationMetric {
+        /// `COST` (not returned for WABAs on a partner's credit line).
+        Cost => "COST",
+        /// `CONVERSATION`.
+        Conversation => "CONVERSATION",
+    }
 }
 
-/// Conversation category.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ConversationCategory {
-    /// `AUTHENTICATION`.
-    Authentication,
-    /// `MARKETING`.
-    Marketing,
-    /// `SERVICE`.
-    Service,
-    /// `UTILITY`.
-    Utility,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Conversation category.
+    pub enum ConversationCategory {
+        /// `AUTHENTICATION`.
+        Authentication => "AUTHENTICATION",
+        /// `MARKETING`.
+        Marketing => "MARKETING",
+        /// `SERVICE`.
+        Service => "SERVICE",
+        /// `UTILITY`.
+        Utility => "UTILITY",
+    }
 }
 
-/// Conversation type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ConversationType {
-    /// `FREE_ENTRY_POINT`.
-    FreeEntryPoint,
-    /// `FREE_TIER`.
-    FreeTier,
-    /// `REGULAR`.
-    Regular,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Conversation type.
+    pub enum ConversationType {
+        /// `FREE_ENTRY_POINT`.
+        FreeEntryPoint => "FREE_ENTRY_POINT",
+        /// `FREE_TIER`.
+        FreeTier => "FREE_TIER",
+        /// `REGULAR`.
+        Regular => "REGULAR",
+    }
 }
 
-/// Conversation direction.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ConversationDirection {
-    /// `BUSINESS_INITIATED`.
-    BusinessInitiated,
-    /// `USER_INITIATED`.
-    UserInitiated,
-    /// `UNKNOWN` — a documented value: Meta could not tell.
-    Unknown,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Conversation direction.
+    pub enum ConversationDirection {
+        /// `BUSINESS_INITIATED`.
+        BusinessInitiated => "BUSINESS_INITIATED",
+        /// `USER_INITIATED`.
+        UserInitiated => "USER_INITIATED",
+        /// `UNKNOWN` — a documented value: Meta could not tell.
+        Unknown => "UNKNOWN",
+    }
 }
 
-/// `dimensions` (breakdowns) of conversation analytics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum ConversationDimension {
-    /// `CONVERSATION_CATEGORY`.
-    ConversationCategory,
-    /// `CONVERSATION_DIRECTION`.
-    ConversationDirection,
-    /// `CONVERSATION_TYPE`.
-    ConversationType,
-    /// `COUNTRY`.
-    Country,
-    /// `PHONE`.
-    Phone,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `dimensions` (breakdowns) of conversation analytics.
+    pub enum ConversationDimension {
+        /// `CONVERSATION_CATEGORY`.
+        ConversationCategory => "CONVERSATION_CATEGORY",
+        /// `CONVERSATION_DIRECTION`.
+        ConversationDirection => "CONVERSATION_DIRECTION",
+        /// `CONVERSATION_TYPE`.
+        ConversationType => "CONVERSATION_TYPE",
+        /// `COUNTRY`.
+        Country => "COUNTRY",
+        /// `PHONE`.
+        Phone => "PHONE",
+    }
 }
 
-/// `metric_types` of pricing analytics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum PricingMetric {
-    /// `COST`.
-    Cost,
-    /// `VOLUME`.
-    Volume,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `metric_types` of pricing analytics.
+    pub enum PricingMetric {
+        /// `COST`.
+        Cost => "COST",
+        /// `VOLUME`.
+        Volume => "VOLUME",
+    }
 }
 
-/// Pricing category of delivered messages.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum PricingCategory {
-    /// `AUTHENTICATION`.
-    Authentication,
-    /// `AUTHENTICATION_INTERNATIONAL`.
-    AuthenticationInternational,
-    /// `MARKETING`.
-    Marketing,
-    /// `MARKETING_LITE`.
-    MarketingLite,
-    /// `SERVICE` (not charged).
-    Service,
-    /// `UTILITY`.
-    Utility,
-    /// `REFERRAL_CONVERSION` (free entry point).
-    ReferralConversion,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Pricing category of delivered messages.
+    pub enum PricingCategory {
+        /// `AUTHENTICATION`.
+        Authentication => "AUTHENTICATION",
+        /// `AUTHENTICATION_INTERNATIONAL`.
+        AuthenticationInternational => "AUTHENTICATION_INTERNATIONAL",
+        /// `MARKETING`.
+        Marketing => "MARKETING",
+        /// `MARKETING_LITE`.
+        MarketingLite => "MARKETING_LITE",
+        /// `SERVICE` (not charged).
+        Service => "SERVICE",
+        /// `UTILITY`.
+        Utility => "UTILITY",
+        /// `REFERRAL_CONVERSION` (free entry point).
+        ReferralConversion => "REFERRAL_CONVERSION",
+    }
 }
 
-/// Pricing type of delivered messages.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum PricingType {
-    /// `FREE_CUSTOMER_SERVICE`.
-    FreeCustomerService,
-    /// `FREE_ENTRY_POINT`.
-    FreeEntryPoint,
-    /// `REGULAR` (billable).
-    Regular,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Pricing type of delivered messages.
+    pub enum PricingType {
+        /// `FREE_CUSTOMER_SERVICE`.
+        FreeCustomerService => "FREE_CUSTOMER_SERVICE",
+        /// `FREE_ENTRY_POINT`.
+        FreeEntryPoint => "FREE_ENTRY_POINT",
+        /// `REGULAR` (billable).
+        Regular => "REGULAR",
+    }
 }
 
-/// `dimensions` of pricing analytics. `Tier` together with
-/// `PricingCategory` and `Country` adds volume tiers to data points.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum PricingDimension {
-    /// `COUNTRY`.
-    Country,
-    /// `PHONE`.
-    Phone,
-    /// `PRICING_CATEGORY`.
-    PricingCategory,
-    /// `PRICING_TYPE`.
-    PricingType,
-    /// `TIER`.
-    Tier,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `dimensions` of pricing analytics. `Tier` together with
+    /// `PricingCategory` and `Country` adds volume tiers to data points.
+    pub enum PricingDimension {
+        /// `COUNTRY`.
+        Country => "COUNTRY",
+        /// `PHONE`.
+        Phone => "PHONE",
+        /// `PRICING_CATEGORY`.
+        PricingCategory => "PRICING_CATEGORY",
+        /// `PRICING_TYPE`.
+        PricingType => "PRICING_TYPE",
+        /// `TIER`.
+        Tier => "TIER",
+    }
 }
 
-/// Call direction.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum CallDirection {
-    /// `USER_INITIATED`.
-    UserInitiated,
-    /// `BUSINESS_INITIATED`.
-    BusinessInitiated,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// Call direction.
+    pub enum CallDirection {
+        /// `USER_INITIATED`.
+        UserInitiated => "USER_INITIATED",
+        /// `BUSINESS_INITIATED`.
+        BusinessInitiated => "BUSINESS_INITIATED",
+    }
 }
 
-/// `dimensions` of call analytics — lowercase on the wire, as documented.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CallDimension {
-    /// `phone`.
-    Phone,
-    /// `direction`.
-    Direction,
-    /// `country`.
-    Country,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `dimensions` of call analytics — lowercase on the wire, as documented.
+    pub enum CallDimension {
+        /// `phone`.
+        Phone => "phone",
+        /// `direction`.
+        Direction => "direction",
+        /// `country`.
+        Country => "country",
+    }
 }
 
-/// `metric_types` of call analytics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum CallMetric {
-    /// `COUNT`.
-    Count,
-    /// `COST`.
-    Cost,
-    /// `AVERAGE_DURATION`.
-    AverageDuration,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `metric_types` of call analytics.
+    pub enum CallMetric {
+        /// `COUNT`.
+        Count => "COUNT",
+        /// `COST`.
+        Cost => "COST",
+        /// `AVERAGE_DURATION`.
+        AverageDuration => "AVERAGE_DURATION",
+    }
 }
 
-/// `metric_types` of template analytics. The `App*`/`Website*` metrics are
-/// for Marketing Messages API for WhatsApp businesses only.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum TemplateMetric {
-    /// `COST`.
-    Cost,
-    /// `CLICKED`.
-    Clicked,
-    /// `DELIVERED`.
-    Delivered,
-    /// `READ`.
-    Read,
-    /// `SENT`.
-    Sent,
-    /// `APP_ACTIVATIONS`.
-    AppActivations,
-    /// `APP_ADD_TO_CART`.
-    AppAddToCart,
-    /// `APP_CHECKOUTS_INITIATED`.
-    AppCheckoutsInitiated,
-    /// `APP_PURCHASES`.
-    AppPurchases,
-    /// `APP_PURCHASES_CONVERSION_VALUE`.
-    AppPurchasesConversionValue,
-    /// `WEBSITE_ADD_TO_CART`.
-    WebsiteAddToCart,
-    /// `WEBSITE_CHECKOUTS_INITIATED`.
-    WebsiteCheckoutsInitiated,
-    /// `WEBSITE_PURCHASES`.
-    WebsitePurchases,
-    /// `WEBSITE_PURCHASES_CONVERSION_VALUE`.
-    WebsitePurchasesConversionValue,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `metric_types` of template analytics. The `App*`/`Website*` metrics are
+    /// for Marketing Messages API for WhatsApp businesses only.
+    pub enum TemplateMetric {
+        /// `COST`.
+        Cost => "COST",
+        /// `CLICKED`.
+        Clicked => "CLICKED",
+        /// `DELIVERED`.
+        Delivered => "DELIVERED",
+        /// `READ`.
+        Read => "READ",
+        /// `SENT`.
+        Sent => "SENT",
+        /// `APP_ACTIVATIONS`.
+        AppActivations => "APP_ACTIVATIONS",
+        /// `APP_ADD_TO_CART`.
+        AppAddToCart => "APP_ADD_TO_CART",
+        /// `APP_CHECKOUTS_INITIATED`.
+        AppCheckoutsInitiated => "APP_CHECKOUTS_INITIATED",
+        /// `APP_PURCHASES`.
+        AppPurchases => "APP_PURCHASES",
+        /// `APP_PURCHASES_CONVERSION_VALUE`.
+        AppPurchasesConversionValue => "APP_PURCHASES_CONVERSION_VALUE",
+        /// `WEBSITE_ADD_TO_CART`.
+        WebsiteAddToCart => "WEBSITE_ADD_TO_CART",
+        /// `WEBSITE_CHECKOUTS_INITIATED`.
+        WebsiteCheckoutsInitiated => "WEBSITE_CHECKOUTS_INITIATED",
+        /// `WEBSITE_PURCHASES`.
+        WebsitePurchases => "WEBSITE_PURCHASES",
+        /// `WEBSITE_PURCHASES_CONVERSION_VALUE`.
+        WebsitePurchasesConversionValue => "WEBSITE_PURCHASES_CONVERSION_VALUE",
+    }
 }
 
-/// `product_type` filter of template analytics; without it only Cloud API
-/// sends are counted.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum TemplateProductType {
-    /// `CLOUD_API`.
-    CloudApi,
-    /// `MARKETING_MESSAGES_API_FOR_WHATSAPP`.
-    MarketingMessagesApiForWhatsapp,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `product_type` filter of template analytics; without it only Cloud API
+    /// sends are counted.
+    pub enum TemplateProductType {
+        /// `CLOUD_API`.
+        CloudApi => "CLOUD_API",
+        /// `MARKETING_MESSAGES_API_FOR_WHATSAPP`.
+        MarketingMessagesApiForWhatsapp => "MARKETING_MESSAGES_API_FOR_WHATSAPP",
+    }
 }
 
-/// `metric_types` of template group analytics — lowercase on the wire, as
-/// documented for this endpoint.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TemplateGroupMetric {
-    /// `cost`.
-    Cost,
-    /// `clicked`.
-    Clicked,
-    /// `delivered`.
-    Delivered,
-    /// `read`.
-    Read,
-    /// `sent`.
-    Sent,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `metric_types` of template group analytics — lowercase on the wire, as
+    /// documented for this endpoint.
+    pub enum TemplateGroupMetric {
+        /// `cost`.
+        Cost => "cost",
+        /// `clicked`.
+        Clicked => "clicked",
+        /// `delivered`.
+        Delivered => "delivered",
+        /// `read`.
+        Read => "read",
+        /// `sent`.
+        Sent => "sent",
+    }
 }
 
-/// `metric_types` of group analytics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum GroupMetric {
-    /// `SENT`: messages the business sent to the group.
-    Sent,
-    /// `DELIVERED`: deliveries to participants.
-    Delivered,
-    /// `READ`: reads by participants.
-    Read,
-    /// `PARTICIPANTS_JOINED`.
-    ParticipantsJoined,
-    /// `PARTICIPANTS_LEFT`.
-    ParticipantsLeft,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `metric_types` of group analytics.
+    pub enum GroupMetric {
+        /// `SENT`: messages the business sent to the group.
+        Sent => "SENT",
+        /// `DELIVERED`: deliveries to participants.
+        Delivered => "DELIVERED",
+        /// `READ`: reads by participants.
+        Read => "READ",
+        /// `PARTICIPANTS_JOINED`.
+        ParticipantsJoined => "PARTICIPANTS_JOINED",
+        /// `PARTICIPANTS_LEFT`.
+        ParticipantsLeft => "PARTICIPANTS_LEFT",
+    }
 }
 
-/// `clicked[].type` of template analytics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ClickType {
-    /// `url_button`: total URL button clicks.
-    UrlButton,
-    /// `unique_url_button`: distinct users who clicked.
-    UniqueUrlButton,
-    /// `quick_reply_button` (appears in the example response).
-    QuickReplyButton,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `clicked[].type` of template analytics.
+    pub enum ClickType {
+        /// `url_button`: total URL button clicks.
+        UrlButton => "url_button",
+        /// `unique_url_button`: distinct users who clicked.
+        UniqueUrlButton => "unique_url_button",
+        /// `quick_reply_button` (appears in the example response).
+        QuickReplyButton => "quick_reply_button",
+    }
 }
 
-/// `cost[].type` of template analytics.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CostType {
-    /// `amount_spent`.
-    AmountSpent,
-    /// `cost_per_delivered`.
-    CostPerDelivered,
-    /// `cost_per_url_button_click`.
-    CostPerUrlButtonClick,
-    /// Any other value, verbatim.
-    #[serde(untagged)]
-    Other(String),
+open_enum! {
+    /// `cost[].type` of template analytics.
+    pub enum CostType {
+        /// `amount_spent`.
+        AmountSpent => "amount_spent",
+        /// `cost_per_delivered`.
+        CostPerDelivered => "cost_per_delivered",
+        /// `cost_per_url_button_click`.
+        CostPerUrlButtonClick => "cost_per_url_button_click",
+    }
 }
 
 // ── Queries ──────────────────────────────────────────────────────────────

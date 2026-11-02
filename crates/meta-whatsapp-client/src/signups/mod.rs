@@ -55,6 +55,7 @@ use futures::Stream;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{SignupId, WabaId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::paging::Page;
 use serde::{Deserialize, Serialize};
 
@@ -227,18 +228,14 @@ impl NewSignup {
     }
 }
 
-/// Signup status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
-pub enum SignupStatus {
-    /// The deep link works.
-    Active,
-    /// Users who open the link see an error. Reversible.
-    Disabled,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
+open_enum! {
+    /// Signup status.
+    pub enum SignupStatus {
+        /// The deep link works.
+        Active => "ACTIVE",
+        /// Users who open the link see an error. Reversible.
+        Disabled => "DISABLED",
+    }
 }
 
 /// Options of [`Signups::list`] (`in-app-signup`, "List signups").
@@ -376,7 +373,7 @@ impl SignupUpdate {
         if let Some(url) = &self.website_url {
             check_website(url)?;
         }
-        if self.status == Some(SignupStatus::Unknown) {
+        if matches!(self.status, Some(SignupStatus::Other(_))) {
             return Err(ValidationError::new("status", "must be ACTIVE or DISABLED"));
         }
         Ok(())

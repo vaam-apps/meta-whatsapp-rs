@@ -38,7 +38,7 @@
 //!
 //! let created = client
 //!     .flows(meta_whatsapp_core::ids::WabaId::new("<WABA_ID>")?)
-//!     .create(&CreateFlow::new("My first flow", [FlowCategory::Other]))
+//!     .create(&CreateFlow::new("My first flow", [FlowCategory::OtherCategory]))
 //!     .await?;
 //! let flow = client.flow(created.id);
 //! let upload = flow.upload_flow_json(flow_json).await?;
