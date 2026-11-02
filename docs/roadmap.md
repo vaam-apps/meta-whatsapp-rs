@@ -5062,7 +5062,8 @@ design's (§9).
     live: another tenant's key with every scope is `404` with nothing
     erased, a key without the scope `403`, the same customer on the
     tenant's other number and on another tenant's number kept);
-    `conformance::outbox::erase_contacts` (both backends: the tenant's own
+    `conformance::outbox::erase_contacts` (both backends, and, since the
+    merge of PR #91, S9's `MongoOutbox`, live: the tenant's own
     rows, never the number's operator-only ones, whose dedup keys stay
     taken, nor another number's or another tenant's stream, a repeat
     deleting nothing, the dedup key freed);
