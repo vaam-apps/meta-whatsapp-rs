@@ -84,6 +84,22 @@
 //!   or received before the service recorded media ids): Meta's check, as
 //!   above.
 //!
+//! One row here is enough, whatever other rows name the id
+//! (`Received::among`), and the cut is the inbox's own (received at or
+//! after it). A media id is bound to the number by the event that named
+//! it: the row's number and tenant are the ones the webhook was routed
+//! by (its `metadata.phone_number_id`, bound under the WABA it names), and
+//! only a delivery signed with the deployment's app secret is recorded,
+//! so no tenant writes a row. The exemption trusts that a media id Meta
+//! delivered on a number is that number's customer's file.
+//!
+//! **Timing** (design D78): a refusal answers without a round trip to
+//! Meta, an id never recorded after one, so a caller can tell that an id
+//! it already holds was received elsewhere in the deployment (within the
+//! outbox's retention). Nothing of the file, its number or its tenant is
+//! told, and asking Meta anyway would undo the refusal's point (nothing
+//! asked); accepted, not mitigated.
+//!
 //! To swap (every id through Meta's check again, M1b's rule): answer
 //! [`Received::Never`] from [`Media::received`].
 //!
@@ -107,12 +123,14 @@ use meta_whatsapp_rs::client::media::{
     Media as LibraryMedia, MediaInfo, MediaKind, VerifiedBody, validate_upload,
 };
 use meta_whatsapp_rs::core::error::TransportError;
-use meta_whatsapp_rs::core::ids::MediaId;
+use meta_whatsapp_rs::core::ids::{MediaId, PhoneNumberId};
+use time::OffsetDateTime;
 
 use crate::authz::{Authorizer, OwnedNumber, object_failed};
 use crate::error::{ErrorCode, ServiceError};
+use crate::model::TenantId;
 use crate::observe::Observer;
-use crate::outbox::Outbox;
+use crate::outbox::{Outbox, ReceivedMedia};
 use crate::ratelimit::{Slot, Slots};
 use crate::request::typed_graph_id;
 
@@ -570,6 +588,32 @@ pub enum Received {
     Never,
 }
 
+impl Received {
+    /// Where `rows` (the outbox's rows of one media id,
+    /// [`Outbox::received_media`]) place it for `tenant`'s number `pn`
+    /// under its binding's cut `from` ([`crate::authz::history_from`]):
+    /// [`Self::Here`] when one of them is that number's, routed to that
+    /// tenant, and received at or after the cut (the inbox's own test,
+    /// `crate::inbox::visible`), whatever the others name; else
+    /// [`Self::Elsewhere`] when there is any row; else [`Self::Never`].
+    pub(crate) fn among(
+        rows: &[ReceivedMedia],
+        tenant: &TenantId,
+        pn: &PhoneNumberId,
+        from: Option<OffsetDateTime>,
+    ) -> Self {
+        if rows.is_empty() {
+            return Self::Never;
+        }
+        let here = rows.iter().any(|row| {
+            row.tenant.as_ref() == Some(tenant)
+                && row.phone_number_id.as_ref() == Some(pn)
+                && crate::inbox::visible(from, row.received_at)
+        });
+        if here { Self::Here } else { Self::Elsewhere }
+    }
+}
+
 impl fmt::Debug for Media<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Media")
@@ -680,20 +724,12 @@ impl<'a> Media<'a> {
     /// `503 storage_unavailable`.
     pub async fn received(&self, id: &MediaId) -> Result<Received, ServiceError> {
         let rows = self.received.received_media(id).await?;
-        if rows.is_empty() {
-            return Ok(Received::Never);
-        }
-        let from = self.number.history_from();
-        let here = rows.iter().any(|row| {
-            row.tenant.as_ref() == Some(self.number.tenant())
-                && row.phone_number_id.as_ref() == Some(self.number.phone_number_id())
-                && from.is_none_or(|from| row.received_at >= from)
-        });
-        Ok(if here {
-            Received::Here
-        } else {
-            Received::Elsewhere
-        })
+        Ok(Received::among(
+            &rows,
+            self.number.tenant(),
+            self.number.phone_number_id(),
+            self.number.history_from(),
+        ))
     }
 
     /// The library's media API for a download of `id`: unscoped for a
@@ -880,6 +916,81 @@ impl<'a> Media<'a> {
 #[allow(clippy::unwrap_used)] // test code: a panic is the report
 mod tests {
     use super::*;
+
+    /// Roadmap M2e's rule for the rows of a media id (`Received::among`):
+    /// one row of this number, routed to this tenant, received at or
+    /// after the cut, is `Here`, whatever other rows name the id; a row
+    /// received the instant the cut began is inside it (the inbox's own
+    /// test), one an instant before is not; another tenant's row on the
+    /// number, the tenant's row on another number and an operator-only row
+    /// are `Elsewhere`; no row is `Never`. Decisive: the cut's `>=` made
+    /// `>` (the instant of the cut), `any` made `all` (a row here beside
+    /// one elsewhere), and each clause of the filter.
+    #[test]
+    fn a_received_media_id_is_here_from_the_instant_of_the_cut_on() {
+        let tenant = TenantId::parse("tenant-a").unwrap();
+        let other = TenantId::parse("tenant-b").unwrap();
+        let pn = PhoneNumberId::new("106540352242922").unwrap();
+        let other_pn = PhoneNumberId::new("106540352242923").unwrap();
+        let cut = OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap();
+        let row =
+            |tenant: Option<&TenantId>, pn: &PhoneNumberId, at: OffsetDateTime| ReceivedMedia {
+                tenant: tenant.cloned(),
+                phone_number_id: Some(pn.clone()),
+                received_at: at,
+            };
+        let instant = time::Duration::nanoseconds(1);
+        let among = |rows: &[ReceivedMedia], from| Received::among(rows, &tenant, &pn, from);
+
+        assert_eq!(among(&[], Some(cut)), Received::Never);
+        assert_eq!(
+            among(&[row(Some(&tenant), &pn, cut)], Some(cut)),
+            Received::Here
+        );
+        assert_eq!(
+            among(&[row(Some(&tenant), &pn, cut - instant)], Some(cut)),
+            Received::Elsewhere,
+            "an instant before the cut"
+        );
+        assert_eq!(
+            among(
+                &[row(Some(&tenant), &pn, cut - time::Duration::days(30))],
+                None
+            ),
+            Received::Here,
+            "no cut: a number no other tenant held"
+        );
+        for (rows, why) in [
+            (
+                vec![row(Some(&other), &pn, cut)],
+                "another tenant's row on the number",
+            ),
+            (
+                vec![row(Some(&tenant), &other_pn, cut)],
+                "the tenant's row on another number",
+            ),
+            (
+                vec![row(None, &pn, cut)],
+                "an operator-only row on the number",
+            ),
+            (
+                vec![ReceivedMedia {
+                    phone_number_id: None,
+                    ..row(Some(&tenant), &pn, cut)
+                }],
+                "a row naming no number",
+            ),
+        ] {
+            assert_eq!(among(&rows, Some(cut)), Received::Elsewhere, "{why}");
+        }
+        // One row here is enough, wherever else the id was recorded.
+        let mixed = [
+            row(Some(&other), &other_pn, cut + instant),
+            row(None, &pn, cut + instant),
+            row(Some(&tenant), &pn, cut),
+        ];
+        assert_eq!(among(&mixed, Some(cut)), Received::Here);
+    }
 
     #[test]
     fn file_names_are_inert_and_have_an_extension() {

@@ -4603,14 +4603,14 @@ design's (§9).
     how): no route added; `GET` and `DELETE
     /v1/numbers/{pn}/media/{media_id}` read, before Meta is asked, where
     the id was recorded as received. The record is the outbox's
-    (D75): `NewEvent::received_media` (the core's `received_media_id`:
+    (D77): `NewEvent::received_media` (the core's `received_media_id`:
     a `message_received` event's image, video, audio, document or
     sticker `{type}.id`, or an edit's, digits only) is kept beside the
     row at insert, on Postgres in `wa_server_events.media_id` with the
     partial index `wa_server_events_media_idx` (migration 6, expand-only,
     no table rewrite; a previous release's rows record none), in memory
     beside the row; `Outbox::received_media` (a port change, required:
-    D77) answers the rows of an id, every stream, the operator-only one
+    D79) answers the rows of an id, every stream, the operator-only one
     included, newest first, at most 16 (`RECEIVED_MEDIA_ROWS`). The core's
     `Media::received` reads them for the number (`media::Received`): a
     row of this number routed to its tenant, received from the binding
@@ -4620,7 +4620,7 @@ design's (§9).
     with the number's token, then Meta's URL through the library's
     allow-list, within the same limits and verification; any other row
     makes it `Elsewhere`, `404 not_found` for a download and a deletion
-    with nothing asked of Meta (D76; one `info` line, no id); no row,
+    with nothing asked of Meta (D78; one `info` line, no id); no row,
     `Never`, Meta's check as in M1b. A deletion is never unscoped.
     `Media::new` takes the bundle's outbox (breaking for an adapter
     calling it; the HTTP crate passes the state's). The OpenAPI document
@@ -4649,8 +4649,17 @@ design's (§9).
     deletion; a received id kept scoped; the binding not read again; the
     memory or Postgres backend recording no id; an edit not followed, the
     type not matched, the id not checked; the library's host allow-list
-    and its request time limit removed. D75–D77 are proposed, for the
-    coordinator. Migration 6's names are stable identifiers pending the
+    and its request time limit removed. The security review (2026-11-02)
+    found the lookup walking the whole outbox on Postgres while
+    `media_id` had no statistics (from migration 6 until the next
+    analyze; a million rows read per request) and made the partial index
+    `(media_id, created_at)`, pinned by its plan in the migration's live
+    test; it pinned the cut's instant and the "one row here is enough"
+    rule (`Received::among`, sharing the inbox's `visible`), each media
+    type's own object, and the `RECEIVED_MEDIA_ROWS` bound in the outbox
+    suite; it documented the refusal's timing (D78). D77–D79 are the
+    coordinator's decisions (2026-11-02, under the owner's delegation,
+    swappable). Migration 6's names are stable identifiers pending the
     owner (§ Owner touchpoints).
   - **Left, and why:** the live check (no real account here: run by the
     owner or the coordinator, OPEN_QUESTIONS #43); media of a coexistence

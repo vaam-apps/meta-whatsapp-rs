@@ -254,6 +254,7 @@ impl Outbox for IgnoresTheGuard {
                 phone_number_id: row.phone_number_id.clone(),
                 received_at: row.created_at,
             })
+            .take(meta_whatsapp_server_core::outbox::RECEIVED_MEDIA_ROWS)
             .collect())
     }
 }

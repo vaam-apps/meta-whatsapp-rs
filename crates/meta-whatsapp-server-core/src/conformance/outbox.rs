@@ -483,8 +483,10 @@ fn message_row(tenant_id: Option<&str>, pn: &str, message: &serde_json::Value) -
 /// every row of it, newest first, the operator-only ones included, each
 /// with its tenant and number; a row of another type, or a message with no
 /// media, records none; a redelivery (its dedup key stored) adds no row;
-/// a deleted tenant's rows go with it. Decisive: the id kept at insert,
-/// the operator-only stream searched too, the tenant's deletion.
+/// at most [`RECEIVED_MEDIA_ROWS`](crate::outbox::RECEIVED_MEDIA_ROWS)
+/// rows are answered, the newest; a deleted tenant's rows go with it.
+/// Decisive: the id kept at insert, the operator-only stream searched
+/// too, the order, the bound, the tenant's deletion.
 pub async fn received_media(backend: &dyn Backend) {
     let outbox = backend.outbox();
     let store = outbox.as_ref();
@@ -552,6 +554,31 @@ pub async fn received_media(backend: &dyn Backend) {
             .await
             .unwrap()
             .is_empty()
+    );
+
+    // At most `RECEIVED_MEDIA_ROWS`, the newest: a media id named by more
+    // rows (a message and its edits) answers a bounded read.
+    let edited = serde_json::json!({"type": "document", "document": {"id": "622684793477189"}});
+    for _ in 0..=crate::outbox::RECEIVED_MEDIA_ROWS {
+        store
+            .insert(&message_row(Some("suite-media-a"), "771", &edited))
+            .await
+            .unwrap();
+    }
+    let bounded = store
+        .received_media(&media("622684793477189"))
+        .await
+        .unwrap();
+    assert_eq!(
+        bounded.len(),
+        crate::outbox::RECEIVED_MEDIA_ROWS,
+        "more rows than RECEIVED_MEDIA_ROWS answered"
+    );
+    assert!(
+        bounded
+            .windows(2)
+            .all(|pair| pair[0].received_at >= pair[1].received_at),
+        "not newest first"
     );
 
     // A deleted tenant's rows go with it.

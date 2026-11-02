@@ -191,6 +191,15 @@ the upgrade keeps the earlier rules, with the same result. Do not move
 WABAs between tenants in the 7 days and an hour before the deploy, nor
 during it.
 
+Service migration 6 (roadmap M2e) adds the media id an event records as
+received (`wa_server_events.media_id`, no default: nothing is rewritten)
+and builds its index, which reads the event outbox once and holds its
+inserts until it is done: webhook deliveries wait meanwhile (or Meta
+retries them). The outbox holds only `WA_SERVER_OUTBOX_RETENTION` of
+events; a million cached rows took about half a second on Postgres 16.
+Rows from before it record no media id: their media keep Meta's
+`phone_number_id` check ("Media" below).
+
 The inbox tables are kept forever unless `WA_SERVER_INBOX_RETENTION` is
 set (housekeeping then purges what is older than it, roadmap M2a); the
 service has no erasure route yet (roadmap M2f). The event outbox keeps whole events
@@ -504,7 +513,9 @@ object), and:
 - a media id received **anywhere else** (another number of yours,
   another tenant's number, or this number before it came under your
   tenant) answers `404 not_found` for a download and a deletion, and
-  the service asks Meta nothing;
+  the service asks Meta nothing (so it answers sooner than Meta's check
+  would: its timing tells a caller that an id it already holds was
+  received elsewhere in the deployment, and nothing more; design D78);
 - any other id (an upload's, or one received before your deployment ran
   this release, or longer ago than `WA_SERVER_OUTBOX_RETENTION`, 7 days
   by default: about as long as Meta keeps it) keeps the check.

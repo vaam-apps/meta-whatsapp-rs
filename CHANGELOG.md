@@ -272,7 +272,8 @@ stored data, the owner's).
     health check or error answer at the checkout endpoint.
 
 - **Received media in the service** (roadmap M2e, OPEN_QUESTIONS #43,
-  parity row 45, now done in the service too; proposed choices D75–D77).
+  parity row 45, now done in the service too; choices D77–D79, decided
+  by the coordinator under the owner's delegation).
   `GET /v1/numbers/{pn}/media/{media_id}` downloads a media id the
   service recorded as received on that number for the caller's tenant
   (a customer's image, video, audio, document or sticker, or an edit into

@@ -677,10 +677,11 @@ model evolution (46).
     id still says which behaviour Meta has. Swappable: the exemption is
     one lookup. Roadmap M2e.
 
-    **Built 2026-11-02 (roadmap M2e; its choices D75–D77 proposed for the
-    coordinator):** the outbox keeps beside each `message_received` row
-    the media id its customer sent (`wa_server_events.media_id`,
-    migration 6). A media id recorded on the caller's own number, routed
+    **Built 2026-11-02 (roadmap M2e; its choices D77–D79 decided by the
+    coordinator under the owner's delegation, swappable):** the outbox
+    keeps beside each `message_received` row the media id its customer
+    sent (`wa_server_events.media_id`, migration 6). A media id recorded
+    on the caller's own number, routed
     to its tenant, from the number's binding epoch on, is downloaded with
     `GET /{media_id}` and no `phone_number_id` (the binding read again
     first); one recorded anywhere else (another number or tenant, an

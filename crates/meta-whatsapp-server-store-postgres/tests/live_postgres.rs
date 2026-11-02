@@ -157,9 +157,11 @@ async fn live_postgres_migration_5_rewrites_no_table() {
 /// says: its media goes through Meta's `phone_number_id` check, as every
 /// id did before. An insert the previous release makes (no `media_id`)
 /// still works after it, and records none either. A row this release
-/// inserts records its media id, found by the index. Decisive: a default
-/// on the column (it rewrites the table into a new file), an update of the
-/// existing rows (they would record theirs).
+/// inserts records its media id, found by the index: its definition, and
+/// a plan of the lookup that probes it. Decisive: a default on the column
+/// (it rewrites the table into a new file), an update of the existing rows
+/// (they would record theirs), an index whose predicate or collation the
+/// lookup cannot use.
 #[tokio::test]
 async fn live_postgres_migration_6_rewrites_no_table_and_records_from_its_release_on() {
     use meta_whatsapp_rs::adapters::store::postgres::sqlx::migrate::Migrator;
@@ -246,6 +248,46 @@ async fn live_postgres_migration_6_rewrites_no_table_and_records_from_its_releas
             .as_ref()
             .map(meta_whatsapp_rs::core::ids::PhoneNumberId::as_str),
         Some("6101")
+    );
+    // The lookup is an index probe, never a walk of the outbox: the
+    // partial index covers only the rows that record a media id, and its
+    // predicate, collation and order fit `PgEventStore::received_media`'s
+    // statement (copied here, with its parameters' types): with
+    // sequential scans off, its plan reads the index backwards. (On
+    // `media_id` alone the planner walks `wa_server_events_created_idx`
+    // here, as it does on a large outbox before `media_id` has
+    // statistics: every row read and filtered.)
+    let definition: String =
+        sqlx::query_scalar("SELECT pg_get_indexdef('wa_server_events_media_idx'::regclass)")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(
+        definition.ends_with("USING btree (media_id, created_at) WHERE (media_id IS NOT NULL)"),
+        "{definition}"
+    );
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query("SET enable_seqscan = off")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let plan: Vec<String> = sqlx::query_scalar(
+        "EXPLAIN SELECT tenant_id, phone_number_id, created_at FROM wa_server_events \
+         WHERE media_id = $1 ORDER BY created_at DESC LIMIT $2",
+    )
+    .bind("1003383421387263")
+    .bind(16_i64)
+    .fetch_all(&mut *conn)
+    .await
+    .unwrap();
+    sqlx::query("RESET enable_seqscan")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("Index Scan Backward using wa_server_events_media_idx")),
+        "{plan:?}"
     );
 }
 

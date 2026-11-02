@@ -598,6 +598,29 @@ mod tests {
             received_media_id("message_received", &image).map(MediaId::into_inner),
             Some("1003383421387256".to_owned())
         );
+        // Each media type reads its own object, and only its own: the
+        // others' objects present, its own missing, record nothing.
+        for kind in RECEIVED_MEDIA_TYPES {
+            let own = message(&format!(
+                r#"{{"type":"{kind}","{kind}":{{"id":"1003383421387256"}}}}"#
+            ));
+            assert_eq!(
+                received_media_id("message_received", &own).map(MediaId::into_inner),
+                Some("1003383421387256".to_owned()),
+                "{kind}"
+            );
+            let others: Vec<String> = RECEIVED_MEDIA_TYPES
+                .iter()
+                .filter(|other| **other != kind)
+                .map(|other| format!(r#""{other}":{{"id":"1003383421387256"}}"#))
+                .collect();
+            let theirs = message(&format!(r#"{{"type":"{kind}",{}}}"#, others.join(",")));
+            assert_eq!(
+                received_media_id("message_received", &theirs),
+                None,
+                "{kind}: another type's object"
+            );
+        }
         for (event_type, data, why) in [
             ("status_updated", image.clone(), "another event type"),
             (
