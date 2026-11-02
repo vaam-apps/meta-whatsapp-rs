@@ -58,11 +58,13 @@ pub const PREVIOUS_APP_SECRET: &str = "previous-app-secret-for-tests";
 /// [`PREVIOUS_APP_SECRET`].
 pub const DEFAULT_APP_SECRETS: &[&str] = &[APP_SECRET, PREVIOUS_APP_SECRET];
 
-/// A `KvStore` that counts reads of the token vault's namespace.
+/// A `KvStore` that counts reads of the token vault's namespace, and
+/// keeps the keys written.
 #[derive(Debug)]
 pub struct CountingKv {
     inner: Arc<dyn KvStore>,
     vault_reads: AtomicUsize,
+    written: std::sync::Mutex<Vec<StoreKey>>,
 }
 
 impl CountingKv {
@@ -71,7 +73,18 @@ impl CountingKv {
         Self {
             inner,
             vault_reads: AtomicUsize::new(0),
+            written: std::sync::Mutex::default(),
         }
+    }
+
+    /// Every key written so far (put, put if absent, compare and swap), in
+    /// order.
+    pub fn written(&self) -> Vec<StoreKey> {
+        self.written.lock().unwrap().clone()
+    }
+
+    fn wrote(&self, key: &StoreKey) {
+        self.written.lock().unwrap().push(key.clone());
     }
 
     /// Reads of the vault's namespace so far.
@@ -94,6 +107,7 @@ impl KvStore for CountingKv {
         value: Vec<u8>,
         expiry: Expiry,
     ) -> Result<u64, StorageError> {
+        self.wrote(key);
         self.inner.put(key, value, expiry).await
     }
     async fn put_if_absent(
@@ -102,6 +116,7 @@ impl KvStore for CountingKv {
         value: Vec<u8>,
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
+        self.wrote(key);
         self.inner.put_if_absent(key, value, expiry).await
     }
     async fn compare_and_swap(
@@ -111,6 +126,7 @@ impl KvStore for CountingKv {
         new: Option<Vec<u8>>,
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
+        self.wrote(key);
         self.inner
             .compare_and_swap(key, expected, new, expiry)
             .await

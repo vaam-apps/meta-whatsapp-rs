@@ -212,19 +212,28 @@ async fn m3_5_every_outcome() {
     let expired = h.call(verify(&t.a, PHONE, &code)).await;
     assert_eq!(expired.json(), json!({"result": "expired"}));
 
-    // too_many_attempts, the right code included; then rate_limited: the
-    // third code in the hour was this one.
+    // too_many_attempts, the right code included (to another recipient:
+    // the platform's number allows PHONE two codes an hour, whatever the
+    // purpose); then rate_limited: PHONE's third code in the hour.
     h.graph.push_json(200, accepted());
     let sent = h
-        .call(issue(&t.a, &json!({"phone": PHONE, "purpose": "reset"})))
+        .call(issue(
+            &t.a,
+            &json!({"phone": OTHER_PHONE, "purpose": "reset"}),
+        ))
         .await;
     assert_eq!(sent.json()["status"], "sent", "{}", sent.text);
-    let code = sent_code(h, PLATFORM_PN, PLATFORM_TOKEN, TEMPLATE, "en_US");
+    let code =
+        h.graph.last_request().unwrap().json().unwrap()["template"]["components"][0]["parameters"]
+            [0]["text"]
+            .as_str()
+            .unwrap()
+            .to_owned();
     let wrong = if code == "000000" { "111111" } else { "000000" };
     let check = |code: &str| {
         Call::new(Method::POST, "/v1/otp/verify")
             .key(&t.a)
-            .json(&json!({"phone": PHONE, "purpose": "reset", "code": code}))
+            .json(&json!({"phone": OTHER_PHONE, "purpose": "reset", "code": code}))
     };
     for left in (0..5).rev() {
         let reply = h.call(check(wrong)).await;
@@ -259,6 +268,37 @@ async fn m3_5_every_outcome() {
         json!({"status": "cooling_down", "retry_after_seconds": 30})
     );
     assert_eq!(h.graph.requests().len(), 1, "nothing sent");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// `rate_limited` by a tenant's own issue limit alone, on its own number
+/// (no shared limit there): the library's, per recipient and purpose,
+/// never off. Decisive: `otp::config`'s `issue_limit`.
+#[tokio::test]
+async fn a_tenants_own_issue_limit_holds_on_its_own_number() {
+    let t = otp().await;
+    let h = &t.h;
+    let mut own = OtpSettings::new(PhoneNumberId::new(OWN_PN).unwrap(), "own_code", "fr");
+    own.resend_cooldown_seconds = 0;
+    own.max_issues = 2;
+    h.store
+        .set_otp_settings(&tenant(OWN), Some(&own))
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        h.graph.push_json(200, accepted());
+        let sent = h.call(issue(&t.own, &json!({"phone": PHONE}))).await;
+        assert_eq!(sent.json()["status"], "sent", "{}", sent.text);
+    }
+    let limited = h.call(issue(&t.own, &json!({"phone": PHONE}))).await;
+    assert_eq!(limited.json()["status"], "rate_limited", "{}", limited.text);
+    assert_eq!(h.graph.requests().len(), 2, "nothing sent");
+    // Another purpose has its own.
+    h.graph.push_json(200, accepted());
+    let other = h
+        .call(issue(&t.own, &json!({"phone": PHONE, "purpose": "reset"})))
+        .await;
+    assert_eq!(other.json()["status"], "sent", "{}", other.text);
     assert_eq!(h.graph.remaining(), 0);
 }
 
@@ -514,6 +554,161 @@ async fn rate_limits_are_per_tenant_and_per_recipient() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// Decision D8's default fails closed: a suspended default OTP tenant
+/// lends neither its settings nor its number. A tenant borrowing them is
+/// `409 otp_not_configured` on issue and on check, Meta unasked and the
+/// platform's token unread, while a tenant with its own settings is
+/// untouched; reactivated, the default lends again. Deleted (its WABA
+/// unbound first), it lends nothing either. Decisive: the default tenant's
+/// status read in `otp::Otp::settings`.
+#[tokio::test]
+async fn a_suspended_or_deleted_default_tenant_lends_nothing() {
+    use meta_whatsapp_server::model::TenantStatus;
+    let t = otp().await;
+    let h = &t.h;
+    h.store
+        .update_tenant(&tenant(PLATFORM), None, Some(TenantStatus::Suspended))
+        .await
+        .unwrap()
+        .unwrap();
+    let reads = h.kv.vault_reads();
+    for call in [
+        issue(&t.a, &json!({"phone": PHONE})),
+        verify(&t.a, PHONE, "123456"),
+    ] {
+        let reply = h.call(call).await;
+        assert_eq!(
+            status(&reply),
+            (StatusCode::CONFLICT, "otp_not_configured".to_owned()),
+            "{}",
+            reply.text
+        );
+    }
+    assert_eq!(h.kv.vault_reads(), reads, "the platform's token unread");
+    assert!(h.graph.requests().is_empty(), "Meta was not asked");
+    // A tenant with its own settings does not borrow.
+    h.graph.push_json(200, accepted());
+    let own = h.call(issue(&t.own, &json!({"phone": PHONE}))).await;
+    assert_eq!(own.json()["status"], "sent", "{}", own.text);
+    sent_code(h, OWN_PN, OWN_TOKEN, "own_code", "fr");
+    // Reactivated, it lends again.
+    h.store
+        .update_tenant(&tenant(PLATFORM), None, Some(TenantStatus::Active))
+        .await
+        .unwrap()
+        .unwrap();
+    h.graph.push_json(200, accepted());
+    let lent = h.call(issue(&t.a, &json!({"phone": PHONE}))).await;
+    assert_eq!(lent.json()["status"], "sent", "{}", lent.text);
+    sent_code(h, PLATFORM_PN, PLATFORM_TOKEN, TEMPLATE, "en_US");
+    // Deleted: its settings go with it.
+    h.store
+        .unbind_waba(&meta_whatsapp_rs::core::ids::WabaId::new(PLATFORM_WABA).unwrap())
+        .await
+        .unwrap();
+    h.store.delete_tenant(&tenant(PLATFORM)).await.unwrap();
+    let reply = h.call(issue(&t.b, &json!({"phone": OTHER_PHONE}))).await;
+    assert_eq!(status(&reply).1, "otp_not_configured", "{}", reply.text);
+    assert_eq!(h.graph.requests().len(), 2);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// The default OTP tenant's number has one issue limit per recipient,
+/// shared by every tenant and purpose sending from it (SMS pumping: N
+/// borrowing tenants, or N purposes, would otherwise send one recipient N
+/// times the limit on the platform's bill). With the platform's limit at
+/// 2 codes an hour: A's code and B's are the recipient's two, then A
+/// under another purpose, B, and the platform itself are `rate_limited`
+/// with the wait, nothing sent; another recipient, and a tenant on its own
+/// number, still get theirs. An answer that sent nothing (a cooldown, a
+/// refusal before the send) gives its slot back; one that may have sent
+/// (a timeout) keeps it. Once the window passes, the recipient gets a code
+/// again. The shared log's keys hold no phone number. Decisive: the
+/// reservation in `otp::SharedLimit`, and its release.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn the_platform_numbers_issue_limit_per_recipient_is_shared() {
+    use meta_whatsapp_rs::core::error::TransportError;
+    let mut settings = platform_settings();
+    settings.max_issues = 2;
+    let t = otp_with(with_default(), settings).await;
+    let h = &t.h;
+    let platform = h.tenant_key(PLATFORM, &[Scope::Otp]).await;
+    let sent = |reply: &Reply| reply.json()["status"] == "sent";
+
+    // A's first, then its cooldown: nothing sent, the slot given back.
+    h.graph.push_json(200, accepted());
+    assert!(sent(&h.call(issue(&t.a, &json!({"phone": PHONE}))).await));
+    let cooling = h.call(issue(&t.a, &json!({"phone": PHONE}))).await;
+    assert_eq!(cooling.json()["status"], "cooling_down", "{}", cooling.text);
+    // Meta refuses B's (a 4xx: not sent): the slot given back too.
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": "(#100) Invalid parameter", "type": "OAuthException", "code": 100}}),
+    );
+    let refused = h.call(issue(&t.b, &json!({"phone": PHONE}))).await;
+    assert_eq!(status(&refused).1, "invalid_parameter", "{}", refused.text);
+    // B's: the recipient's second on the platform's number.
+    h.graph.push_json(200, accepted());
+    let b = h
+        .call(issue(&t.b, &json!({"phone": PHONE, "purpose": "signup"})))
+        .await;
+    assert!(sent(&b), "{}", b.text);
+    let asked = h.graph.requests().len();
+    for (key, purpose) in [(&t.a, "reset"), (&t.b, "login"), (&platform, "login")] {
+        let limited = h
+            .call(issue(key, &json!({"phone": PHONE, "purpose": purpose})))
+            .await;
+        assert_eq!(limited.status, StatusCode::OK, "{}", limited.text);
+        let body = limited.json();
+        assert_eq!(body["status"], "rate_limited", "{purpose}: {body}");
+        let wait = body["retry_after_seconds"].as_u64().unwrap();
+        assert!((3500..=3600).contains(&wait), "{wait}");
+    }
+    assert_eq!(h.graph.requests().len(), asked, "nothing sent");
+    // Another recipient; a tenant on its own number.
+    h.graph.push_json(200, accepted());
+    assert!(sent(
+        &h.call(issue(&t.a, &json!({"phone": OTHER_PHONE}))).await
+    ));
+    h.graph.push_json(200, accepted());
+    let own = h.call(issue(&t.own, &json!({"phone": PHONE}))).await;
+    assert!(sent(&own), "{}", own.text);
+    sent_code(h, OWN_PN, OWN_TOKEN, "own_code", "fr");
+
+    // A timeout may have sent: its slot is kept.
+    h.graph.push_error(|| TransportError::Timeout);
+    let cut = h
+        .call(issue(&t.b, &json!({"phone": OTHER_PHONE, "purpose": "x"})))
+        .await;
+    assert_eq!(cut.status, StatusCode::GATEWAY_TIMEOUT, "{}", cut.text);
+    let full = h
+        .call(issue(&t.a, &json!({"phone": OTHER_PHONE, "purpose": "y"})))
+        .await;
+    assert_eq!(full.json()["status"], "rate_limited", "{}", full.text);
+
+    // The window passes.
+    h.clock.advance(std::time::Duration::from_secs(3601));
+    h.graph.push_json(200, accepted());
+    let again = h
+        .call(issue(&t.b, &json!({"phone": PHONE, "purpose": "reset"})))
+        .await;
+    assert!(sent(&again), "{}", again.text);
+
+    let shared: Vec<_> =
+        h.kv.written()
+            .into_iter()
+            .filter(|key| key.namespace() == "wa_server.otp.shared_rate")
+            .collect();
+    assert!(!shared.is_empty());
+    for key in &shared {
+        assert_eq!(key.key().len(), 64, "a hex HMAC: {key}");
+        assert!(!key.key().contains(PHONE_DIGITS), "{key}");
+        assert!(!key.key().contains("6505559876"), "{key}");
+    }
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// The request is checked before anything is read or sent: a phone that
 /// is not strict E.164 with `+` (a BSUID, a `wa_id`, separators), a bad
 /// purpose, an unknown key, an empty or long code. A key without scope
@@ -555,6 +750,60 @@ async fn requests_are_checked_first_and_need_the_otp_scope() {
         );
     }
     assert!(h.graph.requests().is_empty());
+}
+
+/// A malformed check counts no attempt: an empty code, one over 15
+/// characters, a bad purpose, a phone without `+`, an unknown key, ten
+/// times each against an outstanding code, are `422` before the store is
+/// read; the next wrong code still has 4 attempts left, and the right one
+/// verifies. A wrong code of the right shape, letters included, counts.
+/// Decisive: the checks before `OtpService::verify`.
+#[tokio::test]
+async fn a_malformed_check_counts_no_attempt() {
+    let t = otp().await;
+    let h = &t.h;
+    h.graph.push_json(200, accepted());
+    assert_eq!(
+        h.call(issue(&t.a, &json!({"phone": PHONE}))).await.json()["status"],
+        "sent"
+    );
+    let code = sent_code(h, PLATFORM_PN, PLATFORM_TOKEN, TEMPLATE, "en_US");
+    let long = format!("{code}{}", "0".repeat(10));
+    let check = |body: Value| {
+        Call::new(Method::POST, "/v1/otp/verify")
+            .key(&t.a)
+            .json(&body)
+    };
+    for _ in 0..10 {
+        for body in [
+            json!({"phone": PHONE, "code": ""}),
+            json!({"phone": PHONE, "code": long}),
+            json!({"phone": PHONE, "purpose": "two words", "code": code}),
+            json!({"phone": PHONE_DIGITS, "code": code}),
+            json!({"phone": PHONE, "code": code, "namespace": "shop-b"}),
+        ] {
+            let reply = h.call(check(body.clone())).await;
+            assert_eq!(
+                status(&reply),
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "invalid_request".to_owned()
+                ),
+                "{body}"
+            );
+        }
+    }
+    let invalid = h.call(verify(&t.a, PHONE, "abcdef")).await;
+    assert_eq!(
+        invalid.json(),
+        json!({"result": "invalid", "attempts_left": 4}),
+        "only the wrong code counted"
+    );
+    assert_eq!(
+        h.call(verify(&t.a, PHONE, &code)).await.json(),
+        json!({"result": "verified"})
+    );
+    assert_eq!(h.graph.remaining(), 0);
 }
 
 /// `Idempotency-Key` on an issue (design section 5.4): a repeat with the

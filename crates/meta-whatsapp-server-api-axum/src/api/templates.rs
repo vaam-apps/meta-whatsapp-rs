@@ -339,7 +339,7 @@ async fn create(
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
         (status = 404, description = "`not_found`: no such WABA for this tenant", body = ErrorBody),
         (status = 409, description = "`template_limit_reached`, `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` (with `field`: the definition breaks a documented limit, or holds a key the service would not send to Meta), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (with `field`: the definition breaks a documented limit, holds a key the service would not send to Meta, or accepts Meta's zero-tap terms, `zero_tap_terms_accepted: true`, which the service never does for a tenant), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`", body = ErrorBody),
         (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`: the template may have been created", body = ErrorBody),

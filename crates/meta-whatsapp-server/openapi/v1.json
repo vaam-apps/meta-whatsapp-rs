@@ -3668,7 +3668,7 @@
         },
         "responses": {
           "200": {
-            "description": "The outcome: `sent` (a code is on its way: `challenge_id`, `expires_at`), or `cooling_down` or `rate_limited` (nothing sent: `retry_after_seconds`). Never the code",
+            "description": "The outcome: `sent` (a code is on its way: `challenge_id`, `expires_at`), or `cooling_down` or `rate_limited` (nothing sent: `retry_after_seconds`; on the default OTP tenant's number, its issue limit per recipient is shared by every tenant and purpose sending from it). Never the code",
             "content": {
               "application/json": {
                 "schema": {
@@ -3698,7 +3698,7 @@
             }
           },
           "409": {
-            "description": "`otp_not_configured` (no OTP settings for the tenant and no default OTP tenant, or the sending number is no longer its holder's), the sending number's `number_not_connected` or `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "description": "`otp_not_configured` (no OTP settings for the tenant and no default OTP tenant that is active and has settings, or the sending number is no longer its holder's), the sending number's `number_not_connected` or `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
             "content": {
               "application/json": {
                 "schema": {
@@ -3828,7 +3828,7 @@
             }
           },
           "409": {
-            "description": "`otp_not_configured`",
+            "description": "`otp_not_configured` (as on an issue)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4432,7 +4432,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` (with `field`: the definition breaks a documented limit, or holds a key the service would not send to Meta), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`",
+            "description": "`invalid_request` (with `field`: the definition breaks a documented limit, holds a key the service would not send to Meta, or accepts Meta's zero-tap terms, `zero_tap_terms_accepted: true`, which the service never does for a tenant), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`",
             "content": {
               "application/json": {
                 "schema": {

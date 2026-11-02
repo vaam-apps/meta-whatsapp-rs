@@ -519,6 +519,15 @@ refused on the key named:
 - a template as `GET` answers it, which is not a definition: its `id`,
   `status` or `correct_category`.
 
+**Zero-tap is refused on both routes.** A zero-tap button's
+`zero_tap_terms_accepted: true` accepts Meta's zero-tap terms, a legal
+act the service does not take for a tenant: a definition holding it is
+`422 invalid_request` on its path
+(`components[2].buttons[0].zero_tap_terms_accepted`), and nothing
+reaches Meta (it was passed through from M1b until M3c's review; `false`
+is refused too, Meta would not create it). Who may accept them is the
+owner's (roadmap M3g).
+
 Meta refusing a definition is `422 template_rejected`, a WABA
 at its limit `409 template_limit_reached`. Review results arrive as
 `template_status_updated` events (`GET /v1/events`). A creation or deletion drops
@@ -645,9 +654,21 @@ curl -sS -X POST "$WA_SERVER/v1/otp/verify" -H "Authorization: Bearer $KEY" \
   limits. A tenant without settings sends from the default OTP tenant's
   number (`WA_SERVER_OTP_DEFAULT_TENANT`, the platform's), with that
   tenant's template; the user then sees the platform's name. No
-  settings and no default, or settings naming a number the tenant no
-  longer holds: `409 otp_not_configured`, nothing sent. Changing a
-  tenant's sending number kills its codes in flight.
+  settings and no default, a default tenant that is suspended, deleted
+  or without settings, or settings naming a number the tenant no longer
+  holds: `409 otp_not_configured`, nothing sent (`doctor` warns about
+  the default tenant, below). Changing a tenant's sending number kills
+  its codes in flight.
+- **The platform's number has one limit per recipient.** On the default
+  OTP tenant's number, every tenant and purpose sending from it share
+  that tenant's issue limit per recipient (5 codes an hour by default),
+  on top of each tenant's own: past it, `rate_limited`. So tenants
+  sharing the platform's number cannot send one person five codes an
+  hour each, on the platform's bill; the cost is that one tenant's codes
+  to a recipient count against the others'. A tenant with its own
+  number and settings has only its own limits. An answer that sent
+  nothing (`cooling_down`, your own `rate_limited`, a refusal before the
+  send) does not count; a timeout does.
 - **The code is in no answer, log or error.** A failed send keeps Meta's
   code and trace id, never its text or `details` (a template error could
   quote its parameter, the code). The idempotency record of an issue
@@ -909,6 +930,7 @@ without their credentials, Meta's failures by code).
 | `token.partner` | (Solution Partner mode) `debug_token` says `WA_PARTNER_SYSTEM_TOKEN` is invalid, expired or another app's |
 | `token.waba.<id>` | a bound WABA has no token in the vault, one the vault keys cannot open, or one `debug_token` says is invalid, expired (a warning within 7 days), another app's, without `whatsapp_business_management` or `whatsapp_business_messaging`, or granted for other WABAs |
 | `webhooks.waba.<id>` | the app is not among the WABA's `subscribed_apps`: Meta sends nothing for its numbers (attach it again) |
+| `otp.default_tenant` | never (with `WA_SERVER_OTP_DEFAULT_TENANT` set): it warns when the tenant named does not exist, is suspended, has no OTP settings, or no longer holds their sending number, since the tenants without settings of their own then get `409 otp_not_configured`; skipped on memory storage |
 
 The Graph checks need `WA_APP_ID` (they skip without it) and an accepted
 configuration. The WABA checks walk the first 100 bound WABAs, two calls

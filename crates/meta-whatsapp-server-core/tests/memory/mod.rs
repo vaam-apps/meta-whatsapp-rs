@@ -126,11 +126,22 @@ impl RecordStore for Records {
     }
     async fn update_tenant(
         &self,
-        _: &TenantId,
-        _: Option<&str>,
-        _: Option<TenantStatus>,
+        id: &TenantId,
+        name: Option<&str>,
+        status: Option<TenantStatus>,
     ) -> StoreResult<Option<Tenant>> {
-        unimplemented!("not used by the suites this backend runs")
+        let mut state = self.state();
+        let Some(tenant) = state.tenants.get_mut(id.as_str()) else {
+            return Ok(None);
+        };
+        if let Some(name) = name {
+            name.clone_into(&mut tenant.name);
+        }
+        if let Some(status) = status {
+            tenant.status = status;
+        }
+        tenant.updated_at = OffsetDateTime::now_utc();
+        Ok(Some(tenant.clone()))
     }
     async fn otp_settings(&self, id: &TenantId) -> StoreResult<Option<OtpSettings>> {
         Ok(self

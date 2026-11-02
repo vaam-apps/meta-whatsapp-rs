@@ -24,7 +24,11 @@ const PHONE: &str = "+16505551234";
 /// M3.5: logs hold neither code nor number. Captured at `TRACE` for every
 /// target (the library's, the service's), an issue, a wrong and a right
 /// check, a cooldown and a send Meta refuses log neither the code nor the
-/// recipient's number, with or without its `+` and country code.
+/// recipient's number, with or without its `+` and country code; nor any
+/// of Meta's texts on that refusal (its message, user texts and
+/// `details`, which could quote the template's parameter, the code), at
+/// any level: every other route logs them at `debug` (M3c's review;
+/// decisive: `ServiceError::from_library_withholding_texts`).
 #[tokio::test]
 async fn m3_5_logs_hold_neither_code_nor_number() {
     let h = Harness::with_settings(Settings {
@@ -83,8 +87,10 @@ async fn m3_5_logs_hold_neither_code_nor_number() {
     h.clock.advance(std::time::Duration::from_secs(31));
     h.graph.push_json(
         400,
-        json!({"error": {"message": "(#132001) Template name does not exist in the translation",
-            "type": "OAuthException", "code": 132001, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+        json!({"error": {"message": "(#132001) Template name does not exist in the translation SENTINEL-message",
+            "type": "OAuthException", "code": 132001, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn",
+            "error_user_title": "SENTINEL-user-title", "error_user_msg": "SENTINEL-user-message",
+            "error_data": {"messaging_product": "whatsapp", "details": "SENTINEL-details"}}}),
     );
     let refused = h.call(issue()).await;
     assert_eq!(refused.code(), "template_not_found", "{}", refused.text);
@@ -97,6 +103,14 @@ async fn m3_5_logs_hold_neither_code_nor_number() {
     assert!(
         !digit_runs(&logs).any(|run| run == code),
         "the code was logged:\n{logs}"
+    );
+    assert!(
+        logs.contains("AXsgnV2Cm3ZMGF3dF_cfYIn"),
+        "the trace id is logged"
+    );
+    assert!(
+        !logs.contains("SENTINEL"),
+        "Meta's texts were logged:\n{logs}"
     );
     for number in [PHONE, "16505551234", "6505551234"] {
         assert!(!logs.contains(number), "{number} was logged:\n{logs}");

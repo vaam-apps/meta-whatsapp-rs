@@ -23,3 +23,12 @@ async fn a_code_verifies_at_no_other_tenant_on_the_same_number() {
     let backend = memory::Memory::default();
     conformance::otp::a_code_verifies_at_no_other_tenant_on_the_same_number(&backend).await;
 }
+
+/// M3c's review: the default OTP tenant's number allows a recipient one
+/// issue limit across tenants and purposes; a suspended default tenant
+/// lends nothing.
+#[tokio::test]
+async fn the_default_numbers_issue_limit_is_shared_and_fails_closed() {
+    let backend = memory::Memory::default();
+    conformance::otp::the_default_numbers_issue_limit_is_shared_and_fails_closed(&backend).await;
+}

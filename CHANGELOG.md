@@ -523,7 +523,8 @@ stored data, the owner's).
 
 - **OTP and authentication templates in the service** (roadmap M3c;
   parity row 98 partial on the service's side, zero-tap and previews left
-  for M3g; design D8, proposed D45–D49). Scope `otp`: `POST
+  for M3g; design D8, and D45–D49, the coordinator's of 2026-11-01).
+  Scope `otp`: `POST
   /v1/otp/issue` (`issue_otp`) sends a code with the tenant's
   authentication template and answers `200` with `sent` (`challenge_id`,
   `expires_at`), `cooling_down` or `rate_limited` (`retry_after_seconds`),
@@ -537,8 +538,16 @@ stored data, the owner's).
   code and trace id, never its text or `details`. The sending number is
   the one the tenant's OTP settings name, one of its own numbers, else
   the default OTP tenant's (`WA_SERVER_OTP_DEFAULT_TENANT`, the
-  platform's number); none, or a number no longer its holder's, is the
-  new `409 otp_not_configured`. Admin: `GET`, `PUT` and `DELETE
+  platform's number) while that tenant is active; none, a default tenant
+  suspended, deleted or without settings, or a number no longer its
+  holder's, is the new `409 otp_not_configured`. On the default tenant's
+  number, its issue limit per recipient is shared by every tenant and
+  purpose sending from it (`wa_server.otp.shared_rate`, keyed by an HMAC
+  of the number and the recipient under `WA_OTP_PEPPER`; design D50,
+  proposed), so N tenants cannot send one recipient N times the limit;
+  `doctor` warns (`otp.default_tenant`) when `WA_SERVER_OTP_DEFAULT_TENANT`
+  names a tenant missing, suspended, without settings or no longer
+  holding its number. Admin: `GET`, `PUT` and `DELETE
   /v1/admin/tenants/{id}/otp` (the number, the template and its
   language, the library's limits, the issue limit never off; audited
   `otp_settings_set`, `otp_settings_cleared`), kept in
@@ -3717,6 +3726,29 @@ are marked `internal`, so `npx skills add vaam-apps/wa-rs` no longer offers
 them.
 
 ### Security
+
+**The service's generic template route accepted Meta's zero-tap terms
+for a tenant** (since roadmap M1b, closed by M3c's review before any
+release). `POST /v1/wabas/{waba_id}/templates` passed a zero-tap
+authentication button's `zero_tap_terms_accepted: true` through to
+Meta: a tenant could accept Meta's zero-tap terms through the service,
+a legal act AGENTS.md § Decisions keeps out of any tenant's request (an
+explicit, audited operator action, off by default, or nothing). Such a
+definition is now `422 invalid_request` on the key's path
+(`components[2].buttons[0].zero_tap_terms_accepted`), wherever in the
+definition it is, before any request
+(`meta_whatsapp_server_core::templates::ZERO_TAP_TERMS`); no other route
+carries it (the authentication route refuses `otp_type: zero_tap`, sends
+carry no definition, the template library is not exposed). Zero-tap
+stays the owner's (roadmap M3g). The OpenAPI document's schemas are
+unchanged.
+
+**A failed OTP send logged Meta's error texts at `debug`** (roadmap M3c,
+closed by its review before any release). The service logs Meta's
+message, user texts and `details` at `debug` on every route; on `POST
+/v1/otp/issue` they can quote the template's parameter, the code. The
+OTP route now logs Meta's code and trace id only, at every level
+(`ServiceError::from_library_withholding_texts`).
 
 **`FfmpegConverter`: a small JPEG or PNG could take `ffmpeg` to
 gigabytes of memory** (roadmap L19b, fixed before any release; measured

@@ -16,6 +16,10 @@
 //!   a number the tenant no longer holds are `409 otp_not_configured`, with
 //!   no request to Meta.
 //! - **Another authorizer's caller** opens nothing (`403 forbidden`).
+//! - **The default OTP tenant's number has one issue limit per
+//!   recipient** (M3c's review), shared by every tenant and purpose that
+//!   sends from it, kept in the backend's key/value store; and **a
+//!   suspended default tenant lends nothing** (`409 otp_not_configured`).
 //!
 //! [`RecordStore::otp_settings`]: crate::store::RecordStore::otp_settings
 
@@ -34,7 +38,9 @@ use serde_json::json;
 use crate::admin::mint;
 use crate::authz::{Authorizer, Caller};
 use crate::backend::Backend;
-use crate::model::{BindOutcome, DeleteTenantOutcome, KeyOwner, OtpSettings, Scope, TenantId};
+use crate::model::{
+    BindOutcome, DeleteTenantOutcome, KeyOwner, OtpSettings, Scope, TenantId, TenantStatus,
+};
 use crate::otp::{Checked, IssueRequest, Issued, OtpCodes, OtpDeployment, OtpKeys, VerifyRequest};
 
 /// The default OTP tenant, its WABA, its number and its token.
@@ -48,6 +54,7 @@ const PHONE: &str = "+16505551234";
 pub async fn run(backend: &dyn Backend) {
     a_tenants_otp_settings_are_its_own_record(backend).await;
     a_code_verifies_at_no_other_tenant_on_the_same_number(backend).await;
+    the_default_numbers_issue_limit_is_shared_and_fails_closed(backend).await;
 }
 
 fn tenant(id: &str) -> TenantId {
@@ -279,5 +286,110 @@ pub async fn a_code_verifies_at_no_other_tenant_on_the_same_number(backend: &dyn
     };
     let forged = caller(backend, &other, A).await;
     assert_eq!(codes.open(&authz, &forged).unwrap_err().code(), "forbidden");
+    assert_eq!(script.remaining(), 0);
+}
+
+/// The default OTP tenant's number allows a recipient its settings' issue
+/// limit (here 1 code) across tenants and purposes: A's code is sent, then
+/// B's and A's under another purpose are `rate_limited`, nothing sent;
+/// suspended, the default tenant lends nothing (`409
+/// otp_not_configured`). On the backend's key/value store and records.
+pub async fn the_default_numbers_issue_limit_is_shared_and_fails_closed(backend: &dyn Backend) {
+    let (platform, a, b) = ("otp-shared-platform", "otp-shared-a", "otp-shared-b");
+    let (waba, pn) = ("102290129340420", "106540352242940");
+    let records = backend.records();
+    for t in [platform, a, b] {
+        records.create_tenant(&tenant(t), "").await.unwrap();
+    }
+    let waba = WabaId::new(waba).unwrap();
+    let number = PhoneNumberId::new(pn).unwrap();
+    assert_eq!(
+        records
+            .bind_waba(&tenant(platform), &waba, std::slice::from_ref(&number))
+            .await
+            .unwrap(),
+        BindOutcome::Bound
+    );
+    let vault = TokenVault::new(
+        backend.kv(),
+        VaultKeys::new(VaultKey::generate("otp-shared-suite").unwrap()),
+    )
+    .unwrap();
+    vault
+        .store(
+            &StoredBusinessToken::new(waba.clone(), AccessToken::new(PLATFORM_TOKEN))
+                .phone_number_ids([number.clone()]),
+        )
+        .await
+        .unwrap();
+    let mut limited = settings(pn);
+    limited.max_issues = 1;
+    assert!(
+        records
+            .set_otp_settings(&tenant(platform), Some(&limited))
+            .await
+            .unwrap()
+    );
+    let script = ScriptedTransport::new();
+    let client = Client::builder().transport(script.clone()).build().unwrap();
+    let authz = Authorizer::new(records.clone(), vault, client).unwrap();
+    // A pepper of this case's own: a shared count of another run on the
+    // same store is under other keys.
+    let mut pepper = vec![0u8; 32];
+    getrandom::fill(&mut pepper).unwrap();
+    let keys = OtpKeys::new(SecretBytes::new(pepper)).unwrap();
+    let codes = OtpCodes::new(
+        backend.kv(),
+        Arc::new(SystemClock),
+        Some(OtpDeployment::new(keys, Some(tenant(platform)))),
+    );
+    let a = caller(backend, &authz, a).await;
+    let b = caller(backend, &authz, b).await;
+    let request = |purpose: &str| IssueRequest {
+        phone: PHONE.to_owned(),
+        purpose: Some(purpose.to_owned()),
+    };
+    script.push_json(
+        200,
+        json!({
+            "messaging_product": "whatsapp",
+            "contacts": [{"input": PHONE, "wa_id": "16505551234"}],
+            "messages": [{"id": "wamid.HBgLMTY0NjcwNDM1OTUVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA"}]
+        }),
+    );
+    let sent = codes
+        .open(&authz, &a)
+        .unwrap()
+        .issue(request("login"))
+        .await
+        .unwrap();
+    assert!(matches!(sent, Issued::Sent { .. }), "{sent:?}");
+    for (caller, purpose) in [(&b, "login"), (&a, "reset")] {
+        let refused = codes
+            .open(&authz, caller)
+            .unwrap()
+            .issue(request(purpose))
+            .await
+            .unwrap();
+        assert!(
+            matches!(refused, Issued::RateLimited { retry_after_seconds } if retry_after_seconds > 3500),
+            "{purpose}: {refused:?}"
+        );
+    }
+    assert_eq!(script.requests().len(), 1, "one code sent");
+
+    records
+        .update_tenant(&tenant(platform), None, Some(TenantStatus::Suspended))
+        .await
+        .unwrap()
+        .unwrap();
+    let suspended = codes
+        .open(&authz, &b)
+        .unwrap()
+        .issue(request("other"))
+        .await
+        .unwrap_err();
+    assert_eq!(suspended.code(), "otp_not_configured");
+    assert_eq!(script.requests().len(), 1, "Meta was not asked");
     assert_eq!(script.remaining(), 0);
 }

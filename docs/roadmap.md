@@ -4377,8 +4377,43 @@ design's (§9).
     `WA_SERVER_RATE_*` for every tenant); the design's "one `OtpService`
     per (tenant, sending number), cached" is built per request instead (it
     holds no connection: an allocation); template previews and zero-tap
-    wait for M3g; `doctor` does not check that the default OTP tenant
-    exists and has settings.
+    wait for M3g.
+  - **Review (security lens), in the same PR:** five fixes. The generic
+    `POST /v1/wabas/{waba_id}/templates` passed a zero-tap button's
+    `zero_tap_terms_accepted: true` through to Meta since M1b (a tenant
+    accepting Meta's terms): now `422 invalid_request` on the key's path
+    (`templates::ZERO_TAP_TERMS`), the only other route that could carry
+    it. A suspended or deleted default OTP tenant still lent its settings
+    and number: now `409 otp_not_configured`, issue and check (fail
+    closed). The library's issue limit is per namespace, so N tenants on
+    the platform's number (or N purposes) could send one recipient N
+    times it: the default tenant's number now has one issue limit per
+    recipient, shared by every tenant and purpose sending from it
+    (`otp::SharedLimit` on the bundle's `KvStore`, namespace
+    `wa_server.otp.shared_rate`, the key an HMAC of the number and the
+    recipient under a key derived from the pepper; reserved before the
+    library's call, given back when nothing was sent; design D50,
+    proposed). A failed OTP send logged Meta's texts at `debug`, as
+    every route does, and they can quote the template's parameter, the
+    code: withheld at every level on the OTP route
+    (`ServiceError::from_library_withholding_texts`). `doctor` warns
+    (`otp.default_tenant`) when the default
+    tenant is missing, suspended, without settings or no longer holding
+    its number. Decisive:
+    `templates::tests::a_definition_accepting_the_zero_tap_terms_is_refused`
+    and `tests/templates.rs`'s
+    `a_template_accepting_the_zero_tap_terms_is_refused`;
+    `a_suspended_or_deleted_default_tenant_lends_nothing`;
+    `m3_5_logs_hold_neither_code_nor_number` (a sentinel in each of
+    Meta's texts, captured at `TRACE`); `a_malformed_check_counts_no_attempt`;
+    `the_platform_numbers_issue_limit_per_recipient_is_shared` and the
+    core's `conformance::otp::the_default_numbers_issue_limit_is_shared_and_fails_closed`
+    (memory, and live on Postgres); `a_default_otp_tenant_that_cannot_lend_warns`.
+    Left: on a tenant's own number the library's limit stays per
+    purpose, so a tenant can still send one recipient its limit once per
+    purpose it invents (its own number and bill: a per-number limit
+    there is a roadmap item if wanted); a tenant suspended between the
+    settings' read and the send still sends that one code.
 - [ ] **M3g. Zero-tap templates and template previews** (row 98; added
   by M3c): zero-tap authentication templates once the owner decides who
   accepts Meta's zero-tap terms (`zero_tap_terms_accepted`, a terms
@@ -4847,6 +4882,9 @@ everything else goes into the parity-completion report.
   key `otp` of `wa_server_tenants.settings` and its version 1 layout,
   and the label `meta-whatsapp-server/otp-fingerprint/v1` the issue's
   idempotency fingerprint is keyed with, added and awaiting
+  confirmation; M3c's review's shared issue log, the namespace
+  `wa_server.otp.shared_rate`, its key's derivation and record, and the
+  label `meta-whatsapp-server/otp-shared-limit/v1`, added and awaiting
   confirmation), for the same reason as L5's.
 - **Zero-tap authentication templates** (M3c, M3g): creating one sets
   Meta's `zero_tap_terms_accepted`, an acknowledgement of the WhatsApp
@@ -4855,8 +4893,10 @@ everything else goes into the parity-completion report.
   whether a tenant may accept them through the service, as an explicit
   and audited action off by default, is the owner's (AGENTS.md §
   Decisions, legal acts). The generic `POST /v1/wabas/{waba_id}/templates`
-  passes Meta's JSON through, a zero-tap button with the field included,
-  since M1b: that too is the owner's to confirm or close.
+  passed Meta's JSON through, a zero-tap button with the field included,
+  from M1b; M3c's review closed it (`422` on
+  `zero_tap_terms_accepted`), so neither route accepts the terms until
+  the owner decides.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored
