@@ -1107,6 +1107,15 @@ stored data, the owner's).
   under the partial index `wa_server_events_media_idx`, and `get` (M2b)
   with one lookup by `_id` in the tenant's own stream; those field and
   index names are new stored names too, pending the same confirmation.
+  It answers `erase_contacts` (roadmap M2f) as Postgres does too: an
+  insert keeps the event's `NewEvent::contacts` as a `contacts` array of
+  `wa_server_events` (absent when it names nobody), and the erasure
+  deletes, whole, the rows whose `tenant_id` is the tenant (never an
+  operator-only row, which has none), whose `phone_number_id` is the
+  number and whose `contacts` hold one of the identities, through the
+  partial multikey index `wa_server_events_contacts_idx` (over the rows
+  holding `contacts`), answering how many rows went; the field and the
+  index name are new stored names, pending the same confirmation.
   With the driver a normal dependency, `cargo deny check` met
   `tiny-keccak`'s CC0-1.0 licence (reached through the driver's
   `macro_magic`): the owner allowed CC0-1.0 on 2026-11-02, see

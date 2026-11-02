@@ -1284,6 +1284,33 @@ and `store-postgres`.
     `live_mongodb_received_media_reads_its_index_in_order` (no field on
     a row without media, the index's use counted by `$indexStats`, thirty
     rows of three tenants read back newest first).
+    **Brought up to M2f on 2026-11-02** (PR #115): `erase_contacts`
+    (required), as Postgres' `ERASE_SQL` does it. An insert keeps the
+    event's `NewEvent::contacts` in `contacts`, an array of strings,
+    absent when the event names nobody (Postgres' `NULL`); the erasure
+    deletes, whole, the rows whose `tenant_id` is the tenant (an
+    operator-only row has none, so it is never one; and `tenant_id`
+    rather than `stream`, which leads the stream's index, so the
+    planner's only index is the erasure's), whose `phone_number_id` is
+    the number and whose `contacts` hold one of the identities (`$in`),
+    in one `delete_many` at majority write concern, no stream's document
+    written (its sequences and `purged_through` stay), and answers how
+    many rows went; an empty list asks nothing. Its index,
+    `wa_server_events_contacts_idx`, is partial and multikey (`contacts`,
+    over the rows where it `$exists`, which an `$in` of strings implies,
+    so the erasure's filter need not repeat it and the `$in` gives the
+    bounds). Its tests: `conformance::outbox::erase_contacts` (in
+    `live_mongodb_outbox_passes_the_outbox_cases`), M2f's inbox and
+    webhook cases (in the whole suite),
+    `a_row_naming_customers_stores_its_contacts_and_no_other_row_does`
+    (offline; by mutation, the field written always, never, or only in
+    part each fail it) and
+    `live_mongodb_erase_contacts_reads_its_index_and_keeps_the_rest` (the
+    index's use counted by `$indexStats`; the number's operator-only row,
+    a previous holder's row in its own stream, another customer's row
+    and the customer's row on another number kept). The live cases were
+    not run on the branch (no MongoDB there): CI's `just test-live` runs
+    them.
     By mutation, live: the re-check dropped (the routed tenant kept), and
     `RouteGuard::admits` dropped (the binding's tenant and numbers still
     matched), each fail the invariants (`only the rows whose guard held`)
@@ -1324,9 +1351,10 @@ and `store-postgres`.
     **Pending the owner** (stored names, before the first release): the
     collections `wa_server_events`, `wa_server_event_streams` and
     `wa_server_wabas`, their fields (since the merge of 2026-11-02,
-    `media_id` and `media_order` among them) and the index names
-    (`wa_server_events_media_idx` among them; docs/architecture.md §
-    Stable identifiers). **The licence, decided by the owner on
+    `media_id` and `media_order` among them, and since M2f's, PR #115,
+    `contacts`) and the index names (`wa_server_events_media_idx` and,
+    since M2f's, `wa_server_events_contacts_idx` among them;
+    docs/architecture.md § Stable identifiers). **The licence, decided by the owner on
     2026-11-02** ("Yes, upgrade deny"): CC0-1.0 is allowed, in
     `deny.toml`'s `allow` list with the decision's date beside it, for
     `tiny-keccak` through the driver (S9, S17), and `just deny` passes;
