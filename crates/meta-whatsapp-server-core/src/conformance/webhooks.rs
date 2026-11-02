@@ -2071,6 +2071,17 @@ impl Outbox for WatchedOutbox {
         self.inner.purge(older_than).await
     }
 
+    async fn erase_contacts(
+        &self,
+        tenant: &TenantId,
+        phone_number_id: &PhoneNumberId,
+        contacts: &[String],
+    ) -> StoreResult<u64> {
+        self.inner
+            .erase_contacts(tenant, phone_number_id, contacts)
+            .await
+    }
+
     async fn received_media(
         &self,
         media_id: &meta_whatsapp_rs::core::ids::MediaId,

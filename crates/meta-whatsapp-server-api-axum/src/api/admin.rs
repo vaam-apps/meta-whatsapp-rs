@@ -483,6 +483,8 @@ pub enum ScopeName {
     Numbers,
     /// Payment configurations, payment lookups and refunds.
     Payments,
+    /// Erasing a customer on a number (roadmap M2f).
+    Erasure,
 }
 
 impl From<ScopeName> for Scope {
@@ -498,6 +500,7 @@ impl From<ScopeName> for Scope {
             ScopeName::Otp => Scope::Otp,
             ScopeName::Numbers => Scope::Numbers,
             ScopeName::Payments => Scope::Payments,
+            ScopeName::Erasure => Scope::Erasure,
         }
     }
 }
@@ -515,6 +518,7 @@ impl From<Scope> for ScopeName {
             Scope::Otp => ScopeName::Otp,
             Scope::Numbers => ScopeName::Numbers,
             Scope::Payments => ScopeName::Payments,
+            Scope::Erasure => ScopeName::Erasure,
         }
     }
 }

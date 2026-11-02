@@ -52,6 +52,15 @@
 //! ([`Outbox::received_media`]: read in order, up to its limit, whatever
 //! the column's statistics). A row a replica of the release before it
 //! inserted has none.
+//!
+//! **A row keeps the identifiers its event names its customers by**
+//! (roadmap M2f, migration 8): `contacts`, set at insert from the core's
+//! `NewEvent::contacts` (`NULL` when it names none), and found by the
+//! partial GIN index `wa_server_events_contacts_idx`
+//! ([`Outbox::erase_contacts`]: an overlap, the tenant read by
+//! `tenant_id`, which no other index leads with, so the plan is that index
+//! or a scan, whatever the column's statistics). A row a replica of a
+//! release before it inserted has none.
 
 use std::time::Duration;
 
@@ -175,11 +184,13 @@ fn binding_admits(alias: &str) -> String {
 
 #[async_trait]
 impl Outbox for PgEventStore {
-    // One statement and its fifteen parameters, read top to bottom.
+    // One statement and its sixteen parameters, read top to bottom.
     #[allow(clippy::too_many_lines)]
     async fn insert(&self, event: &NewEvent) -> StoreResult<Option<i64>> {
         let data_bytes = i32::try_from(event.data.len())
             .map_err(|_| StorageError::Backend(anyhow::anyhow!("an event over 2 GiB")))?;
+        // `NULL` for an event that names nobody (outside the partial index).
+        let contacts = Some(event.contacts()).filter(|contacts| !contacts.is_empty());
         let mut tx = self.pool.begin().await.map_err(backend)?;
         // A connection of the pool the API shares waits at most this long
         // for a lock (security review M2).
@@ -263,8 +274,9 @@ impl Outbox for PgEventStore {
              ) \
              INSERT INTO wa_server_events \
              (tenant_id, sequence, id, dedup_key, dedup_until, phone_number_id, waba_id, \
-              event_type, data, data_bytes, media_id) \
-             SELECT fresh.tenant_id, drawn.last_sequence, $1, $2, $10, $4, $5, $6, $7::json, $8, $15 \
+              event_type, data, data_bytes, media_id, contacts) \
+             SELECT fresh.tenant_id, drawn.last_sequence, $1, $2, $10, $4, $5, $6, $7::json, $8, $15, \
+                    $16::text[] \
              FROM fresh, drawn \
              ON CONFLICT (dedup_key) DO NOTHING RETURNING sequence, tenant_id",
             number_admits = binding_admits("nw"),
@@ -286,6 +298,7 @@ impl Outbox for PgEventStore {
             .bind(bounds.map(|b| b.after_move))
             .bind(undated_moved_by)
             .bind(event.received_media().map(MediaId::into_inner))
+            .bind(contacts)
             .fetch_optional(&mut *tx)
             .await
             .map_err(busy_or_backend)?;
@@ -451,4 +464,37 @@ impl Outbox for PgEventStore {
             })
             .collect()
     }
+
+    async fn erase_contacts(
+        &self,
+        tenant: &TenantId,
+        phone_number_id: &PhoneNumberId,
+        contacts: &[String],
+    ) -> StoreResult<u64> {
+        if contacts.is_empty() {
+            return Ok(0);
+        }
+        // The tenant's own rows on the number (never an operator-only
+        // one: design D89), by the GIN index on `contacts` (`ERASE_SQL`).
+        let deleted = sqlx::query(ERASE_SQL)
+            .bind(tenant.as_str())
+            .bind(phone_number_id.as_str())
+            .bind(contacts)
+            .execute(&self.pool)
+            .await
+            .map_err(busy_or_backend)?
+            .rows_affected();
+        Ok(deleted)
+    }
 }
+
+/// [`Outbox::erase_contacts`]'s statement: `$1` the tenant, `$2` the
+/// number, `$3` the identities. The tenant's own rows only: `tenant_id =
+/// $1` never matches an operator-only row (`NULL`). The tenant is read by
+/// `tenant_id` (no index leads with it), not `stream` (the primary key's
+/// first column), so that the planner's only index is
+/// `wa_server_events_contacts_idx`. Public for the live test that pins its
+/// plan.
+pub const ERASE_SQL: &str = "DELETE FROM wa_server_events \
+     WHERE tenant_id = $1 AND phone_number_id = $2 \
+       AND contacts && $3::text[]";

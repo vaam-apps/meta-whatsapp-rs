@@ -120,6 +120,7 @@ read yet: set, it stops the start.
 | `WA_VAULT_KEY_ID` | `k1` | the key's id, recorded with each token |
 | `WA_VAULT_PREVIOUS_KEYS` | — | older keys still read, `<id>:<base64>` comma-separated; every id once, the active one's included |
 | `WA_OTP_PEPPER` | required with Postgres | at least 32 bytes, kept out of the database: it keys every OTP code's and store key's hash, and an OTP issue's idempotency fingerprint; rotating it kills the codes in flight (memory storage in development: a throwaway one) |
+| `WA_SERVER_ERASURE_KEY` | unset: erasure off | at least 32 bytes from your secret manager, kept out of the database and for as long as your backups: the key the erasure journal's HMACs are made with (roadmap M2f). Unset, `POST /v1/numbers/{pn}/erasures` answers `409 erasure_not_configured` (memory storage in development: a throwaway one) |
 | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number and template (decision D8's default). Unset, a tenant without settings answers `409 otp_not_configured` |
 | `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` also needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` (AUD, EUR, GBP, IDR, INR or USD): your credit line funds every merchant onboarded ([Solution Partner mode](#solution-partner-mode)) |
 | `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` | `graph` | whether an `account_update` webhook that offboards a merchant or revokes their credit line is confirmed with Graph first (`graph`: `debug_token` on the WABA's stored token, which must no longer be valid or granted the WABA) or acted on by its signature alone (`signature`) ([Offboarding](#offboarding)) |
@@ -215,16 +216,20 @@ events; a million cached rows took about half a second on Postgres 16.
 Rows from before it record no media id: their media keep Meta's
 `phone_number_id` check ("Media" below).
 
+Service migration 8 (roadmap M2f) adds the identifiers each event names
+its customers by (`wa_server_events.contacts`, no default: nothing is
+rewritten) and builds its GIN index, which reads the outbox once and
+holds its inserts meanwhile, as migration 7's does. Rows from before it
+name nobody to an erasure: they go with the outbox's retention.
+
 The inbox tables are kept forever unless `WA_SERVER_INBOX_RETENTION` is
-set (housekeeping then purges what is older than it, roadmap M2a); the
-service has no erasure route yet (roadmap M2f). The event outbox keeps whole events
-(message texts, BSUIDs, phone numbers) for `WA_SERVER_OUTBOX_RETENTION`
-(7 days by default), with no column to find a customer's rows by. Until
-M2f, an erasure request is a job of your own: the library's
-`PostgresConversationStore` on the same database (`identities`, then
-`erase_all` per number: the
-[cms-inbox guide](cms-inbox.md#8-erasing-a-customer-and-retention)),
-and Postgres's side of it ([production.md § 8](production.md#8-retention-and-erasure-on-postgres)).
+set (housekeeping then purges what is older than it, roadmap M2a). The
+event outbox keeps whole events (message texts, BSUIDs, phone numbers),
+and since migration 8 the identifiers they name, for
+`WA_SERVER_OUTBOX_RETENTION` (7 days by default). A customer is erased
+on a number when you ask ("Erasing a customer" below); Postgres's own
+copies (dead rows, WAL, replicas, backups, statement logs) are yours to
+handle ([production.md § 8](production.md#8-retention-and-erasure-on-postgres)).
 
 ## Tenants and keys
 
@@ -240,10 +245,12 @@ immutable. Three kinds of API key, all `wak_<key id>_<secret>`, sent as
 | admin key | nobody: `/v1/admin` only | operators |
 
 Tenant and platform keys carry scopes (`numbers`, `send`, `media`,
-`templates`, `inbox`, `events`, `otp` and `payments` today; `webhooks`
-and `signup` for the routes to come). `payments` (roadmap P2) is new: a
-key minted before it does not carry it, so mint one that does for the
-payment routes. The service keeps only each key's id and the SHA-256 of its
+`templates`, `inbox`, `events`, `otp`, `signup`, `payments` and `erasure`
+today; `webhooks` for the routes to come). `payments` (roadmap P2) and
+`erasure` (roadmap M2f) are new: a key minted before them does not carry
+them, so mint one that does for those routes. `inbox` does not grant
+`erasure`: give the key that erases to the part of your backend that
+handles privacy requests only. The service keeps only each key's id and the SHA-256 of its
 secret, and shows the key once. Rotate by minting a new one, deploying
 it, then revoking the old one: revocation and suspension take effect on
 the next request, on every replica.
@@ -815,6 +822,85 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.1349120
   missing one, and the read route sends no receipt for one.
 - Reads answer `409 reconnect_required` or `number_not_connected` for a
   number whose token does not work, as every number route does.
+
+## Erasing a customer
+
+One route erases a customer on one of the tenant's numbers, from the
+service's inbox and its event outbox (scope `erasure`; roadmap M2f). It
+is irreversible, and it runs only when you call it: which erasure
+requests to honour, and when, is your decision (design D10, "Legal
+acts"); the service never erases on its own.
+
+```bash
+curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/erasures" \
+  -H "Authorization: Bearer $ERASURE_KEY" -H "Content-Type: application/json" \
+  -d '{"confirm": "106540352242922", "contacts": ["US.13491208655302741918", "16505551234"]}'
+# {"erasure_id": "era_…", "phone_number_id": "106540352242922", "erased_at": "2026-11-02T09:30:00Z"}
+```
+
+- **`contacts`** are the person's identities on the number, as the inbox
+  names a conversation's contact: their BSUIDs and `wa_id`s (digits, no
+  `+`), 1 to 16, the ones you hold yourself included. The service adds
+  every identity its inbox connects to them on the number (the identity
+  links the webhooks recorded: a phone number to its BSUID, a BSUID
+  change), then erases them all. `confirm` is the path's number again.
+  The identities travel in the body only, never in a path (an ingress
+  logs paths).
+- **What goes**: their conversations, messages, window events, thread
+  ownership, synced contacts and identity links on the number; their
+  messages in groups redacted (the library's `erase_all`, design D31);
+  and every event of the tenant on the number whose data names one of
+  them (`wa_server_events`, by its `contacts` column: whole events, so a
+  history chunk or a group update that also names others goes too; `GET
+  /v1/events` skips the gap, nothing is renumbered). Never an
+  operator-only event of the number: those are the operator's (design
+  D89).
+- **The answer says nothing of what was found**: the same `200` whether
+  the person was known or not, so a repeat is harmless (it erases
+  nothing more). No `Idempotency-Key`: there is nothing to replay.
+- **The journal**: before anything is deleted, the service writes one
+  entry (target `erasure_journal` in its logs, `info`): `erasure_id`,
+  `at`, `tenant`, `phone_number_id` and `identities`, the hex
+  HMAC-SHA256 of `<phone_number_id>|<contact>` under
+  `WA_SERVER_ERASURE_KEY` for each identity erased, comma-separated. No
+  identity in clear. Ship that target to a store outside the database
+  you back up: after a restore, compute the same HMAC over every
+  identity the restored tables hold and erase again the ones an entry
+  lists ([production.md § 8](production.md#8-retention-and-erasure-on-postgres)).
+  A journal that cannot be written stops the erasure (`503`, nothing
+  deleted).
+- **The audit event** (`customer_erased`, target `audit`) names the key,
+  the tenant, the WABA, the number, the erasure's id and what each store
+  deleted, by count; never the person.
+- **Refusals**: another tenant's number is `404` (it does not exist for
+  you), a key without the scope `403 forbidden`, a wrong `confirm` or bad
+  `contacts` `422`, no `WA_SERVER_ERASURE_KEY` `409
+  erasure_not_configured`, a number that came to you from another tenant
+  `409 erasure_crosses_binding` (below), a number whose token lapsed
+  `409 reconnect_required` (the whole authorization order runs, as on
+  the inbox's routes), a number that moved while it was erased `503`
+  (repeat it). Nothing is erased on any refusal. Its rate class is the
+  writes'.
+- **What it does not reach**: the person on your other numbers (erase on
+  each), the number's operator-only events and another tenant's (a
+  previous holder of the number keeps its own: both go with the outbox's
+  retention, `WA_SERVER_OUTBOX_RETENTION`), events recorded before
+  migration 8, a body the library could not parse, the person quoted in
+  someone else's message, the 24-hour idempotency answers of sends to
+  them (`WA_SERVER_IDEMPOTENCY_TTL`), the webhook dedup markers (keyed
+  hashes: keep them), what live streams already delivered, Meta's
+  contact book (the library's `delete_contact_book_entry`). What arrives
+  after the erasure is recorded again: erase again once Meta's 7-day
+  redelivery window has passed.
+- **A number that came to you from another tenant** (its WABA moved, or
+  Meta migrated the number from another tenant's WABA) is refused whole:
+  `409 erasure_crosses_binding`, nothing erased, no journal entry. The
+  inbox is kept by number, and your reads stop at your binding's start
+  (design D10), but the library's erasure takes no time bound, so it
+  would also delete the previous holder's hidden records of the person
+  (design D90). Ask the operator: they can erase on the number through
+  the library. Whether the service may reach those records is the
+  owner's open choice (roadmap § Owner touchpoints).
 
 ## OTP
 

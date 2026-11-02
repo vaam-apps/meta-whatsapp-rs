@@ -210,6 +210,52 @@ fn refuses_a_pepper_under_32_bytes_with_postgres() {
     assert!(Config::from_env(&production().set("WA_OTP_PEPPER", &"p".repeat(32))).is_ok());
 }
 
+/// Roadmap M2f (design D88): `WA_SERVER_ERASURE_KEY` is a secret of its
+/// own, at least 32 bytes, directly or from its `_FILE`; unset, erasure
+/// is off (`None`). A shorter key is refused at start, naming the
+/// variable and never quoting it; a blank one is `Blank`. The key is the
+/// bytes given, derived from nothing: its HMAC is the one a key made of
+/// those bytes computes, whether read directly or from a file. Decisive:
+/// the length check, the `_FILE` reading, a derivation.
+#[test]
+fn reads_an_erasure_key_of_at_least_32_bytes() {
+    use meta_whatsapp_rs::core::ids::PhoneNumberId;
+    use meta_whatsapp_rs::core::secret::SecretBytes;
+    use meta_whatsapp_server_core::erasure::ErasureKey;
+    let short = "k".repeat(31);
+    match refused(&production().set("WA_SERVER_ERASURE_KEY", &short)) {
+        ConfigError::Invalid { name, .. } => assert_eq!(name, "WA_SERVER_ERASURE_KEY"),
+        other => panic!("{other:?}"),
+    }
+    let error = refused(&production().set("WA_SERVER_ERASURE_KEY", &short));
+    assert!(!error.to_string().contains(&short), "{error}");
+    assert!(!format!("{error:?}").contains(&short), "{error:?}");
+    assert_eq!(
+        refused(&production().set("WA_SERVER_ERASURE_KEY", "  ")),
+        ConfigError::Blank("WA_SERVER_ERASURE_KEY")
+    );
+    let off = Config::from_env(&production()).unwrap();
+    assert!(off.erasure_key.is_none(), "erasure is off without a key");
+    let key = "an-erasure-key-of-thirty-two-b!!";
+    assert_eq!(key.len(), 32);
+    let pn = PhoneNumberId::new("106540352242922").unwrap();
+    let expected = ErasureKey::new(SecretBytes::new(key.as_bytes().to_vec()))
+        .unwrap()
+        .journal_hmac(&pn, "16505551234");
+    let direct = Config::from_env(&production().set("WA_SERVER_ERASURE_KEY", key)).unwrap();
+    let from_file = Config::from_env(
+        &production()
+            .set("WA_SERVER_ERASURE_KEY_FILE", "/run/secrets/erasure")
+            .file("/run/secrets/erasure", &format!("{key}\n")),
+    )
+    .unwrap();
+    for (config, how) in [(direct, "directly"), (from_file, "from a file")] {
+        let read = config.erasure_key.expect(how);
+        assert_eq!(read.journal_hmac(&pn, "16505551234"), expected, "{how}");
+        assert!(!format!("{read:?}").contains(key), "{how}");
+    }
+}
+
 #[test]
 fn refuses_memory_storage_outside_development() {
     assert_eq!(
