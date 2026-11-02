@@ -104,14 +104,11 @@ resumes exactly after it; with neither, only the next events come.
 - The stream may end with `event: lagged` (you took nothing for 30 s
   while 1 MiB waited, or events after your cursor were purged) or
   `event: shutdown` (the replica stops), each with `{"after": n}`, the
-  last sequence sent: reconnect with it as `Last-Event-ID`. It ends with
-  no last frame once the key is revoked or the tenant suspended: the
-  reconnection is `401` or `403`.
+  last sequence sent: reconnect with it as `Last-Event-ID`.
 - Refused before it starts: `cursor_expired` (410) and `invalid_request`
   on `Last-Event-ID` or `after` (422), as for polling; `too_many_streams`
   (429: 20 per tenant and replica, `WA_SERVER_STREAMS_PER_TENANT`) and
-  `shutting_down` (503): wait `Retry-After`, reconnect. A number not
-  yours: `not_found`.
+  `shutting_down` (503): wait `Retry-After`. A number not yours: `not_found`.
 - Browsers cannot send the key (an EventSource sends no Authorization header):
   relay the stream from your backend.
 
