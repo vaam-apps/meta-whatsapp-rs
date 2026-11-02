@@ -750,7 +750,8 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/register" \
   each deregistration, like each PIN change, is an audit event with the
   key's public id. Meta keeps the number's history and its local storage
   setting, and refuses to deregister a number also on the WhatsApp
-  Business app. The number stays bound to your tenant; its sends fail
+  Business app (with a code its pages do not list: `502 unknown`,
+  `may_have_been_sent: false`, the key freed). The number stays bound to your tenant; its sends fail
   with `409 registration` until it is registered again.
 
 ## Rate limits

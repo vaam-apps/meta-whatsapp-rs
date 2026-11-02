@@ -26,3 +26,12 @@ async fn the_number_services_read_change_and_disconnect_as_meta_documents() {
     )
     .await;
 }
+
+/// Roadmap M3d: the registration services open on the caller's own
+/// number only (another tenant's is `404`, before any attempt is counted).
+#[tokio::test]
+async fn the_registration_services_open_on_the_callers_own_number_only() {
+    let backend = memory::Memory::default();
+    conformance::numbers::the_registration_services_open_on_the_callers_own_number_only(&backend)
+        .await;
+}

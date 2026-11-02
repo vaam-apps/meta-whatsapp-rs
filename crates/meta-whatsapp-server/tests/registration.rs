@@ -376,7 +376,10 @@ async fn metas_refusal_to_deregister_maps_cleanly() {
         assert_eq!(error["retryable"], false, "{code}");
         assert!(!refused.text.contains("Business app"));
         assert!(!refused.text.contains("coexistence"));
-        assert!(refused.headers.get("idempotent-replayed").is_none(), "released");
+        assert!(
+            refused.headers.get("idempotent-replayed").is_none(),
+            "released"
+        );
     }
     assert_eq!(h.graph.requests().len(), 2, "the key was free each time");
     assert_eq!(h.graph.remaining(), 0);

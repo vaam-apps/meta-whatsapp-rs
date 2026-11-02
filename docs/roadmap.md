@@ -4862,6 +4862,42 @@ design's (§9).
     logged, `details` answered, the budget's charge removed or moved
     before the confirmation, the confirmation removed, axum's own JSON
     extractor, the deregistration's audit removed: each fails a test.
+  - **Decided:** D65–D69, the coordinator's of 2026-11-02 under the
+    owner's delegation, each swappable (design §10); the namespace
+    `wa.server.registration` and its record wait for the owner, and so
+    does a scope of deregistration's own (§ Owner touchpoints).
+  - **Review (security lens), in the same PR:** one fix and the tests a
+    guard lacked. A counter record of another `v` whose fields parsed
+    was read as version 1: now refused (`503`, fail closed;
+    `a_record_that_does_not_read_refuses_the_attempt`). Pinned by new
+    tests, each by mutation: concurrent charges on one record pass the
+    limit exactly (`concurrent_charges_never_pass_the_limit`; a plain
+    write, or a plain first write, lets all through), and so on Postgres
+    across two replicas
+    (`live_postgres_a_numbers_budget_holds_across_racing_replicas`); a
+    store whose reads or writes fail refuses
+    (`a_store_that_fails_refuses_the_attempt`); a moving 72 hours never
+    holds more than 10 accepted attempts
+    (`two_back_to_back_windows_hold_at_most_ten`); `Registration::new`'s
+    tenant check, which HTTP never reached (the extractor refuses
+    first), in `conformance::numbers`
+    (`the_registration_services_open_on_the_callers_own_number_only`); the
+    region in the fingerprint; an encoded path's confirmation
+    (`deregistering_an_encoded_path_takes_the_decoded_id`); a timeout's
+    kept key, replayed with another PIN and no attempt spent; Meta's
+    refusal of a coexistence number (`502 unknown`, the key freed, no
+    texts; `metas_refusal_to_deregister_maps_cleanly`); callers without a
+    valid key. The shared flow now carries the PIN in malformed shapes
+    (a number, too long, signed, padded, other digits, a body that is not
+    JSON) through the store sweep, the `TRACE` capture and the live
+    sweep, keys and replays its deregistration (audited once), and the
+    metrics hold no secret. Docs: Meta limits registering and
+    deregistering to 10 each per moving 72 hours, not 10 shared; the
+    library's `PhoneNumber::deregister` said it turned local storage off,
+    which Meta's page says it does not. Left: the windows are measured on
+    each replica's clock, so a skew between replicas shortens one by the
+    skew; the settings accept budgets past Meta's limit without a
+    warning; a verification code has no length bound but the body's.
 - [ ] **M3e. The token-expiry event** (row 6; OPEN_QUESTIONS #8): an
   event and a metric ahead of a stored token's lapse.
   - **After:** M3a, L11e.

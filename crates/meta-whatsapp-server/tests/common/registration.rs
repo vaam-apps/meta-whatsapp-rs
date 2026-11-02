@@ -125,7 +125,10 @@ pub async fn flow(h: &Harness, key: &str) -> Vec<Reply> {
         ("register", json!({"pin": format!("+{PIN}")})),
         ("register", json!({"pin": format!(" {PIN}")})),
         ("register", json!({"pin": format!("{PIN}\n")})),
-        ("register", json!({"pin": "\u{0665}\u{0668}\u{0661}\u{0660}\u{0666}\u{0663}"})),
+        (
+            "register",
+            json!({"pin": "\u{0665}\u{0668}\u{0661}\u{0660}\u{0666}\u{0663}"}),
+        ),
         ("register", json!({"pin": PIN, "unknown": PIN})),
         ("register", json!({"pin": [PIN]})),
         ("register", json!({"pin": {"value": PIN}})),
@@ -135,12 +138,15 @@ pub async fn flow(h: &Harness, key: &str) -> Vec<Reply> {
         ("verify-code", json!({"code": format!("{CODE}x")})),
         ("verify-code", json!({"code": 774216})),
     ] {
-        call(post(key, route, &malformed), StatusCode::UNPROCESSABLE_ENTITY).await;
+        call(
+            post(key, route, &malformed),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        )
+        .await;
     }
     // Not JSON at all, the PIN inside: the parser's message would quote it.
     call(
-        post(key, "register", &json!({}))
-            .body(format!("{{\"pin\": {PIN}x}}").into()),
+        post(key, "register", &json!({})).body(format!("{{\"pin\": {PIN}x}}").into()),
         StatusCode::UNPROCESSABLE_ENTITY,
     )
     .await;

@@ -747,8 +747,10 @@ mod tests {
     /// fraction of a second past a whole second (the record keeps whole
     /// seconds): at every accepted attempt, the attempts accepted in the
     /// 72 hours up to it (Meta's count) are at most 10, and the budget
-    /// still lets 5 a window through. Decisive: a window shorter than its
-    /// setting, or one that starts again before it ended.
+    /// still lets 5 a window through. Decisive: a full window starting
+    /// again, a window of half its setting, a new window keeping the old
+    /// count, the limit off by one (a window an hour short is
+    /// `a_numbers_budget_refuses_past_its_limit_until_the_window_ends`').
     #[tokio::test]
     async fn two_back_to_back_windows_hold_at_most_ten() {
         let (counters, clock, _) = attempts(AttemptLimits::default());
@@ -864,9 +866,8 @@ mod tests {
             .collect();
         assert_eq!(passed, 5, "{refused:?}");
         assert_eq!(refused, [429; 5]);
-        let stored = kv
-            .0
-            .get(&RegistrationAttempts::store_key(
+        let stored =
+            kv.0.get(&RegistrationAttempts::store_key(
                 AttemptBudget::Registration,
                 &a,
             ))
@@ -880,9 +881,12 @@ mod tests {
         );
     }
 
-    /// A `KvStore` that fails every call.
+    /// A `KvStore` that fails every call, or (`reads`) only its writes:
+    /// its reads are a memory store's.
     #[derive(Debug)]
-    struct Failing;
+    struct Failing {
+        reads: Option<MemoryKvStore>,
+    }
 
     fn down() -> StorageError {
         StorageError::Backend(anyhow::anyhow!("down"))
@@ -892,9 +896,12 @@ mod tests {
     impl KvStore for Failing {
         async fn get(
             &self,
-            _: &StoreKey,
+            key: &StoreKey,
         ) -> Result<Option<meta_whatsapp_rs::core::store::Versioned>, StorageError> {
-            Err(down())
+            match &self.reads {
+                Some(reads) => reads.get(key).await,
+                None => Err(down()),
+            }
         }
         async fn put(&self, _: &StoreKey, _: Vec<u8>, _: Expiry) -> Result<u64, StorageError> {
             Err(down())
@@ -921,15 +928,52 @@ mod tests {
         }
     }
 
-    /// A store that fails refuses the attempt (`503`, retryable, nothing
-    /// sent): the budget fails closed. Decisive: the store's error
-    /// propagated, not read as "no record".
+    /// A store that fails refuses the attempt (`503`, nothing sent): the
+    /// budget fails closed, whether its reads fail or only its writes, on
+    /// a first attempt and on a counted one. Decisive: the store's errors
+    /// propagated (a failed write read as done would let every attempt
+    /// through uncounted).
     #[tokio::test]
     async fn a_store_that_fails_refuses_the_attempt() {
         let clock = ManualClock::new(OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap());
-        let counters =
-            RegistrationAttempts::new(Arc::new(Failing), AttemptLimits::default(), Arc::new(clock));
-        for budget in AttemptBudget::ALL {
+        let counted = MemoryKvStore::new();
+        counted
+            .put(
+                &RegistrationAttempts::store_key(
+                    AttemptBudget::Registration,
+                    &pn("106540352242922"),
+                ),
+                br#"{"v":1,"since":1800000000,"count":1}"#.to_vec(),
+                Expiry::Never,
+            )
+            .await
+            .unwrap();
+        for (store, budgets) in [
+            (Failing { reads: None }, AttemptBudget::ALL.to_vec()),
+            (
+                Failing {
+                    reads: Some(MemoryKvStore::new()),
+                },
+                AttemptBudget::ALL.to_vec(),
+            ),
+            (
+                Failing {
+                    reads: Some(counted),
+                },
+                vec![AttemptBudget::Registration],
+            ),
+        ] {
+            let counters = RegistrationAttempts::new(
+                Arc::new(store),
+                AttemptLimits::default(),
+                Arc::new(clock.clone()),
+            );
+            check_refused(&counters, &budgets).await;
+        }
+    }
+
+    async fn check_refused(counters: &RegistrationAttempts, budgets: &[AttemptBudget]) {
+        for &budget in budgets {
             let refused = counters
                 .charge(budget, &pn("106540352242922"))
                 .await

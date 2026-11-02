@@ -1463,7 +1463,10 @@ async fn live_postgres_a_numbers_budget_holds_across_racing_replicas() {
         h.call(post(&key, "register", &serde_json::json!({"pin": PIN})))
     });
     let replies = futures::future::join_all(calls).await;
-    let passed = replies.iter().filter(|r| r.status == StatusCode::OK).count();
+    let passed = replies
+        .iter()
+        .filter(|r| r.status == StatusCode::OK)
+        .count();
     for reply in &replies {
         assert!(
             [200, 429, 503].contains(&reply.status.as_u16()),
@@ -1475,9 +1478,8 @@ async fn live_postgres_a_numbers_budget_holds_across_racing_replicas() {
     let asked = a.graph.requests().len() + b.graph.requests().len();
     assert_eq!(asked, passed, "only the passed ones reached Meta");
     assert!((1..=3).contains(&passed), "{passed} passed");
-    let stored = a
-        .kv
-        .get(&RegistrationAttempts::store_key(
+    let stored =
+        a.kv.get(&RegistrationAttempts::store_key(
             AttemptBudget::Registration,
             &PhoneNumberId::new(PN).unwrap(),
         ))

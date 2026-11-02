@@ -107,7 +107,8 @@ show the merchant the wait.
 The number stops sending and receiving through the Cloud API until it is
 registered again, with its PIN. Meta keeps its history and its local
 storage setting, and refuses a number also used in the WhatsApp Business
-app. `confirm` must be the path's number (else `422` on `confirm`). The
+app (with a code it does not document: `502 unknown`, nothing done, not
+retryable). `confirm` must be the path's number (else `422` on `confirm`). The
 service writes an audit event in its logs (action number_deregistered,
 as for a PIN change, two_step_pin_set) with your key's public id. The number stays
 bound to your tenant; its sends answer `409 registration` meanwhile.
