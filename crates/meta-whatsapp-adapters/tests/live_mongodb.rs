@@ -373,7 +373,9 @@ mod adapters {
         assert_eq!(ttl, Some((doc! { "purge_after": 1 }, Some(Duration::ZERO))));
 
         // A version written by the clock's term after the document is gone
-        // (as the TTL index removes it) is past every earlier one.
+        // (as the TTL index removes it, ten minutes after its last write at
+        // the soonest: a few milliseconds here) is past every earlier one.
+        tokio::time::sleep(Duration::from_millis(5)).await;
         records.delete_one(doc! { "_id": id }).await.unwrap();
         let v3 = store
             .put(&key, b"anew".to_vec(), Expiry::Never)
