@@ -5,7 +5,7 @@ description: "Registering a WhatsApp business number through meta-whatsapp-serve
 
 # meta-whatsapp-rs-server-registration
 
-> **Verified against meta-whatsapp-rs 983ed5ef1bf828e6e7989563c6db19e97f3a5d29 (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs cbd6ff6716a3aeb7f7c012937de3e09e3d593441 (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/registration.ts](examples/registration.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#registration-and-the-two-step-pin).
 
