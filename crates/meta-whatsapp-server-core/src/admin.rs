@@ -40,6 +40,7 @@ use crate::model::{
     MAX_NAME_CHARS, MAX_PAGE_SIZE, NewApiKey, NumberBinding, OtpSettings, PageRequest, Scope,
     Tenant, TenantId, TenantStatus, WabaBinding,
 };
+use crate::number_events::{DisconnectReason, NumberEvent};
 use crate::observe::Observer;
 use crate::store::RecordStore;
 
@@ -720,7 +721,11 @@ impl<'a> Admin<'a> {
     ///    D4 refused.
     /// 4. Store the token (`Authorizer::store_token`: binds, stores,
     ///    then confirms; moved meanwhile, its own write taken back and
-    ///    `503`, retryable). Audited (`waba_attached`) once stored.
+    ///    `503`, retryable). Audited (`waba_attached`) once stored. Then
+    ///    `number_connected` for each of its numbers, for the binding's
+    ///    generation (roadmap M2d, [`crate::number_events`]): not recorded
+    ///    (the outbox failing), `503`, the WABA staying attached; a repeat
+    ///    is a new generation, which records them again.
     /// 5. Subscribe the app to the WABA's webhooks with the token. Its
     ///    failure carries `step: subscribe_app` and `resumable: true`: the
     ///    WABA stays attached, and repeating the call finishes it. Meta
@@ -820,6 +825,18 @@ impl<'a> Admin<'a> {
                 ..Subject::default()
             },
         );
+        // The binding as the token's store confirmed it: its numbers are
+        // connected, for this generation (roadmap M2d).
+        if let Some(binding) = self
+            .records()
+            .waba(&waba_id)
+            .await?
+            .filter(|binding| binding.tenant_id == tenant)
+        {
+            self.authz
+                .record_number_event(&binding.epoch(), NumberEvent::Connected)
+                .await?;
+        }
         // Subscribe the app to the WABA's webhooks, as onboarding does
         // after storing the token: a WABA the app is not subscribed to
         // delivers no webhook, and disconnecting unsubscribes it
@@ -895,8 +912,10 @@ impl<'a> Admin<'a> {
 
     /// Unbind a WABA as the operator, from its `binding` as read: with its
     /// stored token, if one is usable, unsubscribe the app, at best (Meta
-    /// refusing does not stop it); then delete the token, then the
-    /// bindings, as a disconnection does. A token no tenant can reach
+    /// refusing does not stop it); then record `number_disconnected`
+    /// (`reason`: `operator_unbound`) for each of its numbers, while the
+    /// binding still holds them (roadmap M2d); then delete the token, then
+    /// the bindings, as a disconnection does. A token no tenant can reach
     /// serves nothing and widens what a database and vault key compromise
     /// exposes. Not audited: [`Self::unbind_waba`] is.
     ///
@@ -913,6 +932,12 @@ impl<'a> Admin<'a> {
             Err(error) if error.error_code() == ErrorCode::STORAGE_UNAVAILABLE => Err(error),
             // No token, an expired one, or one that no longer decrypts.
             Err(unusable) => {
+                self.authz
+                    .record_number_event(
+                        &binding.epoch(),
+                        NumberEvent::Disconnected(DisconnectReason::OperatorUnbound),
+                    )
+                    .await?;
                 self.authz
                     .forget_for_admin(self.caller, &binding.waba_id)
                     .await?;
@@ -946,6 +971,12 @@ impl<'a> Admin<'a> {
                 "unbinding a WABA Meta did not unsubscribe the app from"
             );
         }
+        self.authz
+            .record_number_event(
+                owned.epoch(),
+                NumberEvent::Disconnected(DisconnectReason::OperatorUnbound),
+            )
+            .await?;
         owned.forget_or_busy(self.authz).await
     }
 

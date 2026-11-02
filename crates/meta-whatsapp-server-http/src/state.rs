@@ -183,7 +183,11 @@ impl AppState {
         let vault = TokenVault::new(backend.kv(), vault_keys)?;
         // One clock for the whole service: the webhook pipeline's.
         let clock = inbound.clock();
-        let authz = Authorizer::new(store.clone(), vault, client)?.with_clock(clock.clone());
+        // The service's number events (roadmap M2d) go to the outbox the
+        // pipeline records Meta's events in, with its ids and clock.
+        let authz = Authorizer::new(store.clone(), vault, client)?
+            .with_clock(clock.clone())
+            .with_number_events(inbound.number_events(backend.as_ref()));
         let events = Events::new(inbound, backend.as_ref(), metrics.clone());
         // The codes in the bundle's key/value store, as the vault, on the
         // service's one clock.

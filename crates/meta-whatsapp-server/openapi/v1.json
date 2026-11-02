@@ -9288,7 +9288,13 @@
           "template_quality_updated",
           "template_status_updated",
           "template_category_updated",
-          "template_category_misuse_detected"
+          "template_category_misuse_detected",
+          "standby_observed",
+          "thread_control_changed",
+          "user_action_reported",
+          "number_connected",
+          "number_disconnected",
+          "number_reconnect_required"
         ]
       },
       "ListRow": {

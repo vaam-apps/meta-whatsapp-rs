@@ -195,6 +195,305 @@ pub async fn run(backend: &dyn Backend) {
     an_address_book_change_reaches_its_tenant_and_no_inbox(backend).await;
     undated_events_after_a_move_reach_no_tenant_within_the_window(backend).await;
     an_event_of_its_bindings_first_second_reaches_a_first_onboarding_only(backend).await;
+    the_reviewed_types_reach_their_numbers_tenant_and_no_other(backend).await;
+    the_reviewed_types_of_a_previous_holder_reach_no_tenant(backend).await;
+}
+
+/// Meta's WABA in the examples of its pages (the library's fixtures).
+const EXAMPLE_WABA: &str = "102290129340398";
+/// Meta's business number in them.
+const EXAMPLE_PN: &str = "106540352242922";
+
+/// Meta's examples of the three types roadmap M2d made tenant-visible
+/// (design D25), by type: every fixture of the library's that holds one
+/// (one event each), from `webhooks/reference/standby`,
+/// `webhooks/reference/messaging-handovers`,
+/// `conversation-routing/thread-control`,
+/// `conversation-routing/conversation-context` and
+/// `marketing-messages/track-click-events`. All on [`EXAMPLE_WABA`] and
+/// [`EXAMPLE_PN`].
+pub const REVIEWED_EXAMPLES: [(&str, &str); 11] = [
+    (
+        "standby_observed",
+        include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/webhooks.reference.standby__inbound_message.json"
+        ),
+    ),
+    (
+        "standby_observed",
+        include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/webhooks.reference.standby__text_message_echo.json"
+        ),
+    ),
+    (
+        "standby_observed",
+        include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/webhooks.reference.standby__template_message_echo.json"
+        ),
+    ),
+    (
+        "standby_observed",
+        include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/webhooks.reference.standby__interactive_flow_message_echo.json"
+        ),
+    ),
+    (
+        "standby_observed",
+        include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/webhooks.reference.standby__status_receipt.json"
+        ),
+    ),
+    (
+        "thread_control_changed",
+        include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/webhooks.reference.messaging-handovers__control_passed.json"
+        ),
+    ),
+    (
+        "thread_control_changed",
+        include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/webhooks.reference.messaging-handovers__control_taken.json"
+        ),
+    ),
+    (
+        "thread_control_changed",
+        include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/conversation-routing.thread-control__control_passed.json"
+        ),
+    ),
+    (
+        "thread_control_changed",
+        include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/conversation-routing.thread-control__control_taken.json"
+        ),
+    ),
+    (
+        "thread_control_changed",
+        include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/conversation-routing.conversation-context__control_passed.json"
+        ),
+    ),
+    (
+        "user_action_reported",
+        include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/marketing-messages.track-click-events__webhooks.json"
+        ),
+    ),
+];
+
+/// Meta's `example`, sent to `waba` and `pn` instead of Meta's example
+/// ones, its message ids tagged with `tag` (each case's own: the dedup
+/// leases outlive a case), every date set to `at` (Unix seconds).
+pub fn example_on(example: &str, waba: &str, pn: &str, tag: &str, at: i64) -> Value {
+    let text = example
+        .replace(EXAMPLE_WABA, waba)
+        .replace(EXAMPLE_PN, pn)
+        .replace("wamid.", &format!("wamid.{tag}."));
+    dated(serde_json::from_str(&text).unwrap(), at)
+}
+
+/// [`example_on`] `holder`'s WABA and number.
+pub(super) fn example_for(example: &str, holder: Holder, tag: &str, at: i64) -> Value {
+    example_on(example, holder.waba, holder.pn, tag, at)
+}
+
+/// Roadmap M2d's decisive case (acceptance test M2.6, design D25), through
+/// the core's pipeline: Meta's examples of `standby_observed`,
+/// `thread_control_changed` and `user_action_reported`, each on tenant A's
+/// number, reach A (its rows, its poll, each by id) and no other tenant (B
+/// polls none, and reads none by id); the same examples on an unbound
+/// number, or naming A's number under B's WABA, are operator-only rows, as
+/// every event of a type a tenant receives. Each is told to the observer
+/// by its audience. Decisive: the three types in `TENANT_EVENT_TYPES` (one
+/// taken out, A polls none of its examples), and the routing allow-list
+/// (an unbound number's example reaching A).
+pub async fn the_reviewed_types_reach_their_numbers_tenant_and_no_other(backend: &dyn Backend) {
+    const A: Holder = Holder {
+        id: "wh-reviewed-a",
+        waba: "102290129340430",
+        pn: "106540352242950",
+    };
+    const B: Holder = Holder {
+        id: "wh-reviewed-b",
+        waba: "102290129340431",
+        pn: "106540352242951",
+    };
+    let records = backend.records();
+    hold(records.as_ref(), A).await;
+    hold(records.as_ref(), B).await;
+    let watched = Watched::of(backend);
+    let told = Arc::new(Told::default());
+    let pipeline = pipeline(&watched, &told);
+    let unbound = Holder {
+        id: "",
+        waba: UNBOUND_WABA,
+        pn: UNBOUND_PN,
+    };
+    let under_b = Holder {
+        id: "",
+        waba: B.waba,
+        pn: A.pn,
+    };
+    // Each example dated a second of its own: two of Meta's pages print
+    // the same handover, which would otherwise be one event.
+    let at = sent_now();
+    let mut asked = 0;
+    for (to, tag, owner) in [
+        (A, "reviewed-a", Some(A.id)),
+        (unbound, "reviewed-unbound", None),
+        (under_b, "reviewed-under-b", None),
+    ] {
+        for (i, (kind, example)) in REVIEWED_EXAMPLES.iter().enumerate() {
+            let case = format!("{tag}, example {i} ({kind})");
+            let payload = example_for(
+                example,
+                to,
+                &format!("{tag}-{i}"),
+                at + i64::try_from(i).unwrap(),
+            );
+            let report = deliver(&pipeline, &body(&payload))
+                .await
+                .unwrap_or_else(|refused| panic!("{case}: refused {refused:?}"));
+            assert_eq!((report.delivered, report.duplicates), (1, 0), "{case}");
+            let inserted = watched.outbox.inserted();
+            asked += 1;
+            assert_eq!(inserted.len(), asked, "{case}: one row asked for");
+            let (row, sequence) = &inserted[asked - 1];
+            assert!(sequence.is_some(), "{case}: recorded");
+            assert_eq!(row.event_type, *kind, "{case}");
+            assert_eq!(
+                row.tenant.as_ref().map(TenantId::as_str),
+                owner,
+                "{case}: the row's tenant"
+            );
+            assert_eq!(
+                row.phone_number_id.as_ref().map(PhoneNumberId::as_str),
+                Some(to.pn),
+                "{case}"
+            );
+        }
+    }
+    let of_a = polled(backend, A.id).await;
+    assert_eq!(
+        types(&of_a),
+        REVIEWED_EXAMPLES.map(|(kind, _)| kind),
+        "A polls every example on its number, in order"
+    );
+    for event in &of_a {
+        assert_eq!(
+            (
+                event.phone_number_id.as_ref().map(PhoneNumberId::as_str),
+                event.waba_id.as_ref().map(WabaId::as_str)
+            ),
+            (Some(A.pn), Some(A.waba))
+        );
+        let data: Value = serde_json::from_str(&event.data).unwrap();
+        assert_eq!(data["event"], event.event_type.as_str());
+        let (a, b) = (
+            TenantId::parse(A.id).unwrap(),
+            TenantId::parse(B.id).unwrap(),
+        );
+        let outbox = backend.outbox();
+        let own = crate::events::get_event(outbox.as_ref(), &a, &event.id)
+            .await
+            .unwrap();
+        assert_eq!(own.data, event.data, "A reads its own by id");
+        let refused = crate::events::get_event(outbox.as_ref(), &b, &event.id)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (refused.status(), refused.code()),
+            (404, "not_found"),
+            "B reads none of A's by id"
+        );
+    }
+    assert!(
+        polled(backend, B.id).await.is_empty(),
+        "B polled another tenant's number's events"
+    );
+    let n = REVIEWED_EXAMPLES.len();
+    let told = told.take_webhook_events();
+    assert_eq!(told.len(), 3 * n);
+    for (i, (kind, audience)) in told.iter().enumerate() {
+        assert_eq!(*kind, REVIEWED_EXAMPLES[i % n].0);
+        assert_eq!(*audience, if i < n { "tenant" } else { "operator" }, "{i}");
+    }
+}
+
+/// Roadmap M2d with S2b's rules (design D25, D36), through the core's
+/// pipeline: after a WABA moved from tenant A to tenant B, Meta's examples
+/// of the three types dated in A's time (Meta redelivering them, for up to
+/// 7 days) reach neither tenant, and nor do those dated in the second B's
+/// binding began; dated the next second, they reach B. Decisive: the
+/// routing's date check, applied to these types as to every dated one.
+pub async fn the_reviewed_types_of_a_previous_holder_reach_no_tenant(backend: &dyn Backend) {
+    const LEFT: Holder = Holder {
+        id: "wh-reviewed-left",
+        waba: "102290129340432",
+        pn: "106540352242952",
+    };
+    const ARRIVED: Holder = Holder {
+        id: "wh-reviewed-arrived",
+        ..LEFT
+    };
+    let records = backend.records();
+    hold(records.as_ref(), LEFT).await;
+    let waba = WabaId::new(LEFT.waba).unwrap();
+    assert!(records.unbind_waba(&waba).await.unwrap());
+    hold(records.as_ref(), ARRIVED).await;
+    let began = records
+        .waba(&waba)
+        .await
+        .unwrap()
+        .unwrap()
+        .attached_at
+        .unix_timestamp();
+    let watched = Watched::of(backend);
+    let told = Arc::new(Told::default());
+    let pipeline = pipeline(&watched, &told);
+    let mut asked = 0;
+    for (case, at, owner) in [
+        (
+            "the previous holder's, a minute before the move",
+            began - 60,
+            None,
+        ),
+        ("dated in the second the binding began", began, None),
+        ("dated the next second", began + 1, Some(ARRIVED.id)),
+    ] {
+        let tag = format!("reviewed-moved-{}", at - began + 60);
+        for (i, (kind, example)) in REVIEWED_EXAMPLES.iter().enumerate() {
+            // Dated alike: two of Meta's pages print the same handover,
+            // told apart here by its customer.
+            let mut payload = example_for(example, ARRIVED, &format!("{tag}-{i}"), at);
+            if *kind == "thread_control_changed" {
+                payload["entry"][0]["changes"][0]["value"]["sender"]["phone_number"] =
+                    json!(format!("1650555{i:04}"));
+            }
+            let report = deliver(&pipeline, &body(&payload))
+                .await
+                .unwrap_or_else(|refused| panic!("{case}, {i}: refused {refused:?}"));
+            assert_eq!(
+                (report.delivered, report.duplicates),
+                (1, 0),
+                "{case}, {i} ({kind})"
+            );
+            asked += 1;
+            let inserted = watched.outbox.inserted();
+            assert_eq!(
+                inserted[asked - 1].0.tenant.as_ref().map(TenantId::as_str),
+                owner,
+                "{case}, {i} ({kind}): the row's tenant"
+            );
+        }
+    }
+    assert_eq!(
+        types(&polled(backend, ARRIVED.id).await),
+        REVIEWED_EXAMPLES.map(|(kind, _)| kind),
+        "the new holder: the next second's only"
+    );
+    assert!(polled(backend, LEFT.id).await.is_empty());
+    let _ = told.take_webhook_events();
 }
 
 /// Roadmap S2b's decisive case (design D36), through the core's pipeline:

@@ -18,6 +18,7 @@ use meta_whatsapp_rs::webhooks::WebhookPayload;
 use meta_whatsapp_server::events::{
     OPERATOR_EVENT_TYPES, TENANT_EVENT_TYPES, event_data, meta_time,
 };
+use meta_whatsapp_server_core::number_events::NUMBER_EVENT_TYPES;
 use serde_json::Value;
 
 fn fixtures_dir() -> PathBuf {
@@ -131,7 +132,8 @@ fn event_data_is_pinned_over_metas_examples() {
 /// Every type the library names (`WebhookEvent::kind`) is either one a
 /// tenant receives or an operator-only one: a type a library release adds
 /// fails here until the service decides which (until then it is
-/// operator-only, never shown to a tenant).
+/// operator-only, never shown to a tenant). The service's own number
+/// events are tenant types no webhook carries: none of the library's.
 #[test]
 fn every_library_event_type_is_classified() {
     let source = include_str!("../../meta-whatsapp-webhooks/src/event.rs");
@@ -150,8 +152,13 @@ fn every_library_event_type_is_classified() {
         .iter()
         .chain(OPERATOR_EVENT_TYPES.iter())
         .copied()
+        .filter(|kind| !NUMBER_EVENT_TYPES.contains(kind))
         .collect();
     assert_eq!(named, classified);
+    for kind in NUMBER_EVENT_TYPES {
+        assert!(TENANT_EVENT_TYPES.contains(&kind), "{kind}");
+        assert!(!named.contains(kind), "the library names {kind}");
+    }
     // Every fixture's types are among them.
     for fixture in fixtures() {
         for event in served(&fixture).as_array().unwrap() {
@@ -222,7 +229,8 @@ fn every_dated_event_type_has_its_meta_time() {
     // so is every other type an example shows (operator-only ones too: the
     // routing's date check applies to them before the audience does).
     for kind in TENANT_EVENT_TYPES.iter().chain(seen.iter()) {
-        if !UNDATED.contains(kind) {
+        // The service's own number events are no webhook's.
+        if !UNDATED.contains(kind) && !NUMBER_EVENT_TYPES.contains(kind) {
             assert!(dated.contains(kind), "no dated example of {kind}");
         }
     }

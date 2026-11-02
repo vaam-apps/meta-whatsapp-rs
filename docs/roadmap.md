@@ -4580,7 +4580,7 @@ design's (§9).
   (Standard Webhooks, a destination allow list).
   - **After:** M2b.
   - **Decisive:** M2.4.
-- [ ] **M2d. The reviewed event types** (rows 84, 137, 139; D25):
+- [x] **M2d. The reviewed event types** (rows 84, 137, 139; D25):
   `standby_observed`, `thread_control_changed` and
   `user_action_reported` made tenant-visible, with L7's inbox answer to
   OPEN_QUESTIONS #44 (the inbox already records ownership and window
@@ -4590,6 +4590,96 @@ design's (§9).
   - **After:** S7, L7.
   - **Decisive:** M2.6; taking one of the three types out of
     `TENANT_EVENT_TYPES` fails it.
+  - **Landed:** the three types move from `OPERATOR_EVENT_TYPES` (now
+    `unknown`, `unparsed`, `partner_solution_updated`) to
+    `TENANT_EVENT_TYPES` (34 types), routed by their number as every event
+    naming one (the binding epoch, the same-second rule after a move and
+    D36's window unchanged), so `GET /v1/events`, `GET /v1/events/{id}`,
+    both streams and the `types` filter carry them for their number's
+    tenant only. The OpenAPI document is additive only (six values
+    appended to `KnownEventType`; the one line removed is a comma); no
+    event data snapshot changed or was added (the 11 fixtures of the three
+    types, from five of Meta's pages, were pinned already). Meta's click
+    payload (`marketing-messages/track-click-events`, read again on
+    2026-11-02) names neither the user nor the message: its `click_id`,
+    `tracking_token` and `product_id` are served whole and reach no log
+    line (M1.7's capture now delivers the three types with sentinels). The
+    service's number events are the core's new `number_events`:
+    `number_connected` (the admin attach, once the token is stored),
+    `number_disconnected` (`reason`: `tenant_disconnected` once Meta
+    unsubscribed the app, `operator_unbound` with or without a usable
+    token; recorded before the binding goes) and
+    `number_reconnect_required` (a `190` marking a number anew, best
+    effort), one per number, `data` `{event, phone_number_id, waba_id}`
+    and `reason`, keyed by the binding's epoch (once per generation), the
+    outbox's own `RouteGuard` on the number under the epoch's WABA dated
+    the second after that binding began (no port change, no backend
+    change), each waking the tenant's streams; the `Authorizer` records
+    them once `AppState` gives it `Inbound::number_events`. Decisive tests:
+    `conformance::webhooks::the_reviewed_types_reach_their_numbers_tenant_and_no_other`
+    (Meta's 11 examples, `conformance::webhooks::REVIEWED_EXAMPLES`, on
+    A's number: A's rows, poll and lookups; B none; an unbound number's
+    and A's number under B's WABA operator-only),
+    `the_reviewed_types_of_a_previous_holder_reach_no_tenant` (after a
+    move, dated before it or in the binding's second: no tenant; the next
+    second: the new holder) and
+    `conformance::live::the_reviewed_types_reach_their_numbers_tenants_streams_only`,
+    in `conformance::run` (the memory crate's and, live, Postgres), the
+    first two also on the core's own memory backend; the suite
+    `conformance::number_events` (their tenant only on poll, streams and by
+    id, a number not the binding's and a moved or re-made binding giving
+    the row to nobody, once per generation, the new holder's own at once
+    after a move); over HTTP `tests/reviewed_events.rs` (M2.6: poll in
+    order with the snapshots' data, by id, both streams of each tenant,
+    `types`; `KnownEventType` equal to `TENANT_EVENT_TYPES`; the inbox
+    answering what the events say: after Meta's standby copy no unread
+    message, a recorded window, `409 thread_owned_elsewhere`, and with the
+    number's ownership check off the reply going on the window the copy
+    opened, `409 customer_service_window_closed` without the copy; after
+    Meta's `control_taken`, the same) and `tests/number_events.rs` (each
+    change of a binding its tenant's event only, on the poll, the stream,
+    the number's stream and by id; the operator's unbind the previous
+    holder's, the next holder starting anew; `data` holding no token,
+    display number or Meta text). By mutation, each failing
+    a named test: each of the three types in turn moved back to
+    `OPERATOR_EVENT_TYPES` (the two webhook cases, on the core's memory
+    backend; for `user_action_reported` also HTTP M2.6 and the memory
+    crate's `conformance::run`); `user_action_reported`'s date dropped from
+    `meta_time` (the previous holder's case: undated, the new holder no
+    longer gets the next second's); the attach's `number_connected`, the
+    disconnect's and both unbind paths' `number_disconnected`, the `190`'s
+    `number_reconnect_required` each removed, and the disconnect's moved
+    after the binding goes (operator-only then), over HTTP; the guard
+    dropped (operator-only rows) and the guard on the WABA alone (another
+    tenant's number reaching the epoch's tenant), the date in the binding's
+    own second, the date by the clock and the clock-or-binding date (a
+    tenant created again getting its namesake's), the generation left out
+    of the key (`conformance::number_events`, memory); the tenant event's
+    `data` added to the pipeline's log line (M1.7's capture, over the
+    three types' sentinels). The `190`'s read of the numbers not marked
+    yet is an optimisation the key makes safe: a repeated refusal of a
+    marked token is refused before Meta is asked, so no test tells it.
+  - **Proposed, for the coordinator** (design §10, D80–D85; none
+    recorded): the number events' `data` (D80), when each is recorded
+    (D81), their guard and date (D82), their outbox key (D83), their
+    place in `TENANT_EVENT_TYPES` (D84) and `user_action_reported`'s
+    `data` served whole (D85). Each swaps where its row says.
+  - **Pending the owner's confirmation before the first release**
+    (architecture § Stable identifiers): the three type names, the
+    `reason` values `tenant_disconnected` and `operator_unbound`, and the
+    label `meta-whatsapp-server/number-event/v1` with its key layout.
+  - **Left, and why:** `number_disconnected` on Meta's offboarding
+    (`account_update` with `PARTNER_APP_UNINSTALLED`, `ACCOUNT_DELETED` or
+    the coexistence offboarding): the automatic disconnect is not built,
+    and design §6 has it confirmed with Graph from M3 (no roadmap item
+    names it yet); Embedded Signup's `number_connected` (M3a calls
+    `Authorizer::record_number_event` after its bind and store); a number
+    a refresh drops from its WABA gets no `number_disconnected` (its
+    binding is gone when the refresh lands, so the outbox would keep the
+    row operator-only); a tenant deleted, created again and bound again
+    within one second could get its namesake's late event (D82); a
+    disconnect that fails after its events (`503`, the WABA moved) leaves
+    them for a binding that stays (D81).
 - [ ] **M2e. Received media** (row 45; OPEN_QUESTIONS #43): a media id
   the service recorded as received on the tenant's number is asked from
   Meta without `phone_number_id`; every other id keeps the check; a live
@@ -5718,7 +5808,12 @@ everything else goes into the parity-completion report.
   confirmation; M3c's review's shared issue log, the namespace
   `wa_server.otp.shared_rate`, its key's derivation and record, and the
   label `meta-whatsapp-server/otp-shared-limit/v1`, added and awaiting
-  confirmation), for the same reason as L5's.
+  confirmation; M2d's number events, their types `number_connected`,
+  `number_disconnected` and `number_reconnect_required`, the `reason`
+  values `tenant_disconnected` and `operator_unbound`, and their outbox
+  key's label `meta-whatsapp-server/number-event/v1` with its layout
+  (design D80, D83, proposed), added and awaiting confirmation), for the
+  same reason as L5's.
 - **A scope of its own for deregistering a number** (M3d, design D68):
   the coordinator decided the scope `numbers`, a confirmation in the body
   and an audit event; a separate scope would be a new stored name (keys

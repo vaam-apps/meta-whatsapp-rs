@@ -225,6 +225,50 @@ stored data, the owner's).
 
 ### Added
 
+- **The reviewed event types and the service's number events** (roadmap
+  M2d, design D25, acceptance test M2.6; parity row 84 now done in the
+  service, rows 137 and 139 waiting only for M5h and M5l; categories 16,
+  18 and 19; coverage rows 29 and 33).
+  - **Tenant-visible** (`meta_whatsapp_server_core::events`):
+    `standby_observed`, `thread_control_changed` and
+    `user_action_reported` move from `OPERATOR_EVENT_TYPES` (3 types
+    left: `unknown`, `unparsed`, `partner_solution_updated`) to
+    `TENANT_EVENT_TYPES` (34), so `GET /v1/events`, `GET /v1/events/{id}`,
+    both streams and the `types` filter carry them, for their number's
+    tenant only, routed as every event naming a number (the binding
+    epoch and D36's rules unchanged). The OpenAPI document is additive
+    only: six values appended to `KnownEventType` (the one line removed
+    is a comma). No event data snapshot changed and none was added (every
+    fixture of the three types was pinned already).
+  - **The service's number events** (`meta_whatsapp_server_core::number_events`,
+    new): `number_connected` (an admin attach, once the token is stored),
+    `number_disconnected` (`reason`: `tenant_disconnected` or
+    `operator_unbound`, recorded before the binding goes) and
+    `number_reconnect_required` (a `190` marking a number anew), one per
+    number, `data` `{event, phone_number_id, waba_id[, reason]}`, keyed by
+    the binding's epoch (once per binding generation), guarded by the
+    outbox's own `RouteGuard` (the number under the epoch's WABA, dated
+    the second after that binding began), and waking the tenant's
+    streams. `NumberEvents`, `NumberEvent`, `DisconnectReason`,
+    `NUMBER_EVENT_TYPES`; `Inbound::number_events`;
+    `Authorizer::with_number_events` (the server's `AppState` sets it;
+    without it none is recorded). The attach, the tenant's disconnect and
+    the admin unbind answer `503` when the outbox fails to record them.
+  - **Conformance**: `conformance::webhooks::REVIEWED_EXAMPLES` (Meta's 11
+    examples of the three types, the library's fixtures), `example_on`,
+    `the_reviewed_types_reach_their_numbers_tenant_and_no_other`,
+    `the_reviewed_types_of_a_previous_holder_reach_no_tenant`;
+    `conformance::live::the_reviewed_types_reach_their_numbers_tenants_streams_only`;
+    the new suite `conformance::number_events` (in `conformance::run`).
+  - **Proposed, for the coordinator** (design §10): D80 (the number
+    events' `data`), D81 (when each is recorded), D82 (their guard and
+    date), D83 (their outbox key, label
+    `meta-whatsapp-server/number-event/v1`), D84 (listed in
+    `TENANT_EVENT_TYPES`), D85 (`user_action_reported`'s `data` served
+    whole). The three type names, the two `reason` values and the label
+    are new stored names, pending the owner's confirmation before the
+    first release.
+
 - **India's checkout button templates and the third party validation**
   (roadmap P1d, parity row 141, now done in the library; category 15,
   coverage row 32; from `payments/payments-in/checkout-button-templates`,
@@ -2581,6 +2625,12 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking for code naming the arrays' lengths** (roadmap M2d):
+  `meta_whatsapp_server_core::events::TENANT_EVENT_TYPES` is a
+  `[&str; 34]` (was 28) and `OPERATOR_EVENT_TYPES` a `[&str; 3]` (was
+  6). Over HTTP the change is additive (`KnownEventType` grows; a client
+  defaulting on an unknown type sees nothing break); a client that
+  ignored the three types because no tenant received them now gets them.
 - **Breaking — an order's expiration description is optional** (roadmap
   P1d): `OrderExpiration::description` is an `Option<String>`
   (`OrderExpiration::new` still sets it; `OrderExpiration::at` leaves it
