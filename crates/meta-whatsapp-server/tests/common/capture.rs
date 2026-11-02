@@ -440,6 +440,7 @@ async fn more_deliveries(h: &Harness, waba: &str, pn: &str) -> Vec<String> {
 /// types, and refused ones), then polling them; returns what they carried
 /// that the logs must not: the signatures, the message text, the customer's
 /// name, BSUIDs and username.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
     const WABA: &str = "102290129340398";
     const PN: &str = "1972385232742141";

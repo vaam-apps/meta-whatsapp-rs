@@ -200,9 +200,9 @@ pub async fn run(backend: &dyn Backend) {
 }
 
 /// Meta's WABA in the examples of its pages (the library's fixtures).
-const EXAMPLE_WABA: &str = "102290129340398";
+pub const EXAMPLE_WABA: &str = "102290129340398";
 /// Meta's business number in them.
-const EXAMPLE_PN: &str = "106540352242922";
+pub const EXAMPLE_PN: &str = "106540352242922";
 
 /// Meta's examples of the three types roadmap M2d made tenant-visible
 /// (design D25), by type: every fixture of the library's that holds one

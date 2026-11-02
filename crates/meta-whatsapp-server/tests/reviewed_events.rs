@@ -89,6 +89,7 @@ fn served(payload: &Value) -> Value {
 /// `TENANT_EVENT_TYPES` fails it.
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+#[allow(clippy::similar_names)] // a's and b's streams, side by side
 async fn m2_6_the_reviewed_types_reach_their_numbers_tenant_and_no_other() {
     let h = Harness::with_settings(woken_only(test_settings()));
     h.tenant(A).await;
@@ -216,7 +217,7 @@ fn the_reviewed_types_are_known_event_types_of_the_document() {
 }
 
 /// What the inbox records from the reviewed types (roadmap L7,
-/// OPEN_QUESTIONS #44) is what the tenant polling them meets on M2a's and
+/// `OPEN_QUESTIONS.md` #44) is what the tenant polling them meets on M2a's and
 /// M2g's routes. Meta's standby copy of the customer's message: the tenant
 /// polls `standby_observed`; the inbox records a window (the window
 /// route's `closes_at`) and another app owning the thread, so a free-form

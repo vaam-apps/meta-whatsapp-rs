@@ -387,6 +387,7 @@ pub async fn a_stream_sends_only_its_tenants_events(backend: &dyn Backend) {
 /// order, and no stream of tenant B's (its own, nor its number's).
 /// Decisive: the three types in `TENANT_EVENT_TYPES` (one taken out, its
 /// examples reach no stream).
+#[allow(clippy::similar_names)] // a's and b's streams, side by side
 pub async fn the_reviewed_types_reach_their_numbers_tenants_streams_only(backend: &dyn Backend) {
     use super::webhooks::{REVIEWED_EXAMPLES, example_for};
     const A: Holder = Holder {
