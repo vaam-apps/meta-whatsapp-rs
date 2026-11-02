@@ -5,7 +5,7 @@ description: "Sending WhatsApp messages, media and templates, and replying from 
 
 # meta-whatsapp-rs-server-send
 
-> **Verified against meta-whatsapp-rs fe11b20439b577522278d88ccf93b47188b625d7 (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 293a159a69030e0df5fc597182d2963046aeba5e (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/send.ts](examples/send.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
