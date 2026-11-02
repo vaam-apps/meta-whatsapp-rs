@@ -599,7 +599,9 @@ Meta's `payments/payments-in/*` and `payments/payments-br/*` pages).
 - **The configuration a lookup or a refund names is looked for in the
   number's own WABA first** (one request more): a name it has none of is
   `404 not_found`, and the payment is neither read nor refunded (as is
-  an answer naming another configuration). A configuration's name is
+  an answer naming another configuration; when Meta fails on that
+  check, the answer says `may_have_been_sent: false`, and a refund's key
+  is free to repeat). A configuration's name is
   one path segment: one holding `/` or `\` is `422 invalid_request`
   before any request (design D51). Meta asks you to read the payment
   here rather than trust the webhook alone.

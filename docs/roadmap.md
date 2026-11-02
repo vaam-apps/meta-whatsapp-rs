@@ -4956,12 +4956,27 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     `PaymentConfigurations::new` or `Payments::new` dropped; and step 4
     of `owned_waba` dropped (the M1.3 table, the payment routes
     included).
-  - **Proposed (not recorded; the coordinator decides):** see the pull
-    request: a `payments` scope; the configuration check before a lookup
-    or a refund; the OAuth link kept out of the idempotency records; an
-    `order_status` checked by Brazil's rules; times as RFC 3339 strings
-    under Meta's names; providers refused outside Meta's list; refund
-    amounts as strings or numbers.
+  - **Decided** (the coordinator's decisions of 2026-11-01 under the
+    owner's delegation, each swappable: design §10, D50 to D58): a
+    `payments` scope (D50; its stored name pending the owner's
+    confirmation); the configuration check before a lookup or a refund
+    (D51); the OAuth link never kept (D52); an `order_status` checked by
+    Brazil's rules (D53); times as RFC 3339 strings under Meta's names
+    (D54); providers among Meta's four (D55); the refund's body (D56);
+    Meta's `details` kept (D57); the four audit events (D58).
+  - **Review** (adversarial, security lens): a configuration name holding
+    `/` or `\` is refused (Meta could read the library's `%2F` as
+    several segments); the check trusts only an answer of the very name
+    asked; a check that fails was not sent (`may_have_been_sent: false`,
+    the refund's key released, where it was kept as a refund that may
+    have been made); the payment changes' audit events name what
+    reconciles them, and a change cut by a timeout is audited, its
+    outcome `unknown`. New decisive tests:
+    `a_configuration_meta_answers_under_another_name_is_not_found`,
+    `a_refunds_amount_is_checked_before_any_request`,
+    `a_refund_whose_check_failed_was_not_sent_and_frees_its_key`,
+    `an_inbox_reply_carries_a_payment_message_checked_and_within_its_window`,
+    and M1.7's capture (`check_audit`).
   - **Not done here:** the data endpoint link of a configuration and
     India's checkout button templates (the library's P1d first); the
     alpha third-party validation (P1d).
