@@ -18,7 +18,7 @@
 //! | Class | Operations | Default (per tenant and replica) |
 //! | --- | --- | --- |
 //! | `send` | every write that is not template management: `send_message`, `mark_read`, `upload_media`, `delete_media`, `update_profile`, `disconnect_waba`, `reply_to_conversation`, `create_payment_configuration`, `delete_payment_configuration`, `regenerate_payment_oauth_link`, `refund_payment` | 20/s, burst 40 (the design's "sends") |
-//! | `read` | every read but templates': `list_wabas`, `list_numbers`, `get_number`, `get_profile`, `download_media`, `list_events`, `list_conversations`, `list_conversation_messages`, `list_payment_configurations`, `get_payment_configuration`, `get_payment` | 50/s, burst 50 (the design's "reads"; it states no burst) |
+//! | `read` | every read but templates': `list_wabas`, `list_numbers`, `get_number`, `get_profile`, `download_media`, `list_events`, `get_event`, `stream_events`, `stream_number_events`, `list_conversations`, `list_conversation_messages`, `list_payment_configurations`, `get_payment_configuration`, `get_payment` (a stream is charged once, when it opens; how many stay open is bounded apart, `crate::live`) | 50/s, burst 50 (the design's "reads"; it states no burst) |
 //! | `templates` | every template operation: `list_templates`, `get_template`, `create_template`, `delete_templates` | 2/s, burst 2 (the design's "template management"; it states no burst) |
 //!
 //! The design names classes for sends, reads and template management; it
@@ -64,6 +64,9 @@ impl RouteClass {
             | Operation::GetProfile
             | Operation::DownloadMedia
             | Operation::ListEvents
+            | Operation::GetEvent
+            | Operation::StreamEvents
+            | Operation::StreamNumberEvents
             | Operation::ListConversations
             | Operation::ListConversationMessages
             | Operation::ListPaymentConfigurations
@@ -397,6 +400,9 @@ mod tests {
             ("delete_templates", RouteClass::Templates),
             ("get_template", RouteClass::Templates),
             ("list_events", RouteClass::Read),
+            ("get_event", RouteClass::Read),
+            ("stream_events", RouteClass::Read),
+            ("stream_number_events", RouteClass::Read),
             ("list_conversations", RouteClass::Read),
             ("list_conversation_messages", RouteClass::Read),
             ("reply_to_conversation", RouteClass::Send),

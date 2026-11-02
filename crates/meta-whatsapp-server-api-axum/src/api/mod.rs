@@ -122,7 +122,12 @@ fn numbers_routes() -> OpenApiRouter<Grant> {
 }
 
 fn events_routes() -> OpenApiRouter<Grant> {
-    OpenApiRouter::new().routes(routes!(events::list_events))
+    OpenApiRouter::new()
+        .routes(routes!(events::list_events))
+        .routes(routes!(events::get_event))
+        // The live streams (Server-Sent Events): the HTTP crate's, as
+        // media's are.
+        .merge(events::stream_routes())
 }
 
 fn messages_routes() -> OpenApiRouter<Grant> {
@@ -380,6 +385,17 @@ mod tests {
                 .all(|(x, y)| param(x) || param(y) || x == y)
     }
 
+    /// Whether, at the first segment where `a` and `b` differ, one has a
+    /// literal and the other a parameter: the router then routes the
+    /// literal's path to its template.
+    fn literal_beats_parameter(a: &str, b: &str) -> bool {
+        let param = |s: &str| s.starts_with('{') && s.ends_with('}');
+        a.split('/')
+            .zip(b.split('/'))
+            .find(|(x, y)| x != y)
+            .is_some_and(|(x, y)| param(x) != param(y))
+    }
+
     /// Every tenant route is one core operation (roadmap S6): each
     /// operation of a tenant group's document has an `operationId` that is
     /// a core [`Operation`]'s id, with its group's scope, and the guard's
@@ -431,12 +447,17 @@ mod tests {
                 .unwrap_or_else(|| panic!("{method} {template}: `{id}` is no core operation"));
             assert_eq!(operation.scope(), *scope, "{id}");
             assert!(served.insert(operation), "{id} served twice");
-            // No path of this template is another's of the same method.
+            // No path of this template is another's of the same method,
+            // but where one template has a literal segment and the other a
+            // parameter (`/v1/events/stream` and `/v1/events/{id}`): axum
+            // routes the literal's paths to it, and so does the guard
+            // (`Operations::of`, checked below with the literal path).
             let others: Vec<_> = operations
                 .routes()
                 .iter()
                 .filter(|(m, t, _)| m == method && t != template)
                 .filter(|(_, t, _)| templates_overlap(t, template))
+                .filter(|(_, t, _)| !literal_beats_parameter(t, template))
                 .collect();
             assert!(
                 others.is_empty(),
@@ -476,5 +497,20 @@ mod tests {
         assert_eq!(operations.of("get", "/v1/numbers"), None);
         assert_eq!(operations.of("GET", "/v1/numbers/x/y"), None);
         assert_eq!(operations.of("GET", "/v1/numbers/1/profile/"), None);
+        // A literal segment beats a parameter, as axum routes it (roadmap
+        // M2b): the stream is not an event of id `stream`.
+        assert!(literal_beats_parameter(
+            "/v1/events/stream",
+            "/v1/events/{id}"
+        ));
+        assert!(!literal_beats_parameter("/v1/{a}/x", "/v1/{b}/y"));
+        assert_eq!(
+            operations.of("GET", "/v1/events/stream"),
+            Some(Operation::StreamEvents)
+        );
+        assert_eq!(
+            operations.of("GET", "/v1/events/evt_4042233518184f0e9822bebdbba028a8"),
+            Some(Operation::GetEvent)
+        );
     }
 }

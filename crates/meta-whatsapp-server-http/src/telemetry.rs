@@ -116,10 +116,37 @@ pub struct Observed {
 /// The template among `routes` that `path` matches (`{name}` matches one
 /// segment), or `unmatched`.
 pub fn route_template<'a>(routes: &'a [String], path: &str) -> &'a str {
-    routes
-        .iter()
-        .find(|template| template_matches(template, path))
-        .map_or("unmatched", String::as_str)
+    most_specific(
+        routes
+            .iter()
+            .filter(|template| template_matches(template, path)),
+        |template| template,
+    )
+    .map_or("unmatched", String::as_str)
+}
+
+/// Of `matches` (whose templates, `template` of each, match one path),
+/// the one axum's router routes the path to: a literal segment beats a
+/// parameter at the first segment where two templates differ
+/// (`/v1/events/stream` before `/v1/events/{id}`).
+pub fn most_specific<T>(
+    matches: impl Iterator<Item = T>,
+    template: impl Fn(&T) -> &String,
+) -> Option<T> {
+    let literals = |template: &str| -> Vec<bool> {
+        template
+            .split('/')
+            .map(|part| !(part.starts_with('{') && part.ends_with('}')))
+            .collect()
+    };
+    let mut best: Option<(Vec<bool>, T)> = None;
+    for candidate in matches {
+        let key = literals(template(&candidate));
+        if best.as_ref().is_none_or(|(held, _)| key > *held) {
+            best = Some((key, candidate));
+        }
+    }
+    best.map(|(_, candidate)| candidate)
 }
 
 /// Whether `path` is one of `template`'s, segment by segment: `{name}`
@@ -227,6 +254,26 @@ mod tests {
         assert_eq!(route_template(&routes, "/v1/numbers/"), "unmatched");
         assert_eq!(route_template(&routes, "/v1/numbers/1/2"), "unmatched");
         assert_eq!(route_template(&routes, "/elsewhere"), "unmatched");
+    }
+
+    /// A literal segment beats a parameter, whatever the order of the
+    /// templates, as axum routes it (roadmap M2b: the stream is not an
+    /// event of id `stream`). Decisive: `most_specific`.
+    #[test]
+    fn a_literal_segment_beats_a_parameter() {
+        for routes in [
+            vec!["/v1/events/{id}".to_owned(), "/v1/events/stream".to_owned()],
+            vec!["/v1/events/stream".to_owned(), "/v1/events/{id}".to_owned()],
+        ] {
+            assert_eq!(
+                route_template(&routes, "/v1/events/stream"),
+                "/v1/events/stream"
+            );
+            assert_eq!(
+                route_template(&routes, "/v1/events/evt_1"),
+                "/v1/events/{id}"
+            );
+        }
     }
 
     #[test]

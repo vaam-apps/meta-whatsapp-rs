@@ -1541,6 +1541,256 @@
         ]
       }
     },
+    "/v1/events/stream": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "`GET /v1/events/stream`: the tenant's events, live.",
+        "operationId": "stream_events",
+        "parameters": [
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "description": "Resume after this sequence (the `id` of the last `whatsapp` frame received): what `EventSource` sends when it reconnects; wins over `after`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Start after this sequence (`next_after` of a poll, or an event's\n`sequence`), when no `Last-Event-ID` header is sent. Omit both to\nstart with the next event.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "description": "Only these types (`KnownEventType`), comma-separated or repeated;\nevery type when omitted.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phone_number_id",
+            "in": "query",
+            "description": "Only this business phone number's events (on\n`/v1/events/stream`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events: `event: whatsapp` frames (`id` the event's sequence, `data` an `Event`), a `: keepalive` comment every 15 s, and, when the service ends the stream, `event: lagged` (dropped as too slow, or events purged before they were sent) or `event: shutdown` (the replica is stopping), each with `data: {\"after\": <the last sequence sent>}`; the stream ends with no last frame once the key or the tenant would no longer be admitted (revoked, expired, suspended, deleted: reconnecting answers `401` or `403`)",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (no `events` scope), `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`cursor_expired`: events after the cursor were purged (past retention, or deleted with a tenant of the same id); start again without one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `Last-Event-ID` or `after` (malformed, or past the tenant's newest sequence), `types` (not a `KnownEventType`) or `phone_number_id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_streams`: the tenant's streams open on this replica (20 by default, `WA_SERVER_STREAMS_PER_TENANT`) or the replica's (1,000, `WA_SERVER_STREAMS_PER_REPLICA`), `Retry-After` 5 s (a place frees when any stream ends); `too_many_requests`: the tenant's `read` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`shutting_down`: the replica is stopping, open the stream on another; `storage_unavailable`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/events/{id}": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "`GET /v1/events/{id}`: one of the tenant's events, by id.",
+        "operationId": "get_event",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The event's id (`evt_` and 32 hex digits), as an envelope carries it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The event, whole (`truncated` is false): what a delivery that left `data` out refers to",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (no `events` scope), `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no event of this tenant has this id (another tenant's event, one past retention, and an id that is no event's look alike)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers": {
       "get": {
         "tags": [
@@ -2235,6 +2485,176 @@
           },
           "504": {
             "description": "`timeout`: the reply may have been sent (`may_have_been_sent: true`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/events/stream": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/events/stream`: one of the tenant's numbers'\nevents, live.",
+        "operationId": "stream_number_events",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "description": "Resume after this sequence (the `id` of the last `whatsapp` frame received): what `EventSource` sends when it reconnects; wins over `after`",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Start after this sequence (`next_after` of a poll, or an event's\n`sequence`), when no `Last-Event-ID` header is sent. Omit both to\nstart with the next event.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "description": "Only these types (`KnownEventType`), comma-separated or repeated;\nevery type when omitted.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phone_number_id",
+            "in": "query",
+            "description": "Only this business phone number's events (on\n`/v1/events/stream`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events of the number's events, as `/v1/events/stream` sends them (its `phone_number_id` parameter is the path's)",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (no `events` scope), `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant (nothing read; the number need not be connected)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`cursor_expired`: events after the cursor were purged; start again without one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `Last-Event-ID` or `after` (malformed, or past the tenant's newest sequence) or `types`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_streams`, `too_many_requests`, as for `/v1/events/stream`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`shutting_down`, `storage_unavailable`",
             "content": {
               "application/json": {
                 "schema": {

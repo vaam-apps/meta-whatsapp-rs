@@ -360,6 +360,46 @@ pub trait Outbox: Send + Sync + 'static {
     /// from one consistent read.
     async fn page(&self, query: &EventQuery) -> StoreResult<EventPage>;
 
+    /// The event of id `id` in `tenant`'s stream, if it is stored there
+    /// (`GET /v1/events/{id}`, roadmap M2b): never another tenant's event
+    /// nor an operator-only row, whatever its id, and none once purged.
+    ///
+    /// The default pages the tenant's stream from its oldest retained
+    /// event until it finds the id: correct, and as slow as the stream is
+    /// long. The in-tree backends answer it with one lookup by id (an
+    /// index), and a backend of yours should too.
+    ///
+    /// # Errors
+    ///
+    /// The library's `StorageError`.
+    async fn get(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<StoredEvent>> {
+        let mut after = None;
+        loop {
+            let page = self
+                .page(&EventQuery {
+                    tenant: tenant.clone(),
+                    after,
+                    types: None,
+                    phone_number_id: None,
+                    limit: 100,
+                    max_bytes: crate::events::MAX_PAGE_DATA_BYTES,
+                })
+                .await?;
+            let last = page.events.last().map(|event| event.sequence);
+            if let Some(found) = page
+                .events
+                .into_iter()
+                .find(|event| event.id == id && event.tenant.as_ref() == Some(tenant))
+            {
+                return Ok(Some(found));
+            }
+            match last {
+                Some(last) if page.more => after = Some(last),
+                _ => return Ok(None),
+            }
+        }
+    }
+
     /// Delete the events received more than `older_than` ago, as a prefix
     /// of each stream, and record how far each went; how many went. It
     /// takes no lock of its own (housekeeping runs it under a

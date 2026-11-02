@@ -13,6 +13,7 @@
 //! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | the API adapter's routes (`meta-whatsapp-server-api-axum`: `/v1/admin/…`, `/v1/wabas`, `/v1/numbers/…`, `/v1/events`, `/v1/openapi.json`), with this crate's media routes behind their scope and `/livez`, `/readyz`, `/metrics`, `/v1/version` |
 
 pub mod common;
+pub mod events;
 pub mod media;
 pub mod ops;
 pub mod webhooks;
@@ -322,6 +323,7 @@ mod tests {
             ("webhooks.rs", include_str!("webhooks.rs")),
             ("common.rs", include_str!("common.rs")),
             ("media.rs", include_str!("media.rs")),
+            ("events.rs", include_str!("events.rs")),
         ];
         let mut plain = Vec::new();
         for (file, source) in sources {

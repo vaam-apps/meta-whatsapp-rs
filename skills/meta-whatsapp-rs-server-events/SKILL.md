@@ -1,13 +1,13 @@
 ---
 name: meta-whatsapp-rs-server-events
-description: "Receiving WhatsApp events through meta-whatsapp-server, the meta-whatsapp-rs HTTP service, from an app not written in Rust - pointing the Meta app's webhook at the service, how it verifies, deduplicates and routes Meta's deliveries to tenants (and keeps the rest operator-only), and polling GET /v1/events from a TypeScript backend with a stored cursor (next_after, cursor_expired, types, phone_number_id). Load when a non-Rust backend (a Medusa store, a CMS) needs incoming WhatsApp messages, delivery statuses or template reviews from meta-whatsapp-server, or when configuring Meta's callback URL for it."
+description: "Receiving WhatsApp events through meta-whatsapp-server, the meta-whatsapp-rs HTTP service, from an app not written in Rust - pointing the Meta app's webhook at the service, how it verifies, deduplicates and routes Meta's deliveries to tenants (and keeps the rest operator-only), polling GET /v1/events from a TypeScript backend with a stored cursor (next_after, cursor_expired, types, phone_number_id), following them live over Server-Sent Events (GET /v1/events/stream, Last-Event-ID, lagged, shutdown, too_many_streams) and reading one event by id. Load when a non-Rust backend (a Medusa store, a CMS) needs incoming WhatsApp messages, delivery statuses or template reviews from meta-whatsapp-server, or when configuring Meta's callback URL for it."
 ---
 
 # meta-whatsapp-rs-server-events
 
-> **Verified against meta-whatsapp-rs 3b25f8d85e16ce447e42fbf62c67b833432ad9ca (2026-09-27).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 73896491572ef2c00f648889ac6595f9830be294 (2026-11-01).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
-Reference code: [examples/events.ts](examples/events.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#receiving-metas-webhooks).
+Reference code: [examples/events.ts](examples/events.ts) (polling) and [examples/stream.ts](examples/stream.ts) (live), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#receiving-metas-webhooks).
 
 ## When to use
 
@@ -20,38 +20,31 @@ its keys: `meta-whatsapp-rs-server` first.
 
 - App Dashboard, WhatsApp, Configuration: callback URL
   `https://<public host>/webhooks/meta`, verify token `WA_VERIFY_TOKEN`'s
-  value; subscribe the fields you need (messages, at least). The public
-  listener answers Meta's check (`GET /webhooks/meta`) and deliveries
-  (`POST /webhooks/meta`); nothing of the /v1 API.
-- Meta sends a WABA's events only once the app is subscribed to it:
-  attaching one (`POST /v1/admin/tenants/{id}/wabas`) does that.
-- Deliveries are signed with the app secret: `WA_APP_SECRET`, and
-  `WA_APP_SECRET_PREVIOUS` while you rotate it.
-- The ingress passes 3 MiB bodies untouched, buffers them, outwaits the
-  slowest delivery, and admits only Meta's IP ranges (or Meta's mTLS).
+  value; subscribe the fields you need (messages, at least). Attaching a
+  WABA (`POST /v1/admin/tenants/{id}/wabas`) subscribes the app to it.
+- Deliveries are signed with `WA_APP_SECRET` (and `WA_APP_SECRET_PREVIOUS`
+  while you rotate it). The ingress passes 3 MiB bodies untouched and
+  admits only Meta's IP ranges (or Meta's mTLS).
 
 ## What the service does with a delivery
 
-- Unsigned or forged: `401`, nothing recorded; over 3 MiB: `413`; a body
-  slower than 15 s: `408`.
-- Busy (64 deliveries in flight, or another replica recording the same
-  event): `503`, Meta retries. Already recorded: acknowledged, not
-  recorded again. Errors carry no id: the same body within an hour is a
-  redelivery, after it a new event (new `id`): errors can recur.
+- Unsigned or forged: `401`; over 3 MiB: `413`; slower than 15 s: `408`;
+  busy: `503`, Meta retries. Already recorded: acknowledged once. Errors
+  carry no id: the same body within an hour is a redelivery, after it a
+  new event (new `id`).
 - **Routed by ownership, as an allow-list**: an event about a business
-  number goes to that number's tenant; one naming only a WABA (template
-  reviews, account updates) to the WABA's tenant; if dated, only after
-  the second it was attached in. Inbox first, then the outbox you poll.
+  number goes to that number's tenant; one naming only a WABA to the
+  WABA's tenant; if dated, only after the second it was attached in.
 - **Operator-only**, never shown to a tenant: events of a number or WABA
   no tenant holds (or held then), replays over 7 days and an hour old,
-  untyped fields, signed bodies that are not webhooks, partner solution
-  updates, types not reviewed yet (`KnownEventType` lists what you get).
+  untyped fields, bodies that are not webhooks, types not reviewed yet
+  (`KnownEventType` lists what you get).
 
 ## Poll the events
 
-`GET /v1/events` with a key holding the `events` scope answers
-`{data, next_after}`. Store `next_after`, pass it as `after` next time;
-omit `after` only for the very first poll (the oldest event kept).
+`GET /v1/events` (scope `events`) answers `{data, next_after}`. Store
+`next_after`, pass it as `after` next time; omit `after` only for the
+very first poll (the oldest event kept).
 
 ```ts
   const after = await cursor.load();
@@ -62,34 +55,64 @@ omit `after` only for the very first poll (the oldest event kept).
     await handle(event);
   }
   await cursor.save(data.next_after);
-  const last = data.data[data.data.length - 1];
-  return last !== undefined && last.sequence === data.next_after;
 ```
 
-- Each tenant has its own `sequence`, increasing with gaps (a tenant
-  created again under a deleted one's id goes on after it). `next_after`
+- Each tenant has its own `sequence`, increasing with gaps. `next_after`
   is the last event's when more may follow, else the tenant's newest:
-  save it even when `data` is empty. Poll again at once while `data` is
-  non-empty and more may follow; on `429`, wait `Retry-After` seconds.
+  save it even when `data` is empty. On `429`, wait `Retry-After`.
 - Handle, then save: after a crash in between the same events come
   again, so handlers skip an `id` they already handled.
-- `cursor_expired` (410): events after your cursor were purged, past
-  retention (`WA_SERVER_OUTBOX_RETENTION`, 7 days by default) or with a
-  deleted tenant of the same id. `invalid_request` on `after` (422): a
-  cursor past your newest event (a restored database: reset too when
-  the operator says so). Either way, rebuild what you derive from
-  events, then poll without `after`:
+- `cursor_expired` (410): events after your cursor were purged (past
+  `WA_SERVER_OUTBOX_RETENTION`, 7 days by default). `invalid_request` on
+  `after` (422): a cursor past your newest event (a restored database).
+  Either way, rebuild what you derive from events, then poll without
+  `after`. `types` and `phone_number_id` filter (keep one cursor per
+  filter set); a page stops at 100 events or 8 MiB of `data`.
 
 ```ts
     const expired = error.error.code === "cursor_expired";
     const unknown = error.error.code === "invalid_request" && error.error.field === "after";
 ```
 
-```bash
-curl -sS "$WA_SERVER/v1/events?after=18342&limit=100" -H "Authorization: Bearer $KEY"
+## Follow them live (Server-Sent Events)
+
+`GET /v1/events/stream` (or `GET /v1/numbers/{pn}/events/stream`, one
+number's) sends each new event as it is recorded, on any replica:
+`event: whatsapp` frames whose `id` is the `sequence` and whose `data` is
+the envelope below, and `: keepalive` every 15 s. Catch up by polling
+first, then follow from your cursor: `Last-Event-ID` (or `after`)
+resumes exactly after it; with neither, only the next events come.
+
+```ts
+    const header = after === undefined ? {} : { "Last-Event-ID": String(after) };
+    const query: StreamQuery = { types: "message_received,status_updated" };
+    const { data, error, response } = await api.GET("/v1/events/stream", {
+      params: { header, query },
+      parseAs: "stream",
+      signal,
+    });
 ```
 
-## The envelope
+```ts
+        if (frame.event === "whatsapp") {
+          const event = JSON.parse(frame.data) as Event;
+          await handle(event);
+          await cursor.save(event.sequence);
+        } else if (frame.event === "lagged" || frame.event === "shutdown") {
+```
+
+- The stream may end with `event: lagged` (you took nothing for 30 s
+  while 1 MiB waited, or events after your cursor were purged) or
+  `event: shutdown` (the replica stops), each with `{"after": n}`, the
+  last sequence sent: reconnect with it as `Last-Event-ID`.
+- Refused before it starts: `cursor_expired` (410) and `invalid_request`
+  on `Last-Event-ID` or `after` (422), as for polling; `too_many_streams`
+  (429: 20 per tenant and replica, `WA_SERVER_STREAMS_PER_TENANT`) and
+  `shutting_down` (503): wait `Retry-After`. A number not yours: `not_found`.
+- Browsers cannot send the key (an EventSource sends no Authorization header):
+  relay the stream from your backend.
+
+## The envelope, and one event by id
 
 ```json
 {"id": "evt_3f9c0a…", "sequence": 18342, "type": "message_received", "api_version": "v1",
@@ -100,11 +123,10 @@ curl -sS "$WA_SERVER/v1/events?after=18342&limit=100" -H "Authorization: Bearer 
 ```
 
 `data` is meta-whatsapp-rs's event JSON: Meta's fields, normalized.
-Deduplicate on `id` (an event recorded again keeps it, unless the
-operator rotated `WA_APP_SECRET` in between), order on `sequence`; make
-what you do per message idempotent on `data.message.id` too. Key a
-customer by their BSUID (the contact's user id): the phone number may be
-absent. New fields and types appear within v1: ignore the unknown.
+Deduplicate on `id`, order on `sequence`; make what you do per message
+idempotent on `data.message.id` too. Key a customer by their BSUID (the
+contact's user id): the phone number may be absent. New fields and types
+appear within v1: ignore the unknown.
 
 ```ts
   switch (event.type as KnownEventType) {
@@ -114,44 +136,22 @@ absent. New fields and types appear within v1: ignore the unknown.
       const customer = data.contact?.user_id ?? data.contact?.wa_id ?? undefined;
 ```
 
-In `status_updated`, `data.status.id` is the send's `message_id`,
-`data.status.status` its state, and your `callback_data` comes back as
-`data.status.biz_opaque_callback_data`: after a `504` (no `message_id`),
-look for it there before concluding "never sent" and resending.
+In `status_updated`, `data.status.id` is the send's `message_id`, and
+your `callback_data` comes back as `data.status.biz_opaque_callback_data`:
+after a `504`, look for it there before resending.
 
-```ts
-    case "status_updated": {
-      const data = event.data as Delivery;
-      // After a 504 (no message_id), find the send by its callback_data.
-      const reference = data.status?.biz_opaque_callback_data ?? undefined;
-```
-
-## Filter
-
-`types` (`KnownEventType` values, comma-separated or repeated; another
-is `invalid_request`) and `phone_number_id` narrow the page. `limit` is
-1 to 100, 50 by default; a page stops before 8 MiB of `data`. A filtered
-poll's `next_after` moves past what the filter left out: keep one cursor
-per filter set.
-
-```ts
-  const query: EventsQuery = {
-    after,
-    types: "message_received,status_updated",
-    phone_number_id: pn,
-  };
-```
+`GET /v1/events/{id}` answers one of your events, whole; another
+tenant's id, one past retention or no event's id is `not_found`, alike
+(the example's eventById).
 
 ## What meta-whatsapp-rs does not do
 
-- It pushes nothing to your backend yet: poll. Live streams (SSE),
-  signed webhooks to your URL and one event by its id come with M2.
+- It pushes nothing to your URL yet: poll, or hold a stream. Signed
+  webhooks to your backend come with M2c.
 - It never shows you operator-only events, nor another tenant's: a WABA moved
   to you gets no undated event (error, history) for 7 days and an hour.
 - It does not resynchronise you after `cursor_expired`, and keeps events
   7 days by default (design D10, decided on 2026-09-26: set per store).
-- Meta's own retries, deduplication and signature are its business: you
-  never talk to Meta, and never verify Meta's signature yourself.
 
 ## Related skills
 

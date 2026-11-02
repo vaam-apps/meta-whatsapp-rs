@@ -90,6 +90,7 @@ pub async fn readyz(State(state): State<AppState>) -> Result<Json<Health>, ApiEr
     responses((status = 200, description = "Prometheus metrics, in the OpenMetrics text format", content_type = "application/openmetrics-text", body = String))
 )]
 pub async fn metrics(State(state): State<AppState>) -> Response {
+    state.metrics().streams_open(state.open_streams());
     let mut response = state.metrics().render().into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,

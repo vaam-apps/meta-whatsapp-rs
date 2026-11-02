@@ -836,3 +836,149 @@ async fn live_postgres_a_deadlocked_insert_is_busy() {
         Ok(sequence) => panic!("inserted {sequence:?} through a deadlock"),
     }
 }
+
+/// Roadmap M2b, M2.2 at the bundle: two replicas (two backends, each on a
+/// pool of its own, one database): an event recorded through one wakes a
+/// stream on the other within 2 s (`NOTIFY` on the deployment's channel,
+/// each replica's own `LISTEN` connection), another tenant's stream there
+/// sees none of it, and a stream resumed there replays exactly the events
+/// after its cursor. Decisive: `LISTEN`/`NOTIFY` (each replica's notifier
+/// local to it fails the first step).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_an_event_through_one_replica_wakes_a_stream_on_another() {
+    use meta_whatsapp_server_core::backend::Backend as _;
+    use meta_whatsapp_server_store_postgres::PgBackend;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let (pool_a, pool_b) = (db.pool(4).await, db.pool(4).await);
+    migrate(&pool_a).await.unwrap();
+    let (a, b) = (PgBackend::new(pool_a), PgBackend::new(pool_b));
+    conformance::live::an_event_through_one_replica_wakes_a_stream_on_another(&a, &b).await;
+    a.close().await;
+    b.close().await;
+}
+
+/// A `NOTIFY` on another channel (another deployment sharing the
+/// database) wakes nobody here; a subscription made through a closed
+/// backend's notifier listens again.
+#[tokio::test]
+async fn live_postgres_the_channel_is_the_deployments() {
+    use meta_whatsapp_server_core::notify::{EventNotifier, Wakeup};
+    use meta_whatsapp_server_store_postgres::{EVENTS_CHANNEL, PgNotifier};
+    use std::time::Duration;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(2).await;
+    let ours = PgNotifier::new(pool.clone());
+    assert_eq!(ours.channel(), EVENTS_CHANNEL);
+    let theirs = PgNotifier::with_channel(pool.clone(), "wa_server_events_of_another");
+    let tenant = TenantId::parse(&format!("live-channel-{}", support::unique())).unwrap();
+    let mut subscription = ours.subscribe(&tenant).await.unwrap();
+    let wakeup = Wakeup {
+        tenant: tenant.clone(),
+        sequence: 1,
+    };
+    // The first wake-up after listening (anything missed before it).
+    let _ = tokio::time::timeout(Duration::from_millis(200), subscription.woken()).await;
+    theirs.notify(&wakeup).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), subscription.woken())
+            .await
+            .is_err(),
+        "a notification on another channel woke this deployment's stream"
+    );
+    ours.notify(&wakeup).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), subscription.woken())
+            .await
+            .is_ok()
+    );
+    drop(subscription);
+    ours.close().await;
+    let mut again = ours.subscribe(&tenant).await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_millis(200), again.woken()).await;
+    ours.notify(&wakeup).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), again.woken())
+            .await
+            .is_ok(),
+        "closed, then subscribed again: not listening"
+    );
+    ours.close().await;
+    theirs.close().await;
+}
+
+/// The listening connection killed (an operator, a failover, a
+/// connection limit): the notifier listens again on a new one, wakes every
+/// subscription once it listens (what was sent meanwhile was lost to it),
+/// not before, and a notification sent after that wake-up reaches the
+/// subscription. A channel of the test's own, so only its session is
+/// killed. Decisive: `listen`'s reconnect, and its wake-up after `LISTEN`
+/// (woken before it, a notification sent at once could be lost).
+#[tokio::test]
+async fn live_postgres_a_killed_listener_listens_again() {
+    use meta_whatsapp_server_core::notify::{EventNotifier, Wakeup};
+    use meta_whatsapp_server_store_postgres::PgNotifier;
+    use std::time::Duration;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(2).await;
+    let channel = format!("wa_server_events_killed_{}", support::unique());
+    let notifier = PgNotifier::with_channel(pool.clone(), &channel);
+    let tenant = TenantId::parse(&format!("live-killed-{}", support::unique())).unwrap();
+    let mut subscription = notifier.subscribe(&tenant).await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_millis(200), subscription.woken()).await;
+    let killed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+         WHERE pid <> pg_backend_pid() AND query LIKE 'LISTEN %' AND query LIKE $1) AS t",
+    )
+    .bind(format!("%{channel}%"))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(killed, 1, "the listening session");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), subscription.woken())
+            .await
+            .is_ok(),
+        "not woken once listening again"
+    );
+    let wakeup = Wakeup {
+        tenant: tenant.clone(),
+        sequence: 1,
+    };
+    notifier.notify(&wakeup).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), subscription.woken())
+            .await
+            .is_ok(),
+        "a notification after it was lost"
+    );
+    notifier.close().await;
+}
+
+/// M2.5 live: 200 open streams (ten tenants of 20, half never read) at 100
+/// events a second for 3 seconds, on a pool of ten: every read stream gets
+/// every event of its tenant in order, and the data held for clients never
+/// passes each stream's budget.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_two_hundred_streams_at_a_hundred_events_a_second_hold_bounded_memory() {
+    use meta_whatsapp_server_core::backend::Backend as _;
+    use meta_whatsapp_server_store_postgres::PgBackend;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(10).await;
+    migrate(&pool).await.unwrap();
+    let backend = PgBackend::new(pool);
+    let load =
+        conformance::live::many_streams_at_a_steady_rate_hold_bounded_memory(&backend, 200, 100, 3)
+            .await;
+    eprintln!("postgres, M2.5: {load:?}");
+    assert_eq!(load.delivered, load.events * 10);
+    assert!(load.peak_buffered_bytes <= load.streams * load.budget_per_stream);
+    backend.close().await;
+}
