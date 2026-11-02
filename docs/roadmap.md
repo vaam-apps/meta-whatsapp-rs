@@ -4858,6 +4858,14 @@ design's (§9).
     new holder's own and both tenants' events kept) and its core twin
     `conformance::inbox::an_erasure_on_a_number_with_a_previous_holder_erases_nothing`
     (both backends, no journal entry);
+    `conformance::inbox::an_erasure_failing_part_way_is_completed_by_a_repeat`
+    (the outbox before the inbox: with the inbox first, a repeat after a
+    failing outbox leaves the phone number's row);
+    `the_erasure_service_refuses_another_authorizers_caller_and_number`
+    (the core's `tests/capabilities.rs`: each of `Erasures::new`'s
+    admissions); `reads_an_erasure_key_of_at_least_32_bytes` (`config`:
+    the key's length, `_FILE`, no derivation) and
+    `erasure_is_set_up_by_its_key_or_by_a_throwaway_on_memory` (`serve`);
     `the_journal_and_the_audit_event_hold_no_identity_in_clear`
     (`erasure_logs.rs`: no log line at `TRACE` names the customer, the
     journal's HMACs computed apart from the code, the audit event's ids
