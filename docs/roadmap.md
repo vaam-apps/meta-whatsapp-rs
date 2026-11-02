@@ -5036,7 +5036,7 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
        button that did not parse typed (the review's extension).
     8. The button `index` stays a string, as every template button's,
        though the order details pages print a number.
-- [ ] **P1d. India's checkout button templates** (`meta-whatsapp-client`;
+- [x] **P1d. India's checkout button templates** (`meta-whatsapp-client`;
   row 141): the checkout button templates
   (`payments/payments-in/checkout-button-templates`: one `order_details`
   button labelled `Buy now` per product, in a single product template or
@@ -5054,6 +5054,37 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     send examples; each endpoint sample request decrypted and answered
     with its sample response through the Flows endpoint's crypto; the
     two third-party validation payloads of `pg` as exact JSON.
+  - **Landed:** the checkout button (`client::templates::Button::checkout`,
+    `Button::CHECKOUT_LABEL`: an `ORDER_DETAILS` button labelled `Buy now`
+    is checked as one: a `MARKETING` template with an `IMAGE` or `VIDEO`
+    header, one checkout button and up to 9 quick replies, or the first
+    button of each media card), sent with
+    `TemplateMessage::order_details_button` and an order that may offer
+    `client::payments::ShippingInfo` (INR, physical goods; refused in an
+    `order_details` message), each order details button of a message
+    with its own `reference_id`; the checkout endpoint
+    (`client::payments::checkout`, feature `flows-endpoint`:
+    `FlowEndpointKey::decrypt_checkout_request` on the Flows endpoint's
+    `decrypt_request`, made generic inside the crate, `CheckoutRequest`,
+    `CheckoutSubAction`, `CheckoutResponse` checked by `validate` before
+    `ResponseSealer::seal`: India's rules, no payment settings, the total
+    less the `AppliedCoupon`'s discount, a coupon after `apply_coupon` and
+    none after `remove_coupon`); the link
+    (`PaymentConfigurations::link_data_endpoint`: an `https` URL,
+    replayed, its answer undocumented); the third party validation
+    (`PaymentSetting::third_party_validation`, `TpvGateway`,
+    `EncryptedPaymentGatewayData`, redacted from `Debug`). An
+    expiration's description is now optional
+    (`OrderExpiration::description` an `Option`, `OrderExpiration::at`),
+    still required in an `order_details` message. Every example of the
+    three pages an exact-JSON test (`payments/tests/checkout.rs`, the
+    endpoint's in `payments/tests/checkout/endpoint.rs`: each sample
+    request encrypted as the WhatsApp client does, decrypted, answered
+    with the typed sample response, sealed and opened again to the page's
+    JSON). Not wrapped, being undocumented: unlinking the data endpoint,
+    a shipping address's floor number (its key is never shown), and a
+    health check or error answer at the checkout endpoint (a request
+    without a sub-action parses, to be answered as a Flow endpoint's).
 - [ ] **P2. Payment routes in the service** (rows 38, 141).
   - **After:** P1a, P1b, P1c.
   - **Decisive:** M1.3 over the new routes; an order-details send

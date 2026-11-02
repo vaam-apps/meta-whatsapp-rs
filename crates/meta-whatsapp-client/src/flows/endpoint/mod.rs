@@ -521,9 +521,21 @@ impl FlowEndpointKey {
         &self,
         request: &EncryptedFlowRequest,
     ) -> Result<(FlowRequest, ResponseSealer), CryptoError> {
+        self.decrypt_as(request)
+    }
+
+    /// [`Self::decrypt_request`] into another payload shape: the same
+    /// crypto for every endpoint WhatsApp encrypts this way (the Payments
+    /// API's checkout endpoint,
+    /// [`crate::payments::checkout`]). A payload that does not parse as
+    /// `T` is [`CryptoError::Decrypt`], as any other failure.
+    pub(crate) fn decrypt_as<T: serde::de::DeserializeOwned>(
+        &self,
+        request: &EncryptedFlowRequest,
+    ) -> Result<(T, ResponseSealer), CryptoError> {
         let (plaintext, sealer) = self.open(request).ok_or(CryptoError::Decrypt)?;
-        let request = serde_json::from_slice::<FlowRequest>(&plaintext.0)
-            .map_err(|_| CryptoError::Decrypt)?;
+        let request =
+            serde_json::from_slice::<T>(&plaintext.0).map_err(|_| CryptoError::Decrypt)?;
         Ok((request, sealer))
     }
 

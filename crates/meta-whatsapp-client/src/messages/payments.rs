@@ -7,7 +7,11 @@
 //! intent links), `payments/payments-in/payment-links`,
 //! `payments/payments-in/pg` (payment gateways) and
 //! `payments/payments-in/upi-intent` (the older payment configuration
-//! method, `payment_configuration` instead of `payment_settings`).
+//! method, `payment_configuration` instead of `payment_settings`); the
+//! checkout button templates' order parts, its shipping info and the
+//! checkout endpoint's coupon (`payments/payments-in/checkout-button-templates`,
+//! in `checkout.rs`), and the alpha third-party validation setting
+//! (`payments/payments-in/pg`, "Third party validation", in `tpv.rs`).
 //! Pages (Brazil): `payments/payments-br/orders` (the messages),
 //! `payments/payments-br/offsite-pix` (dynamic Pix codes),
 //! `payments/payments-br/payment-links`, `payments/payments-br/boleto`
@@ -29,6 +33,12 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::interactive::{FOOTER_MAX, TextObject};
 use super::validate::{self, Check};
 use crate::common::MediaSource;
+
+mod checkout;
+mod tpv;
+
+pub use checkout::{AppliedCoupon, ShippingAddress, ShippingInfo};
+pub use tpv::{EncryptedPaymentGatewayData, ThirdPartyValidation, TpvGateway};
 
 /// Body text limit of `order_details` and `order_status` ("Maximum length
 /// is 1024 characters" on every payments page).
@@ -328,9 +338,22 @@ pub enum PaymentSetting {
     /// `offsite_card_pay` (BRL): one-click payment with a card you store
     /// (`payments-br/one-click-payments`; not publicly available).
     OffsiteCardPay(OffsiteCardPay),
+    /// `razorpay` or `payu` (INR, alpha): third party validation, the bank
+    /// accounts the buyer must pay from, encrypted for the gateway
+    /// (`payments-in/pg`, "Third party validation"). Its `type` is the
+    /// gateway's name. The page shows it as an update to an order, not
+    /// with the order's `payment_gateway` setting; whether Meta wants both
+    /// is not said, and neither is required here.
+    ThirdPartyValidation(ThirdPartyValidation),
 }
 
 impl PaymentSetting {
+    /// A third party validation setting (INR, alpha): `data`, encrypted
+    /// for `gateway`.
+    pub fn third_party_validation(gateway: TpvGateway, data: EncryptedPaymentGatewayData) -> Self {
+        Self::ThirdPartyValidation(ThirdPartyValidation::new(gateway, data))
+    }
+
     /// A UPI intent link (INR).
     pub fn upi_intent_link(link: impl Into<String>) -> Self {
         Self::UpiIntentLink { link: link.into() }
@@ -364,6 +387,7 @@ impl PaymentSetting {
             Self::PixDynamicCode(_) => "pix_dynamic_code",
             Self::Boleto { .. } => "boleto",
             Self::OffsiteCardPay(_) => "offsite_card_pay",
+            Self::ThirdPartyValidation(t) => t.gateway.as_str(),
         }
     }
 
@@ -371,7 +395,9 @@ impl PaymentSetting {
     /// both do (`payment_link`).
     fn only_currency(&self) -> Option<Currency> {
         match self {
-            Self::UpiIntentLink { .. } | Self::PaymentGateway(_) => Some(Currency::Inr),
+            Self::UpiIntentLink { .. }
+            | Self::PaymentGateway(_)
+            | Self::ThirdPartyValidation(_) => Some(Currency::Inr),
             Self::PixDynamicCode(_) | Self::Boleto { .. } | Self::OffsiteCardPay(_) => {
                 Some(Currency::Brl)
             }
@@ -408,6 +434,7 @@ impl PaymentSetting {
                 validate::non_empty(&format!("{field}.boleto.digitable_line"), digitable_line)
             }
             Self::OffsiteCardPay(c) => c.validate(&format!("{field}.offsite_card_pay")),
+            Self::ThirdPartyValidation(t) => t.validate(&format!("{field}.{}", t.gateway.as_str())),
         }
     }
 }
@@ -434,6 +461,7 @@ impl Serialize for PaymentSetting {
                 map.serialize_entry(kind, &Boleto { digitable_line })?;
             }
             Self::OffsiteCardPay(c) => map.serialize_entry(kind, c)?,
+            Self::ThirdPartyValidation(t) => map.serialize_entry(kind, &t.body())?,
         }
         map.end()
     }
@@ -462,8 +490,18 @@ impl<'de> Deserialize<'de> for PaymentSetting {
             pix_dynamic_code: Option<PixDynamicCode>,
             boleto: Option<Boleto>,
             offsite_card_pay: Option<OffsiteCardPay>,
+            razorpay: Option<tpv::TpvRaw>,
+            payu: Option<tpv::TpvRaw>,
         }
         let raw = Raw::deserialize(deserializer)?;
+        let tpv = |gateway: TpvGateway, raw: Option<tpv::TpvRaw>| {
+            raw.map(|r| {
+                Self::ThirdPartyValidation(ThirdPartyValidation::new(
+                    gateway,
+                    r.encrypted_payment_gateway_data,
+                ))
+            })
+        };
         let setting = match raw.kind.as_str() {
             "upi_intent_link" => raw
                 .upi_intent_link
@@ -475,6 +513,8 @@ impl<'de> Deserialize<'de> for PaymentSetting {
                 digitable_line: b.digitable_line,
             }),
             "offsite_card_pay" => raw.offsite_card_pay.map(Self::OffsiteCardPay),
+            "razorpay" => tpv(TpvGateway::Razorpay, raw.razorpay),
+            "payu" => tpv(TpvGateway::Payu, raw.payu),
             _ => {
                 return Err(D::Error::custom("a payment setting type this client knows"));
             }
@@ -498,6 +538,12 @@ impl From<PaymentGateway> for PaymentSetting {
 impl From<PixDynamicCode> for PaymentSetting {
     fn from(p: PixDynamicCode) -> Self {
         Self::PixDynamicCode(p)
+    }
+}
+
+impl From<ThirdPartyValidation> for PaymentSetting {
+    fn from(t: ThirdPartyValidation) -> Self {
+        Self::ThirdPartyValidation(t)
     }
 }
 
@@ -1362,8 +1408,13 @@ pub struct OrderExpiration {
     /// ahead (not checked locally: it is relative to Meta's clock).
     #[serde(serialize_with = "u64_as_string", deserialize_with = "u64_from_string")]
     pub timestamp: u64,
-    /// Shown to the buyer: at most 120 characters.
-    pub description: String,
+    /// Shown to the buyer: at most 120 characters. Required in an
+    /// `order_details` message (`payments-in/pg`: the business "must
+    /// define" it); optional in a template's order details button, which
+    /// the checkout button template page sends without one, and in a
+    /// checkout endpoint's exchange.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 impl OrderExpiration {
@@ -1371,7 +1422,17 @@ impl OrderExpiration {
     pub fn new(timestamp: u64, description: impl Into<String>) -> Self {
         Self {
             timestamp,
-            description: description.into(),
+            description: Some(description.into()),
+        }
+    }
+
+    /// Expire at `timestamp` (unix seconds), without a description: for a
+    /// template's order details button (a checkout button template), not
+    /// an `order_details` message, which requires one.
+    pub fn at(timestamp: u64) -> Self {
+        Self {
+            timestamp,
+            description: None,
         }
     }
 }
@@ -1507,8 +1568,16 @@ impl Order {
     /// `legacy`: paid through the older `payment_configuration`
     /// (`payments-in/upi-intent`), whose page makes the items' origin and
     /// importer optional without a `catalog_id`. Brazil's items need
-    /// neither (`OrderItem::validate_brl` refuses them).
-    fn validate(&self, field: &str, currency: Currency, legacy: bool) -> Check {
+    /// neither (`OrderItem::validate_brl` refuses them). `context`: where
+    /// the order is sent, which decides whether its expiration needs a
+    /// description.
+    fn validate(
+        &self,
+        field: &str,
+        currency: Currency,
+        legacy: bool,
+        context: OrderContext,
+    ) -> Check {
         let items = format!("{field}.items");
         validate::count(&items, self.items.len(), 1, usize::MAX)?;
         let has_catalog = self.catalog_id.is_some();
@@ -1568,11 +1637,21 @@ impl Order {
             d.validate(&format!("{field}.discount"), currency)?;
         }
         if let Some(e) = &self.expiration {
-            validate::text(
-                &format!("{field}.expiration.description"),
-                &e.description,
-                STATUS_DESCRIPTION_MAX,
-            )?;
+            let description = format!("{field}.expiration.description");
+            match (&e.description, context) {
+                (Some(text), _) => validate::text(&description, text, STATUS_DESCRIPTION_MAX)?,
+                // payments-in/pg: "Business must define the following
+                // fields inside this object: `timestamp` …, `description`";
+                // the checkout button template page sends a button's
+                // expiration without one.
+                (None, OrderContext::Message) => {
+                    return Err(ValidationError::new(
+                        description,
+                        "is required in an `order_details` message",
+                    ));
+                }
+                (None, _) => {}
+            }
         }
         Ok(())
     }
@@ -1652,6 +1731,22 @@ impl<'de> Deserialize<'de> for Order {
 
 // ─── order_details ───────────────────────────────────────────────────────
 
+/// Where an order's parameters go, which decides the rules beyond their
+/// currency's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OrderContext {
+    /// An `order_details` interactive message.
+    Message,
+    /// A template's order details button: an order details template's
+    /// (`payments-in/orderdetailstemplate`, `payments-br/orderdetailstemplate`)
+    /// or a checkout button template's
+    /// (`payments-in/checkout-button-templates`); a send cannot tell which.
+    TemplateButton,
+    /// The order a checkout endpoint answers with
+    /// (`payments-in/checkout-button-templates`).
+    Checkout,
+}
+
 /// `action.parameters` of an `order_details` message, and the
 /// `order_details` of an order details template's button
 /// ([`SendComponent::order_details_button`](crate::templates::SendComponent::order_details_button)).
@@ -1683,10 +1778,22 @@ pub struct OrderDetailsParameters {
     /// Who receives shipped physical goods (INR only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub beneficiaries: Vec<Beneficiary>,
+    /// Where to ship, offered to the buyer: a checkout button template's
+    /// order (`payments-in/checkout-button-templates`, INR, physical goods
+    /// only), and the checkout endpoint's exchange. Refused in an
+    /// `order_details` message, whose pages do not document it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shipping_info: Option<ShippingInfo>,
+    /// The coupon applied to the order: only in the checkout endpoint's
+    /// exchange (`apply_coupon`), whose total it lowers. Refused in a send.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coupon: Option<AppliedCoupon>,
     /// The order's currency, which selects the rules checked.
     pub currency: Currency,
     /// What the buyer pays, above zero: with an `order`,
-    /// `subtotal + tax + shipping - discount`.
+    /// `subtotal + tax + shipping - discount`, less the
+    /// [`coupon`](Self::coupon)'s discount when there is one
+    /// ([`Self::expected_total`]).
     pub total_amount: Amount,
     /// The order: required in India; optional in Brazil, where a
     /// "simplified" message sends the total alone.
@@ -1713,6 +1820,8 @@ impl OrderDetailsParameters {
             payment_configuration: None,
             payment_settings: vec![payment_setting.into()],
             beneficiaries: Vec::new(),
+            shipping_info: None,
+            coupon: None,
             currency: Currency::Inr,
             total_amount: Amount::inr(total),
             order: Some(order),
@@ -1756,6 +1865,8 @@ impl OrderDetailsParameters {
             payment_configuration: None,
             payment_settings: vec![payment_setting.into()],
             beneficiaries: Vec::new(),
+            shipping_info: None,
+            coupon: None,
             currency: Currency::Brl,
             total_amount,
             order: None,
@@ -1783,25 +1894,86 @@ impl OrderDetailsParameters {
         self
     }
 
+    /// Set `shipping_info`: the addresses offered to the buyer of a
+    /// checkout button template's order (INR, physical goods).
+    #[must_use]
+    pub fn shipping_info(mut self, shipping_info: ShippingInfo) -> Self {
+        self.shipping_info = Some(shipping_info);
+        self
+    }
+
+    /// Apply `coupon` (a checkout endpoint's answer to `apply_coupon`),
+    /// and set `total_amount` to the total that follows
+    /// ([`Self::with_expected_total`]).
+    #[must_use]
+    pub fn coupon(mut self, coupon: AppliedCoupon) -> Self {
+        self.coupon = Some(coupon);
+        self.with_expected_total()
+    }
+
+    /// Remove the coupon (a checkout endpoint's answer to
+    /// `remove_coupon`), and set `total_amount` to the total that follows
+    /// ([`Self::with_expected_total`]).
+    #[must_use]
+    pub fn without_coupon(mut self) -> Self {
+        self.coupon = None;
+        self.with_expected_total()
+    }
+
+    /// The `total_amount` value the order implies: `subtotal + tax +
+    /// shipping - discount`, less the coupon's discount when one is
+    /// applied (the checkout button template page's `apply_coupon`
+    /// examples: `150000 + 10000 + 20000 - 15000 - 16500 = 148500`).
+    /// `None` without an order, or when it would be below zero or above
+    /// `u64::MAX`.
+    pub fn expected_total(&self) -> Option<u64> {
+        let total = self.order.as_ref()?.total()?;
+        match &self.coupon {
+            Some(coupon) => total.checked_sub(coupon.discount.value),
+            None => Some(total),
+        }
+    }
+
+    /// Set `total_amount`'s value to [`Self::expected_total`] (`0`, which
+    /// the checks refuse, when there is none): after changing the order's
+    /// shipping, say, in a checkout endpoint's answer to `apply_shipping`.
+    #[must_use]
+    pub fn with_expected_total(mut self) -> Self {
+        self.total_amount.value = self.expected_total().unwrap_or(0);
+        self
+    }
+
     fn validate(&self) -> Check {
-        self.validate_at(PARAMS)
+        self.validate_at(PARAMS, OrderContext::Message)
     }
 
     /// The rules of [`OrderDetails::validate`] for these parameters, by
-    /// their currency's pages, with fields named under `at` (an
-    /// `order_details` message's `interactive.action.parameters`, a
-    /// template button's `….action.order_details`).
-    pub(crate) fn validate_at(&self, at: &str) -> Check {
+    /// their currency's pages and where they go (`context`), with fields
+    /// named under `at` (an `order_details` message's
+    /// `interactive.action.parameters`, a template button's
+    /// `….action.order_details`, a checkout endpoint answer's
+    /// `data.order_details`).
+    pub(crate) fn validate_at(&self, at: &str, context: OrderContext) -> Check {
         let currency = self.currency;
+        if context == OrderContext::Checkout && currency != Currency::Inr {
+            // payments-in/checkout-button-templates: the checkout endpoint
+            // is "only available to India businesses".
+            return Err(ValidationError::new(
+                format!("{at}.currency"),
+                "a checkout endpoint's order is in INR (India only)",
+            ));
+        }
         check_reference_id(
             &format!("{at}.reference_id"),
             &self.reference_id,
             currency.reference_id_max(),
         )?;
-        match currency {
-            Currency::Inr => self.validate_inr_payment(at)?,
-            Currency::Brl => self.validate_brl_payment(at)?,
+        match (context, currency) {
+            (OrderContext::Checkout, _) => self.validate_checkout_payment(at)?,
+            (_, Currency::Inr) => self.validate_inr_payment(at)?,
+            (_, Currency::Brl) => self.validate_brl_payment(at)?,
         }
+        self.validate_checkout_parts(at, context)?;
         let total = format!("{at}.total_amount");
         self.total_amount.validate(&total, currency)?;
         if self.total_amount.value == 0 {
@@ -1822,25 +1994,99 @@ impl OrderDetailsParameters {
                 )),
             };
         };
-        // Without a payment setting, the order is paid through the older
-        // `payment_configuration` alone.
-        let legacy = self.payment_settings.is_empty();
-        order.validate(&format!("{at}.order"), currency, legacy)?;
+        // Without a payment setting, a sent order is paid through the older
+        // `payment_configuration` alone. A checkout endpoint's order has no
+        // payment settings by design: its items keep India's rules.
+        let legacy = context != OrderContext::Checkout && self.payment_settings.is_empty();
+        order.validate(&format!("{at}.order"), currency, legacy, context)?;
         // Every page: "`total_amount.value` must be equal to
         // `order.subtotal.value` + `order.tax.value` +
-        // `order.shipping.value` - `order.discount.value`."
-        if order.total() != Some(self.total_amount.value) {
+        // `order.shipping.value` - `order.discount.value`"; the checkout
+        // endpoint's examples take an applied coupon's discount off too.
+        let expected = self.expected_total();
+        if expected != Some(self.total_amount.value) {
+            let coupon = if self.coupon.is_some() {
+                " - the coupon's discount"
+            } else {
+                ""
+            };
             return Err(ValidationError::new(
                 format!("{total}.value"),
                 format!(
-                    "is {}; it must equal subtotal + tax + shipping - discount ({})",
+                    "is {}; it must equal subtotal + tax + shipping - discount{coupon} ({})",
                     self.total_amount.value,
-                    order.total().map_or_else(
+                    expected.map_or_else(
                         || "below zero or above u64::MAX".to_owned(),
                         |t| t.to_string()
                     ),
                 ),
             ));
+        }
+        Ok(())
+    }
+
+    /// The order a checkout endpoint answers with
+    /// (`payments-in/checkout-button-templates`): WhatsApp "passes order
+    /// parameters excluding the payment settings", and every answer of the
+    /// page leaves them out, so neither `payment_settings` nor the older
+    /// `payment_configuration` is sent back; Brazil's `payment_type` is
+    /// refused, the beneficiaries are India's.
+    fn validate_checkout_payment(&self, at: &str) -> Check {
+        if !self.payment_settings.is_empty() {
+            return Err(ValidationError::new(
+                format!("{at}.payment_settings"),
+                "a checkout endpoint exchanges the order without its payment settings",
+            ));
+        }
+        if self.payment_configuration.is_some() {
+            return Err(ValidationError::new(
+                format!("{at}.payment_configuration"),
+                "a checkout endpoint exchanges the order without its payment settings",
+            ));
+        }
+        if self.payment_type == Some(PaymentType::Br) {
+            return Err(only_for(format!("{at}.payment_type"), Currency::Brl));
+        }
+        for (i, b) in self.beneficiaries.iter().enumerate() {
+            b.validate(&format!("{at}.beneficiaries[{i}]"))?;
+        }
+        Ok(())
+    }
+
+    /// `shipping_info` and `coupon`, which only the checkout button
+    /// template page documents: the shipping info in a template button's
+    /// order (INR, "required for physical-goods type, else omit") and in
+    /// the endpoint's exchange, the selected address and the coupon in the
+    /// endpoint's exchange alone.
+    fn validate_checkout_parts(&self, at: &str, context: OrderContext) -> Check {
+        if let Some(info) = &self.shipping_info {
+            let field = format!("{at}.shipping_info");
+            if context == OrderContext::Message {
+                return Err(ValidationError::new(
+                    field,
+                    "is documented for checkout button templates only, not `order_details` messages",
+                ));
+            }
+            if self.currency != Currency::Inr {
+                return Err(only_for(field, Currency::Inr));
+            }
+            if self.goods_type == GoodsType::Digital {
+                return Err(ValidationError::new(
+                    field,
+                    "is for physical goods only (\"required for physical-goods type, else omit\")",
+                ));
+            }
+            info.validate(&field, context == OrderContext::Checkout)?;
+        }
+        if let Some(coupon) = &self.coupon {
+            let field = format!("{at}.coupon");
+            if context != OrderContext::Checkout {
+                return Err(ValidationError::new(
+                    field,
+                    "is documented in a checkout endpoint's exchange only, not in a send",
+                ));
+            }
+            coupon.validate(&field, self.currency)?;
         }
         Ok(())
     }
@@ -2069,6 +2315,11 @@ impl OrderDetails {
     /// India's payment settings),
     /// and Brazil's in an INR one (`payment_type` `br`, Brazil's payment
     /// settings): no page says Meta reads them there.
+    ///
+    /// **Either**: an expiration's description is required; the checkout
+    /// button templates' `shipping_info` and the checkout endpoint's
+    /// `coupon` are refused (no `order_details` page documents them); a
+    /// third party validation setting (INR) has its encrypted data.
     ///
     /// [`Messages::send`](super::Messages::send) calls it first.
     ///
