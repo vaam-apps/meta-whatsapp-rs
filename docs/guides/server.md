@@ -949,10 +949,26 @@ before anything is shared.
   Multi-Partner Solution (`solution_partner_business_ids` listed) is not
   acted on: nothing tells whether your business is the partner removed;
   the event still reaches its tenant.
-- **The operator's unbind and a tenant's deletion revoke nothing**: they
-  move or free a WABA, not end a merchant's funding. Revoke by hand
-  (the library's `EmbeddedSignup::revoke_credit_line`) when that is what
-  you mean.
+- **Deleting a tenant** (`DELETE /v1/admin/tenants/{id}`) in Solution
+  Partner mode revokes each of its WABAs' lines the same way (decision
+  D75): unsubscribed, revoked, then the token and the bindings. A
+  revocation that fails deletes nothing and is the answer (`step:
+  revoke_credit_line`): repeat it. Each revocation is an `audit` event
+  (`credit_line_revoked`, with the key's id).
+- **The operator's unbind revokes nothing**: it moves or frees a WABA,
+  not end a merchant's funding. Revoke by hand (the library's
+  `EmbeddedSignup::revoke_credit_line`) when that is what you mean.
+- **A WABA that moves while it is offboarded** (unbound and attached to
+  another tenant during the revocation's calls to Meta) keeps its new
+  holder's token and binding: only the token and the binding the
+  offboarding read are deleted. The disconnection answers `503`; the
+  webhook is acknowledged and logged.
+- **`WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION=signature`** makes your app
+  secret the only gate: whoever holds it can sign a delivery that deletes
+  any merchant's token. Even with `graph`, what Graph cannot confirm (no
+  stored token, a removal naming no WABA) is a revocation on the
+  signature alone, which the reshare route undoes.
+
 ## Registration and the two-step PIN
 
 A number added in WhatsApp Manager, or by Embedded Signup, is registered

@@ -129,7 +129,11 @@ step. Funding them again is your operator's decision:
 ```
 
 The app is unsubscribed, a Solution Partner's line revoked, then the
-token and bindings deleted; a failure deletes nothing: call it again. Meta's
+token and bindings deleted; a failure deletes nothing: call it again. A
+`503 storage_unavailable` means the WABA moved to another merchant while
+it was being disconnected: nothing of theirs was deleted. Your operator
+deleting the merchant's tenant revokes the line the same way; their
+unbind revokes nothing. Meta's
 account_update webhooks do the same on their own: the merchant
 uninstalling your app (PARTNER_APP_UNINSTALLED) or deleting the WABA
 offboards them; unsharing it (PARTNER_REMOVED) revokes the line. The

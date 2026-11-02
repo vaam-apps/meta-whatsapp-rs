@@ -2,9 +2,11 @@
 //! token, the PIN, the code and the attempt's state are in no log line, at
 //! any level, for any target, through a Solution Partner's whole signup
 //! (a completion stopped at the registration, the merchant's
-//! `PARTNER_REMOVED`, a resume, the operator's re-share, a disconnection,
-//! an uninstall); nor are Meta's texts on a failed signup step (the signup
-//! routes withhold them, as the OTP routes do). Alone in its binary, as
+//! `PARTNER_REMOVED`, a resume, the operator's re-share, an uninstall, a
+//! tenant's disconnection and an admin's deletion of the tenant, both
+//! audited `credit_line_revoked`); nor are Meta's texts on a failed signup
+//! step (the signup routes withhold them, as the OTP routes do). Alone in
+//! its binary, as
 //! `logs.rs` is: the capture is a thread's default subscriber, and
 //! `tracing` caches whether a call site is enabled across threads.
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
@@ -14,9 +16,9 @@ mod common;
 use common::Call;
 use common::capture::{Captured, subscriber};
 use common::signup::{
-    PHONE, SYSTEM_TOKEN, TOKEN, WABA, complete, harness, removed, resume, script_already_revoked,
-    script_confirmed, script_revocation, script_share, script_until_verified, solution_partner,
-    start, success, uninstalled,
+    PHONE, SYSTEM_TOKEN, TOKEN, WABA, complete, finished, harness, removed, resume,
+    script_already_revoked, script_confirmed, script_revocation, script_share,
+    script_until_verified, solution_partner, start, success, uninstalled,
 };
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::model::Scope;
@@ -109,6 +111,7 @@ async fn a_partners_signup_logs_no_token_pin_code_or_state() {
     );
     assert_eq!(h.webhook(&uninstalled()).await.status, StatusCode::OK);
     assert_eq!(h.graph.remaining(), 0);
+    reconnect_and_offboard(&h, &key, &admin).await;
 
     let logs = captured.text();
     assert!(
@@ -120,10 +123,7 @@ async fn a_partners_signup_logs_no_token_pin_code_or_state() {
         logs.contains("AXsgnV2Cm3ZMGF3dF_cfYIn"),
         "Meta's trace id is logged"
     );
-    assert!(
-        logs.contains("credit_line_reshared") && logs.contains("waba_offboarded"),
-        "the operator's re-share and the webhook's offboarding are audited"
-    );
+    assert_audited(&logs);
     for secret in [
         TOKEN,
         SYSTEM_TOKEN,
@@ -134,5 +134,65 @@ async fn a_partners_signup_logs_no_token_pin_code_or_state() {
         "SENTINEL",
     ] {
         assert!(!logs.contains(secret), "{secret} was logged:\n{logs}");
+    }
+}
+
+/// Connected again (stopped at the line, revoked) and disconnected by the
+/// tenant, then again and the operator deletes the tenant: each
+/// unsubscribed, revoked (found revoked), deleted, audited (D75).
+async fn reconnect_and_offboard(h: &common::Harness, key: &str, admin: &str) {
+    let business = json!({"name": "Wind & Wool", "id": common::signup::BUSINESS});
+    let found_revoked = || {
+        h.graph.push_json(200, success()); // unsubscribed
+        h.graph.push_json(
+            200,
+            json!({"id": "58501441721239", "receiving_business": business}),
+        );
+        h.graph.push_json(
+            200,
+            json!({"receiving_business": business, "request_status": "DELETED"}),
+        );
+    };
+    for by_admin in [false, true] {
+        let state_again = start(h, key).await;
+        script_until_verified(&h.graph);
+        h.graph.push_json(200, success()); // subscribed_apps
+        h.graph.push_json(200, success()); // assigned_users
+        let again = h.call(complete(key, &finished(&state_again))).await;
+        assert_eq!(
+            again.json()["error"]["step"],
+            "share_credit_line",
+            "{}",
+            again.text
+        );
+        found_revoked();
+        let call = if by_admin {
+            Call::new(Method::DELETE, "/v1/admin/tenants/merchant-a").key(admin)
+        } else {
+            Call::new(Method::DELETE, format!("/v1/wabas/{WABA}")).key(key)
+        };
+        let deleted = h.call(call).await;
+        assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{}", deleted.text);
+        assert_eq!(h.graph.remaining(), 0);
+    }
+}
+
+/// The operator's re-share, the webhook's offboarding and both
+/// revocations (a tenant's disconnection, an admin's tenant deletion) are
+/// audit events.
+fn assert_audited(logs: &str) {
+    assert!(
+        logs.contains("credit_line_reshared") && logs.contains("waba_offboarded"),
+        "the operator's re-share and the webhook's offboarding are audited"
+    );
+    for (change, what) in [
+        ("tenant change", "a disconnection's"),
+        ("admin change", "a tenant deletion's"),
+    ] {
+        let revoked = logs
+            .lines()
+            .find(|line| line.contains("credit_line_revoked") && line.contains(change))
+            .unwrap_or_else(|| panic!("{what} revocation is audited:\n{logs}"));
+        assert!(revoked.contains(WABA), "{revoked}");
     }
 }

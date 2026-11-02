@@ -484,8 +484,15 @@ impl Signups {
         session.waba_id = Some(waba_id.clone());
         let request = OnboardingRequest::for_resume(session).reshare_after_revocation();
         let approval = OnceLock::new();
-        let approve =
-            |verified: VerifiedOnboarding| approve_held(records, &tenant, verified, &approval);
+        let approval_set = &approval;
+        let tenant_held = &tenant;
+        // The share writes the WABA's ledger: remembered for a key rotation
+        // first, as a partner's signup does (a WABA onboarded while the
+        // deployment was a Tech Provider has no entry yet).
+        let approve = move |verified: VerifiedOnboarding| async move {
+            remember_ledger(records, &verified).await?;
+            approve_held(records, tenant_held, verified, approval_set).await
+        };
         let es = deployment.onboarding(authz.client());
         let resumed = es
             .resume_with_approval(&waba_id, &request, authz.vault_for_signup(), approve)

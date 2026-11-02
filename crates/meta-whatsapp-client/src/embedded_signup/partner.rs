@@ -459,6 +459,9 @@ impl EmbeddedSignup {
     /// `PARTNER_REMOVED` revocation: the credit ledger outlives the token.
     /// Stop the app's webhooks first if the token still works
     /// (`waba(..).unsubscribe_app()` with it).
+    /// When your records may move the WABA to another holder while this
+    /// runs, use [`Self::offboard_if_unchanged`]: it deletes only the token
+    /// you read.
     ///
     /// - When nothing names the WABA's business and the credit ledger shows
     ///   nothing was ever shared with it (a WABA onboarded before this

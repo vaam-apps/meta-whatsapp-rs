@@ -453,7 +453,8 @@ pub(crate) async fn update_profile(
         (status = 404, description = "`not_found`: no such WABA for this tenant", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required` (nothing deleted)", body = ErrorBody),
         (status = 429, description = "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling (nothing deleted)", body = ErrorBody),
-        (status = 502, description = "Unsubscribing failed: nothing deleted", body = ErrorBody),
+        (status = 502, description = "Unsubscribing failed, or, in Solution Partner mode, revoking the credit line (`step: revoke_credit_line`): nothing deleted", body = ErrorBody),
+        (status = 503, description = "`storage_unavailable`: the WABA's token or binding changed meanwhile (moved to another tenant: theirs left alone); retryable", body = ErrorBody),
         (status = 504, description = "`timeout`: nothing deleted", body = ErrorBody),
     )
 )]

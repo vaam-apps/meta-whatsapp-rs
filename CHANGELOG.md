@@ -225,6 +225,14 @@ stored data, the owner's).
 
 ### Added
 
+- **`EmbeddedSignup::offboard_if_unchanged`** (roadmap M3a's review):
+  `offboard`'s revocation, then the token deleted only if its vault
+  record is still the one read (`TokenVault::get_versioned`, then
+  `delete_if_unchanged`), so a token stored while the revocation's calls
+  ran is kept (`Offboarded::token_deleted` is `false`). For a caller whose
+  records may move the WABA to another holder meanwhile: the service's
+  partner disconnections use it. `offboard` is unchanged.
+
 - **India's checkout button templates and the third party validation**
   (roadmap P1d, parity row 141, now done in the library; category 15,
   coverage row 32; from `payments/payments-in/checkout-button-templates`,
@@ -754,7 +762,8 @@ stored data, the owner's).
   trims added to `live_postgres_the_locks_are_the_documented_ones`.
 
 - **Embedded Signup in the service** (roadmap M3a; parity rows 120 and
-  142 done on the service's side; design D70–D76, proposed). Scope
+  142 done on the service's side; design D70–D76, the coordinator's of
+  2026-11-02). Scope
   `signup`: `POST /v1/signup/sessions` (`start_signup`) binds an attempt
   to the calling tenant for 15 minutes (the library's `SignupSessions`,
   `wa.es.session` unchanged) and answers what the page's `FB.init` and
@@ -779,7 +788,14 @@ stored data, the owner's).
   operator, `POST /v1/admin/wabas/{waba_id}/credit-line/reshare`
   (audited `credit_line_reshared`). Offboarding: the tenant's `DELETE
   /v1/wabas/{waba_id}` revokes the line before it deletes the token and
-  the bindings in Solution Partner mode; the webhook pipeline acts on
+  the bindings in Solution Partner mode, and so does an admin's deletion
+  of a tenant, for each of its WABAs (decision D75; a failed revocation
+  deletes nothing and is the answer; the admin unbind revokes nothing),
+  each revocation audited `credit_line_revoked`; only the token and the
+  binding the offboarding read before the revocation's calls are deleted
+  (a WABA moved to another tenant meanwhile keeps its new holder's: the
+  route answers `503`, the webhook is acknowledged and logged); the
+  webhook pipeline acts on
   `account_update` (`PARTNER_APP_UNINSTALLED` of the deployment's app and
   `ACCOUNT_DELETED` offboard, `PARTNER_REMOVED` revokes at once, decision
   D14), each confirmed with Graph first (`debug_token` on the stored

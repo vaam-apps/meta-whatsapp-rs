@@ -4827,12 +4827,17 @@ design's (§9).
     route clearing a lost credit share (`clear_pending_share`); a
     Multi-Partner Solution's `PARTNER_REMOVED` is not acted on (no
     setting names the deployment's partner business); the admin unbind
-    and a tenant's deletion revoke nothing (D75); a partner disconnection
-    deletes the token through the library's `offboard`, unconditioned on
-    the capability's token version, so a WABA moved within the
-    revocation's own calls loses its new token (the window the unsubscribe
-    call already has); hosted signup, several WABAs and pre-verified
-    numbers wait for M3f. Proposed, pending the coordinator: D70–D76.
+    revokes nothing (D75: the operator revokes explicitly); hosted
+    signup, several WABAs and pre-verified numbers wait for M3f. The
+    review (2026-11-02) made a partner disconnection delete only the
+    token and the binding it started from (the library's
+    `EmbeddedSignup::offboard_if_unchanged`;
+    `an_uninstall_whose_waba_moves_mid_revocation_leaves_the_new_holder`,
+    `a_disconnect_whose_waba_moves_mid_revocation_leaves_the_new_holder`)
+    and a Solution Partner's tenant deletion revoke first
+    (`deleting_a_partners_tenant_revokes_its_wabas_lines_first`). D70–D76
+    decided by the coordinator on 2026-11-02; migration 6's stored names
+    stay pending the owner.
 - [ ] **M3b. Coexistence** (rows 69, 124): onboarding, the automatic
   sync (D7), the synced contacts stored and readable by their tenant:
   M3b turns the inbox's contacts recording on

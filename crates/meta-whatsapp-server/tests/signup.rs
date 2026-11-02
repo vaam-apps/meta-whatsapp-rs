@@ -1125,6 +1125,64 @@ async fn m3_4_a_revoked_business_is_refunded_only_by_the_operator() {
     );
 }
 
+/// The operator's re-share of a WABA no Solution Partner signup recorded
+/// (onboarded while the deployment was a Tech Provider) remembers its
+/// ledger for a key rotation: the share writes one, which outlives the
+/// binding. Decisive: the reshare's approval recording the WABA (without
+/// it, no listing names the ledger once the WABA is unbound, and a
+/// rotation never reaches it).
+#[tokio::test]
+async fn an_operators_reshare_remembers_the_ledger_for_a_rotation() {
+    let (store, kv) = (Arc::new(MemoryStore::new()), Arc::new(MemoryKvStore::new()));
+    let first = Harness::on_with(store.clone(), kv.clone(), settings(tech_provider()));
+    let (a, _) = tenants(&first).await;
+    onboard_tech_provider(&first, &a).await;
+    let page = meta_whatsapp_server::model::PageRequest {
+        after: None,
+        limit: 10,
+    };
+    assert!(
+        first
+            .store
+            .vault_entries(&page)
+            .await
+            .unwrap()
+            .items
+            .is_empty(),
+        "a Tech Provider's signup records none"
+    );
+    // The deployment became a Solution Partner.
+    let h = Harness::on_with(store, kv, settings(solution_partner()));
+    let admin = h.admin_key().await;
+    h.graph.push_json(200, success()); // subscribed_apps
+    h.graph.push_json(200, success()); // assigned_users
+    h.graph.push_json(200, json!({"data": []})); // owning_credit_allocation_configs
+    h.graph.push_json(
+        200,
+        json!({"allocation_config_id": ALLOCATION, "waba_id": WABA}),
+    );
+    let reshared = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("/v1/admin/wabas/{WABA}/credit-line/reshare"),
+            )
+            .key(&admin),
+        )
+        .await;
+    assert_eq!(reshared.status, StatusCode::OK, "{}", reshared.text);
+    assert_eq!(h.graph.remaining(), 0);
+    let entries = h.store.vault_entries(&page).await.unwrap().items;
+    assert!(
+        entries.contains(&VaultEntry::Waba(WabaId::new(WABA).unwrap())),
+        "{entries:?}"
+    );
+    assert!(
+        entries.contains(&VaultEntry::Business(BusinessId::new(BUSINESS).unwrap())),
+        "{entries:?}"
+    );
+}
+
 /// M3.4, the CMS disconnect: in Solution Partner mode `DELETE
 /// /v1/wabas/{waba_id}` unsubscribes, revokes the line, then deletes the
 /// token and the bindings; a revocation that fails deletes nothing (the
@@ -1481,6 +1539,129 @@ async fn an_uninstall_whose_waba_moves_mid_revocation_leaves_the_new_holder() {
     assert_eq!(h.graph.remaining(), 0, "revoked");
     assert_held_by_b(&h).await;
 }
+
+/// A WABA that moves between the webhook's read of its binding and of its
+/// token (the token read is then the new holder's) is not acted on: the
+/// delivery is `500`, Meta redelivers, and merchant-b's token and binding
+/// stay. Decisive: the binding read again after the token (`held`).
+#[tokio::test]
+async fn an_uninstall_whose_waba_moves_between_its_reads_is_redelivered() {
+    let moving = Arc::new(Moving::new(Arc::new(MemoryStore::new())));
+    let h = Harness::on_with(
+        moving.clone(),
+        Arc::new(MemoryKvStore::new()),
+        settings(solution_partner()),
+    );
+    let (a, _) = tenants(&h).await;
+    onboard_partner(&h, &a).await;
+    let (store, vault) = (h.store.clone(), h.vault.clone());
+    moving.after_waba_read(
+        READS_BEFORE_THE_OFFBOARDING + 1,
+        Box::pin(async move {
+            move_waba(
+                store.as_ref(),
+                &vault,
+                &WabaId::new(WABA).unwrap(),
+                &PhoneNumberId::new(PHONE).unwrap(),
+                B,
+                Some("TOKEN-OF-B"),
+            )
+            .await;
+        }),
+    );
+    script_confirmed(&h.graph);
+    script_revocation(&h.graph);
+    let delivered = h.webhook(&uninstalled()).await;
+    assert!(!moving.armed(), "the move happened");
+    assert_eq!(delivered.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_held_by_b(&h).await;
+}
+
+/// The `waba` reads the webhook pipeline makes before the offboarding's
+/// own (routing the event).
+const READS_BEFORE_THE_OFFBOARDING: usize = 1;
+
+/// An uninstall of a WABA whose token is gone already (an offboarding
+/// that stopped half-way) unbinds only the binding it read: one made for
+/// another tenant during the revocation's calls is left. Decisive: the
+/// conditional unbind (`unbind_waba_if`, not `unbind_waba`).
+#[tokio::test]
+async fn an_uninstall_without_a_token_unbinds_only_the_binding_it_read() {
+    let moving = Arc::new(Moving::new(Arc::new(MemoryStore::new())));
+    let h = Harness::on_with(
+        moving.clone(),
+        Arc::new(MemoryKvStore::new()),
+        settings(solution_partner()),
+    );
+    let (a, _) = tenants(&h).await;
+    onboard_partner(&h, &a).await;
+    h.vault.delete(&WabaId::new(WABA).unwrap()).await.unwrap();
+    move_to_b_mid_revocation(&moving, &h);
+    script_revocation(&h.graph);
+    assert_eq!(h.webhook(&uninstalled()).await.status, StatusCode::OK);
+    assert!(!moving.armed(), "the move happened");
+    assert_eq!(h.graph.remaining(), 0, "revoked, nothing to confirm with");
+    assert_held_by_b(&h).await;
+}
+
+/// A disconnection whose WABA moves after its unsubscribe, before the
+/// revocation, revokes nothing: `503`, no credit call, merchant-b's token
+/// and binding left. Decisive: the binding checked again before the
+/// revocation (`Signups::offboard`'s `still_bound`).
+#[tokio::test]
+async fn a_disconnect_whose_waba_moves_before_the_revocation_revokes_nothing() {
+    let moving = Arc::new(Moving::new(Arc::new(MemoryStore::new())));
+    let h = Harness::on_with(
+        moving.clone(),
+        Arc::new(MemoryKvStore::new()),
+        settings(solution_partner()),
+    );
+    let (a, _) = tenants(&h).await;
+    onboard_partner(&h, &a).await;
+    let (store, vault) = (h.store.clone(), h.vault.clone());
+    // The key's lookup aside: the extractor's binding, the capability's
+    // check, the disconnection's check before the unsubscribe.
+    moving.after_waba_read(
+        DISCONNECT_READS,
+        Box::pin(async move {
+            move_waba(
+                store.as_ref(),
+                &vault,
+                &WabaId::new(WABA).unwrap(),
+                &PhoneNumberId::new(PHONE).unwrap(),
+                B,
+                Some("TOKEN-OF-B"),
+            )
+            .await;
+        }),
+    );
+    let asked = h.graph.requests().len();
+    h.graph.push_json(200, success()); // subscribed_apps
+    let done = h
+        .call(Call::new(Method::DELETE, format!("/v1/wabas/{WABA}")).key(&a))
+        .await;
+    assert!(!moving.armed(), "the move happened");
+    assert_eq!(
+        (done.status, done.code().as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable"),
+        "{}",
+        done.text
+    );
+    assert_eq!(h.graph.requests().len(), asked + 1, "the unsubscribe only");
+    assert_held_by_b(&h).await;
+    assert!(
+        h.vault
+            .revoked_business(&BusinessId::new(BUSINESS).unwrap())
+            .await
+            .unwrap()
+            .is_none(),
+        "nothing revoked"
+    );
+}
+
+/// The `waba` reads of a disconnection up to its check before the
+/// unsubscribe.
+const DISCONNECT_READS: usize = 3;
 
 /// The same race on the tenant's own disconnection: `503` (retryable),
 /// and merchant-b's token and binding left alone.
