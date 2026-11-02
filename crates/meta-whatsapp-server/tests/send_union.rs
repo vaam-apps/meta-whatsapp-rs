@@ -154,7 +154,7 @@ impl Example {
     }
 }
 
-fn media_card(i: usize, slug: &str, name: &str, text: &str, action: Value) -> Value {
+fn media_card(i: usize, slug: &str, name: &str, text: &str, action: &Value) -> Value {
     json!({
         "card_index": i,
         "type": "cta_url",
@@ -192,7 +192,7 @@ fn url_carousel() -> Value {
                 slug,
                 name,
                 text,
-                json!({"name": "cta_url", "parameters": {
+                &json!({"name": "cta_url", "parameters": {
                     "display_text": "Buy now",
                     "url": format!("https://shop.luckyshrub.com/latest/{slug}")
                 }}),
@@ -212,7 +212,7 @@ fn quick_reply_carousel() -> Value {
                 slug,
                 name,
                 text,
-                json!({"buttons": [
+                &json!({"buttons": [
                     {"type": "quick_reply", "quick_reply": {"id": format!("learn-{slug}"), "title": "Learn more"}},
                     {"type": "quick_reply", "quick_reply": {"id": format!("fav-{slug}"), "title": "Add to favorites"}}
                 ]}),
@@ -455,17 +455,14 @@ async fn each_types_example_is_sent_as_its_page_prints_it_with_the_tenants_token
             reply.text
         );
         let requests = &h.graph.requests()[before..];
-        let (checked, sent) = match &example.check {
-            Some((path, _)) => {
-                assert_eq!(requests.len(), 2, "{}", example.name);
-                assert_eq!(requests[0].method, Method::GET, "{}", example.name);
-                assert_eq!(requests[0].path(), *path, "{}", example.name);
-                (Some(&requests[0]), &requests[1])
-            }
-            None => {
-                assert_eq!(requests.len(), 1, "{}", example.name);
-                (None, &requests[0])
-            }
+        let (checked, sent) = if let Some((path, _)) = &example.check {
+            assert_eq!(requests.len(), 2, "{}", example.name);
+            assert_eq!(requests[0].method, Method::GET, "{}", example.name);
+            assert_eq!(requests[0].path(), *path, "{}", example.name);
+            (Some(&requests[0]), &requests[1])
+        } else {
+            assert_eq!(requests.len(), 1, "{}", example.name);
+            (None, &requests[0])
         };
         for request in checked.into_iter().chain([sent]) {
             assert_eq!(request.bearer(), Some(TOKEN), "{}", example.name);
@@ -525,35 +522,32 @@ async fn a_key_the_library_would_drop_is_refused_on_its_path_before_any_request(
         ),
         (
             edit(location.clone(), &|o| {
-                o["header"] = json!({"type": "text", "text": "h"})
+                o["header"] = json!({"type": "text", "text": "h"});
             }),
             "interactive.header",
         ),
         (
-            edit(
-                location.clone(),
-                &|o| {
-                    o["action"]["buttons"] =
-                        json!([{"type": "reply", "reply": {"id": "a", "title": "A"}}])
-                },
-            ),
+            edit(location.clone(), &|o| {
+                o["action"]["buttons"] =
+                    json!([{"type": "reply", "reply": {"id": "a", "title": "A"}}]);
+            }),
             "interactive.action.buttons",
         ),
         (
             edit(location.clone(), &|o| {
-                o["action"]["name"] = json!("send_location_now")
+                o["action"]["name"] = json!("send_location_now");
             }),
             "interactive.action.name",
         ),
         (
             edit(call.clone(), &|o| {
-                o["action"]["parameters"]["ttl_minute"] = json!(5)
+                o["action"]["parameters"]["ttl_minute"] = json!(5);
             }),
             "interactive.action.parameters.ttl_minute",
         ),
         (
             edit(call.clone(), &|o| {
-                o["action"]["parameters"]["ttl_minutes"] = json!(43_201)
+                o["action"]["parameters"]["ttl_minutes"] = json!(43_201);
             }),
             "interactive.action.parameters.ttl_minutes",
         ),
@@ -579,13 +573,13 @@ async fn a_key_the_library_would_drop_is_refused_on_its_path_before_any_request(
         ),
         (
             edit(url_carousel(), &|o| {
-                o["action"]["cards"][2]["card_index"] = json!(1)
+                o["action"]["cards"][2]["card_index"] = json!(1);
             }),
             "interactive.action.cards[2].card_index",
         ),
         (
             edit(url_carousel(), &|o| {
-                o["action"]["cards"][2]["type"] = json!("product")
+                o["action"]["cards"][2]["type"] = json!("product");
             }),
             "interactive.action.cards[2].type",
         ),
@@ -604,25 +598,25 @@ async fn a_key_the_library_would_drop_is_refused_on_its_path_before_any_request(
         ),
         (
             edit(flow_by_name(), &|o| {
-                o["action"]["parameters"]["flow_tokn"] = json!("x")
+                o["action"]["parameters"]["flow_tokn"] = json!("x");
             }),
             "interactive.action.parameters.flow_tokn",
         ),
         (
             edit(flow_by_name(), &|o| {
-                o["action"]["parameters"]["flow_message_version"] = json!("2")
+                o["action"]["parameters"]["flow_message_version"] = json!("2");
             }),
             "interactive.action.parameters.flow_message_version",
         ),
         (
             edit(flow_by_name(), &|o| {
-                o["action"]["parameters"]["flow_id"] = json!(FLOW)
+                o["action"]["parameters"]["flow_id"] = json!(FLOW);
             }),
             "interactive.action.parameters.flow_name",
         ),
         (
             edit(flow_by_id(), &|o| {
-                o["action"]["parameters"]["flow_id"] = json!("../me")
+                o["action"]["parameters"]["flow_id"] = json!("../me");
             }),
             "interactive.action.parameters.flow_id",
         ),
@@ -635,13 +629,13 @@ async fn a_key_the_library_would_drop_is_refused_on_its_path_before_any_request(
         ),
         (
             edit(single_product(), &|o| {
-                o["header"] = json!({"type": "text", "text": "h"})
+                o["header"] = json!({"type": "text", "text": "h"});
             }),
             "interactive.header",
         ),
         (
             edit(single_product(), &|o| {
-                o["action"]["name"] = json!("product")
+                o["action"]["name"] = json!("product");
             }),
             "interactive.action.name",
         ),
