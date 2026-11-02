@@ -5,7 +5,7 @@ description: "Receiving WhatsApp events through meta-whatsapp-server, the meta-w
 
 # meta-whatsapp-rs-server-events
 
-> **Verified against meta-whatsapp-rs 73896491572ef2c00f648889ac6595f9830be294 (2026-11-01).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 42f517b8a32f356943b54db2391d4fc00520b96a (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/events.ts](examples/events.ts) (polling) and [examples/stream.ts](examples/stream.ts)
 (live), type-checked against the service's OpenAPI document. Operators' guide:
@@ -20,8 +20,8 @@ statuses, template reviews, account updates) through meta-whatsapp-server. Deplo
 ## Point Meta at the service (once per Meta app)
 
 - App Dashboard, WhatsApp, Configuration: callback URL `https://<public host>/webhooks/meta`, verify token
-  `WA_VERIFY_TOKEN`'s value; subscribe the fields you need (messages, at least). Attaching a WABA (`POST
-  /v1/admin/tenants/{id}/wabas`) subscribes the app to it.
+  `WA_VERIFY_TOKEN`'s value; subscribe the fields you need (messages, at least). Attaching a WABA
+  (`POST /v1/admin/tenants/{id}/wabas`) subscribes the app to it.
 - Deliveries are signed with `WA_APP_SECRET` (and `WA_APP_SECRET_PREVIOUS` while you rotate it). The ingress passes
   3 MiB bodies untouched and admits only Meta's IP ranges (or Meta's mTLS).
 
