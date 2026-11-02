@@ -16,6 +16,7 @@
 //! | [`numbers`] | the number operations as services: a number's live details, its business profile read and changed, disconnecting a WABA |
 //! | [`media`] | the media operations as services: an upload checked (type, size, file name) before any request, a download verified against Meta's SHA-256 (whole, or as a framework-free byte stream that ends before its last chunk on a mismatch), a deletion of the number's own media only |
 //! | [`inbox`] | the inbox operations as services: a number's conversations and one conversation's history, from its binding's start on (decision D10: a moved number's history hidden from its new tenant, never purged), and a reply through the library's inbox, checked against the 24-hour window and the thread's owner first ([`inbox::ReplyChecksByNumber`]: the checks per number) |
+//! | [`payments`] | the payment operations as services (roadmap P2): a WABA's payment configurations (list, get, create, a new OAuth link, delete), a payment's lookup and its refund on a number, each configuration named looked for in the number's own WABA first |
 //! | [`templates`] | the template operations as services: the list (cached per WABA, [`templates::TemplateCache`]), the lookup of an id in a WABA, creation (the definition checked first), deletion |
 //! | [`request`] | what the requests share: a Meta object read into the library's type, no key dropped; a Meta object id checked before it reaches a Graph path |
 //! | [`keys`] | the API key format, digests, constant-time comparison |
@@ -76,6 +77,7 @@ pub mod numbers;
 pub mod observe;
 pub mod operation;
 pub mod outbox;
+pub mod payments;
 pub mod ratelimit;
 pub mod request;
 pub mod store;

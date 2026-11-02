@@ -81,6 +81,8 @@ impl<S: Send + Sync> FromRequestParts<S> for KeyHeader {
 pub struct Success {
     status: StatusCode,
     body: Vec<u8>,
+    /// What a key keeps instead of `body` ([`Self::json_keeping`]).
+    kept: Option<Vec<u8>>,
 }
 
 impl std::fmt::Debug for Success {
@@ -88,6 +90,7 @@ impl std::fmt::Debug for Success {
         f.debug_struct("Success")
             .field("status", &self.status)
             .field("body_len", &self.body.len())
+            .field("kept_len", &self.kept.as_ref().map(Vec::len))
             .finish()
     }
 }
@@ -96,13 +99,39 @@ impl Success {
     /// `status` with `value` as its JSON body.
     pub fn json<T: Serialize>(status: StatusCode, value: &T) -> Result<Self, ApiError> {
         serde_json::to_vec(value)
-            .map(|body| Self { status, body })
+            .map(|body| Self {
+                status,
+                body,
+                kept: None,
+            })
             .map_err(|_| ApiError::internal())
+    }
+
+    /// `status` with `value` as its JSON body, and `kept` as what a key
+    /// keeps for a repeat: an answer holding a credential the records must
+    /// not store (a payment configuration's OAuth link, roadmap P2) keeps
+    /// the same answer without it, and a repeat gets that.
+    pub fn json_keeping<T: Serialize, K: Serialize>(
+        status: StatusCode,
+        value: &T,
+        kept: &K,
+    ) -> Result<Self, ApiError> {
+        let body = serde_json::to_vec(value).map_err(|_| ApiError::internal())?;
+        let kept = serde_json::to_vec(kept).map_err(|_| ApiError::internal())?;
+        Ok(Self {
+            status,
+            body,
+            kept: Some(kept),
+        })
     }
 
     /// The core's answer, for its `run`.
     fn into_answer(self) -> Answer {
-        Answer::new(self.status.as_u16(), self.body)
+        let answer = Answer::new(self.status.as_u16(), self.body);
+        match self.kept {
+            Some(kept) => answer.keeping(kept),
+            None => answer,
+        }
     }
 }
 

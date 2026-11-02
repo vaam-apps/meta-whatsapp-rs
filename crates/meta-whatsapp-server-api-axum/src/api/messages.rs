@@ -11,8 +11,10 @@
 //! any request: `text`; `image`, `video`, `audio`, `document`, `sticker`
 //! by uploaded `id` or `https://` `link` (Meta fetches it, never the
 //! service); `location`, `contacts`, `reaction`; `template` (Meta's
-//! object); `interactive` `button`, `list` and `cta_url`. Any other type,
-//! Direct Send included, is `422 unsupported_message_type`. Meta enforces
+//! object); `interactive` `button`, `list` and `cta_url`, and the payment
+//! messages `order_details` and `order_status` (roadmap P2: their
+//! `parameters` Meta's object, checked by the library's payment rules).
+//! Any other type, Direct Send included, is `422 unsupported_message_type`. Meta enforces
 //! the 24-hour window: outside it a free-form message is `409
 //! customer_service_window_closed`.
 //!
@@ -92,7 +94,8 @@ pub enum MessageType {
     Reaction,
     /// `template`.
     Template,
-    /// `interactive` (`button`, `list`, `cta_url`).
+    /// `interactive` (`button`, `list`, `cta_url`, `order_details`,
+    /// `order_status`).
     Interactive,
 }
 
@@ -337,6 +340,12 @@ pub enum InteractiveType {
     List,
     /// A URL button (`messages/interactive-cta-url-messages`).
     CtaUrl,
+    /// An order to review and pay (`payments/payments-in/pg`,
+    /// `payments/payments-br/orders`): scope `send`, like every message.
+    OrderDetails,
+    /// An order's new status (`payments/payments-in/pg`,
+    /// `payments/payments-br/orders`).
+    OrderStatus,
 }
 
 /// `{"text": …}`: an interactive message's body or footer.
@@ -448,9 +457,49 @@ pub struct CtaUrlParameters {
     pub url: String,
 }
 
+/// A payment message's `action.parameters` (`order_details`,
+/// `order_status`), in Meta's JSON as the payments pages write it
+/// (`payments/payments-in/pg`, `upi-intent`, `payment-links`,
+/// `payments/payments-br/orders` and its pages): read into the library's
+/// payment types with no key dropped, and checked by the order's
+/// currency's rules (`INR` India's, `BRL` Brazil's) before any request.
+#[derive(Debug, ToSchema)]
+#[schema(as = OrderParameters, value_type = HashMap<String, Value>)]
+pub struct OrderParameters(pub serde_json::Map<String, Value>);
+
+/// An interactive message's `action.parameters`: a URL button's, or a
+/// payment message's (Meta's object).
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum InteractiveParameters {
+    /// `cta_url`'s.
+    CtaUrl(CtaUrlParameters),
+    /// `order_details`' or `order_status`'.
+    Order(serde_json::Map<String, Value>),
+}
+
+/// The schema of `action.parameters`: a URL button's, a payment
+/// message's, or none.
+fn interactive_parameters_schema() -> utoipa::openapi::schema::Schema {
+    use utoipa::openapi::Ref;
+    use utoipa::openapi::schema::{AnyOfBuilder, ObjectBuilder, Schema, Type};
+    let mut cta_url = Ref::from_schema_name("CtaUrlParameters");
+    "The URL button.".clone_into(&mut cta_url.description);
+    let mut order = Ref::from_schema_name("OrderParameters");
+    "An `order_details` or `order_status` message's parameters.".clone_into(&mut order.description);
+    Schema::AnyOf(
+        AnyOfBuilder::new()
+            .item(cta_url)
+            .item(order)
+            .item(ObjectBuilder::new().schema_type(Type::Null))
+            .build(),
+    )
+}
+
 /// An interactive message's `action`: `buttons` for `button`; `button` and
 /// `sections` for `list`; `name` (`cta_url`) and `parameters` for
-/// `cta_url`.
+/// `cta_url`; `name` (`review_and_pay`, `review_order`) and `parameters`
+/// for `order_details` and `order_status`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InteractiveAction {
@@ -460,13 +509,16 @@ pub struct InteractiveAction {
     pub button: Option<String>,
     /// The list's sections.
     pub sections: Option<Vec<ListSectionObject>>,
-    /// `cta_url`.
+    /// `cta_url`; `review_and_pay` for `order_details`, `review_order`
+    /// for `order_status`.
     pub name: Option<String>,
-    /// The URL button.
-    pub parameters: Option<CtaUrlParameters>,
+    /// The URL button, or a payment message's parameters.
+    #[schema(schema_with = interactive_parameters_schema)]
+    pub parameters: Option<InteractiveParameters>,
 }
 
-/// `interactive`, as Meta writes it: `button`, `list` or `cta_url`.
+/// `interactive`, as Meta writes it: `button`, `list`, `cta_url`,
+/// `order_details` or `order_status`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(as = InteractiveContent)]
@@ -598,6 +650,15 @@ same_fields! {
     CtaUrlParameters { display_text, url }
 }
 
+impl From<InteractiveParameters> for domain::ActionParameters {
+    fn from(value: InteractiveParameters) -> Self {
+        match value {
+            InteractiveParameters::CtaUrl(parameters) => Self::CtaUrl(parameters.into()),
+            InteractiveParameters::Order(object) => Self::Order(object),
+        }
+    }
+}
+
 /// Each of `items`, converted.
 pub(crate) fn each<T: Into<U>, U>(items: Vec<T>) -> Vec<U> {
     items.into_iter().map(Into::into).collect()
@@ -676,6 +737,8 @@ impl From<InteractiveType> for domain::InteractiveType {
             InteractiveType::Button => Self::Button,
             InteractiveType::List => Self::List,
             InteractiveType::CtaUrl => Self::CtaUrl,
+            InteractiveType::OrderDetails => Self::OrderDetails,
+            InteractiveType::OrderStatus => Self::OrderStatus,
         }
     }
 }

@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`; messages `send`; media `media`; templates `templates`; conversations `inbox`), `/v1/events` (scope `events`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`), `/v1/events` (scope `events`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -23,6 +23,7 @@ pub mod events;
 pub mod inbox;
 pub mod messages;
 pub mod numbers;
+pub mod payments;
 pub mod templates;
 
 pub use meta_whatsapp_server_http::api::{
@@ -78,13 +79,14 @@ impl Modify for Security {
                        `error.code` (`ErrorCode`), and resend only when `may_have_been_sent` is false."
     ),
     modifiers(&Security),
-    components(schemas(ErrorBody, ErrorCodeSchema, KnownErrorCodeSchema, events::EventType, events::KnownEventType)),
+    components(schemas(ErrorBody, ErrorCodeSchema, KnownErrorCodeSchema, events::EventType, events::KnownEventType, messages::CtaUrlParameters, messages::OrderParameters)),
     tags(
         (name = "admin", description = "Tenants, keys, WABA bindings and the vault key (admin key)"),
         (name = "numbers", description = "WABAs, numbers and business profiles (scope `numbers`)"),
         (name = "messages", description = "Sending messages and read receipts (scope `send`)"),
         (name = "media", description = "Uploading, downloading and deleting media (scope `media`)"),
         (name = "templates", description = "Listing, creating and deleting message templates (scope `templates`)"),
+        (name = "payments", description = "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"),
         (name = "inbox", description = "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"),
         (name = "events", description = "Meta's webhook events, routed to their tenant (scope `events`)"),
         (name = "operations", description = "Health, metrics, this document, versions (no key)"),
@@ -138,6 +140,21 @@ fn inbox_routes() -> OpenApiRouter<Grant> {
         ))
 }
 
+fn payments_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(
+            payments::list_payment_configurations,
+            payments::create_payment_configuration
+        ))
+        .routes(routes!(
+            payments::get_payment_configuration,
+            payments::delete_payment_configuration
+        ))
+        .routes(routes!(payments::regenerate_payment_oauth_link))
+        .routes(routes!(payments::get_payment))
+        .routes(routes!(payments::refund_payment))
+}
+
 fn templates_routes() -> OpenApiRouter<Grant> {
     OpenApiRouter::new()
         .routes(routes!(
@@ -187,6 +204,7 @@ fn api_routes(
         .merge(tenant(media::routes(), Scope::Media))
         .merge(tenant(templates_routes(), Scope::Templates))
         .merge(tenant(inbox_routes(), Scope::Inbox))
+        .merge(tenant(payments_routes(), Scope::Payments))
         .merge(tenant(events_routes(), Scope::Events))
         .merge(ops_routes())
 }
@@ -334,6 +352,7 @@ mod tests {
             ("events.rs", include_str!("events.rs")),
             ("inbox.rs", include_str!("inbox.rs")),
             ("messages.rs", include_str!("messages.rs")),
+            ("payments.rs", include_str!("payments.rs")),
             ("templates.rs", include_str!("templates.rs")),
         ];
         let mut plain = Vec::new();

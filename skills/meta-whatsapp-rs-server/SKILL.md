@@ -29,7 +29,7 @@ and so do Meta's webhooks and polling events (load
 | `GET /v1/numbers/{pn}` | scope `numbers` | live details from Meta: `display_phone_number`, `verified_name`, `quality_rating`, `name_status`, `throughput` |
 | `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `websites`, `vertical`) |
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
-| `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, `GET /v1/numbers/{pn}/conversations`, … | scopes `send`, `media`, `templates`, `inbox` | sends, media, templates, the inbox: `meta-whatsapp-rs-server-send` |
+| `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, `GET /v1/numbers/{pn}/conversations`, `GET /v1/wabas/{waba_id}/payment-configurations`, … | scopes `send`, `media`, `templates`, `inbox`, `payments` | sends, media, templates, the inbox, payments: `meta-whatsapp-rs-server-send` |
 | `GET /v1/events` | scope `events` | Meta's webhook events for the tenant, after a cursor: `meta-whatsapp-rs-server-events` |
 | `POST /v1/admin/tenants`, `POST /v1/admin/tenants/{id}/keys`, `POST /v1/admin/platform-keys` | admin key | tenants and keys |
 | `POST /v1/admin/tenants/{id}/wabas`, `GET /v1/admin/wabas/{waba_id}`, `DELETE /v1/admin/wabas/{waba_id}/binding` | admin key | attach the platform's own WABA (numbers listed by Meta, app subscribed); who holds one; unbind it (token deleted too) |

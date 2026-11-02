@@ -17,8 +17,8 @@
 //!
 //! | Class | Operations | Default (per tenant and replica) |
 //! | --- | --- | --- |
-//! | `send` | every write that is not template management: `send_message`, `mark_read`, `upload_media`, `delete_media`, `update_profile`, `disconnect_waba`, `reply_to_conversation` | 20/s, burst 40 (the design's "sends") |
-//! | `read` | every read but templates': `list_wabas`, `list_numbers`, `get_number`, `get_profile`, `download_media`, `list_events`, `list_conversations`, `list_conversation_messages` | 50/s, burst 50 (the design's "reads"; it states no burst) |
+//! | `send` | every write that is not template management: `send_message`, `mark_read`, `upload_media`, `delete_media`, `update_profile`, `disconnect_waba`, `reply_to_conversation`, `create_payment_configuration`, `delete_payment_configuration`, `regenerate_payment_oauth_link`, `refund_payment` | 20/s, burst 40 (the design's "sends") |
+//! | `read` | every read but templates': `list_wabas`, `list_numbers`, `get_number`, `get_profile`, `download_media`, `list_events`, `list_conversations`, `list_conversation_messages`, `list_payment_configurations`, `get_payment_configuration`, `get_payment` | 50/s, burst 50 (the design's "reads"; it states no burst) |
 //! | `templates` | every template operation: `list_templates`, `get_template`, `create_template`, `delete_templates` | 2/s, burst 2 (the design's "template management"; it states no burst) |
 //!
 //! The design names classes for sends, reads and template management; it
@@ -65,14 +65,21 @@ impl RouteClass {
             | Operation::DownloadMedia
             | Operation::ListEvents
             | Operation::ListConversations
-            | Operation::ListConversationMessages => Self::Read,
+            | Operation::ListConversationMessages
+            | Operation::ListPaymentConfigurations
+            | Operation::GetPaymentConfiguration
+            | Operation::GetPayment => Self::Read,
             Operation::UpdateProfile
             | Operation::DisconnectWaba
             | Operation::SendMessage
             | Operation::MarkRead
             | Operation::UploadMedia
             | Operation::DeleteMedia
-            | Operation::ReplyToConversation => Self::Send,
+            | Operation::ReplyToConversation
+            | Operation::CreatePaymentConfiguration
+            | Operation::DeletePaymentConfiguration
+            | Operation::RegeneratePaymentOauthLink
+            | Operation::RefundPayment => Self::Send,
             Operation::ListTemplates
             | Operation::CreateTemplate
             | Operation::DeleteTemplates
@@ -393,6 +400,13 @@ mod tests {
             ("list_conversations", RouteClass::Read),
             ("list_conversation_messages", RouteClass::Read),
             ("reply_to_conversation", RouteClass::Send),
+            ("list_payment_configurations", RouteClass::Read),
+            ("create_payment_configuration", RouteClass::Send),
+            ("get_payment_configuration", RouteClass::Read),
+            ("delete_payment_configuration", RouteClass::Send),
+            ("regenerate_payment_oauth_link", RouteClass::Send),
+            ("get_payment", RouteClass::Read),
+            ("refund_payment", RouteClass::Send),
         ];
         assert_eq!(table.len(), Operation::ALL.len(), "every operation");
         for (id, class) in table {

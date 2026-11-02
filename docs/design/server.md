@@ -426,7 +426,8 @@ tenant (a merchant, or the platform's store) 1──n WABA 1──n phone number
 | admin key | the same | `/v1/admin` only | the operator |
 
 Keys carry scopes (`send`, `media`, `templates`, `inbox`, `events`,
-`webhooks`, `signup`, `otp`, `numbers`), look like `wak_<key id>_<32 random
+`webhooks`, `signup`, `otp`, `numbers`, and since roadmap P2 `payments`),
+look like `wak_<key id>_<32 random
 bytes, base62>` (the prefix lets secret scanners find leaks) and are stored
 as the key id plus SHA-256 of the secret, compared in constant time (the
 examples' scheme; random 256-bit secrets need no slow hash). The digest is
@@ -601,6 +602,28 @@ Rules the service implements:
 
 Review results arrive as `template_status_updated` events.
 
+**Payments** (scope `payments`; *as built in roadmap P2*, India's pages
+`payments/payments-in/onboarding-apis` and `payments/payments-in/pg`)
+
+| Method and path | Does | Request → response | Notable errors |
+| --- | --- | --- | --- |
+| `GET /v1/wabas/{waba_id}/payment-configurations` | the WABA's payment configurations (Meta documents no pages) | → `{data: [PaymentConfiguration]}` | 403 `permission` until the WABA accepted the WhatsApp Payments terms (Meta's `131005`, its link in `details`) |
+| `POST /v1/wabas/{waba_id}/payment-configurations` | create one, checked first (a name of 1 to 60 characters, a provider among `upi_vpa`, `razorpay`, `payu`, `zaakpay`); an `Idempotency-Key` | Meta's body → `201 {oauth_url, expiration}` (a gateway's link, a credential for the merchant; `null` for `upi_vpa`, and in a replay: the kept answer has no link) | 422 `invalid_request`; 504 with `may_have_been_sent` |
+| `GET`, `DELETE /v1/wabas/{waba_id}/payment-configurations/{configuration_name}` | one, by name; remove it | → `PaymentConfiguration`; → 204 | 404 for a name the WABA has none of (Meta's empty `data`, or its refusal of the name) |
+| `POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link` | a new OAuth link for a gateway configuration; an `Idempotency-Key` | `{redirect_url?}` (optional) → `{oauth_url, expiration}`, the link never kept | |
+| `GET /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}` | the payment of an order: its status, attempts and refunds (Meta asks to read it rather than trust the webhook alone); the configuration looked for in the number's own WABA first | → `{data: [Payment]}` | 404 for a configuration not the WABA's, the payment not asked for; 502 `upstream` for Meta's own lookup error |
+| `POST /v1/numbers/{pn}/payments/refunds` | refund an order paid through a gateway, after the same configuration check; never replayed; an `Idempotency-Key` | Meta's body (`reference_id`, `speed?`, `payment_config_id`, `amount` with `currency` `INR` and `value`, `offset` as strings or numbers) → `201 {id, status, speed_processed}` | 404 as above, nothing refunded; 504 with `may_have_been_sent` |
+
+The payment messages (`order_details`, `order_status`) are sends
+(scope `send`, [§4.3](#43-message-content)), and the payment webhooks
+are events: `payment_configuration_updated`, a status of type `payment`
+in `status_updated`, Brazil's `payment_method` reply in
+`message_received`. A refund, a configuration's creation or removal and
+a new OAuth link are the caller's audit events. No route accepts Meta's
+terms (AGENTS.md § Decisions): the merchant opens Meta's link. Brazil
+documents neither configurations nor lookups; the data endpoint link and
+India's checkout button templates wait for the library (roadmap P1d).
+
 **Inbox** (scope `inbox`)
 
 | Method and path | Does | Request → response |
@@ -664,7 +687,12 @@ serialize-only, so no library change). Types: `text`; `image`, `video`,
 `audio`, `document`, `sticker` by `id` or `https://` `link` (Meta fetches
 it, never the service); `location`, `contacts`, `reaction`; `template`
 (Meta's object, deserialized into `TemplateMessage`); `interactive`
-`button`, `list`, `cta_url`. Anything else, `MessageContent::Raw` and Direct
+`button`, `list`, `cta_url`, and, since roadmap P2, the payment messages
+`order_details` and `order_status` (their `action.parameters` Meta's
+object, read into the library's payment types with no key dropped and
+checked by their currency's rules; an `order_status`, whose wire names no
+currency, by Brazil's, the wider, an India-only refusal left to Meta).
+Anything else, `MessageContent::Raw` and Direct
 Send included, is `422 unsupported_message_type`. A streamed download
 **aborts the connection** on a digest mismatch, so unverified bytes never
 arrive as a complete body.
@@ -846,8 +874,11 @@ which never sends twice. The service adds no send retries of its own.
 
 ### 5.4 Idempotency keys
 
-- `Idempotency-Key` on sends, inbox replies, OTP issue, uploads and
-  template creation, scoped to the tenant; stored with a hash of the
+- `Idempotency-Key` on sends, inbox replies, OTP issue, uploads,
+  template creation and, since roadmap P2, a payment configuration's
+  creation, a new OAuth link and a refund (whose kept answer has no
+  OAuth link: the link is a credential the records do not store),
+  scoped to the tenant; stored with a hash of the
   operation and its canonical input (the number or WABA the path names,
   decoded, and the body: D27, built in roadmap S6; never the method or
   the path's spelling, so a key means the same through every API

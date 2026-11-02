@@ -403,7 +403,9 @@ async fn every_rate_limited_operation_declares_its_429() {
 }
 
 /// Exactly the routes that honour `Idempotency-Key` declare it (sends,
-/// uploads, template creation: docs/design/server.md, section 5.4), and
+/// uploads, template creation, and since roadmap P2 a payment
+/// configuration's creation, a new OAuth link and a refund:
+/// docs/design/server.md, section 5.4), and
 /// the upload is a multipart form.
 #[test]
 fn idempotent_operations_declare_their_key() {
@@ -426,6 +428,9 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/numbers/{pn}/conversations/{contact}/messages",
             "POST /v1/numbers/{pn}/media",
             "POST /v1/numbers/{pn}/messages",
+            "POST /v1/numbers/{pn}/payments/refunds",
+            "POST /v1/wabas/{waba_id}/payment-configurations",
+            "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
             "POST /v1/wabas/{waba_id}/templates",
         ]
     );

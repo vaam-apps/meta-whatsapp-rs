@@ -63,11 +63,31 @@ pub enum Operation {
     /// `reply_to_conversation`: a reply to a conversation's contact,
     /// checked against the window and the thread's owner first.
     ReplyToConversation,
+    /// `list_payment_configurations`: a WABA's payment configurations
+    /// (roadmap P2).
+    ListPaymentConfigurations,
+    /// `create_payment_configuration`: a payment configuration created in
+    /// a WABA.
+    CreatePaymentConfiguration,
+    /// `get_payment_configuration`: one payment configuration of a WABA,
+    /// by name.
+    GetPaymentConfiguration,
+    /// `delete_payment_configuration`: a payment configuration removed.
+    DeletePaymentConfiguration,
+    /// `regenerate_payment_oauth_link`: a new OAuth link for a payment
+    /// gateway configuration.
+    RegeneratePaymentOauthLink,
+    /// `get_payment`: the payment of an order, looked up by its
+    /// configuration and reference id.
+    GetPayment,
+    /// `refund_payment`: a refund of an order paid through a payment
+    /// gateway.
+    RefundPayment,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 26] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -87,6 +107,13 @@ impl Operation {
         Self::ListConversations,
         Self::ListConversationMessages,
         Self::ReplyToConversation,
+        Self::ListPaymentConfigurations,
+        Self::CreatePaymentConfiguration,
+        Self::GetPaymentConfiguration,
+        Self::DeletePaymentConfiguration,
+        Self::RegeneratePaymentOauthLink,
+        Self::GetPayment,
+        Self::RefundPayment,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -111,6 +138,13 @@ impl Operation {
             Self::ListConversations => "list_conversations",
             Self::ListConversationMessages => "list_conversation_messages",
             Self::ReplyToConversation => "reply_to_conversation",
+            Self::ListPaymentConfigurations => "list_payment_configurations",
+            Self::CreatePaymentConfiguration => "create_payment_configuration",
+            Self::GetPaymentConfiguration => "get_payment_configuration",
+            Self::DeletePaymentConfiguration => "delete_payment_configuration",
+            Self::RegeneratePaymentOauthLink => "regenerate_payment_oauth_link",
+            Self::GetPayment => "get_payment",
+            Self::RefundPayment => "refund_payment",
         }
     }
 
@@ -138,6 +172,13 @@ impl Operation {
             Self::ListConversations
             | Self::ListConversationMessages
             | Self::ReplyToConversation => Scope::Inbox,
+            Self::ListPaymentConfigurations
+            | Self::CreatePaymentConfiguration
+            | Self::GetPaymentConfiguration
+            | Self::DeletePaymentConfiguration
+            | Self::RegeneratePaymentOauthLink
+            | Self::GetPayment
+            | Self::RefundPayment => Scope::Payments,
         }
     }
 }

@@ -152,6 +152,8 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     // Sends, media and templates (M1b), with what M1.7 keeps out of the
     // logs: message text, recipients, contacts.
     secrets.extend(send_media_and_templates(h, &admin).await);
+    // Payments (roadmap P2): the OAuth links are credentials.
+    secrets.extend(payments(h, &admin).await);
     // Failures log too: a refused key, and Meta refusing a token.
     let refused = h
         .call(Call::get("/v1/numbers").key(&format!("{tenant_key}x")))
@@ -519,6 +521,132 @@ async fn inbox(h: &Harness, admin: &str) -> Vec<String> {
     ]
 }
 
+/// The OAuth links Meta answers in the capture: credentials the logs must
+/// not hold.
+pub const OAUTH_LINKS: [&str; 2] = [
+    "https://www.facebook.com/payment/onboarding/init/?token=CAPTURE-OAUTH-LINK-1",
+    "https://www.facebook.com/payment/onboarding/init/?token=CAPTURE-OAUTH-LINK-2",
+];
+
+/// The payment routes (roadmap P2) on merchant-42's WABA and first
+/// number, and an `order_details` send: every route answered as Meta's
+/// pages print it, a creation repeated under its key (answered without
+/// its link); returns what the logs must not hold (the links, the key).
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn payments(h: &Harness, admin: &str) -> Vec<String> {
+    const WABA: &str = "102290129340398";
+    const PN: &str = "1972385232742141";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["payments", "send"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let configuration = json!({
+        "configuration_name": "test-payment-configuration",
+        "merchant_category_code": {"code": "0000", "description": "Test MCC Code"},
+        "purpose_code": {"code": "00", "description": "Test Purpose Code"},
+        "status": "Active",
+        "provider_mid": "test-payment-gateway-mid",
+        "provider_name": "RazorPay",
+        "created_timestamp": 1_720_203_204,
+        "updated_timestamp": 1_721_088_316
+    });
+    let base = format!("/v1/wabas/{WABA}/payment-configurations");
+    h.graph.push_json(
+        200,
+        json!({"data": [{"payment_configurations": [configuration.clone()]}]}),
+    );
+    let listed = h.call(Call::get(&base).key(&key)).await;
+    assert_eq!(listed.status.as_u16(), 200, "{}", listed.text);
+    h.graph.push_json(
+        200,
+        json!({"oauth_url": OAUTH_LINKS[0], "expiration": 1_721_687_287, "success": true}),
+    );
+    let create = || {
+        Call::new(Method::POST, &base)
+            .key(&key)
+            .header("idempotency-key", "payment-configuration-1")
+            .json(&json!({"configuration_name": "test-payment-configuration",
+                          "purpose_code": "00", "merchant_category_code": "0000",
+                          "provider_name": "razorpay",
+                          "redirect_url": "https://test-redirect-url.com"}))
+    };
+    let created = h.call(create()).await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text);
+    assert!(created.text.contains(OAUTH_LINKS[0]), "the caller gets it");
+    let again = h.call(create()).await;
+    assert_eq!(again.status.as_u16(), 201, "{}", again.text);
+    assert!(!again.text.contains("CAPTURE-OAUTH-LINK"), "{}", again.text);
+    h.graph
+        .push_json(200, json!({"data": [configuration.clone()]}));
+    let one = h
+        .call(Call::get(format!("{base}/test-payment-configuration")).key(&key))
+        .await;
+    assert_eq!(one.status.as_u16(), 200, "{}", one.text);
+    h.graph.push_json(
+        200,
+        json!({"oauth_url": OAUTH_LINKS[1], "expiration": 1_721_687_287}),
+    );
+    let link = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("{base}/test-payment-configuration/oauth-link"),
+            )
+            .key(&key)
+            .json(&json!({"redirect_url": "https://test-redirect-url.com"})),
+        )
+        .await;
+    assert_eq!(link.status.as_u16(), 200, "{}", link.text);
+    h.graph.push_json(200, json!({"success": true}));
+    let deleted = h
+        .call(Call::new(Method::DELETE, format!("{base}/test-payment-configuration")).key(&key))
+        .await;
+    assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
+    h.graph
+        .push_json(200, json!({"data": [configuration.clone()]}));
+    h.graph.push_json(
+        200,
+        json!({"payments": [{"reference_id": "BM345A-12", "status": "pending",
+                             "currency": "INR", "amount": {"value": 21000, "offset": 100}}]}),
+    );
+    let payment = h
+        .call(
+            Call::get(format!(
+                "/v1/numbers/{PN}/payments/test-payment-configuration/BM345A-12"
+            ))
+            .key(&key),
+        )
+        .await;
+    assert_eq!(payment.status.as_u16(), 200, "{}", payment.text);
+    h.graph.push_json(200, json!({"data": [configuration]}));
+    h.graph.push_json(
+        200,
+        json!({"id": "refund-id", "status": "pending", "speed_processed": "normal"}),
+    );
+    let refunded = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{PN}/payments/refunds"))
+                .key(&key)
+                .json(&json!({"reference_id": "BM345A-12", "speed": "normal",
+                              "payment_config_id": "test-payment-configuration",
+                              "amount": {"currency": "INR", "value": "100", "offset": "100"}})),
+        )
+        .await;
+    assert_eq!(refunded.status.as_u16(), 201, "{}", refunded.text);
+    vec![
+        key.clone(),
+        key.rsplit('_').next().unwrap().to_owned(),
+        OAUTH_LINKS[0].to_owned(),
+        OAUTH_LINKS[1].to_owned(),
+        "CAPTURE-OAUTH-LINK".to_owned(),
+    ]
+}
+
 /// A message's text, a recipient, a contact and the caller's references,
 /// none of which may be logged.
 pub const MESSAGE_TEXT: &str = "Your order 1234 of Echeveria has shipped";
@@ -850,8 +978,15 @@ fn check_audit(logs: &str) {
         .collect();
     assert_eq!(
         actions,
-        ["templates_deleted", "template_deleted"],
-        "the template deletions' audit events"
+        [
+            "templates_deleted",
+            "template_deleted",
+            "payment_configuration_created",
+            "payment_oauth_link_regenerated",
+            "payment_configuration_deleted",
+            "payment_refunded"
+        ],
+        "the template deletions' and the payment changes' audit events"
     );
     for fields in deletions {
         assert!(fields["key_id"].is_string(), "{fields}");

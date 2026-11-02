@@ -7,13 +7,13 @@ description: "Sending WhatsApp messages, media and templates, and replying from 
 
 > **Verified against meta-whatsapp-rs 73e660893a3c034b3b9193db949390f92a8c1bef (2026-11-01).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
-Reference code: [examples/send.ts](examples/send.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
+Reference code: [examples/send.ts](examples/send.ts) and [examples/payments.ts](examples/payments.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
 ## When to use
 
 Your backend is not Rust, reaches WhatsApp through meta-whatsapp-server
 (`meta-whatsapp-rs-server`: deploying it, keys, errors) and sends order
-notifications, replies, files or templates (scopes `send`, `media`, `templates`, `inbox`).
+notifications, replies, files, templates or payment orders (scopes `send`, `media`, `templates`, `inbox`, `payments`).
 
 | Route | Does |
 | --- | --- |
@@ -23,6 +23,7 @@ notifications, replies, files or templates (scopes `send`, `media`, `templates`,
 | `GET /v1/numbers/{pn}/media/{media_id}`, `DELETE /v1/numbers/{pn}/media/{media_id}` | download, verified; delete |
 | `GET /v1/wabas/{waba_id}/templates`, `GET /v1/wabas/{waba_id}/templates/{id}`, `POST /v1/wabas/{waba_id}/templates`, `DELETE /v1/wabas/{waba_id}/templates` | list (cached 60 s per WABA), one, create, delete by `name` (and `id`) |
 | `GET /v1/numbers/{pn}/conversations`, `GET` and `POST /v1/numbers/{pn}/conversations/{contact}/messages` | the inbox (scope `inbox`): conversations, a history, a reply checked against the 24-hour window and the thread's owner: [references/inbox.md](references/inbox.md) |
+| `GET /v1/wabas/{waba_id}/payment-configurations`, `POST /v1/numbers/{pn}/payments/refunds`, … | payments (scope `payments`): configurations, a payment's lookup, refunds: [references/payments.md](references/payments.md) |
 
 ## Send a message
 
@@ -50,10 +51,10 @@ export async function send(api: WhatsApp, pn: string, message: SendMessage, refe
   phone number); both: Meta uses the phone; `group_id` alone.
 - **Types**: `text`; `image`, `video`, `audio`, `document`, `sticker` by
   uploaded `id` or an https `link` Meta fetches; `location`, `contacts`,
-  `reaction`; `template`; `interactive` of type `button`, `list` or
-  `cta_url`. Anything else is `unsupported_message_type`. Limits Meta
-  documents (4,096 characters of text, 3 buttons, …) are checked first:
-  `invalid_request` with `field`.
+  `reaction`; `template`; `interactive` of type `button`, `list`,
+  `cta_url`, `order_details` or `order_status`. Anything else is
+  `unsupported_message_type`. Limits Meta documents (4,096 characters of
+  text, 3 buttons, …) are checked first: `invalid_request` with `field`.
 - **The 24-hour window** is Meta's: a free-form message to a customer who
   has not written for 24 hours is `customer_service_window_closed` (409).
   Send an approved template instead:
@@ -147,11 +148,10 @@ sent; a platform key shares the tenant's budget. Meta's own limits answer
 - It never retries a send for you, and it cannot tell you whether a
   timed-out message went out: its status event (`GET /v1/events`) or your
   `Idempotency-Key` repeat does.
-- No campaign pacing or opt-out registry: respect `marketing_opted_out`
-  and pace your own sends.
+- No campaign pacing or opt-out registry: respect `marketing_opted_out`.
 - Meta documents its per-number media check for uploads only: a file
   received by webhook answering `not_found` may be that; report it.
-- No Direct Send, Flows, product or carousel messages, and no authentication templates yet; no documents route (M4).
+- No Direct Send, Flows, product or carousel messages, no checkout button templates, and no authentication templates yet; no documents route (M4).
 
 ## Related skills
 

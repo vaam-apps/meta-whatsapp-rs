@@ -351,6 +351,13 @@ const CALLS_META: &[&str] = &[
     "DELETE /v1/wabas/{waba_id}/templates",
     "GET /v1/wabas/{waba_id}/templates/{id}",
     "POST /v1/numbers/{pn}/conversations/{contact}/messages",
+    "GET /v1/wabas/{waba_id}/payment-configurations",
+    "POST /v1/wabas/{waba_id}/payment-configurations",
+    "GET /v1/wabas/{waba_id}/payment-configurations/{configuration_name}",
+    "DELETE /v1/wabas/{waba_id}/payment-configurations/{configuration_name}",
+    "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
+    "GET /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
+    "POST /v1/numbers/{pn}/payments/refunds",
 ];
 
 /// Operations whose call to Meta is best effort: whatever Meta answers,
@@ -377,6 +384,13 @@ const DETAILS_KEPT: &[&str] = &[
     "DELETE /v1/wabas/{waba_id}/templates",
     "GET /v1/wabas/{waba_id}/templates/{id}",
     "POST /v1/numbers/{pn}/conversations/{contact}/messages",
+    "GET /v1/wabas/{waba_id}/payment-configurations",
+    "POST /v1/wabas/{waba_id}/payment-configurations",
+    "GET /v1/wabas/{waba_id}/payment-configurations/{configuration_name}",
+    "DELETE /v1/wabas/{waba_id}/payment-configurations/{configuration_name}",
+    "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
+    "GET /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
+    "POST /v1/numbers/{pn}/payments/refunds",
 ];
 
 /// Operations on an object named by id (a media id, a template id): Meta
@@ -387,6 +401,11 @@ const OBJECT_BY_ID: &[&str] = &[
     "GET /v1/numbers/{pn}/media/{media_id}",
     "DELETE /v1/numbers/{pn}/media/{media_id}",
     "GET /v1/wabas/{waba_id}/templates/{id}",
+    // A configuration named by its name (roadmap P2): in its WABA's path,
+    // or looked for there before a lookup or a refund.
+    "GET /v1/wabas/{waba_id}/payment-configurations/{configuration_name}",
+    "GET /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
+    "POST /v1/numbers/{pn}/payments/refunds",
 ];
 
 /// Meta's answers the sentinel test gives every operation: `(status,

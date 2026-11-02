@@ -142,6 +142,40 @@ impl Fingerprint {
         )
     }
 
+    /// `create_payment_configuration` in `waba`, with the JSON body the
+    /// request carried (roadmap P2; no legacy fingerprint).
+    pub fn create_payment_configuration(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreatePaymentConfiguration,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `regenerate_payment_oauth_link` of the configuration
+    /// `configuration_name` (as the path named it, decoded) in `waba`, with
+    /// the JSON body the request carried, `null` for none (roadmap P2).
+    pub fn regenerate_payment_oauth_link(
+        waba: &WabaId,
+        configuration_name: &str,
+        body: &serde_json::Value,
+    ) -> Self {
+        Self::json(
+            Operation::RegeneratePaymentOauthLink,
+            &[
+                ("waba_id", waba.as_str()),
+                ("configuration_name", configuration_name),
+            ],
+            body,
+        )
+    }
+
+    /// `refund_payment` on `number`, with the JSON body the request carried
+    /// (roadmap P2).
+    pub fn refund_payment(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::RefundPayment, &[("pn", number.as_str())], body)
+    }
+
     /// `operation` with its named parameters `params` (in any order: they
     /// are hashed sorted by name) and a JSON body.
     fn json(operation: Operation, params: &[(&str, &str)], body: &serde_json::Value) -> Self {
@@ -586,6 +620,9 @@ impl Drop for Claim {
 pub struct Answer {
     status: u16,
     body: Vec<u8>,
+    /// What a key keeps for a repeat, when it is not `body`
+    /// ([`Self::keeping`]).
+    kept: Option<Vec<u8>>,
     replayed: bool,
 }
 
@@ -594,6 +631,7 @@ impl std::fmt::Debug for Answer {
         f.debug_struct("Answer")
             .field("status", &self.status)
             .field("body_len", &self.body.len())
+            .field("kept_len", &self.kept.as_ref().map(Vec::len))
             .field("replayed", &self.replayed)
             .finish()
     }
@@ -605,8 +643,19 @@ impl Answer {
         Self {
             status,
             body,
+            kept: None,
             replayed: false,
         }
+    }
+
+    /// Keep `kept` for a repeat instead of the body answered now: for an
+    /// answer holding a credential the records must not store (a payment
+    /// configuration's OAuth link, roadmap P2), the same answer without it.
+    /// A repeat then gets `kept`, never the body.
+    #[must_use]
+    pub fn keeping(mut self, kept: Vec<u8>) -> Self {
+        self.kept = Some(kept);
+        self
     }
 
     /// The status.
@@ -744,6 +793,7 @@ where
             Ok(Answer {
                 status,
                 body,
+                kept: None,
                 replayed: true,
             })
         }
@@ -752,10 +802,11 @@ where
                 claim
                     .settle(Outcome::Answered {
                         status: answer.status,
-                        body: &answer.body,
+                        body: answer.kept.as_deref().unwrap_or(&answer.body),
                     })
                     .await;
                 Ok(Answer {
+                    kept: None,
                     replayed: false,
                     ..answer
                 })
