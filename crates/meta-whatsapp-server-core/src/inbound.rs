@@ -88,6 +88,7 @@ use tokio::sync::Semaphore;
 
 use crate::backend::Backend;
 use crate::events::{EventIdKey, EventKey, MoveRules, Routing, outbox_row, route};
+use crate::notify::{EventNotifier, Wakeup};
 use crate::observe::Observer;
 use crate::outbox::Outbox;
 use crate::store::RecordStore;
@@ -312,6 +313,7 @@ impl Pipeline {
             store: backend.records(),
             inbox: InboxSink::new(backend.conversations()).with_recording(INBOX_RECORDING),
             outbox: outbox.clone(),
+            notifier: backend.notifier(),
             observer: observer.clone(),
             ids: inbound.ids,
             replay_window: dedup.ttl(),
@@ -451,6 +453,8 @@ struct ServiceSink {
     store: Arc<dyn RecordStore>,
     inbox: InboxSink,
     outbox: Arc<dyn Outbox>,
+    /// Wakes the tenant's live streams once its row is stored.
+    notifier: Arc<dyn EventNotifier>,
     observer: Arc<dyn Observer>,
     ids: EventIdKey,
     /// Events Meta dated longer ago than this are replays: the dedup
@@ -535,6 +539,24 @@ impl ServiceSink {
                 tenant = tenant.as_str(),
                 "event recorded"
             );
+            // The row is committed: wake its tenant's live streams, on
+            // every replica. A wake-up only (roadmap M2b): a failure loses
+            // nothing, as the streams read the outbox again when their
+            // re-poll is due, so the delivery still succeeds. (Should the
+            // outbox have kept the row operator-only, `sequence` is the
+            // operator stream's, and the tenant's streams read nothing.)
+            let wakeup = Wakeup {
+                tenant: tenant.clone(),
+                sequence,
+            };
+            if let Err(error) = self.notifier.notify(&wakeup).await {
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    event_type = kind,
+                    error = %error,
+                    "the live streams were not notified of a recorded event (their re-poll will find it)"
+                );
+            }
         } else {
             self.observer.webhook_event(kind, "operator");
             tracing::info!(

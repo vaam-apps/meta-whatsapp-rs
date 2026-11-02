@@ -1,39 +1,41 @@
-//! Events (scope `events`; docs/design/server.md, sections 2.3 and 4.2):
-//! polling the outbox.
+//! Events (scope `events`; docs/design/server.md, sections 2.3, 4.2 and
+//! 4.5): polling the outbox, one event by id, and the live streams.
 //!
 //! | Route | Does |
 //! | --- | --- |
 //! | `GET /v1/events` | the caller's tenant's events after a sequence of its own, `?after=&types=&phone_number_id=&limit=`; `410 cursor_expired` past retention, or past a tenant deleted and created again under the same id |
+//! | `GET /v1/events/{id}` | one of the tenant's events, whole (roadmap M2b): another tenant's id, an operator-only row's, a purged or unknown one, and an id that is not an event's are `404`, alike |
+//! | `GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream` | Server-Sent Events: the HTTP crate's route group (`meta_whatsapp_server_http::api::events::stream_routes`), mounted here behind the same scope |
 //!
 //! Operator-only events (no tenant) are never answered. The logic is
-//! [`crate::events::poll`]; this module parses the query and shapes the
-//! envelope.
+//! [`crate::events::poll`] and the core's `events::get_event`; this module
+//! parses the query, and the envelope is the HTTP crate's
+//! ([`EventEnvelope`], shared with the streams).
 
 use meta_whatsapp_rs::core::ids::PhoneNumberId;
 use meta_whatsapp_rs::webhooks::axum::Json;
-use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Query, State};
+use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Path, Query, State};
 use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use super::common::rfc3339;
-use super::ops::API_VERSION;
+use meta_whatsapp_server_core::events::get_event as get_event_of;
+pub use meta_whatsapp_server_http::api::events::{
+    EventEnvelope, EventType, KnownEventType, LAST_EVENT_ID, MAX_TYPES, StreamParams, stream_routes,
+};
+use meta_whatsapp_server_http::api::events::{
+    envelope, parse_after, parse_phone_number_id, parse_types,
+};
+
 use crate::auth::Caller;
 use crate::error::{ApiError, ErrorBody};
-use crate::events::{MAX_PAGE_DATA_BYTES, TENANT_EVENT_TYPES, poll};
+use crate::events::{MAX_PAGE_DATA_BYTES, poll};
 use crate::model::{MAX_PAGE_SIZE, TenantId};
 use crate::state::Grant;
-use crate::store::events::{EventQuery, StoredEvent};
-
-/// The target of this module's log lines: the module they were logged
-/// from before roadmap S7 moved it out of `meta-whatsapp-server`.
-const LOG_TARGET: &str = "meta_whatsapp_server::api::events";
+use crate::store::events::EventQuery;
 
 /// Default page size of `GET /v1/events`.
 pub const DEFAULT_EVENTS_LIMIT: usize = 50;
-
-/// At most this many types in `types`.
-pub const MAX_TYPES: usize = 32;
 
 /// The query of `GET /v1/events`, as the OpenAPI document declares it
 /// ([`EventsQuery`] reads it).
@@ -90,34 +92,9 @@ fn parse_query(pairs: &[(String, String)]) -> Result<EventsQuery, ApiError> {
     };
     for (name, value) in pairs {
         match name.as_str() {
-            "after" => {
-                let after = value
-                    .parse::<i64>()
-                    .ok()
-                    .filter(|a| *a >= 0)
-                    .ok_or_else(|| ApiError::invalid("after"))?;
-                query.after = Some(after);
-            }
-            "types" => {
-                let types = query.types.get_or_insert_with(Vec::new);
-                for kind in value.split(',').map(str::trim) {
-                    if !TENANT_EVENT_TYPES.contains(&kind) {
-                        return Err(ApiError::invalid("types"));
-                    }
-                    if !types.iter().any(|t| t == kind) {
-                        types.push(kind.to_owned());
-                    }
-                }
-                if types.len() > MAX_TYPES {
-                    return Err(ApiError::invalid("types"));
-                }
-            }
-            "phone_number_id" => {
-                // The library's numeric id shape: 1 to 64 ASCII digits.
-                let number = PhoneNumberId::new(value.as_str())
-                    .map_err(|_| ApiError::invalid("phone_number_id"))?;
-                query.phone_number_id = Some(number);
-            }
+            "after" => query.after = Some(parse_after(value, "after")?),
+            "types" => parse_types(value, query.types.get_or_insert_with(Vec::new))?,
+            "phone_number_id" => query.phone_number_id = Some(parse_phone_number_id(value)?),
             "limit" => {
                 query.limit = value
                     .parse::<usize>()
@@ -143,65 +120,6 @@ impl<S: Send + Sync> FromRequestParts<S> for EventsQuery {
     }
 }
 
-/// One event (docs/design/server.md, section 4.4): the same envelope a
-/// webhook endpoint (M2) receives.
-#[derive(Debug, Serialize, ToSchema)]
-#[schema(as = Event)]
-pub struct EventEnvelope {
-    /// The event's id (`evt_…`): derived from the event, so the same event
-    /// keeps it wherever it is recorded again (until the operator rotates
-    /// the Meta app secret it is derived with); deduplicate on it. An
-    /// error, or a body that is not a webhook, seen again over an hour
-    /// later is a new event, with a new id.
-    pub id: String,
-    /// Its position among the tenant's events (each tenant has its own
-    /// sequence): increasing (with gaps), never reused within one
-    /// database's history (a point-in-time restore of the service's
-    /// database rolls sequences back: resynchronise and poll without
-    /// `after` when the operator says so); order on it.
-    pub sequence: i64,
-    /// Its type (`EventType`), the `event` tag of `data`.
-    #[serde(rename = "type")]
-    #[schema(value_type = EventType)]
-    pub event_type: String,
-    /// The envelope's version: `v1`.
-    pub api_version: &'static str,
-    /// The tenant it belongs to.
-    pub tenant_id: String,
-    /// The business phone number, when the event names one.
-    #[schema(required = true)]
-    pub phone_number_id: Option<String>,
-    /// Its WhatsApp Business Account, when the event names one.
-    #[schema(required = true)]
-    pub waba_id: Option<String>,
-    /// When the service received it (RFC 3339).
-    #[schema(format = DateTime)]
-    pub received_at: String,
-    /// Whether `data` was left out for its size (webhook deliveries only;
-    /// always `false` here).
-    pub truncated: bool,
-    /// The event: meta-whatsapp-rs's `WebhookEvent` JSON, an open object
-    /// in the document (`event_data_schema`).
-    #[schema(schema_with = event_data_schema)]
-    pub data: serde_json::Value,
-}
-
-/// The schema of an envelope's `data`: an open object, so a generated
-/// client reads its fields (a bare `object` becomes `Record<string, never>`
-/// in TypeScript).
-fn event_data_schema() -> utoipa::openapi::schema::Object {
-    use utoipa::openapi::schema::{AdditionalProperties, ObjectBuilder, Type};
-    ObjectBuilder::new()
-        .schema_type(Type::Object)
-        .additional_properties(Some(AdditionalProperties::FreeForm(true)))
-        .description(Some(
-            "The event: meta-whatsapp-rs's WebhookEvent JSON, tagged by `event` (the envelope's \
-             `type`). Its fields are Meta's, as the library normalizes them; new fields may \
-             appear.",
-        ))
-        .build()
-}
-
 /// A page of events.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct EventList {
@@ -213,34 +131,6 @@ pub struct EventList {
     /// `phone_number_id`) moves it past the events the filter left out:
     /// keep one cursor per filter set.
     pub next_after: i64,
-}
-
-/// The envelope of a stored event of `tenant`.
-fn envelope(tenant: &TenantId, event: StoredEvent) -> Result<EventEnvelope, ApiError> {
-    let data = serde_json::from_str(&event.data).map_err(|_| {
-        tracing::error!(
-            target: LOG_TARGET,
-            sequence = event.sequence,
-            "an outbox event is not JSON"
-        );
-        ApiError::internal()
-    })?;
-    Ok(EventEnvelope {
-        id: event.id,
-        sequence: event.sequence,
-        event_type: event.event_type,
-        api_version: API_VERSION,
-        tenant_id: tenant.as_str().to_owned(),
-        phone_number_id: event
-            .phone_number_id
-            .map(meta_whatsapp_rs::core::ids::PhoneNumberId::into_inner),
-        waba_id: event
-            .waba_id
-            .map(meta_whatsapp_rs::core::ids::WabaId::into_inner),
-        received_at: rfc3339(event.created_at),
-        truncated: false,
-        data,
-    })
 }
 
 /// `GET /v1/events`: the tenant's events after a sequence.
@@ -280,45 +170,33 @@ pub(crate) async fn list_events(
     }))
 }
 
-/// The `KnownEventType` schema: the types a tenant receives today.
-pub struct KnownEventType;
-
-impl utoipa::PartialSchema for KnownEventType {
-    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        use utoipa::openapi::schema::{ObjectBuilder, Type};
-        ObjectBuilder::new()
-            .schema_type(Type::String)
-            .enum_values(Some(TENANT_EVENT_TYPES))
-            .description(Some(
-                "The event types a tenant receives today (switch on them and let any other \
-                 fall to a default).",
-            ))
-            .into()
-    }
+/// `GET /v1/events/{id}`: one of the tenant's events, by id.
+#[utoipa::path(
+    get,
+    path = "/v1/events/{id}",
+    tag = "events",
+    security(("api_key" = [])),
+    params(
+        ("id" = String, Path, description = "The event's id (`evt_` and 32 hex digits), as an envelope carries it"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+    ),
+    responses(
+        (status = 200, description = "The event, whole (`truncated` is false): what a delivery that left `data` out refers to", body = EventEnvelope),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden` (no `events` scope), `tenant_suspended`", body = ErrorBody),
+        (status = 404, description = "`not_found`: no event of this tenant has this id (another tenant's event, one past retention, and an id that is no event's look alike)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`: the tenant's `read` budget (`Retry-After`)", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_event(
+    State(state): State<Grant>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> Result<Json<EventEnvelope>, ApiError> {
+    let tenant = caller.tenant().clone();
+    let event = get_event_of(state.outbox(), &tenant, &id).await?;
+    Ok(Json(envelope(&tenant, event)?))
 }
-
-impl ToSchema for KnownEventType {}
-
-/// The `EventType` schema: a [`KnownEventType`], or any other string, since
-/// types grow within `v1`.
-pub struct EventType;
-
-impl utoipa::PartialSchema for EventType {
-    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        use utoipa::openapi::Ref;
-        use utoipa::openapi::schema::{AnyOfBuilder, ObjectBuilder, Type};
-        AnyOfBuilder::new()
-            .item(Ref::from_schema_name("KnownEventType"))
-            .item(ObjectBuilder::new().schema_type(Type::String))
-            .description(Some(
-                "An event type: a KnownEventType today. Types only grow within v1: ignore an \
-                 unknown one.",
-            ))
-            .into()
-    }
-}
-
-impl ToSchema for EventType {}
 
 #[cfg(test)]
 mod tests {

@@ -59,8 +59,10 @@ subtle.workspace = true
 thiserror.workspace = true
 time.workspace = true
 # The rate limiter's buckets and the transfer slots; an idempotency key
-# cut before it settled is settled from a task of its own.
-tokio = { workspace = true, features = ["sync", "time", "rt"] }
+# cut before it settled is settled from a task of its own; a live event
+# stream's task waits on its wake-ups, its timers and its shutdown at once
+# (`select!`, src/live.rs).
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 tracing.workspace = true
 # Meta's `details` lose format characters and line separators, not only
 # control characters (src/error.rs).

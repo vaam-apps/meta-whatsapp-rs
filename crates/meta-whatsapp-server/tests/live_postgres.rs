@@ -1210,3 +1210,115 @@ async fn live_postgres_a_timeout_is_replayed_and_a_131047_releases_its_key() {
     assert_eq!(h.graph.requests().len(), 3);
     assert_eq!(h.graph.remaining(), 0);
 }
+
+/// Acceptance test M2.2 (roadmap M2b), live: two replicas on one database
+/// (two services, each on a pool of its own: `NOTIFY` on the deployment's
+/// channel, each replica's own `LISTEN` connection). A webhook delivered to
+/// A reaches a stream open on B within 2 s; `Last-Event-ID` on B replays
+/// exactly the events it missed, those recorded while it was away
+/// included; a stream on another tenant's number on B sees none of them.
+/// Decisive: the notification crossing replicas (B's streams have no
+/// re-poll in the test's time).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_a_webhook_into_one_replica_reaches_a_stream_on_another() {
+    use common::sse::open;
+    use meta_whatsapp_server::state::Settings;
+    use meta_whatsapp_server_core::live::LiveSettings;
+    use std::time::Duration;
+    const WITHIN: Duration = Duration::from_secs(2);
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let woken_only = Settings {
+        live: LiveSettings {
+            heartbeat: Duration::from_secs(3600),
+            repoll: Duration::from_secs(3600),
+            ..LiveSettings::default()
+        },
+        ..common::test_settings()
+    };
+    let replica = async |settings: Settings| {
+        let pool = db.pool(10).await;
+        migrate(&pool).await.unwrap();
+        Harness::with_stores_and_settings(Stores::postgres(&pool), settings)
+    };
+    let a = replica(common::test_settings()).await;
+    let b = replica(woken_only).await;
+    a.tenant("tenant-a").await;
+    a.connect("tenant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
+        .await;
+    a.tenant("tenant-b").await;
+    a.connect(
+        "tenant-b",
+        "102290129340399",
+        &["106540352242923"],
+        "TOKEN-OF-B",
+    )
+    .await;
+    let key = b.tenant_key("tenant-a", &[Scope::Events]).await;
+    let b_key = b.tenant_key("tenant-b", &[Scope::Events]).await;
+    let mut on_b = open(&b.internal, Call::get("/v1/events/stream").key(&key))
+        .await
+        .unwrap_or_else(|reply| panic!("{}", reply.text));
+    let mut bs_number = open(
+        &b.internal,
+        Call::get("/v1/numbers/106540352242923/events/stream").key(&b_key),
+    )
+    .await
+    .unwrap_or_else(|reply| panic!("{}", reply.text));
+    let mut seen = Vec::new();
+    for i in 0..3 {
+        let started = tokio::time::Instant::now();
+        let reply = a
+            .webhook(&bytes(&text(
+                EXAMPLE_WABA,
+                EXAMPLE_PN,
+                &format!("wamid.m22.{i}"),
+            )))
+            .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+        let frame = on_b.event(WITHIN).await;
+        assert!(
+            started.elapsed() <= WITHIN,
+            "reached the other replica after {:?}",
+            started.elapsed()
+        );
+        assert_eq!(frame.json()["tenant_id"], "tenant-a");
+        seen.push(frame.sequence());
+    }
+    assert_eq!(seen, [1, 2, 3]);
+    // The client goes away after the first; two more arrive meanwhile.
+    drop(on_b);
+    for i in 3..5 {
+        let reply = a
+            .webhook(&bytes(&text(
+                EXAMPLE_WABA,
+                EXAMPLE_PN,
+                &format!("wamid.m22.{i}"),
+            )))
+            .await;
+        assert_eq!(reply.status, StatusCode::OK);
+    }
+    let mut resumed = open(
+        &b.internal,
+        Call::get("/v1/events/stream")
+            .key(&key)
+            .header("last-event-id", "1"),
+    )
+    .await
+    .unwrap_or_else(|reply| panic!("{}", reply.text));
+    let mut replayed = Vec::new();
+    for _ in 0..4 {
+        replayed.push(resumed.event(WITHIN).await.sequence());
+    }
+    assert_eq!(
+        replayed,
+        [2, 3, 4, 5],
+        "exactly the events after Last-Event-ID"
+    );
+    assert!(resumed.next(Duration::from_millis(400)).await.is_none());
+    assert!(
+        bs_number.next(Duration::from_millis(400)).await.is_none(),
+        "a stream on tenant b's number saw tenant a's events"
+    );
+}
