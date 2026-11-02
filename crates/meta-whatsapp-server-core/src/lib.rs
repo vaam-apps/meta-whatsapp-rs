@@ -23,12 +23,13 @@
 //! | [`error`] | the error model as data: codes, statuses as numbers, `retryable`, `may_have_been_sent`, Meta's `details` |
 //! | [`authz`] | the authorization order: key, tenant, scope, ownership, vault |
 //! | [`audit`], [`observe`] | the audit events (target `audit`); what an operation reports to the adapter's metrics |
-//! | [`events`] | routing Meta's webhook events to tenants, their outbox keys and ids, polling |
+//! | [`events`] | routing Meta's webhook events to tenants, their outbox keys and ids, polling, one event by id |
+//! | [`live`] | live event streams (SSE in the HTTP adapter): a tenant's events after a cursor, read from the outbox when its notifier wakes them or a re-poll is due, bounded per tenant and replica, a slow client dropped |
 //! | [`inbound`] | the webhook pipeline: a signed body verified before anything is stored, parsed, each event under its dedup lease, routed by the records and recorded (inbox, then outbox), and what to answer Meta |
 //! | [`idempotency`] | `Idempotency-Key`: claim, settle, replay, over a fingerprint of the operation and its canonical input; running an operation under a key (`run`: a status, a body, and whether it replayed) |
 //! | [`operation`] | the tenant operations by id (the HTTP adapter's `operationId`): what a rate class and an idempotency fingerprint follow, whatever the adapter |
 //! | [`ratelimit`] | per-tenant token buckets by route class, charged by operation; transfer slots |
-//! | [`store`], [`outbox`], [`backend`] | the ports, and the bundle a backend gives |
+//! | [`store`], [`outbox`], [`notify`], [`backend`] | the ports, and the bundle a backend gives |
 //! | [`housekeeping`] | the periodic purges, over a [`backend::Backend`], one replica at a time |
 //! | `conformance` (feature `conformance`) | the ports' contracts as executable suites, run over a [`backend::Backend`]: every backend's tests run them |
 //!
@@ -38,7 +39,8 @@
 //! | --- | --- | --- |
 //! | [`store::RecordStore`] | tenants, keys, bindings (`ping` … `set_waba_status`) | memory, Postgres |
 //! | [`store::IdempotencyRecords`] | `claim_idempotency_key`, `complete_…`, `release_…`, `purge_…` | memory, Postgres |
-//! | [`outbox::Outbox`] | `insert`, `page`, `purge` | memory, Postgres |
+//! | [`outbox::Outbox`] | `insert`, `page`, `get`, `purge` | memory, Postgres |
+//! | [`notify::EventNotifier`] | `notify`, `subscribe`: wake-ups of a tenant's live streams | memory (a broadcast in the process, [`notify::LocalNotifier`]), Postgres (`NOTIFY` on the deployment's channel, one `LISTEN` connection per replica) |
 //! | [`store::LeaderLock`] | `try_exclusive(name, lease)`: a lease | memory (the process), Postgres (an advisory lock, the session ended past the lease) |
 //! | [`store::Janitor`] | `purge_expired` | memory (nothing to do), Postgres (the library's key/value rows) |
 //! | [`store::SchemaMigrator`] | `migrate` | memory (nothing to do), Postgres |
@@ -70,9 +72,11 @@ pub mod idempotency;
 pub mod inbound;
 pub mod inbox;
 pub mod keys;
+pub mod live;
 pub mod media;
 pub mod messages;
 pub mod model;
+pub mod notify;
 pub mod numbers;
 pub mod observe;
 pub mod operation;

@@ -27,6 +27,7 @@ use meta_whatsapp_server::config::{Env, NotUnicode, Storage};
 use meta_whatsapp_server::doctor::{Doctor, Report, Status};
 use meta_whatsapp_server::model::TenantId;
 use meta_whatsapp_server::serve::{BackendFactory, BuiltinBackends};
+use meta_whatsapp_server::store::EventNotifier;
 use meta_whatsapp_server::store::{
     Backend, BackendKind, IdempotencyRecords, Janitor, LeaderLock, MemoryBackend, Outbox,
     RecordStore, SchemaMigrator,
@@ -152,6 +153,9 @@ impl Backend for Shared {
     }
     fn outbox(&self) -> Arc<dyn Outbox> {
         panic!("doctor asked for the outbox")
+    }
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        panic!("doctor asked for the notifier")
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         panic!("doctor asked for a lock")

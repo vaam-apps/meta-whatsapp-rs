@@ -53,13 +53,14 @@ use crate::inbound::{
     Refused,
 };
 use crate::model::{BindOutcome, TenantId};
+use crate::notify::EventNotifier;
 use crate::outbox::{EventPage, EventQuery, NewEvent, Outbox, StoredEvent};
 use crate::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult,
 };
 
 /// The Meta app's secret, which signs the deliveries.
-const APP_SECRET: &str = "app-secret-of-the-webhook-suite";
+pub(super) const APP_SECRET: &str = "app-secret-of-the-webhook-suite";
 /// The previous one, still accepted while rotating.
 const PREVIOUS_APP_SECRET: &str = "previous-app-secret-of-the-webhook-suite";
 /// A secret that is not the app's.
@@ -67,10 +68,10 @@ const FORGERS_SECRET: &str = "a-forger-s-secret";
 
 /// A tenant of a case: its id, its WABA and its number.
 #[derive(Clone, Copy)]
-struct Holder {
-    id: &'static str,
-    waba: &'static str,
-    pn: &'static str,
+pub(super) struct Holder {
+    pub(super) id: &'static str,
+    pub(super) waba: &'static str,
+    pub(super) pn: &'static str,
 }
 
 /// The decisive case's tenant A: Meta's example WABA and number.
@@ -1304,7 +1305,7 @@ async fn hold_every_turn(
 }
 
 /// Create `holder`'s tenant and bind its WABA and number to it.
-async fn hold(records: &dyn RecordStore, holder: Holder) {
+pub(super) async fn hold(records: &dyn RecordStore, holder: Holder) {
     let tenant = TenantId::parse(holder.id).unwrap();
     records.create_tenant(&tenant, "").await.unwrap();
     let outcome = records
@@ -1350,6 +1351,17 @@ fn pipeline_with(
     Pipeline::new(inbound, watched, told.clone())
 }
 
+/// A pipeline over `backend` as it is (its notifier included), verifying
+/// with the app's secret, observing nothing: the live suite's.
+pub(super) fn plain_pipeline(backend: &dyn Backend) -> Pipeline {
+    let inbound = Inbound::new(
+        vec![AppSecret::new(APP_SECRET)],
+        VerifyToken::new("verify-token-of-the-webhook-suite"),
+    )
+    .unwrap();
+    Pipeline::new(inbound, backend, Arc::new(()))
+}
+
 /// The system clock, `.0` ahead.
 #[derive(Debug)]
 struct Ahead(Duration);
@@ -1361,7 +1373,7 @@ impl Clock for Ahead {
 }
 
 /// `payload` delivered as Meta delivers it: signed with the app's secret.
-async fn deliver(pipeline: &Pipeline, payload: &[u8]) -> Result<Delivered, Refused> {
+pub(super) async fn deliver(pipeline: &Pipeline, payload: &[u8]) -> Result<Delivered, Refused> {
     pipeline
         .deliver(
             Some(&sign(&AppSecret::new(APP_SECRET), payload)),
@@ -1442,7 +1454,7 @@ fn dated(mut payload: Value, at: i64) -> Value {
 
 /// webhooks/reference/messages/text, its example: a customer's text to
 /// `pn` of `waba`, message id `wamid`, sent now.
-fn text(waba: &str, pn: &str, wamid: &str) -> Value {
+pub(super) fn text(waba: &str, pn: &str, wamid: &str) -> Value {
     json!({
         "object": "whatsapp_business_account",
         "entry": [{
@@ -1622,7 +1634,7 @@ fn undated_group_update(waba: &str, pn: &str, tag: &str) -> Value {
 
 /// A field no library types yet, on `waba`, naming `pn`: an `unknown`
 /// event.
-fn unknown_field(waba: &str, pn: &str) -> Value {
+pub(super) fn unknown_field(waba: &str, pn: &str) -> Value {
     json!({
         "object": "whatsapp_business_account",
         "entry": [{
@@ -1637,7 +1649,7 @@ fn unknown_field(waba: &str, pn: &str) -> Value {
 }
 
 /// `payload` as bytes.
-fn body(payload: &Value) -> Vec<u8> {
+pub(super) fn body(payload: &Value) -> Vec<u8> {
     serde_json::to_vec(payload).unwrap()
 }
 
@@ -1752,6 +1764,10 @@ impl Outbox for WatchedOutbox {
         self.inner.page(query).await
     }
 
+    async fn get(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<StoredEvent>> {
+        self.inner.get(tenant, id).await
+    }
+
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
         self.inner.purge(older_than).await
     }
@@ -1828,11 +1844,13 @@ struct Watched {
     conversations: Arc<dyn ConversationStore>,
     kv: Arc<WatchedKv>,
     outbox: Arc<WatchedOutbox>,
+    notifier: Arc<dyn EventNotifier>,
 }
 
 impl Watched {
     fn of(backend: &dyn Backend) -> Self {
         Self {
+            notifier: backend.notifier(),
             records: backend.records(),
             conversations: backend.conversations(),
             kv: Arc::new(WatchedKv {
@@ -1860,6 +1878,10 @@ impl Backend for Watched {
 
     fn outbox(&self) -> Arc<dyn Outbox> {
         self.outbox.clone()
+    }
+
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.notifier.clone()
     }
 
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {

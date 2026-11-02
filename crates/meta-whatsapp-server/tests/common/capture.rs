@@ -435,6 +435,28 @@ async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
     ] {
         assert!(polled.text.contains(private), "{private}: {}", polled.text);
     }
+    // The same events by id and live (roadmap M2b): they carry what the
+    // logs must not either.
+    let first = polled.json()["data"][0]["id"].as_str().unwrap().to_owned();
+    let one = h
+        .call(Call::get(format!("/v1/events/{first}")).key(tenant_key))
+        .await;
+    assert_eq!(one.status.as_u16(), 200, "{}", one.text);
+    assert!(one.text.contains(EXAMPLE_TEXT), "{}", one.text);
+    for path in [
+        "/v1/events/stream".to_owned(),
+        format!("/v1/numbers/{PN}/events/stream"),
+    ] {
+        let live = h
+            .call(
+                Call::get(path.as_str())
+                    .key(tenant_key)
+                    .header("last-event-id", "0"),
+            )
+            .await;
+        assert_eq!(live.status.as_u16(), 200, "{path}: {}", live.text);
+        assert!(live.text.contains(EXAMPLE_TEXT), "{path}: {}", live.text);
+    }
     carried.extend(
         [
             EXAMPLE_TEXT,

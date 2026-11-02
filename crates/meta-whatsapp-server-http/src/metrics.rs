@@ -19,6 +19,7 @@
 //! | `wa_server_idempotency_total` | `outcome`: `replayed`, `reused`, `in_progress`, `outcome_unknown` (a repeat that met a key's record) |
 //! | `wa_server_rate_limited_total` | `class` (`send`, `read`, `templates`, `otp_issue`, `otp_verify`): requests refused `429` by the service's own limits |
 //! | `wa_server_otp_outcomes_total` | `operation` (`issue`, `verify`), `outcome` (an issue's `sent`, `cooling_down`, `rate_limited`, `failed`; a check's `verified`, `invalid`, `expired`, `too_many_attempts`, `not_found`, `failed`): the OTP outcomes (roadmap M3c), never a number or a code |
+//! | `wa_server_event_streams_open` | none: the live event streams open on the replica, read when scraped (a gauge; roadmap M2b) |
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -27,6 +28,7 @@ use meta_whatsapp_rs::webhooks::axum::http::Method;
 use prometheus_client::encoding::EncodeLabelSet;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
+use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::metrics::histogram::{Histogram, exponential_buckets};
 use prometheus_client::registry::Registry;
 
@@ -113,6 +115,7 @@ pub struct Metrics {
     idempotency: Family<OutcomeLabels, Counter>,
     rate_limited: Family<ClassLabels, Counter>,
     otp: Family<OtpLabels, Counter>,
+    streams_open: Gauge,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -196,6 +199,12 @@ impl Metrics {
             "OTP issues and checks, by operation and outcome",
             otp.clone(),
         );
+        let streams_open = Gauge::default();
+        registry.register(
+            "event_streams_open",
+            "Live event streams open on this replica",
+            streams_open.clone(),
+        );
         Self {
             registry: Arc::new(Mutex::new(registry)),
             requests,
@@ -208,6 +217,7 @@ impl Metrics {
             idempotency,
             rate_limited,
             otp,
+            streams_open,
         }
     }
 
@@ -322,6 +332,13 @@ impl Metrics {
                 outcome: outcome.to_owned(),
             })
             .inc();
+    }
+
+    /// Set how many live event streams are open on this replica (what
+    /// `/metrics` does before it renders).
+    pub fn streams_open(&self, open: usize) {
+        self.streams_open
+            .set(i64::try_from(open).unwrap_or(i64::MAX));
     }
 
     /// The Prometheus text exposition.

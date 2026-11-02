@@ -19,6 +19,7 @@ use meta_whatsapp_rs::core::store::ConversationStore;
 use meta_whatsapp_rs::webhooks::axum::extract::FromRef;
 use meta_whatsapp_rs::{Client, Error};
 use meta_whatsapp_server_core::inbox::ReplyChecksByNumber;
+use meta_whatsapp_server_core::live::{LiveSettings, Streams};
 use meta_whatsapp_server_core::otp::{OtpCodes, OtpDeployment};
 use meta_whatsapp_server_core::templates::TemplateCache;
 
@@ -68,6 +69,10 @@ pub struct Settings {
     pub media_streams: usize,
     /// [`TEMPLATE_CACHE_TTL`].
     pub template_cache_ttl: Duration,
+    /// The live event streams' bounds (`WA_SERVER_STREAMS_PER_TENANT`,
+    /// `WA_SERVER_STREAMS_PER_REPLICA`) and the design's fixed values
+    /// (heartbeat, re-poll, buffer, slow client), which tests shorten.
+    pub live: LiveSettings,
     /// `WA_SERVER_INBOX_REPLY_CHECKS`: the local checks an inbox reply
     /// makes, per number (every one on a number it does not list; roadmap
     /// M2a).
@@ -90,6 +95,7 @@ impl Default for Settings {
             media_concurrency: DEFAULT_MEDIA_CONCURRENCY,
             media_streams: DEFAULT_MEDIA_STREAMS,
             template_cache_ttl: TEMPLATE_CACHE_TTL,
+            live: LiveSettings::default(),
             inbox_reply_checks: ReplyChecksByNumber::new(),
             otp: None,
         }
@@ -121,6 +127,7 @@ struct Inner {
     stream_slots: Slots,
     templates: TemplateCache,
     otp: OtpCodes,
+    streams: Streams,
 }
 
 impl std::fmt::Debug for AppState {
@@ -173,6 +180,9 @@ impl AppState {
         // The codes in the bundle's key/value store, as the vault, on the
         // service's one clock.
         let otp = OtpCodes::new(backend.kv(), clock.clone(), settings.otp.clone());
+        // The live streams read the outbox the pipeline writes, woken by the
+        // same backend's notifier, which the pipeline notifies.
+        let streams = Streams::new(backend.outbox(), backend.notifier(), settings.live);
         let state = Self {
             inner: Arc::new(Inner {
                 idempotency: backend.idempotency(),
@@ -188,6 +198,7 @@ impl AppState {
                 stream_slots: Slots::new(settings.media_streams),
                 templates: TemplateCache::new(settings.template_cache_ttl),
                 otp,
+                streams,
                 settings,
             }),
         };
@@ -279,9 +290,23 @@ impl AppState {
         self.client().endpoint().version()
     }
 
-    /// Mark the service as shutting down: `/readyz` fails from now on.
+    /// The live event streams of this replica.
+    pub(crate) fn streams(&self) -> &Streams {
+        &self.inner.streams
+    }
+
+    /// Live event streams open now on this replica.
+    pub fn open_streams(&self) -> usize {
+        self.inner.streams.open()
+    }
+
+    /// Mark the service as shutting down: `/readyz` fails from now on, and
+    /// every live event stream ends with `event: shutdown` (its client
+    /// resumes on another replica), so the listeners' open connections
+    /// can finish within the grace period.
     pub fn begin_shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
+        self.inner.streams.shut_down();
     }
 
     /// Whether [`Self::begin_shutdown`] was called.

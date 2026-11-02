@@ -29,6 +29,7 @@ use meta_whatsapp_server_core::model::{
     NumberTombstone, OtpSettings, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
     WabaTombstone,
 };
+use meta_whatsapp_server_core::notify::{EventNotifier, LocalNotifier};
 use meta_whatsapp_server_core::outbox::{
     EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
 };
@@ -646,6 +647,7 @@ pub struct Memory {
     pub kv: Arc<support::Kv>,
     pub outbox: Arc<Events>,
     pub conversations: Arc<MemoryConversationStore>,
+    pub notifier: Arc<LocalNotifier>,
 }
 
 impl Default for Memory {
@@ -657,6 +659,7 @@ impl Default for Memory {
             idempotency: Arc::default(),
             kv: Arc::default(),
             conversations: Arc::new(MemoryConversationStore::new()),
+            notifier: Arc::default(),
         }
     }
 }
@@ -674,6 +677,9 @@ impl Backend for Memory {
     }
     fn outbox(&self) -> Arc<dyn Outbox> {
         self.outbox.clone()
+    }
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.notifier.clone()
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         unimplemented!("not used by the suites this backend runs")

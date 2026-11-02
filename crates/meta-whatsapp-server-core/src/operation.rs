@@ -55,6 +55,13 @@ pub enum Operation {
     GetTemplate,
     /// `list_events`: the tenant's events, polled.
     ListEvents,
+    /// `get_event`: one of the tenant's events, by id (roadmap M2b).
+    GetEvent,
+    /// `stream_events`: the tenant's events, live (Server-Sent Events,
+    /// roadmap M2b).
+    StreamEvents,
+    /// `stream_number_events`: one of the tenant's numbers' events, live.
+    StreamNumberEvents,
     /// `list_conversations`: a number's inbox, newest activity first.
     ListConversations,
     /// `list_conversation_messages`: one conversation's history, newest
@@ -76,7 +83,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 25] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -93,6 +100,9 @@ impl Operation {
         Self::DeleteTemplates,
         Self::GetTemplate,
         Self::ListEvents,
+        Self::GetEvent,
+        Self::StreamEvents,
+        Self::StreamNumberEvents,
         Self::ListConversations,
         Self::ListConversationMessages,
         Self::ReplyToConversation,
@@ -120,6 +130,9 @@ impl Operation {
             Self::DeleteTemplates => "delete_templates",
             Self::GetTemplate => "get_template",
             Self::ListEvents => "list_events",
+            Self::GetEvent => "get_event",
+            Self::StreamEvents => "stream_events",
+            Self::StreamNumberEvents => "stream_number_events",
             Self::ListConversations => "list_conversations",
             Self::ListConversationMessages => "list_conversation_messages",
             Self::ReplyToConversation => "reply_to_conversation",
@@ -150,7 +163,9 @@ impl Operation {
             | Self::DeleteTemplates
             | Self::GetTemplate
             | Self::CreateAuthenticationTemplate => Scope::Templates,
-            Self::ListEvents => Scope::Events,
+            Self::ListEvents | Self::GetEvent | Self::StreamEvents | Self::StreamNumberEvents => {
+                Scope::Events
+            }
             Self::ListConversations
             | Self::ListConversationMessages
             | Self::ReplyToConversation => Scope::Inbox,

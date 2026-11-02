@@ -29,6 +29,7 @@ use meta_whatsapp_rs::webhooks::sign;
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::inbound::{Inbound, LOG_TARGET, Pipeline, Refused};
 use meta_whatsapp_server_core::model::TenantId;
+use meta_whatsapp_server_core::notify::EventNotifier;
 use meta_whatsapp_server_core::outbox::{EventPage, EventQuery, NewEvent, Outbox};
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult,
@@ -152,6 +153,9 @@ impl Backend for Broken {
     }
     fn outbox(&self) -> Arc<dyn Outbox> {
         Arc::new(BrokenOutbox)
+    }
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.0.notifier()
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         self.0.leader_lock()

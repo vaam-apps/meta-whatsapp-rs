@@ -327,6 +327,15 @@ impl ServiceError {
         error
     }
 
+    /// `429 too_many_streams`, retryable, with `Retry-After`: the live
+    /// event streams' bounds ([`crate::live`]), a limit of the service's
+    /// own, as [`Self::too_many_requests`] is.
+    pub fn too_many_streams(retry_after_secs: u64) -> Self {
+        let mut error = Self::new(ErrorCode::TOO_MANY_STREAMS).retryable(true);
+        error.0.retry_after = Some(retry_after_secs);
+        error
+    }
+
     /// `422 invalid_request` on `field`.
     pub fn invalid(field: impl Into<String>) -> Self {
         let mut error = Self::new(ErrorCode::INVALID_REQUEST);

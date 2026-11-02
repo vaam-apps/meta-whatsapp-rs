@@ -29,6 +29,8 @@ serde_json.workspace = true
 # SHA-256 of the advisory lock keys (`lock_key`).
 sha2.workspace = true
 time.workspace = true
+# The notifier's listening task, its readiness and its wait (src/notify.rs).
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
 tracing.workspace = true
 
 [dev-dependencies]

@@ -247,6 +247,20 @@ impl Outbox for MemoryEventStore {
         })
     }
 
+    async fn get(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<StoredEvent>> {
+        // The tenant's own stream only: another tenant's rows, and the
+        // operator-only ones, are never looked at.
+        let state = self.lock();
+        Ok(state.streams.get(tenant.as_str()).and_then(|stream| {
+            stream
+                .rows
+                .values()
+                .map(|row| &row.event)
+                .find(|event| event.id == id)
+                .cloned()
+        }))
+    }
+
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
         let mut state = self.lock();
         let cutoff = OffsetDateTime::now_utc() - older_than;
