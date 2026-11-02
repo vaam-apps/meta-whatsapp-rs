@@ -92,8 +92,8 @@ use meta_whatsapp_server_core::otp::OtpKeys;
 use meta_whatsapp_server_core::registration::{AttemptLimit, AttemptLimits};
 use meta_whatsapp_server_core::signup::AccountUpdateConfirmation;
 use meta_whatsapp_server_core::webhooks_out::DEFAULT_RETRY_WINDOW;
-use meta_whatsapp_server_core::webhooks_out::dispatch::DispatchSettings;
 use meta_whatsapp_server_core::webhooks_out::destination::DestinationPolicy;
+use meta_whatsapp_server_core::webhooks_out::dispatch::DispatchSettings;
 use meta_whatsapp_server_core::webhooks_out::seal::{DataKey, DataKeys};
 
 use crate::events::{
@@ -672,6 +672,21 @@ fn webhook_config(
             window => window,
         },
     };
+    let dispatch = dispatch_settings(r)?;
+    Ok(WebhookConfig {
+        data_keys,
+        data_key_is_throwaway: throwaway,
+        destinations,
+        retry_window,
+        dispatch,
+    })
+}
+
+/// `WA_SERVER_WEBHOOK_IN_FLIGHT`, `…_IN_FLIGHT_PER_TENANT`,
+/// `…_IN_FLIGHT_PER_ENDPOINT` (positive) and `WA_SERVER_WEBHOOK_LEASE`
+/// (at least [`MIN_WEBHOOK_LEASE`]): the dispatcher's bounds and lease
+/// (design D108), the defaults unset.
+fn dispatch_settings(r: &Reader<'_>) -> Result<DispatchSettings, ConfigError> {
     let defaults = DispatchSettings::default();
     let bound = |name: &'static str, default: usize| -> Result<usize, ConfigError> {
         match positive(r, name)? {
@@ -694,22 +709,18 @@ fn webhook_config(
             lease => lease,
         },
     };
-    let dispatch = DispatchSettings {
+    Ok(DispatchSettings {
         workers: bound("WA_SERVER_WEBHOOK_IN_FLIGHT", defaults.workers)?,
-        per_tenant: bound("WA_SERVER_WEBHOOK_IN_FLIGHT_PER_TENANT", defaults.per_tenant)?,
+        per_tenant: bound(
+            "WA_SERVER_WEBHOOK_IN_FLIGHT_PER_TENANT",
+            defaults.per_tenant,
+        )?,
         per_endpoint: bound(
             "WA_SERVER_WEBHOOK_IN_FLIGHT_PER_ENDPOINT",
             defaults.per_endpoint,
         )?,
         lease,
         ..defaults
-    };
-    Ok(WebhookConfig {
-        data_keys,
-        data_key_is_throwaway: throwaway,
-        destinations,
-        retry_window,
-        dispatch,
     })
 }
 

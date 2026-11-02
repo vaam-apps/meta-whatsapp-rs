@@ -494,7 +494,7 @@ mod tests {
         slow.timeout = Duration::from_millis(500);
         assert_eq!(sender.send(slow).await, Err(SendError::Timeout));
         let mut tls = held_rx.await.unwrap();
-        let tcp = &mut tls.get_mut().0;
+        let (tcp, _) = tls.get_mut();
         let mut closed = false;
         for _ in 0..40 {
             tokio::time::sleep(Duration::from_millis(50)).await;

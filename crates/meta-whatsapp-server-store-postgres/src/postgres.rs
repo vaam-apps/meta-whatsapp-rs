@@ -1446,7 +1446,7 @@ mod tests {
     /// `(version, SHA-384 hex)` of every service migration, as sqlx records
     /// it. A new migration adds a line; an existing line never changes (an
     /// edited migration makes `migrate` refuse every database it ran on).
-    const PINNED_CHECKSUMS: [(i64, &str); 8] = [
+    const PINNED_CHECKSUMS: [(i64, &str); 9] = [
         (
             1,
             "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",

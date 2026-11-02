@@ -231,7 +231,7 @@ fn forbidden(ip: IpAddr) -> bool {
 /// unique-local, site-local (IANA's special-purpose registries), and every
 /// IPv6 address outside the global unicast block `2000::/3` (the
 /// IPv4-translated `::ffff:0:0:0/96`, the dummy prefix `100:0:0:1::/64`,
-/// SRv6's `5f00::/16`, the reserved rest), or inside `3fff::/20`
+/// Segment Routing's `5f00::/16`, the reserved rest), or inside `3fff::/20`
 /// (documentation).
 pub fn is_special(ip: IpAddr) -> bool {
     const V4: [(u32, u8); 14] = [
@@ -820,7 +820,13 @@ mod tests {
         let host = Cidr::parse("fd00::1/128").unwrap();
         assert!(host.contains(ip("fd00::1")));
         assert!(!host.contains(ip("fd00::2")));
-        for bad in ["10.0.0.0/", "10.0.0.0/+8", "10.0.0.0/-1", "::/129", "10.0.0/8"] {
+        for bad in [
+            "10.0.0.0/",
+            "10.0.0.0/+8",
+            "10.0.0.0/-1",
+            "::/129",
+            "10.0.0/8",
+        ] {
             assert_eq!(Cidr::parse(bad), None, "{bad}");
         }
     }

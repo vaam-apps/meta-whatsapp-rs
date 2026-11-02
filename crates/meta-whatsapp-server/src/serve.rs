@@ -442,24 +442,7 @@ async fn run<S: Future<Output = ()>>(
         settings,
     )?;
     if backend.kind().is_process_local() {
-        // Memory storage exists in development only (the configuration
-        // refuses it elsewhere), and the CLI cannot reach it: the first
-        // admin key is minted here and written once to standard error,
-        // never through the logs.
-        let (minted, _) = mint(
-            grant.store(),
-            KeyOwner::Admin,
-            Vec::new(),
-            "development".to_owned(),
-            None,
-        )
-        .await
-        .context("minting the development admin key")?;
-        eprintln!(
-            "meta-whatsapp-server: development, memory storage: a one-time admin key for this \
-             process, shown once: {}",
-            minted.expose_key()
-        );
+        development_admin_key(grant.store()).await?;
     }
 
     // `SIGTERM` and `SIGINT` are caught from here: one that comes once the
@@ -507,6 +490,28 @@ async fn run<S: Future<Output = ()>>(
     end_dispatcher(dispatcher).await;
     backend.close().await;
     served
+}
+
+/// Memory storage exists in development only (the configuration refuses
+/// it elsewhere), and the CLI cannot reach it: the first admin key is
+/// minted here and written once to standard error, never through the
+/// logs.
+async fn development_admin_key(store: &dyn crate::store::RecordStore) -> anyhow::Result<()> {
+    let (minted, _) = mint(
+        store,
+        KeyOwner::Admin,
+        Vec::new(),
+        "development".to_owned(),
+        None,
+    )
+    .await
+    .context("minting the development admin key")?;
+    eprintln!(
+        "meta-whatsapp-server: development, memory storage: a one-time admin key for this \
+         process, shown once: {}",
+        minted.expose_key()
+    );
+    Ok(())
 }
 
 /// Webhooks out (roadmap M2c): a dispatcher on every replica, claiming
