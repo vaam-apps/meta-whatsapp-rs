@@ -394,7 +394,10 @@ async fn metas_refusal_to_deregister_maps_cleanly() {
 async fn deregistering_an_encoded_path_takes_the_decoded_id() {
     let h = Harness::new();
     let key = connected(&h).await;
-    let encoded: String = PN.bytes().map(|b| format!("%{b:02X}")).collect();
+    let encoded = PN.bytes().fold(String::new(), |mut encoded, b| {
+        std::fmt::Write::write_fmt(&mut encoded, format_args!("%{b:02X}")).unwrap();
+        encoded
+    });
     let call = |confirm: &str| {
         Call::new(Method::POST, format!("/v1/numbers/{encoded}/deregister"))
             .key(&key)
