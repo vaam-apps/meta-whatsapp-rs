@@ -1398,8 +1398,8 @@ and `store-postgres`.
   in the build: S10–S16 do not happen.
   - **After:** S7. The owner's yes to D20 (a) came on 2026-11-02
     (BlueOak-1.0.0 allowed for `minicbor` and `minicbor-serde` only):
-    S10 adds that scoped exception to `deny.toml`, and nothing before
-    it does.
+    this item adds that scoped exception to `deny.toml`, and nothing
+    before it does.
   - **Decisive:** `just deny` passes and fails again when the exception
     is removed; a live Postgres test with `sslmode=require` passes in a
     binary that links both providers (sqlx picks `ring` itself until

@@ -33,6 +33,12 @@
 //! - **One clock**: the database's. An event's `created_at` is the
 //!   server's (`$currentDate`), and a purge's cutoff is measured from the
 //!   server's `localTime`.
+//! - **What a row received** (roadmap M2e): an insert keeps the media id
+//!   its event records as received (`NewEvent::received_media`) beside
+//!   the row, and [`Outbox::received_media`] reads the rows of one id from
+//!   a partial index, newest first: by the server's millisecond, then by
+//!   an `ObjectId` the inserting process drew. [`Outbox::get`] is one
+//!   lookup by the event's id, in its tenant's stream only.
 //! - **Contention is typed**: an insert that kept meeting write conflicts
 //!   for its budget ([`MongoOutbox::with_busy_after`], 2 seconds by
 //!   default, as Postgres' `lock_timeout`) wrote nothing and answers
@@ -50,6 +56,8 @@
 //!
 //! [`RouteGuard::admits`]: meta_whatsapp_server_core::outbox::RouteGuard::admits
 //! [`Outbox::purge`]: meta_whatsapp_server_core::outbox::Outbox::purge
+//! [`Outbox::received_media`]: meta_whatsapp_server_core::outbox::Outbox::received_media
+//! [`Outbox::get`]: meta_whatsapp_server_core::outbox::Outbox::get
 
 mod outbox;
 pub mod schema;
