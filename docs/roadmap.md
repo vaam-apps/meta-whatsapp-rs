@@ -5611,13 +5611,103 @@ routes (M1.3's table covers each new `{pn}` and `{waba_id}` route by
 construction; a route whose object id is not checked against the number
 or WABA fails the family's own cross-tenant test).
 
-- [ ] **M5a. The send union's other types** (rows 22, 29, 37, 51, 53,
+- [x] **M5a. The send union's other types** (rows 22, 29, 37, 51, 53,
   56, 57, 59, 60, 104): pin, request contact info, Direct Send,
   interactive carousels, voice call, location request, address, call
   permission request, Flow, product messages.
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; each type's documented example is sent
     byte for byte; one left out of the send union fails its test.
+  - **Landed:** `POST /v1/numbers/{pn}/messages` and the inbox reply take
+    `pin` (`meta_whatsapp_server_core::messages::MessageType::Pin`, to a
+    group), the `interactive` types `location_request_message`,
+    `request_contact_info`, `call_permission_request`, `voice_call`,
+    `flow`, `address_message`, `carousel` (media cards or product cards),
+    `product`, `product_list` and `catalog_message`
+    (`messages::InteractiveType`, fifteen in all), and Direct Send's
+    `category`, `ttl_seconds` and `direct_send_config` on any type
+    (`messages::DirectSendCategoryObject`, Meta's three categories). Each
+    is read into the library's own type (`Pin`, `LocationRequest`,
+    `RequestContactInfo`, `CallPermissionRequest`, `VoiceCall`,
+    `FlowMessage`, `AddressMessage`, `MediaCarousel`, `ProductCarousel`,
+    `SingleProduct`, `ProductList`, `CatalogMessage`, the parameters
+    objects as Meta's JSON, as P2 read the payment messages'), then the
+    request's object, written back under Meta's names, is compared with
+    what the library would send (P2's `request::dropped_key`): a key it
+    would drop is `422 invalid_request` on its path, nothing sent; the
+    values the library writes itself (an action's `name`, a card's
+    `card_index` and `type`, `flow_message_version`) must be its own.
+    The types before M5a are built as they were, a key new with M5a
+    refused on them. The design's M5.2 for this family: a Flow's
+    `flow_id` and a product message's `catalog_id` are checked to be the
+    number's WABA's with its token before the send
+    (`messages::admit_named_object`: `GET /{flow_id}`, its
+    `whatsapp_business_account`; `GET /{waba_id}/product_catalogs`),
+    another WABA's or one Meta refuses `404 not_found` with nothing sent,
+    a failed check `may_have_been_sent: false`; on an inbox reply after
+    the window's check (`Conversations::reply`), so a closed window asks
+    Meta nothing. A `flow_token` reaches no log (the request's `Debug`
+    shows a parameters object's keys only). The window: every new type is
+    free-form, as is Direct Send `service`; `utility` and `authentication`
+    are sent by Meta as templates, and the library's `Inbox::send` and
+    the reply's cut exempt them. No new route, error code, setting or
+    stored name. The OpenAPI document is additive only (596 lines added;
+    the 11 removed are descriptions, `interactive.body` leaving
+    `required`, a `$ref` widened to an `anyOf` and two enums' last
+    lines): `type` gains `pin`, `interactive.type` ten values,
+    `action.parameters` four `anyOf` alternatives (`FlowParameters`,
+    `VoiceCallParameters`, `AddressParameters`, `CatalogParameters`),
+    `action.sections` `ProductSection`, `action` `cards`, `catalog_id`
+    and `product_retailer_id`, `SendMessage` and `ReplyMessage` `pin`,
+    `category`, `ttl_seconds` and `direct_send_config`; seventeen schemas.
+    Tests: the service's `tests/send_union.rs` (each type's example from
+    its page sent as printed with the tenant's token, never the
+    operator's,
+    `each_types_example_is_sent_as_its_page_prints_it_with_the_tenants_token`;
+    `a_key_the_library_would_drop_is_refused_on_its_path_before_any_request`;
+    `direct_send_is_checked_by_the_librarys_rules_before_any_request`;
+    M5.2's `a_flow_or_a_catalog_of_another_waba_is_not_found_and_nothing_is_sent`;
+    M5.1's `another_tenants_number_is_not_found_before_the_vault_whatever_the_type`,
+    sends and inbox replies; `an_inbox_reply_meets_each_types_window_rule`),
+    M1.7's capture with a Flow's token (`tests/logs.rs`, live on Postgres
+    `tests/live_logs.rs`), the core's `a_flow_token_never_reaches_debug`
+    and the adapter's `a_flow_token_never_reaches_the_requests_debug`. By
+    mutation, each failing a test: a type out of the send union (one per
+    type), the comparison with the library's message removed (for the
+    interactive types, for `pin`), the `card_index` check, the action
+    name check, the `flow_message_version` check, the `flow_id` digits
+    check, the closed Direct Send category, the named object's check
+    removed from the send or from the reply, the WABA comparison of a
+    Flow or a catalog, the reply's window check before the named
+    object's, the failed check marked sent, and the redacted `Debug`.
+    M5a's review added `each_value_the_library_writes_is_checked_and_a_carousels_catalogs_are_one`
+    (each type's action `name`, a URL card's `name`, a quick-reply
+    button's `type`, a product carousel's second catalog) and
+    `an_inbox_replys_cut_exempts_only_what_meta_sends_as_a_template`
+    (Direct Send under a migrated number's cut; the cut's exemption
+    survived mutation before it), a Flow answered under another id, a
+    `utility` Flow outside the window still checked, and the library's
+    `a_flow_token_is_redacted_from_debug`.
+  - **Decided 2026-11-02** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable, design §10, D100
+    to D104): the comparison with the library's message, on M5a's types
+    only (D100); Direct Send by the library's rules with Meta's three
+    categories (D101); the `flow_id` and `catalog_id` checks before each
+    send, no cache (D102); the `flow_token` out of every log, the
+    library's `FlowParameters` `Debug` redacted with it (D103); Meta's
+    per-user limits left to Meta (D104). No stored name; no legal act
+    (no type accepts terms).
+  - **Not done here:** Direct Send's interactive authentication message
+    (a copy-code OTP button) and mixed URL and reply buttons, which the
+    library does not model (its `MessageContent::Raw`, which the service
+    refuses); the catalog a template's product cards name (M5b's); a
+    group id checked against the number's groups (M5f's); the comparison
+    on the types before M5a (D100).
+  - **Also, after the first release** (from S7, carried by M2a, P2 and
+    now M5a, which landed before it): drop the legacy fingerprint (S6's
+    window: `Fingerprint::legacy_v1_json`, `legacy_v1_upload`,
+    `or_legacy`, and the handlers' `Uri`), once every deployment has run
+    a release with S6 for one `WA_SERVER_IDEMPOTENCY_TTL`.
 - [ ] **M5b. Templates** (rows 95, 96, 99, 100, 101, 153): edit,
   library, migrate, compare, unpause, archive and unarchive, template
   groups, each kind of row 99 created through the service (app deep
