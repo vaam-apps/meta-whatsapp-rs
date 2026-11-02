@@ -241,9 +241,11 @@ stored data, the owner's).
     is a comma). No event data snapshot changed and none was added (every
     fixture of the three types was pinned already).
   - **The service's number events** (`meta_whatsapp_server_core::number_events`,
-    new): `number_connected` (an admin attach, once the token is stored),
-    `number_disconnected` (`reason`: `tenant_disconnected` or
-    `operator_unbound`, recorded before the binding goes) and
+    new): `number_connected` (an admin attach, once the token is stored,
+    or an Embedded Signup completed or resumed), `number_disconnected`
+    (`reason`: `tenant_disconnected`, `operator_unbound`, or, for Meta's
+    `account_update` offboarding, `partner_app_uninstalled` and
+    `account_deleted`; recorded before the binding goes) and
     `number_reconnect_required` (a `190` marking a number anew), one per
     number, `data` `{event, phone_number_id, waba_id[, reason]}`, keyed by
     the binding's epoch (once per binding generation), guarded by the
@@ -265,7 +267,7 @@ stored data, the owner's).
     date), D83 (their outbox key, label
     `meta-whatsapp-server/number-event/v1`), D84 (listed in
     `TENANT_EVENT_TYPES`), D85 (`user_action_reported`'s `data` served
-    whole). The three type names, the two `reason` values and the label
+    whole). The three type names, the four `reason` values and the label
     are new stored names, pending the owner's confirmation before the
     first release.
 

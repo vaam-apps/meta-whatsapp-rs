@@ -136,7 +136,7 @@ message), and the service's own: `number_connected`, `number_disconnected` (why 
     case "thread_control_changed":
       return;
     case "number_disconnected": {
-      // tenant_disconnected, operator_unbound, or a reason added later.
+      // tenant_disconnected, operator_unbound, account_deleted, … (more may come).
       const data = event.data as Disconnected;
 ```
 

@@ -1202,11 +1202,12 @@ Among them since roadmap M2d:
   `data.action` holds the click's time, the component, and Meta's
   `click_id`, `tracking_token` and `product_id`).
 - The service's own events about your numbers, whose `data` names the
-  number and its WABA only: `number_connected` (attached, its token
-  stored: also after a reconnection), `number_disconnected` (with
+  number and its WABA only: `number_connected` (attached or onboarded
+  through Embedded Signup, its token stored: also after a reconnection), `number_disconnected` (with
   `data.reason`: `tenant_disconnected` for your `DELETE
-  /v1/wabas/{waba_id}`, `operator_unbound` for the operator's unbind;
-  more reasons may come), `number_reconnect_required` (Meta refused the
+  /v1/wabas/{waba_id}`, `operator_unbound` for the operator's unbind,
+  `partner_app_uninstalled` and `account_deleted` when Meta's
+  `account_update` offboards the WABA; more reasons may come), `number_reconnect_required` (Meta refused the
   number's token: calls on it answer `409 reconnect_required` until it is
   attached again). Each comes once per binding of the number: a token
   refused again before a reconnection records no second one.

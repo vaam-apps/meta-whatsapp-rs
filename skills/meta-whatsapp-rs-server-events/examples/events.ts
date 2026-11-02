@@ -141,7 +141,7 @@ export async function handle(event: Event): Promise<void> {
     case "thread_control_changed":
       return;
     case "number_disconnected": {
-      // tenant_disconnected, operator_unbound, or a reason added later.
+      // tenant_disconnected, operator_unbound, account_deleted, … (more may come).
       const data = event.data as Disconnected;
       console.log(event.phone_number_id, data.reason);
       return;

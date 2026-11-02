@@ -4605,10 +4605,14 @@ design's (§9).
     `tracking_token` and `product_id` are served whole and reach no log
     line (M1.7's capture now delivers the three types with sentinels). The
     service's number events are the core's new `number_events`:
-    `number_connected` (the admin attach, once the token is stored),
+    `number_connected` (the admin attach, once the token is stored, and,
+    merged with M3a, an Embedded Signup completed or resumed),
     `number_disconnected` (`reason`: `tenant_disconnected` once Meta
-    unsubscribed the app, `operator_unbound` with or without a usable
-    token; recorded before the binding goes) and
+    unsubscribed the app, before M3a's revocation in Solution Partner
+    mode; `operator_unbound` with or without a usable token; with M3a,
+    `partner_app_uninstalled` and `account_deleted` for Meta's
+    `account_update` offboarding, confirmed with Graph; recorded before
+    the binding goes) and
     `number_reconnect_required` (a `190` marking a number anew, best
     effort), one per number, `data` `{event, phone_number_id, waba_id}`
     and `reason`, keyed by the binding's epoch (once per generation), the
@@ -4666,14 +4670,14 @@ design's (§9).
     `data` served whole (D85). Each swaps where its row says.
   - **Pending the owner's confirmation before the first release**
     (architecture § Stable identifiers): the three type names, the
-    `reason` values `tenant_disconnected` and `operator_unbound`, and the
-    label `meta-whatsapp-server/number-event/v1` with its key layout.
-  - **Left, and why:** `number_disconnected` on Meta's offboarding
-    (`account_update` with `PARTNER_APP_UNINSTALLED`, `ACCOUNT_DELETED` or
-    the coexistence offboarding): the automatic disconnect is not built,
-    and design §6 has it confirmed with Graph from M3 (no roadmap item
-    names it yet); Embedded Signup's `number_connected` (M3a calls
-    `Authorizer::record_number_event` after its bind and store); a number
+    `reason` values `tenant_disconnected`, `operator_unbound`,
+    `partner_app_uninstalled` and `account_deleted`, and the label
+    `meta-whatsapp-server/number-event/v1` with its key layout.
+  - **Left, and why:** the coexistence offboarding (`account_update`'s
+    offboarded event, design §3.4) marks nothing and records no event
+    (M3b's routes); M3a's wiring is tested over HTTP on the uninstall
+    (`tests/signup.rs`'s `m3_4_uninstall_then_removal_end_revoked_then_deleted`)
+    and not on `ACCOUNT_DELETED` alone; a number
     a refresh drops from its WABA gets no `number_disconnected` (its
     binding is gone when the refresh lands, so the outbox would keep the
     row operator-only); a tenant deleted, created again and bound again
@@ -5911,7 +5915,8 @@ everything else goes into the parity-completion report.
   columns and the kinds `waba` and `business`, added and awaiting
   confirmation; M2d's number events, their types `number_connected`,
   `number_disconnected` and `number_reconnect_required`, the `reason`
-  values `tenant_disconnected` and `operator_unbound`, and their outbox
+  values `tenant_disconnected`, `operator_unbound`,
+  `partner_app_uninstalled` and `account_deleted`, and their outbox
   key's label `meta-whatsapp-server/number-event/v1` with its layout
   (design D80, D83, proposed), added and awaiting confirmation), for the
   same reason as L5's.
