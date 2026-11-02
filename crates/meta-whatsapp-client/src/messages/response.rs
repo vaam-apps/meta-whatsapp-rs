@@ -5,6 +5,7 @@
 //! as `messages` status webhooks keyed by [`SentMessage::id`].
 
 use meta_whatsapp_core::ids::{GroupId, MessageId, UserId, WaId};
+use meta_whatsapp_core::open_enum;
 use serde::Deserialize;
 
 /// Response of `POST /{phone_number_id}/messages`.
@@ -64,19 +65,15 @@ pub struct SentMessage {
     pub message_status: Option<MessageStatus>,
 }
 
-/// `message_status` (`templates/template-pacing`; values from the message
-/// API reference).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum MessageStatus {
-    /// Accepted and being processed.
-    Accepted,
-    /// Held while Meta assesses the template's quality (pacing).
-    HeldForQualityAssessment,
-    /// Delivery paused.
-    Paused,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
+open_enum! {
+    /// `message_status` (`templates/template-pacing`; values from the message
+    /// API reference).
+    pub enum MessageStatus {
+        /// Accepted and being processed.
+        Accepted => "accepted",
+        /// Held while Meta assesses the template's quality (pacing).
+        HeldForQualityAssessment => "held_for_quality_assessment",
+        /// Delivery paused.
+        Paused => "paused",
+    }
 }

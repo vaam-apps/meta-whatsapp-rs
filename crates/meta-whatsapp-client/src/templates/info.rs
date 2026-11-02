@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 
 use meta_whatsapp_core::ids::TemplateId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::definition::{Button, SupportedApp, TemplateComponent};
-use super::macros::string_enum;
 use super::types::{
     DisplayFormat, ParameterFormat, QualityRating, RejectionReason, TemplateCategory,
     TemplateSource, TemplateStatus, TemplateSubCategory,
@@ -339,7 +339,8 @@ pub struct LibraryTemplateRequest {
     pub library_template_body_inputs: Option<LibraryBodyInputs>,
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `type` of a library button input.
     pub enum LibraryButtonType {
         /// Quick reply.
@@ -471,7 +472,8 @@ pub struct MigrationResult {
     pub failed_templates: BTreeMap<TemplateId, String>,
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// Metric of a template comparison.
     pub enum ComparisonMetricKind {
         /// Templates ordered by block rate (blocks / sends), lowest first.

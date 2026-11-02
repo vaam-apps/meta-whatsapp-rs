@@ -20,10 +20,10 @@
 //! `support/health-status`.
 
 use meta_whatsapp_core::ids::MediaId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 
 use crate::messages::validate::{self, Check};
-use crate::templates::macros::string_enum;
 
 mod secret_url;
 
@@ -75,7 +75,8 @@ impl From<MediaId> for MediaSource {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `flow_action` of a Flow message or a Flow template button: how the
     /// Flow starts.
     pub enum FlowAction {
@@ -87,7 +88,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// Quality rating of a template (`quality_score.score`,
     /// `templates/template-quality`) or of a business phone number
     /// (`quality_rating`).
@@ -209,7 +211,8 @@ pub struct HealthError {
     pub possible_solution: Option<String>,
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A health status value (`can_send_message`, `can_receive_call_sip`).
     pub enum HealthState {
         /// Meets every requirement.
@@ -223,7 +226,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// The kind of node a [`HealthEntity`] describes.
     pub enum HealthEntityType {
         /// A business phone number.

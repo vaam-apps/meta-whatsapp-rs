@@ -20,18 +20,19 @@
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::PhoneNumberId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 
 use super::PhoneNumber;
 use crate::request::decode_json;
-use crate::templates::macros::string_enum;
 
 /// Fewest supporting links an application may carry, when it carries any.
 pub const MIN_SUPPORTING_LINKS: usize = 5;
 /// Most supporting links an application may carry.
 pub const MAX_SUPPORTING_LINKS: usize = 10;
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// Where a number's Official Business Account application stands
     /// (`oba_status`).
     pub enum ObaStatus {

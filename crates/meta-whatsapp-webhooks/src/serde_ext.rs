@@ -114,8 +114,9 @@ pub(crate) mod graph_errors {
 
 /// A key-value object whose values Meta documents as strings (Razorpay's
 /// `notes`, echoed in a payment's status): a value of another JSON type is
-/// kept as its JSON text, as [`crate::open_enum`] keeps an enum value,
-/// rather than failing the whole change. `null` and `[]` are an empty map.
+/// kept as its JSON text, as [`open_enum!`](meta_whatsapp_core::open_enum!)
+/// keeps an enum value, rather than failing the whole change. `null` and
+/// `[]` are an empty map.
 pub(crate) mod string_map {
     use std::collections::BTreeMap;
 

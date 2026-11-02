@@ -9,11 +9,11 @@
 
 use futures::Stream;
 use meta_whatsapp_core::ids::{BusinessId, WabaId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
-use super::wire_enum;
 use crate::request::{decode_json, safe_snippet};
 use crate::{Client, GraphRequest};
 
@@ -54,29 +54,29 @@ impl Client {
     }
 }
 
-wire_enum! {
+open_enum! {
     /// `marketing_messages_onboarding_status` of a WABA.
     ///
     /// Only these two values are spelled out in Meta's pages; the reference
     /// they point to for the full list does not document the field, so
-    /// anything else arrives as `Unknown`.
+    /// anything else arrives as [`OnboardingStatus::Other`].
     pub enum OnboardingStatus {
         /// Can be onboarded.
-        Eligible = "ELIGIBLE",
+        Eligible => "ELIGIBLE",
         /// Already onboarded.
-        Onboarded = "ONBOARDED",
+        Onboarded => "ONBOARDED",
     }
 }
 
-wire_enum! {
+open_enum! {
     /// Where a business portfolio is with the MM API Terms of Service.
     pub enum TermsStatus {
         /// No request and no signature yet.
-        NotStarted = "NOT_STARTED",
+        NotStarted => "NOT_STARTED",
         /// An onboarding request was sent to the business's admins.
-        RequestSent = "REQUEST_SENT",
+        RequestSent => "REQUEST_SENT",
         /// The Terms of Service are signed (Meta's spelling: `TERM_OF_…`).
-        TermsSigned = "TERM_OF_SERVICE_SIGNED",
+        TermsSigned => "TERM_OF_SERVICE_SIGNED",
     }
 }
 

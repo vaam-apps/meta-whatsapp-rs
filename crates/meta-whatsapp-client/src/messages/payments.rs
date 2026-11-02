@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::CatalogId;
+use meta_whatsapp_core::open_enum;
 use serde::de::Error as _;
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -28,7 +29,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::interactive::{FOOTER_MAX, TextObject};
 use super::validate::{self, Check};
 use crate::common::MediaSource;
-use crate::templates::macros::string_enum;
 
 /// Body text limit of `order_details` and `order_status` ("Maximum length
 /// is 1024 characters" on every payments page).
@@ -266,7 +266,8 @@ impl<'de> Deserialize<'de> for Currency {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// What the order pays for (`parameters.type`).
     pub enum GoodsType {
         /// `digital-goods`.
@@ -277,7 +278,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `parameters.payment_type`. In India, required (`upi`) by the
     /// payment links page and the older payment configuration method; the
     /// dynamic UPI intent and payment gateway pages do not send it. In
@@ -568,7 +570,8 @@ impl PaymentLink {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// The kind of a Pix key (`pix_dynamic_code.key_type`): "One of
     /// `CPF`, `CNPJ`, `EMAIL`, `PHONE` or `EVP`".
     pub enum PixKeyType {
@@ -585,7 +588,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// How WhatsApp presents a dynamic Pix code
     /// (`pix_dynamic_code.flow_type`; `payments-br/offsite-pix`,
     /// "Payment experiences"). Absent, the buyer copies the code.
@@ -698,7 +702,8 @@ impl OffsiteCardPay {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A UPI app to show first (`preferred_payment_methods[].method`;
     /// `payments-in/pg`, "Merchant preferred UPI payment method").
     pub enum UpiApp {
@@ -719,7 +724,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A checkout option to offer (`enabled_payment_options`;
     /// `payments-in/pg`, "Restrict available payment options").
     pub enum PaymentOption {
@@ -2140,7 +2146,8 @@ impl Serialize for OrderDetails {
 
 // ─── order_status ────────────────────────────────────────────────────────
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// An order's status in an `order_status` message. `canceled` and
     /// `completed` are final; `pending` can move to any other;
     /// `processing`, `shipped` and `partially_shipped` move among
@@ -2214,7 +2221,8 @@ impl OrderUpdate {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A payment's status in an `order_status` message
     /// (`parameters.payment.status`, `payments-br/orders`, "Supported
     /// payment status"). Not the lookup's [`PaymentStatus`](crate::payments::PaymentStatus).

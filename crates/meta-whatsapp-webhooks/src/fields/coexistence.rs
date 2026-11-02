@@ -13,12 +13,12 @@
 
 use meta_whatsapp_core::GraphApiError;
 use meta_whatsapp_core::ids::{MessageId, UserId, WaId};
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::common::{Contact, Metadata};
 use super::messages::{InboundMessage, MessageContent};
-use crate::open_enum::open_enum;
 
 /// `value` of an `smb_message_echoes` change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

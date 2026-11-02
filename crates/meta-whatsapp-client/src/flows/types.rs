@@ -9,6 +9,7 @@
 
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::FlowId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -22,114 +23,53 @@ use time::macros::format_description;
 /// have accepted.
 pub const MAX_FLOW_JSON_BYTES: usize = 10 * 1024 * 1024;
 
-/// A string enum Meta may extend: documented values get variants, anything
-/// else is kept verbatim in `Unknown(String)`. Carrying the raw value (rather
-/// than a unit `#[serde(other)]` variant) means an unknown value survives a
-/// read-modify-write round trip — e.g. re-sending a Flow's categories — and
-/// still shows up in logs.
-macro_rules! wire_enum {
-    (
-        $(#[$meta:meta])*
-        pub enum $name:ident {
-            $( $(#[$vmeta:meta])* $variant:ident = $wire:literal, )+
-        }
-    ) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-        #[non_exhaustive]
-        pub enum $name {
-            $( $(#[$vmeta])* $variant, )+
-            /// A value this version of `meta-whatsapp-rs` does not know yet, verbatim.
-            Unknown(String),
-        }
-
-        impl $name {
-            /// The value as it appears on the wire.
-            pub fn as_str(&self) -> &str {
-                match self {
-                    $( Self::$variant => $wire, )+
-                    Self::Unknown(other) => other,
-                }
-            }
-        }
-
-        impl From<&str> for $name {
-            fn from(value: &str) -> Self {
-                match value {
-                    $( $wire => Self::$variant, )+
-                    other => Self::Unknown(other.to_owned()),
-                }
-            }
-        }
-
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(self.as_str())
-            }
-        }
-
-        impl ::serde::Serialize for $name {
-            fn serialize<S: ::serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-                s.serialize_str(self.as_str())
-            }
-        }
-
-        impl<'de> ::serde::Deserialize<'de> for $name {
-            fn deserialize<D: ::serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-                let raw = <String as ::serde::Deserialize>::deserialize(d)?;
-                Ok(Self::from(raw.as_str()))
-            }
-        }
-    };
-}
-pub(crate) use wire_enum;
-
-wire_enum! {
+open_enum! {
     /// What a Flow is for. At least one is required when creating a Flow.
     pub enum FlowCategory {
         /// `SIGN_UP`.
-        SignUp = "SIGN_UP",
+        SignUp => "SIGN_UP",
         /// `SIGN_IN`.
-        SignIn = "SIGN_IN",
+        SignIn => "SIGN_IN",
         /// `APPOINTMENT_BOOKING`.
-        AppointmentBooking = "APPOINTMENT_BOOKING",
+        AppointmentBooking => "APPOINTMENT_BOOKING",
         /// `LEAD_GENERATION`.
-        LeadGeneration = "LEAD_GENERATION",
+        LeadGeneration => "LEAD_GENERATION",
         /// `CONTACT_US`.
-        ContactUs = "CONTACT_US",
+        ContactUs => "CONTACT_US",
         /// `CUSTOMER_SUPPORT`.
-        CustomerSupport = "CUSTOMER_SUPPORT",
+        CustomerSupport => "CUSTOMER_SUPPORT",
         /// `SURVEY`.
-        Survey = "SURVEY",
-        /// `OTHER`.
-        Other = "OTHER",
+        Survey => "SURVEY",
+        /// `OTHER`: a category of its own, not the catch-all
+        /// ([`FlowCategory::Other`] keeps a value the docs do not list).
+        OtherCategory => "OTHER",
     }
 }
 
-wire_enum! {
+open_enum! {
     /// Where a Flow is in its lifecycle (`flows/guides/lifecycle`).
     pub enum FlowStatus {
         /// Initial state: editable, deletable, sendable only with
         /// `"mode": "draft"` for testing.
-        Draft = "DRAFT",
+        Draft => "DRAFT",
         /// Sendable to customers; can no longer be edited or deleted.
-        Published = "PUBLISHED",
+        Published => "PUBLISHED",
         /// Retired by the business: cannot be sent or opened. Terminal.
-        Deprecated = "DEPRECATED",
+        Deprecated => "DEPRECATED",
         /// Set by WhatsApp monitoring when the endpoint is unhealthy: cannot
         /// be sent or opened until the endpoint recovers.
-        Blocked = "BLOCKED",
+        Blocked => "BLOCKED",
         /// Set by WhatsApp monitoring when the endpoint degrades: can be
         /// opened, but at most 10 messages per hour can be sent.
-        Throttled = "THROTTLED",
+        Throttled => "THROTTLED",
     }
 }
 
-wire_enum! {
+open_enum! {
     /// Kind of asset attached to a Flow.
     pub enum FlowAssetType {
         /// The Flow JSON definition (`flow.json`).
-        FlowJson = "FLOW_JSON",
+        FlowJson => "FLOW_JSON",
     }
 }
 
@@ -562,8 +502,8 @@ mod tests {
             cats,
             vec![
                 FlowCategory::SignUp,
-                FlowCategory::Other,
-                FlowCategory::Unknown("SHOPPING".into())
+                FlowCategory::OtherCategory,
+                FlowCategory::Other("SHOPPING".into())
             ]
         );
         assert_eq!(
@@ -586,7 +526,7 @@ mod tests {
         }
         assert_eq!(
             FlowStatus::from("ARCHIVED"),
-            FlowStatus::Unknown("ARCHIVED".into())
+            FlowStatus::Other("ARCHIVED".into())
         );
     }
 
