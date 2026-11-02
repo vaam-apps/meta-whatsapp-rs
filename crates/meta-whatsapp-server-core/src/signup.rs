@@ -816,6 +816,15 @@ impl<'a> Signup<'a> {
             return Err(ServiceError::from(StorageError::Busy));
         };
         let connected = Connected::from(onboarded);
+        // Its numbers are connected, for this binding's generation
+        // (roadmap M2d), before a kept attempt is dropped: not recorded
+        // (the outbox failing), `503` with the attempt kept, and its
+        // resume records them (once: a resume binds no new generation). A
+        // first completion that kept no attempt has nothing to resume: the
+        // events are lost with its `503` (design D81).
+        self.authz
+            .record_number_event(&held.epoch(), NumberEvent::Connected)
+            .await?;
         records.delete_signup_attempt(tenant, &waba_id).await?;
         record_allocation(records, tenant, &connected).await?;
         tenant_audit(
@@ -827,12 +836,6 @@ impl<'a> Signup<'a> {
                 ..Subject::default()
             },
         );
-        // Its numbers are connected, for this binding's generation
-        // (roadmap M2d): not recorded (the outbox failing), `503`, and a
-        // resume records them.
-        self.authz
-            .record_number_event(&held.epoch(), NumberEvent::Connected)
-            .await?;
         Ok(Completed::Connected(connected))
     }
 
@@ -1074,7 +1077,10 @@ fn finish_kind(stored: &str) -> Option<FinishKind> {
 ///   owner business the vault recorded, else the webhook's
 ///   `owner_business_id`), and the token deleted second (the library's
 ///   `EmbeddedSignup::offboard`), then the bindings; a failed revocation
-///   deletes nothing.
+///   deletes nothing. Before any of it, once confirmed, the bound numbers'
+///   `number_disconnected` (`reason`: `partner_app_uninstalled`,
+///   `account_deleted`; roadmap M2d, [`crate::number_events`]): not
+///   recorded, nothing is revoked or deleted.
 /// - `PARTNER_REMOVED`, in Solution Partner mode: the credit line revoked
 ///   at once (the library's `revoke_credit_line`, or
 ///   `revoke_business_credit_line` when it names no WABA); the token and
@@ -1228,6 +1234,19 @@ impl AccountUpdates {
         if self.deployment.is_solution_partner() {
             remember(records, waba_id, owner).await?;
         }
+        // Its numbers' `number_disconnected` (roadmap M2d), once Graph
+        // confirmed and before anything is revoked or deleted, as a
+        // tenant's disconnect records them once Meta unsubscribed: while
+        // the binding read holds (after the unbinding, the outbox would
+        // keep the rows operator-only), and so that an outbox failing
+        // leaves the merchant whole (`Busy`: Meta's redelivery records
+        // them, each once; any other failure is the operator's) rather
+        // than its token deleted and its binding kept.
+        if let Some(binding) = &binding {
+            self.authz
+                .record_number_event(&binding.epoch(), NumberEvent::Disconnected(why))
+                .await?;
+        }
         let version = token.map(|(_, version)| version);
         let offboarded = es
             .offboard_if_unchanged(waba_id, owner, self.authz.vault_for_signup(), version)
@@ -1256,14 +1275,7 @@ impl AccountUpdates {
             return Ok(());
         }
         let unbound = match &binding {
-            Some(binding) => {
-                // Before the binding goes (roadmap M2d): after it, the
-                // outbox would keep the rows operator-only.
-                self.authz
-                    .record_number_event(&binding.epoch(), NumberEvent::Disconnected(why))
-                    .await?;
-                records.unbind_waba_if(&binding.epoch()).await?
-            }
+            Some(binding) => records.unbind_waba_if(&binding.epoch()).await?,
             None => false,
         };
         tracing::info!(

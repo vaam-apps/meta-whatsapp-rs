@@ -246,7 +246,8 @@ stored data, the owner's).
     or an Embedded Signup completed or resumed), `number_disconnected`
     (`reason`: `tenant_disconnected`, `operator_unbound`, or, for Meta's
     `account_update` offboarding, `partner_app_uninstalled` and
-    `account_deleted`; recorded before the binding goes) and
+    `account_deleted`; recorded before the binding goes, and for
+    `account_update` before anything is revoked or deleted) and
     `number_reconnect_required` (a `190` marking a number anew), one per
     number, `data` `{event, phone_number_id, waba_id[, reason]}`, keyed by
     the binding's epoch (once per binding generation), guarded by the
@@ -263,14 +264,22 @@ stored data, the owner's).
     `the_reviewed_types_of_a_previous_holder_reach_no_tenant`;
     `conformance::live::the_reviewed_types_reach_their_numbers_tenants_streams_only`;
     the new suite `conformance::number_events` (in `conformance::run`).
-  - **Proposed, for the coordinator** (design §10): D80 (the number
-    events' `data`), D81 (when each is recorded), D82 (their guard and
-    date), D83 (their outbox key, label
-    `meta-whatsapp-server/number-event/v1`), D84 (listed in
-    `TENANT_EVENT_TYPES`), D85 (`user_action_reported`'s `data` served
-    whole). The three type names, the four `reason` values and the label
-    are new stored names, pending the owner's confirmation before the
-    first release.
+  - **Decided by the coordinator on 2026-11-02, under the owner's
+    delegation, swappable** (design §10): D80 (the number events'
+    `data`), D81 (when each is recorded), D82 (their guard and date),
+    D83 (their outbox key, label `meta-whatsapp-server/number-event/v1`),
+    D84 (listed in `TENANT_EVENT_TYPES`), D85 (`user_action_reported`'s
+    `data` served whole). The three type names, the four `reason` values
+    and the label are new stored names, pending the owner's confirmation
+    before the first release.
+  - **Review fixes**: an Embedded Signup's completion or resume records
+    `number_connected` before it drops a kept attempt (an outbox failure
+    is `503` with the attempt kept, and the resume records them; before,
+    the resume found nothing to resume), and Meta's `account_update`
+    offboarding records `number_disconnected` once Graph confirmed,
+    before anything is revoked or deleted (before, an outbox failure
+    left the token deleted and the binding kept). `ACCOUNT_DELETED`'s
+    offboarding is tested over HTTP for the first time.
 
 - **`EmbeddedSignup::offboard_if_unchanged`** (roadmap M3a's review):
   `offboard`'s revocation, then the token deleted only if its vault

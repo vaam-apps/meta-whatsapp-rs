@@ -129,7 +129,9 @@ it, never answer it; an inbox reply is `thread_owned_elsewhere`) and `thread_con
 you, or taken), `user_action_reported` (a click on a marketing message: Meta names neither the customer nor the
 message), and the service's own: `number_connected`, `number_disconnected` (why in `data.reason`) and
 `number_reconnect_required` (calls on the number answer `reconnect_required` until it is attached again), whose
-`data` names the number and its WABA only.
+`data` names the number and its WABA only. They say when to look, not the state: one can repeat (a retried attach),
+stay after a change that failed (a `503`), or be missing (`number_reconnect_required` is best effort), so read
+`GET /v1/numbers` when one comes.
 
 ```ts
     case "standby_observed":

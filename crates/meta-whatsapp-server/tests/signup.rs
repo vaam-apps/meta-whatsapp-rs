@@ -1286,6 +1286,9 @@ async fn m3_4_uninstall_then_removal_end_revoked_then_deleted() {
     let (a, _) = tenants(&h).await;
     onboard_partner(&h, &a).await;
     let waba = WabaId::new(WABA).unwrap();
+    // One body, delivered twice as Meta redelivers it: dated anew, a
+    // second delivery that crosses a second would be another update.
+    let uninstall = uninstalled();
     // Meta unreachable during the revocation: redelivered, nothing deleted.
     script_confirmed(&h.graph);
     for _ in 0..3 {
@@ -1293,7 +1296,7 @@ async fn m3_4_uninstall_then_removal_end_revoked_then_deleted() {
             .push_error(|| TransportError::Connect(anyhow::anyhow!("unreachable")));
     }
     assert_eq!(
-        h.webhook(&uninstalled()).await.status,
+        h.webhook(&uninstall).await.status,
         StatusCode::INTERNAL_SERVER_ERROR,
         "a retryable failure is redelivered"
     );
@@ -1308,7 +1311,7 @@ async fn m3_4_uninstall_then_removal_end_revoked_then_deleted() {
     // Redelivered: revoked, then deleted.
     script_confirmed(&h.graph);
     script_revocation(&h.graph);
-    assert_eq!(h.webhook(&uninstalled()).await.status, StatusCode::OK);
+    assert_eq!(h.webhook(&uninstall).await.status, StatusCode::OK);
     let requests = h.graph.requests();
     let lookup = requests
         .iter()
@@ -1839,6 +1842,202 @@ async fn a_tech_providers_offboarding_revokes_nothing() {
         .await;
     assert_eq!(done.status, StatusCode::NO_CONTENT, "{}", done.text);
     assert_eq!(tp.graph.requests().len(), asked + 1, "the unsubscribe only");
+}
+
+// ─── Roadmap M2d: the number events of signup and offboarding ───────────
+
+/// `ACCOUNT_DELETED` of [`WABA`], as Meta sends it
+/// (`webhooks/reference/account_update`: no `waba_info`, the entry is the
+/// WABA), dated now.
+fn account_deleted() -> Vec<u8> {
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    json!({"object": "whatsapp_business_account", "entry": [{
+        "id": WABA, "time": now,
+        "changes": [{"field": "account_update", "value": {"event": "ACCOUNT_DELETED"}}]
+    }]})
+    .to_string()
+    .into_bytes()
+}
+
+/// `key`'s polled events of `types`: `(type, data)`.
+async fn polled_of(h: &Harness, key: &str, types: &str) -> Vec<(String, Value)> {
+    let reply = h
+        .call(Call::get(format!("/v1/events?types={types}")).key(key))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    reply.json()["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["type"].as_str().unwrap().to_owned(), e["data"].clone()))
+        .collect()
+}
+
+/// A number event of [`WABA`]'s number `pn`, as served.
+fn number_event(kind: &str, pn: &str, reason: Option<&str>) -> (String, Value) {
+    let mut data = json!({"event": kind, "phone_number_id": pn, "waba_id": WABA});
+    if let Some(reason) = reason {
+        data["reason"] = json!(reason);
+    }
+    (kind.to_owned(), data)
+}
+
+/// Roadmap M2d with M3a: Meta's `ACCOUNT_DELETED`, confirmed with Graph,
+/// offboards the WABA (its token and bindings gone) and records
+/// `number_disconnected` (`reason`: `account_deleted`) for each number,
+/// for the tenant that held it and no other, after the signup's
+/// `number_connected`; and an outbox that is busy on the first of them
+/// fails the delivery with nothing deleted (the merchant whole), Meta's
+/// redelivery recording each once. Decisive: the `ACCOUNT_DELETED` arm of
+/// the offboarding (taken out, nothing is deleted and no event comes),
+/// its reason, and the events recorded before the token is deleted
+/// (recorded after it, the busy delivery leaves the token deleted and the
+/// binding kept).
+#[tokio::test]
+async fn an_account_deleted_offboards_and_is_its_tenants_number_disconnected() {
+    let h = harness(tech_provider());
+    let (a, _) = tenants(&h).await;
+    onboard_tech_provider(&h, &a).await;
+    h.connect(B, "102290129340399", &["1972385232742149"], "TOKEN-OF-B")
+        .await;
+    let events_a = h.tenant_key(A, &[Scope::Events]).await;
+    let events_b = h.tenant_key(B, &[Scope::Events]).await;
+    let waba = WabaId::new(WABA).unwrap();
+    let body = account_deleted();
+    // The account update recorded, then the outbox busy on the first
+    // number event: `500`, nothing revoked or deleted.
+    h.outbox.fates(&[common::Fate::Pass, common::Fate::Busy]);
+    script_confirmed(&h.graph);
+    assert_eq!(
+        h.webhook(&body).await.status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "a busy outbox is redelivered"
+    );
+    assert!(
+        h.vault.get(&waba).await.unwrap().is_some(),
+        "the token kept"
+    );
+    assert!(
+        h.store.waba(&waba).await.unwrap().is_some(),
+        "the binding kept"
+    );
+    // Redelivered: confirmed again, recorded, offboarded.
+    script_confirmed(&h.graph);
+    assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    assert_eq!(h.graph.remaining(), 0);
+    assert!(h.vault.get(&waba).await.unwrap().is_none(), "token deleted");
+    assert!(h.store.waba(&waba).await.unwrap().is_none(), "unbound");
+    for pn in [PHONE, PHONE_2] {
+        assert!(
+            h.store
+                .number(&PhoneNumberId::new(pn).unwrap())
+                .await
+                .unwrap()
+                .is_none(),
+            "{pn} released"
+        );
+    }
+    let types = "number_connected,number_disconnected,number_reconnect_required";
+    assert_eq!(
+        polled_of(&h, &events_a, types).await,
+        [
+            number_event("number_connected", PHONE, None),
+            number_event("number_connected", PHONE_2, None),
+            number_event("number_disconnected", PHONE, Some("account_deleted")),
+            number_event("number_disconnected", PHONE_2, Some("account_deleted")),
+        ],
+        "A's, each once"
+    );
+    let updates = polled_of(&h, &events_a, "account_updated").await;
+    assert_eq!(updates.len(), 1, "{updates:?}");
+    assert_eq!(updates[0].1["update"]["event"], "ACCOUNT_DELETED");
+    assert_eq!(
+        h.call(Call::get("/v1/events").key(&events_b)).await.json()["data"],
+        json!([]),
+        "B saw A's"
+    );
+}
+
+/// Any other outbox failure on the offboarding's number events (not
+/// `Busy`: not redelivered, the operator's) leaves the merchant whole: the
+/// token, the binding and its numbers kept, no event. Decisive: the events
+/// recorded before the token is deleted (after it, the token is gone and
+/// the binding stays, for good).
+#[tokio::test]
+async fn an_offboarding_whose_events_fail_for_good_deletes_nothing() {
+    let h = harness(tech_provider());
+    let (a, _) = tenants(&h).await;
+    onboard_tech_provider(&h, &a).await;
+    let events_a = h.tenant_key(A, &[Scope::Events]).await;
+    let waba = WabaId::new(WABA).unwrap();
+    h.outbox.fates(&[common::Fate::Pass, common::Fate::Fail]);
+    script_confirmed(&h.graph);
+    assert_eq!(h.webhook(&uninstalled()).await.status, StatusCode::OK);
+    assert_eq!(h.graph.remaining(), 0);
+    assert!(
+        h.vault.get(&waba).await.unwrap().is_some(),
+        "the token kept"
+    );
+    assert!(
+        h.store.waba(&waba).await.unwrap().is_some(),
+        "the binding kept"
+    );
+    assert!(
+        polled_of(&h, &events_a, "number_disconnected")
+            .await
+            .is_empty()
+    );
+}
+
+/// Roadmap M2d: a resume whose `number_connected` the outbox refuses is
+/// `503` with its attempt kept, and the next resume records them, once
+/// each (a resume binds no new generation). Decisive: the events recorded
+/// before the kept attempt is dropped (dropped first, the next resume is
+/// `404 nothing_to_resume` and the events are lost).
+#[tokio::test]
+async fn a_resume_whose_number_events_fail_keeps_its_attempt_and_records_them_next() {
+    let h = harness(tech_provider());
+    let (a, _) = tenants(&h).await;
+    let events_a = h.tenant_key(A, &[Scope::Events, Scope::Signup]).await;
+    let state = start(&h, &a).await;
+    script_until_verified(&h.graph);
+    h.graph.push_json(200, success()); // subscribed_apps
+    h.graph.push_json(400, pin_mismatch());
+    let stopped = h.call(complete(&a, &finished(&state))).await;
+    assert_eq!(stopped.status, StatusCode::BAD_GATEWAY, "{}", stopped.text);
+    h.outbox.fail_next(1);
+    h.graph.push_json(200, success()); // subscribed_apps
+    h.graph.push_json(200, success()); // register
+    let refused = h
+        .call(resume(&a, &json!({"waba_id": WABA, "pin": "123456"})))
+        .await;
+    assert_eq!(
+        (refused.status, refused.code().as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable"),
+        "{}",
+        refused.text
+    );
+    let kept = h.call(Call::get("/v1/signup/attempts").key(&a)).await;
+    assert_eq!(
+        kept.json()["data"].as_array().unwrap().len(),
+        1,
+        "the attempt kept: {}",
+        kept.text
+    );
+    h.graph.push_json(200, success()); // subscribed_apps
+    h.graph.push_json(200, success()); // register
+    let done = h
+        .call(resume(&a, &json!({"waba_id": WABA, "pin": "123456"})))
+        .await;
+    assert_eq!(done.status, StatusCode::OK, "{}", done.text);
+    assert_eq!(h.graph.remaining(), 0);
+    assert_eq!(
+        polled_of(&h, &events_a, "number_connected").await,
+        [
+            number_event("number_connected", PHONE, None),
+            number_event("number_connected", PHONE_2, None),
+        ]
+    );
 }
 
 /// The scope: a key without `signup` reaches none of the routes; the

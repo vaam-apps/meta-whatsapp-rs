@@ -1234,14 +1234,21 @@ Among them since roadmap M2d:
   `click_id`, `tracking_token` and `product_id`).
 - The service's own events about your numbers, whose `data` names the
   number and its WABA only: `number_connected` (attached or onboarded
-  through Embedded Signup, its token stored: also after a reconnection), `number_disconnected` (with
-  `data.reason`: `tenant_disconnected` for your `DELETE
-  /v1/wabas/{waba_id}`, `operator_unbound` for the operator's unbind,
-  `partner_app_uninstalled` and `account_deleted` when Meta's
-  `account_update` offboards the WABA; more reasons may come), `number_reconnect_required` (Meta refused the
-  number's token: calls on it answer `409 reconnect_required` until it is
-  attached again). Each comes once per binding of the number: a token
-  refused again before a reconnection records no second one.
+  through Embedded Signup, its token stored: also after a
+  reconnection), `number_disconnected` (with `data.reason`:
+  `tenant_disconnected` for your `DELETE /v1/wabas/{waba_id}`,
+  `operator_unbound` for the operator's unbind, `partner_app_uninstalled`
+  and `account_deleted` when Meta's `account_update` offboards the WABA;
+  more reasons may come: default on one you do not know),
+  `number_reconnect_required` (Meta refused the number's token: calls on
+  it answer `409 reconnect_required` until it is attached again). Each
+  comes once per binding of the number: a token refused again before a
+  reconnection records no second one. They tell you when to look, not
+  the state itself: an event is recorded just before its change, so a
+  change that then fails (a `503` your retry finishes) leaves it; a
+  retried attach can repeat `number_connected`; and
+  `number_reconnect_required` is best effort. `GET /v1/numbers` is the
+  state: read it when one comes (design D81).
 
 **4. One event by id.** `GET /v1/events/{id}` answers one of the
 tenant's events, whole, as polling does: what a webhook delivery that

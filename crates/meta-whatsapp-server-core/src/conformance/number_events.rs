@@ -5,17 +5,21 @@
 //! number its tenant does not hold under the event's WABA, a binding that
 //! moved to another tenant, and a binding begun after the event's own (a
 //! tenant deleted, created again under its id and bound again) give the
-//! row to nobody; each event is recorded once per binding generation; and
-//! after a move the new holder's own event reaches it at once. The
+//! row to nobody; each event is recorded once per binding generation;
+//! after a move the new holder's own event reaches it at once; and the
+//! `Authorizer` records a binding's event for that binding's numbers
+//! only (a previous binding's writes no row). The
 //! services that record them (the admin attach and unbind, a tenant's
 //! disconnect, a `190`) are the service's HTTP tests' (`tests/number_events.rs`).
+
+use std::sync::Arc;
 
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::AppSecret;
 use serde_json::{Value, json};
 
 use super::live::{QUIET, WITHIN, authorizer, caller, next_frame};
-use super::webhooks::{Holder, hold};
+use super::webhooks::{Holder, WatchedOutbox, hold};
 use crate::backend::Backend;
 use crate::events::EventIdKey;
 use crate::live::{Frame, StreamQuery, Streams};
@@ -29,6 +33,7 @@ pub async fn run(backend: &dyn Backend) {
     a_number_event_reaches_its_numbers_tenant_only(backend).await;
     a_number_event_is_recorded_once_per_binding_generation(backend).await;
     a_number_event_of_a_binding_that_moved_reaches_nobody(backend).await;
+    a_number_event_is_recorded_for_its_bindings_numbers_only(backend).await;
 }
 
 /// What records the events: over the bundle's outbox and notifier, ids
@@ -384,4 +389,65 @@ pub async fn a_number_event_of_a_binding_that_moved_reaches_nobody(backend: &dyn
         polled(backend, AGAIN.id).await.is_empty(),
         "a tenant created again got its namesake's event"
     );
+}
+
+/// What the services record (`Authorizer::record_number_event`, roadmap
+/// M2d): the event for the numbers its binding's tenant holds under its
+/// WABA, read when it records. Once the WABA moved to another tenant, an
+/// event of the previous binding writes no row at all (not even an
+/// operator-only one naming the new holder's numbers); the new binding's
+/// own is its tenant's. Decisive: the tenant filter on the numbers read
+/// (the outbox's guard alone would keep such rows from every tenant, but
+/// still write them). Found by M2d's review, where that filter survived
+/// every other test.
+pub async fn a_number_event_is_recorded_for_its_bindings_numbers_only(backend: &dyn Backend) {
+    const LEFT: Holder = Holder {
+        id: "ne-filter-left",
+        waba: "102290129345006",
+        pn: "106540352245017",
+    };
+    const ARRIVED: Holder = Holder {
+        id: "ne-filter-arrived",
+        ..LEFT
+    };
+    let records = backend.records();
+    hold(records.as_ref(), LEFT).await;
+    let of_left = epoch(records.as_ref(), LEFT.waba).await;
+    assert!(
+        records
+            .unbind_waba(&WabaId::new(LEFT.waba).unwrap())
+            .await
+            .unwrap()
+    );
+    hold(records.as_ref(), ARRIVED).await;
+    let of_arrived = epoch(records.as_ref(), ARRIVED.waba).await;
+    let watched = Arc::new(WatchedOutbox::new(backend.outbox()));
+    let authz = authorizer(backend).with_number_events(NumberEvents::new(
+        watched.clone(),
+        backend.notifier(),
+        EventIdKey::from_app_secret(&AppSecret::new("app-secret-of-the-number-events-suite"))
+            .unwrap(),
+    ));
+    authz
+        .record_number_event(
+            &of_left,
+            NumberEvent::Disconnected(DisconnectReason::OperatorUnbound),
+        )
+        .await
+        .unwrap();
+    assert!(
+        watched.inserted().is_empty(),
+        "a previous binding's event wrote a row about the new holder's number"
+    );
+    authz
+        .record_number_event(&of_arrived, NumberEvent::Connected)
+        .await
+        .unwrap();
+    let inserted = watched.inserted();
+    assert_eq!(inserted.len(), 1);
+    assert_eq!(inserted[0].0.tenant, Some(tenant(ARRIVED.id)));
+    assert_eq!(inserted[0].0.phone_number_id, Some(number(ARRIVED.pn)));
+    assert!(inserted[0].1.is_some(), "recorded");
+    assert_eq!(polled(backend, ARRIVED.id).await.len(), 1);
+    assert!(polled(backend, LEFT.id).await.is_empty());
 }

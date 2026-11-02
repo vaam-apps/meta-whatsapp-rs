@@ -315,3 +315,166 @@ async fn a_number_events_data_names_the_businesss_ids_only() {
     }
     assert_eq!(reply.json()["data"].as_array().unwrap().len(), 2);
 }
+
+/// What each recording that fails answers: the attach, the tenant's
+/// disconnect and the operator's unbind are `503 storage_unavailable` with
+/// the binding kept, and their repeat records the events (the attach's
+/// again for its new generation, the disconnections' once); a `190` whose
+/// event the outbox refuses still answers the call's own `409
+/// reconnect_required`, the numbers marked (best effort: no event).
+/// Decisive: each `?` on a recording (dropped, the call answers success
+/// with no event), and the `190`'s recording kept out of its answer.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn a_number_event_the_outbox_refuses_is_503_and_its_repeat_records_it() {
+    let h = Harness::with_settings(settings());
+    let admin = h.admin_key().await;
+    h.tenant(A).await;
+    let key_a = h
+        .tenant_key(A, &[Scope::Events, Scope::Numbers, Scope::Send])
+        .await;
+    let unavailable = |reply: &common::Reply, what: &str| {
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable"),
+            "{what}: {}",
+            reply.text
+        );
+    };
+    let waba = meta_whatsapp_rs::core::ids::WabaId::new(WABA_A).unwrap();
+
+    // The attach: bound and stored, its event refused, `503` before the
+    // app is subscribed; the repeat (a new generation) records it.
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": PN_1, "display_phone_number": "+1 631-555-1111"}]}),
+    );
+    h.outbox.fail_next(1);
+    let refused = h
+        .call(
+            Call::new(Method::POST, format!("/v1/admin/tenants/{A}/wabas"))
+                .key(&admin)
+                .json(&json!({"waba_id": WABA_A, "token": SYSTEM_TOKEN})),
+        )
+        .await;
+    unavailable(&refused, "the attach");
+    assert_eq!(h.graph.remaining(), 0, "not subscribed");
+    assert!(polled(&h, &key_a).await.is_empty());
+    attach(&h, &admin, A, WABA_A, &[PN_1]).await;
+    let mut expected = vec![event("number_connected", PN_1, WABA_A)];
+    assert_eq!(polled(&h, &key_a).await, expected, "the repeat's");
+
+    // A `190`: the call's own answer, the number marked, no event.
+    h.outbox.fail_next(1);
+    refused_token(&h, &key_a, PN_1).await;
+    assert_eq!(polled(&h, &key_a).await, expected, "best effort");
+
+    // The tenant's disconnect: unsubscribed, its event refused, `503`, the
+    // binding and the token kept; the repeat records it once.
+    attach(&h, &admin, A, WABA_A, &[PN_1]).await;
+    expected.push(event("number_connected", PN_1, WABA_A));
+    h.graph.push_json(200, json!({"success": true}));
+    h.outbox.fail_next(1);
+    let disconnect = || Call::new(Method::DELETE, format!("/v1/wabas/{WABA_A}")).key(&key_a);
+    unavailable(&h.call(disconnect()).await, "the disconnect");
+    assert!(h.store.waba(&waba).await.unwrap().is_some(), "bound still");
+    assert!(h.vault.get(&waba).await.unwrap().is_some(), "token kept");
+    assert_eq!(polled(&h, &key_a).await, expected);
+    h.graph.push_json(200, json!({"success": true}));
+    let gone = h.call(disconnect()).await;
+    assert_eq!(gone.status, StatusCode::NO_CONTENT, "{}", gone.text);
+    expected.push(disconnected(PN_1, WABA_A, "tenant_disconnected"));
+    assert_eq!(polled(&h, &key_a).await, expected);
+
+    // The operator's unbind: the same.
+    attach(&h, &admin, A, WABA_A, &[PN_1]).await;
+    expected.push(event("number_connected", PN_1, WABA_A));
+    let unbind =
+        || Call::new(Method::DELETE, format!("/v1/admin/wabas/{WABA_A}/binding")).key(&admin);
+    h.graph.push_json(200, json!({"success": true}));
+    h.outbox.fail_next(1);
+    unavailable(&h.call(unbind()).await, "the unbind");
+    assert!(h.store.waba(&waba).await.unwrap().is_some(), "bound still");
+    h.graph.push_json(200, json!({"success": true}));
+    let unbound = h.call(unbind()).await;
+    assert_eq!(unbound.status, StatusCode::NO_CONTENT, "{}", unbound.text);
+    expected.push(disconnected(PN_1, WABA_A, "operator_unbound"));
+    assert_eq!(polled(&h, &key_a).await, expected);
+
+    // And an unbind with no usable token (nothing to unsubscribe with).
+    attach(&h, &admin, A, WABA_A, &[PN_1]).await;
+    expected.push(event("number_connected", PN_1, WABA_A));
+    h.vault.delete(&waba).await.unwrap();
+    h.outbox.fail_next(1);
+    unavailable(&h.call(unbind()).await, "the unbind without a token");
+    assert!(h.store.waba(&waba).await.unwrap().is_some(), "bound still");
+    let unbound = h.call(unbind()).await;
+    assert_eq!(unbound.status, StatusCode::NO_CONTENT, "{}", unbound.text);
+    expected.push(disconnected(PN_1, WABA_A, "operator_unbound"));
+    assert_eq!(polled(&h, &key_a).await, expected);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// After a move, the next holder's views of the number hold its own
+/// events only: its number's stream from the start, its poll filtered by
+/// the number, and the previous holder's events by id are `404`; the
+/// previous holder keeps its own and gets none of the next holder's.
+/// Decisive: the row's tenant (the epoch's) and the number stream's
+/// tenant filter.
+#[tokio::test]
+async fn after_a_move_each_holder_sees_its_own_number_events_only() {
+    let h = Harness::with_settings(settings());
+    let admin = h.admin_key().await;
+    h.tenant(A).await;
+    h.tenant(B).await;
+    let key_a = h.tenant_key(A, &[Scope::Events, Scope::Numbers]).await;
+    let key_b = h.tenant_key(B, &[Scope::Events, Scope::Numbers]).await;
+    attach(&h, &admin, A, WABA_A, &[PN_1]).await;
+    h.graph.push_json(200, json!({"success": true}));
+    let unbound = h
+        .call(Call::new(Method::DELETE, format!("/v1/admin/wabas/{WABA_A}/binding")).key(&admin))
+        .await;
+    assert_eq!(unbound.status, StatusCode::NO_CONTENT, "{}", unbound.text);
+    let as_ids: Vec<String> = h.call(Call::get("/v1/events").key(&key_a)).await.json()["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(as_ids.len(), 2);
+    attach(&h, &admin, B, WABA_A, &[PN_1]).await;
+    let mut stream = opened(
+        &h,
+        Call::get(format!("/v1/numbers/{PN_1}/events/stream?after=0")).key(&key_b),
+    )
+    .await;
+    let frame = stream.event(WITHIN).await.json();
+    assert_eq!(
+        (&frame["type"], &frame["tenant_id"]),
+        (&json!("number_connected"), &json!(B)),
+        "the next holder's own first"
+    );
+    assert!(stream.next(QUIET).await.is_none(), "and nothing else");
+    let filtered = h
+        .call(Call::get(format!("/v1/events?phone_number_id={PN_1}")).key(&key_b))
+        .await;
+    assert_eq!(filtered.status, StatusCode::OK, "{}", filtered.text);
+    let filtered = filtered.json()["data"].as_array().unwrap().clone();
+    assert_eq!(filtered.len(), 1, "{filtered:?}");
+    assert_eq!(filtered[0]["id"], frame["id"]);
+    for id in &as_ids {
+        let other = h
+            .call(Call::get(format!("/v1/events/{id}")).key(&key_b))
+            .await;
+        assert_eq!(other.status, StatusCode::NOT_FOUND, "{}", other.text);
+    }
+    assert_eq!(
+        polled(&h, &key_a).await,
+        [
+            event("number_connected", PN_1, WABA_A),
+            disconnected(PN_1, WABA_A, "operator_unbound"),
+        ],
+        "the previous holder: its own, none of the next's"
+    );
+    assert_eq!(h.graph.remaining(), 0);
+}

@@ -1974,7 +1974,7 @@ enum Insert {
 
 /// The backend's outbox, recording every row asked for and the answer,
 /// able to hold inserts at a gate (while it is closed) and to fail them.
-struct WatchedOutbox {
+pub(super) struct WatchedOutbox {
     inner: Arc<dyn Outbox>,
     mode: Mutex<Insert>,
     gate: watch::Sender<bool>,
@@ -1984,7 +1984,7 @@ struct WatchedOutbox {
 }
 
 impl WatchedOutbox {
-    fn new(inner: Arc<dyn Outbox>) -> Self {
+    pub(super) fn new(inner: Arc<dyn Outbox>) -> Self {
         Self {
             inner,
             mode: Mutex::new(Insert::Pass),
@@ -1997,7 +1997,7 @@ impl WatchedOutbox {
 
     /// Every row the backend's outbox recorded or met again, and its
     /// answer (`None`: already stored).
-    fn inserted(&self) -> Vec<(NewEvent, Option<i64>)> {
+    pub(super) fn inserted(&self) -> Vec<(NewEvent, Option<i64>)> {
         self.inserted
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

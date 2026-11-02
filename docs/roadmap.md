@@ -4663,11 +4663,40 @@ design's (§9).
     three types' sentinels); after the merge with M3a, the signup's `number_connected` and the `account_update` offboarding's `number_disconnected` each removed (`tests/signup.rs`'s uninstall case). The `190`'s read of the numbers not marked
     yet is an optimisation the key makes safe: a repeated refusal of a
     marked token is refused before Meta is asked, so no test tells it.
-  - **Proposed, for the coordinator** (design §10, D80–D85; none
-    recorded): the number events' `data` (D80), when each is recorded
-    (D81), their guard and date (D82), their outbox key (D83), their
-    place in `TENANT_EVENT_TYPES` (D84) and `user_action_reported`'s
-    `data` served whole (D85). Each swaps where its row says.
+  - **Decided by the coordinator on 2026-11-02** (design §10, D80–D85,
+    under the owner's delegation, swappable): the number events' `data`
+    (D80), when each is recorded (D81), their guard and date (D82),
+    their outbox key (D83), their place in `TENANT_EVENT_TYPES` (D84) and
+    `user_action_reported`'s `data` served whole (D85). Each swaps where
+    its row says.
+  - **Review** (adversarial, tenant isolation, 2026-11-02): an Embedded
+    Signup's completion or resume dropped its kept attempt before
+    recording `number_connected`, so an outbox failure answered `503`
+    and the resume that was to record them found nothing to resume; now
+    recorded before the attempt is dropped. Meta's `account_update`
+    offboarding recorded `number_disconnected` after the token was
+    deleted, so an outbox failure left the token deleted and the binding
+    kept (and, not `Busy`, for good); now recorded once Graph confirmed,
+    before anything is revoked or deleted. New HTTP tests:
+    `tests/signup.rs`'s
+    `an_account_deleted_offboards_and_is_its_tenants_number_disconnected`
+    (the `ACCOUNT_DELETED` path, M3a's first test of it, with a busy
+    outbox redelivered), `an_offboarding_whose_events_fail_for_good_deletes_nothing`
+    and `a_resume_whose_number_events_fail_keeps_its_attempt_and_records_them_next`;
+    `tests/number_events.rs`'s
+    `a_number_event_the_outbox_refuses_is_503_and_its_repeat_records_it`
+    (the attach, the disconnect and both unbind paths `503`, their repeat
+    recording each; a `190`'s refusal answering its own `409`) and
+    `after_a_move_each_holder_sees_its_own_number_events_only` (the next
+    holder's number stream from the start, its `phone_number_id` filter,
+    the previous holder's ids `404`); the core's
+    `conformance::number_events::a_number_event_is_recorded_for_its_bindings_numbers_only`
+    (a previous binding's event writes no row about the new holder's
+    numbers: the `Authorizer`'s tenant filter, which survived every other
+    test). Each failing on its mutation (the review's table). M3a's
+    `m3_4_uninstall_then_removal_end_revoked_then_deleted` now redelivers
+    the same body (dated anew, a redelivery crossing a second was a second
+    `account_updated`: a flake).
   - **Pending the owner's confirmation before the first release**
     (architecture § Stable identifiers): the three type names, the
     `reason` values `tenant_disconnected`, `operator_unbound`,
@@ -4675,15 +4704,19 @@ design's (§9).
     `meta-whatsapp-server/number-event/v1` with its key layout.
   - **Left, and why:** the coexistence offboarding (`account_update`'s
     offboarded event, design §3.4) marks nothing and records no event
-    (M3b's routes); M3a's wiring is tested over HTTP on the uninstall
-    (`tests/signup.rs`'s `m3_4_uninstall_then_removal_end_revoked_then_deleted`)
-    and not on `ACCOUNT_DELETED` alone; a number
+    (M3b's routes); a number
     a refresh drops from its WABA gets no `number_disconnected` (its
     binding is gone when the refresh lands, so the outbox would keep the
     row operator-only); a tenant deleted, created again and bound again
-    within one second could get its namesake's late event (D82); a
-    disconnect that fails after its events (`503`, the WABA moved) leaves
-    them for a binding that stays (D81).
+    within one second could get its namesake's late event, and an event of
+    a binding's previous generation recorded after its tenant refreshed
+    it reaches that tenant (D82: the guard compares no generation); a
+    disconnect that fails after its events (`503`, the WABA moved or
+    refreshed, a revocation that fails) leaves them for a binding that
+    stays (D81); a first Embedded Signup completion whose events the
+    outbox refuses kept no attempt to resume, and loses them with its
+    `503` (D81); a `190` whose event the outbox refuses loses it (best
+    effort, D81).
 - [x] **M2e. Received media** (row 45; OPEN_QUESTIONS #43): a media id
   the service recorded as received on the tenant's number is asked from
   Meta without `phone_number_id`; every other id keeps the check; a live
@@ -5991,7 +6024,8 @@ everything else goes into the parity-completion report.
   values `tenant_disconnected`, `operator_unbound`,
   `partner_app_uninstalled` and `account_deleted`, and their outbox
   key's label `meta-whatsapp-server/number-event/v1` with its layout
-  (design D80, D83, proposed), added and awaiting confirmation), for the
+  (design D80, D83, decided by the coordinator), added and awaiting
+  confirmation), for the
   same reason as L5's.
 - **A scope of its own for deregistering a number** (M3d, design D68):
   the coordinator decided the scope `numbers`, a confirmation in the body
