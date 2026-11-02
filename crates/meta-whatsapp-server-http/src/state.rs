@@ -195,8 +195,13 @@ impl AppState {
         let vault = TokenVault::new(backend.kv(), vault_keys)?;
         // One clock for the whole service: the webhook pipeline's.
         let clock = inbound.clock();
-        let authz =
-            Arc::new(Authorizer::new(store.clone(), vault, client)?.with_clock(clock.clone()));
+        // The service's number events (roadmap M2d) go to the outbox the
+        // pipeline records Meta's events in, with its ids.
+        let authz = Arc::new(
+            Authorizer::new(store.clone(), vault, client)?
+                .with_clock(clock.clone())
+                .with_number_events(inbound.number_events(backend.as_ref())),
+        );
         // Embedded Signup's attempts in the bundle's key/value store, as the
         // vault; its offboarding acts on the webhook pipeline's account
         // updates, through the same authorization order (roadmap M3a).

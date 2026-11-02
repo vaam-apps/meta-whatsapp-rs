@@ -112,3 +112,20 @@ async fn the_webhook_suite_runs_on_one_backend() {
     let backend = memory::Memory::default();
     conformance::webhooks::run(&backend).await;
 }
+
+/// Roadmap M2d's decisive case (M2.6): Meta's examples of the three
+/// reviewed types reach their number's tenant and no other.
+#[tokio::test]
+async fn the_reviewed_types_reach_their_numbers_tenant_and_no_other() {
+    let backend = memory::Memory::default();
+    conformance::webhooks::the_reviewed_types_reach_their_numbers_tenant_and_no_other(&backend)
+        .await;
+}
+
+/// Roadmap M2d with S2b's rules: a previous holder's examples of the three
+/// reviewed types reach no tenant after a move.
+#[tokio::test]
+async fn the_reviewed_types_of_a_previous_holder_reach_no_tenant() {
+    let backend = memory::Memory::default();
+    conformance::webhooks::the_reviewed_types_of_a_previous_holder_reach_no_tenant(&backend).await;
+}

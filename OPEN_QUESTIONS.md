@@ -643,7 +643,9 @@ Found while writing the integrator guides and checking them against
     `ReplyChecks::window(false)`; the ownership refusal is its own
     `ErrorKind::ThreadOwnedElsewhere`, each recording a switch
     (`InboxSink::with_recording`) and the idle timeout a setting
-    (`Inbox::with_thread_idle_after`). Roadmap L7 (landed) and M2d.
+    (`Inbox::with_thread_idle_after`). Roadmap L7 and M2d (both landed:
+    the service's tenants receive the two event types the inbox records
+    from, on M2a's routes the same checks).
 
 ## Service (meta-whatsapp-server)
 

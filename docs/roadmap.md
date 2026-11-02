@@ -1260,7 +1260,7 @@ and `store-postgres`.
     1,400 events in two streams, one past a purge step) and
     `live_mongodb_migrate_makes_the_named_collections_and_indexes_once`;
     the stored names pinned by `schema::tests::the_stored_names_are_pinned`.
-    **Brought up to `main` on 2026-11-02** (PRs #92 to #108): the two
+    **Brought up to `main` on 2026-11-02** (PRs #92 to #109): the two
     `Outbox` methods added since, implemented as Postgres does them.
     `received_media` (M2e, required): an insert keeps the media id its
     event records as received (`NewEvent::received_media`) in
@@ -1279,7 +1279,8 @@ and `store-postgres`.
     delegated, as none changes a binding the outbox reads). Their tests:
     `conformance::outbox::received_media` (in
     `live_mongodb_outbox_passes_the_outbox_cases`), `conformance::live`'s
-    lookups by id (in the whole suite), and
+    lookups by id and M2d's `conformance::number_events` (in the whole
+    suite), and
     `live_mongodb_received_media_reads_its_index_in_order` (no field on
     a row without media, the index's use counted by `$indexStats`, thirty
     rows of three tenants read back newest first).
@@ -4740,7 +4741,7 @@ design's (§9).
   (Standard Webhooks, a destination allow list).
   - **After:** M2b.
   - **Decisive:** M2.4.
-- [ ] **M2d. The reviewed event types** (rows 84, 137, 139; D25):
+- [x] **M2d. The reviewed event types** (rows 84, 137, 139; D25):
   `standby_observed`, `thread_control_changed` and
   `user_action_reported` made tenant-visible, with L7's inbox answer to
   OPEN_QUESTIONS #44 (the inbox already records ownership and window
@@ -4750,6 +4751,133 @@ design's (§9).
   - **After:** S7, L7.
   - **Decisive:** M2.6; taking one of the three types out of
     `TENANT_EVENT_TYPES` fails it.
+  - **Landed:** the three types move from `OPERATOR_EVENT_TYPES` (now
+    `unknown`, `unparsed`, `partner_solution_updated`) to
+    `TENANT_EVENT_TYPES` (34 types), routed by their number as every event
+    naming one (the binding epoch, the same-second rule after a move and
+    D36's window unchanged), so `GET /v1/events`, `GET /v1/events/{id}`,
+    both streams and the `types` filter carry them for their number's
+    tenant only. The OpenAPI document is additive only (six values
+    appended to `KnownEventType`; the one line removed is a comma); no
+    event data snapshot changed or was added (the 11 fixtures of the three
+    types, from five of Meta's pages, were pinned already). Meta's click
+    payload (`marketing-messages/track-click-events`, read again on
+    2026-11-02) names neither the user nor the message: its `click_id`,
+    `tracking_token` and `product_id` are served whole and reach no log
+    line (M1.7's capture now delivers the three types with sentinels). The
+    service's number events are the core's new `number_events`:
+    `number_connected` (the admin attach, once the token is stored, and,
+    merged with M3a, an Embedded Signup completed or resumed),
+    `number_disconnected` (`reason`: `tenant_disconnected` once Meta
+    unsubscribed the app, before M3a's revocation in Solution Partner
+    mode; `operator_unbound` with or without a usable token; with M3a,
+    `partner_app_uninstalled` and `account_deleted` for Meta's
+    `account_update` offboarding, confirmed with Graph; recorded before
+    the binding goes) and
+    `number_reconnect_required` (a `190` marking a number anew, best
+    effort), one per number, `data` `{event, phone_number_id, waba_id}`
+    and `reason`, keyed by the binding's epoch (once per generation), the
+    outbox's own `RouteGuard` on the number under the epoch's WABA dated
+    the second after that binding began (no port change, no backend
+    change), each waking the tenant's streams; the `Authorizer` records
+    them once `AppState` gives it `Inbound::number_events`. Decisive tests:
+    `conformance::webhooks::the_reviewed_types_reach_their_numbers_tenant_and_no_other`
+    (Meta's 11 examples, `conformance::webhooks::REVIEWED_EXAMPLES`, on
+    A's number: A's rows, poll and lookups; B none; an unbound number's
+    and A's number under B's WABA operator-only),
+    `the_reviewed_types_of_a_previous_holder_reach_no_tenant` (after a
+    move, dated before it or in the binding's second: no tenant; the next
+    second: the new holder) and
+    `conformance::live::the_reviewed_types_reach_their_numbers_tenants_streams_only`,
+    in `conformance::run` (the memory crate's and, live, Postgres), the
+    first two also on the core's own memory backend; the suite
+    `conformance::number_events` (their tenant only on poll, streams and by
+    id, a number not the binding's and a moved or re-made binding giving
+    the row to nobody, once per generation, the new holder's own at once
+    after a move); over HTTP `tests/reviewed_events.rs` (M2.6: poll in
+    order with the snapshots' data, by id, both streams of each tenant,
+    `types`; `KnownEventType` equal to `TENANT_EVENT_TYPES`; the inbox
+    answering what the events say: after Meta's standby copy no unread
+    message, a recorded window, `409 thread_owned_elsewhere`, and with the
+    number's ownership check off the reply going on the window the copy
+    opened, `409 customer_service_window_closed` without the copy; after
+    Meta's `control_taken`, the same) and `tests/number_events.rs` (each
+    change of a binding its tenant's event only, on the poll, the stream,
+    the number's stream and by id; the operator's unbind the previous
+    holder's, the next holder starting anew; `data` holding no token,
+    display number or Meta text). By mutation, each failing
+    a named test: each of the three types in turn moved back to
+    `OPERATOR_EVENT_TYPES` (the two webhook cases, on the core's memory
+    backend; for `user_action_reported` also HTTP M2.6 and the memory
+    crate's `conformance::run`); `user_action_reported`'s date dropped from
+    `meta_time` (the previous holder's case: undated, the new holder no
+    longer gets the next second's); the attach's `number_connected`, the
+    disconnect's and both unbind paths' `number_disconnected`, the `190`'s
+    `number_reconnect_required` each removed, and the disconnect's moved
+    after the binding goes (operator-only then), over HTTP; the guard
+    dropped (operator-only rows) and the guard on the WABA alone (another
+    tenant's number reaching the epoch's tenant), the date in the binding's
+    own second, the date by the clock and the clock-or-binding date (a
+    tenant created again getting its namesake's), the generation left out
+    of the key (`conformance::number_events`, memory); the tenant event's
+    `data` added to the pipeline's log line (M1.7's capture, over the
+    three types' sentinels); after the merge with M3a, the signup's `number_connected` and the `account_update` offboarding's `number_disconnected` each removed (`tests/signup.rs`'s uninstall case). The `190`'s read of the numbers not marked
+    yet is an optimisation the key makes safe: a repeated refusal of a
+    marked token is refused before Meta is asked, so no test tells it.
+  - **Decided by the coordinator on 2026-11-02** (design §10, D80–D85,
+    under the owner's delegation, swappable): the number events' `data`
+    (D80), when each is recorded (D81), their guard and date (D82),
+    their outbox key (D83), their place in `TENANT_EVENT_TYPES` (D84) and
+    `user_action_reported`'s `data` served whole (D85). Each swaps where
+    its row says.
+  - **Review** (adversarial, tenant isolation, 2026-11-02): an Embedded
+    Signup's completion or resume dropped its kept attempt before
+    recording `number_connected`, so an outbox failure answered `503`
+    and the resume that was to record them found nothing to resume; now
+    recorded before the attempt is dropped. Meta's `account_update`
+    offboarding recorded `number_disconnected` after the token was
+    deleted, so an outbox failure left the token deleted and the binding
+    kept (and, not `Busy`, for good); now recorded once Graph confirmed,
+    before anything is revoked or deleted. New HTTP tests:
+    `tests/signup.rs`'s
+    `an_account_deleted_offboards_and_is_its_tenants_number_disconnected`
+    (the `ACCOUNT_DELETED` path, M3a's first test of it, with a busy
+    outbox redelivered), `an_offboarding_whose_events_fail_for_good_deletes_nothing`
+    and `a_resume_whose_number_events_fail_keeps_its_attempt_and_records_them_next`;
+    `tests/number_events.rs`'s
+    `a_number_event_the_outbox_refuses_is_503_and_its_repeat_records_it`
+    (the attach, the disconnect and both unbind paths `503`, their repeat
+    recording each; a `190`'s refusal answering its own `409`) and
+    `after_a_move_each_holder_sees_its_own_number_events_only` (the next
+    holder's number stream from the start, its `phone_number_id` filter,
+    the previous holder's ids `404`); the core's
+    `conformance::number_events::a_number_event_is_recorded_for_its_bindings_numbers_only`
+    (a previous binding's event writes no row about the new holder's
+    numbers: the `Authorizer`'s tenant filter, which survived every other
+    test). Each failing on its mutation (the review's table). M3a's
+    `m3_4_uninstall_then_removal_end_revoked_then_deleted` now redelivers
+    the same body (dated anew, a redelivery crossing a second was a second
+    `account_updated`: a flake).
+  - **Pending the owner's confirmation before the first release**
+    (architecture § Stable identifiers): the three type names, the
+    `reason` values `tenant_disconnected`, `operator_unbound`,
+    `partner_app_uninstalled` and `account_deleted`, and the label
+    `meta-whatsapp-server/number-event/v1` with its key layout.
+  - **Left, and why:** the coexistence offboarding (`account_update`'s
+    offboarded event, design §3.4) marks nothing and records no event
+    (M3b's routes); a number
+    a refresh drops from its WABA gets no `number_disconnected` (its
+    binding is gone when the refresh lands, so the outbox would keep the
+    row operator-only); a tenant deleted, created again and bound again
+    within one second could get its namesake's late event, and an event of
+    a binding's previous generation recorded after its tenant refreshed
+    it reaches that tenant (D82: the guard compares no generation); a
+    disconnect that fails after its events (`503`, the WABA moved or
+    refreshed, a revocation that fails) leaves them for a binding that
+    stays (D81); a first Embedded Signup completion whose events the
+    outbox refuses kept no attempt to resume, and loses them with its
+    `503` (D81); a `190` whose event the outbox refuses loses it (best
+    effort, D81).
 - [x] **M2e. Received media** (row 45; OPEN_QUESTIONS #43): a media id
   the service recorded as received on the tenant's number is asked from
   Meta without `phone_number_id`; every other id keeps the check; a live
@@ -6051,6 +6179,12 @@ everything else goes into the parity-completion report.
   confirmation; M3a's migration 6, `signup`, its tables
   `wa_server_signup_attempts` and `wa_server_vault_records`, their
   columns and the kinds `waba` and `business`, added and awaiting
+  confirmation; M2d's number events, their types `number_connected`,
+  `number_disconnected` and `number_reconnect_required`, the `reason`
+  values `tenant_disconnected`, `operator_unbound`,
+  `partner_app_uninstalled` and `account_deleted`, and their outbox
+  key's label `meta-whatsapp-server/number-event/v1` with its layout
+  (design D80, D83, decided by the coordinator), added and awaiting
   confirmation; S9's MongoDB outbox
   collections `wa_server_events`, `wa_server_event_streams` and
   `wa_server_wabas`, their fields and their index names, added by a spike

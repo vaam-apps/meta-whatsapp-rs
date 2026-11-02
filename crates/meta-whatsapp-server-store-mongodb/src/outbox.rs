@@ -657,35 +657,7 @@ impl MongoOutbox {
             .await?
             .ok_or_else(|| corrupt(s::STREAMS, s::STREAM_LAST))?;
         let sequence = i64_of(&drawn, s::STREAMS, s::STREAM_LAST)?;
-        let data_bytes = i64_saturating(event.data.len());
-        let mut row = doc! {
-            s::EVENT_STREAM: stream,
-            s::EVENT_SEQUENCE: sequence,
-            s::EVENT_TYPE: event.event_type.as_str(),
-            s::EVENT_DATA: event.data.as_str(),
-            s::EVENT_DATA_BYTES: data_bytes,
-        };
-        if let Some(tenant) = tenant {
-            row.insert(s::EVENT_TENANT, tenant.as_str());
-        }
-        if let Some(key) = &event.dedup_key {
-            row.insert(s::EVENT_DEDUP_KEY, key.as_str());
-            if let Some(window) = event.dedup_window {
-                row.insert(s::EVENT_DEDUP_UNTIL, bson_ceil(window.until));
-            }
-        }
-        if let Some(pn) = &event.phone_number_id {
-            row.insert(s::EVENT_PHONE_NUMBER, pn.as_str());
-        }
-        if let Some(waba) = &event.waba_id {
-            row.insert(s::EVENT_WABA, waba.as_str());
-        }
-        // The media id the event records as received (roadmap M2e), with
-        // what orders it among the same millisecond's rows.
-        if let Some(media) = event.received_media() {
-            row.insert(s::EVENT_MEDIA_ID, media.as_str());
-            row.insert(s::EVENT_MEDIA_ORDER, ObjectId::new());
-        }
+        let row = event_document(event, stream, sequence, tenant);
         // An upsert, so that `created_at` is the server's clock; one that
         // matches is an event id stored already (not a redelivery: those
         // share a dedup key, above), refused as Postgres' unique id is.
@@ -871,6 +843,46 @@ impl MongoOutbox {
     }
 }
 
+/// The document of `event`, as its insert stores it (`created_at` aside:
+/// the server's, set by the upsert).
+fn event_document(
+    event: &NewEvent,
+    stream: &str,
+    sequence: i64,
+    tenant: Option<&TenantId>,
+) -> Document {
+    let data_bytes = i64_saturating(event.data.len());
+    let mut row = doc! {
+        s::EVENT_STREAM: stream,
+        s::EVENT_SEQUENCE: sequence,
+        s::EVENT_TYPE: event.event_type.as_str(),
+        s::EVENT_DATA: event.data.as_str(),
+        s::EVENT_DATA_BYTES: data_bytes,
+    };
+    if let Some(tenant) = tenant {
+        row.insert(s::EVENT_TENANT, tenant.as_str());
+    }
+    if let Some(key) = &event.dedup_key {
+        row.insert(s::EVENT_DEDUP_KEY, key.as_str());
+        if let Some(window) = event.dedup_window {
+            row.insert(s::EVENT_DEDUP_UNTIL, bson_ceil(window.until));
+        }
+    }
+    if let Some(pn) = &event.phone_number_id {
+        row.insert(s::EVENT_PHONE_NUMBER, pn.as_str());
+    }
+    if let Some(waba) = &event.waba_id {
+        row.insert(s::EVENT_WABA, waba.as_str());
+    }
+    // The media id the event records as received (roadmap M2e), with
+    // what orders it among the same millisecond's rows.
+    if let Some(media) = event.received_media() {
+        row.insert(s::EVENT_MEDIA_ID, media.as_str());
+        row.insert(s::EVENT_MEDIA_ORDER, ObjectId::new());
+    }
+    row
+}
+
 /// An event as stored, from its document.
 fn stored_event(row: &Document) -> StoreResult<StoredEvent> {
     let tenant = optional_str(row, s::EVENTS, s::EVENT_TENANT)?
@@ -1035,6 +1047,48 @@ mod tests {
         let before = time::macros::datetime!(1969-12-31 23:59:59.9995 UTC);
         assert_eq!(bson_floor(before).timestamp_millis(), -1);
         assert_eq!(bson_ceil(before).timestamp_millis(), 0);
+    }
+
+    /// An event recording a received media id (roadmap M2e) stores it,
+    /// with its order, under the index's fields; any other event stores
+    /// neither, so the partial index holds the media rows only. Decisive:
+    /// the fields written, and only for `NewEvent::received_media`.
+    #[test]
+    fn a_media_row_stores_its_media_id_and_no_other_row_does() {
+        let event = |event_type: &str, message: &str| NewEvent {
+            id: "evt_1".to_owned(),
+            dedup_key: None,
+            dedup_window: None,
+            tenant: None,
+            route_guard: None,
+            phone_number_id: None,
+            waba_id: None,
+            event_type: event_type.to_owned(),
+            data: format!(r#"{{"event":"{event_type}","message":{message}}}"#),
+        };
+        let image = r#"{"type":"image","image":{"id":"1003383421387256"}}"#;
+        let first = event_document(&event("message_received", image), "", 1, None);
+        assert_eq!(
+            first.get_str(s::EVENT_MEDIA_ID).unwrap(),
+            "1003383421387256"
+        );
+        let order = |row: &Document| row.get_object_id(s::EVENT_MEDIA_ORDER).unwrap();
+        let second = event_document(&event("message_received", image), "", 2, None);
+        assert!(
+            order(&second) > order(&first),
+            "one process's rows ordered as inserted"
+        );
+        for (event_type, message) in [
+            (
+                "message_received",
+                r#"{"type":"text","text":{"body":"hi"}}"#,
+            ),
+            ("status_updated", image),
+        ] {
+            let row = event_document(&event(event_type, message), "", 3, None);
+            assert!(!row.contains_key(s::EVENT_MEDIA_ID), "{event_type}");
+            assert!(!row.contains_key(s::EVENT_MEDIA_ORDER), "{event_type}");
+        }
     }
 
     /// The pause between two attempts stays between 0.1 and 64.1
