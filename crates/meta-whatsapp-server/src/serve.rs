@@ -655,6 +655,32 @@ mod tests {
 
     use super::*;
 
+    /// Roadmap M2f (design D88): a configured key is used on any storage;
+    /// without one, memory storage (development) gets a throwaway key and
+    /// any other storage none (`409 erasure_not_configured`). Decisive:
+    /// each arm of `erasure_deployment`.
+    #[test]
+    fn erasure_is_set_up_by_its_key_or_by_a_throwaway_on_memory() {
+        use meta_whatsapp_rs::core::ids::PhoneNumberId;
+        use meta_whatsapp_rs::core::secret::SecretBytes;
+        let key = || ErasureKey::new(SecretBytes::new(vec![7u8; 32])).unwrap();
+        let pn = PhoneNumberId::new("106540352242922").unwrap();
+        for memory in [true, false] {
+            let set = erasure_deployment(Some(key()), memory).unwrap().unwrap();
+            assert_eq!(
+                set.key().journal_hmac(&pn, "x"),
+                key().journal_hmac(&pn, "x"),
+                "the configured key, memory {memory}"
+            );
+        }
+        let throwaway = erasure_deployment(None, true).unwrap().unwrap();
+        assert_ne!(
+            throwaway.key().journal_hmac(&pn, "x"),
+            key().journal_hmac(&pn, "x")
+        );
+        assert!(erasure_deployment(None, false).unwrap().is_none());
+    }
+
     /// A state on a memory backend, with a Graph client scripted to answer
     /// nothing (the HTTP crate's unit tests have their own:
     /// `AppState::for_tests` is private to them).
