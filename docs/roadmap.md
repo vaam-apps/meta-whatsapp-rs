@@ -4660,7 +4660,7 @@ design's (§9).
     tenant created again getting its namesake's), the generation left out
     of the key (`conformance::number_events`, memory); the tenant event's
     `data` added to the pipeline's log line (M1.7's capture, over the
-    three types' sentinels). The `190`'s read of the numbers not marked
+    three types' sentinels); after the merge with M3a, the signup's `number_connected` and the `account_update` offboarding's `number_disconnected` each removed (`tests/signup.rs`'s uninstall case). The `190`'s read of the numbers not marked
     yet is an optimisation the key makes safe: a repeated refusal of a
     marked token is refused before Meta is asked, so no test tells it.
   - **Proposed, for the coordinator** (design §10, D80–D85; none
