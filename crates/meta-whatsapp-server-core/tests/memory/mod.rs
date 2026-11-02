@@ -774,7 +774,9 @@ impl Outbox for Events {
         let mut streams = self.streams.lock().unwrap();
         let before = streams.rows.len();
         streams.rows.retain(|row| {
-            let ours = row.event.tenant.as_ref().is_none_or(|t| t == tenant)
+            // The tenant's own rows: never an operator-only one (no
+            // tenant), as the port says.
+            let ours = row.event.tenant.as_ref() == Some(tenant)
                 && row.event.phone_number_id.as_ref() == Some(phone_number_id);
             !(ours && row.contacts.iter().any(|c| contacts.contains(c)))
         });
