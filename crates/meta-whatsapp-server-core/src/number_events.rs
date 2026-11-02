@@ -19,10 +19,14 @@
 //! binding's start ([`BindingEpoch::attached_at`]), so that its own binding
 //! admits it (after a move too: the same-second rule protects a WABA's new
 //! holder from the previous holder's redelivered events, and this event
-//! is the binding's own), and no binding begun in a later second does. So
-//! an event of a binding that moved to another tenant meanwhile, or that
-//! was unbound, its tenant deleted, created again under the same id and
-//! bound again in a later second, is operator-only. That is why
+//! is the binding's own), and no binding begun in a later second after a
+//! move does (a deleted tenant counts as another, so a tenant created again
+//! under its id is one; without a previous tenant, a binding of the
+//! event's own second, one after its binding's, still holds, which only
+//! the same tenant binding its own WABA again can meet). So an event of a
+//! binding that moved to another tenant meanwhile, or that was unbound, its
+//! tenant deleted, created again under the same id and bound again in a
+//! later second, is operator-only. That is why
 //! `number_disconnected` is recorded before the binding goes: after it, no
 //! binding would hold. The window after a move for undated events (design
 //! D36) does not apply: the event is dated.
@@ -438,13 +442,18 @@ mod tests {
             Some(epoch().attached_at + time::Duration::SECOND)
         );
         assert_eq!(guard.after_move, AfterMove::default());
-        // Its own binding admits it, after a move too; a binding begun a
-        // second later (a tenant created again, bound again) does not.
+        // Its own binding admits it, after a move too. A binding begun a
+        // second later after a move (a tenant created again, bound again:
+        // a deleted tenant counts as another) does not; without a previous
+        // tenant (the same tenant's WABA bound again by itself), the event's
+        // own second is the binding's, as for a first onboarding, and only
+        // a binding begun two seconds later is refused.
         let moved = Some(epoch().attached_at - time::Duration::days(3));
-        let later = epoch().attached_at + time::Duration::SECOND;
-        for previous in [moved, None] {
-            assert!(guard.admits(epoch().attached_at, previous), "{previous:?}");
-            assert!(!guard.admits(later, previous), "{previous:?}");
-        }
+        let later = |s: i64| epoch().attached_at + time::Duration::seconds(s);
+        assert!(guard.admits(epoch().attached_at, moved));
+        assert!(!guard.admits(later(1), moved));
+        assert!(guard.admits(epoch().attached_at, None));
+        assert!(guard.admits(later(1), None));
+        assert!(!guard.admits(later(2), None));
     }
 }
