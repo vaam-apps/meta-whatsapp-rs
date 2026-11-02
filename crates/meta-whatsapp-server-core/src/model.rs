@@ -117,11 +117,16 @@ pub enum Scope {
     /// its refunds (roadmap P2). The payment messages themselves are
     /// sends (`send`).
     Payments,
+    /// Erasing a customer on a number (roadmap M2f): irreversible, so a
+    /// scope of its own, which `inbox` does not grant (a stored name,
+    /// pending the owner's confirmation: docs/architecture.md, § Stable
+    /// identifiers).
+    Erasure,
 }
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 10] = [
+    pub const ALL: [Scope; 11] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -132,6 +137,7 @@ impl Scope {
         Self::Otp,
         Self::Numbers,
         Self::Payments,
+        Self::Erasure,
     ];
 
     /// Stored and API name.
@@ -147,6 +153,7 @@ impl Scope {
             Self::Otp => "otp",
             Self::Numbers => "numbers",
             Self::Payments => "payments",
+            Self::Erasure => "erasure",
         }
     }
 

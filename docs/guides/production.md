@@ -620,7 +620,13 @@ The procedure, per erasure request:
    redacted and keep their ids (a `wamid` encodes the phone number)
    unless the store deletes them (`ErasureMode::Delete`).
 3. Delete your own copies (downloaded media, exports, SSE clients'
-   caches), the service's outbox rows (roadmap M2f) and your dead
+   caches), the service's outbox rows (its erasure route,
+   `POST /v1/numbers/{pn}/erasures`, since roadmap M2f, does steps 1
+   and 2 on the service's database for the tenant's own rows, and
+   journals them; it leaves the number's operator-only rows to the
+   outbox's retention, and refuses a number moved from another tenant,
+   `409 erasure_crosses_binding`, where step 2 through the library is
+   the operator's) and your dead
    letters for that customer: `meta_whatsapp_rs::erasure::Eraser` with
    `with_dead_letters` does step 2 and the dead letters together (L21a;
    [webhooks.md § 9](webhooks.md#9-dead-letters)). A dead letter is kept

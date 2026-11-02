@@ -28,6 +28,17 @@ use meta_whatsapp_server_core::admin::Admin;
 use meta_whatsapp_server_core::messages::Messages;
 use support::*;
 
+use std::time::Duration;
+
+use meta_whatsapp_rs::adapters::store::MemoryConversationStore;
+use meta_whatsapp_rs::core::clock::{Clock, SystemClock};
+use meta_whatsapp_rs::core::ids::MediaId;
+use meta_whatsapp_rs::core::store::ConversationStore;
+use meta_whatsapp_server_core::erasure::Erasures;
+use meta_whatsapp_server_core::model::TenantId;
+use meta_whatsapp_server_core::outbox::{EventPage, EventQuery, NewEvent, Outbox, ReceivedMedia};
+use meta_whatsapp_server_core::store::StoreResult;
+
 /// The control: each `Authorizer` accepts what it made, and the service
 /// refuses the forger's key itself (it knows no such key).
 #[tokio::test]
@@ -302,4 +313,86 @@ async fn the_message_services_refuse_another_authorizers_number() {
     before.unchanged(&service, "Messages::new").await;
     let own = service.number().await;
     assert!(Messages::new(&service.authz, &own).is_ok());
+}
+
+/// An outbox no refused service may reach: every call panics.
+struct Untouched;
+
+#[async_trait::async_trait]
+impl Outbox for Untouched {
+    async fn insert(&self, _: &NewEvent) -> StoreResult<Option<i64>> {
+        panic!("the outbox was written")
+    }
+    async fn page(&self, _: &EventQuery) -> StoreResult<EventPage> {
+        panic!("the outbox was read")
+    }
+    async fn purge(&self, _: Duration) -> StoreResult<u64> {
+        panic!("the outbox was purged")
+    }
+    async fn received_media(&self, _: &MediaId) -> StoreResult<Vec<ReceivedMedia>> {
+        panic!("the outbox was read")
+    }
+    async fn erase_contacts(
+        &self,
+        _: &TenantId,
+        _: &PhoneNumberId,
+        _: &[String],
+    ) -> StoreResult<u64> {
+        panic!("the outbox was erased from")
+    }
+}
+
+/// Roadmap M2f: the erasure service opens only on a caller and a number
+/// its own `Authorizer` made: `Erasures::new` with the forger's caller, or
+/// the forger's number, is `403 forbidden`, before anything is read or
+/// erased (the outbox is never called, and the service's records and
+/// vault are untouched). The control: the service's own caller and number
+/// open it. Decisive: each of `Erasures::new`'s two admissions (`admit`
+/// and `admit_number`).
+#[tokio::test]
+async fn the_erasure_service_refuses_another_authorizers_caller_and_number() {
+    let (service, forger) = service_and_forger().await;
+    let store: Arc<dyn ConversationStore> = Arc::new(MemoryConversationStore::new());
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let (own_caller, own_number) = (service.caller().await, service.number().await);
+    let (foreign_caller, foreign_number) = (forger.caller().await, forger.number().await);
+    let before = Before::of(&service);
+    for (caller, number, what) in [
+        (
+            &foreign_caller,
+            &own_number,
+            "Erasures::new, a forged caller",
+        ),
+        (
+            &own_caller,
+            &foreign_number,
+            "Erasures::new, a forged number",
+        ),
+    ] {
+        let error = Erasures::new(
+            &service.authz,
+            caller,
+            number,
+            Arc::clone(&store),
+            &Untouched,
+            None,
+            Arc::clone(&clock),
+        )
+        .map(|_| ())
+        .unwrap_err();
+        assert_forbidden(&error, what);
+    }
+    before.unchanged(&service, "Erasures::new").await;
+    assert!(
+        Erasures::new(
+            &service.authz,
+            &own_caller,
+            &own_number,
+            store,
+            &Untouched,
+            None,
+            clock,
+        )
+        .is_ok()
+    );
 }

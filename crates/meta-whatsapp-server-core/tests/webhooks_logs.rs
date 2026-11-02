@@ -135,6 +135,14 @@ impl Outbox for BrokenOutbox {
     async fn purge(&self, _: std::time::Duration) -> StoreResult<u64> {
         unimplemented!("the pipeline does not purge")
     }
+    async fn erase_contacts(
+        &self,
+        _: &meta_whatsapp_server_core::model::TenantId,
+        _: &meta_whatsapp_rs::core::ids::PhoneNumberId,
+        _: &[String],
+    ) -> StoreResult<u64> {
+        unimplemented!("the pipeline does not erase")
+    }
     async fn received_media(
         &self,
         _: &meta_whatsapp_rs::core::ids::MediaId,

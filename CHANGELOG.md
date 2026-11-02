@@ -370,6 +370,39 @@ stored data, the owner's).
     unlinking the data endpoint, a shipping address's floor number, a
     health check or error answer at the checkout endpoint.
 
+- **Erasure in the service** (roadmap M2f, parity row 91: the service's
+  part done but the bot's auto-delete over HTTP, M5k; choices D86–D91,
+  decided by the coordinator under the owner's delegation, D89 and D90
+  narrow by default). `POST /v1/numbers/{pn}/erasures`
+  (`erase_customer`, a new scope `erasure` that no other scope grants)
+  erases a person on one of the tenant's numbers, only when called:
+  `{confirm: <pn>, contacts: [1..16]}`, the identities closed over the
+  inbox's (`Inbox::identities`), then a journal entry (the hex
+  HMAC-SHA256 of `<phone_number_id>|<contact>` under the new secret
+  `WA_SERVER_ERASURE_KEY`, written before anything is deleted, by
+  default the log target `erasure_journal`), the tenant's own outbox rows
+  naming them (never the number's operator-only rows, which the outbox's
+  retention takes), their inbox records (`Inbox::erase_all`), and the
+  audit event `customer_erased`. A number with a history cut (moved from
+  another tenant) is refused whole, `409 erasure_crosses_binding` (a new
+  code): the library's erasure has no time bound, and would reach the
+  previous holder's hidden records. It answers
+  `200 {erasure_id, phone_number_id, erased_at}`, nothing of what was
+  found; no `Idempotency-Key` (a repeat is harmless); no identity in any
+  answer, error, log, journal entry or audit event. Without
+  `WA_SERVER_ERASURE_KEY`, `409 erasure_not_configured` (a new code;
+  memory storage in development uses a throwaway key). Postgres migration
+  8, `erasure`: the column `wa_server_events.contacts` (`TEXT[]`, filled
+  at insert, no default, no table rewrite) and its partial GIN index
+  `wa_server_events_contacts_idx`; rows from before it name nobody.
+  Stable identifiers pending the owner's confirmation. The OpenAPI
+  document gains the route, its two schemas, the tag and the scope
+  (additive). In the core: `erasure` (`Erasures`, `ErasureJournal`,
+  `LogJournal`, `ErasureKey`, `ErasureDeployment`),
+  `outbox::event_contacts` and `NewEvent::contacts`,
+  `audit::erasure_audit`, `Scope::Erasure`, `Operation::EraseCustomer`;
+  `state::Settings::erasure` in the HTTP crate.
+
 - **Received media in the service** (roadmap M2e, OPEN_QUESTIONS #43,
   parity row 45, now done in the service too; choices D77–D79, decided
   by the coordinator under the owner's delegation).
@@ -1110,6 +1143,15 @@ stored data, the owner's).
   under the partial index `wa_server_events_media_idx`, and `get` (M2b)
   with one lookup by `_id` in the tenant's own stream; those field and
   index names are new stored names too, pending the same confirmation.
+  It answers `erase_contacts` (roadmap M2f) as Postgres does too: an
+  insert keeps the event's `NewEvent::contacts` as a `contacts` array of
+  `wa_server_events` (absent when it names nobody), and the erasure
+  deletes, whole, the rows whose `tenant_id` is the tenant (never an
+  operator-only row, which has none), whose `phone_number_id` is the
+  number and whose `contacts` hold one of the identities, through the
+  partial multikey index `wa_server_events_contacts_idx` (over the rows
+  holding `contacts`), answering how many rows went; the field and the
+  index name are new stored names, pending the same confirmation.
   With the driver a normal dependency, `cargo deny check` met
   `tiny-keccak`'s CC0-1.0 licence (reached through the driver's
   `macro_magic`): the owner allowed CC0-1.0 on 2026-11-02, see
@@ -2806,6 +2848,14 @@ stored data, the owner's).
 
 ### Changed
 
+- **The service's core** (roadmap M2f): `outbox::Outbox` gains a
+  required `erase_contacts` (a backend of your own must answer it: delete
+  the tenant's own rows of the number, never an operator-only one, whose
+  `NewEvent::contacts`, kept at insert, name one of the identities; the
+  `conformance` suites check it), and `model::Scope` and
+  `operation::Operation` gain a variant each (`Erasure`,
+  `EraseCustomer`): a `match` over either outside this repository must
+  follow.
 - **The service's core** (roadmap M5a): `messages::MessageType` gains
   `Pin`, `messages::InteractiveType` ten variants;
   `messages::SendMessage` and `ReplyMessage` gain `pin`, `category`,

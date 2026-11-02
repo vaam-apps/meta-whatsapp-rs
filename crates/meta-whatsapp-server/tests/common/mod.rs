@@ -4,6 +4,7 @@
 #![allow(dead_code)] // each test binary uses a different subset
 
 pub mod capture;
+pub mod erasure;
 pub mod inbox;
 pub mod media;
 pub mod meta;
@@ -288,6 +289,17 @@ impl EventStore for RecordingEvents {
         media_id: &meta_whatsapp_rs::core::ids::MediaId,
     ) -> Result<Vec<meta_whatsapp_server_core::outbox::ReceivedMedia>, StorageError> {
         self.inner.received_media(media_id).await
+    }
+
+    async fn erase_contacts(
+        &self,
+        tenant: &TenantId,
+        phone_number_id: &meta_whatsapp_rs::core::ids::PhoneNumberId,
+        contacts: &[String],
+    ) -> Result<u64, StorageError> {
+        self.inner
+            .erase_contacts(tenant, phone_number_id, contacts)
+            .await
     }
 }
 
@@ -605,8 +617,23 @@ pub fn test_settings() -> Settings {
     Settings {
         rate_limits: unlimited(),
         otp: Some(otp_deployment(None)),
+        erasure: Some(erasure_deployment()),
         ..Settings::default()
     }
+}
+
+/// The erasure key of every test service (roadmap M2f).
+pub const ERASURE_KEY: &str = "erasure-key-of-the-tests-32-bytes-long";
+
+/// The erasure settings of a test service: [`ERASURE_KEY`], the service's
+/// log journal.
+pub fn erasure_deployment() -> meta_whatsapp_server_core::erasure::ErasureDeployment {
+    meta_whatsapp_server_core::erasure::ErasureDeployment::new(
+        meta_whatsapp_server_core::erasure::ErasureKey::new(
+            meta_whatsapp_rs::core::secret::SecretBytes::new(ERASURE_KEY.as_bytes().to_vec()),
+        )
+        .unwrap(),
+    )
 }
 
 impl Harness {
@@ -864,7 +891,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 10] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 11] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -1099,6 +1126,13 @@ pub fn sample_call(operation: &Operation, sample: &Sample, key: Option<&str>) ->
         == ("POST", "/v1/numbers/{pn}/deregister")
     {
         return call.json(&serde_json::json!({"confirm": sample.pn}));
+    }
+    // An erasure confirms the path's number and names a contact (roadmap
+    // M2f).
+    if (operation.method.as_str(), operation.template.as_str())
+        == ("POST", "/v1/numbers/{pn}/erasures")
+    {
+        return call.json(&serde_json::json!({"confirm": sample.pn, "contacts": [SAMPLE_CONTACT]}));
     }
     if let Some(body) = sample_body(&operation.method, &operation.template) {
         call = call.json(&body);

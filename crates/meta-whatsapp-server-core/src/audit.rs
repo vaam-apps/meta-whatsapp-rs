@@ -8,7 +8,9 @@
 //! number id): never a secret or a phone number. A payment change's
 //! ([`payment_audit`]) adds what reconciles it: the number's id, the
 //! configuration's name, an order's `reference_id`, an amount and Meta's
-//! refund id, and never an OAuth link (docs/design/server.md, D58).
+//! refund id, and never an OAuth link (docs/design/server.md, D58). An
+//! erasure's ([`erasure_audit`], roadmap M2f) adds its id and what each
+//! store deleted, by count: never an identity of the person erased.
 
 /// An operator's change, logged at `info` with the target `audit`:
 /// `action`, the admin key's public id, and the ids it touched (tenant,
@@ -70,6 +72,48 @@ pub fn payment_audit(
         outcome = outcome.as_str(),
         "tenant change"
     );
+}
+
+/// A customer erased on a number (roadmap M2f: `crate::erasure`), logged
+/// like [`tenant_audit`] (target `audit`, message `tenant change`, action
+/// `customer_erased`) with the erasure's id (its journal entry's) and
+/// counts: the identities erased, the outbox rows, and each of the
+/// inbox's records ([`Erased`](meta_whatsapp_rs::core::store::Erased)).
+/// Never an identity, in clear or hashed: the journal has the HMACs.
+pub fn erasure_audit(key_id: &str, subject: &Subject<'_>, erasure: &ErasureFacts<'_>) {
+    let erased = erasure.erased;
+    tracing::info!(
+        target: "audit",
+        action = crate::erasure::ERASURE_ACTION,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
+        erasure_id = erasure.erasure_id,
+        identities = erasure.identities,
+        events = erasure.events,
+        messages = erased.messages,
+        conversations = erased.conversations,
+        window_events = erased.window_events,
+        thread_owners = erased.thread_owners,
+        contacts = erased.contacts,
+        identity_links = erased.identity_links,
+        group_messages = erased.group_messages,
+        "tenant change"
+    );
+}
+
+/// What an [`erasure_audit`] event names besides its [`Subject`].
+#[derive(Debug, Clone, Copy)]
+pub struct ErasureFacts<'a> {
+    /// The erasure's id.
+    pub erasure_id: &'a str,
+    /// How many identities it erased.
+    pub identities: u64,
+    /// The outbox rows it deleted.
+    pub events: u64,
+    /// What the inbox deleted.
+    pub erased: &'a meta_whatsapp_rs::core::store::Erased,
 }
 
 /// Whether a [`payment_audit`] change went through.

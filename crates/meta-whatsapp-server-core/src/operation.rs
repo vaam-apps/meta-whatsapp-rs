@@ -134,11 +134,14 @@ pub enum Operation {
     /// `resume_signup`: an attempt's steps after the stored token run
     /// again (roadmap M3a).
     ResumeSignup,
+    /// `erase_customer`: a customer erased on a number, from the inbox and
+    /// the outbox, journaled and audited (roadmap M2f).
+    EraseCustomer,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 45] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -183,6 +186,7 @@ impl Operation {
         Self::CompleteSignup,
         Self::ListSignupAttempts,
         Self::ResumeSignup,
+        Self::EraseCustomer,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -232,6 +236,7 @@ impl Operation {
             Self::CompleteSignup => "complete_signup",
             Self::ListSignupAttempts => "list_signup_attempts",
             Self::ResumeSignup => "resume_signup",
+            Self::EraseCustomer => "erase_customer",
         }
     }
 
@@ -282,6 +287,7 @@ impl Operation {
             | Self::CompleteSignup
             | Self::ListSignupAttempts
             | Self::ResumeSignup => Scope::Signup,
+            Self::EraseCustomer => Scope::Erasure,
         }
     }
 }
