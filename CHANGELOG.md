@@ -237,13 +237,17 @@ stored data, the owner's).
     its refund (`POST /v1/numbers/{pn}/payments/refunds`), over the
     core's `payments::PaymentConfigurations` and `payments::Payments`.
     A lookup and a refund look their configuration up in the number's
-    own WABA first (`404` when it is not there, nothing read or
-    refunded). A creation, a new OAuth link and a refund take an
+    own WABA first (`404` when it is not there, or when Meta answers
+    another name, nothing read or refunded), and a configuration's name
+    is one path segment (`/` and `\` refused). A creation, a new OAuth link and a refund take an
     `Idempotency-Key`; the answer kept for one has no OAuth link (the
     link is a credential the records never store), through the
     idempotency engine's new `Answer::keeping` and the HTTP adapter's
     `Success::json_keeping`. A refund, a creation, a removal and a new
-    link are tenant audit events. Keys minted before do not carry the
+    link are tenant audit events (`audit::payment_audit`: the
+    configuration, and a refund's number, order, amount and Meta's
+    refund id; an `outcome`, `unknown` for a call cut by a timeout).
+    Decisions D50 to D58 (design §10). Keys minted before do not carry the
     new scope: mint one that does.
   - The OpenAPI document is additive: five paths, the tag `payments`,
     eighteen schemas, the values `order_details`, `order_status` of

@@ -4274,7 +4274,7 @@
           {
             "name": "configuration_name",
             "in": "path",
-            "description": "The configuration's name, percent-encoded",
+            "description": "The configuration's name, percent-encoded: one path segment (no `/` or `\\`)",
             "required": true,
             "schema": {
               "type": "string"
@@ -4420,7 +4420,7 @@
           {
             "name": "configuration_name",
             "in": "path",
-            "description": "The configuration's name, percent-encoded",
+            "description": "The configuration's name, percent-encoded: one path segment (no `/` or `\\`)",
             "required": true,
             "schema": {
               "type": "string"
@@ -4561,7 +4561,7 @@
           {
             "name": "configuration_name",
             "in": "path",
-            "description": "The configuration's name, percent-encoded",
+            "description": "The configuration's name, percent-encoded: one path segment (no `/` or `\\`)",
             "required": true,
             "schema": {
               "type": "string"
@@ -5822,7 +5822,7 @@
         "properties": {
           "configuration_name": {
             "type": "string",
-            "description": "Its name, what orders name it by: 1 to 60 characters."
+            "description": "Its name, what orders name it by: 1 to 60 characters, one path\nsegment (no `/` or `\\`)."
           },
           "merchant_category_code": {
             "type": [

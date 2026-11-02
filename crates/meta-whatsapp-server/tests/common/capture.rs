@@ -638,6 +638,26 @@ async fn payments(h: &Harness, admin: &str) -> Vec<String> {
         )
         .await;
     assert_eq!(refunded.status.as_u16(), 201, "{}", refunded.text);
+    // A refund cut by a timeout: it may have gone through, so it is
+    // audited, its outcome unknown (design D58).
+    h.graph.push_json(
+        200,
+        json!({"data": [{"configuration_name": "test-payment-configuration",
+                         "status": "Active", "provider_name": "razorpay"}]}),
+    );
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let cut = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{PN}/payments/refunds"))
+                .key(&key)
+                .header("idempotency-key", "refund-cut-1")
+                .json(&json!({"reference_id": "BM345A-13",
+                              "payment_config_id": "test-payment-configuration",
+                              "amount": {"currency": "INR", "value": 250, "offset": 100}})),
+        )
+        .await;
+    assert_eq!(cut.status.as_u16(), 504, "{}", cut.text);
     vec![
         key.clone(),
         key.rsplit('_').next().unwrap().to_owned(),
@@ -984,15 +1004,64 @@ fn check_audit(logs: &str) {
             "payment_configuration_created",
             "payment_oauth_link_regenerated",
             "payment_configuration_deleted",
+            "payment_refunded",
             "payment_refunded"
         ],
         "the template deletions' and the payment changes' audit events"
     );
-    for fields in deletions {
+    for fields in &deletions {
         assert!(fields["key_id"].is_string(), "{fields}");
         assert_eq!(fields["tenant"], "merchant-42", "{fields}");
         assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
     }
+    // The payment changes carry what reconciles them (design D58): the
+    // configuration, and for a refund the number, the order, the amount
+    // and Meta's answer, or an unknown outcome when it timed out.
+    let payments: Vec<&serde_json::Value> = deletions
+        .iter()
+        .copied()
+        .filter(|fields| {
+            fields["action"]
+                .as_str()
+                .is_some_and(|a| a.starts_with("payment_"))
+        })
+        .collect();
+    for fields in &payments {
+        assert_eq!(
+            fields["configuration_name"], "test-payment-configuration",
+            "{fields}"
+        );
+        assert!(fields.get("oauth_url").is_none(), "{fields}");
+    }
+    let refunds: Vec<serde_json::Value> = payments
+        .iter()
+        .filter(|fields| fields["action"] == "payment_refunded")
+        .map(|fields| {
+            json!({
+                "phone_number_id": fields["phone_number_id"],
+                "reference_id": fields["reference_id"],
+                "amount_value": fields["amount_value"],
+                "amount_offset": fields["amount_offset"],
+                "currency": fields["currency"],
+                "refund_id": fields.get("refund_id"),
+                "refund_status": fields.get("refund_status"),
+                "outcome": fields["outcome"],
+            })
+        })
+        .collect();
+    assert_eq!(
+        refunds,
+        [
+            json!({"phone_number_id": "1972385232742141", "reference_id": "BM345A-12",
+                   "amount_value": 100, "amount_offset": 100, "currency": "INR",
+                   "refund_id": "refund-id", "refund_status": "pending",
+                   "outcome": "answered"}),
+            json!({"phone_number_id": "1972385232742141", "reference_id": "BM345A-13",
+                   "amount_value": 250, "amount_offset": 100, "currency": "INR",
+                   "refund_id": null, "refund_status": null, "outcome": "unknown"}),
+        ],
+        "the refunds' audit events"
+    );
 }
 
 /// Every success status an operation answered is one its document lists

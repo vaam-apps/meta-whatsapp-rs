@@ -25,9 +25,11 @@
 //! and one token may reach several tenants' WABAs (the platform's system
 //! user token attached to WABAs of different tenants): the configuration
 //! is looked for in the number's own WABA first, and one that is not
-//! there (Meta's empty `data`, or its refusal of the name) is `404
-//! not_found`, without Meta's code or text, before the payment is asked
-//! for or refunded. Meta's pages do not say whether a lookup or a refund
+//! there (Meta's empty `data`, its refusal of the name, or an answer
+//! naming another configuration) is `404 not_found`, without Meta's code
+//! or text, before the payment is asked for or refunded. A name is one
+//! path segment: one holding `/` or `\` is refused before any request
+//! ([`configuration_name`]). Meta's pages do not say whether a lookup or a refund
 //! checks the configuration against the number: this check does not rely
 //! on it.
 //!
@@ -42,9 +44,12 @@
 //! link are never replayed by the library after a timeout or a server
 //! error (`RetryPolicy`); an idempotent request runs under
 //! [`crate::idempotency::run`], and a refund, a creation, a new link and a
-//! deletion are the caller's audit events ([`crate::audit::tenant_audit`]:
+//! deletion are the caller's audit events ([`crate::audit::payment_audit`]:
 //! `payment_refunded`, `payment_configuration_created`,
-//! `payment_oauth_link_regenerated`, `payment_configuration_deleted`).
+//! `payment_oauth_link_regenerated`, `payment_configuration_deleted`),
+//! with what reconciles them (a refund's number, order, amount and Meta's
+//! refund id), and audited with an `unknown` outcome when they may have
+//! gone through unanswered.
 //!
 //! **No legal act.** Meta refuses these calls with `131005` ("Access
 //! denied": `403 permission`) until the WABA accepted the WhatsApp
@@ -58,7 +63,7 @@ use meta_whatsapp_rs::client::payments::{
     PaymentProvider, RefundCreated, RefundRequest, RefundSpeed,
 };
 
-use crate::audit::{Subject, tenant_audit};
+use crate::audit::{Outcome, PaymentFacts, Subject, payment_audit};
 use crate::authz::{Authorizer, Caller, OwnedNumber, OwnedWaba, object_failed};
 use crate::error::ServiceError;
 use crate::observe::Observer;
@@ -72,6 +77,12 @@ pub const CONFIGURATION_NAME_MAX: usize = 60;
 /// (`payments/payments-in/pg`, the parameters object).
 pub const REFERENCE_ID_MAX: usize = 35;
 
+/// The audit actions (docs/design/server.md, D58).
+const REFUNDED: &str = "payment_refunded";
+const CONFIGURATION_CREATED: &str = "payment_configuration_created";
+const CONFIGURATION_DELETED: &str = "payment_configuration_deleted";
+const OAUTH_LINK_REGENERATED: &str = "payment_oauth_link_regenerated";
+
 /// The providers a configuration may be created for
 /// (`payments/payments-in/onboarding-apis`: "Must be one of").
 pub const PROVIDERS: [&str; 4] = ["upi_vpa", "razorpay", "payu", "zaakpay"];
@@ -79,9 +90,11 @@ pub const PROVIDERS: [&str; 4] = ["upi_vpa", "razorpay", "payu", "zaakpay"];
 // ─── The request's checks ────────────────────────────────────────────────
 
 /// A configuration name, from a path or a body: 1 to
-/// [`CONFIGURATION_NAME_MAX`] characters, no control character, and not
-/// `.` or `..` (a path segment that names its parent), else `422
-/// invalid_request` on `field`.
+/// [`CONFIGURATION_NAME_MAX`] characters, no control character, no `/` or
+/// `\` (a name is one path segment of Meta's, which Meta could read as
+/// several once it decodes the library's `%2F`), and not `.` or `..` (a
+/// path segment that names its parent), else `422 invalid_request` on
+/// `field` (docs/design/server.md, D51).
 ///
 /// # Errors
 ///
@@ -89,7 +102,9 @@ pub const PROVIDERS: [&str; 4] = ["upi_vpa", "razorpay", "payu", "zaakpay"];
 pub fn configuration_name(field: &'static str, name: &str) -> Result<(), ServiceError> {
     let valid = !name.trim().is_empty()
         && name.chars().count() <= CONFIGURATION_NAME_MAX
-        && !name.chars().any(char::is_control)
+        && !name
+            .chars()
+            .any(|c| c.is_control() || c == '/' || c == '\\')
         && name != "."
         && name != "..";
     if valid {
@@ -347,8 +362,10 @@ impl<'a> PaymentConfigurations<'a> {
         self.counted(error).await.with_details(error)
     }
 
-    fn audit(&self, action: &'static str) {
-        tenant_audit(
+    /// The caller's audit event `action` on the configuration `name`
+    /// (D58).
+    fn audit(&self, action: &'static str, name: &str, outcome: Outcome) {
+        payment_audit(
             action,
             self.caller.key_id(),
             &Subject {
@@ -356,7 +373,22 @@ impl<'a> PaymentConfigurations<'a> {
                 waba_id: Some(self.waba.waba_id().as_str()),
                 ..Subject::default()
             },
+            &PaymentFacts {
+                configuration_name: Some(name),
+                ..PaymentFacts::default()
+            },
+            outcome,
         );
+    }
+
+    /// The error of a change that failed, audited as `action` with an
+    /// unknown outcome when it may have gone through.
+    async fn change_failed(&self, action: &'static str, name: &str, error: &Error) -> ServiceError {
+        let failed = self.failed(error).await;
+        if failed.may_have_been_sent() {
+            self.audit(action, name, Outcome::Unknown);
+        }
+        failed
     }
 
     /// Every payment configuration of the WABA (Meta documents no pages).
@@ -422,10 +454,20 @@ impl<'a> PaymentConfigurations<'a> {
             .await;
         match created {
             Ok(link) => {
-                self.audit("payment_configuration_created");
+                self.audit(
+                    CONFIGURATION_CREATED,
+                    &configuration.configuration_name,
+                    Outcome::Answered,
+                );
                 Ok(link)
             }
-            Err(error) => Err(self.failed(&error).await),
+            Err(error) => Err(self
+                .change_failed(
+                    CONFIGURATION_CREATED,
+                    &configuration.configuration_name,
+                    &error,
+                )
+                .await),
         }
     }
 
@@ -456,10 +498,12 @@ impl<'a> PaymentConfigurations<'a> {
             .await;
         match link {
             Ok(link) => {
-                self.audit("payment_oauth_link_regenerated");
+                self.audit(OAUTH_LINK_REGENERATED, name, Outcome::Answered);
                 Ok(link)
             }
-            Err(error) => Err(self.failed(&error).await),
+            Err(error) => Err(self
+                .change_failed(OAUTH_LINK_REGENERATED, name, &error)
+                .await),
         }
     }
 
@@ -481,10 +525,12 @@ impl<'a> PaymentConfigurations<'a> {
             .await;
         match deleted {
             Ok(()) => {
-                self.audit("payment_configuration_deleted");
+                self.audit(CONFIGURATION_DELETED, name, Outcome::Answered);
                 Ok(())
             }
-            Err(error) => Err(self.failed(&error).await),
+            Err(error) => Err(self
+                .change_failed(CONFIGURATION_DELETED, name, &error)
+                .await),
         }
     }
 }
@@ -573,13 +619,46 @@ impl<'a> Payments<'a> {
             .get(name)
             .await;
         match found {
-            Ok(Some(_)) => Ok(()),
-            Ok(None) => {
+            // Meta's answer is the configuration of that very name, or the
+            // name is not the WABA's: a match by case, prefix or anything
+            // else Meta might do is not trusted.
+            Ok(Some(configuration)) if configuration.configuration_name == name => Ok(()),
+            Ok(_) => {
                 tracing::info!("a payment configuration named is not the number's WABA's");
                 Err(ServiceError::not_found())
             }
             Err(error) => Err(object_failed(self.counted(&error).await, &error)),
         }
+    }
+
+    /// The caller's audit event `payment_refunded` (D58): what reconciles
+    /// the refund, Meta's answer when there is one.
+    fn audit_refund(
+        &self,
+        refund: &RefundRequest,
+        created: Option<&RefundCreated>,
+        outcome: Outcome,
+    ) {
+        payment_audit(
+            REFUNDED,
+            self.caller.key_id(),
+            &Subject {
+                tenant: Some(self.caller.tenant().as_str()),
+                waba_id: Some(self.number.waba_id().as_str()),
+                ..Subject::default()
+            },
+            &PaymentFacts {
+                phone_number_id: Some(self.number.phone_number_id().as_str()),
+                configuration_name: Some(&refund.payment_config_id),
+                reference_id: Some(&refund.reference_id),
+                amount_value: Some(refund.amount.value),
+                amount_offset: Some(refund.amount.offset),
+                currency: Some(refund.currency.as_str()),
+                refund_id: created.map(|c| c.id.as_str()),
+                refund_status: created.map(|c| c.status.as_str()),
+            },
+            outcome,
+        );
     }
 
     /// The payment of the order `reference_id`, sent with the
@@ -633,18 +712,16 @@ impl<'a> Payments<'a> {
             .await;
         match refunded {
             Ok(created) => {
-                tenant_audit(
-                    "payment_refunded",
-                    self.caller.key_id(),
-                    &Subject {
-                        tenant: Some(self.caller.tenant().as_str()),
-                        waba_id: Some(self.number.waba_id().as_str()),
-                        ..Subject::default()
-                    },
-                );
+                self.audit_refund(refund, Some(&created), Outcome::Answered);
                 Ok(created)
             }
-            Err(error) => Err(self.failed(&error).await),
+            Err(error) => {
+                let failed = self.failed(&error).await;
+                if failed.may_have_been_sent() {
+                    self.audit_refund(refund, None, Outcome::Unknown);
+                }
+                Err(failed)
+            }
         }
     }
 }
@@ -665,7 +742,17 @@ mod tests {
                 "{good:?}"
             );
         }
-        for bad in ["", " ", ".", "..", "a\nb", &"a".repeat(61)] {
+        for bad in [
+            "",
+            " ",
+            ".",
+            "..",
+            "a\nb",
+            "a/b",
+            "../x",
+            "a\\..\\b",
+            &"a".repeat(61),
+        ] {
             let refused = configuration_name("configuration_name", bad).unwrap_err();
             assert_eq!(refused.field(), Some("configuration_name"), "{bad:?}");
         }

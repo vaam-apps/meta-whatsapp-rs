@@ -271,7 +271,8 @@ pub struct RefundCreatedView {
 #[serde(deny_unknown_fields)]
 #[schema(as = CreatePaymentConfiguration)]
 pub struct CreatePaymentConfigurationBody {
-    /// Its name, what orders name it by: 1 to 60 characters.
+    /// Its name, what orders name it by: 1 to 60 characters, one path
+    /// segment (no `/` or `\`).
     pub configuration_name: String,
     /// `upi_vpa`, `razorpay`, `payu` or `zaakpay`.
     pub provider_name: String,
@@ -663,7 +664,7 @@ pub(crate) async fn create_payment_configuration(
     security(("api_key" = [])),
     params(
         ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
-        ("configuration_name" = String, Path, description = "The configuration's name, percent-encoded"),
+        ("configuration_name" = String, Path, description = "The configuration's name, percent-encoded: one path segment (no `/` or `\\`)"),
         ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
     ),
     responses(
@@ -697,7 +698,7 @@ pub(crate) async fn get_payment_configuration(
     security(("api_key" = [])),
     params(
         ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
-        ("configuration_name" = String, Path, description = "The configuration's name, percent-encoded"),
+        ("configuration_name" = String, Path, description = "The configuration's name, percent-encoded: one path segment (no `/` or `\\`)"),
         ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
     ),
     responses(
@@ -745,7 +746,7 @@ async fn regenerate(
     security(("api_key" = [])),
     params(
         ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
-        ("configuration_name" = String, Path, description = "The configuration's name, percent-encoded"),
+        ("configuration_name" = String, Path, description = "The configuration's name, percent-encoded: one path segment (no `/` or `\\`)"),
         ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
         ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never ask twice (a repeat's answer has no `oauth_url`)"),
     ),

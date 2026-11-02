@@ -592,11 +592,17 @@ Meta's `payments/payments-in/*` and `payments/payments-br/*` pages).
   `may_have_been_sent: true`. Look the payment up (its `refunds`) or
   repeat with the same key; never refund again under a new key. The
   amount is not compared with what was paid. A refund, a creation, a
-  removal and a new link are audit events naming the key.
+  removal and a new link are audit events naming the key and the
+  configuration; a refund's also names the number, the order's
+  `reference_id`, the amount and Meta's refund id, and one cut by a
+  timeout is audited with the `outcome` `unknown` (design D58).
 - **The configuration a lookup or a refund names is looked for in the
   number's own WABA first** (one request more): a name it has none of is
-  `404 not_found`, and the payment is neither read nor refunded. Meta
-  asks you to read the payment here rather than trust the webhook alone.
+  `404 not_found`, and the payment is neither read nor refunded (as is
+  an answer naming another configuration). A configuration's name is
+  one path segment: one holding `/` or `\` is `422 invalid_request`
+  before any request (design D51). Meta asks you to read the payment
+  here rather than trust the webhook alone.
 - **Webhooks**: `payment_configuration_updated` events (a configuration's
   status), India's payment status in `status_updated` events
   (`data.status.type` `payment`, with `data.status.payment`), Brazil's

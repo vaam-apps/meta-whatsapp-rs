@@ -973,3 +973,325 @@ async fn the_terms_of_service_refusal_carries_metas_link_and_nothing_is_accepted
     assert_eq!(h.graph.requests().len(), 1);
     assert_eq!(h.graph.remaining(), 0);
 }
+
+/// Design D51 (review of P2): the configuration check trusts only an
+/// answer of the very name asked; one Meta answers under another name (a
+/// match by case, or anything else) is `404 not_found` and nothing is read
+/// or refunded. A name holding `/` or `\` (which Meta could read as
+/// several path segments once it decodes the library's `%2F`) is `422` on
+/// its field before any request, in a path or in the refund's body.
+/// Decisive: the name's comparison in `Payments::configuration_of_the_waba`,
+/// and the separators in `payments::configuration_name`.
+#[tokio::test]
+async fn a_configuration_meta_answers_under_another_name_is_not_found() {
+    let (h, key) = connected(&[Scope::Payments]).await;
+    let asked = "Test-Payment-Configuration";
+    for call in [
+        Call::get(format!(
+            "/v1/numbers/{PN}/payments/{asked}/reference-id-value"
+        ))
+        .key(&key),
+        refund(
+            &key,
+            &json!({"reference_id": "reference-id-value", "payment_config_id": asked,
+                    "amount": {"currency": "INR", "value": "100", "offset": "100"}}),
+        ),
+    ] {
+        let before = h.graph.requests().len();
+        // Meta answers the configuration of another name.
+        h.graph.push_json(200, json!({"data": [configuration()]}));
+        let reply = h.call(call).await;
+        assert_eq!(
+            (reply.status, error(&reply)["code"].clone()),
+            (StatusCode::NOT_FOUND, json!("not_found")),
+            "{}",
+            reply.text
+        );
+        let requests = h.graph.requests();
+        assert_eq!(requests.len(), before + 1, "only the check");
+        assert_eq!(
+            requests.last().unwrap().path(),
+            format!("/v25.0/{WABA}/payment_configuration/{asked}")
+        );
+    }
+    let sent = h.graph.requests().len();
+    for (call, field) in [
+        (
+            Call::get(format!(
+                "/v1/numbers/{PN}/payments/x%2F..%2F..%2F{WABA}/reference-id-value"
+            ))
+            .key(&key),
+            "configuration_name",
+        ),
+        (
+            Call::get(format!(
+                "/v1/wabas/{WABA}/payment-configurations/a%5C..%5Cb"
+            ))
+            .key(&key),
+            "configuration_name",
+        ),
+        (
+            Call::new(
+                Method::DELETE,
+                format!("/v1/wabas/{WABA}/payment-configurations/a%2Fb"),
+            )
+            .key(&key),
+            "configuration_name",
+        ),
+        (
+            Call::new(
+                Method::POST,
+                format!("/v1/wabas/{WABA}/payment-configurations/..%2Fx/oauth-link"),
+            )
+            .key(&key),
+            "configuration_name",
+        ),
+        (
+            Call::new(
+                Method::POST,
+                format!("/v1/wabas/{WABA}/payment-configurations"),
+            )
+            .key(&key)
+            .json(&json!({"configuration_name": "a/b", "provider_name": "razorpay"})),
+            "configuration_name",
+        ),
+        (
+            refund(
+                &key,
+                &json!({"reference_id": "reference-id-value",
+                        "payment_config_id": format!("../{CONFIGURATION}"),
+                        "amount": {"currency": "INR", "value": "100", "offset": "100"}}),
+            ),
+            "payment_config_id",
+        ),
+    ] {
+        let reply = h.call(call).await;
+        assert_eq!(
+            refused(&reply),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_request".to_owned(),
+                Some(field.to_owned())
+            ),
+            "{}",
+            reply.text
+        );
+    }
+    assert_eq!(h.graph.requests().len(), sent, "nothing asked of Meta");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// Design D56 (review of P2): a refund's amount over HTTP, as a caller
+/// writes it, is checked before any request: a negative, fractional, zero,
+/// empty, signed, spaced or larger-than-64-bit `value`, an `offset` that
+/// is not 100, a currency that is not `INR` (in any other case), a missing
+/// amount; each is `422`, nothing refunded, nothing asked. Decisive: the
+/// parts' reading (`RefundAmountPart`, `AmountPart::value`), the offset
+/// and currency checks, and the library's positive amount.
+#[tokio::test]
+async fn a_refunds_amount_is_checked_before_any_request() {
+    let (h, key) = connected(&[Scope::Payments]).await;
+    let with = |amount: Value| {
+        json!({"reference_id": "reference-id-value", "payment_config_id": CONFIGURATION,
+               "amount": amount})
+    };
+    let cases = [
+        (
+            json!({"currency": "INR", "value": -100, "offset": 100}),
+            "body",
+        ),
+        (
+            json!({"currency": "INR", "value": 1.5, "offset": 100}),
+            "body",
+        ),
+        (
+            json!({"currency": "INR", "value": 1e30, "offset": 100}),
+            "body",
+        ),
+        (
+            json!({"currency": "INR", "value": null, "offset": 100}),
+            "body",
+        ),
+        (
+            json!({"currency": "INR", "value": 0, "offset": 100}),
+            "amount.value",
+        ),
+        (
+            json!({"currency": "INR", "value": "0", "offset": "100"}),
+            "amount.value",
+        ),
+        (
+            json!({"currency": "INR", "value": "", "offset": "100"}),
+            "amount.value",
+        ),
+        (
+            json!({"currency": "INR", "value": "-100", "offset": "100"}),
+            "amount.value",
+        ),
+        (
+            json!({"currency": "INR", "value": "+100", "offset": "100"}),
+            "amount.value",
+        ),
+        (
+            json!({"currency": "INR", "value": "1 00", "offset": "100"}),
+            "amount.value",
+        ),
+        (
+            json!({"currency": "INR", "value": "18446744073709551616", "offset": "100"}),
+            "amount.value",
+        ),
+        (
+            json!({"currency": "INR", "value": "100", "offset": "1"}),
+            "amount.offset",
+        ),
+        (
+            json!({"currency": "INR", "value": 100, "offset": 4_294_967_396_u64}),
+            "amount.offset",
+        ),
+        (
+            json!({"currency": "inr", "value": "100", "offset": "100"}),
+            "amount.currency",
+        ),
+        (
+            json!({"currency": "USD", "value": "100", "offset": "100"}),
+            "amount.currency",
+        ),
+        (json!({"currency": "INR", "value": "100"}), "body"),
+    ];
+    for (amount, field) in cases {
+        let reply = h
+            .call(refund(&key, &with(amount.clone())).header("idempotency-key", "refund:checked"))
+            .await;
+        assert_eq!(
+            refused(&reply),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_request".to_owned(),
+                Some(field.to_owned())
+            ),
+            "{amount}: {}",
+            reply.text
+        );
+    }
+    let missing = h
+        .call(refund(
+            &key,
+            &json!({"reference_id": "reference-id-value", "payment_config_id": CONFIGURATION}),
+        ))
+        .await;
+    assert_eq!(
+        missing.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        missing.text
+    );
+    assert!(h.graph.requests().is_empty(), "nothing asked of Meta");
+    // The key was never kept: the largest amount that fits goes under it.
+    h.graph.push_json(200, json!({"data": [configuration()]}));
+    h.graph.push_json(
+        200,
+        json!({"id": "refund-id", "status": "failed", "speed_processed": "normal"}),
+    );
+    let largest = h
+        .call(
+            refund(
+                &key,
+                &with(json!({"currency": "INR", "value": u64::MAX, "offset": 100})),
+            )
+            .header("idempotency-key", "refund:checked"),
+        )
+        .await;
+    assert_eq!(largest.status, StatusCode::CREATED, "{}", largest.text);
+    assert_eq!(
+        h.graph.last_request().unwrap().json().unwrap()["amount"],
+        json!({"currency": "INR", "value": u64::MAX.to_string(), "offset": "100"})
+    );
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// An inbox reply (scope `inbox`, roadmap M2a) carries a payment message
+/// as a send does (P2): the conversation's contact as its recipient, the
+/// tenant's token, Meta's object as the page prints it; checked the same
+/// way before any request (a key the library would drop is `422`); and
+/// held to the 24-hour window like every free-form message (`409
+/// customer_service_window_closed`, zero requests). Decisive: the reply's
+/// path through the core's `reply_message`, and the inbox's window.
+#[tokio::test]
+async fn an_inbox_reply_carries_a_payment_message_checked_and_within_its_window() {
+    use common::inbox::{TO as CONTACT, TOKEN as INBOX_TOKEN, accepted as replied};
+    use common::meta::{EXAMPLE_PN, EXAMPLE_WA_ID, EXAMPLE_WABA, EXAMPLE_WAMID, bytes, text};
+    let h = Harness::new();
+    h.tenant(TENANT).await;
+    h.connect(TENANT, EXAMPLE_WABA, &[EXAMPLE_PN], INBOX_TOKEN)
+        .await;
+    let received = h
+        .webhook(&bytes(&text(EXAMPLE_WABA, EXAMPLE_PN, EXAMPLE_WAMID)))
+        .await;
+    assert_eq!(received.status, StatusCode::OK, "{}", received.text);
+    h.clock
+        .set(time::OffsetDateTime::now_utc() + time::Duration::seconds(2));
+    let key = h.tenant_key(TENANT, &[Scope::Inbox]).await;
+    let reply_with = |idempotency_key: &str, interactive: &Value| {
+        Call::new(
+            Method::POST,
+            format!("/v1/numbers/{EXAMPLE_PN}/conversations/{EXAMPLE_WA_ID}/messages"),
+        )
+        .key(&key)
+        .header("idempotency-key", idempotency_key)
+        .json(&json!({"type": "interactive", "interactive": interactive}))
+    };
+    h.graph.push_json(200, replied("wamid.ORDER-REPLY"));
+    let sent = h
+        .call(reply_with("order:1:details", &razorpay_order_details()))
+        .await;
+    assert_eq!(sent.status, StatusCode::ACCEPTED, "{}", sent.text);
+    let request = h.graph.last_request().unwrap();
+    assert_eq!(request.path(), format!("/v25.0/{EXAMPLE_PN}/messages"));
+    assert_eq!(request.bearer(), Some(INBOX_TOKEN));
+    let mut expected = envelope(&razorpay_order_details());
+    expected["to"] = json!(CONTACT);
+    assert_eq!(request.json().unwrap(), expected);
+    let mut dropped = razorpay_order_details();
+    dropped["action"]["parameters"]["referense_id"] = json!("x");
+    let refused_key = h.call(reply_with("order:1:dropped", &dropped)).await;
+    assert_eq!(
+        refused(&refused_key),
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_request".to_owned(),
+            Some("interactive.action.parameters.referense_id".to_owned())
+        ),
+        "{}",
+        refused_key.text
+    );
+    let mut wrong_total = razorpay_order_details();
+    wrong_total["action"]["parameters"]["total_amount"]["value"] = json!(21001);
+    let refused_total = h.call(reply_with("order:1:total", &wrong_total)).await;
+    assert_eq!(
+        refused(&refused_total).2.as_deref(),
+        Some("interactive.action.parameters.total_amount.value"),
+        "{}",
+        refused_total.text
+    );
+    assert_eq!(h.graph.requests().len(), 1);
+    // 25 hours on: the window is closed for an order as for a text.
+    h.clock
+        .set(time::OffsetDateTime::now_utc() + time::Duration::hours(25));
+    let status = json!({"type": "order_status", "body": {"text": "your-text-body-content"},
+        "action": {"name": "review_order", "parameters": {"reference_id": "reference-id-value",
+        "order": {"status": "processing", "description": "optional-text"}}}});
+    for (idempotency_key, interactive) in [
+        ("order:1:late", razorpay_order_details()),
+        ("order:1:status", status),
+    ] {
+        let closed = h.call(reply_with(idempotency_key, &interactive)).await;
+        assert_eq!(
+            (closed.status, closed.code().as_str()),
+            (StatusCode::CONFLICT, "customer_service_window_closed"),
+            "{}",
+            closed.text
+        );
+    }
+    assert_eq!(h.graph.requests().len(), 1, "refused with zero requests");
+    assert_eq!(h.graph.remaining(), 0);
+}
