@@ -1,6 +1,6 @@
 # Flows, calls, carousels, products, pins and Direct Send
 
-> **Verified against meta-whatsapp-rs 0efc244d8e35bc635847c8194efb3cdf86a6dfa8 (2026-11-02).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, schemas `SendMessage`, `InteractiveContent`, `InteractiveAction`), `docs/guides/server.md` section "Send messages" and [examples/interactive.ts](../examples/interactive.ts).
+> **Verified against meta-whatsapp-rs 497029b011b58cfa1628f28deac9aa442f140751 (2026-11-02).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, schemas `SendMessage`, `InteractiveContent`, `InteractiveAction`), `docs/guides/server.md` section "Send messages" and [examples/interactive.ts](../examples/interactive.ts).
 
 Every type below goes through `POST /v1/numbers/{pn}/messages` (scope
 `send`) and the inbox reply (scope `inbox`), written as Meta's page for
