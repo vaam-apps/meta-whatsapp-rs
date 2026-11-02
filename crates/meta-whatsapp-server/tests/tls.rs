@@ -84,7 +84,7 @@ impl Env for Vars {
 /// `serve::connect`). sqlx names its provider itself (aws-lc-rs in this
 /// tree: CrateStack's `db = None` facade brings no sqlx), so its TLS in
 /// this mode does not depend on the process default, installed or not;
-/// `sslmode=verify-ca` does (tests/tls_verify_ca.rs).
+/// `sslmode=verify-ca` does (`tests/tls_verify_ca.rs`).
 #[tokio::test]
 async fn live_postgres_sslmode_require_with_both_providers_linked() {
     let Some(url) = common::postgres_url() else {
