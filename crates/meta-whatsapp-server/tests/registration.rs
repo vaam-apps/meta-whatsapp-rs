@@ -193,7 +193,7 @@ async fn a_registrations_pin_and_code_are_in_no_store_and_no_answer() {
     }
     // The registrations' records hold the number's fingerprint, which no
     // PIN is an input of.
-    for key in &KEYS[1..] {
+    for key in &KEYS[1..3] {
         assert_eq!(
             &flow::record(&h, key).await.fingerprint,
             flow::registration_fingerprint().as_bytes(),
@@ -203,6 +203,14 @@ async fn a_registrations_pin_and_code_are_in_no_store_and_no_answer() {
     for row in h.outbox.rows() {
         flow::holds_no_secret(format!("{row:?}").as_bytes(), "an outbox row");
     }
+    // The deregistration's repeat under its key was its kept answer.
+    let last = replies.last().unwrap();
+    assert_eq!(last.headers.get("idempotent-replayed").unwrap(), "true");
+    // The metrics' labels and values hold none of them either.
+    let metrics = h.call(Call::get("/metrics")).await;
+    assert_eq!(metrics.status, StatusCode::OK);
+    assert!(metrics.text.contains("/v1/numbers/{pn}/register"));
+    flow::logs_hold_no_secret(&metrics.text);
 }
 
 /// A repeat under the key of a kept registration, with another PIN, is
@@ -292,6 +300,132 @@ async fn a_wrong_pin_frees_the_key_and_a_failure_keeps_it() {
         .await;
     assert_eq!(repeat.headers.get("idempotent-replayed").unwrap(), "true");
     assert_eq!(h.graph.requests().len(), 3);
+    // A timeout (`504`): kept too, and its repeat, with another PIN,
+    // replayed without asking Meta or spending an attempt.
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let timed_out = h
+        .call(post(&key, "register", &json!({"pin": PIN})).header("idempotency-key", "k3"))
+        .await;
+    assert_eq!(
+        (timed_out.status, timed_out.code().as_str()),
+        (StatusCode::GATEWAY_TIMEOUT, "timeout")
+    );
+    assert_eq!(timed_out.json()["error"]["may_have_been_sent"], true);
+    let count = registration_count(&h).await;
+    let repeat = h
+        .call(post(&key, "register", &json!({"pin": WRONG_PIN})).header("idempotency-key", "k3"))
+        .await;
+    assert_eq!(repeat.status, StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(repeat.headers.get("idempotent-replayed").unwrap(), "true");
+    assert_eq!(repeat.text, timed_out.text);
+    assert_eq!(h.graph.requests().len(), 4, "Meta asked once");
+    assert_eq!(registration_count(&h).await, count, "no attempt spent");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// The registration budget's count of [`PN`], as stored.
+async fn registration_count(h: &Harness) -> u64 {
+    let stored =
+        h.kv.get(&RegistrationAttempts::store_key(
+            AttemptBudget::Registration,
+            &PhoneNumberId::new(PN).unwrap(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    serde_json::from_slice::<Value>(&stored.value).unwrap()["count"]
+        .as_u64()
+        .unwrap()
+}
+
+/// Meta refuses to deregister a number also on the WhatsApp Business app
+/// (coexistence), with a code its pages do not list: the answer is the
+/// documented `502 unknown` with Meta's code and trace id and none of its texts,
+/// nothing may have been done, the key is released (the same key may be
+/// tried again) and nothing is audited. Meta's `133016` (the 72-hour
+/// limit) is `409 registration`, not retryable.
+#[tokio::test]
+async fn metas_refusal_to_deregister_maps_cleanly() {
+    let h = Harness::new();
+    let key = connected(&h).await;
+    for (code, status, answered) in [
+        (2_593_007, StatusCode::BAD_GATEWAY, "unknown"),
+        (133_016, StatusCode::CONFLICT, "registration"),
+    ] {
+        h.graph.push_json(
+            400,
+            json!({"error": {"message": "(#{code}) This number is in use with the WhatsApp Business app",
+                "type": "OAuthException", "code": code, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn",
+                "error_data": {"messaging_product": "whatsapp", "details": "coexistence number"}}}),
+        );
+        let refused = h
+            .call(post(&key, "deregister", &json!({"confirm": PN})).header("idempotency-key", "c"))
+            .await;
+        assert_eq!(
+            (refused.status, refused.code().as_str()),
+            (status, answered),
+            "{code}: {}",
+            refused.text
+        );
+        let error = &refused.json()["error"];
+        assert_eq!(error["graph"]["code"], code);
+        assert_eq!(error["graph"]["fbtrace_id"], "AXsgnV2Cm3ZMGF3dF_cfYIn");
+        assert_eq!(error["graph"]["details"], Value::Null);
+        assert_eq!(error["may_have_been_sent"], false, "{code}");
+        assert_eq!(error["retryable"], false, "{code}");
+        assert!(!refused.text.contains("Business app"));
+        assert!(!refused.text.contains("coexistence"));
+        assert!(refused.headers.get("idempotent-replayed").is_none(), "released");
+    }
+    assert_eq!(h.graph.requests().len(), 2, "the key was free each time");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// The path's number may be percent-encoded (`%31` is `1`): the
+/// confirmation is the number's id as the path decodes, never its
+/// encoding nor a near miss, and an encoded path books the number's own
+/// budget (one record per number, whatever the spelling). Decisive: the
+/// confirmation's exact comparison with the decoded id.
+#[tokio::test]
+async fn deregistering_an_encoded_path_takes_the_decoded_id() {
+    let h = Harness::new();
+    let key = connected(&h).await;
+    let encoded: String = PN.bytes().map(|b| format!("%{b:02X}")).collect();
+    let call = |confirm: &str| {
+        Call::new(Method::POST, format!("/v1/numbers/{encoded}/deregister"))
+            .key(&key)
+            .json(&json!({"confirm": confirm}))
+    };
+    let near_misses = [
+        encoded.clone(),
+        format!("%31{}", &PN[1..]),
+        format!(" {PN}"),
+        format!("{PN} "),
+        format!("+{PN}"),
+        format!("0{PN}"),
+        PN[1..].to_owned(),
+        String::new(),
+    ];
+    for confirm in &near_misses {
+        let refused = h.call(call(confirm)).await;
+        assert_eq!(
+            (refused.status, refused.json()["error"]["field"].clone()),
+            (StatusCode::UNPROCESSABLE_ENTITY, json!("confirm")),
+            "{confirm:?}: {}",
+            refused.text
+        );
+    }
+    assert!(h.graph.requests().is_empty(), "Meta was asked");
+    h.graph.push_json(200, success());
+    let done = h.call(call(PN)).await;
+    assert_eq!(done.status, StatusCode::OK, "{}", done.text);
+    assert_eq!(done.json()["phone_number_id"], PN);
+    assert_eq!(
+        h.graph.last_request().unwrap().path(),
+        format!("/v25.0/{PN}/deregister")
+    );
+    assert_eq!(registration_count(&h).await, 1);
     assert_eq!(h.graph.remaining(), 0);
 }
 
@@ -389,6 +523,24 @@ async fn another_tenants_number_is_not_found_and_spends_none_of_its_budget() {
                 "{route}"
             );
             assert!(!reply.text.contains(PIN));
+        }
+    }
+    // Nor can a caller without a valid key: `401`, before anything.
+    let tenant_key = h.tenant_key(TENANT, &[Scope::Numbers]).await;
+    for route in [
+        "request-code",
+        "verify-code",
+        "register",
+        "deregister",
+        "two-step-pin",
+    ] {
+        for call in [
+            Call::new(Method::POST, format!("/v1/numbers/{PN}/{route}"))
+                .json(&json!({"pin": PIN, "code": CODE_DIGITS, "confirm": PN})),
+            post(&format!("{tenant_key}x"), route, &json!({"pin": PIN})),
+        ] {
+            let reply = h.call(call).await;
+            assert_eq!(reply.status, StatusCode::UNAUTHORIZED, "{route}");
         }
     }
     assert_eq!(h.kv.vault_reads(), reads, "the vault was read");

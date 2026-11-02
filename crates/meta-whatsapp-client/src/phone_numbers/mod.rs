@@ -452,7 +452,8 @@ impl PhoneNumber {
             .await
     }
 
-    /// `POST /{PHONE_NUMBER_ID}/deregister`. Also turns local storage off.
+    /// `POST /{PHONE_NUMBER_ID}/deregister`. Does not turn local storage
+    /// off (Meta's page: disable it with [`Self::disable_local_storage`]).
     /// Not available for numbers in coexistence (Cloud API + WhatsApp
     /// Business app); those disconnect from the app.
     pub async fn deregister(&self) -> Result<()> {

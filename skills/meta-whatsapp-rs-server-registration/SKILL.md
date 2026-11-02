@@ -84,7 +84,7 @@ event or an idempotency record.
 
 ## Attempts are counted per number
 
-Meta allows 10 registrations and deregistrations per number in 72
+Meta allows 10 registrations, and 10 deregistrations, per number in 72
 hours, then locks the number for 72 hours, and locks it after too many
 wrong PINs. The service counts for every replica together, once the
 number is found to be yours: 5 registrations and deregistrations in 72

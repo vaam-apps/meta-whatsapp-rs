@@ -34,7 +34,7 @@ pub const CODE_DIGITS: &str = "774216";
 pub const SECRETS: [&str; 4] = [PIN, WRONG_PIN, CODE, CODE_DIGITS];
 
 /// The idempotency keys the flow uses.
-pub const KEYS: [&str; 3] = ["code:1", "register:1", "register:2"];
+pub const KEYS: [&str; 4] = ["code:1", "register:1", "register:2", "deregister:1"];
 
 /// A tenant with the number bound and its token stored, and a key of
 /// scope `numbers`.
@@ -69,9 +69,12 @@ pub fn quoting(code: i64, secret: &str) -> Value {
 
 /// The whole flow, every answer checked: a code requested (under a key)
 /// and checked; a wrong PIN Meta refuses quoting it; the right one under
-/// a key, then repeated under it; three malformed bodies; the PIN set; a
-/// registration Meta fails on (its answer kept under its key, and
-/// quoting the PIN); the deregistration. Returns every answer.
+/// a key, then repeated under it; malformed bodies, most of them carrying
+/// the PIN (as a number, too long, signed, padded, in other digits, in a
+/// body that is not JSON), and a malformed code carrying the code; the
+/// PIN set; a registration Meta fails on (its answer kept under its key,
+/// and quoting the PIN); the deregistration under a key, then repeated
+/// under it (Meta asked once). Returns every answer.
 pub async fn flow(h: &Harness, key: &str) -> Vec<Reply> {
     let mut replies = Vec::new();
     let mut call = async |call: Call, status: StatusCode| {
@@ -114,20 +117,30 @@ pub async fn flow(h: &Harness, key: &str) -> Vec<Reply> {
         StatusCode::OK,
     )
     .await;
-    for malformed in [
-        json!({"pin": 581063}),
-        json!({"pin": "58106x"}),
-        json!({"pin": PIN, "unknown": PIN}),
-        json!({"pin": [PIN]}),
+    for (route, malformed) in [
+        ("register", json!({"pin": 581063})),
+        ("register", json!({"pin": 581_063.0})),
+        ("register", json!({"pin": "58106x"})),
+        ("register", json!({"pin": format!("{PIN}1")})),
+        ("register", json!({"pin": format!("+{PIN}")})),
+        ("register", json!({"pin": format!(" {PIN}")})),
+        ("register", json!({"pin": format!("{PIN}\n")})),
+        ("register", json!({"pin": "\u{0665}\u{0668}\u{0661}\u{0660}\u{0666}\u{0663}"})),
+        ("register", json!({"pin": PIN, "unknown": PIN})),
+        ("register", json!({"pin": [PIN]})),
+        ("register", json!({"pin": {"value": PIN}})),
+        ("two-step-pin", json!({"pin": format!("{PIN}0")})),
+        ("two-step-pin", json!({"pin": 581063})),
+        ("verify-code", json!({"code": "774-21x"})),
+        ("verify-code", json!({"code": format!("{CODE}x")})),
+        ("verify-code", json!({"code": 774216})),
     ] {
-        call(
-            post(key, "register", &malformed),
-            StatusCode::UNPROCESSABLE_ENTITY,
-        )
-        .await;
+        call(post(key, route, &malformed), StatusCode::UNPROCESSABLE_ENTITY).await;
     }
+    // Not JSON at all, the PIN inside: the parser's message would quote it.
     call(
-        post(key, "verify-code", &json!({"code": "774-21x"})),
+        post(key, "register", &json!({}))
+            .body(format!("{{\"pin\": {PIN}x}}").into()),
         StatusCode::UNPROCESSABLE_ENTITY,
     )
     .await;
@@ -150,11 +163,13 @@ pub async fn flow(h: &Harness, key: &str) -> Vec<Reply> {
     )
     .await;
     h.graph.push_json(200, success());
-    call(
-        post(key, "deregister", &json!({"confirm": PN})),
-        StatusCode::OK,
-    )
-    .await;
+    for _ in 0..2 {
+        call(
+            post(key, "deregister", &json!({"confirm": PN})).header("idempotency-key", KEYS[3]),
+            StatusCode::OK,
+        )
+        .await;
+    }
     assert_eq!(h.graph.remaining(), 0);
     replies
 }
@@ -219,12 +234,14 @@ pub fn digit_runs(text: &str) -> Vec<&str> {
     runs
 }
 
-/// Logs hold no secret: none as a run of digits, nor the code with its
-/// hyphen.
+/// Logs hold no secret: none inside a run of digits (a malformed PIN such
+/// as `5810631` holds it too), nor the code with its hyphen.
 pub fn logs_hold_no_secret(logs: &str) {
     for run in digit_runs(logs) {
         assert!(
-            ![PIN, WRONG_PIN, CODE_DIGITS].contains(&run),
+            ![PIN, WRONG_PIN, CODE_DIGITS]
+                .iter()
+                .any(|secret| run.contains(secret)),
             "a secret was logged ({run}):\n{logs}"
         );
     }

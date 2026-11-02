@@ -32,13 +32,14 @@
 //! (another tenant never spends a number's budget: its call is `404`
 //! before) and after the local checks (a malformed PIN spends nothing:
 //! Meta never sees it), before the request to Meta. Meta allows 10
-//! registration and deregistration requests per number in a moving
-//! 72-hour window and locks the number for 72 hours on the 11th
-//! (`133016`), and locks it after too many wrong PINs (`133008`, for a
+//! registration requests, and apart 10 deregistration requests, per
+//! number in a moving 72-hour window and locks the number for 72 hours on
+//! the 11th (`133016`), and locks it after too many wrong PINs (`133008`, for a
 //! time it does not document): the service's default,
 //! [`AttemptLimits::default`], is 5 a fixed window of 72 hours, so a
 //! moving window of 72 hours never holds more than 10 of the service's
-//! (two fixed windows' worth), and a caller's retry loop cannot lock the
+//! (it meets two fixed windows at most), registrations and
+//! deregistrations together, and a caller's retry loop cannot lock the
 //! merchant's number. A refused attempt is `429 too_many_requests` with
 //! `Retry-After` the rest of the window, and nothing is asked of Meta.
 //!
@@ -165,8 +166,8 @@ impl CodeRequest {
 /// Which of a number's budgets an operation spends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AttemptBudget {
-    /// Registering and deregistering: Meta's 10 per 72 hours, shared by
-    /// both, and its wrong-PIN lock.
+    /// Registering and deregistering, counted together (Meta allows 10 of
+    /// each per moving 72 hours), and Meta's wrong-PIN lock.
     Registration,
     /// Requesting and checking a verification code (Meta's pages say
     /// failed attempts may block the number for a while, without a
@@ -331,8 +332,17 @@ impl RegistrationAttempts {
                 }
                 continue;
             };
-            let counted: Counted =
-                serde_json::from_slice(&stored.value).map_err(|source| StorageError::Corrupt {
+            // A layout this release does not know (another `v`) refuses,
+            // as a record that does not read does: fail closed.
+            let counted: Counted = serde_json::from_slice(&stored.value)
+                .and_then(|counted: Counted| {
+                    if counted.v == 1 {
+                        Ok(counted)
+                    } else {
+                        Err(serde::de::Error::custom("unknown record version"))
+                    }
+                })
+                .map_err(|source| StorageError::Corrupt {
                     key: key.to_string(),
                     source,
                 })?;
@@ -699,24 +709,238 @@ mod tests {
         );
     }
 
-    /// A record that does not read refuses (fail closed), and so does a
-    /// store that fails.
+    /// A record that does not read refuses (fail closed), and so does one
+    /// of a layout this release does not know, even when its fields read
+    /// (a store that fails: `a_store_that_fails_refuses_the_attempt`).
+    /// Decisive: the version's check.
     #[tokio::test]
     async fn a_record_that_does_not_read_refuses_the_attempt() {
         let (counters, _, kv) = attempts(AttemptLimits::default());
         let a = pn("106540352242922");
-        kv.put(
-            &RegistrationAttempts::store_key(AttemptBudget::Registration, &a),
-            b"{\"v\":2}".to_vec(),
-            Expiry::Never,
-        )
-        .await
-        .unwrap();
-        let refused = counters
-            .charge(AttemptBudget::Registration, &a)
+        for record in [
+            r#"{"v":2}"#.to_owned(),
+            r#"{"v":2,"since":1800000000,"count":0}"#.to_owned(),
+            "not json".to_owned(),
+        ] {
+            kv.put(
+                &RegistrationAttempts::store_key(AttemptBudget::Registration, &a),
+                record.clone().into_bytes(),
+                Expiry::Never,
+            )
             .await
-            .unwrap_err();
-        assert_eq!(refused.status(), 503);
+            .unwrap();
+            let refused = counters
+                .charge(AttemptBudget::Registration, &a)
+                .await
+                .unwrap_err();
+            assert_eq!(refused.status(), 503, "{record}");
+        }
+    }
+
+    /// Meta counts a number's registrations (and, apart, its
+    /// deregistrations) in a moving 72 hours and locks the number on the
+    /// 11th. A moving 72 hours meets at most two of the service's fixed
+    /// windows (each lasts the whole window from its first attempt, and
+    /// the next starts only once it ended), so the default's 5 a window
+    /// holds it at 10. Checked here against attempts every ten minutes,
+    /// and bursts hugging each window's end, for ten days, from a start a
+    /// fraction of a second past a whole second (the record keeps whole
+    /// seconds): at every accepted attempt, the attempts accepted in the
+    /// 72 hours up to it (Meta's count) are at most 10, and the budget
+    /// still lets 5 a window through. Decisive: a window shorter than its
+    /// setting, or one that starts again before it ended.
+    #[tokio::test]
+    async fn two_back_to_back_windows_hold_at_most_ten() {
+        let (counters, clock, _) = attempts(AttemptLimits::default());
+        let start = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap()
+            + time::Duration::milliseconds(900);
+        clock.set(start);
+        let a = pn("106540352242922");
+        let meta_window = time::Duration::hours(72);
+        let mut offsets: Vec<time::Duration> = (0..10 * 24 * 6)
+            .map(|i| time::Duration::minutes(10 * i))
+            .collect();
+        // Bursts just before and just after each 72-hour mark since the
+        // first attempt, where two windows meet.
+        for day in 1..4 {
+            let mark = time::Duration::hours(72 * day);
+            for s in [-3, -2, -1, 0, 1, 2, 3] {
+                offsets.push(mark + time::Duration::seconds(s));
+                offsets.push(mark + time::Duration::milliseconds(s * 1000 - 150));
+            }
+        }
+        offsets.sort();
+        offsets.dedup();
+        let mut accepted: Vec<OffsetDateTime> = Vec::new();
+        for offset in offsets {
+            clock.set(start + offset);
+            if counters
+                .charge(AttemptBudget::Registration, &a)
+                .await
+                .is_ok()
+            {
+                accepted.push(start + offset);
+            }
+        }
+        for at in &accepted {
+            let in_metas_window = accepted
+                .iter()
+                .filter(|t| **t > *at - meta_window && **t <= *at)
+                .count();
+            assert!(
+                in_metas_window <= 10,
+                "{in_metas_window} attempts in the 72 hours up to {at}"
+            );
+        }
+        // Not vacuous: ten days are four windows (the last one begun).
+        assert_eq!(accepted.len(), 4 * 5, "{accepted:?}");
+    }
+
+    /// A `KvStore` that reads, then yields before answering: concurrent
+    /// charges all read the same record before any of them writes, the
+    /// race two replicas run.
+    #[derive(Debug)]
+    struct Interleaved(MemoryKvStore);
+
+    #[async_trait::async_trait]
+    impl KvStore for Interleaved {
+        async fn get(
+            &self,
+            key: &StoreKey,
+        ) -> Result<Option<meta_whatsapp_rs::core::store::Versioned>, StorageError> {
+            let read = self.0.get(key).await;
+            tokio::task::yield_now().await;
+            read
+        }
+        async fn put(
+            &self,
+            key: &StoreKey,
+            value: Vec<u8>,
+            expiry: Expiry,
+        ) -> Result<u64, StorageError> {
+            self.0.put(key, value, expiry).await
+        }
+        async fn put_if_absent(
+            &self,
+            key: &StoreKey,
+            value: Vec<u8>,
+            expiry: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            self.0.put_if_absent(key, value, expiry).await
+        }
+        async fn compare_and_swap(
+            &self,
+            key: &StoreKey,
+            expected: u64,
+            new: Option<Vec<u8>>,
+            expiry: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            self.0.compare_and_swap(key, expected, new, expiry).await
+        }
+        async fn delete(&self, key: &StoreKey) -> Result<bool, StorageError> {
+            self.0.delete(key).await
+        }
+    }
+
+    /// Ten charges at once, each reading the count before any writes: the
+    /// limit's 5 pass, the rest are `429`, and the count is 5. Decisive:
+    /// the compare-and-swap (a plain write would let all ten through).
+    #[tokio::test]
+    async fn concurrent_charges_never_pass_the_limit() {
+        let kv = Arc::new(Interleaved(MemoryKvStore::new()));
+        let clock = ManualClock::new(OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap());
+        let counters = RegistrationAttempts::new(
+            kv.clone(),
+            AttemptLimits::default(),
+            Arc::new(clock.clone()),
+        );
+        let a = pn("106540352242922");
+        let charges = (0..10).map(|_| counters.charge(AttemptBudget::Registration, &a));
+        let results = futures::future::join_all(charges).await;
+        let passed = results.iter().filter(|r| r.is_ok()).count();
+        let refused: Vec<u16> = results
+            .iter()
+            .filter_map(|r| r.as_ref().err().map(ServiceError::status))
+            .collect();
+        assert_eq!(passed, 5, "{refused:?}");
+        assert_eq!(refused, [429; 5]);
+        let stored = kv
+            .0
+            .get(&RegistrationAttempts::store_key(
+                AttemptBudget::Registration,
+                &a,
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            String::from_utf8(stored.value)
+                .unwrap()
+                .ends_with(r#""count":5}"#)
+        );
+    }
+
+    /// A `KvStore` that fails every call.
+    #[derive(Debug)]
+    struct Failing;
+
+    fn down() -> StorageError {
+        StorageError::Backend(anyhow::anyhow!("down"))
+    }
+
+    #[async_trait::async_trait]
+    impl KvStore for Failing {
+        async fn get(
+            &self,
+            _: &StoreKey,
+        ) -> Result<Option<meta_whatsapp_rs::core::store::Versioned>, StorageError> {
+            Err(down())
+        }
+        async fn put(&self, _: &StoreKey, _: Vec<u8>, _: Expiry) -> Result<u64, StorageError> {
+            Err(down())
+        }
+        async fn put_if_absent(
+            &self,
+            _: &StoreKey,
+            _: Vec<u8>,
+            _: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            Err(down())
+        }
+        async fn compare_and_swap(
+            &self,
+            _: &StoreKey,
+            _: u64,
+            _: Option<Vec<u8>>,
+            _: Expiry,
+        ) -> Result<Option<u64>, StorageError> {
+            Err(down())
+        }
+        async fn delete(&self, _: &StoreKey) -> Result<bool, StorageError> {
+            Err(down())
+        }
+    }
+
+    /// A store that fails refuses the attempt (`503`, retryable, nothing
+    /// sent): the budget fails closed. Decisive: the store's error
+    /// propagated, not read as "no record".
+    #[tokio::test]
+    async fn a_store_that_fails_refuses_the_attempt() {
+        let clock = ManualClock::new(OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap());
+        let counters =
+            RegistrationAttempts::new(Arc::new(Failing), AttemptLimits::default(), Arc::new(clock));
+        for budget in AttemptBudget::ALL {
+            let refused = counters
+                .charge(budget, &pn("106540352242922"))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                (refused.status(), refused.code()),
+                (503, "storage_unavailable"),
+                "{budget:?}"
+            );
+            assert!(!refused.may_have_been_sent());
+        }
     }
 
     /// The local checks never quote the value they refuse.

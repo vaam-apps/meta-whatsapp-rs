@@ -1419,3 +1419,73 @@ async fn live_postgres_a_registration_leaves_its_pin_in_no_table() {
     assert!(rows > 5, "{rows} rows swept");
     assert!(found_number, "the sweep reads the stored rows");
 }
+
+/// Roadmap M3d's budget across replicas on Postgres: two instances on one
+/// database, twelve registrations of one number at once (six on each), a
+/// budget of 3: no more than 3 reach Meta, the stored count is the number
+/// that did, and every other one is refused before Meta (`429`, or `503`
+/// when the compare-and-swap kept losing). Decisive: the charge's
+/// compare-and-swap on the shared `KvStore` (a plain write lets racing
+/// replicas all through).
+#[tokio::test]
+async fn live_postgres_a_numbers_budget_holds_across_racing_replicas() {
+    use common::registration::{self as flow, PIN, PN, post, success};
+    use meta_whatsapp_rs::core::ids::PhoneNumberId;
+    use meta_whatsapp_rs::core::store::KvStore;
+    use meta_whatsapp_server_core::registration::{
+        AttemptBudget, AttemptLimit, AttemptLimits, RegistrationAttempts,
+    };
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(20).await;
+    migrate(&pool).await.unwrap();
+    let settings = meta_whatsapp_server::state::Settings {
+        registration_attempts: AttemptLimits {
+            registration: AttemptLimit {
+                attempts: 3,
+                window: std::time::Duration::from_hours(72),
+            },
+            ..AttemptLimits::default()
+        },
+        ..common::test_settings()
+    };
+    let a = Harness::with_stores_and_settings(Stores::postgres(&pool), settings.clone());
+    let b = Harness::with_stores_and_settings(Stores::postgres(&pool), settings);
+    let key = flow::connected(&a).await;
+    for h in [&a, &b] {
+        for _ in 0..6 {
+            h.graph.push_json(200, success());
+        }
+    }
+    let calls = (0..12).map(|i| {
+        let h = if i % 2 == 0 { &a } else { &b };
+        h.call(post(&key, "register", &serde_json::json!({"pin": PIN})))
+    });
+    let replies = futures::future::join_all(calls).await;
+    let passed = replies.iter().filter(|r| r.status == StatusCode::OK).count();
+    for reply in &replies {
+        assert!(
+            [200, 429, 503].contains(&reply.status.as_u16()),
+            "{}: {}",
+            reply.status,
+            reply.text
+        );
+    }
+    let asked = a.graph.requests().len() + b.graph.requests().len();
+    assert_eq!(asked, passed, "only the passed ones reached Meta");
+    assert!((1..=3).contains(&passed), "{passed} passed");
+    let stored = a
+        .kv
+        .get(&RegistrationAttempts::store_key(
+            AttemptBudget::Registration,
+            &PhoneNumberId::new(PN).unwrap(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let count = serde_json::from_slice::<serde_json::Value>(&stored.value).unwrap()["count"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(usize::try_from(count).unwrap(), passed);
+}
