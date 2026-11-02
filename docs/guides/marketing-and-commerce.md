@@ -243,5 +243,8 @@ Consent registry, recurring campaign schedules (pacing is the bot
 crate's paced broadcast, [bots.md](bots.md#9-paced-broadcasts); a
 campaign sent at a time, surviving a restart, is a job,
 [bots.md](bots.md#10-scheduled-and-durable-jobs)), audience
-segmentation, catalog inventory management, conversion tracking through
-Meta's Conversions API, and payments ([coverage.md](../coverage.md)).
+segmentation, catalog inventory management, and conversion tracking
+through Meta's Conversions API. Payments are typed, not handled for you:
+India's and Brazil's order messages and payment templates, India's
+checkout button templates and their checkout endpoint, are
+`meta_whatsapp_client::payments` ([coverage.md](../coverage.md#row-32)).

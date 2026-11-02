@@ -645,8 +645,11 @@ Meta's `payments/payments-in/*` and `payments/payments-br/*` pages).
   of service, Meta refuses (`403 permission`, `131005`; a send
   `403 payment`, `134011`), and `error.graph.details` carries Meta's
   link, which the merchant opens. No route of the service accepts them.
-- Not yet (roadmap P1d): India's checkout button templates, the data
-  endpoint of a configuration, the alpha third-party validation.
+- India's checkout button templates (a template whose `order_details`
+  button carries `shipping_info`) and the alpha third-party validation
+  (a `razorpay` or `payu` payment setting with its
+  `encrypted_payment_gateway_data`) go through the same send (roadmap
+  P1d). Not yet (roadmap P2b): linking a configuration's data endpoint.
 
 ## The inbox
 

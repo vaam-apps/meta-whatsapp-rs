@@ -277,6 +277,8 @@ fn components(
         }
     }
 
+    checkout_template(list, category, header_format, path)?;
+
     let ctx = Ctx {
         category,
         format,
@@ -883,9 +885,21 @@ fn payment_request_buttons(buttons: &[Button], field: &str) -> Check {
 /// `DOCUMENT`" (India's page: "categorized as Utility", or marketing with
 /// `display_format`). The label is not checked beyond being there: India
 /// fixes it to `Review and Pay`, Brazil's example prints a placeholder.
+///
+/// One label is read: `Buy now`, which the checkout button template page
+/// calls the checkout button's "non-customizable syntax", makes the button
+/// a checkout button, under that page's rules instead ("Checkout button
+/// templates are marketing templates").
 fn order_details_button(t: &str, ctx: &Ctx<'_>, field: &str) -> Check {
     if t.trim().is_empty() {
         return Err(err(format!("{field}.text"), "must not be empty"));
+    }
+    if t == Button::CHECKOUT_LABEL {
+        // A checkout button: its template's rules are `checkout_template`'s
+        // (a single product: MARKETING, the header, the other buttons) and
+        // `card_components`' (a carousel card, whose template the carousel
+        // rule already holds to MARKETING), both checked before this.
+        return Ok(());
     }
     if ctx
         .category
@@ -906,6 +920,66 @@ fn order_details_button(t: &str, ctx: &Ctx<'_>, field: &str) -> Check {
             field,
             "an order details template's header is TEXT, IMAGE or DOCUMENT",
         ));
+    }
+    Ok(())
+}
+
+/// Whether `b` is a checkout button: `ORDER_DETAILS` labelled `Buy now`.
+fn is_checkout(b: &Button) -> bool {
+    matches!(b, Button::OrderDetails { text } if text == Button::CHECKOUT_LABEL)
+}
+
+/// A single product checkout button template
+/// (`payments-in/checkout-button-templates`): "a single product image or
+/// video header, along with message body text, message footer, a single
+/// checkout button, and up to 9 quick-reply buttons"; the header format
+/// "Required … Value can be `image` or `video`". The carousel's checkout
+/// buttons are checked with their cards (`card_components`).
+fn checkout_template(
+    list: &[TemplateComponent],
+    category: Option<&TemplateCategory>,
+    header_format: Option<&HeaderFormat>,
+    path: &str,
+) -> Check {
+    for (i, c) in list.iter().enumerate() {
+        let TemplateComponent::Buttons { buttons } = c else {
+            continue;
+        };
+        let field = format!("{path}[{i}].buttons");
+        let checkout = buttons.iter().filter(|b| is_checkout(b)).count();
+        if checkout == 0 {
+            continue;
+        }
+        if category.is_some_and(|c| *c != TemplateCategory::Marketing) {
+            return Err(err(
+                &field,
+                "a checkout button template is a MARKETING template",
+            ));
+        }
+        if checkout > 1 {
+            return Err(err(
+                &field,
+                "a single product checkout button template has one checkout button (a carousel gives each card its own)",
+            ));
+        }
+        if !matches!(
+            header_format,
+            Some(HeaderFormat::Image | HeaderFormat::Video)
+        ) {
+            return Err(err(
+                path,
+                "a checkout button template needs an IMAGE or VIDEO header",
+            ));
+        }
+        if let Some(j) = buttons
+            .iter()
+            .position(|b| !is_checkout(b) && !matches!(b, Button::QuickReply { .. }))
+        {
+            return Err(err(
+                format!("{field}[{j}]"),
+                "a checkout button template's other buttons are quick replies",
+            ));
+        }
     }
     Ok(())
 }
@@ -1120,6 +1194,7 @@ fn button_kind(b: &Button) -> &'static str {
         Button::Url { .. } => "URL",
         Button::PhoneNumber { .. } => "PHONE_NUMBER",
         Button::Spm { .. } => "SPM",
+        Button::OrderDetails { .. } => "ORDER_DETAILS",
         _ => "OTHER",
     }
 }
@@ -1165,18 +1240,22 @@ fn card_components(list: &[TemplateComponent], ctx: &Ctx<'_>, path: &str) -> Che
                 )?;
             }
             TemplateComponent::Buttons { buttons } => {
-                // Media cards: "up to two buttons", quick reply / phone / URL.
+                // Media cards: "up to two buttons", quick reply / phone / URL,
+                // or a checkout button (`payments-in/checkout-button-templates`:
+                // "replace one of the buttons with a checkout button, and
+                // make sure that it is the first button in the card").
                 // Product cards: "a single View button or URL button".
                 let (max, allowed): (usize, fn(&Button) -> bool) = if product {
                     (1, |b| matches!(b, Button::Spm { .. } | Button::Url { .. }))
                 } else {
                     (2, |b| {
-                        matches!(
-                            b,
-                            Button::QuickReply { .. }
-                                | Button::Url { .. }
-                                | Button::PhoneNumber { .. }
-                        )
+                        is_checkout(b)
+                            || matches!(
+                                b,
+                                Button::QuickReply { .. }
+                                    | Button::Url { .. }
+                                    | Button::PhoneNumber { .. }
+                            )
                     })
                 };
                 if buttons.len() > max {
@@ -1189,6 +1268,12 @@ fn card_components(list: &[TemplateComponent], ctx: &Ctx<'_>, path: &str) -> Che
                     return Err(err(
                         format!("{field}.buttons[{j}]"),
                         "button type not allowed on this kind of card",
+                    ));
+                }
+                if let Some(j) = buttons.iter().skip(1).position(is_checkout) {
+                    return Err(err(
+                        format!("{field}.buttons[{}]", j + 1),
+                        "a card's checkout button is its first button",
                     ));
                 }
                 button_list(buttons, ctx, &field)?;

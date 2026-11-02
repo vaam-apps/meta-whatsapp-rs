@@ -145,7 +145,7 @@ own gate. On another `rev`, trust the rustdoc
 
 - No tenant model, no job queue or outbox, no consent registry.
 - Not wrapped: Multi-Partner Solutions and migration intents (credit lines and partner-led
-  business verification are), India's checkout button templates (other payments are)
+  business verification are)
   ([coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md),
   [parity](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/parity.md),
   [roadmap](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/roadmap.md)).
