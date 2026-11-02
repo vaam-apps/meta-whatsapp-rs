@@ -77,7 +77,10 @@ registration reference pages of 2026-11-02; the service's cell of row 45 with re
 events (roadmap M2d), against their code and tests and Meta's
 `webhooks/reference/standby`, `webhooks/reference/messaging-handovers`
 and `marketing-messages/track-click-events` examples as the library's
-fixtures carry them (the last page read again on 2026-11-02); the service's cells of rows 22, 29, 37, 51, 53, 56, 57, 59, 60 and 104 with the send union's other types (roadmap M5a), against their code and tests and Meta's Direct Send, carousel, catalog, calling, Flows, groups, location request, address and business-scoped user id pages of 2026-11-02. Every cell
+fixtures carry them (the last page read again on 2026-11-02); the service's cells of rows 22, 29, 37, 51, 53, 56, 57, 59, 60 and 104 with the send union's other types (roadmap M5a), against their code and tests and Meta's Direct Send, carousel, catalog, calling, Flows, groups, location request, address and business-scoped user id pages of 2026-11-02; the
+service's cell of row 10 with webhooks out (roadmap M2c), against its
+code and tests, the Standard Webhooks specification and its libraries'
+known-answer vectors of 2026-11-02. Every cell
 about us was
 checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
@@ -88,13 +91,13 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**60 of the 132 counted rows are done on both sides.** Parity is not
+**61 of the 132 counted rows are done on both sides.** Parity is not
 reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
 | Library | 128 | 3 | 0 | 1 |
-| Service | 60 | 16 | 55 | 1 |
+| Service | 61 | 15 | 55 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
   over WhatsApp Web ("n/a — unofficial protocol"). The counted rows'
@@ -102,9 +105,9 @@ reached.
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
 - Each of the library's 3 partial or gap rows is cited by a
-  [roadmap](roadmap.md) item. Each of the service's 71 names, in its
+  [roadmap](roadmap.md) item. Each of the service's 70 names, in its
   status, the roadmap items that bring it; by family (a row can name
-  two): M2 1, M3 7, M4 2, M5 60, P 1 (payments: P2b).
+  two): M3 7, M4 2, M5 60, P 1 (payments: P2b).
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
@@ -273,7 +276,7 @@ The owner's definition (2026-09-26):
 | 7 | Connection | Webhook endpoint: the verify-token handshake, `X-Hub-Signature-256` | No | Yes (`client.webhook()`; an unsigned mode for development) | `webhooks/overview.md`, `webhooks/create-webhook-endpoint.md` | `webhooks::verify::verify_subscription`; `webhooks::SignatureVerifier` (several secrets, fail-closed, no unsigned mode); `webhooks::WebhookHandler::deliver`; the axum `webhooks::router` | `GET` and `POST /webhooks/meta` (`server_http::api::webhooks::verify`, `receive`, over the core's pipeline since S5e, `server_core::inbound::Pipeline::deliver`): a missing or malformed signature header refused before the body is read, the signature checked against every app secret before parsing, 3 MiB | done / done |
 | 8 | Connection | Webhook deduplication | — | — | `webhooks/overview.md` (Meta retries a delivery) | `webhooks::dedup::DedupGuard` (a lease: pending, then done or released); an event the sink refuses permanently is dead-lettered and marked done instead of holding back its batch (`webhooks::deadletter::DeadLetters`, `WebhookHandlerBuilder::dead_letters`, roadmap L21a) | the library's lease, shared by every replica through the Postgres `KvStore`; no dead letters (its sink classifies no error as permanent) | done / done |
 | 9 | Accounts | Several numbers and accounts, routed by `phone_number_id` | Yes (one client per session) | Yes (one client per phone number id; a router reads the body) | `solution-providers/manage-accounts.md` | `client::Client::with_token`; `client::embedded_signup::TokenVault::get_by_phone_number`; every event carries its business number | tenants, keys and WABA bindings (`server_core::admin::Admin`, under the routes of `server_api_axum::api::admin`); each webhook event routed to the tenant that owns its number or WABA (`server_core::events::route`, `owner`), a dated event only when that binding began by its second (a first onboarding keeps its first second; after a move from another tenant, a second before it, by the skew margin `server_core::events::MoveRules`); since S2b an undated event (an error, a history chunk, an undated group update) of a WABA that moved from another tenant is operator-only for 7 days and an hour after the move (`server_core::events::UndatedAfterMove`, `OperatorOnly` by default, `CurrentHolder` the behaviour before: design D36), from the record of the WABA's last unbinding (`server_core::model::WabaTombstone`), so a previous holder's that Meta redelivers no longer reach a new holder | done / done |
-| 10 | Accounts | A live event stream for a UI | — | — | none (ours to build) | `webhooks::sse`; `adapters::sink::BroadcastSink` | polling: `GET /v1/events` (`server_api_axum::api::events::list_events`), one event by id (`server_api_axum::api::events::get_event`); SSE since M2b: `GET /v1/events/stream` and `GET /v1/numbers/{pn}/events/stream` (`server_http::api::events::stream_routes`, over `server_core::live::Streams`), woken through the bundle's `server_core::notify::EventNotifier` (Postgres `LISTEN`/`NOTIFY`, `server_store_postgres::PgNotifier`; memory, `server_core::notify::LocalNotifier`), resumed by `Last-Event-ID` on any replica; webhooks-out in M2c | done / partial (M2c) |
+| 10 | Accounts | A live event stream for a UI | — | — | none (ours to build) | `webhooks::sse`; `adapters::sink::BroadcastSink` | polling: `GET /v1/events` (`server_api_axum::api::events::list_events`), one event by id (`server_api_axum::api::events::get_event`); SSE since M2b: `GET /v1/events/stream` and `GET /v1/numbers/{pn}/events/stream` (`server_http::api::events::stream_routes`, over `server_core::live::Streams`), woken through the bundle's `server_core::notify::EventNotifier` (Postgres `LISTEN`/`NOTIFY`, `server_store_postgres::PgNotifier`; memory, `server_core::notify::LocalNotifier`), resumed by `Last-Event-ID` on any replica; webhooks out since M2c: `POST /v1/webhook-endpoints` and the endpoint, secret, ping and delivery routes (`server_api_axum::api::webhook_endpoints`), signed the Standard Webhooks way (`server_core::webhooks_out::signature::EndpointSecret`), fanned out from the outbox and dispatched under a claim on every replica (`server_core::webhooks_out::dispatch::Dispatcher`, over the bundle's `server_core::webhooks_out::store::WebhookStore`), each destination checked against the allow-list and its address pinned per attempt (`server_core::webhooks_out::destination::pin`, sent by `server_http::webhooks_out::HyperSender`) | done / done |
 
 ### B. Sending messages
 
