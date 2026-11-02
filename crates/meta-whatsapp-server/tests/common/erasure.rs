@@ -2,13 +2,15 @@
 //! (`erasure.rs`) and on Postgres (`live_postgres.rs`, which sweeps every
 //! table of the schema after them).
 
+use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::store::ConversationKey;
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::model::Scope;
 use serde_json::{Value, json};
 
 use super::meta::{
-    EXAMPLE_BSUID, EXAMPLE_PN, EXAMPLE_WA_ID, EXAMPLE_WABA, bytes, delivered, fixture, text,
-    with_ids,
+    EXAMPLE_BSUID, EXAMPLE_PN, EXAMPLE_WA_ID, EXAMPLE_WABA, bytes, dated, delivered, fixture, now,
+    text, with_ids,
 };
 use super::{Call, Harness, Reply};
 
@@ -57,6 +59,17 @@ pub fn linked(waba: &str, pn: &str, wamid: &str) -> Value {
     value["messages"][0]["from"] = json!(EXAMPLE_WA_ID);
     value["messages"][0]["id"] = json!(wamid);
     payload
+}
+
+/// Meta's standby example (`webhooks/reference/standby`) on `pn` of
+/// `waba`: the customer's message while another app owns the thread, an
+/// operator-only row of the outbox (`standby_observed`) naming them.
+pub fn standby(waba: &str, pn: &str) -> Value {
+    with_ids(
+        fixture("pages/webhooks.reference.standby__inbound_message.json"),
+        waba,
+        pn,
+    )
 }
 
 /// `POST /v1/numbers/{pn}/erasures` with `key`, confirming `confirm`.
@@ -152,13 +165,17 @@ pub fn erased(reply: &Reply, pn: &str) -> String {
 }
 
 /// The decisive scenario (roadmap M2f): the customer writes under their
-/// phone number and their BSUID; the merchant erases them by their BSUID
-/// alone. Afterwards the inbox lists only the other customer, none of the
+/// phone number and their BSUID (and once in standby, an operator-only
+/// row of the outbox); the merchant erases them by their BSUID alone.
+/// Afterwards the inbox lists only the other customer, none of the
 /// tenant's events names them, Meta was asked nothing; a repeat answers
-/// the same. `live_postgres.rs` then sweeps every table.
+/// the same. `live_postgres.rs` then sweeps every table: no row a tenant
+/// sees names them, and the operator-only row still does (design D89,
+/// narrow by default).
 pub async fn an_erasure_by_bsuid_leaves_nothing_of_the_customer(h: &Harness) {
     let (reader, eraser) = merchant(h).await;
     the_customer_writes(h).await;
+    deliver(h, &standby(EXAMPLE_WABA, EXAMPLE_PN)).await;
     let pn = EXAMPLE_PN;
     assert_eq!(
         conversations_of(h, &reader, pn).await,
@@ -268,5 +285,67 @@ pub async fn an_erasure_stays_on_its_number_and_tenant(h: &Harness) {
         .await;
     assert_eq!(refused.status, StatusCode::NOT_FOUND, "{}", refused.text);
     assert_eq!(conversations_of(h, &reader, EXAMPLE_PN).await, [OTHER]);
+    assert!(h.graph.requests().is_empty(), "Meta was asked");
+}
+
+/// Design D90, narrow by default: on a number whose WABA moved from
+/// merchant-a to merchant-b, merchant-b's erasure of the customer who
+/// wrote to both is `409 erasure_crosses_binding` (the library's erasure
+/// has no time bound, so it would reach merchant-a's hidden records), and
+/// erases nothing: merchant-a's hidden message and merchant-b's own stay,
+/// and so do both tenants' events of the number. The answer quotes no
+/// contact.
+pub async fn an_erasure_on_a_moved_number_erases_nothing(h: &Harness) {
+    let (waba, pn) = (EXAMPLE_WABA, EXAMPLE_PN);
+    h.tenant("merchant-a").await;
+    h.tenant("merchant-b").await;
+    h.connect("merchant-a", waba, &[pn], "TOKEN-OF-A").await;
+    let a_key = h
+        .tenant_key("merchant-a", &[Scope::Inbox, Scope::Events])
+        .await;
+    // In the binding's own second, which a first onboarding keeps.
+    deliver(h, &dated(text(waba, pn, "wamid.ERASE-MOVED-A"), now())).await;
+    assert_eq!(naming(&events_of(h, &a_key, pn).await), 1);
+    assert!(
+        h.store
+            .unbind_waba(&WabaId::new(waba).unwrap())
+            .await
+            .unwrap()
+    );
+    h.connect("merchant-b", waba, &[pn], "TOKEN-OF-B").await;
+    let b_key = h
+        .tenant_key("merchant-b", &[Scope::Inbox, Scope::Events])
+        .await;
+    let b_eraser = h.tenant_key("merchant-b", &[Scope::Erasure]).await;
+    // After a move, an event of the binding's own second reaches nobody.
+    deliver(h, &dated(text(waba, pn, "wamid.ERASE-MOVED-B"), now() + 1)).await;
+    let key = ConversationKey::new(PhoneNumberId::new(pn).unwrap(), EXAMPLE_WA_ID);
+    let stored = || async {
+        h.conversations
+            .messages(&key, None, 10)
+            .await
+            .unwrap()
+            .len()
+    };
+    assert_eq!(stored().await, 2, "merchant-a's hidden, merchant-b's own");
+    assert_eq!(conversations_of(h, &b_key, pn).await, [EXAMPLE_WA_ID]);
+    let reply = h.call(erase(&b_eraser, pn, pn, &[EXAMPLE_WA_ID])).await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::CONFLICT, "erasure_crosses_binding"),
+        "{}",
+        reply.text
+    );
+    for needle in needles() {
+        assert!(!reply.text.contains(needle), "{}", reply.text);
+    }
+    assert_eq!(stored().await, 2, "an erasure reached the previous holder");
+    assert_eq!(conversations_of(h, &b_key, pn).await, [EXAMPLE_WA_ID]);
+    assert_eq!(naming(&events_of(h, &b_key, pn).await), 1);
+    assert_eq!(
+        naming(&events_of(h, &a_key, pn).await),
+        1,
+        "merchant-a's own stream"
+    );
     assert!(h.graph.requests().is_empty(), "Meta was asked");
 }

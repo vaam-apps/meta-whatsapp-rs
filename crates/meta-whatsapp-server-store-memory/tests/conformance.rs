@@ -245,7 +245,7 @@ impl Outbox for IgnoresTheGuard {
         let mut rows = self.rows.lock().unwrap();
         let before = rows.len();
         rows.retain(|row| {
-            let ours = row.tenant.as_ref().is_none_or(|t| t == tenant)
+            let ours = row.tenant.as_ref() == Some(tenant)
                 && row.phone_number_id.as_ref() == Some(phone_number_id);
             !(ours
                 && meta_whatsapp_server_core::outbox::event_contacts(&row.data)

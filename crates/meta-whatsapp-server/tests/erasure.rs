@@ -31,6 +31,14 @@ async fn an_erasure_stays_on_its_number_and_tenant() {
     common::erasure::an_erasure_stays_on_its_number_and_tenant(&Harness::new()).await;
 }
 
+/// Decisive (design D90, narrow by default): on a number moved from
+/// another tenant, the erasure is `409 erasure_crosses_binding` and the
+/// previous holder's hidden records stay.
+#[tokio::test]
+async fn an_erasure_on_a_moved_number_erases_nothing() {
+    common::erasure::an_erasure_on_a_moved_number_erases_nothing(&Harness::new()).await;
+}
+
 /// Every refusal comes before anything is read or erased, and quotes no
 /// contact: a body naming another number (`confirm`), no contact, 17, a
 /// blank one, one with a control character, an unknown field; a

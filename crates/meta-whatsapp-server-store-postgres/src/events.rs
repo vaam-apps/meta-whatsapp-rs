@@ -474,8 +474,8 @@ impl Outbox for PgEventStore {
         if contacts.is_empty() {
             return Ok(0);
         }
-        // The tenant's rows and the operator-only ones on the number, by
-        // the GIN index on `contacts` (`ERASE_SQL`).
+        // The tenant's own rows on the number (never an operator-only
+        // one: design D89), by the GIN index on `contacts` (`ERASE_SQL`).
         let deleted = sqlx::query(ERASE_SQL)
             .bind(tenant.as_str())
             .bind(phone_number_id.as_str())
@@ -489,10 +489,12 @@ impl Outbox for PgEventStore {
 }
 
 /// [`Outbox::erase_contacts`]'s statement: `$1` the tenant, `$2` the
-/// number, `$3` the identities. The tenant is read by `tenant_id` (no
-/// index leads with it), not `stream` (the primary key's first column), so
-/// that the planner's only index is `wa_server_events_contacts_idx`.
-/// Public for the live test that pins its plan.
+/// number, `$3` the identities. The tenant's own rows only: `tenant_id =
+/// $1` never matches an operator-only row (`NULL`). The tenant is read by
+/// `tenant_id` (no index leads with it), not `stream` (the primary key's
+/// first column), so that the planner's only index is
+/// `wa_server_events_contacts_idx`. Public for the live test that pins its
+/// plan.
 pub const ERASE_SQL: &str = "DELETE FROM wa_server_events \
-     WHERE (tenant_id = $1 OR tenant_id IS NULL) AND phone_number_id = $2 \
+     WHERE tenant_id = $1 AND phone_number_id = $2 \
        AND contacts && $3::text[]";

@@ -330,12 +330,9 @@ impl Outbox for MemoryEventStore {
         let mut state = self.lock();
         let mut erased = 0u64;
         let mut gone: Vec<String> = Vec::new();
-        // The tenant's stream and the operator-only one; never another
-        // tenant's.
-        for name in [tenant.as_str(), ""] {
-            let Some(stream) = state.streams.get_mut(name) else {
-                continue;
-            };
+        // The tenant's own stream only: never the operator-only one (the
+        // operator's, design D89), nor another tenant's.
+        if let Some(stream) = state.streams.get_mut(tenant.as_str()) {
             stream.rows.retain(|_, row| {
                 let named = row.event.phone_number_id.as_ref() == Some(phone_number_id)
                     && row

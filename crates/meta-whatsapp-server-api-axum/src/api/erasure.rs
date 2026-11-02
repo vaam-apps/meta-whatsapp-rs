@@ -3,7 +3,7 @@
 //!
 //! | Route | Does |
 //! | --- | --- |
-//! | `POST /v1/numbers/{pn}/erasures` | erase a person on the number: every identity the inbox connects to the ones named, from the inbox and from the outbox (the tenant's rows and the operator-only ones on the number), journaled and audited first and after; asks Meta nothing |
+//! | `POST /v1/numbers/{pn}/erasures` | erase a person on the number: every identity the inbox connects to the ones named, from the inbox and from the tenant's own outbox rows of the number (never the operator-only ones), journaled and audited first and after; refused on a number moved from another tenant (`409 erasure_crosses_binding`); asks Meta nothing |
 //!
 //! The rules are the core's ([`meta_whatsapp_server_core::erasure`]: the
 //! `Erasures` service on an owned number, the journal, the order of the
@@ -58,7 +58,9 @@ pub struct ErasureAnswer {
 }
 
 /// `POST /v1/numbers/{pn}/erasures`: erase a customer on the number, from
-/// the service's inbox and event outbox. Irreversible; only when you call
+/// the service's inbox and the tenant's own rows of its event outbox (not
+/// the operator's). Refused on a number moved from another tenant, nothing
+/// erased (`409 erasure_crosses_binding`). Irreversible; only when you call
 /// it (which requests to honour is yours to decide). Erase on each of the
 /// merchant's numbers, and again once Meta's 7-day redelivery window has
 /// passed; Meta's contact book is the library's
@@ -78,7 +80,7 @@ pub struct ErasureAnswer {
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden` (a key without the scope `erasure`), `tenant_suspended`", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
-        (status = 409, description = "`erasure_not_configured` (no `WA_SERVER_ERASURE_KEY`), `number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 409, description = "`erasure_not_configured` (no `WA_SERVER_ERASURE_KEY`), `erasure_crosses_binding` (the number came from another tenant, whose hidden records of the person an erasure would reach: nothing erased), `number_not_connected`, `reconnect_required`", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `confirm` (not the path's number), `contacts` (none, more than 16, or one the inbox's routes refuse: never quoted) or `body`: nothing was read or erased", body = ErrorBody),
         (status = 429, description = "`too_many_requests`: the tenant's `send` budget (`Retry-After`)", body = ErrorBody),
         (status = 503, description = "`storage_unavailable`: the number moved while it was erased, or the journal or a store failed; repeat it", body = ErrorBody),

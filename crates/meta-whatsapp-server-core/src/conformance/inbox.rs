@@ -33,7 +33,10 @@
 //!   records kept; its journal entry, written first, holds keyed HMACs
 //!   only, and a journal that fails erases nothing; a deployment without
 //!   an erasure key, or a request not confirming the number, erases
-//!   nothing.
+//!   nothing. On a number whose WABA moved from another tenant (a history
+//!   cut), the erasure is `409 erasure_crosses_binding` and erases
+//!   nothing: neither the previous holder's hidden records of the person
+//!   nor the new holder's (design D90, narrow by default).
 //! - Only the order's own number opens the services.
 //! - Roadmap M2g: the window is what a free-form reply would meet (and the
 //!   list's is the same); marking a conversation read resets `unread`
@@ -131,11 +134,12 @@ pub async fn run(backend: &dyn Backend) {
     Box::pin(a_message_is_found_by_id_on_its_own_number(backend)).await;
     Box::pin(the_previous_holders_message_window_and_receipt_never_reach_the_new_holder(backend))
         .await;
-    Box::pin(housekeeping_applies_the_inbox_stores_retention(backend)).await;
     Box::pin(an_erasure_reaches_every_identity_and_journals_first(
         backend,
     ))
     .await;
+    Box::pin(an_erasure_on_a_number_with_a_previous_holder_erases_nothing(backend)).await;
+    Box::pin(housekeeping_applies_the_inbox_stores_retention(backend)).await;
 }
 
 /// A tenant's number, as one request sees it: the order, the caller it
@@ -1247,6 +1251,116 @@ pub async fn an_erasure_reaches_every_identity_and_journals_first(backend: &dyn 
         entries[1].identities,
         [key().journal_hmac(&pn_id, BSUID)],
         "the links went with the first erasure"
+    );
+}
+
+/// The tenant's own outbox rows, as its stream's page answers them.
+async fn stream_of(backend: &dyn Backend, tenant: &str) -> Vec<String> {
+    let page = backend
+        .outbox()
+        .page(&crate::outbox::EventQuery {
+            tenant: TenantId::parse(tenant).unwrap(),
+            after: None,
+            types: None,
+            phone_number_id: None,
+            limit: 100,
+            max_bytes: 8 * 1024 * 1024,
+        })
+        .await
+        .unwrap();
+    page.events.into_iter().map(|event| event.data).collect()
+}
+
+/// Roadmap M2f, design D90 (narrow by default): an erasure never reaches
+/// a previous holder's records of the person.
+///
+/// 1. Tenant A's customer writes on A's number (the inbox, A's stream).
+/// 2. The WABA moves to tenant B, and the customer writes to B.
+/// 3. B's erasure of the customer, configured and confirmed, is `409
+///    erasure_crosses_binding`: no journal entry, and every record stays,
+///    A's hidden message and B's own (the library's erasure has no time
+///    bound, so the service cannot leave A's out), each holder's outbox
+///    rows too.
+///
+/// Decisive: the cut's refusal in `Erasures::erase` (without it, A's
+/// hidden message goes with B's).
+#[allow(clippy::too_many_lines)] // a scenario: it reads top to bottom
+pub async fn an_erasure_on_a_number_with_a_previous_holder_erases_nothing(backend: &dyn Backend) {
+    let (waba, pn) = ("102290129340301", "106540352242801");
+    let pipeline = pipeline(backend);
+    let clock = ManualClock::new(OffsetDateTime::now_utc());
+    let _a = merchant(backend, "inbox-erase-cut-a", waba, pn).await;
+    deliver(
+        &pipeline,
+        &text(waba, pn, CONTACT, "wamid.ERASE-CUT-A", "to A", now()),
+    )
+    .await;
+    let records = backend.records();
+    assert!(
+        records
+            .unbind_waba(&WabaId::new(waba).unwrap())
+            .await
+            .unwrap()
+    );
+    let b = merchant(backend, "inbox-erase-cut-b", waba, pn).await;
+    deliver(
+        &pipeline,
+        &text(waba, pn, CONTACT, "wamid.ERASE-CUT-B", "to B", now() + 1),
+    )
+    .await;
+    let inbox = b.inbox(backend, ReplyChecks::ALL, &clock);
+    assert!(inbox.history_from().is_some(), "a cut");
+    let history = inbox.history(CONTACT, &first(50)).await.unwrap();
+    let ids: Vec<_> = history.items.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["wamid.ERASE-CUT-B"], "B reads its own only");
+    let key = ConversationKey::new(PhoneNumberId::new(pn).unwrap(), CONTACT);
+    let stored = || async {
+        let mut ids: Vec<String> = backend
+            .conversations()
+            .messages(&key, None, 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.id.as_str().to_owned())
+            .collect();
+        ids.sort();
+        ids
+    };
+    let both = ["wamid.ERASE-CUT-A", "wamid.ERASE-CUT-B"];
+    assert_eq!(stored().await, both, "A's hidden, B's own");
+    let naming = |rows: &[String]| rows.iter().filter(|d| d.contains(CONTACT)).count();
+    assert_eq!(naming(&stream_of(backend, "inbox-erase-cut-a").await), 1);
+    assert_eq!(naming(&stream_of(backend, "inbox-erase-cut-b").await), 1);
+
+    let journal = Arc::new(KeptJournal::default());
+    let configured =
+        ErasureDeployment::new(ErasureKey::new(SecretBytes::new(ERASURE_KEY.to_vec())).unwrap())
+            .with_journal(journal.clone());
+    let outbox = backend.outbox();
+    let refused = b
+        .erasures(backend, outbox.as_ref(), Some(&configured), &clock)
+        .erase(pn, &[CONTACT.to_owned()])
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (refused.status(), refused.code()),
+        (409, "erasure_crosses_binding")
+    );
+    assert!(journal.entries.lock().unwrap().is_empty(), "journaled");
+    assert_eq!(
+        stored().await,
+        both,
+        "the erasure reached the previous holder's hidden record"
+    );
+    assert_eq!(
+        naming(&stream_of(backend, "inbox-erase-cut-a").await),
+        1,
+        "the previous holder's outbox row"
+    );
+    assert_eq!(
+        naming(&stream_of(backend, "inbox-erase-cut-b").await),
+        1,
+        "a refused erasure erased"
     );
 }
 

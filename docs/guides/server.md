@@ -799,11 +799,12 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/erasures" \
 - **What goes**: their conversations, messages, window events, thread
   ownership, synced contacts and identity links on the number; their
   messages in groups redacted (the library's `erase_all`, design D31);
-  and every event of the tenant on the number, and every operator-only
-  event of the number, whose data names one of them (`wa_server_events`,
-  by its `contacts` column: whole events, so a history chunk or a group
-  update that also names others goes too; `GET /v1/events` skips the
-  gap, nothing is renumbered).
+  and every event of the tenant on the number whose data names one of
+  them (`wa_server_events`, by its `contacts` column: whole events, so a
+  history chunk or a group update that also names others goes too; `GET
+  /v1/events` skips the gap, nothing is renumbered). Never an
+  operator-only event of the number: those are the operator's (design
+  D89).
 - **The answer says nothing of what was found**: the same `200` whether
   the person was known or not, so a repeat is harmless (it erases
   nothing more). No `Idempotency-Key`: there is nothing to replay.
@@ -824,22 +825,32 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/erasures" \
 - **Refusals**: another tenant's number is `404` (it does not exist for
   you), a key without the scope `403 forbidden`, a wrong `confirm` or bad
   `contacts` `422`, no `WA_SERVER_ERASURE_KEY` `409
-  erasure_not_configured`, a number whose token lapsed `409
-  reconnect_required` (the whole authorization order runs, as on the
-  inbox's routes), a number that moved while it was erased `503`
-  (repeat it). Its rate class is the writes'.
+  erasure_not_configured`, a number that came to you from another tenant
+  `409 erasure_crosses_binding` (below), a number whose token lapsed
+  `409 reconnect_required` (the whole authorization order runs, as on
+  the inbox's routes), a number that moved while it was erased `503`
+  (repeat it). Nothing is erased on any refusal. Its rate class is the
+  writes'.
 - **What it does not reach**: the person on your other numbers (erase on
-  each), another tenant's events (a previous holder of the number keeps
-  its own until the outbox's retention), events recorded before
+  each), the number's operator-only events and another tenant's (a
+  previous holder of the number keeps its own: both go with the outbox's
+  retention, `WA_SERVER_OUTBOX_RETENTION`), events recorded before
   migration 8, a body the library could not parse, the person quoted in
   someone else's message, the 24-hour idempotency answers of sends to
   them (`WA_SERVER_IDEMPOTENCY_TTL`), the webhook dedup markers (keyed
   hashes: keep them), what live streams already delivered, Meta's
-  contact book (the library's `delete_contact_book_entry`). On a number
-  that moved to you from another tenant, the inbox's erasure also
-  reaches the previous holder's records of the person under it (the
-  inbox is kept by number). What arrives after the erasure is recorded
-  again: erase again once Meta's 7-day redelivery window has passed.
+  contact book (the library's `delete_contact_book_entry`). What arrives
+  after the erasure is recorded again: erase again once Meta's 7-day
+  redelivery window has passed.
+- **A number that came to you from another tenant** (its WABA moved, or
+  Meta migrated the number from another tenant's WABA) is refused whole:
+  `409 erasure_crosses_binding`, nothing erased, no journal entry. The
+  inbox is kept by number, and your reads stop at your binding's start
+  (design D10), but the library's erasure takes no time bound, so it
+  would also delete the previous holder's hidden records of the person
+  (design D90). Ask the operator: they can erase on the number through
+  the library. Whether the service may reach those records is the
+  owner's open choice (roadmap § Owner touchpoints).
 
 ## OTP
 

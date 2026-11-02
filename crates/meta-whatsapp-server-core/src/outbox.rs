@@ -39,8 +39,9 @@
 //! event names its customers by ([`NewEvent::contacts`], from
 //! [`event_contacts`]), which a backend keeps beside the row at insert
 //! (Postgres: `wa_server_events.contacts`, a GIN index), so that an
-//! erasure finds a person's rows on a number without reading every row's
-//! data ([`Outbox::erase_contacts`], called by [`crate::erasure`] only).
+//! erasure finds a person's rows in a tenant's stream on a number without
+//! reading every row's data ([`Outbox::erase_contacts`], called by
+//! [`crate::erasure`] only; never an operator-only row).
 //! The column holds identifiers by design, as `data` does: it goes with
 //! its row, by the outbox's retention, its tenant's deletion or an
 //! erasure.
@@ -670,12 +671,14 @@ pub trait Outbox: Send + Sync + 'static {
     async fn received_media(&self, media_id: &MediaId) -> StoreResult<Vec<ReceivedMedia>>;
 
     /// Erase a customer's rows on one business number (roadmap M2f): delete
-    /// every row of `tenant`'s stream and of the operator-only stream
-    /// whose `phone_number_id` is `phone_number_id` and whose
-    /// [`NewEvent::contacts`], kept beside it at insert, name one of
-    /// `contacts`; how many went. Whole rows: one that also names others
-    /// (a history chunk, a group update) goes with their part. Never a row
-    /// of another tenant's stream, nor of another number; an empty
+    /// every row of `tenant`'s own stream whose `phone_number_id` is
+    /// `phone_number_id` and whose [`NewEvent::contacts`], kept beside it
+    /// at insert, name one of `contacts`; how many went. Whole rows: one
+    /// that also names others (a history chunk, a group update) goes with
+    /// their part. Never an operator-only row (no tenant: the operator's,
+    /// which the outbox's retention takes; design D89, narrow by default),
+    /// a row of another tenant's stream (a previous holder's), nor one of
+    /// another number; an empty
     /// `contacts`, or ids no row names, delete nothing; a row inserted
     /// before its backend kept contacts names nobody here. A backend keeps
     /// the contacts indexed (Postgres: `wa_server_events.contacts`, a GIN

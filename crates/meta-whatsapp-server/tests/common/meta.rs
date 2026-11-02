@@ -54,6 +54,9 @@ pub fn fixture(name: &str) -> Value {
         "fields/history_threads.json" => include_str!(
             "../../../meta-whatsapp-webhooks/tests/fixtures/fields/history_threads.json"
         ),
+        "pages/webhooks.reference.standby__inbound_message.json" => include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/webhooks.reference.standby__inbound_message.json"
+        ),
         other => panic!("no fixture {other} here (tests/common/meta.rs)"),
     };
     serde_json::from_str(text).unwrap()

@@ -633,16 +633,18 @@ pub fn from_row(tenant_id: Option<&str>, pn: &str, from: &str, dedup: Option<&st
     }
 }
 
-/// Roadmap M2f: an erasure deletes the rows naming one of its contacts on
-/// its number, the tenant's and the operator-only ones, and nothing else:
-/// not another customer's row on the number, not the customer's rows on
-/// another number of the tenant (nor operator-only ones there), not
-/// another tenant's row on the same number (a previous holder's, kept in
-/// its own stream), not a row whose text quotes the number. It answers how
-/// many went; a repeat deletes nothing; an empty list deletes nothing; a
-/// deleted row's dedup key is free again. Decisive: each clause of a
-/// backend's erasure (the contacts, the number, the tenant or
-/// operator-only streams).
+/// Roadmap M2f (design D89, narrow by default): an erasure deletes the
+/// tenant's own rows naming one of its contacts on its number, and
+/// nothing else: not the number's operator-only rows naming them (the
+/// operator's: their dedup keys stay taken), not another customer's row
+/// on the number, not the customer's rows on another number of the
+/// tenant, not another tenant's row on the same number (a previous
+/// holder's, kept in its own stream), not a row whose text quotes the
+/// number. It answers how many went; a repeat deletes nothing; an empty
+/// list deletes nothing; a deleted row's dedup key is free again.
+/// Decisive: each clause of a backend's erasure (the contacts, the
+/// number, the tenant's stream alone: an erasure reaching the
+/// operator-only stream deletes its rows and frees their keys).
 #[allow(clippy::too_many_lines)] // one case, read top to bottom
 pub async fn erase_contacts(backend: &dyn Backend) {
     const X: &str = "16505551234";
@@ -692,12 +694,12 @@ pub async fn erase_contacts(backend: &dyn Backend) {
     ] {
         kept.push(store.insert(&event).await.unwrap().unwrap());
     }
+    // The number's operator-only rows naming the customer, each by a key
+    // of its own: a kept row keeps its key taken.
+    let operator_only =
+        |number: &str| from_row(None, number, X, Some(&format!("erase-op-{number}")));
     for number in ["31", "32"] {
-        store
-            .insert(&from_row(None, number, X, None))
-            .await
-            .unwrap()
-            .unwrap();
+        store.insert(&operator_only(number)).await.unwrap().unwrap();
     }
     let contacts = [X.to_owned(), X_BSUID.to_owned()];
     assert_eq!(
@@ -705,8 +707,8 @@ pub async fn erase_contacts(backend: &dyn Backend) {
             .erase_contacts(&a, &pn("31"), &contacts)
             .await
             .unwrap(),
-        3,
-        "the tenant's two rows and the operator-only one, on 31"
+        2,
+        "the tenant's two rows on 31, never the operator-only one"
     );
     let page = store
         .page(&query("suite-erase-a", None, 100))
@@ -751,14 +753,23 @@ pub async fn erase_contacts(backend: &dyn Backend) {
         [previous],
         "another tenant's stream is untouched"
     );
-    // On 32, the tenant's row and the operator-only one.
+    // On 32, the tenant's row alone.
     assert_eq!(
         store
             .erase_contacts(&a, &pn("32"), &contacts)
             .await
             .unwrap(),
-        2
+        1
     );
+    // The operator-only rows naming the customer stay, on both numbers:
+    // their keys are still taken (a deleted row's would be free).
+    for number in ["31", "32"] {
+        assert_eq!(
+            store.insert(&operator_only(number)).await.unwrap(),
+            None,
+            "the operator-only row on {number} was erased"
+        );
+    }
     // The deleted row's dedup key is free: the same event is recorded
     // again (the webhook pipeline's dedup markers keep redeliveries out).
     assert!(

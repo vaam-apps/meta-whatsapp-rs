@@ -538,8 +538,9 @@ What the erasure does not reach, and what you do about it:
 - **Outside the store**: the webhook dedup markers (hashed, 7 days: keep
   them, they stop Meta's redeliveries from recording the customer
   again), OTP challenges (hashed, expiring), what your sinks forwarded
-  (the service's event outbox, which its erasure route reaches since
-  roadmap M2f, and its 24-hour idempotency answers, which it does not;
+  (the service's event outbox, whose tenant rows its erasure route
+  reaches since roadmap M2f, but not its operator-only rows, and its
+  24-hour idempotency answers, which it does not reach either;
   the webhook dead letters unless erased with `Eraser`, above, L21a; SSE
   clients), your own copies
   (media you downloaded, section 4), logs, and Meta's side (the

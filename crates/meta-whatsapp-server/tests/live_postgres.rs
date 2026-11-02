@@ -113,6 +113,9 @@ async fn live_postgres_another_tenants_received_media_id_is_not_found_with_no_re
 /// hex of its UTF-8 bytes, by table: `(table, rows)`, the tables with
 /// none left out. Every table, the library's and the service's: one added
 /// later is swept too (as the library's live erasure test sweeps its own).
+/// Every row a tenant may see: of `wa_server_events`, the rows with a
+/// tenant (an operator-only row, `tenant_id` `NULL`, is the operator's,
+/// which an erasure leaves: design D89; [`operator_rows_mentioning`]).
 async fn rows_mentioning(db: &TestDb, pool: &sqlx::PgPool, needles: &[&str]) -> Vec<(String, i64)> {
     let tables: Vec<String> = sqlx::query_scalar(
         "SELECT table_name::text FROM information_schema.tables \
@@ -129,12 +132,17 @@ async fn rows_mentioning(db: &TestDb, pool: &sqlx::PgPool, needles: &[&str]) -> 
     let mut found = Vec::new();
     for table in tables {
         let mut total = 0;
+        let tenants_only = if table == "wa_server_events" {
+            "t.tenant_id IS NOT NULL AND"
+        } else {
+            ""
+        };
         for needle in needles {
             let hex = hex::encode(needle.as_bytes());
             let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
                 "SELECT count(*) FROM \"{table}\" t \
-                 WHERE position($1 IN row_to_json(t)::text) > 0 \
-                    OR position($2 IN row_to_json(t)::text) > 0"
+                 WHERE {tenants_only} (position($1 IN row_to_json(t)::text) > 0 \
+                    OR position($2 IN row_to_json(t)::text) > 0)"
             )))
             .bind(*needle)
             .bind(hex)
@@ -150,13 +158,35 @@ async fn rows_mentioning(db: &TestDb, pool: &sqlx::PgPool, needles: &[&str]) -> 
     found
 }
 
+/// The operator-only rows of `wa_server_events` (`tenant_id` `NULL`)
+/// whose JSON rendering holds one of `needles`.
+async fn operator_rows_mentioning(pool: &sqlx::PgPool, needles: &[&str]) -> i64 {
+    let mut total = 0;
+    for needle in needles {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM wa_server_events t \
+             WHERE t.tenant_id IS NULL AND position($1 IN row_to_json(t)::text) > 0",
+        )
+        .bind(*needle)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        total += n;
+    }
+    total
+}
+
 /// Roadmap M2f's decisive test on Postgres: after the erasure of a
-/// customer by their BSUID alone (`common::erasure`), no row of any table
-/// mentions them (their phone number, BSUID, parent BSUID, username or
-/// name), the inbox's tables and `wa_server_events` included; before it,
-/// both did. Decisive: the outbox's erasure (`wa_server_events` keeps
+/// customer by their BSUID alone (`common::erasure`), no row a tenant may
+/// see of any table mentions them (their phone number, BSUID, parent
+/// BSUID, username or name), the inbox's tables and `wa_server_events`
+/// included; before it, both did. The number's operator-only row naming
+/// them (a standby message) stays: the operator's (design D89, narrow by
+/// default). Decisive: the outbox's erasure (`wa_server_events` keeps
 /// their rows without it), the closure over `identities` (the
-/// phone-keyed thread stays), the inbox's erasure.
+/// phone-keyed thread stays), the inbox's erasure, and the tenant clause
+/// of `ERASE_SQL` (an erasure reaching operator-only rows deletes the
+/// standby one).
 #[tokio::test]
 async fn live_postgres_after_an_erasure_no_row_of_any_table_mentions_the_customer() {
     let Some(db) = TestDb::new().await else {
@@ -186,6 +216,11 @@ async fn live_postgres_after_an_erasure_no_row_of_any_table_mentions_the_custome
         Vec::<(String, i64)>::new(),
         "rows mention the customer after the erasure"
     );
+    assert_eq!(
+        operator_rows_mentioning(&pool2, &[common::meta::EXAMPLE_WA_ID]).await,
+        1,
+        "the operator-only standby row was erased"
+    );
     // The other customer's rows stay.
     let other = rows_mentioning(&db2, &pool2, &[common::erasure::OTHER]).await;
     let tables: Vec<&str> = other.iter().map(|(t, _)| t.as_str()).collect();
@@ -193,6 +228,17 @@ async fn live_postgres_after_an_erasure_no_row_of_any_table_mentions_the_custome
         assert!(tables.contains(&table), "{table}: {other:?}");
     }
     drop(h);
+}
+
+/// Roadmap M2f on Postgres (design D90, narrow by default): on a number
+/// moved from another tenant, the erasure is `409 erasure_crosses_binding`
+/// and erases nothing (`common::erasure`).
+#[tokio::test]
+async fn live_postgres_an_erasure_on_a_moved_number_erases_nothing() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::erasure::an_erasure_on_a_moved_number_erases_nothing(&harness(&db).await).await;
 }
 
 /// Roadmap M2f on Postgres: another tenant's key cannot erase on the

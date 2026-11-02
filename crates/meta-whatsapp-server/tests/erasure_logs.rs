@@ -50,7 +50,11 @@ fn lines(captured: &Captured) -> Vec<Value> {
 /// `<phone_number_id>|<contact>` under the deployment's key of each
 /// identity the inbox connects (computed here apart from the code), and
 /// one audit event (`customer_erased`) with the same id, ids and counts
-/// only. Decisive: an identity in either, the HMAC's input.
+/// only. Malformed bodies naming the customer (a number where a string
+/// goes, an unknown field named after them, a cut body, the customer's
+/// number as `confirm`) are `422` quoting nothing, and log nothing of
+/// them. Decisive: an identity in either, the HMAC's input, a body
+/// parser's error text reaching the answer or a log.
 #[tokio::test]
 async fn the_journal_and_the_audit_event_hold_no_identity_in_clear() {
     let captured = Captured::default();
@@ -58,6 +62,45 @@ async fn the_journal_and_the_audit_event_hold_no_identity_in_clear() {
     let h = Harness::new();
     let (_, eraser) = merchant(&h).await;
     the_customer_writes(&h).await;
+    // Malformed bodies naming the customer, whose parser errors would
+    // quote them (serde's `invalid type: integer `…``, `unknown field
+    // `…``): `422` on `body` or `confirm`, quoting nothing, logging
+    // nothing of them (the sweep below).
+    let path = format!("/v1/numbers/{EXAMPLE_PN}/erasures");
+    let wa_id: u64 = EXAMPLE_WA_ID.parse().unwrap();
+    for (body, field) in [
+        (
+            serde_json::json!({"confirm": EXAMPLE_PN, "contacts": [wa_id]}).to_string(),
+            "body",
+        ),
+        (
+            serde_json::json!({"confirm": EXAMPLE_PN, "contacts": [EXAMPLE_BSUID], EXAMPLE_BSUID: 1})
+                .to_string(),
+            "body",
+        ),
+        (
+            format!("{{\"confirm\": \"{EXAMPLE_PN}\", \"contacts\": [\"{EXAMPLE_WA_ID}\""),
+            "body",
+        ),
+        (
+            serde_json::json!({"confirm": EXAMPLE_WA_ID, "contacts": [EXAMPLE_WA_ID]}).to_string(),
+            "confirm",
+        ),
+    ] {
+        let refused = h
+            .call(
+                common::Call::new(meta_whatsapp_rs::webhooks::axum::http::Method::POST, &path)
+                    .key(&eraser)
+                    .header("content-type", "application/json")
+                    .body(body.clone().into()),
+            )
+            .await;
+        assert_eq!(refused.status.as_u16(), 422, "{body}: {}", refused.text);
+        assert_eq!(refused.json()["error"]["field"], field, "{body}");
+        for needle in needles() {
+            assert!(!refused.text.contains(needle), "{body}: {}", refused.text);
+        }
+    }
     let reply = h
         .call(erase(&eraser, EXAMPLE_PN, EXAMPLE_PN, &[EXAMPLE_BSUID]))
         .await;

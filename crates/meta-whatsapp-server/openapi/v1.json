@@ -3342,7 +3342,7 @@
         "tags": [
           "erasure"
         ],
-        "summary": "`POST /v1/numbers/{pn}/erasures`: erase a customer on the number, from\nthe service's inbox and event outbox. Irreversible; only when you call\nit (which requests to honour is yours to decide). Erase on each of the\nmerchant's numbers, and again once Meta's 7-day redelivery window has\npassed; Meta's contact book is the library's\n`delete_contact_book_entry`.",
+        "summary": "`POST /v1/numbers/{pn}/erasures`: erase a customer on the number, from\nthe service's inbox and the tenant's own rows of its event outbox (not\nthe operator's). Refused on a number moved from another tenant, nothing\nerased (`409 erasure_crosses_binding`). Irreversible; only when you call\nit (which requests to honour is yours to decide). Erase on each of the\nmerchant's numbers, and again once Meta's 7-day redelivery window has\npassed; Meta's contact book is the library's\n`delete_contact_book_entry`.",
         "operationId": "erase_customer",
         "parameters": [
           {
@@ -3419,7 +3419,7 @@
             }
           },
           "409": {
-            "description": "`erasure_not_configured` (no `WA_SERVER_ERASURE_KEY`), `number_not_connected`, `reconnect_required`",
+            "description": "`erasure_not_configured` (no `WA_SERVER_ERASURE_KEY`), `erasure_crosses_binding` (the number came from another tenant, whose hidden records of the person an erasure would reach: nothing erased), `number_not_connected`, `reconnect_required`",
             "content": {
               "application/json": {
                 "schema": {
@@ -10067,6 +10067,7 @@
           "otp_not_configured",
           "signup_not_configured",
           "erasure_not_configured",
+          "erasure_crosses_binding",
           "permission",
           "account_restricted",
           "country_restricted",

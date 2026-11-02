@@ -281,16 +281,21 @@ stored data, the owner's).
 
 - **Erasure in the service** (roadmap M2f, parity row 91: the service's
   part done but the bot's auto-delete over HTTP, M5k; choices D86–D91,
-  proposed, awaiting the coordinator). `POST /v1/numbers/{pn}/erasures`
+  decided by the coordinator under the owner's delegation, D89 and D90
+  narrow by default). `POST /v1/numbers/{pn}/erasures`
   (`erase_customer`, a new scope `erasure` that no other scope grants)
   erases a person on one of the tenant's numbers, only when called:
   `{confirm: <pn>, contacts: [1..16]}`, the identities closed over the
   inbox's (`Inbox::identities`), then a journal entry (the hex
   HMAC-SHA256 of `<phone_number_id>|<contact>` under the new secret
   `WA_SERVER_ERASURE_KEY`, written before anything is deleted, by
-  default the log target `erasure_journal`), the tenant's and the
-  number's operator-only outbox rows naming them, their inbox records
-  (`Inbox::erase_all`), and the audit event `customer_erased`. It answers
+  default the log target `erasure_journal`), the tenant's own outbox rows
+  naming them (never the number's operator-only rows, which the outbox's
+  retention takes), their inbox records (`Inbox::erase_all`), and the
+  audit event `customer_erased`. A number with a history cut (moved from
+  another tenant) is refused whole, `409 erasure_crosses_binding` (a new
+  code): the library's erasure has no time bound, and would reach the
+  previous holder's hidden records. It answers
   `200 {erasure_id, phone_number_id, erased_at}`, nothing of what was
   found; no `Idempotency-Key` (a repeat is harmless); no identity in any
   answer, error, log, journal entry or audit event. Without
@@ -2704,7 +2709,7 @@ stored data, the owner's).
 
 - **The service's core** (roadmap M2f): `outbox::Outbox` gains a
   required `erase_contacts` (a backend of your own must answer it: delete
-  the tenant's and the number's operator-only rows whose
+  the tenant's own rows of the number, never an operator-only one, whose
   `NewEvent::contacts`, kept at insert, name one of the identities; the
   `conformance` suites check it), and `model::Scope` and
   `operation::Operation` gain a variant each (`Erasure`,

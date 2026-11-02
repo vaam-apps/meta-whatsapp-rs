@@ -20,22 +20,35 @@
 //! 2. The number's binding, read again ([`OwnedNumber`]'s `still_held`):
 //!    a number that moved since the request was authorized is `503
 //!    storage_unavailable`, nothing erased.
-//! 3. Every identity the inbox connects to each contact on the number
+//! 3. The binding's cut (decision D90, narrow by default): a number with a
+//!    history cut ([`crate::authz::history_from`]: its WABA, or the number
+//!    itself, came from another tenant) is `409 erasure_crosses_binding`,
+//!    nothing erased. The inbox's reads stop at the cut, and the erasure
+//!    must reach no further than they do, but the library's erasure
+//!    (`ConversationStore::erase_all`, and `Inbox::erase_all` and
+//!    `Inbox::erase` over it) takes no time bound: it would delete the
+//!    previous holder's hidden records of the person too. Whether an
+//!    erasure may reach them is the owner's (roadmap § Owner touchpoints);
+//!    until then the operator erases on such a number through the library.
+//! 4. Every identity the inbox connects to each contact on the number
 //!    (the library's `Inbox::identities`, D30: the synced contacts and the
 //!    identity links), before anything is deleted (the erasure deletes the
 //!    links that connect them).
-//! 4. The journal entry ([`JournalEntry`], through the deployment's
+//! 5. The journal entry ([`JournalEntry`], through the deployment's
 //!    [`ErasureJournal`]): for each identity, the hex HMAC-SHA256 of
 //!    `<phone_number_id>|<contact>` under the deployment's key, and the
 //!    time. A journal that fails stops the erasure (`503`), nothing
 //!    deleted: an erasure is never done without its entry.
-//! 5. The outbox's rows naming one of the identities on the number, the
-//!    tenant's and the operator-only ones ([`Outbox::erase_contacts`]).
-//! 6. The inbox's records of them on the number (the library's
+//! 6. The tenant's own outbox rows naming one of the identities on the
+//!    number ([`Outbox::erase_contacts`], D89, narrow by default): never
+//!    the number's operator-only rows (the operator's, which expire with
+//!    the outbox's retention), nor another tenant's.
+//! 7. The inbox's records of them on the number (the library's
 //!    `Inbox::erase_all`: their conversations, window events, ownership
 //!    records, synced contacts, identity links, their group messages
-//!    redacted or deleted per the store's mode, D31).
-//! 7. The tenant's audit event `customer_erased` (target `audit`): the
+//!    redacted or deleted per the store's mode, D31): on a number with no
+//!    cut (step 3), every record of the number is the tenant's to read.
+//! 8. The tenant's audit event `customer_erased` (target `audit`): the
 //!    key's id, the tenant, the WABA and the number, the erasure's id and
 //!    what each store deleted, by count.
 //!
@@ -49,10 +62,7 @@
 //! `Idempotency-Key` (nothing is sent, and an idempotency record would keep
 //! a fingerprint of the request), and the answer ([`Erasure`]) says
 //! nothing of what was found: not whether the person was known, nor how
-//! many records went. A number that moved to its tenant from another
-//! keeps the previous holder's records under it (D10: hidden, not purged),
-//! and counts would tell the new holder whether that holder's customer
-//! wrote; the operator's audit event has them.
+//! many records went (the operator's audit event has the counts).
 //!
 //! **Nothing names the customer in clear**: not the answer, the journal,
 //! the audit event, an error, a log line at any level, a metric, or an
@@ -61,8 +71,9 @@
 //! trying them all.
 //!
 //! **What it does not reach** (the guides list them for the deployer):
-//! another tenant's outbox rows (a previous holder's, kept by the outbox's
-//! retention), rows inserted before the outbox kept contacts (migration
+//! the number's operator-only outbox rows and another tenant's (a previous
+//! holder's), both kept by the outbox's retention; a number with a cut
+//! (step 3: refused whole); rows inserted before the outbox kept contacts (migration
 //! 8: a rolling deploy's previous release, and every row before it), a
 //! customer quoted in someone else's message, a body the library could not
 //! parse, the 24-hour idempotency answers of sends to them, the webhook
@@ -344,7 +355,9 @@ impl<'a> Erasures<'a> {
     /// `409 erasure_not_configured`; `422 invalid_request` on `confirm` or
     /// `contacts` (never quoting a contact), nothing read; `503
     /// storage_unavailable` (the number moved, the journal or a store
-    /// failed): repeat it, an erasure is idempotent.
+    /// failed): repeat it, an erasure is idempotent; `409
+    /// erasure_crosses_binding` (the number has a history cut), nothing
+    /// erased.
     pub async fn erase(&self, confirm: &str, contacts: &[String]) -> Result<Erasure, ServiceError> {
         let deployment = self
             .deployment
@@ -353,6 +366,12 @@ impl<'a> Erasures<'a> {
         crate::registration::confirmed(pn, confirm)?;
         let keys = checked_contacts(pn, contacts)?;
         self.number.still_held(self.authz).await?;
+        // D90, narrow by default: the library's erasure has no time bound,
+        // so on a number with a cut it would reach the previous holder's
+        // hidden records (step 3 of the module's).
+        if self.number.history_from().is_some() {
+            return Err(ServiceError::new(ErrorCode::ERASURE_CROSSES_BINDING));
+        }
         let inbox = Inbox::new(
             self.number.client().clone(),
             pn.clone(),
