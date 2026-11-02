@@ -1,5 +1,5 @@
 //! MongoDB adapters (feature `mongodb`, roadmap S17): [`MongoKvStore`] and
-//! [`MongoConversationStore`] over a [`Database`](::mongodb::Database) of a
+//! [`MongoConversationStore`] over a [`Database`] of a
 //! replica set.
 //!
 //! ```no_run
@@ -80,7 +80,7 @@ pub mod schema;
 use std::time::Duration;
 
 /// The MongoDB driver these adapters are built against: they take its
-/// [`Database`](::mongodb::Database), so build clients with this re-export
+/// [`Database`], so build clients with this re-export
 /// rather than pinning the driver yourself (it is `mongodb` 3.9, with
 /// `rustls-tls-aws-lc`, `compat-3-3-0` and `bson-3`).
 pub use ::mongodb;
