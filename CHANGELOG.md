@@ -225,6 +225,45 @@ stored data, the owner's).
 
 ### Added
 
+- **Payments in the service** (roadmap P2, parity rows 38, now done in
+  the service too, and 141; from `payments/payments-in/onboarding-apis`
+  and `payments/payments-in/pg`, read on 2026-11-01).
+  - **The payment messages**: `POST /v1/numbers/{pn}/messages` (and an
+    inbox reply) takes `interactive` of type `order_details` and
+    `order_status`, `action.parameters` as Meta's pages write them, read
+    into the library's types with no key dropped and checked by the
+    library's rules for the order's currency (an `order_status`, whose
+    wire names no currency, by Brazil's, the wider) before the request;
+    `422 unsupported_message_type` before.
+  - **A new key scope, `payments`**, and seven routes under it: a WABA's
+    payment configurations (`GET`, `POST
+    /v1/wabas/{waba_id}/payment-configurations`; `GET`, `DELETE
+    …/{configuration_name}`; `POST …/{configuration_name}/oauth-link`),
+    an order's payment (`GET
+    /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}`) and
+    its refund (`POST /v1/numbers/{pn}/payments/refunds`), over the
+    core's `payments::PaymentConfigurations` and `payments::Payments`.
+    A lookup and a refund look their configuration up in the number's
+    own WABA first (`404` when it is not there, or when Meta answers
+    another name, nothing read or refunded), and a configuration's name
+    is one path segment (`/` and `\` refused). A creation, a new OAuth link and a refund take an
+    `Idempotency-Key`; the answer kept for one has no OAuth link (the
+    link is a credential the records never store), through the
+    idempotency engine's new `Answer::keeping` and the HTTP adapter's
+    `Success::json_keeping`. A refund, a creation, a removal and a new
+    link are tenant audit events (`audit::payment_audit`: the
+    configuration, and a refund's number, order, amount and Meta's
+    refund id; an `outcome`, `unknown` for a call cut by a timeout).
+    A refund requires an `Idempotency-Key` (`428
+    idempotency_key_required`, a new error code, without one), and the
+    OAuth link's answers carry `Cache-Control: no-store`. Decisions D50
+    to D58 (design §10; D56 amended on 2026-11-02). Keys minted before do not carry the
+    new scope: mint one that does.
+  - The OpenAPI document is additive: five paths, the tag `payments`,
+    eighteen schemas, the values `order_details`, `order_status` of
+    `InteractiveType` and `payments` of `Scope`, and `action.parameters`
+    an `anyOf` of the URL button's and a payment message's (Meta's
+    object, `OrderParameters`).
 - **The inbox's other routes in the service** (roadmap M2g; parity row
   111 now done on the service's side; design D60–D63, decided by the
   coordinator on 2026-11-02). Scope
@@ -2472,6 +2511,13 @@ stored data, the owner's).
 
 ### Changed
 
+- **The service's core** (roadmap P2): `messages::InteractiveAction::parameters`
+  is a `messages::ActionParameters` (a URL button's, or a payment
+  message's Meta object), not a `CtaUrlParameters`;
+  `messages::InteractiveType` gains `OrderDetails` and `OrderStatus`,
+  `model::Scope` `Payments`, `operation::Operation` the seven payment
+  operations. Code that matches on them exhaustively, or builds an
+  `InteractiveAction` with a URL button's parameters, must follow.
 - **Breaking — one shape for every open enum** (roadmap L20a, decided as
   OPEN_QUESTIONS #27, now closed). Every enum Meta may extend, 197 of them in
   `meta-whatsapp-client`, `meta-whatsapp-webhooks` and core, is now

@@ -155,6 +155,8 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     // OTP and authentication templates (roadmap M3c): the recipient's
     // number is not logged (the code's own case is `tests/otp_logs.rs`).
     secrets.extend(otp(h, &admin).await);
+    // Payments (roadmap P2): the OAuth links are credentials.
+    secrets.extend(payments(h, &admin).await);
     // Failures log too: a refused key, and Meta refusing a token.
     let refused = h
         .call(Call::get("/v1/numbers").key(&format!("{tenant_key}x")))
@@ -580,6 +582,167 @@ async fn inbox(h: &Harness, admin: &str) -> Vec<String> {
     ]
 }
 
+/// The OAuth links Meta answers in the capture: credentials the logs must
+/// not hold.
+pub const OAUTH_LINKS: [&str; 2] = [
+    "https://www.facebook.com/payment/onboarding/init/?token=CAPTURE-OAUTH-LINK-1",
+    "https://www.facebook.com/payment/onboarding/init/?token=CAPTURE-OAUTH-LINK-2",
+];
+
+/// The payment routes (roadmap P2) on merchant-42's WABA and first
+/// number, and an `order_details` send: every route answered as Meta's
+/// pages print it, a creation repeated under its key (answered without
+/// its link); returns what the logs must not hold (the links, the key).
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn payments(h: &Harness, admin: &str) -> Vec<String> {
+    const WABA: &str = "102290129340398";
+    const PN: &str = "1972385232742141";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["payments", "send"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let configuration = json!({
+        "configuration_name": "test-payment-configuration",
+        "merchant_category_code": {"code": "0000", "description": "Test MCC Code"},
+        "purpose_code": {"code": "00", "description": "Test Purpose Code"},
+        "status": "Active",
+        "provider_mid": "test-payment-gateway-mid",
+        "provider_name": "RazorPay",
+        "created_timestamp": 1_720_203_204,
+        "updated_timestamp": 1_721_088_316
+    });
+    let base = format!("/v1/wabas/{WABA}/payment-configurations");
+    h.graph.push_json(
+        200,
+        json!({"data": [{"payment_configurations": [configuration.clone()]}]}),
+    );
+    let listed = h.call(Call::get(&base).key(&key)).await;
+    assert_eq!(listed.status.as_u16(), 200, "{}", listed.text);
+    h.graph.push_json(
+        200,
+        json!({"oauth_url": OAUTH_LINKS[0], "expiration": 1_721_687_287, "success": true}),
+    );
+    let create = || {
+        Call::new(Method::POST, &base)
+            .key(&key)
+            .header("idempotency-key", "payment-configuration-1")
+            .json(&json!({"configuration_name": "test-payment-configuration",
+                          "purpose_code": "00", "merchant_category_code": "0000",
+                          "provider_name": "razorpay",
+                          "redirect_url": "https://test-redirect-url.com"}))
+    };
+    let created = h.call(create()).await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text);
+    assert!(created.text.contains(OAUTH_LINKS[0]), "the caller gets it");
+    let again = h.call(create()).await;
+    assert_eq!(again.status.as_u16(), 201, "{}", again.text);
+    assert!(!again.text.contains("CAPTURE-OAUTH-LINK"), "{}", again.text);
+    // A creation cut by a timeout may have gone through: audited, its
+    // outcome unknown (design D58).
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let cut = h
+        .call(
+            Call::new(Method::POST, &base)
+                .key(&key)
+                .header("idempotency-key", "payment-configuration-2")
+                .json(&json!({"configuration_name": "test-payment-configuration",
+                              "provider_name": "payu"})),
+        )
+        .await;
+    assert_eq!(cut.status.as_u16(), 504, "{}", cut.text);
+    h.graph
+        .push_json(200, json!({"data": [configuration.clone()]}));
+    let one = h
+        .call(Call::get(format!("{base}/test-payment-configuration")).key(&key))
+        .await;
+    assert_eq!(one.status.as_u16(), 200, "{}", one.text);
+    h.graph.push_json(
+        200,
+        json!({"oauth_url": OAUTH_LINKS[1], "expiration": 1_721_687_287}),
+    );
+    let link = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("{base}/test-payment-configuration/oauth-link"),
+            )
+            .key(&key)
+            .json(&json!({"redirect_url": "https://test-redirect-url.com"})),
+        )
+        .await;
+    assert_eq!(link.status.as_u16(), 200, "{}", link.text);
+    h.graph.push_json(200, json!({"success": true}));
+    let deleted = h
+        .call(Call::new(Method::DELETE, format!("{base}/test-payment-configuration")).key(&key))
+        .await;
+    assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
+    h.graph
+        .push_json(200, json!({"data": [configuration.clone()]}));
+    h.graph.push_json(
+        200,
+        json!({"payments": [{"reference_id": "BM345A-12", "status": "pending",
+                             "currency": "INR", "amount": {"value": 21000, "offset": 100}}]}),
+    );
+    let payment = h
+        .call(
+            Call::get(format!(
+                "/v1/numbers/{PN}/payments/test-payment-configuration/BM345A-12"
+            ))
+            .key(&key),
+        )
+        .await;
+    assert_eq!(payment.status.as_u16(), 200, "{}", payment.text);
+    h.graph.push_json(200, json!({"data": [configuration]}));
+    h.graph.push_json(
+        200,
+        json!({"id": "refund-id", "status": "pending", "speed_processed": "normal"}),
+    );
+    let refunded = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{PN}/payments/refunds"))
+                .key(&key)
+                .header("idempotency-key", "refund-1")
+                .json(&json!({"reference_id": "BM345A-12", "speed": "normal",
+                              "payment_config_id": "test-payment-configuration",
+                              "amount": {"currency": "INR", "value": "100", "offset": "100"}})),
+        )
+        .await;
+    assert_eq!(refunded.status.as_u16(), 201, "{}", refunded.text);
+    // A refund cut by a timeout: it may have gone through, so it is
+    // audited, its outcome unknown (design D58).
+    h.graph.push_json(
+        200,
+        json!({"data": [{"configuration_name": "test-payment-configuration",
+                         "status": "Active", "provider_name": "razorpay"}]}),
+    );
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let cut = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{PN}/payments/refunds"))
+                .key(&key)
+                .header("idempotency-key", "refund-cut-1")
+                .json(&json!({"reference_id": "BM345A-13",
+                              "payment_config_id": "test-payment-configuration",
+                              "amount": {"currency": "INR", "value": 250, "offset": 100}})),
+        )
+        .await;
+    assert_eq!(cut.status.as_u16(), 504, "{}", cut.text);
+    vec![
+        key.clone(),
+        key.rsplit('_').next().unwrap().to_owned(),
+        OAUTH_LINKS[0].to_owned(),
+        OAUTH_LINKS[1].to_owned(),
+        "CAPTURE-OAUTH-LINK".to_owned(),
+    ]
+}
+
 /// A message's text, a recipient, a contact and the caller's references,
 /// none of which may be logged.
 pub const MESSAGE_TEXT: &str = "Your order 1234 of Echeveria has shipped";
@@ -994,14 +1157,97 @@ fn check_audit(logs: &str) {
         .collect();
     assert_eq!(
         actions,
-        ["templates_deleted", "template_deleted"],
-        "the template deletions' audit events"
+        [
+            "templates_deleted",
+            "template_deleted",
+            "payment_configuration_created",
+            "payment_configuration_created",
+            "payment_oauth_link_regenerated",
+            "payment_configuration_deleted",
+            "payment_refunded",
+            "payment_refunded"
+        ],
+        "the template deletions' and the payment changes' audit events"
     );
-    for fields in deletions {
+    for fields in &deletions {
         assert!(fields["key_id"].is_string(), "{fields}");
         assert_eq!(fields["tenant"], "merchant-42", "{fields}");
         assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
     }
+    check_payment_audit(&deletions);
+}
+
+/// The payment changes' audit events (of the tenant changes `changes`)
+/// carry what reconciles them (design D58): the configuration, each
+/// change's outcome, and for a refund the number, the order, the amount
+/// and Meta's answer, or an unknown outcome when it timed out.
+fn check_payment_audit(changes: &[&serde_json::Value]) {
+    let payments: Vec<&serde_json::Value> = changes
+        .iter()
+        .copied()
+        .filter(|fields| {
+            fields["action"]
+                .as_str()
+                .is_some_and(|a| a.starts_with("payment_"))
+        })
+        .collect();
+    for fields in &payments {
+        assert_eq!(
+            fields["configuration_name"], "test-payment-configuration",
+            "{fields}"
+        );
+        assert!(fields.get("oauth_url").is_none(), "{fields}");
+    }
+    let outcomes: Vec<(&str, &str)> = payments
+        .iter()
+        .map(|fields| {
+            (
+                fields["action"].as_str().unwrap_or_default(),
+                fields["outcome"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            ("payment_configuration_created", "answered"),
+            ("payment_configuration_created", "unknown"),
+            ("payment_oauth_link_regenerated", "answered"),
+            ("payment_configuration_deleted", "answered"),
+            ("payment_refunded", "answered"),
+            ("payment_refunded", "unknown"),
+        ],
+        "each payment change's outcome"
+    );
+    let refunds: Vec<serde_json::Value> = payments
+        .iter()
+        .filter(|fields| fields["action"] == "payment_refunded")
+        .map(|fields| {
+            json!({
+                "phone_number_id": fields["phone_number_id"],
+                "reference_id": fields["reference_id"],
+                "amount_value": fields["amount_value"],
+                "amount_offset": fields["amount_offset"],
+                "currency": fields["currency"],
+                "refund_id": fields.get("refund_id"),
+                "refund_status": fields.get("refund_status"),
+                "outcome": fields["outcome"],
+            })
+        })
+        .collect();
+    assert_eq!(
+        refunds,
+        [
+            json!({"phone_number_id": "1972385232742141", "reference_id": "BM345A-12",
+                   "amount_value": 100, "amount_offset": 100, "currency": "INR",
+                   "refund_id": "refund-id", "refund_status": "pending",
+                   "outcome": "answered"}),
+            json!({"phone_number_id": "1972385232742141", "reference_id": "BM345A-13",
+                   "amount_value": 250, "amount_offset": 100, "currency": "INR",
+                   "refund_id": null, "refund_status": null, "outcome": "unknown"}),
+        ],
+        "the refunds' audit events"
+    );
 }
 
 /// Every success status an operation answered is one its document lists

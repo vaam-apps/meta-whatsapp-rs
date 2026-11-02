@@ -29,6 +29,7 @@ use meta_whatsapp_server::model::{AllowedTenants, Scope, TenantId};
 use meta_whatsapp_server::store::events::NewEvent;
 use meta_whatsapp_server::store::{Outbox as EventStore, PgEventStore, PgStore, migrate};
 use meta_whatsapp_server_core::conformance::outbox as outbox_suite;
+use serde_json::json;
 
 /// An instance of the service on the test database: everything on
 /// Postgres.
@@ -230,6 +231,23 @@ async fn live_postgres_another_tenants_number_is_not_found_before_the_vault() {
             "/v1/wabas/102290129340398",
         )
         .key(&b),
+        // Roadmap P2: the payment routes, by WABA and by number.
+        Call::get("/v1/wabas/102290129340398/payment-configurations").key(&b),
+        Call::get("/v1/wabas/102290129340398/payment-configurations/test-payment-configuration")
+            .key(&platform)
+            .tenant("tenant-b"),
+        Call::get("/v1/numbers/106540352242922/payments/test-payment-configuration/BM345A-12")
+            .key(&b),
+        Call::new(
+            meta_whatsapp_rs::webhooks::axum::http::Method::POST,
+            "/v1/numbers/106540352242922/payments/refunds",
+        )
+        .key(&b)
+        .header("idempotency-key", "refund-b-1")
+        .json(
+            &json!({"reference_id": "BM345A-12", "payment_config_id": "test-payment-configuration",
+                      "amount": {"currency": "INR", "value": "100", "offset": "100"}}),
+        ),
     ] {
         let reply = h.call(call).await;
         assert_eq!(
@@ -239,6 +257,43 @@ async fn live_postgres_another_tenants_number_is_not_found_before_the_vault() {
     }
     assert_eq!(h.kv.vault_reads(), before);
     assert!(h.graph.requests().is_empty());
+}
+
+/// Roadmap P2 on Postgres: a key with the new `payments` scope is stored
+/// and read back (`wa_server_api_keys.scopes`), and it reaches its own
+/// WABA's payment configurations with that WABA's token; a key without it
+/// is `403 forbidden`.
+#[tokio::test]
+async fn live_postgres_a_payments_key_reaches_its_wabas_configurations() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let h = harness(&db).await;
+    h.tenant("tenant-a").await;
+    h.connect(
+        "tenant-a",
+        "102290129340398",
+        &["106540352242922"],
+        "TOKEN-OF-A",
+    )
+    .await;
+    let payments = h.tenant_key("tenant-a", &[Scope::Payments]).await;
+    let send = h.tenant_key("tenant-a", &[Scope::Send]).await;
+    let path = "/v1/wabas/102290129340398/payment-configurations";
+    let refused = h.call(Call::get(path).key(&send)).await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text);
+    h.graph
+        .push_json(200, json!({"data": [{"payment_configurations": []}]}));
+    let listed = h.call(Call::get(path).key(&payments)).await;
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);
+    assert_eq!(listed.json(), json!({"data": []}));
+    let request = h.graph.last_request().unwrap();
+    assert_eq!(
+        request.path(),
+        "/v25.0/102290129340398/payment_configurations"
+    );
+    assert_eq!(request.bearer(), Some("TOKEN-OF-A"));
+    assert_eq!(h.graph.remaining(), 0);
 }
 
 /// The value of a metric series of `h`, 0 when absent.
@@ -1241,9 +1296,7 @@ async fn live_postgres_a_timeout_is_replayed_and_a_131047_releases_its_key() {
         "TOKEN",
     )
     .await;
-    let key = h
-        .tenant_key("merchant-42", &[meta_whatsapp_server::model::Scope::Send])
-        .await;
+    let key = h.tenant_key("merchant-42", &[Scope::Send]).await;
     let send = |idempotency_key: &str| {
         Call::new(
             meta_whatsapp_rs::webhooks::axum::http::Method::POST,
