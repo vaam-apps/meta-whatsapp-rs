@@ -43,6 +43,47 @@ async fn harness(db: &TestDb) -> Harness {
 /// `accepted`, which a status webhook moves to `delivered`; a free-form
 /// reply outside the window `409` with zero requests
 /// (`common::inbox::m2_1`).
+/// M3.5's decisive case on Postgres (roadmap M3c): the tenants' OTP
+/// settings in `wa_server_tenants.settings`, the library's codes in the
+/// Postgres key/value store; tenant A's code verifies at no other tenant
+/// on the same number.
+#[tokio::test]
+async fn live_postgres_m3_5_a_code_verifies_at_no_other_tenant_on_the_same_number() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(10).await;
+    migrate(&pool).await.unwrap();
+    let h = Harness::with_stores_and_settings(
+        Stores::postgres(&pool),
+        meta_whatsapp_server::state::Settings {
+            otp: Some(common::otp_deployment(Some(common::otp::PLATFORM))),
+            ..common::test_settings()
+        },
+    );
+    common::otp::a_code_verifies_at_no_other_tenant_on_the_same_number(&h).await;
+    // Stored as the layout pins it, under the tenant's `settings`.
+    let stored: serde_json::Value =
+        sqlx::query_scalar("SELECT settings -> 'otp' FROM wa_server_tenants WHERE id = 'platform'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored["v"], 1);
+    assert_eq!(stored["phone_number_id"], "106540352242922");
+    // No code and no phone number in any row the service or the library
+    // keeps: the codes are keyed hashes.
+    let dump: String = sqlx::query_scalar(
+        "SELECT coalesce(string_agg(t::text, ' '), '') FROM ( \
+           SELECT row_to_json(k)::text AS t FROM wa_kv k \
+           UNION ALL SELECT row_to_json(i)::text FROM wa_server_idempotency i \
+           UNION ALL SELECT row_to_json(s)::text FROM wa_server_tenants s) rows",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!dump.contains("6505551234"), "a phone number is stored");
+}
+
 #[tokio::test]
 async fn live_postgres_m2_1_an_inbound_message_is_listed_read_and_answered() {
     let Some(db) = TestDb::new().await else {

@@ -7,6 +7,7 @@ pub mod capture;
 pub mod inbox;
 pub mod meta;
 pub mod moving;
+pub mod otp;
 pub mod registration;
 pub mod scenarios;
 pub mod sse;
@@ -60,12 +61,13 @@ pub const PREVIOUS_APP_SECRET: &str = "previous-app-secret-for-tests";
 pub const DEFAULT_APP_SECRETS: &[&str] = &[APP_SECRET, PREVIOUS_APP_SECRET];
 
 /// A `KvStore` that counts reads of the token vault's namespace, and
-/// keeps every key and value written (roadmap M3d's sweep for a PIN).
+/// keeps every key written, and every value but a compare and swap's
+/// deletion (roadmap M3d's sweep for a PIN).
 #[derive(Debug)]
 pub struct CountingKv {
     inner: Arc<dyn KvStore>,
     vault_reads: AtomicUsize,
-    writes: Mutex<Vec<(StoreKey, Vec<u8>)>>,
+    writes: Mutex<Vec<(StoreKey, Option<Vec<u8>>)>>,
 }
 
 impl CountingKv {
@@ -78,16 +80,33 @@ impl CountingKv {
         }
     }
 
-    /// Every key and value written so far, in order (deletions aside).
+    /// Every key and value written so far (put, put if absent, compare and
+    /// swap), in order; a compare and swap that deletes wrote no value.
     pub fn writes(&self) -> Vec<(StoreKey, Vec<u8>)> {
-        self.writes.lock().unwrap().clone()
-    }
-
-    fn wrote(&self, key: &StoreKey, value: &[u8]) {
         self.writes
             .lock()
             .unwrap()
-            .push((key.clone(), value.to_vec()));
+            .iter()
+            .filter_map(|(key, value)| Some((key.clone(), value.clone()?)))
+            .collect()
+    }
+
+    /// Every key written so far (put, put if absent, compare and swap), in
+    /// order.
+    pub fn written(&self) -> Vec<StoreKey> {
+        self.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
+    fn wrote(&self, key: &StoreKey, value: Option<&[u8]>) {
+        self.writes
+            .lock()
+            .unwrap()
+            .push((key.clone(), value.map(<[u8]>::to_vec)));
     }
 
     /// Reads of the vault's namespace so far.
@@ -110,7 +129,7 @@ impl KvStore for CountingKv {
         value: Vec<u8>,
         expiry: Expiry,
     ) -> Result<u64, StorageError> {
-        self.wrote(key, &value);
+        self.wrote(key, Some(&value));
         self.inner.put(key, value, expiry).await
     }
     async fn put_if_absent(
@@ -119,7 +138,7 @@ impl KvStore for CountingKv {
         value: Vec<u8>,
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
-        self.wrote(key, &value);
+        self.wrote(key, Some(&value));
         self.inner.put_if_absent(key, value, expiry).await
     }
     async fn compare_and_swap(
@@ -129,9 +148,7 @@ impl KvStore for CountingKv {
         new: Option<Vec<u8>>,
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
-        if let Some(value) = &new {
-            self.wrote(key, value);
-        }
+        self.wrote(key, new.as_deref());
         self.inner
             .compare_and_swap(key, expected, new, expiry)
             .await
@@ -550,13 +567,35 @@ pub fn unlimited() -> RateLimits {
         send: rate,
         read: rate,
         templates: rate,
+        otp_issue: rate,
+        otp_verify: rate,
     }
 }
 
-/// The settings of a test service: the defaults, without rate limits.
+/// The OTP pepper of every test service (roadmap M3c): 32 bytes or more.
+pub const OTP_PEPPER: &str = "otp-pepper-of-the-test-services-32-bytes-or-more";
+
+/// The OTP settings of a test service: [`OTP_PEPPER`], and `default_tenant`
+/// for the tenants without settings of their own.
+pub fn otp_deployment(
+    default_tenant: Option<&str>,
+) -> meta_whatsapp_server_core::otp::OtpDeployment {
+    meta_whatsapp_server_core::otp::OtpDeployment::new(
+        meta_whatsapp_server_core::otp::OtpKeys::new(
+            meta_whatsapp_rs::core::secret::SecretBytes::new(OTP_PEPPER.as_bytes().to_vec()),
+        )
+        .unwrap(),
+        default_tenant.map(|id| TenantId::parse(id).unwrap()),
+    )
+}
+
+/// The settings of a test service: the defaults, without rate limits, and
+/// OTP set up with no default OTP tenant (a tenant without OTP settings is
+/// `409 otp_not_configured`).
 pub fn test_settings() -> Settings {
     Settings {
         rate_limits: unlimited(),
+        otp: Some(otp_deployment(None)),
         ..Settings::default()
     }
 }
@@ -592,7 +631,8 @@ impl Harness {
         })
     }
 
-    /// On `stores`, with `settings`.
+    /// On `stores`, with `settings` (roadmap M3c: a default OTP tenant on
+    /// Postgres).
     pub fn with_stores_and_settings(stores: Stores, settings: Settings) -> Self {
         Self::build(stores, settings, DEFAULT_APP_SECRETS, |graph| {
             Arc::new(graph)
@@ -969,6 +1009,20 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             serde_json::json!({"waba_id": "555000111", "token": "SYSTEM-TOKEN-FOR-SAMPLES"})
         }
         ("PATCH", "/v1/numbers/{pn}/profile") => serde_json::json!({"about": "Open 9 to 5"}),
+        // Roadmap M3c: OTP, its settings and authentication templates.
+        ("POST", "/v1/otp/issue") => serde_json::json!({"phone": SAMPLE_TO}),
+        ("POST", "/v1/otp/verify") => serde_json::json!({"phone": SAMPLE_TO, "code": "123456"}),
+        ("PUT", "/v1/admin/tenants/{id}/otp") => serde_json::json!({
+            "phone_number_id": "106540352242922",
+            "template": {"name": "login_code", "language": "en_US"}
+        }),
+        ("POST", "/v1/wabas/{waba_id}/templates/authentication") => serde_json::json!({
+            "name": "authentication_code_copy_code_button",
+            "languages": ["en_US", "es_ES", "fr"],
+            "otp_type": "copy_code",
+            "add_security_recommendation": true,
+            "code_expiration_minutes": 10
+        }),
         // business-phone-numbers/registration's and the request-code
         // reference's examples (roadmap M3d).
         ("POST", "/v1/numbers/{pn}/request-code") => {

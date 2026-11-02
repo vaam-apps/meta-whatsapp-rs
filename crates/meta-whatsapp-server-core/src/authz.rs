@@ -626,12 +626,41 @@ impl Authorizer {
         pn: PhoneNumberId,
     ) -> Result<OwnedNumber, ServiceError> {
         self.check(&caller.issuer, "owned_number")?;
+        self.number_of(&caller.tenant, pn).await
+    }
+
+    /// Steps 4 and 5 for the number an OTP is sent from (roadmap M3c,
+    /// decision D8), for `caller`: the number `pn` bound to `holder`, the
+    /// tenant whose OTP settings name it, which is `caller`'s own tenant,
+    /// or the deployment's default OTP tenant (the platform's number) for a
+    /// caller without settings of its own. `holder` is never a request's
+    /// value: the core's OTP services pass the caller's tenant or the
+    /// deployment's setting, and nothing else calls this (crate-private).
+    /// A number no longer `holder`'s is `404 not_found`, which the OTP
+    /// services answer `409 otp_not_configured`. A `caller` another
+    /// [`Authorizer`] made is `403 forbidden`, before anything is read.
+    pub(crate) async fn otp_sender(
+        &self,
+        caller: &Caller,
+        holder: &TenantId,
+        pn: PhoneNumberId,
+    ) -> Result<OwnedNumber, ServiceError> {
+        self.check(&caller.issuer, "otp_sender")?;
+        self.number_of(holder, pn).await
+    }
+
+    /// Steps 4 and 5 for the number `pn`, bound to `tenant`.
+    async fn number_of(
+        &self,
+        tenant: &TenantId,
+        pn: PhoneNumberId,
+    ) -> Result<OwnedNumber, ServiceError> {
         // Step 4: bound to this tenant, else it does not exist.
         let binding = self
             .records
             .number(&pn)
             .await?
-            .filter(|binding| binding.tenant_id == caller.tenant)
+            .filter(|binding| &binding.tenant_id == tenant)
             .ok_or_else(ServiceError::not_found)?;
         // Step 5.
         match binding.status {
@@ -649,7 +678,7 @@ impl Authorizer {
             .records
             .waba(&binding.waba_id)
             .await?
-            .filter(|waba| waba.tenant_id == caller.tenant)
+            .filter(|waba| &waba.tenant_id == tenant)
             .ok_or_else(ServiceError::not_found)?;
         // What the vault answers (a token, none, a failure) is this
         // binding's only if the binding held throughout the read.

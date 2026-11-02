@@ -1057,6 +1057,246 @@
         ]
       }
     },
+    "/v1/admin/tenants/{id}/otp": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "A tenant's own OTP settings.",
+        "operationId": "get_otp_settings",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's own OTP settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtpSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such tenant, or it has no settings of its own (it borrows the default OTP tenant's, if the deployment names one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Set a tenant's OTP settings (decision D8): the sending number, one of\nits own, the authentication template and the limits. Replaces them\nwhole; codes in flight sent from another number stop verifying.",
+        "operationId": "set_otp_settings",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The settings, every limit filled in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtpSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `phone_number_id` (not one of the tenant's numbers), `template.name`, `template.language`, `code_length`, `ttl_seconds`, `max_attempts`, `issue_limit` or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Clear a tenant's OTP settings: it borrows the default OTP tenant's from\nnow on, if the deployment names one.",
+        "operationId": "clear_otp_settings",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Tenant id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Cleared (also when it had none)"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/admin/tenants/{id}/wabas": {
       "post": {
         "tags": [
@@ -4584,6 +4824,268 @@
         }
       }
     },
+    "/v1/otp/issue": {
+      "post": {
+        "tags": [
+          "otp"
+        ],
+        "summary": "`POST /v1/otp/issue`: send a code with the tenant's authentication\ntemplate.",
+        "operationId": "issue_otp",
+        "parameters": [
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never send twice (a repeat gets the kept answer, with `Idempotent-Replayed: true`)",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueOtp"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The outcome: `sent` (a code is on its way: `challenge_id`, `expires_at`), or `cooling_down` or `rate_limited` (nothing sent: `retry_after_seconds`; on the default OTP tenant's number, its issue limit per recipient is shared by every tenant and purpose sending from it). Never the code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtpIssued"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`otp_not_configured` (no OTP settings for the tenant and no default OTP tenant that is active and has settings, or the sending number is no longer its holder's), the sending number's `number_not_connected` or `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`phone`: not E.164 with `+`, or a BSUID; `purpose`; `body`), `recipient_not_supported`, Meta's `template_*`, `idempotency_key_reused`: nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests` (the tenant's OTP issue budget, `Retry-After`) or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent` (when true, the code may be on its way and stays verifiable). Meta's text and `details` are never answered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the code may have been sent (`may_have_been_sent: true`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/otp/verify": {
+      "post": {
+        "tags": [
+          "otp"
+        ],
+        "summary": "`POST /v1/otp/verify`: check a typed code.",
+        "operationId": "verify_otp",
+        "parameters": [
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyOtp"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the check found: `verified`, `invalid` (with `attempts_left`), `expired`, `too_many_attempts` or `not_found`. Every check of an outstanding code counts as an attempt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtpVerified"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`otp_not_configured` (as on an issue)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`phone`, `purpose`, `code`, `body`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests` (the tenant's OTP check budget, `Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`: retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/version": {
       "get": {
         "tags": [
@@ -5131,7 +5633,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` (with `field`: the definition breaks a documented limit, or holds a key the service would not send to Meta), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`",
+            "description": "`invalid_request` (with `field`: the definition breaks a documented limit, holds a key the service would not send to Meta, or accepts Meta's zero-tap terms, `zero_tap_terms_accepted: true`, which the service never does for a tenant), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`",
             "content": {
               "application/json": {
                 "schema": {
@@ -5310,6 +5812,167 @@
           },
           "504": {
             "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/templates/authentication": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/templates/authentication`: an authentication\ntemplate, copy code or one-tap, in one or more languages.",
+        "operationId": "create_authentication_template",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never create twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthenticationTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created or updated, one entry per language; review results arrive as `template_status_updated` events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthenticationTemplatesCreated"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`template_limit_reached`, `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`name`, `languages`, `otp_type`: `zero_tap` is refused, `supported_apps`, `code_expiration_minutes`, `message_send_ttl_seconds`, `body`), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the template may have been created or updated",
             "content": {
               "application/json": {
                 "schema": {
@@ -5598,6 +6261,112 @@
           }
         },
         "additionalProperties": false
+      },
+      "AuthenticationTemplateCreated": {
+        "type": "object",
+        "description": "One language of an authentication template, as Meta answered.",
+        "required": [
+          "id",
+          "status",
+          "language"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Template id."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its language."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its status, as Meta wrote it (`APPROVED`, `PENDING`)."
+          }
+        }
+      },
+      "AuthenticationTemplateRequest": {
+        "type": "object",
+        "description": "`POST /v1/wabas/{waba_id}/templates/authentication`: Meta's bulk\nmanagement fields (`templates/authentication-templates/bulk-management`),\nthe components' own fields flattened, each named as Meta names it.",
+        "required": [
+          "name",
+          "languages",
+          "otp_type"
+        ],
+        "properties": {
+          "add_security_recommendation": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The body's \"For your security, do not share this code.\""
+          },
+          "code_expiration_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The footer's \"This code expires in N minutes.\", 1 to 90: keep it\nequal to the OTP settings' `ttl_seconds`.",
+            "minimum": 0
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its languages (`en_US`, `es_ES`, `fr`): each is created, or updated\nwhen it exists."
+          },
+          "message_send_ttl_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The message's time to live: 30 to 900 seconds, or -1."
+          },
+          "name": {
+            "type": "string",
+            "description": "The template's name (lowercase letters, digits and underscores)."
+          },
+          "otp_type": {
+            "$ref": "#/components/schemas/OtpType",
+            "description": "The button: `copy_code`, or `one_tap` (with `supported_apps`).\nZero-tap (`zero_tap`) is refused: creating one accepts Meta's\nzero-tap terms, which the service does not do for a tenant."
+          },
+          "supported_apps": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SupportedApp"
+            },
+            "description": "A one-tap button's Android apps, 1 to 5."
+          }
+        },
+        "additionalProperties": false
+      },
+      "AuthenticationTemplatesCreated": {
+        "type": "object",
+        "description": "The languages created or updated.",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuthenticationTemplateCreated"
+            },
+            "description": "One per language, as Meta answered."
+          }
+        }
       },
       "CodeCheckBody": {
         "type": "object",
@@ -6662,6 +7431,27 @@
           "cta_url"
         ]
       },
+      "IssueOtp": {
+        "type": "object",
+        "description": "`POST /v1/otp/issue`. No `Debug`: it holds a phone number.",
+        "required": [
+          "phone"
+        ],
+        "properties": {
+          "phone": {
+            "type": "string",
+            "description": "The recipient: E.164 with its `+` (`+16505551234`). A BSUID cannot\nreceive an authentication template (Meta's `131062`), and a number\nwithout `+` would be read as local to the sending number's country."
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The flow the code is for, 1 to 64 of `[A-Za-z0-9._:-]` (`login` when\nabsent): a code sent for one purpose verifies for that purpose only.\nA constant of your code, never a value an end user chooses."
+          }
+        },
+        "additionalProperties": false
+      },
       "Key": {
         "type": "object",
         "description": "An API key, as listed (never its secret).",
@@ -6818,6 +7608,7 @@
           "tenant_exists",
           "idempotency_in_progress",
           "outcome_unknown",
+          "otp_not_configured",
           "permission",
           "account_restricted",
           "country_restricted",
@@ -7305,6 +8096,252 @@
           "connected",
           "reconnect_required",
           "disconnected"
+        ]
+      },
+      "OtpIssueLimit": {
+        "type": "object",
+        "description": "An issue limit: at most `max_issues` codes per recipient and purpose in\nany rolling `window_seconds`.",
+        "required": [
+          "max_issues",
+          "window_seconds"
+        ],
+        "properties": {
+          "max_issues": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Codes allowed per window, 1 to 1000.",
+            "minimum": 0
+          },
+          "window_seconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The window, in seconds (at least 1).",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "OtpIssueStatus": {
+        "type": "string",
+        "description": "What an issue did.",
+        "enum": [
+          "sent",
+          "cooling_down",
+          "rate_limited"
+        ]
+      },
+      "OtpIssued": {
+        "type": "object",
+        "description": "An issue's outcome: `sent` with the challenge's id and expiry, or\n`cooling_down` or `rate_limited` with the wait. Never the code.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "challenge_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`sent`: the challenge's random id (not a secret, not the code)."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "`sent`: when the code stops verifying (RFC 3339)."
+          },
+          "retry_after_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "`cooling_down`, `rate_limited`: seconds until a new code may be\nsent, rounded up.",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/OtpIssueStatus",
+            "description": "What happened."
+          }
+        }
+      },
+      "OtpSettings": {
+        "type": "object",
+        "description": "A tenant's OTP settings, every limit filled in.",
+        "required": [
+          "phone_number_id",
+          "template",
+          "code_length",
+          "ttl_seconds",
+          "max_attempts",
+          "resend_cooldown_seconds",
+          "issue_limit"
+        ],
+        "properties": {
+          "code_length": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Digits per code.",
+            "minimum": 0
+          },
+          "issue_limit": {
+            "$ref": "#/components/schemas/OtpIssueLimit",
+            "description": "Codes per recipient and purpose in a rolling window."
+          },
+          "max_attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Wrong guesses allowed per code.",
+            "minimum": 0
+          },
+          "phone_number_id": {
+            "type": "string",
+            "description": "The number codes are sent from."
+          },
+          "resend_cooldown_seconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Seconds between two codes for one recipient and purpose.",
+            "minimum": 0
+          },
+          "template": {
+            "$ref": "#/components/schemas/OtpTemplate",
+            "description": "The authentication template and its language."
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long a code verifies, in seconds.",
+            "minimum": 0
+          }
+        }
+      },
+      "OtpSettingsRequest": {
+        "type": "object",
+        "description": "`PUT /v1/admin/tenants/{id}/otp`: a tenant's OTP settings (decision D8).",
+        "required": [
+          "phone_number_id",
+          "template"
+        ],
+        "properties": {
+          "code_length": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Digits per code, 4 to 8 (6 when absent).",
+            "minimum": 0
+          },
+          "issue_limit": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OtpIssueLimit",
+                "description": "Codes per recipient and purpose in a rolling window (5 per hour\nwhen absent). It cannot be turned off."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_attempts": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Wrong guesses allowed per code, at least 1 (5 when absent).",
+            "minimum": 0
+          },
+          "phone_number_id": {
+            "type": "string",
+            "description": "The number codes are sent from: one of the tenant's own numbers."
+          },
+          "resend_cooldown_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Seconds between two codes for one recipient and purpose (30 when\nabsent).",
+            "minimum": 0
+          },
+          "template": {
+            "$ref": "#/components/schemas/OtpTemplate",
+            "description": "The approved authentication template and its language."
+          },
+          "ttl_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long a code verifies, 1 to 5400 seconds (600 when absent): keep\nit equal to the template's `code_expiration_minutes`.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "OtpTemplate": {
+        "type": "object",
+        "description": "The authentication template a tenant's codes are sent with.",
+        "required": [
+          "name",
+          "language"
+        ],
+        "properties": {
+          "language": {
+            "type": "string",
+            "description": "The language it was approved in (`en_US`)."
+          },
+          "name": {
+            "type": "string",
+            "description": "The approved authentication template's name (lowercase letters,\ndigits and underscores)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OtpType": {
+        "type": "string",
+        "description": "An authentication template's button type.",
+        "enum": [
+          "copy_code",
+          "one_tap"
+        ]
+      },
+      "OtpVerified": {
+        "type": "object",
+        "description": "A check's outcome.",
+        "required": [
+          "result"
+        ],
+        "properties": {
+          "attempts_left": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "`invalid`: attempts left on this code.",
+            "minimum": 0
+          },
+          "result": {
+            "$ref": "#/components/schemas/OtpVerifyResult",
+            "description": "What the check found."
+          }
+        }
+      },
+      "OtpVerifyResult": {
+        "type": "string",
+        "description": "What a check found.",
+        "enum": [
+          "verified",
+          "invalid",
+          "expired",
+          "too_many_attempts",
+          "not_found"
         ]
       },
       "Profile": {
@@ -7862,6 +8899,25 @@
         },
         "additionalProperties": false
       },
+      "SupportedApp": {
+        "type": "object",
+        "description": "An Android app a one-tap button fills the code in (Meta's\n`supported_apps` entry).",
+        "required": [
+          "package_name",
+          "signature_hash"
+        ],
+        "properties": {
+          "package_name": {
+            "type": "string",
+            "description": "The app's package name (`com.example.luckyshrub`)."
+          },
+          "signature_hash": {
+            "type": "string",
+            "description": "The app's signing key hash (11 characters)."
+          }
+        },
+        "additionalProperties": false
+      },
       "Template": {
         "type": "object",
         "description": "A template, as Meta describes it.",
@@ -8174,6 +9230,32 @@
           }
         }
       },
+      "VerifyOtp": {
+        "type": "object",
+        "description": "`POST /v1/otp/verify`. No `Debug`: it holds a phone number and a code.",
+        "required": [
+          "phone",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The code as the user typed it, 1 to 15 characters, compared byte for\nbyte: trim it first."
+          },
+          "phone": {
+            "type": "string",
+            "description": "The recipient the code was sent to, as the issue named it."
+          },
+          "purpose": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The purpose the code was sent for (`login` when absent)."
+          }
+        },
+        "additionalProperties": false
+      },
       "Version": {
         "type": "object",
         "description": "`GET /v1/version`.",
@@ -8347,6 +9429,10 @@
     {
       "name": "events",
       "description": "Meta's webhook events, routed to their tenant (scope `events`)"
+    },
+    {
+      "name": "otp",
+      "description": "One-time passcodes sent with the tenant's authentication template, and checked (scope `otp`)"
     },
     {
       "name": "operations",

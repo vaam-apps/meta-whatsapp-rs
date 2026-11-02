@@ -351,6 +351,7 @@ const CALLS_META: &[&str] = &[
     "DELETE /v1/wabas/{waba_id}/templates",
     "GET /v1/wabas/{waba_id}/templates/{id}",
     "POST /v1/numbers/{pn}/conversations/{contact}/messages",
+    "POST /v1/wabas/{waba_id}/templates/authentication",
     // Roadmap M3d: none of them in `DETAILS_KEPT` (Meta's texts could
     // quote the PIN or the code).
     "POST /v1/numbers/{pn}/request-code",
@@ -384,6 +385,7 @@ const DETAILS_KEPT: &[&str] = &[
     "DELETE /v1/wabas/{waba_id}/templates",
     "GET /v1/wabas/{waba_id}/templates/{id}",
     "POST /v1/numbers/{pn}/conversations/{contact}/messages",
+    "POST /v1/wabas/{waba_id}/templates/authentication",
 ];
 
 /// Operations on an object named by id (a media id, a template id): Meta

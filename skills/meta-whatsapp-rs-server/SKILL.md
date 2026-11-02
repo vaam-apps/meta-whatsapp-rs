@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs 983ed5ef1bf828e6e7989563c6db19e97f3a5d29 (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 6212e52b3510e55f2a927bb99dcea2642fe03be3 (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -15,12 +15,13 @@ Your app is not Rust and reaches WhatsApp through meta-whatsapp-server:
 you deploy it, hold its keys, call its /v1 API and handle its errors.
 Rust code uses the library directly (`meta-whatsapp-rs`).
 
-## What the service does today (milestones M1a to M1c, and M2a)
+## What the service does today (milestones M1a to M1c, M2a, M2b, M3c and M3d)
 
-Webhooks to your backend, Embedded Signup and OTP do not exist yet. Sends,
-media, templates and the inbox do (`meta-whatsapp-rs-server-send`), so do
-Meta's webhooks, polled or live (`meta-whatsapp-rs-server-events`), and a
-number's registration and PIN (`meta-whatsapp-rs-server-registration`).
+Webhooks to your backend and Embedded Signup do not exist yet: write no
+code against them. The rest does, by skill: sends, media, templates, the
+inbox (`meta-whatsapp-rs-server-send`), Meta's webhooks, polling, one event by
+id and live events (`meta-whatsapp-rs-server-events`), login codes
+(`meta-whatsapp-rs-server-otp`), a number's registration (`meta-whatsapp-rs-server-registration`).
 
 | Route | Needs | Does |
 | --- | --- | --- |
@@ -29,8 +30,9 @@ number's registration and PIN (`meta-whatsapp-rs-server-registration`).
 | `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `websites`, `vertical`) |
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
 | `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, `GET /v1/numbers/{pn}/conversations`, … | scopes `send`, `media`, `templates`, `inbox` | sends, media, templates, the inbox: `meta-whatsapp-rs-server-send` |
+| `GET /v1/events`, `GET /v1/events/{id}`, `GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream` | scope `events` | Meta's webhook events for the tenant, after a cursor, by id or live (Server-Sent Events): `meta-whatsapp-rs-server-events` |
 | `POST /v1/numbers/{pn}/request-code`, `POST /v1/numbers/{pn}/register`, … | scope `numbers` | the number's verification code, registration, PIN, deregistration: `meta-whatsapp-rs-server-registration` |
-| `GET /v1/events` | scope `events` | Meta's webhook events for the tenant, after a cursor: `meta-whatsapp-rs-server-events` |
+| `POST /v1/otp/issue`, `POST /v1/otp/verify` | scope `otp` | login codes over WhatsApp: `meta-whatsapp-rs-server-otp` |
 | `POST /v1/admin/tenants`, `POST /v1/admin/tenants/{id}/keys`, `POST /v1/admin/platform-keys` | admin key | tenants and keys |
 | `POST /v1/admin/tenants/{id}/wabas`, `GET /v1/admin/wabas/{waba_id}`, `DELETE /v1/admin/wabas/{waba_id}/binding` | admin key | attach the platform's own WABA (numbers listed by Meta, app subscribed); who holds one; unbind it (token deleted too) |
 | `/livez`, `/readyz`, `/metrics`, `/v1/version`, `/v1/openapi.json` | nothing | operations, and the document every client is generated from |
@@ -55,7 +57,7 @@ meta-whatsapp-server serve
 It **refuses to start** on an unsafe setting (a blank `WA_APP_SECRET` or
 `WA_VERIFY_TOKEN`, no `WA_VAULT_KEY` or a short `WA_OTP_PEPPER` with
 Postgres, no `DATABASE_URL` outside `WA_SERVER_ENV=development`), naming
-the variable. `meta-whatsapp-server doctor` names every one at once, then the database, the app's missing webhook fields (messages, account_update) and each WABA token's reach, read-only, exiting non-zero on a `FAIL` line.
+the variable. `meta-whatsapp-server doctor` names every one at once, then the database, the app's missing webhook fields (messages, account_update), each WABA token's reach and (a warning) a `WA_SERVER_OTP_DEFAULT_TENANT` that cannot lend its OTP settings, read-only, exiting non-zero on a `FAIL` line.
 Every secret may come from a file (`WA_APP_SECRET_FILE`); back `WA_VAULT_KEY` up apart from the database.
 
 ## Credentials
@@ -132,8 +134,7 @@ export function nextStep(error: ErrorObject): Next {
   `graph` is Meta's own text: show it, never branch on it.
 - **Repeat a request only when `may_have_been_sent` is false**; a
   `timeout` (504) or a Meta failure (502) may have taken effect. Sends,
-  uploads and template creation take an `Idempotency-Key`: the same key
-  never acts twice.
+  uploads, template creation, OTP issue and registration take an `Idempotency-Key`.
 - `too_many_requests` (429): the tenant's rate limit; wait
   `Retry-After` seconds.
 - `invalid_request` names the culprit in `field`; `401` is always
@@ -152,9 +153,8 @@ export function nextStep(error: ErrorObject): Next {
 
 ## Related skills
 
-`meta-whatsapp-rs-server-send` (sending messages, media and templates
-through the service), `meta-whatsapp-rs-server-events` (Meta's webhooks
-through the service, polling events), `meta-whatsapp-rs` (the Rust
-library, when you write Rust), `meta-whatsapp-rs-errors` (the error
-kinds behind the Meta codes), `meta-whatsapp-rs-production` (what the
-service does for you: secrets, logs, several instances).
+`meta-whatsapp-rs-server-send`, `meta-whatsapp-rs-server-events`,
+`meta-whatsapp-rs-server-otp`, `meta-whatsapp-rs-server-registration` (the
+routes above), `meta-whatsapp-rs` (the Rust library, when you write Rust),
+`meta-whatsapp-rs-errors` (the error kinds behind the Meta codes),
+`meta-whatsapp-rs-production` (what the service does for you: secrets, logs, several instances).
