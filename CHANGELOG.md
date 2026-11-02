@@ -4310,10 +4310,13 @@ the unstripped file as its control;
 `ffmpeg_keeps_a_jpeg_s_small_colour_profile_in_one_chunk` shows a
 JPEG's profile still reaching a JPEG and a PNG result).
 
-`pulldown-cmark` (the bot's Markdown parser) is locked at 0.13.5 for
+`pulldown-cmark` (the bot's Markdown parser) is locked at 0.13.6 for
 RUSTSEC-2026-0414, exponential event growth from wikilinks with empty
-display text. The bot never enables `ENABLE_WIKILINKS`, so it was not
-exposed; `cargo deny` refuses the advisory all the same.
+display text, and RUSTSEC-2026-0433 (published 2026-11-02), quadratic
+parsing of nested image wikilinks (0.13.5 had fixed the first only). The
+bot never enables `ENABLE_WIKILINKS` (its options are tables and
+strikethrough), so it was not exposed to either; `cargo deny` refuses
+the advisories all the same.
 
 Found and fixed during review, before any release: an OTP account takeover
 through Meta's country-code prefixing (OTPs now require E.164 with `+`); an
