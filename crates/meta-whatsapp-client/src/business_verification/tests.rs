@@ -800,7 +800,7 @@ fn business_statuses_are_the_references_ten_and_open() {
     }
     // Meta writes this concept in both cases (the WABA reference's
     // `business_verification_status` is upper case, its example lower):
-    // parsed case-insensitively, as every `string_enum!`.
+    // parsed case-insensitively (`open_enum!` with `#![case_insensitive]`).
     let upper: BusinessVerificationStatus = serde_json::from_value(json!("VERIFIED")).unwrap();
     assert_eq!(upper, BusinessVerificationStatus::Verified);
     let info: BusinessInfo =

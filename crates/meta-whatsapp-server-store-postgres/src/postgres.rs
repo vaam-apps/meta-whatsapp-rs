@@ -23,7 +23,7 @@ use meta_whatsapp_rs::adapters::store::postgres::{self as library};
 use meta_whatsapp_rs::adapters::store::{PostgresConversationStore, PostgresKvStore};
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
-use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
+use meta_whatsapp_rs::core::store::{ConversationStore, KvStore, Retention};
 use sha2::{Digest, Sha256};
 
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
@@ -34,11 +34,14 @@ use meta_whatsapp_server_core::store::{
 };
 
 use crate::events::{PgEventStore, busy_or_backend};
+use crate::notify::PgNotifier;
 use meta_whatsapp_server_core::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
-    NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus, WabaBinding,
+    NewSignupAttempt, NumberBinding, NumberStatus, OtpSettings, PageRequest, Scope, SignupAttempt,
+    Tenant, TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
+use meta_whatsapp_server_core::notify::EventNotifier;
 
 /// The service's migration history table, apart from the library's
 /// (`wa_sqlx_migrations`) and from any of the application's own.
@@ -69,6 +72,17 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
         4,
         "waba moves",
         include_str!("../migrations/0004_waba_moves.sql"),
+    ),
+    (
+        5,
+        "number moves",
+        include_str!("../migrations/0005_number_moves.sql"),
+    ),
+    (6, "signup", include_str!("../migrations/0006_signup.sql")),
+    (
+        7,
+        "received media",
+        include_str!("../migrations/0007_received_media.sql"),
     ),
 ];
 
@@ -256,8 +270,14 @@ fn waba_row(row: &PgRow) -> StoreResult<WabaBinding> {
 /// columns, the WABA's `$1` and further parameters), its numbers with it
 /// (ON DELETE CASCADE), and leave its tombstone in the same statement:
 /// the tenant it was unbound from, now, and the binding's
-/// `previous_tenant_unbound_at` (roadmap S2b). Answers how many bindings
-/// went (0 or 1).
+/// `previous_tenant_unbound_at` (roadmap S2b). Each number's tombstone
+/// (roadmap M2h) is left by migration 5's trigger,
+/// `wa_server_numbers_released`, in the same statement: for every row
+/// deleted from `wa_server_numbers` (this cascade, a binding that no
+/// longer lists it, and the same deletions by a replica of the previous
+/// release during a rolling deploy, which writes no tombstone of its own),
+/// the tenant, now, and its `previous_tenant_released_at` replace the
+/// tombstone the number had. Answers how many bindings went (0 or 1).
 fn unbind_sql(condition: &str) -> String {
     format!(
         "WITH gone AS ( \
@@ -276,6 +296,15 @@ fn unbind_sql(condition: &str) -> String {
     )
 }
 
+/// The columns of a number's binding, as [`number_row`] reads them, from
+/// `wa_server_numbers n`: a row written before migration 5 has no
+/// `attached_at` of its own, and reads its WABA's (when the binding that
+/// lists it began).
+const NUMBER_COLUMNS: &str = "n.phone_number_id, n.waba_id, n.tenant_id, n.status, n.updated_at, \
+     COALESCE(n.attached_at, (SELECT w.attached_at FROM wa_server_wabas w \
+       WHERE w.waba_id = n.waba_id)) AS attached_at, \
+     n.previous_tenant_released_at";
+
 fn number_row(row: &PgRow) -> StoreResult<NumberBinding> {
     Ok(NumberBinding {
         phone_number_id: PhoneNumberId::new_unchecked(get::<String>(row, "phone_number_id")?),
@@ -284,7 +313,33 @@ fn number_row(row: &PgRow) -> StoreResult<NumberBinding> {
         status: NumberStatus::parse(&get::<String>(row, "status")?)
             .ok_or_else(|| corrupt("status"))?,
         updated_at: get(row, "updated_at")?,
+        attached_at: get(row, "attached_at")?,
+        previous_tenant_released_at: get(row, "previous_tenant_released_at")?,
     })
+}
+
+/// The columns of a signup attempt, as [`attempt_row`] reads them.
+const ATTEMPT_COLUMNS: &str =
+    "waba_id, tenant_id, failed_step, session, finish_kind, created_at, updated_at";
+
+fn attempt_row(row: &PgRow) -> StoreResult<SignupAttempt> {
+    Ok(SignupAttempt {
+        waba_id: WabaId::new_unchecked(get::<String>(row, "waba_id")?),
+        tenant_id: tenant_id(&get::<String>(row, "tenant_id")?, "tenant_id")?,
+        failed_step: get(row, "failed_step")?,
+        session: get(row, "session")?,
+        finish_kind: get(row, "finish_kind")?,
+        created_at: get(row, "created_at")?,
+        updated_at: get(row, "updated_at")?,
+    })
+}
+
+/// A vault entry's row (`wa_server_vault_records`): a kind or an id this
+/// release did not write is a storage failure.
+fn vault_entry_row(row: &PgRow) -> StoreResult<VaultEntry> {
+    let kind: String = get(row, "kind")?;
+    let id: String = get(row, "id")?;
+    VaultEntry::parse(&kind, &id).ok_or_else(|| corrupt("kind"))
 }
 
 /// `LIMIT` for a page: one more than asked, to know whether more follow.
@@ -371,6 +426,55 @@ impl RecordStore for PgStore {
         .await
         .map_err(backend)?;
         row.as_ref().map(tenant_row).transpose()
+    }
+
+    async fn otp_settings(&self, id: &TenantId) -> StoreResult<Option<OtpSettings>> {
+        // The key `otp` of the tenant's `settings` (roadmap M3c): SQL NULL
+        // when it has none, or there is no such tenant.
+        let row =
+            sqlx::query("SELECT settings -> 'otp' AS otp FROM wa_server_tenants WHERE id = $1")
+                .bind(id.as_str())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(backend)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        match get::<Option<serde_json::Value>>(&row, "otp")? {
+            None => Ok(None),
+            Some(stored) => OtpSettings::from_stored(&stored)
+                .map(Some)
+                .ok_or_else(|| corrupt("settings")),
+        }
+    }
+
+    async fn set_otp_settings(
+        &self,
+        id: &TenantId,
+        settings: Option<&OtpSettings>,
+    ) -> StoreResult<bool> {
+        let done =
+            match settings {
+                Some(settings) => {
+                    sqlx::query(
+                        "UPDATE wa_server_tenants SET settings = jsonb_set(settings, '{otp}', $2), \
+                     updated_at = now() WHERE id = $1",
+                    )
+                    .bind(id.as_str())
+                    .bind(settings.to_stored())
+                    .execute(&self.pool)
+                    .await
+                }
+                None => sqlx::query(
+                    "UPDATE wa_server_tenants SET settings = settings - 'otp', updated_at = now() \
+                     WHERE id = $1",
+                )
+                .bind(id.as_str())
+                .execute(&self.pool)
+                .await,
+            }
+            .map_err(backend)?;
+        Ok(done.rows_affected() == 1)
     }
 
     async fn delete_tenant(&self, id: &TenantId) -> StoreResult<DeleteTenantOutcome> {
@@ -581,6 +685,8 @@ impl RecordStore for PgStore {
             .map_err(backend)?;
         }
         let ids: Vec<&str> = numbers.iter().map(PhoneNumberId::as_str).collect();
+        // The numbers the WABA had and the list lacks are released, each
+        // leaving its tombstone in the same statement (migration 5's trigger).
         sqlx::query(
             "DELETE FROM wa_server_numbers WHERE waba_id = $1 AND NOT (phone_number_id = ANY($2))",
         )
@@ -591,14 +697,23 @@ impl RecordStore for PgStore {
         .map_err(backend)?;
         for id in &ids {
             // A number bound to another tenant's WABA stays theirs: the
-            // conditional update leaves it, and nothing is returned.
-            let bound = sqlx::query(
-                "INSERT INTO wa_server_numbers (phone_number_id, waba_id, tenant_id, status) \
-                 VALUES ($1, $2, $3, 'connected') \
+            // conditional update leaves it, and nothing is returned. One
+            // already this tenant's keeps its start and its previous
+            // tenant (a row from before migration 5, whose start is its
+            // WABA's, keeps that one: written down before the row moves
+            // to another WABA); the returned flag tells a new row (no
+            // updater).
+            let bound: Option<(bool,)> = sqlx::query_as(
+                "INSERT INTO wa_server_numbers (phone_number_id, waba_id, tenant_id, status, \
+                   attached_at, previous_tenant_released_at) \
+                 VALUES ($1, $2, $3, 'connected', now(), NULL) \
                  ON CONFLICT (phone_number_id) DO UPDATE SET waba_id = EXCLUDED.waba_id, \
-                 status = 'connected', updated_at = now() \
+                 status = 'connected', updated_at = now(), \
+                 attached_at = COALESCE(wa_server_numbers.attached_at, \
+                   (SELECT w.attached_at FROM wa_server_wabas w \
+                    WHERE w.waba_id = wa_server_numbers.waba_id)) \
                  WHERE wa_server_numbers.tenant_id = EXCLUDED.tenant_id \
-                 RETURNING phone_number_id",
+                 RETURNING (xmax::text = '0')",
             )
             .bind(*id)
             .bind(waba_id.as_str())
@@ -606,9 +721,34 @@ impl RecordStore for PgStore {
             .fetch_optional(&mut *tx)
             .await
             .map_err(backend)?;
-            if bound.is_none() {
+            let Some((inserted,)) = bound else {
                 tx.rollback().await.map_err(backend)?;
                 return Ok(BindOutcome::OwnedByAnotherTenant);
+            };
+            if inserted {
+                // A new number binding: when another tenant last released
+                // it, from its tombstone, and when it begins: not before
+                // now, nor before that release. A statement of its own,
+                // after the insert, as for the WABA above: a release the
+                // insert waited for (the row it conflicted with, deleted
+                // meanwhile) committed before this statement's snapshot,
+                // so its tombstone is seen, and the insert's `now()` (this
+                // transaction's start) may precede it.
+                sqlx::query(
+                    "UPDATE wa_server_numbers n SET previous_tenant_released_at = ( \
+                       SELECT CASE WHEN t.tenant_id IS NOT DISTINCT FROM n.tenant_id \
+                                   THEN t.previous_tenant_released_at ELSE t.released_at END \
+                       FROM wa_server_number_tombstones t \
+                       WHERE t.phone_number_id = n.phone_number_id), \
+                     attached_at = GREATEST(n.attached_at, clock_timestamp(), ( \
+                       SELECT t.released_at FROM wa_server_number_tombstones t \
+                       WHERE t.phone_number_id = n.phone_number_id)) \
+                     WHERE n.phone_number_id = $1",
+                )
+                .bind(*id)
+                .execute(&mut *tx)
+                .await
+                .map_err(backend)?;
             }
         }
         tx.commit().await.map_err(backend)?;
@@ -616,7 +756,8 @@ impl RecordStore for PgStore {
     }
 
     async fn unbind_waba(&self, waba_id: &WabaId) -> StoreResult<bool> {
-        // Its numbers go with it (ON DELETE CASCADE), its tombstone stays.
+        // Its numbers go with it (ON DELETE CASCADE), its tombstone and
+        // theirs (migration 5's trigger) stay.
         let gone: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(unbind_sql("")))
             .bind(waba_id.as_str())
             .fetch_one(&self.pool)
@@ -627,7 +768,8 @@ impl RecordStore for PgStore {
 
     async fn unbind_waba_if(&self, epoch: &BindingEpoch) -> StoreResult<bool> {
         // One statement: the row is deleted only as `epoch` read it (its
-        // numbers with it, ON DELETE CASCADE, and its tombstone left); a
+        // numbers with it, ON DELETE CASCADE, and its tombstone and theirs
+        // left); a
         // binding made since has another `attached_at`, one refreshed since
         // another `generation`.
         let gone: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(unbind_sql(
@@ -654,14 +796,14 @@ impl RecordStore for PgStore {
     }
 
     async fn number(&self, phone_number_id: &PhoneNumberId) -> StoreResult<Option<NumberBinding>> {
-        let row = sqlx::query(
-            "SELECT phone_number_id, waba_id, tenant_id, status, updated_at \
-             FROM wa_server_numbers WHERE phone_number_id = $1",
-        )
-        .bind(phone_number_id.as_str())
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(backend)?;
+        let sql = format!(
+            "SELECT {NUMBER_COLUMNS} FROM wa_server_numbers n WHERE n.phone_number_id = $1"
+        );
+        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(phone_number_id.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
         row.as_ref().map(number_row).transpose()
     }
 
@@ -705,14 +847,15 @@ impl RecordStore for PgStore {
     }
 
     async fn waba_numbers(&self, waba_id: &WabaId) -> StoreResult<Vec<NumberBinding>> {
-        let rows = sqlx::query(
-            "SELECT phone_number_id, waba_id, tenant_id, status, updated_at FROM wa_server_numbers \
-             WHERE waba_id = $1 ORDER BY phone_number_id LIMIT 1001",
-        )
-        .bind(waba_id.as_str())
-        .fetch_all(&self.pool)
-        .await
-        .map_err(backend)?;
+        let sql = format!(
+            "SELECT {NUMBER_COLUMNS} FROM wa_server_numbers n \
+             WHERE n.waba_id = $1 ORDER BY n.phone_number_id LIMIT 1001"
+        );
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(waba_id.as_str())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
         rows.iter().map(number_row).collect()
     }
 
@@ -721,17 +864,18 @@ impl RecordStore for PgStore {
         tenant: &TenantId,
         page: &PageRequest,
     ) -> StoreResult<Listing<NumberBinding>> {
-        let rows = sqlx::query(
-            "SELECT phone_number_id, waba_id, tenant_id, status, updated_at FROM wa_server_numbers \
-             WHERE tenant_id = $1 AND ($2::text IS NULL OR phone_number_id > $2) \
-             ORDER BY phone_number_id LIMIT $3",
-        )
-        .bind(tenant.as_str())
-        .bind(page.after.as_deref())
-        .bind(fetch_limit(page))
-        .fetch_all(&self.pool)
-        .await
-        .map_err(backend)?;
+        let sql = format!(
+            "SELECT {NUMBER_COLUMNS} FROM wa_server_numbers n \
+             WHERE n.tenant_id = $1 AND ($2::text IS NULL OR n.phone_number_id > $2) \
+             ORDER BY n.phone_number_id LIMIT $3"
+        );
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(tenant.as_str())
+            .bind(page.after.as_deref())
+            .bind(fetch_limit(page))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
         let items = rows
             .iter()
             .map(number_row)
@@ -783,6 +927,160 @@ impl RecordStore for PgStore {
         .await
         .map_err(busy_or_backend)?;
         Ok(held)
+    }
+
+    async fn set_credit_allocation_if(
+        &self,
+        epoch: &BindingEpoch,
+        allocation_config_id: &str,
+    ) -> StoreResult<bool> {
+        // One statement: the row as `epoch` read it, or nothing.
+        let done = sqlx::query(
+            "UPDATE wa_server_wabas SET credit_allocation_id = $5 \
+             WHERE waba_id = $1 AND tenant_id = $2 AND attached_at = $3 AND generation = $4",
+        )
+        .bind(epoch.waba_id.as_str())
+        .bind(epoch.tenant_id.as_str())
+        .bind(epoch.attached_at)
+        .bind(epoch.generation)
+        .bind(allocation_config_id)
+        .execute(&self.pool)
+        .await
+        .map_err(busy_or_backend)?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    async fn save_signup_attempt(&self, attempt: &NewSignupAttempt) -> StoreResult<bool> {
+        // Written only from the binding's row, held by `attempt`'s tenant,
+        // locked `FOR KEY SHARE` (an unbind waits, and one committed first
+        // leaves nothing to write from); a replacement of the same tenant's
+        // attempt keeps when it began.
+        let saved: Option<i32> = sqlx::query_scalar(
+            "WITH held AS ( \
+               SELECT waba_id, tenant_id FROM wa_server_wabas \
+               WHERE waba_id = $1 AND tenant_id = $2 FOR KEY SHARE \
+             ) \
+             INSERT INTO wa_server_signup_attempts \
+               (waba_id, tenant_id, failed_step, session, finish_kind) \
+             SELECT waba_id, tenant_id, $3, $4, $5 FROM held \
+             ON CONFLICT (waba_id) DO UPDATE SET \
+               created_at = CASE WHEN wa_server_signup_attempts.tenant_id = EXCLUDED.tenant_id \
+                 THEN wa_server_signup_attempts.created_at ELSE now() END, \
+               tenant_id = EXCLUDED.tenant_id, failed_step = EXCLUDED.failed_step, \
+               session = EXCLUDED.session, finish_kind = EXCLUDED.finish_kind, \
+               updated_at = now() \
+             RETURNING 1",
+        )
+        .bind(attempt.waba_id.as_str())
+        .bind(attempt.tenant_id.as_str())
+        .bind(&attempt.failed_step)
+        .bind(&attempt.session)
+        .bind(attempt.finish_kind.as_deref())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(busy_or_backend)?;
+        Ok(saved.is_some())
+    }
+
+    async fn signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<Option<SignupAttempt>> {
+        let sql = format!(
+            "SELECT {ATTEMPT_COLUMNS} FROM wa_server_signup_attempts \
+             WHERE waba_id = $1 AND tenant_id = $2"
+        );
+        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(waba_id.as_str())
+            .bind(tenant.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        row.as_ref().map(attempt_row).transpose()
+    }
+
+    async fn signup_attempts(
+        &self,
+        tenant: &TenantId,
+        page: &PageRequest,
+    ) -> StoreResult<Listing<SignupAttempt>> {
+        let sql = format!(
+            "SELECT {ATTEMPT_COLUMNS} FROM wa_server_signup_attempts \
+             WHERE tenant_id = $1 AND ($2::text IS NULL OR waba_id > $2) \
+             ORDER BY waba_id LIMIT $3"
+        );
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(tenant.as_str())
+            .bind(page.after.as_deref())
+            .bind(fetch_limit(page))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
+        let items = rows
+            .iter()
+            .map(attempt_row)
+            .collect::<StoreResult<Vec<_>>>()?;
+        Ok(listing(items, page.limit, |a| {
+            a.waba_id.as_str().to_owned()
+        }))
+    }
+
+    async fn delete_signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<bool> {
+        let done = sqlx::query(
+            "DELETE FROM wa_server_signup_attempts WHERE waba_id = $1 AND tenant_id = $2",
+        )
+        .bind(waba_id.as_str())
+        .bind(tenant.as_str())
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    async fn record_vault_entry(&self, entry: &VaultEntry) -> StoreResult<()> {
+        sqlx::query(
+            "INSERT INTO wa_server_vault_records (kind, id) VALUES ($1, $2) \
+             ON CONFLICT (kind, id) DO NOTHING",
+        )
+        .bind(entry.kind())
+        .bind(entry.id())
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn vault_entries(&self, page: &PageRequest) -> StoreResult<Listing<VaultEntry>> {
+        // The cursor is a key, `<kind>/<id>`: its kind and id, compared as
+        // a pair (byte order of the key, as '/' sorts before every digit).
+        let (kind, id) = match page.after.as_deref() {
+            None => (None, None),
+            Some(after) => {
+                let (kind, id) = after.split_once('/').unwrap_or((after, ""));
+                (Some(kind), Some(id))
+            }
+        };
+        let rows = sqlx::query(
+            "SELECT kind, id FROM wa_server_vault_records \
+             WHERE $1::text IS NULL OR (kind, id) > ($1, $2) \
+             ORDER BY kind, id LIMIT $3",
+        )
+        .bind(kind)
+        .bind(id)
+        .bind(fetch_limit(page))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        let items = rows
+            .iter()
+            .map(vault_entry_row)
+            .collect::<StoreResult<Vec<_>>>()?;
+        Ok(listing(items, page.limit, VaultEntry::key))
     }
 }
 
@@ -1027,7 +1325,8 @@ impl SchemaMigrator for PgMigrator {
 }
 
 /// Every port on one Postgres database, through one pool: [`PgStore`],
-/// [`PgEventStore`], [`PgLeaderLock`], [`PgJanitor`], [`PgMigrator`], and
+/// [`PgEventStore`], [`PgNotifier`] (its `LISTEN` session a connection of
+/// its own), [`PgLeaderLock`], [`PgJanitor`], [`PgMigrator`], and
 /// the library's `PostgresKvStore` and `PostgresConversationStore` (the
 /// default `wa_` prefix). Cheap to clone.
 #[derive(Clone)]
@@ -1035,6 +1334,7 @@ pub struct PgBackend {
     pool: PgPool,
     store: Arc<PgStore>,
     outbox: Arc<PgEventStore>,
+    notifier: Arc<PgNotifier>,
     kv: Arc<PostgresKvStore>,
     conversations: Arc<PostgresConversationStore>,
 }
@@ -1053,10 +1353,22 @@ impl PgBackend {
         Self {
             store: Arc::new(PgStore::new(pool.clone())),
             outbox: Arc::new(PgEventStore::new(pool.clone())),
+            notifier: Arc::new(PgNotifier::new(pool.clone())),
             kv: Arc::new(PostgresKvStore::new(pool.clone())),
             conversations: Arc::new(PostgresConversationStore::new(pool.clone())),
             pool,
         }
+    }
+
+    /// Its inbox applying `retention` (`PostgresConversationStore::with_retention`:
+    /// what housekeeping's `ConversationStore::apply_retention` purges; the
+    /// service's `WA_SERVER_INBOX_RETENTION`, roadmap M2a). The same tables:
+    /// nothing is lost.
+    #[must_use]
+    pub fn with_inbox_retention(mut self, retention: Retention) -> Self {
+        self.conversations =
+            Arc::new(PostgresConversationStore::new(self.pool.clone()).with_retention(retention));
+        self
     }
 }
 
@@ -1076,6 +1388,10 @@ impl Backend for PgBackend {
 
     fn outbox(&self) -> Arc<dyn Outbox> {
         self.outbox.clone()
+    }
+
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.notifier.clone()
     }
 
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
@@ -1099,6 +1415,7 @@ impl Backend for PgBackend {
     }
 
     async fn close(&self) {
+        self.notifier.close().await;
         self.pool.close().await;
     }
 }
@@ -1114,7 +1431,7 @@ mod tests {
     /// `(version, SHA-384 hex)` of every service migration, as sqlx records
     /// it. A new migration adds a line; an existing line never changes (an
     /// edited migration makes `migrate` refuse every database it ran on).
-    const PINNED_CHECKSUMS: [(i64, &str); 4] = [
+    const PINNED_CHECKSUMS: [(i64, &str); 7] = [
         (
             1,
             "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
@@ -1130,6 +1447,18 @@ mod tests {
         (
             4,
             "4d58bbd6f98c7f98f52cad4856ac4220e2cc299a5860597681e2452b129956a5b49def8ab02a152087b5f976a35767ec",
+        ),
+        (
+            5,
+            "4757164b56bd779d41bfafaeb41aa393f921a93e269895d242ba4ec0b90e2f59b745c9407bc9f325a5885676ff137a6a",
+        ),
+        (
+            6,
+            "4d5988da61c5955cb42e9827a24ad4bf0ca4d6aaecba8bdde18ad9c49cc9c2308070ac8f8ca275bbe5b72a0c1606a8e5",
+        ),
+        (
+            7,
+            "aafa19ce1aa066caa0464aeac5ecc436acb994873108f0d51b002bae0155e0a9f8b8e47208fecb15d2420471dd555702",
         ),
     ];
 
@@ -1160,7 +1489,10 @@ mod tests {
                 "tenants keys bindings",
                 "idempotency",
                 "events",
-                "waba moves"
+                "waba moves",
+                "number moves",
+                "signup",
+                "received media"
             ]
         );
         // `\x77` is `w`: spelled so that a search-and-replace of the table
@@ -1192,14 +1524,20 @@ mod tests {
 
     /// Why `sql` would contract the schema (what a replica of the previous
     /// release still reads, or writes without knowing a new rule), or
-    /// `None` when it only expands.
+    /// `None` when it only expands. A function's body (between `$$`) is
+    /// searched like the rest, an upsert's `DO UPDATE` aside (it writes the
+    /// row its own insert names, in a table of the service's), and is not
+    /// a statement of the migration; a trigger may only run `AFTER` the
+    /// row is written (a `BEFORE` one could rewrite or refuse what the
+    /// previous release writes).
     fn contraction(sql: &str) -> Option<String> {
         let upper = sql
             .lines()
             .filter(|l| !l.trim_start().starts_with("--"))
             .collect::<Vec<_>>()
             .join("\n")
-            .to_uppercase();
+            .to_uppercase()
+            .replace("DO UPDATE SET", "DO UPSERT");
         for forbidden in [
             "DROP ",
             "RENAME ",
@@ -1215,11 +1553,24 @@ mod tests {
                 return Some(format!("`{}`", forbidden.trim()));
             }
         }
-        for statement in upper.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+        // The statements, each function's body left out (its `;` are its
+        // own): the text outside the `$$` pairs.
+        let outside: String = upper
+            .split("$$")
+            .enumerate()
+            .filter(|(i, _)| i % 2 == 0)
+            .map(|(_, part)| part)
+            .collect::<Vec<_>>()
+            .join(" BODY ");
+        for statement in outside.split(';').map(str::trim).filter(|s| !s.is_empty()) {
             let statement = statement.split_whitespace().collect::<Vec<_>>().join(" ");
+            let after_trigger = statement.starts_with("CREATE TRIGGER WA_SERVER_")
+                && statement.split(' ').nth(3) == Some("AFTER");
             if !(statement.starts_with("CREATE TABLE WA_SERVER_")
                 || statement.starts_with("CREATE INDEX WA_SERVER_")
-                || statement.starts_with("ALTER TABLE WA_SERVER_"))
+                || statement.starts_with("ALTER TABLE WA_SERVER_")
+                || statement.starts_with("CREATE FUNCTION WA_SERVER_")
+                || after_trigger)
             {
                 return Some(format!(
                     "`{statement}` is not an expansion of a wa_server_ table"
@@ -1270,6 +1621,14 @@ mod tests {
             "ALTER TABLE wa_server_tenants\n  ADD COLUMN plan TEXT\n  NOT NULL;",
             "UPDATE wa_server_tenants SET name = '';",
             "CREATE TABLE wa_other (id TEXT);",
+            "CREATE TRIGGER wa_server_x BEFORE INSERT ON wa_server_tenants \
+             FOR EACH ROW EXECUTE FUNCTION wa_server_f();",
+            "CREATE TRIGGER other_x AFTER DELETE ON wa_server_tenants \
+             FOR EACH ROW EXECUTE FUNCTION wa_server_f();",
+            "CREATE FUNCTION wa_server_f() RETURNS trigger LANGUAGE plpgsql AS $$ \
+             BEGIN DELETE FROM wa_server_tenants; RETURN OLD; END; $$;",
+            "CREATE FUNCTION wa_server_f() RETURNS trigger LANGUAGE plpgsql AS $$ \
+             BEGIN UPDATE wa_server_tenants SET name = ''; RETURN OLD; END; $$;",
         ] {
             assert!(contraction(sql).is_some(), "{sql}");
         }
@@ -1279,6 +1638,11 @@ mod tests {
             "ALTER TABLE wa_server_tenants ADD COLUMN plan TEXT;",
             "ALTER TABLE wa_server_tenants ADD COLUMN plan TEXT NOT NULL DEFAULT 'free';",
             "-- DROP nothing: a comment\nCREATE TABLE wa_server_y (id TEXT);",
+            "CREATE FUNCTION wa_server_f() RETURNS trigger LANGUAGE plpgsql AS $$ \
+             BEGIN INSERT INTO wa_server_x (id) VALUES (OLD.id) \
+             ON CONFLICT (id) DO UPDATE SET id = EXCLUDED.id; RETURN OLD; END; $$;\n\
+             CREATE TRIGGER wa_server_t AFTER DELETE ON wa_server_y \
+             FOR EACH ROW EXECUTE FUNCTION wa_server_f();",
         ] {
             assert_eq!(contraction(sql), None, "{sql}");
         }

@@ -11,10 +11,9 @@
 //! [`TemplateId`] strings like everywhere else in `meta-whatsapp-rs`.
 
 use meta_whatsapp_core::ids::TemplateId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-
-use crate::open_enum::open_enum;
 
 open_enum! {
     /// Template category.

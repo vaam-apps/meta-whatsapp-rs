@@ -15,8 +15,9 @@
 //! on a paused clock: [`a_delivery_with_no_turn_is_busy_after_the_wait`],
 //! not in [`run`]); each event is
 //! recorded once, under its dedup lease; the answer comes only once every
-//! event is recorded; and what the service's metrics count is told to the
-//! [`Observer`](crate::observe::Observer).
+//! event is recorded; the inbox keeps no synced address book contact before
+//! roadmap M3b (design D38); and what the service's metrics count is told
+//! to the [`Observer`](crate::observe::Observer).
 //!
 //! The pipeline runs on a view of the backend (`Watched`) that passes
 //! everything through to the backend's own stores and records what the
@@ -52,13 +53,14 @@ use crate::inbound::{
     Refused,
 };
 use crate::model::{BindOutcome, TenantId};
+use crate::notify::EventNotifier;
 use crate::outbox::{EventPage, EventQuery, NewEvent, Outbox, StoredEvent};
 use crate::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult,
 };
 
 /// The Meta app's secret, which signs the deliveries.
-const APP_SECRET: &str = "app-secret-of-the-webhook-suite";
+pub(super) const APP_SECRET: &str = "app-secret-of-the-webhook-suite";
 /// The previous one, still accepted while rotating.
 const PREVIOUS_APP_SECRET: &str = "previous-app-secret-of-the-webhook-suite";
 /// A secret that is not the app's.
@@ -66,10 +68,10 @@ const FORGERS_SECRET: &str = "a-forger-s-secret";
 
 /// A tenant of a case: its id, its WABA and its number.
 #[derive(Clone, Copy)]
-struct Holder {
-    id: &'static str,
-    waba: &'static str,
-    pn: &'static str,
+pub(super) struct Holder {
+    pub(super) id: &'static str,
+    pub(super) waba: &'static str,
+    pub(super) pn: &'static str,
 }
 
 /// The decisive case's tenant A: Meta's example WABA and number.
@@ -138,6 +140,12 @@ const MOVED_ALONE: Holder = Holder {
     waba: "102290129340417",
     pn: "106540352242937",
 };
+/// The tenant of the address book case.
+const ADDRESS_BOOK: Holder = Holder {
+    id: "wh-address-book",
+    waba: "102290129340429",
+    pn: "106540352242938",
+};
 /// The tenant the move case's numbers move to while their events record.
 const MOVED_TO: &str = "wh-moved-to";
 /// The WABA of [`MOVED_TO`]'s that [`MOVED_ALONE`]'s number moves under.
@@ -184,6 +192,7 @@ pub async fn run(backend: &dyn Backend) {
     an_event_is_recorded_once_under_its_dedup_lease(backend).await;
     the_answer_comes_only_once_every_event_is_recorded(backend).await;
     unknown_and_unparsed_bodies_are_acknowledged_as_operator_only_rows(backend).await;
+    an_address_book_change_reaches_its_tenant_and_no_inbox(backend).await;
     undated_events_after_a_move_reach_no_tenant_within_the_window(backend).await;
     an_event_of_its_bindings_first_second_reaches_a_first_onboarding_only(backend).await;
 }
@@ -922,6 +931,100 @@ pub async fn unknown_and_unparsed_bodies_are_acknowledged_as_operator_only_rows(
     assert!(told.take_webhook_events().is_empty());
 }
 
+/// The coexistence address book (`smb_app_state_sync`) reaches its
+/// tenant's outbox, as `app_state_synced`, and the inbox keeps no synced
+/// contact of it ([`INBOX_RECORDING`](crate::inbound::INBOX_RECORDING)):
+/// the service exposes and erases no synced contacts before roadmap M3b,
+/// which turns recording on. A message is recorded, and its phone number
+/// linked to its BSUID: the inbox's other switches stay on. Decisive: the
+/// library's default switches (`RecordingSwitches::ALL`, contacts on) in
+/// the pipeline, or none of them (`RecordingSwitches::NONE`).
+pub async fn an_address_book_change_reaches_its_tenant_and_no_inbox(backend: &dyn Backend) {
+    hold(backend.records().as_ref(), ADDRESS_BOOK).await;
+    let watched = Watched::of(backend);
+    let told = Arc::new(Told::default());
+    let pipeline = pipeline(&watched, &told);
+    let phone = PhoneNumberId::new(ADDRESS_BOOK.pn).unwrap();
+    // business-scoped-user-ids, smb_app_state_sync: its example, sent now.
+    let payload = json!({
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "id": ADDRESS_BOOK.waba,
+            "changes": [{
+                "value": {
+                    "messaging_product": "whatsapp",
+                    "metadata": {
+                        "display_phone_number": "15550783881",
+                        "phone_number_id": ADDRESS_BOOK.pn
+                    },
+                    "state_sync": [{
+                        "type": "contact",
+                        "contact": {
+                            "full_name": "Pablo Morales",
+                            "first_name": "Pablo",
+                            "phone_number": "16505551234",
+                            "user_id": "US.13491208655302741918",
+                            "parent_user_id": "US.ENT.11815799212886844830",
+                            "username": "pablomorales"
+                        },
+                        "action": "add",
+                        "metadata": {"timestamp": sent_now().to_string()}
+                    }]
+                },
+                "field": "smb_app_state_sync"
+            }]
+        }]
+    });
+    let report = deliver(&pipeline, &body(&payload)).await.unwrap();
+    assert_eq!(report.delivered, 1);
+    // The customer's message, with their BSUID beside the phone number.
+    let bsuid = "US.13491208655302741918";
+    let mut message = text(ADDRESS_BOOK.waba, ADDRESS_BOOK.pn, "wamid.address-book.1");
+    let value = &mut message["entry"][0]["changes"][0]["value"];
+    value["contacts"][0]["user_id"] = json!(bsuid);
+    value["messages"][0]["from_user_id"] = json!(bsuid);
+    let report = deliver(&pipeline, &body(&message)).await.unwrap();
+    assert_eq!(report.delivered, 1);
+    assert_eq!(
+        types(&polled(backend, ADDRESS_BOOK.id).await),
+        ["app_state_synced", "message_received"]
+    );
+    let conversations = backend.conversations();
+    let key = ConversationKey::new(phone.clone(), bsuid);
+    assert_eq!(
+        conversations.messages(&key, None, 10).await.unwrap().len(),
+        1,
+        "the inbox records the message"
+    );
+    assert_eq!(
+        conversations.identity_links(&key).await.unwrap().len(),
+        1,
+        "and links the phone number to the BSUID: the inbox's other switches are on"
+    );
+    assert_eq!(
+        conversations.contacts(&phone, None, 10).await.unwrap(),
+        [],
+        "no synced contact"
+    );
+    for contact in ["US.13491208655302741918", "16505551234"] {
+        assert_eq!(
+            conversations
+                .contact(&ConversationKey::new(phone.clone(), contact))
+                .await
+                .unwrap(),
+            None,
+            "{contact}"
+        );
+    }
+    assert_eq!(
+        told.take_webhook_events(),
+        [
+            ("app_state_synced", "tenant"),
+            ("message_received", "tenant")
+        ]
+    );
+}
+
 /// An event reaches its holder only when Meta dated it after the binding
 /// began (in a later second) and within the dedup lease's memory: the
 /// tenant's own number's message dated a minute before its binding is
@@ -1202,7 +1305,7 @@ async fn hold_every_turn(
 }
 
 /// Create `holder`'s tenant and bind its WABA and number to it.
-async fn hold(records: &dyn RecordStore, holder: Holder) {
+pub(super) async fn hold(records: &dyn RecordStore, holder: Holder) {
     let tenant = TenantId::parse(holder.id).unwrap();
     records.create_tenant(&tenant, "").await.unwrap();
     let outcome = records
@@ -1248,6 +1351,17 @@ fn pipeline_with(
     Pipeline::new(inbound, watched, told.clone())
 }
 
+/// A pipeline over `backend` as it is (its notifier included), verifying
+/// with the app's secret, observing nothing: the live suite's.
+pub(super) fn plain_pipeline(backend: &dyn Backend) -> Pipeline {
+    let inbound = Inbound::new(
+        vec![AppSecret::new(APP_SECRET)],
+        VerifyToken::new("verify-token-of-the-webhook-suite"),
+    )
+    .unwrap();
+    Pipeline::new(inbound, backend, Arc::new(()))
+}
+
 /// The system clock, `.0` ahead.
 #[derive(Debug)]
 struct Ahead(Duration);
@@ -1259,7 +1373,7 @@ impl Clock for Ahead {
 }
 
 /// `payload` delivered as Meta delivers it: signed with the app's secret.
-async fn deliver(pipeline: &Pipeline, payload: &[u8]) -> Result<Delivered, Refused> {
+pub(super) async fn deliver(pipeline: &Pipeline, payload: &[u8]) -> Result<Delivered, Refused> {
     pipeline
         .deliver(
             Some(&sign(&AppSecret::new(APP_SECRET), payload)),
@@ -1340,7 +1454,7 @@ fn dated(mut payload: Value, at: i64) -> Value {
 
 /// webhooks/reference/messages/text, its example: a customer's text to
 /// `pn` of `waba`, message id `wamid`, sent now.
-fn text(waba: &str, pn: &str, wamid: &str) -> Value {
+pub(super) fn text(waba: &str, pn: &str, wamid: &str) -> Value {
     json!({
         "object": "whatsapp_business_account",
         "entry": [{
@@ -1520,7 +1634,7 @@ fn undated_group_update(waba: &str, pn: &str, tag: &str) -> Value {
 
 /// A field no library types yet, on `waba`, naming `pn`: an `unknown`
 /// event.
-fn unknown_field(waba: &str, pn: &str) -> Value {
+pub(super) fn unknown_field(waba: &str, pn: &str) -> Value {
     json!({
         "object": "whatsapp_business_account",
         "entry": [{
@@ -1535,7 +1649,7 @@ fn unknown_field(waba: &str, pn: &str) -> Value {
 }
 
 /// `payload` as bytes.
-fn body(payload: &Value) -> Vec<u8> {
+pub(super) fn body(payload: &Value) -> Vec<u8> {
     serde_json::to_vec(payload).unwrap()
 }
 
@@ -1650,8 +1764,19 @@ impl Outbox for WatchedOutbox {
         self.inner.page(query).await
     }
 
+    async fn get(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<StoredEvent>> {
+        self.inner.get(tenant, id).await
+    }
+
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
         self.inner.purge(older_than).await
+    }
+
+    async fn received_media(
+        &self,
+        media_id: &meta_whatsapp_rs::core::ids::MediaId,
+    ) -> StoreResult<Vec<crate::outbox::ReceivedMedia>> {
+        self.inner.received_media(media_id).await
     }
 }
 
@@ -1726,11 +1851,13 @@ struct Watched {
     conversations: Arc<dyn ConversationStore>,
     kv: Arc<WatchedKv>,
     outbox: Arc<WatchedOutbox>,
+    notifier: Arc<dyn EventNotifier>,
 }
 
 impl Watched {
     fn of(backend: &dyn Backend) -> Self {
         Self {
+            notifier: backend.notifier(),
             records: backend.records(),
             conversations: backend.conversations(),
             kv: Arc::new(WatchedKv {
@@ -1758,6 +1885,10 @@ impl Backend for Watched {
 
     fn outbox(&self) -> Arc<dyn Outbox> {
         self.outbox.clone()
+    }
+
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.notifier.clone()
     }
 
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {

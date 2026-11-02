@@ -150,8 +150,8 @@ token, its `appsecret_proof` in the form body) replaces `exchange_code`, then th
 
 ## What meta-whatsapp-rs does not do
 
-- ~~Only the Tech Provider flow~~ (before 581f9b1); ~~no hosted Embedded Signup~~ (until L11a). No pre-verified number pools or
-  multi-WABA onboarding; no token refresh (an expired token means running the flow again; `TokenVault::token_expiry` warns a lead time ahead, nothing decrypted), no PIN policy ([OPEN_QUESTIONS.md #4–#9 and #12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants), all decided: roadmap L11b–L11e, L25).
+- ~~Only the Tech Provider flow~~ (before 581f9b1); ~~no hosted Embedded Signup~~ (until L11a); ~~no multi-WABA onboarding~~ (until L11b: `every_granted_waba(true)`, then
+  `onboard_wabas`; each WABA's outcome its own, check `is_complete()`, resume each); ~~no pre-verified number pools~~ (until L11c: `client::waba`'s `Business::add_pre_verified_number`, `PreVerifiedPhoneNumber`; a `PreVerifiedPhoneNumberId` is not a phone number id). No token refresh (an expired token means running the flow again; `TokenVault::token_expiry` warns a lead time ahead, nothing decrypted), no PIN policy ([OPEN_QUESTIONS.md #4–#9 and #12](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants), all decided: roadmap L11b–L11e, L25).
 - No tenant model: which of your merchants owns a WABA is your table.
 
 ## Related skills

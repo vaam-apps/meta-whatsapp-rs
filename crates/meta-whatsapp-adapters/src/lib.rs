@@ -11,7 +11,8 @@
 //! | `sinks` (default) | `sink`: channel, broadcast, fan-out, filter, fn, tracing sinks | `EventSink` | tokio `sync`, tokio-stream |
 //! | `reqwest` | `http::ReqwestTransport` | `HttpTransport` | reqwest (rustls, aws-lc-rs, HTTP/2) |
 //! | `postgres` | `store::PostgresKvStore`, `store::PostgresConversationStore`, `store::postgres::migrate` | `KvStore`, `ConversationStore` | sqlx (Postgres, tokio, rustls) |
-//! | `redis` | `store::RedisKvStore`, `store::RedisTls` (`rediss://`) | `KvStore` | redis (tokio, connection manager; none of its TLS features), rustls and tokio-rustls (aws-lc-rs), rustls-platform-verifier |
+//! | `sqlite` | `store::SqliteKvStore`, `store::SqliteConversationStore`, `store::sqlite::migrate` | `KvStore`, `ConversationStore` | sqlx (SQLite, tokio; the SQLite library compiled in, no TLS) |
+//! | `redis` | `store::RedisKvStore`, `store::RedisConversationStore`, `store::RedisTls` (`rediss://`) | `KvStore`, `ConversationStore` | redis (tokio, connection manager; none of its TLS features), rustls and tokio-rustls (aws-lc-rs), rustls-platform-verifier |
 //! | `ffmpeg` | `media::FfmpegConverter` | `MediaConverter` | tokio `process`; runs an `ffmpeg` you install, links none |
 //!
 //! Every feature compiles on its own; none is required by another.
@@ -25,9 +26,9 @@
 //!   connection reconnects on its own but is not redis-rs's
 //!   `ConnectionManager`, and Redis Cluster and Sentinel over TLS are not
 //!   covered.
-//! - **Postgres refuses U+0000 in identifiers**: a message id, contact or
-//!   phone number id, or a `StoreKey`, holding one is rejected with
-//!   `StorageError::Backend`. Message content (kind, text, payload, status
+//! - **Postgres and SQLite refuse U+0000 in identifiers**: a message id,
+//!   contact or phone number id (and, on Postgres, a `StoreKey`) holding
+//!   one is rejected with `StorageError::Backend`. Message content (kind, text, payload, status
 //!   error, preview) keeps it, and key/value values are bytes; content
 //!   columns are `BYTEA` and `json`, which costs SQL-side search and
 //!   indexing (see `store::postgres`).
@@ -41,17 +42,23 @@
 //!   already run it: tokens and OTP state survive restarts and are shared by
 //!   every instance. Use **Redis** when you run several instances and want
 //!   cheap expiring keys (dedup markers, OTPs); make it persistent if tokens
-//!   live there. Use **memory** for tests, development, or one instance that
-//!   can afford to lose OTPs and dedup markers on restart.
+//!   live there. Use **SQLite** for one process on one machine that must
+//!   keep its state across restarts (a CLI, an edge or desktop deployment).
+//!   Use **memory** for tests, development, or one instance that can afford
+//!   to lose OTPs and dedup markers on restart.
 //! - **Conversation history (`ConversationStore`)** backs the in-app inbox.
-//!   **Postgres** in production; **memory** for tests and demos. (No Redis
-//!   adapter: history is not cache-shaped.)
+//!   **Postgres** in production; **SQLite** for one process on one
+//!   machine; **Redis** where Redis is the database you run (persistent,
+//!   `noeviction`; a store's whole inbox on one shard); **memory** for tests
+//!   and demos.
 //! - **Sinks** route webhook events: a `sink::ChannelSink` to a worker for
 //!   anything slow, a `sink::BroadcastSink` for live inbox views, a
 //!   `sink::FanoutSink` to do both.
 //! - **Transport**: `ReqwestTransport` unless you need your own HTTP stack.
-//! - **Media conversion** (a recording into a voice message's Ogg Opus):
-//!   `media::FfmpegConverter` when the host has an `ffmpeg` with libopus;
+//! - **Media conversion** (a recording into a voice message's Ogg Opus,
+//!   an image into a sticker's WebP or under the image limit):
+//!   `media::FfmpegConverter` when the host has an `ffmpeg` with libopus
+//!   (and libwebp, for stickers);
 //!   the library ships none, and the service's image carries none.
 //!
 //! # Whose clock?
@@ -63,8 +70,9 @@
 //! every application instance agrees on what has expired — but it means
 //! `Expiry::At(t)` is compared against the *server's* time, and a test's
 //! `ManualClock` cannot move a Postgres or Redis store forward. Keep
-//! database hosts on NTP. Precision: Postgres keeps microseconds, Redis
-//! milliseconds.
+//! database hosts on NTP. `store::SqliteKvStore` has no server: it uses
+//! an injectable `Clock` too, the application's. Precision: Postgres and
+//! SQLite keep microseconds, Redis milliseconds.
 //!
 //! # Wiring
 //!

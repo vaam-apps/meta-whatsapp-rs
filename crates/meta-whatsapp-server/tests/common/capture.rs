@@ -109,6 +109,7 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     assert_eq!(attached.status.as_u16(), 201, "{}", attached.text);
 
     secrets.extend(webhooks(h, &tenant_key).await);
+    secrets.extend(inbox(h, &admin).await);
 
     // Numbers calls, by both keys, with Meta answering phone numbers.
     h.graph.push_json(
@@ -151,6 +152,15 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     // Sends, media and templates (M1b), with what M1.7 keeps out of the
     // logs: message text, recipients, contacts.
     secrets.extend(send_media_and_templates(h, &admin).await);
+    // OTP and authentication templates (roadmap M3c): the recipient's
+    // number is not logged (the code's own case is `tests/otp_logs.rs`).
+    secrets.extend(otp(h, &admin).await);
+    secrets.extend(registration(h, &tenant_key).await);
+    // Payments (roadmap P2): the OAuth links are credentials.
+    secrets.extend(payments(h, &admin).await);
+    // Embedded Signup (roadmap M3a): neither the merchant's token, nor the
+    // PIN, the code or the state is logged.
+    secrets.extend(signup(h, &admin).await);
     // Failures log too: a refused key, and Meta refusing a token.
     let refused = h
         .call(Call::get("/v1/numbers").key(&format!("{tenant_key}x")))
@@ -431,6 +441,28 @@ async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
     ] {
         assert!(polled.text.contains(private), "{private}: {}", polled.text);
     }
+    // The same events by id and live (roadmap M2b): they carry what the
+    // logs must not either.
+    let first = polled.json()["data"][0]["id"].as_str().unwrap().to_owned();
+    let one = h
+        .call(Call::get(format!("/v1/events/{first}")).key(tenant_key))
+        .await;
+    assert_eq!(one.status.as_u16(), 200, "{}", one.text);
+    assert!(one.text.contains(EXAMPLE_TEXT), "{}", one.text);
+    for path in [
+        "/v1/events/stream".to_owned(),
+        format!("/v1/numbers/{PN}/events/stream"),
+    ] {
+        let live = h
+            .call(
+                Call::get(path.as_str())
+                    .key(tenant_key)
+                    .header("last-event-id", "0"),
+            )
+            .await;
+        assert_eq!(live.status.as_u16(), 200, "{path}: {}", live.text);
+        assert!(live.text.contains(EXAMPLE_TEXT), "{path}: {}", live.text);
+    }
     carried.extend(
         [
             EXAMPLE_TEXT,
@@ -445,6 +477,276 @@ async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
     carried
 }
 
+/// A reply's text, and a contact with no conversation, neither of which
+/// may be logged.
+pub const INBOX_REPLY_TEXT: &str = "Yes, the Echeveria comes in blue";
+pub const INBOX_STRANGER: &str = "16505559876";
+/// The caller's references for those replies.
+pub const INBOX_KEYS: [&str; 3] = [
+    "inbox-reply-order-1234",
+    "inbox-reply-order-5678",
+    "inbox-read-ticket-881",
+];
+
+/// The inbox routes (roadmaps M2a and M2g) on merchant-42's first number,
+/// which [`webhooks`] filled: its conversations, the history of Meta's
+/// example customer, a reply to them within the window, and one to a
+/// contact with no conversation (refused `409`); their window, a message
+/// by id, and the conversation marked read with a receipt to Meta; returns
+/// the key it minted and what the logs must not hold (the reply's text,
+/// the stranger, the caller's references).
+async fn inbox(h: &Harness, admin: &str) -> Vec<String> {
+    const PN: &str = "1972385232742141";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["inbox"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let listed = h
+        .call(Call::get(format!("/v1/numbers/{PN}/conversations")).key(&key))
+        .await;
+    assert_eq!(listed.status.as_u16(), 200, "{}", listed.text);
+    assert!(listed.text.contains(EXAMPLE_WA_ID), "{}", listed.text);
+    let history = h
+        .call(
+            Call::get(format!(
+                "/v1/numbers/{PN}/conversations/{EXAMPLE_WA_ID}/messages"
+            ))
+            .key(&key),
+        )
+        .await;
+    assert_eq!(history.status.as_u16(), 200, "{}", history.text);
+    assert!(history.text.contains(EXAMPLE_TEXT), "{}", history.text);
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp",
+               "contacts": [{"input": RECIPIENT, "wa_id": RECIPIENT_DIGITS}],
+               "messages": [{"id": "wamid.CAPTURE-REPLY"}]}),
+    );
+    let reply = |contact: &str, idempotency_key: &str| {
+        Call::new(
+            Method::POST,
+            format!("/v1/numbers/{PN}/conversations/{contact}/messages"),
+        )
+        .key(&key)
+        .header("idempotency-key", idempotency_key)
+        .json(&json!({"type": "text", "text": {"body": INBOX_REPLY_TEXT},
+                      "callback_data": CALLBACK_DATA}))
+    };
+    let replied = h.call(reply(EXAMPLE_WA_ID, INBOX_KEYS[0])).await;
+    assert_eq!(replied.status.as_u16(), 202, "{}", replied.text);
+    let refused = h.call(reply(INBOX_STRANGER, INBOX_KEYS[1])).await;
+    assert_eq!(
+        (refused.status.as_u16(), refused.code().as_str()),
+        (409, "customer_service_window_closed"),
+        "{}",
+        refused.text
+    );
+    let window = h
+        .call(
+            Call::get(format!(
+                "/v1/numbers/{PN}/conversations/{EXAMPLE_WA_ID}/window"
+            ))
+            .key(&key),
+        )
+        .await;
+    assert_eq!(window.status.as_u16(), 200, "{}", window.text);
+    assert_eq!(window.json()["open"], true, "{}", window.text);
+    let found = h
+        .call(Call::get(format!("/v1/numbers/{PN}/messages/wamid.CAPTURE-1")).key(&key))
+        .await;
+    assert_eq!(found.status.as_u16(), 200, "{}", found.text);
+    h.graph.push_json(200, json!({"success": true}));
+    let asked = h.graph.requests().len();
+    let read = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("/v1/numbers/{PN}/conversations/{EXAMPLE_WA_ID}/read"),
+            )
+            .key(&key)
+            .header("idempotency-key", INBOX_KEYS[2])
+            .json(&json!({"notify_customer": true})),
+        )
+        .await;
+    assert_eq!(read.status.as_u16(), 204, "{}", read.text);
+    assert_eq!(h.graph.requests().len(), asked + 1, "one read receipt");
+    vec![
+        key.clone(),
+        key.rsplit('_').next().unwrap().to_owned(),
+        INBOX_REPLY_TEXT.to_owned(),
+        INBOX_STRANGER.to_owned(),
+        INBOX_KEYS[0].to_owned(),
+        INBOX_KEYS[1].to_owned(),
+        INBOX_KEYS[2].to_owned(),
+    ]
+}
+
+/// The OAuth links Meta answers in the capture: credentials the logs must
+/// not hold.
+pub const OAUTH_LINKS: [&str; 2] = [
+    "https://www.facebook.com/payment/onboarding/init/?token=CAPTURE-OAUTH-LINK-1",
+    "https://www.facebook.com/payment/onboarding/init/?token=CAPTURE-OAUTH-LINK-2",
+];
+
+/// The payment routes (roadmap P2) on merchant-42's WABA and first
+/// number, and an `order_details` send: every route answered as Meta's
+/// pages print it, a creation repeated under its key (answered without
+/// its link); returns what the logs must not hold (the links, the key).
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn payments(h: &Harness, admin: &str) -> Vec<String> {
+    const WABA: &str = "102290129340398";
+    const PN: &str = "1972385232742141";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["payments", "send"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let configuration = json!({
+        "configuration_name": "test-payment-configuration",
+        "merchant_category_code": {"code": "0000", "description": "Test MCC Code"},
+        "purpose_code": {"code": "00", "description": "Test Purpose Code"},
+        "status": "Active",
+        "provider_mid": "test-payment-gateway-mid",
+        "provider_name": "RazorPay",
+        "created_timestamp": 1_720_203_204,
+        "updated_timestamp": 1_721_088_316
+    });
+    let base = format!("/v1/wabas/{WABA}/payment-configurations");
+    h.graph.push_json(
+        200,
+        json!({"data": [{"payment_configurations": [configuration.clone()]}]}),
+    );
+    let listed = h.call(Call::get(&base).key(&key)).await;
+    assert_eq!(listed.status.as_u16(), 200, "{}", listed.text);
+    h.graph.push_json(
+        200,
+        json!({"oauth_url": OAUTH_LINKS[0], "expiration": 1_721_687_287, "success": true}),
+    );
+    let create = || {
+        Call::new(Method::POST, &base)
+            .key(&key)
+            .header("idempotency-key", "payment-configuration-1")
+            .json(&json!({"configuration_name": "test-payment-configuration",
+                          "purpose_code": "00", "merchant_category_code": "0000",
+                          "provider_name": "razorpay",
+                          "redirect_url": "https://test-redirect-url.com"}))
+    };
+    let created = h.call(create()).await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text);
+    assert!(created.text.contains(OAUTH_LINKS[0]), "the caller gets it");
+    let again = h.call(create()).await;
+    assert_eq!(again.status.as_u16(), 201, "{}", again.text);
+    assert!(!again.text.contains("CAPTURE-OAUTH-LINK"), "{}", again.text);
+    // A creation cut by a timeout may have gone through: audited, its
+    // outcome unknown (design D58).
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let cut = h
+        .call(
+            Call::new(Method::POST, &base)
+                .key(&key)
+                .header("idempotency-key", "payment-configuration-2")
+                .json(&json!({"configuration_name": "test-payment-configuration",
+                              "provider_name": "payu"})),
+        )
+        .await;
+    assert_eq!(cut.status.as_u16(), 504, "{}", cut.text);
+    h.graph
+        .push_json(200, json!({"data": [configuration.clone()]}));
+    let one = h
+        .call(Call::get(format!("{base}/test-payment-configuration")).key(&key))
+        .await;
+    assert_eq!(one.status.as_u16(), 200, "{}", one.text);
+    h.graph.push_json(
+        200,
+        json!({"oauth_url": OAUTH_LINKS[1], "expiration": 1_721_687_287}),
+    );
+    let link = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("{base}/test-payment-configuration/oauth-link"),
+            )
+            .key(&key)
+            .json(&json!({"redirect_url": "https://test-redirect-url.com"})),
+        )
+        .await;
+    assert_eq!(link.status.as_u16(), 200, "{}", link.text);
+    h.graph.push_json(200, json!({"success": true}));
+    let deleted = h
+        .call(Call::new(Method::DELETE, format!("{base}/test-payment-configuration")).key(&key))
+        .await;
+    assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
+    h.graph
+        .push_json(200, json!({"data": [configuration.clone()]}));
+    h.graph.push_json(
+        200,
+        json!({"payments": [{"reference_id": "BM345A-12", "status": "pending",
+                             "currency": "INR", "amount": {"value": 21000, "offset": 100}}]}),
+    );
+    let payment = h
+        .call(
+            Call::get(format!(
+                "/v1/numbers/{PN}/payments/test-payment-configuration/BM345A-12"
+            ))
+            .key(&key),
+        )
+        .await;
+    assert_eq!(payment.status.as_u16(), 200, "{}", payment.text);
+    h.graph.push_json(200, json!({"data": [configuration]}));
+    h.graph.push_json(
+        200,
+        json!({"id": "refund-id", "status": "pending", "speed_processed": "normal"}),
+    );
+    let refunded = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{PN}/payments/refunds"))
+                .key(&key)
+                .header("idempotency-key", "refund-1")
+                .json(&json!({"reference_id": "BM345A-12", "speed": "normal",
+                              "payment_config_id": "test-payment-configuration",
+                              "amount": {"currency": "INR", "value": "100", "offset": "100"}})),
+        )
+        .await;
+    assert_eq!(refunded.status.as_u16(), 201, "{}", refunded.text);
+    // A refund cut by a timeout: it may have gone through, so it is
+    // audited, its outcome unknown (design D58).
+    h.graph.push_json(
+        200,
+        json!({"data": [{"configuration_name": "test-payment-configuration",
+                         "status": "Active", "provider_name": "razorpay"}]}),
+    );
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let cut = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{PN}/payments/refunds"))
+                .key(&key)
+                .header("idempotency-key", "refund-cut-1")
+                .json(&json!({"reference_id": "BM345A-13",
+                              "payment_config_id": "test-payment-configuration",
+                              "amount": {"currency": "INR", "value": 250, "offset": 100}})),
+        )
+        .await;
+    assert_eq!(cut.status.as_u16(), 504, "{}", cut.text);
+    vec![
+        key.clone(),
+        key.rsplit('_').next().unwrap().to_owned(),
+        OAUTH_LINKS[0].to_owned(),
+        OAUTH_LINKS[1].to_owned(),
+        "CAPTURE-OAUTH-LINK".to_owned(),
+    ]
+}
+
 /// A message's text, a recipient, a contact and the caller's references,
 /// none of which may be logged.
 pub const MESSAGE_TEXT: &str = "Your order 1234 of Echeveria has shipped";
@@ -455,6 +757,66 @@ pub const CONTACT_NAME: &str = "Barbara J. Johnson";
 pub const CONTACT_PHONE: &str = "+1 (940) 555-1234";
 pub const CALLBACK_DATA: &str = "order:1234:shipped";
 pub const IDEMPOTENCY_KEY: &str = "order-1234-shipped-notice";
+
+/// The registration routes (roadmap M3d), each with a PIN or a code in
+/// its body, and a refusal whose texts quote the PIN: the PIN and the code
+/// are secrets, looked for as a leaked string, JSON value or Meta text
+/// would print them (`tests/registration_logs.rs` looks for them as any
+/// run of digits). The PIN change and the deregistration are audited.
+async fn registration(h: &Harness, tenant_key: &str) -> Vec<String> {
+    const PN: &str = "1972385232742141";
+    const PIN: &str = "581063";
+    const CODE: &str = "774216";
+    let post = |path: &str, body: serde_json::Value| {
+        Call::new(Method::POST, format!("/v1/numbers/{PN}/{path}"))
+            .key(tenant_key)
+            .json(&body)
+    };
+    let ok = || json!({"success": true});
+    h.graph.push_json(200, ok());
+    let requested = h
+        .call(
+            post(
+                "request-code",
+                json!({"code_method": "SMS", "language": "en_US"}),
+            )
+            .header("idempotency-key", "register:1972385232742141:code"),
+        )
+        .await;
+    assert_eq!(requested.status.as_u16(), 200, "{}", requested.text);
+    h.graph.push_json(200, ok());
+    let verified = h.call(post("verify-code", json!({"code": CODE}))).await;
+    assert_eq!(verified.status.as_u16(), 200, "{}", verified.text);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#133005) PIN {PIN} is not this number's"),
+            "type": "OAuthException", "code": 133005, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn",
+            "error_data": {"messaging_product": "whatsapp", "details": format!("pin {PIN}")}}}),
+    );
+    let refused = h.call(post("register", json!({"pin": PIN}))).await;
+    assert_eq!(refused.code(), "two_step_verification", "{}", refused.text);
+    h.graph.push_json(200, ok());
+    let registered = h
+        .call(post("register", json!({"pin": PIN})).header("idempotency-key", "register:1"))
+        .await;
+    assert_eq!(registered.status.as_u16(), 200, "{}", registered.text);
+    h.graph.push_json(200, ok());
+    let set = h.call(post("two-step-pin", json!({"pin": PIN}))).await;
+    assert_eq!(set.status.as_u16(), 200, "{}", set.text);
+    h.graph.push_json(200, ok());
+    let deregistered = h.call(post("deregister", json!({"confirm": PN}))).await;
+    assert_eq!(deregistered.status.as_u16(), 200, "{}", deregistered.text);
+    let mut secrets = Vec::new();
+    for secret in [PIN, CODE] {
+        // Quoted, JSON-escaped inside a log line, and as Meta's texts
+        // quote it.
+        secrets.push(format!("\"{secret}\""));
+        secrets.push(format!("{secret}\\\""));
+        secrets.push(format!("PIN {secret}"));
+        secrets.push(format!("pin {secret}"));
+    }
+    secrets
+}
 
 /// The M1b routes, each exercised, with the tokens, text, recipients and
 /// contacts M1.7 forbids in the logs; returns the key it minted and what
@@ -688,6 +1050,171 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
     ]
 }
 
+/// An OTP recipient: in no log line.
+pub const OTP_PHONE: &str = "+16315554444";
+
+/// The OTP routes and authentication templates (roadmap M3c), each
+/// exercised: the tenant's settings set on its attached number, read, a
+/// code sent and checked, an authentication template created, the
+/// settings cleared; returns what must not be logged.
+async fn otp(h: &Harness, admin: &str) -> Vec<String> {
+    let saved = h
+        .call(
+            Call::new(Method::PUT, "/v1/admin/tenants/merchant-42/otp")
+                .key(admin)
+                .json(&json!({
+                    "phone_number_id": "1972385232742141",
+                    "template": {"name": "login_code", "language": "en_US"}
+                })),
+        )
+        .await;
+    assert_eq!(saved.status.as_u16(), 200, "{}", saved.text);
+    let read = h
+        .call(Call::get("/v1/admin/tenants/merchant-42/otp").key(admin))
+        .await;
+    assert_eq!(read.status.as_u16(), 200, "{}", read.text);
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["otp", "templates"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    h.graph.push_json(
+        200,
+        json!({
+            "messaging_product": "whatsapp",
+            "contacts": [{"input": OTP_PHONE, "wa_id": "16315554444"}],
+            "messages": [{"id": "wamid.HBgLMTYzMTU1NTQ0NDQVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA"}]
+        }),
+    );
+    let sent = h
+        .call(
+            Call::new(Method::POST, "/v1/otp/issue")
+                .key(&key)
+                .json(&json!({"phone": OTP_PHONE})),
+        )
+        .await;
+    assert_eq!(sent.json()["status"], "sent", "{}", sent.text);
+    let checked = h
+        .call(
+            Call::new(Method::POST, "/v1/otp/verify")
+                .key(&key)
+                .json(&json!({"phone": OTP_PHONE, "code": "not-the-code"})),
+        )
+        .await;
+    assert_eq!(checked.json()["result"], "invalid", "{}", checked.text);
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "954638012257287", "status": "APPROVED", "language": "en_US"}]}),
+    );
+    let created = h
+        .call(
+            Call::new(
+                Method::POST,
+                "/v1/wabas/102290129340398/templates/authentication",
+            )
+            .key(&key)
+            .json(&json!({"name": "login_code", "languages": ["en_US"], "otp_type": "copy_code"})),
+        )
+        .await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text);
+    let cleared = h
+        .call(Call::new(Method::DELETE, "/v1/admin/tenants/merchant-42/otp").key(admin))
+        .await;
+    assert_eq!(cleared.status.as_u16(), 204, "{}", cleared.text);
+    vec![
+        key,
+        OTP_PHONE.to_owned(),
+        "16315554444".to_owned(),
+        "6315554444".to_owned(),
+    ]
+}
+
+/// Embedded Signup's routes (roadmap M3a), each exercised as a Tech
+/// Provider (the capture harnesses' deployment, `logs.rs` and
+/// `live_logs.rs`): an attempt started, completed up to a registration
+/// Meta refuses (`133005`: the attempt kept), listed, resumed with a
+/// corrected PIN; the operator's re-funding, which a Tech Provider has
+/// none of (`409`). Returns what must not be logged: the merchant's
+/// token, both PINs, the code and the state.
+async fn signup(h: &Harness, admin: &str) -> Vec<String> {
+    use super::signup::{PHONE, TOKEN, WABA, script_until_verified, success};
+    const CODE: &str = "AQB-signup-code-SENTINEL-for-the-log-test";
+    const PIN: &str = "835164";
+    const NEW_PIN: &str = "472905";
+    h.tenant("merchant-77").await;
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-77/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["signup"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let started = h
+        .call(
+            Call::new(Method::POST, "/v1/signup/sessions")
+                .key(&key)
+                .json(&json!({})),
+        )
+        .await;
+    assert_eq!(started.status.as_u16(), 200, "{}", started.text);
+    let state = started.json()["state"].as_str().unwrap().to_owned();
+    script_until_verified(&h.graph);
+    h.graph.push_json(200, success()); // subscribed_apps
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": "(#133005) Two step verification PIN Mismatch",
+            "type": "OAuthException", "code": 133005, "fbtrace_id": "A"}}),
+    );
+    let stopped = h
+        .call(
+            Call::new(Method::POST, "/v1/signup/complete")
+                .key(&key)
+                .json(&json!({
+                    "state": state, "code": CODE, "pin": PIN,
+                    "event": {"type": "WA_EMBEDDED_SIGNUP", "event": "FINISH",
+                        "data": {"waba_id": WABA, "phone_number_id": PHONE}}
+                })),
+        )
+        .await;
+    assert_eq!(stopped.code(), "onboarding_failed", "{}", stopped.text);
+    let attempts = h.call(Call::get("/v1/signup/attempts").key(&key)).await;
+    assert_eq!(attempts.status.as_u16(), 200, "{}", attempts.text);
+    h.graph.push_json(200, success()); // subscribed_apps
+    h.graph.push_json(200, success()); // register
+    let resumed = h
+        .call(
+            Call::new(Method::POST, "/v1/signup/resume")
+                .key(&key)
+                .json(&json!({"waba_id": WABA, "pin": NEW_PIN})),
+        )
+        .await;
+    assert_eq!(resumed.status.as_u16(), 200, "{}", resumed.text);
+    let reshare = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("/v1/admin/wabas/{WABA}/credit-line/reshare"),
+            )
+            .key(admin),
+        )
+        .await;
+    assert_eq!(reshare.code(), "signup_not_configured", "{}", reshare.text);
+    vec![
+        key,
+        TOKEN.to_owned(),
+        CODE.to_owned(),
+        PIN.to_owned(),
+        NEW_PIN.to_owned(),
+        state,
+    ]
+}
+
 /// SHA-256 of `data`, hex.
 pub fn sha256_hex(data: &[u8]) -> String {
     use sha2::Digest as _;
@@ -765,10 +1292,29 @@ fn check_audit(logs: &str) {
     // A tenant's template deletions are audited too, each under its own
     // action (every language of a name, then one id; the refused one is
     // not), with the tenant, the WABA and its key's id.
-    let deletions: Vec<&serde_json::Value> = events
+    let changes: Vec<&serde_json::Value> = events
         .iter()
         .filter(|e| e["target"] == "audit" && e["fields"]["message"] == "tenant change")
         .map(|e| &e["fields"])
+        .collect();
+    // A tenant's onboarding is audited too (roadmap M3a): the resumed
+    // signup of `signup`, with its tenant, its WABA and its key's id.
+    let onboarded: Vec<&&serde_json::Value> = changes
+        .iter()
+        .filter(|fields| fields["action"] == "signup_resumed")
+        .collect();
+    assert_eq!(onboarded.len(), 1, "the resumed signup's audit event");
+    assert_eq!(onboarded[0]["tenant"], "merchant-77", "{}", onboarded[0]);
+    assert_eq!(
+        onboarded[0]["waba_id"],
+        super::signup::WABA,
+        "{}",
+        onboarded[0]
+    );
+    assert!(onboarded[0]["key_id"].is_string(), "{}", onboarded[0]);
+    let deletions: Vec<&serde_json::Value> = changes
+        .into_iter()
+        .filter(|fields| fields["action"] != "signup_resumed")
         .collect();
     let actions: Vec<&str> = deletions
         .iter()
@@ -776,14 +1322,113 @@ fn check_audit(logs: &str) {
         .collect();
     assert_eq!(
         actions,
-        ["templates_deleted", "template_deleted"],
-        "the template deletions' audit events"
+        [
+            "templates_deleted",
+            "template_deleted",
+            "two_step_pin_set",
+            "number_deregistered",
+            "payment_configuration_created",
+            "payment_configuration_created",
+            "payment_oauth_link_regenerated",
+            "payment_configuration_deleted",
+            "payment_refunded",
+            "payment_refunded"
+        ],
+        "the template deletions', the PIN change's, the deregistration's and the payment changes' audit events"
     );
-    for fields in deletions {
+    for fields in &deletions {
         assert!(fields["key_id"].is_string(), "{fields}");
         assert_eq!(fields["tenant"], "merchant-42", "{fields}");
         assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
     }
+    // The number's own events name it by id (roadmap M3d).
+    let number_changes: Vec<&&serde_json::Value> = deletions
+        .iter()
+        .filter(|fields| {
+            matches!(
+                fields["action"].as_str(),
+                Some("two_step_pin_set" | "number_deregistered")
+            )
+        })
+        .collect();
+    assert_eq!(number_changes.len(), 2, "{number_changes:?}");
+    for fields in number_changes {
+        assert_eq!(fields["phone_number_id"], "1972385232742141", "{fields}");
+    }
+    check_payment_audit(&deletions);
+}
+
+/// The payment changes' audit events (of the tenant changes `changes`)
+/// carry what reconciles them (design D58): the configuration, each
+/// change's outcome, and for a refund the number, the order, the amount
+/// and Meta's answer, or an unknown outcome when it timed out.
+fn check_payment_audit(changes: &[&serde_json::Value]) {
+    let payments: Vec<&serde_json::Value> = changes
+        .iter()
+        .copied()
+        .filter(|fields| {
+            fields["action"]
+                .as_str()
+                .is_some_and(|a| a.starts_with("payment_"))
+        })
+        .collect();
+    for fields in &payments {
+        assert_eq!(
+            fields["configuration_name"], "test-payment-configuration",
+            "{fields}"
+        );
+        assert!(fields.get("oauth_url").is_none(), "{fields}");
+    }
+    let outcomes: Vec<(&str, &str)> = payments
+        .iter()
+        .map(|fields| {
+            (
+                fields["action"].as_str().unwrap_or_default(),
+                fields["outcome"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            ("payment_configuration_created", "answered"),
+            ("payment_configuration_created", "unknown"),
+            ("payment_oauth_link_regenerated", "answered"),
+            ("payment_configuration_deleted", "answered"),
+            ("payment_refunded", "answered"),
+            ("payment_refunded", "unknown"),
+        ],
+        "each payment change's outcome"
+    );
+    let refunds: Vec<serde_json::Value> = payments
+        .iter()
+        .filter(|fields| fields["action"] == "payment_refunded")
+        .map(|fields| {
+            json!({
+                "phone_number_id": fields["phone_number_id"],
+                "reference_id": fields["reference_id"],
+                "amount_value": fields["amount_value"],
+                "amount_offset": fields["amount_offset"],
+                "currency": fields["currency"],
+                "refund_id": fields.get("refund_id"),
+                "refund_status": fields.get("refund_status"),
+                "outcome": fields["outcome"],
+            })
+        })
+        .collect();
+    assert_eq!(
+        refunds,
+        [
+            json!({"phone_number_id": "1972385232742141", "reference_id": "BM345A-12",
+                   "amount_value": 100, "amount_offset": 100, "currency": "INR",
+                   "refund_id": "refund-id", "refund_status": "pending",
+                   "outcome": "answered"}),
+            json!({"phone_number_id": "1972385232742141", "reference_id": "BM345A-13",
+                   "amount_value": 250, "amount_offset": 100, "currency": "INR",
+                   "refund_id": null, "refund_status": null, "outcome": "unknown"}),
+        ],
+        "the refunds' audit events"
+    );
 }
 
 /// Every success status an operation answered is one its document lists

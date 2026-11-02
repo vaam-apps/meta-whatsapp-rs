@@ -44,10 +44,428 @@ async fn live_postgres_backend_passes_the_conformance_suite() {
         let pool = db.pool(10).await;
         migrate(&pool).await.unwrap();
         schemas.lock().unwrap().push(db);
-        Arc::new(PgBackend::new(pool)) as Arc<dyn Backend>
+        // A retention, so that the inbox suite's housekeeping case purges
+        // (roadmap M2a).
+        Arc::new(
+            PgBackend::new(pool)
+                .with_inbox_retention(meta_whatsapp_rs::core::store::Retention::days(30)),
+        ) as Arc<dyn Backend>
     })
     .await;
     eprintln!("postgres, the races: {report:?}");
+}
+
+/// Roadmap M2h: migration 5 rewrites no table (its columns are metadata
+/// only on Postgres 11 and later: one without a default, one with a
+/// constant default, and a default set for the rows to come), so a
+/// database with many numbers migrates without holding its numbers table
+/// for a copy; and a number bound before it reads its WABA's start and a
+/// previous tenant unknown (`UNRECORDED_MOVE`), and keeps that start when
+/// a binding of its tenant's other WABA takes it (it would read the new
+/// WABA's otherwise). Decisive: a volatile default or a column's type
+/// changed in the migration (either rewrites the table into a new file);
+/// for the start, the refresh's `COALESCE` of it. An update of the
+/// existing rows would not change the file; the migration has none.
+#[tokio::test]
+async fn live_postgres_migration_5_rewrites_no_table() {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx::migrate::Migrator;
+    use meta_whatsapp_rs::core::ids::PhoneNumberId;
+    use meta_whatsapp_server_core::model::UNRECORDED_MOVE;
+    use meta_whatsapp_server_core::store::RecordStore as _;
+    use meta_whatsapp_server_store_postgres::migrations;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(3).await;
+    meta_whatsapp_rs::adapters::store::postgres::migrate(&pool)
+        .await
+        .unwrap();
+    let before_5: Vec<_> = migrations().into_iter().filter(|m| m.version < 5).collect();
+    assert_eq!(before_5.len(), 4);
+    let mut migrator = Migrator::with_migrations(before_5);
+    migrator.dangerous_set_table_name(MIGRATIONS_TABLE);
+    migrator.run(&pool).await.unwrap();
+    sqlx::query("INSERT INTO wa_server_tenants (id, name) VALUES ('legacy', '')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let attached_at: time::OffsetDateTime = sqlx::query_scalar(
+        "INSERT INTO wa_server_wabas (waba_id, tenant_id) VALUES ('5001', 'legacy') \
+         RETURNING attached_at",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO wa_server_numbers (phone_number_id, waba_id, tenant_id) \
+         VALUES ('6001', '5001', 'legacy')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let file = || async {
+        let node: i64 = sqlx::query_scalar(
+            "SELECT relfilenode::bigint FROM pg_class \
+             WHERE oid = 'wa_server_numbers'::regclass",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        node
+    };
+    let before = file().await;
+    migrate(&pool).await.unwrap();
+    assert_eq!(
+        file().await,
+        before,
+        "migration 5 rewrote wa_server_numbers"
+    );
+    let number = PgStore::new(pool.clone())
+        .number(&PhoneNumberId::new("6001").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(number.attached_at, attached_at, "its WABA's start");
+    assert_eq!(number.previous_tenant_released_at, Some(UNRECORDED_MOVE));
+
+    // The tenant's other WABA, bound later, takes the number: its start
+    // stays its first WABA's.
+    let store = PgStore::new(pool.clone());
+    let legacy = TenantId::parse("legacy").unwrap();
+    let pn = PhoneNumberId::new("6001").unwrap();
+    store
+        .bind_waba(
+            &legacy,
+            &meta_whatsapp_rs::core::ids::WabaId::new("5002").unwrap(),
+            std::slice::from_ref(&pn),
+        )
+        .await
+        .unwrap();
+    let moved = store.number(&pn).await.unwrap().unwrap();
+    assert_eq!(moved.waba_id.as_str(), "5002");
+    assert_eq!(
+        moved.attached_at, attached_at,
+        "its first WABA's start, not the second's"
+    );
+    assert_eq!(moved.previous_tenant_released_at, Some(UNRECORDED_MOVE));
+}
+
+/// Roadmap M2e: migration 7 adds `wa_server_events.media_id` and its
+/// partial index without rewriting the outbox (the column has no default),
+/// so a deployment with a large outbox migrates without holding it for a
+/// copy. A row written before it records no media id, whatever its data
+/// says: its media goes through Meta's `phone_number_id` check, as every
+/// id did before. An insert the previous release makes (no `media_id`)
+/// still works after it, and records none either. A row this release
+/// inserts records its media id, found by the index: its definition, and
+/// a plan of the lookup that probes it. Decisive: a default on the column
+/// (it rewrites the table into a new file), an update of the existing rows
+/// (they would record theirs), an index whose predicate or collation the
+/// lookup cannot use.
+#[tokio::test]
+async fn live_postgres_migration_7_rewrites_no_table_and_records_from_its_release_on() {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx::migrate::Migrator;
+    use meta_whatsapp_rs::core::ids::MediaId;
+    use meta_whatsapp_server_store_postgres::migrations;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(3).await;
+    meta_whatsapp_rs::adapters::store::postgres::migrate(&pool)
+        .await
+        .unwrap();
+    let before_7: Vec<_> = migrations().into_iter().filter(|m| m.version < 7).collect();
+    assert_eq!(before_7.len(), 6);
+    let mut migrator = Migrator::with_migrations(before_7);
+    migrator.dangerous_set_table_name(MIGRATIONS_TABLE);
+    migrator.run(&pool).await.unwrap();
+    // A row of the previous release: an image received, operator-only (its
+    // sequence far past the stream's, which a raw insert does not draw).
+    let image = |id: &str, sequence: i64| {
+        format!(
+            "INSERT INTO wa_server_events \
+             (tenant_id, sequence, id, phone_number_id, event_type, data, data_bytes) \
+             VALUES (NULL, {sequence}, 'evt_m6_{sequence}', '6101', 'message_received', \
+                     '{{\"event\":\"message_received\",\"message\":{{\"type\":\"image\",\
+                     \"image\":{{\"id\":\"{id}\"}}}}}}'::json, 10)"
+        )
+    };
+    sqlx::query(sqlx::AssertSqlSafe(image("1003383421387261", 1001)))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let file = || async {
+        let node: i64 = sqlx::query_scalar(
+            "SELECT relfilenode::bigint FROM pg_class \
+             WHERE oid = 'wa_server_events'::regclass",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        node
+    };
+    let before = file().await;
+    migrate(&pool).await.unwrap();
+    assert_eq!(file().await, before, "migration 7 rewrote wa_server_events");
+    let events = PgEventStore::new(pool.clone());
+    let media = |id: &str| MediaId::new(id).unwrap();
+    assert!(
+        events
+            .received_media(&media("1003383421387261"))
+            .await
+            .unwrap()
+            .is_empty(),
+        "a row from before migration 7 records a media id"
+    );
+    // The previous release's insert, after the migration.
+    sqlx::query(sqlx::AssertSqlSafe(image("1003383421387262", 1002)))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        events
+            .received_media(&media("1003383421387262"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // This release's insert records it.
+    let row = meta_whatsapp_server_core::outbox::NewEvent {
+        data: r#"{"event":"message_received","message":{"type":"image","image":{"id":"1003383421387263"}}}"#
+            .to_owned(),
+        ..outbox_suite::row(None, "message_received", "6101", None)
+    };
+    events.insert(&row).await.unwrap();
+    let found = events
+        .received_media(&media("1003383421387263"))
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].tenant, None);
+    assert_eq!(
+        found[0]
+            .phone_number_id
+            .as_ref()
+            .map(meta_whatsapp_rs::core::ids::PhoneNumberId::as_str),
+        Some("6101")
+    );
+    the_media_lookup_probes_its_index(&pool).await;
+}
+
+/// Migration 7's index, as `PgEventStore::received_media` reads it: its
+/// definition, and a plan of the lookup that probes it.
+async fn the_media_lookup_probes_its_index(pool: &sqlx::PgPool) {
+    // The lookup is an index probe, never a walk of the outbox: the
+    // partial index covers only the rows that record a media id, and its
+    // predicate, collation and order fit `PgEventStore::received_media`'s
+    // statement (copied here, with its parameters' types): with
+    // sequential scans off, its plan reads the index backwards. (On
+    // `media_id` alone the planner walks `wa_server_events_created_idx`
+    // here, as it does on a large outbox before `media_id` has
+    // statistics: every row read and filtered.)
+    let definition: String =
+        sqlx::query_scalar("SELECT pg_get_indexdef('wa_server_events_media_idx'::regclass)")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert!(
+        definition.ends_with("USING btree (media_id, created_at) WHERE (media_id IS NOT NULL)"),
+        "{definition}"
+    );
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query("SET enable_seqscan = off")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    let plan: Vec<String> = sqlx::query_scalar(
+        "EXPLAIN SELECT tenant_id, phone_number_id, created_at FROM wa_server_events \
+         WHERE media_id = $1 ORDER BY created_at DESC LIMIT $2",
+    )
+    .bind("1003383421387263")
+    .bind(16_i64)
+    .fetch_all(&mut *conn)
+    .await
+    .unwrap();
+    sqlx::query("RESET enable_seqscan")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|line| line.contains("Index Scan Backward using wa_server_events_media_idx")),
+        "{plan:?}"
+    );
+}
+
+/// Roadmap M2a and M2h: a WABA unbound from one tenant before migration 5
+/// (migration 4 recorded the WABA's move, nothing recorded its numbers')
+/// and bound to another tenant after it, with its number: the number
+/// reads as never released, so the WABA's cut alone hides the previous
+/// tenant's history on it (`authz::history_from`: its binding's start).
+/// Decisive: the WABA's cut in `history_from` (the number's is `None`).
+#[tokio::test]
+async fn live_postgres_a_waba_moved_before_migration_5_still_cuts_its_numbers() {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx::migrate::Migrator;
+    use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+    use meta_whatsapp_server_core::authz::history_from;
+    use meta_whatsapp_server_core::store::RecordStore as _;
+    use meta_whatsapp_server_store_postgres::migrations;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(3).await;
+    meta_whatsapp_rs::adapters::store::postgres::migrate(&pool)
+        .await
+        .unwrap();
+    let mut migrator =
+        Migrator::with_migrations(migrations().into_iter().filter(|m| m.version < 5).collect());
+    migrator.dangerous_set_table_name(MIGRATIONS_TABLE);
+    migrator.run(&pool).await.unwrap();
+    for tenant in ["before-5-a", "before-5-b"] {
+        sqlx::query("INSERT INTO wa_server_tenants (id, name) VALUES ($1, '')")
+            .bind(tenant)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO wa_server_wabas (waba_id, tenant_id, previous_tenant_unbound_at) \
+         VALUES ('5301', 'before-5-a', NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO wa_server_numbers (phone_number_id, waba_id, tenant_id) \
+         VALUES ('6301', '5301', 'before-5-a')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // The unbind of the release before migration 5: the WABA's row and
+    // its tombstone, its numbers by the cascade.
+    sqlx::query(
+        "WITH gone AS (DELETE FROM wa_server_wabas WHERE waba_id = '5301' \
+           RETURNING waba_id, tenant_id, previous_tenant_unbound_at) \
+         INSERT INTO wa_server_waba_tombstones \
+           (waba_id, tenant_id, unbound_at, previous_tenant_unbound_at) \
+         SELECT waba_id, tenant_id, now(), previous_tenant_unbound_at FROM gone",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    migrate(&pool).await.unwrap();
+    let store = PgStore::new(pool.clone());
+    let (waba_id, pn) = (
+        WabaId::new("5301").unwrap(),
+        PhoneNumberId::new("6301").unwrap(),
+    );
+    store
+        .bind_waba(
+            &TenantId::parse("before-5-b").unwrap(),
+            &waba_id,
+            std::slice::from_ref(&pn),
+        )
+        .await
+        .unwrap();
+    let waba = store.waba(&waba_id).await.unwrap().unwrap();
+    let number = store.number(&pn).await.unwrap().unwrap();
+    assert!(waba.previous_tenant_unbound_at.is_some(), "a recorded move");
+    assert_eq!(
+        number.previous_tenant_released_at, None,
+        "no release recorded before migration 5"
+    );
+    assert_eq!(
+        history_from(&waba, &number),
+        Some(waba.attached_at),
+        "the WABA's cut"
+    );
+}
+
+/// Roadmap M2h, a rolling deploy: a replica of the previous release
+/// releases numbers with its own statements (a refresh's `DELETE` of the
+/// numbers its list lacks, an unbind's cascade), which know nothing of the
+/// tombstones; migration 5's trigger records the release all the same, so
+/// a binding of this release to another tenant reads a move, its start
+/// after the release. Decisive: the trigger (without it, the number reads
+/// as never held, and the inbox shows the new tenant the previous one's
+/// history).
+#[tokio::test]
+async fn live_postgres_a_release_by_the_previous_release_is_recorded() {
+    use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+    use meta_whatsapp_server_core::store::RecordStore as _;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(3).await;
+    migrate(&pool).await.unwrap();
+    let store = PgStore::new(pool.clone());
+    let (a, b) = (
+        TenantId::parse("rolling-a").unwrap(),
+        TenantId::parse("rolling-b").unwrap(),
+    );
+    store.create_tenant(&a, "").await.unwrap();
+    store.create_tenant(&b, "").await.unwrap();
+    let (pn1, pn2) = (
+        PhoneNumberId::new("6101").unwrap(),
+        PhoneNumberId::new("6102").unwrap(),
+    );
+    store
+        .bind_waba(
+            &a,
+            &WabaId::new("5101").unwrap(),
+            std::slice::from_ref(&pn1),
+        )
+        .await
+        .unwrap();
+    store
+        .bind_waba(
+            &a,
+            &WabaId::new("5102").unwrap(),
+            std::slice::from_ref(&pn2),
+        )
+        .await
+        .unwrap();
+    // The previous release's refresh of 5101 listing no number, and its
+    // unbind of 5102 (the WABA's row, its numbers by the cascade).
+    sqlx::query(
+        "DELETE FROM wa_server_numbers WHERE waba_id = $1 AND NOT (phone_number_id = ANY($2))",
+    )
+    .bind("5101")
+    .bind(Vec::<String>::new())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM wa_server_wabas WHERE waba_id = '5102'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for (pn, released_by) in [(&pn1, "5201"), (&pn2, "5202")] {
+        let (tenant, released_at): (Option<String>, time::OffsetDateTime) = sqlx::query_as(
+            "SELECT tenant_id, released_at FROM wa_server_number_tombstones              WHERE phone_number_id = $1",
+        )
+        .bind(pn.as_str())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(tenant.as_deref(), Some("rolling-a"), "{pn}");
+        store
+            .bind_waba(
+                &b,
+                &WabaId::new(released_by).unwrap(),
+                std::slice::from_ref(pn),
+            )
+            .await
+            .unwrap();
+        let number = store.number(pn).await.unwrap().unwrap();
+        assert_eq!(number.tenant_id, b);
+        assert_eq!(
+            number.previous_tenant_released_at,
+            Some(released_at),
+            "{pn}: a move"
+        );
+        assert!(number.attached_at >= released_at, "{pn}");
+    }
 }
 
 /// Two instances starting at once on an empty database both migrate, and
@@ -70,7 +488,7 @@ async fn live_postgres_parallel_migrations_succeed() {
     .fetch_all(&first)
     .await
     .unwrap();
-    assert_eq!(service, [1, 2, 3, 4]);
+    assert_eq!(service, [1, 2, 3, 4, 5, 6, 7]);
     let library: Vec<i64> =
         sqlx::query_scalar("SELECT version FROM wa_sqlx_migrations WHERE success ORDER BY version")
             .fetch_all(&first)
@@ -564,4 +982,150 @@ async fn live_postgres_a_deadlocked_insert_is_busy() {
         Err(error) => assert!(error.is_busy(), "a deadlock reported as {error}"),
         Ok(sequence) => panic!("inserted {sequence:?} through a deadlock"),
     }
+}
+
+/// Roadmap M2b, M2.2 at the bundle: two replicas (two backends, each on a
+/// pool of its own, one database): an event recorded through one wakes a
+/// stream on the other within 2 s (`NOTIFY` on the deployment's channel,
+/// each replica's own `LISTEN` connection), another tenant's stream there
+/// sees none of it, and a stream resumed there replays exactly the events
+/// after its cursor. Decisive: `LISTEN`/`NOTIFY` (each replica's notifier
+/// local to it fails the first step).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_an_event_through_one_replica_wakes_a_stream_on_another() {
+    use meta_whatsapp_server_core::backend::Backend as _;
+    use meta_whatsapp_server_store_postgres::PgBackend;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let (pool_a, pool_b) = (db.pool(4).await, db.pool(4).await);
+    migrate(&pool_a).await.unwrap();
+    let (a, b) = (PgBackend::new(pool_a), PgBackend::new(pool_b));
+    conformance::live::an_event_through_one_replica_wakes_a_stream_on_another(&a, &b).await;
+    a.close().await;
+    b.close().await;
+}
+
+/// A `NOTIFY` on another channel (another deployment sharing the
+/// database) wakes nobody here; a subscription made through a closed
+/// backend's notifier listens again.
+#[tokio::test]
+async fn live_postgres_the_channel_is_the_deployments() {
+    use meta_whatsapp_server_core::notify::{EventNotifier, Wakeup};
+    use meta_whatsapp_server_store_postgres::{EVENTS_CHANNEL, PgNotifier};
+    use std::time::Duration;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(2).await;
+    let ours = PgNotifier::new(pool.clone());
+    assert_eq!(ours.channel(), EVENTS_CHANNEL);
+    let theirs = PgNotifier::with_channel(pool.clone(), "wa_server_events_of_another");
+    let tenant = TenantId::parse(&format!("live-channel-{}", support::unique())).unwrap();
+    let mut subscription = ours.subscribe(&tenant).await.unwrap();
+    let wakeup = Wakeup {
+        tenant: tenant.clone(),
+        sequence: 1,
+    };
+    // The first wake-up after listening (anything missed before it).
+    let _ = tokio::time::timeout(Duration::from_millis(200), subscription.woken()).await;
+    theirs.notify(&wakeup).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(500), subscription.woken())
+            .await
+            .is_err(),
+        "a notification on another channel woke this deployment's stream"
+    );
+    ours.notify(&wakeup).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), subscription.woken())
+            .await
+            .is_ok()
+    );
+    drop(subscription);
+    ours.close().await;
+    let mut again = ours.subscribe(&tenant).await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_millis(200), again.woken()).await;
+    ours.notify(&wakeup).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), again.woken())
+            .await
+            .is_ok(),
+        "closed, then subscribed again: not listening"
+    );
+    ours.close().await;
+    theirs.close().await;
+}
+
+/// The listening connection killed (an operator, a failover, a
+/// connection limit): the notifier listens again on a new one, wakes every
+/// subscription once it listens (what was sent meanwhile was lost to it),
+/// not before, and a notification sent after that wake-up reaches the
+/// subscription. A channel of the test's own, so only its session is
+/// killed. Decisive: `listen`'s reconnect, and its wake-up after `LISTEN`
+/// (woken before it, a notification sent at once could be lost).
+#[tokio::test]
+async fn live_postgres_a_killed_listener_listens_again() {
+    use meta_whatsapp_server_core::notify::{EventNotifier, Wakeup};
+    use meta_whatsapp_server_store_postgres::PgNotifier;
+    use std::time::Duration;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(2).await;
+    let channel = format!("wa_server_events_killed_{}", support::unique());
+    let notifier = PgNotifier::with_channel(pool.clone(), &channel);
+    let tenant = TenantId::parse(&format!("live-killed-{}", support::unique())).unwrap();
+    let mut subscription = notifier.subscribe(&tenant).await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_millis(200), subscription.woken()).await;
+    let killed: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM (SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+         WHERE pid <> pg_backend_pid() AND query LIKE 'LISTEN %' AND query LIKE $1) AS t",
+    )
+    .bind(format!("%{channel}%"))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(killed, 1, "the listening session");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), subscription.woken())
+            .await
+            .is_ok(),
+        "not woken once listening again"
+    );
+    let wakeup = Wakeup {
+        tenant: tenant.clone(),
+        sequence: 1,
+    };
+    notifier.notify(&wakeup).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(2), subscription.woken())
+            .await
+            .is_ok(),
+        "a notification after it was lost"
+    );
+    notifier.close().await;
+}
+
+/// M2.5 live: 200 open streams (ten tenants of 20, half never read) at 100
+/// events a second for 3 seconds, on a pool of ten: every read stream gets
+/// every event of its tenant in order, and the data held for clients never
+/// passes each stream's budget.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_two_hundred_streams_at_a_hundred_events_a_second_hold_bounded_memory() {
+    use meta_whatsapp_server_core::backend::Backend as _;
+    use meta_whatsapp_server_store_postgres::PgBackend;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(10).await;
+    migrate(&pool).await.unwrap();
+    let backend = PgBackend::new(pool);
+    let load =
+        conformance::live::many_streams_at_a_steady_rate_hold_bounded_memory(&backend, 200, 100, 3)
+            .await;
+    eprintln!("postgres, M2.5: {load:?}");
+    assert_eq!(load.delivered, load.events * 10);
+    assert!(load.peak_buffered_bytes <= load.streams * load.budget_per_stream);
+    backend.close().await;
 }

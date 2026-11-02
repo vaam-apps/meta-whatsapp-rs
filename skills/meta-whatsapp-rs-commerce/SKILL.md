@@ -149,9 +149,9 @@ key the order by the message id.
 ## What meta-whatsapp-rs does not do
 
 - No catalog upload or inventory management, no order state machine.
-  Payment collection is `meta_whatsapp_rs::client::payments` (India
-  only so far, see
-  [coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md)).
+  Payment collection, by message or by template (order details, payment request, order
+  status, India's checkout `Button::checkout`), is `meta_whatsapp_rs::client::payments` (India's UPI and
+  gateways, Brazil's Pix, links, Boleto and one-click; payment statuses come back as webhooks, see [coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md)).
 
 ## Related skills
 

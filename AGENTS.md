@@ -65,6 +65,7 @@ condition: every choice stays swappable. The rule:
 | `just skills-check` | every consumer skill's `Verified against meta-whatsapp-rs <sha>` stamp is a commit in HEAD's history, directly or listed as `Squashed-commit:` by a squash commit on main (the rest of the skill checks run in `just test`: `crates/meta-whatsapp-rs/tests/skills.rs`) |
 | `just skills-ts` | the server skills' TypeScript examples type-check against types generated from `crates/meta-whatsapp-server/openapi/v1.json` (Node pinned in `tools/skills-ts/.nvmrc`; part of `just ci`) |
 | `just squash-body <pr>` | the body of a PR's squash commit: its commits as `Squashed-commit:` lines plus their co-authors (CONTRIBUTING.md § Merging) |
+| `just docs-mcp` | serve this repository's docs and consumer skills over MCP's stdio transport (`tools/docs-mcp`: `list`, `search`, `read` by page or section; read-only, never `.meta-docs/`); registering it with an MCP client is `docs/dev-environment.md` § The docs MCP server |
 | `just meta-docs` | mirror Meta's docs as Markdown into `.meta-docs/` (gitignored): one request every 15 s (`--delay-secs`), backing off on HTTP 429, over an hour and a half; `--missing-only` retries just the pages its `README.md` lists as unavailable |
 
 Toolchain is pinned in `rust-toolchain.toml` (1.98.1, edition 2024); `just

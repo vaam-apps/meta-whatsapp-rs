@@ -1,0 +1,28 @@
+[package]
+name = "meta-whatsapp-docs-mcp"
+description = "An MCP server (stdio) serving meta-whatsapp-rs's docs and consumer skills: list, search, read a page or one section. A tool, not part of the library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# A tool run from a checkout (roadmap L22b), never published.
+publish = false
+
+# A binary only, on purpose: with no library target, no crate can depend
+# on it (`tests/stdio.rs` also checks that none under `crates/` names it).
+# A member of the root workspace, not a default one: `--workspace` recipes
+# (`just lint`, `just test`, `just doc`, `just deny`) cover it, a bare
+# `cargo build` in the root does not build it.
+[[bin]]
+name = "meta-whatsapp-docs-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# JSON-RPC 2.0 by hand over newline-delimited stdio: no MCP SDK, no async
+# runtime, nothing the root workspace does not already resolve.
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

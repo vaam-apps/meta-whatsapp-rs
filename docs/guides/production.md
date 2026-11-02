@@ -22,14 +22,14 @@ Everything stateful sits on two ports. The typed stores are built on
 | webhook dedup (`DedupGuard`) | `KvStore` | `wa.webhook.dedup` | Meta's retries are delivered again |
 | inbox history (`InboxSink`, `Inbox`) | `ConversationStore` | tables `wa_*` | the history |
 
-| | Memory | Postgres (`postgres`) | Redis (`redis`) |
-| --- | --- | --- | --- |
-| `KvStore` | `MemoryKvStore` | `PostgresKvStore` | `RedisKvStore` |
-| `ConversationStore` | `MemoryConversationStore` | `PostgresConversationStore` | — |
-| survives restarts, shared by instances | no | yes | yes, with persistence on |
-| expiry clock | the process | the database server | the Redis server |
-| maintenance | `apply_retention` (or a bot `RetentionSweeper`: by age and a cap per chat) on a schedule, when a retention is set | `migrate` at startup; `purge_expired()` every few minutes to hourly; `apply_retention` (or a bot `RetentionSweeper`) on a schedule, when a retention is set | eviction policy `noeviction`, on an instance of its own |
-| limits | one instance | refuses U+0000 in ids and keys (message content keeps it, as bytes and `json`: search on bytes, no payload indexes) | no built-in TLS |
+| | Memory | Postgres (`postgres`) | SQLite (`sqlite`) | Redis (`redis`) |
+| --- | --- | --- | --- | --- |
+| `KvStore` | `MemoryKvStore` | `PostgresKvStore` | `SqliteKvStore` | `RedisKvStore` |
+| `ConversationStore` | `MemoryConversationStore` | `PostgresConversationStore` | `SqliteConversationStore` | `RedisConversationStore` |
+| survives restarts, shared by instances | no | yes | survives restarts; the processes of one machine | yes, with persistence on |
+| expiry clock | the process | the database server | the process | the Redis server |
+| maintenance | `apply_retention` (or a bot `RetentionSweeper`: by age and a cap per chat) on a schedule, when a retention is set | `migrate` at startup; `purge_expired()` every few minutes to hourly; `apply_retention` (or a bot `RetentionSweeper`) on a schedule, when a retention is set | `migrate` at startup; `purge_expired()` now and then; `apply_retention` (or a bot `RetentionSweeper`) on a schedule, when a retention is set | eviction policy `noeviction`, on an instance of its own; `apply_retention` (one script per number) or a bot `RetentionSweeper` (one script per conversation) in quiet hours |
+| limits | one instance | refuses U+0000 in ids and keys (message content keeps it, as bytes and `json`: search on bytes, no payload indexes) | one machine, never a network file system; refuses U+0000 in message ids, contacts and phone number ids; writes one at a time | a conversation store's inbox on one shard (one hash tag); TLS through `RedisTls` |
 
 Postgres alone covers everything and is the simplest choice. Put the vault
 on Redis only with persistence (AOF or RDB): a Redis that forgets on
@@ -122,10 +122,44 @@ runs it against real Postgres and Redis.
 | system user token | your own number (OTP, order messages) | secret manager | generate a new one in Business Settings, deploy, revoke the old |
 | app secret | webhook signatures, the code exchange, the app token for `debug_token` | secret manager | list old and new in `SignatureVerifier::new` while rolling out, then drop the old |
 | verify token | webhook `GET` verification | secret manager | change it in the dashboard and in your config together |
-| vault key(s) | encrypting merchants' tokens, and a Solution Partner's credit ledger | secret manager, **not** the vault's database | `VaultKeys::new(new).with_previous(old)`, `vault.rotate(&waba_id)` for every WABA ever onboarded (offboarded ones too: the credit ledger outlives the token), `vault.rotate_business(&business_id)` for each business revoked by business id alone, then drop the old key |
+| vault key(s) | encrypting merchants' tokens, and a Solution Partner's credit ledger | secret manager, **not** the vault's database | at least yearly, at once on a suspected exposure ([below](#vault-key-cadence)): `VaultKeys::new(new).with_previous(old)`, `vault.rotate(&waba_id)` for every WABA ever onboarded (offboarded ones too: the credit ledger outlives the token), `vault.rotate_business(&business_id)` for each business revoked by business id alone, then drop the old key once none failed |
 | OTP pepper | keyed hashes of codes and numbers | secret manager, not the OTP database | invalidates outstanding codes and resets limits |
 | merchants' business tokens | acting as a merchant | the vault only | merchant reconnects (no refresh) |
 | two-step PINs | registering numbers | not stored by meta-whatsapp-rs; the examples ask the merchant per attempt | asked per attempt, never stored ([decided](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants) 4) |
+
+### Vault key cadence
+
+The vault key is yours to keep and to rotate (`OPEN_QUESTIONS.md` #9,
+decided: custody stays the integrator's, rotation on demand, the schedule
+the operator's). The cadence to keep:
+
+- **At least once a year**, on a date you put in your operations
+  calendar.
+- **At once on a suspected exposure**: a leaked environment, a secret
+  manager whose access you cannot account for, a departing operator who
+  held it, a backup of the key found where it should not be. Rotate
+  first, investigate second: a database dump together with the key opens
+  every merchant's token, so a stolen key is worth rotating even before
+  you know whether the database went too.
+- **Drop the old key only when a rotation reports no failure.** A record
+  sealed under a key you dropped never opens again: the merchant
+  reconnects, and a Solution Partner's credit ledger or revocation marker
+  is lost with it (an offboarded merchant's line can then no longer be
+  revoked from it). With the library: rotate every WABA ever onboarded
+  (`vault.rotate(&waba_id)`, offboarded ones too) and every business
+  revoked by business id alone (`vault.rotate_business(&business_id)`),
+  and keep the previous key until none of those calls fails. With the
+  service (`meta-whatsapp-server`): `POST /v1/admin/vault/rotate` or
+  `meta-whatsapp-server vault rotate` walks every bound WABA and, since
+  roadmap M3a, every record kept past a binding (the credit ledgers and
+  revocation markers of Solution Partner mode, which no binding names once
+  their WABA left); drop the old key only once both `failed` and
+  `failed_records` are empty (the command exits non-zero until they are).
+
+A rotation is safe to repeat: a record already under the active key is
+read, not rewritten. Keep the previous key in `WA_VAULT_PREVIOUS_KEYS`
+(or `VaultKeys::with_previous`) from the deploy that introduces the new
+one until the clean rotation.
 
 `AccessToken`, `AppSecret`, `VerifyToken`, `SecretBytes`, `SignupCode`,
 `TwoStepPin`, `OtpPepper` and `VaultKey` print `[REDACTED]` (or only an id)
@@ -482,23 +516,48 @@ notification queue on top must be idempotent itself: tag each message with
     store ranks rows on the existing `messages_conversation_idx` and
     takes the existing purge lock.
 - **Media conversion** (feature `ffmpeg`, off by default): Meta converts
-  nothing, so a recording becomes a voice message's Ogg Opus on your
-  side. `meta_whatsapp_adapters::media::FfmpegConverter` runs an
-  `ffmpeg` you install on the host (built with libopus; the library
+  nothing, so a recording becomes a voice message's Ogg Opus, an
+  image a sticker's static WebP or a JPEG or PNG under the 5 MB limit,
+  and a GIF an animated sticker's WebP, on your side.
+  `meta_whatsapp_adapters::media::FfmpegConverter` runs an `ffmpeg` you
+  install on the host (built with libopus, and libwebp for stickers,
+  which gives it the `libwebp` and `libwebp_anim` encoders; the library
   links none, and the service's image carries none, so its licence is
-  that of the build you choose). Point `with_program` at an absolute
-  path, call `check()` at startup so a missing binary or libopus fails
-  there (`ConversionError::BinaryMissing`, `EncoderMissing`) rather than
-  at the first upload, and bound how many conversions run at
-  once (each is a process on about a CPU core for up to its timeout; the
-  converter queues nothing). It caps each allocation in `ffmpeg` (16 MiB)
-  but not the process's total memory: give it a cgroup, or point
+  that of the build you choose). Point
+  `with_program` at an absolute path, call `check_for` with the formats
+  you convert to (`check()` for voice alone) at startup so a missing
+  binary or encoder fails there (`ConversionError::BinaryMissing`,
+  `EncoderMissing`) rather than at the first upload, and bound how many
+  conversions run at once (each is a process on about a CPU core for up
+  to its timeout, an image's or an animation's attempts one after
+  another; the converter
+  queues nothing). It caps each allocation in `ffmpeg` (16 MiB for
+  audio, 256 MiB for an image, which may have up to 32 Mi pixels, and
+  for an animation, whose whole file is one packet: a GIF of up to 2 Mi
+  pixels, 500 frames (100 of 512 × 512 or larger) and 10 s, which took
+  some 170 MB at worst) but not the process's total memory: give it a cgroup, or point
   `with_program` at a wrapper script that sets `ulimit -v` and then
-  `exec`s `ffmpeg` (`exec`, so that a timeout kills `ffmpeg` itself). The
+  `exec`s `ffmpeg` (`exec`, so that a timeout kills `ffmpeg` itself).
+  Before `ffmpeg` reads an image, the converter takes out what `ffmpeg`
+  would multiply in memory: a PNG's text chunks, a JPEG's metadata
+  segments (its EXIF reduced to the orientation, which is still
+  applied; XMP and comments dropped), and any colour profile but one of
+  at most 16 KiB (a JPEG's in a single chunk: a profile split over
+  several chunks is dropped, and that image loses its colour profile),
+  so that an image of a few hundred kilobytes cannot
+  take gigabytes (a 658 KB JPEG of ten crafted EXIF segments took ffmpeg
+  6.1 to 8.4 GB). A JPEG or PNG cut short is refused before `ffmpeg`
+  starts. The
   process inherits no environment but `PATH`; a build that needs
   `LD_LIBRARY_PATH` sets it in such a wrapper.
-  Its input and run time are bounded (64 MiB and 60 s by default), the
-  result to the 16 MiB upload limit, and `ffmpeg`'s own diagnostics are
+  Its input and run time are bounded (64 MiB and 60 s by default; a
+  sticker from a large photo spends most of it on a first attempt at the
+  photo's own size, about 18 s for 24 megapixels on 4 cores, and an
+  animated sticker re-encodes every frame at each attempt, so do not
+  lower it for stickers), the result to its format's limit (16 MiB for
+  voice, 100 000 bytes for a sticker, 500 000 for an animated one,
+  5 000 000 for an image), and
+  `ffmpeg`'s own diagnostics are
   never logged: they name files and URLs. Its failures are
   `Error::Conversion` (retry only `Timeout`; none was sent to Meta).
   CI proves it against a real `ffmpeg` (docs/dev-environment.md).

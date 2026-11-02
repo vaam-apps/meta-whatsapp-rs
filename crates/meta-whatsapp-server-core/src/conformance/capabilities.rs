@@ -24,8 +24,8 @@ use crate::authz::{AdminCaller, Authorizer, Caller};
 use crate::backend::Backend;
 use crate::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
-    NewApiKey, NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus,
-    WabaBinding,
+    NewApiKey, NewSignupAttempt, NumberBinding, NumberStatus, OtpSettings, PageRequest, Scope,
+    SignupAttempt, Tenant, TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
 use crate::store::{RecordStore, StoreResult};
 
@@ -477,6 +477,16 @@ impl RecordStore for MovesAfterRead {
     ) -> StoreResult<Option<Tenant>> {
         self.inner.update_tenant(id, name, status).await
     }
+    async fn otp_settings(&self, id: &TenantId) -> StoreResult<Option<OtpSettings>> {
+        self.inner.otp_settings(id).await
+    }
+    async fn set_otp_settings(
+        &self,
+        id: &TenantId,
+        settings: Option<&OtpSettings>,
+    ) -> StoreResult<bool> {
+        self.inner.set_otp_settings(id, settings).await
+    }
     async fn delete_tenant(&self, id: &TenantId) -> StoreResult<DeleteTenantOutcome> {
         self.inner.delete_tenant(id).await
     }
@@ -558,6 +568,45 @@ impl RecordStore for MovesAfterRead {
         status: NumberStatus,
     ) -> StoreResult<bool> {
         self.inner.set_waba_status_if(epoch, status).await
+    }
+    async fn set_credit_allocation_if(
+        &self,
+        epoch: &BindingEpoch,
+        allocation_config_id: &str,
+    ) -> StoreResult<bool> {
+        self.inner
+            .set_credit_allocation_if(epoch, allocation_config_id)
+            .await
+    }
+    async fn save_signup_attempt(&self, attempt: &NewSignupAttempt) -> StoreResult<bool> {
+        self.inner.save_signup_attempt(attempt).await
+    }
+    async fn signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<Option<SignupAttempt>> {
+        self.inner.signup_attempt(tenant, waba_id).await
+    }
+    async fn signup_attempts(
+        &self,
+        tenant: &TenantId,
+        page: &PageRequest,
+    ) -> StoreResult<Listing<SignupAttempt>> {
+        self.inner.signup_attempts(tenant, page).await
+    }
+    async fn delete_signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<bool> {
+        self.inner.delete_signup_attempt(tenant, waba_id).await
+    }
+    async fn record_vault_entry(&self, entry: &VaultEntry) -> StoreResult<()> {
+        self.inner.record_vault_entry(entry).await
+    }
+    async fn vault_entries(&self, page: &PageRequest) -> StoreResult<Listing<VaultEntry>> {
+        self.inner.vault_entries(page).await
     }
 }
 

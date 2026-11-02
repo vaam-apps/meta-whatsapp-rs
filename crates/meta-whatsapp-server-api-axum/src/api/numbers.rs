@@ -7,7 +7,7 @@
 //! | `GET /v1/numbers/{pn}` | `GET /{pn}?fields=display_phone_number,verified_name,quality_rating,name_status,throughput` |
 //! | `GET /v1/numbers/{pn}/profile` | `GET /{pn}/whatsapp_business_profile?fields=about,address,description,email,websites,vertical` |
 //! | `PATCH /v1/numbers/{pn}/profile` | `POST /{pn}/whatsapp_business_profile`, then the `GET` above |
-//! | `DELETE /v1/wabas/{waba_id}` | `DELETE /{waba_id}/subscribed_apps`; then the token and bindings are deleted |
+//! | `DELETE /v1/wabas/{waba_id}` | `DELETE /{waba_id}/subscribed_apps`; in Solution Partner mode, the credit line revoked (the library's `EmbeddedSignup::offboard`, with the partner's system token); then the token and bindings are deleted |
 //!
 //! Since roadmap S5c a number's details, its profile's read and change,
 //! and the disconnection are the core's
@@ -432,6 +432,11 @@ pub(crate) async fn update_profile(
 /// `DELETE /v1/wabas/{waba_id}`: disconnect. Unsubscribes the app from the
 /// WABA with its token; only then deletes the token and the bindings. When
 /// Meta refuses or fails, nothing is deleted.
+///
+/// In Solution Partner mode the partner's credit line is revoked between
+/// the two (roadmap M3a), with the partner's system token: a revocation
+/// that fails deletes nothing (its error carries `step:
+/// revoke_credit_line`), and the call can be repeated.
 #[utoipa::path(
     delete,
     path = "/v1/wabas/{waba_id}",
@@ -448,18 +453,24 @@ pub(crate) async fn update_profile(
         (status = 404, description = "`not_found`: no such WABA for this tenant", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required` (nothing deleted)", body = ErrorBody),
         (status = 429, description = "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling (nothing deleted)", body = ErrorBody),
-        (status = 502, description = "Unsubscribing failed: nothing deleted", body = ErrorBody),
+        (status = 502, description = "Unsubscribing failed, or, in Solution Partner mode, revoking the credit line (`step: revoke_credit_line`): nothing deleted", body = ErrorBody),
+        (status = 503, description = "`storage_unavailable`: the WABA's token or binding changed meanwhile (moved to another tenant: theirs left alone); retryable", body = ErrorBody),
         (status = 504, description = "`timeout`: nothing deleted", body = ErrorBody),
     )
 )]
 pub(crate) async fn disconnect_waba(
     State(state): State<Grant>,
+    caller: Caller,
     owned: OwnedWaba,
 ) -> Result<StatusCode, ApiError> {
     // The core's `Waba::disconnect`: a WABA moved since the capability was
     // made is `503`, retryable, and nothing is unsubscribed or deleted.
+    // In Solution Partner mode the credit line is revoked between the two
+    // (roadmap M3a), audited for the caller: a failed revocation deletes
+    // nothing.
     Waba::new(state.authz(), owned.capability(&state))?
         .observed_by(state.metrics())
+        .offboarded_by(state.signups(), &caller)
         .disconnect()
         .await?;
     Ok(StatusCode::NO_CONTENT)

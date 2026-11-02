@@ -44,6 +44,15 @@ pub const EVENT_DATA: &str = "data";
 pub const EVENT_DATA_BYTES: &str = "data_bytes";
 /// When the database received it (the server's clock).
 pub const EVENT_CREATED_AT: &str = "created_at";
+/// The media id it records as received (the core's
+/// `NewEvent::received_media`, roadmap M2e); absent for every other row.
+/// The Postgres column's name.
+pub const EVENT_MEDIA_ID: &str = "media_id";
+/// Beside [`EVENT_MEDIA_ID`] only: an `ObjectId` the inserting process
+/// drew, increasing within a process, which orders two rows of one media
+/// id received in the same millisecond ([`EVENT_CREATED_AT`] keeps
+/// milliseconds, where Postgres keeps microseconds).
+pub const EVENT_MEDIA_ORDER: &str = "media_order";
 
 /// A stream's highest sequence, stored or purged.
 pub const STREAM_LAST: &str = "last_sequence";
@@ -68,6 +77,9 @@ pub const INDEX_STREAM_SEQUENCE: &str = "wa_server_events_stream_sequence";
 pub const INDEX_DEDUP_KEY: &str = "wa_server_events_dedup_key";
 /// Retention's cutoff (the Postgres index's name).
 pub const INDEX_CREATED_AT: &str = "wa_server_events_created_idx";
+/// The rows that record a media id, newest first (partial: those rows
+/// only; the Postgres index's name).
+pub const INDEX_MEDIA: &str = "wa_server_events_media_idx";
 
 #[cfg(test)]
 mod tests {
@@ -93,6 +105,8 @@ mod tests {
             (EVENT_DATA, "data"),
             (EVENT_DATA_BYTES, "data_bytes"),
             (EVENT_CREATED_AT, "created_at"),
+            (EVENT_MEDIA_ID, "media_id"),
+            (EVENT_MEDIA_ORDER, "media_order"),
             (STREAM_LAST, "last_sequence"),
             (STREAM_PURGED, "purged_through"),
             (WABA_TENANT, "tenant_id"),
@@ -106,6 +120,7 @@ mod tests {
             (INDEX_STREAM_SEQUENCE, "\x77a_server_events_stream_sequence"),
             (INDEX_DEDUP_KEY, "\x77a_server_events_dedup_key"),
             (INDEX_CREATED_AT, "\x77a_server_events_created_idx"),
+            (INDEX_MEDIA, "\x77a_server_events_media_idx"),
         ];
         for (name, pinned) in names {
             assert_eq!(name, pinned);

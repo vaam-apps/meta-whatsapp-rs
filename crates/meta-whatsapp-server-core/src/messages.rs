@@ -9,7 +9,10 @@
 //! `text`; `image`, `video`, `audio`, `document`, `sticker` by uploaded
 //! `id` or `https://` `link` (Meta fetches it, never the service);
 //! `location`, `contacts`, `reaction`; `template` (Meta's object);
-//! `interactive` `button`, `list` and `cta_url`. Any other type, Direct
+//! `interactive` `button`, `list` and `cta_url`, and the payment messages
+//! `order_details` and `order_status` (roadmap P2: their `parameters`
+//! Meta's object, read into the library's payment types with no key
+//! dropped and checked by their currency's rules). Any other type, Direct
 //! Send included, is `422 unsupported_message_type`
 //! ([`refuse_unsupported`], for an adapter whose request is JSON). It
 //! carries the request's values as the request did, free of any API
@@ -33,6 +36,10 @@ use meta_whatsapp_rs::client::messages::{
     ContactUrl, CtaUrl, Document, Header, Image, Interactive, ListMessage, ListRow, ListSection,
     Location, MediaSource, MessageContent, OutboundMessage, Reaction, ReplyButton, ReplyButtons,
     SendResponse, SentContact, Sticker, Text, Video,
+};
+use meta_whatsapp_rs::client::payments::{
+    OrderDetails, OrderDetailsParameters, OrderStatus, OrderUpdate, PaymentUpdate,
+    PaymentUpdateStatus,
 };
 use meta_whatsapp_rs::client::templates::TemplateMessage;
 use meta_whatsapp_rs::core::ids::{GroupId, MediaId, MessageId, UserId, WaId};
@@ -83,7 +90,8 @@ pub enum MessageType {
     Reaction,
     /// `template`.
     Template,
-    /// `interactive` (`button`, `list`, `cta_url`).
+    /// `interactive` (`button`, `list`, `cta_url`, `order_details`,
+    /// `order_status`).
     Interactive,
 }
 
@@ -314,14 +322,23 @@ pub enum InteractiveType {
     List,
     /// A URL button (`messages/interactive-cta-url-messages`).
     CtaUrl,
+    /// An order to review and pay (`payments/payments-in/pg`,
+    /// `payments/payments-in/upi-intent`, `payments/payments-in/payment-links`,
+    /// `payments/payments-br/orders`; roadmap P2).
+    OrderDetails,
+    /// An order's new status (`payments/payments-in/pg`, "Step 6",
+    /// `payments/payments-br/orders`; roadmap P2).
+    OrderStatus,
 }
 
 impl InteractiveType {
     /// Every interactive type, by its name (`interactive.type`).
-    pub const ALL: [(&'static str, Self); 3] = [
+    pub const ALL: [(&'static str, Self); 5] = [
         ("button", Self::Button),
         ("list", Self::List),
         ("cta_url", Self::CtaUrl),
+        ("order_details", Self::OrderDetails),
+        ("order_status", Self::OrderStatus),
     ];
 }
 
@@ -419,9 +436,21 @@ pub struct CtaUrlParameters {
     pub url: String,
 }
 
+/// An interactive message's `action.parameters`: a URL button's, or a
+/// payment message's, in Meta's JSON.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ActionParameters {
+    /// `cta_url`'s.
+    CtaUrl(CtaUrlParameters),
+    /// `order_details`' or `order_status`', as Meta's pages write them,
+    /// read into the library's payment types with no key dropped.
+    Order(serde_json::Map<String, Value>),
+}
+
 /// An interactive message's `action`: `buttons` for `button`; `button` and
 /// `sections` for `list`; `name` (`cta_url`) and `parameters` for
-/// `cta_url`.
+/// `cta_url`; `name` (`review_and_pay`, `review_order`) and `parameters`
+/// for `order_details` and `order_status`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct InteractiveAction {
     /// Reply buttons, 1 to 3.
@@ -430,13 +459,14 @@ pub struct InteractiveAction {
     pub button: Option<String>,
     /// The list's sections.
     pub sections: Option<Vec<ListSectionObject>>,
-    /// `cta_url`.
+    /// `cta_url`, `review_and_pay` or `review_order`.
     pub name: Option<String>,
-    /// The URL button.
-    pub parameters: Option<CtaUrlParameters>,
+    /// The URL button, or the payment message's parameters.
+    pub parameters: Option<ActionParameters>,
 }
 
-/// `interactive`, as Meta writes it: `button`, `list` or `cta_url`.
+/// `interactive`, as Meta writes it: `button`, `list`, `cta_url`,
+/// `order_details` or `order_status`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InteractiveObject {
     /// Which kind (Meta's `type`).
@@ -508,6 +538,104 @@ impl SendMessage {
             interactive: None,
             reply_to: None,
             callback_data: None,
+        }
+    }
+}
+
+/// A reply to a conversation, as the request carried it (roadmap M2a): a
+/// [`SendMessage`] without `to`, as the conversation names its contact.
+/// `kind` (the request's `type`) names the one content object present.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplyMessage {
+    /// Which content object follows.
+    pub kind: MessageType,
+    /// For `text`.
+    pub text: Option<TextObject>,
+    /// For `image`.
+    pub image: Option<ImageObject>,
+    /// For `video`.
+    pub video: Option<VideoObject>,
+    /// For `audio`.
+    pub audio: Option<AudioObject>,
+    /// For `document`.
+    pub document: Option<DocumentObject>,
+    /// For `sticker`.
+    pub sticker: Option<StickerObject>,
+    /// For `location`.
+    pub location: Option<LocationObject>,
+    /// For `contacts`: 1 to 257 cards.
+    pub contacts: Option<Vec<ContactCard>>,
+    /// For `reaction`.
+    pub reaction: Option<ReactionObject>,
+    /// For `template`: Meta's template object (`name`, `language`,
+    /// `components`).
+    pub template: Option<Value>,
+    /// For `interactive`.
+    pub interactive: Option<InteractiveObject>,
+    /// Reply to this message of the conversation (`wamid.…`); not with
+    /// `reaction`.
+    pub reply_to: Option<String>,
+    /// Echoed in this message's status events (Meta's
+    /// `biz_opaque_callback_data`).
+    pub callback_data: Option<String>,
+}
+
+impl ReplyMessage {
+    /// A reply of `kind`, with no content object yet.
+    pub fn new(kind: MessageType) -> Self {
+        Self {
+            kind,
+            text: None,
+            image: None,
+            video: None,
+            audio: None,
+            document: None,
+            sticker: None,
+            location: None,
+            contacts: None,
+            reaction: None,
+            template: None,
+            interactive: None,
+            reply_to: None,
+            callback_data: None,
+        }
+    }
+
+    /// The same content as a send with no recipient (every field named, so
+    /// a field on one side only fails to compile).
+    fn into_send(self) -> SendMessage {
+        let Self {
+            kind,
+            text,
+            image,
+            video,
+            audio,
+            document,
+            sticker,
+            location,
+            contacts,
+            reaction,
+            template,
+            interactive,
+            reply_to,
+            callback_data,
+        } = self;
+        SendMessage {
+            to: RecipientObject::default(),
+            kind,
+            text,
+            image,
+            video,
+            audio,
+            document,
+            sticker,
+            location,
+            contacts,
+            reaction,
+            template,
+            interactive,
+            reply_to,
+            callback_data,
         }
     }
 }
@@ -814,13 +942,140 @@ fn interactive(value: InteractiveObject) -> Result<Interactive, ServiceError> {
             if action.name.as_deref() != Some("cta_url") {
                 return Err(ServiceError::invalid("interactive.action.name"));
             }
-            let parameters = required("interactive.action.parameters", action.parameters)?;
+            let ActionParameters::CtaUrl(parameters) =
+                required("interactive.action.parameters", action.parameters)?
+            else {
+                return Err(ServiceError::invalid("interactive.action.parameters"));
+            };
             let mut message = CtaUrl::new(body, parameters.display_text, parameters.url);
             message.header = value.header.map(header).transpose()?;
             message.footer = footer;
             Interactive::CtaUrl(message)
         }
+        InteractiveType::OrderDetails => {
+            only_payment_keys(&action)?;
+            if action.name.as_deref() != Some("review_and_pay") {
+                return Err(ServiceError::invalid("interactive.action.name"));
+            }
+            let parameters: OrderDetailsParameters =
+                meta_object(PAYMENT_PARAMETERS, &order_parameters(action.parameters)?)?;
+            let mut message = OrderDetails::new(body, parameters);
+            message.header = value.header.map(order_header).transpose()?;
+            message.footer = footer;
+            message.into()
+        }
+        InteractiveType::OrderStatus => {
+            only_payment_keys(&action)?;
+            if action.name.as_deref() != Some("review_order") {
+                return Err(ServiceError::invalid("interactive.action.name"));
+            }
+            // No page documents a header with fields for an order status
+            // (Brazil's table lists one with none): not sent.
+            if value.header.is_some() {
+                return Err(ServiceError::invalid("interactive.header"));
+            }
+            let parameters: OrderStatusParameters =
+                meta_object(PAYMENT_PARAMETERS, &order_parameters(action.parameters)?)?;
+            Interactive::OrderStatus(parameters.into_message(body, footer))
+        }
     })
+}
+
+/// Where a payment message's parameters are, in the request.
+const PAYMENT_PARAMETERS: &str = "interactive.action.parameters";
+
+/// A payment message's `action` holds `name` and `parameters` only: a
+/// button's, a list's keys would be dropped.
+fn only_payment_keys(action: &InteractiveAction) -> Result<(), ServiceError> {
+    for (field, present) in [
+        ("interactive.action.buttons", action.buttons.is_some()),
+        ("interactive.action.button", action.button.is_some()),
+        ("interactive.action.sections", action.sections.is_some()),
+    ] {
+        if present {
+            return Err(ServiceError::invalid(field));
+        }
+    }
+    Ok(())
+}
+
+/// A payment message's `parameters`, Meta's object.
+fn order_parameters(parameters: Option<ActionParameters>) -> Result<Value, ServiceError> {
+    match required(PAYMENT_PARAMETERS, parameters)? {
+        ActionParameters::Order(object) => Ok(Value::Object(object)),
+        ActionParameters::CtaUrl(_) => Err(ServiceError::invalid(PAYMENT_PARAMETERS)),
+    }
+}
+
+/// An `order_details` header: an image, by uploaded `id` or `https://`
+/// `link` (the payments pages document no other; Brazil's takes a link
+/// only, which the library checks).
+fn order_header(value: InteractiveHeader) -> Result<MediaSource, ServiceError> {
+    let InteractiveHeader {
+        kind,
+        text,
+        image,
+        video,
+        document,
+    } = value;
+    if kind != HeaderType::Image || text.is_some() || video.is_some() || document.is_some() {
+        return Err(ServiceError::invalid("interactive.header"));
+    }
+    let image = image.ok_or_else(|| ServiceError::invalid("interactive.header.image"))?;
+    if image.filename.is_some() {
+        return Err(ServiceError::invalid("interactive.header.image.filename"));
+    }
+    media_source("interactive.header.image", image.id, image.link)
+}
+
+/// An `order_status` message's `parameters`, as Meta's pages write them
+/// (`payments/payments-in/pg`, "Step 6"; `payments/payments-br/orders`):
+/// read with no key dropped.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct OrderStatusParameters {
+    reference_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    order: Option<OrderUpdate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    payment: Option<PaymentUpdateObject>,
+}
+
+/// `parameters.payment` of a Brazil `order_status` message.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct PaymentUpdateObject {
+    status: PaymentUpdateStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timestamp: Option<u64>,
+}
+
+impl OrderStatusParameters {
+    /// The library's message. The wire names no currency, and the library
+    /// checks an order status by its order's (`OrderStatus::currency`, not
+    /// sent): it is checked by Brazil's rules, the wider (India's refuse a
+    /// `payment` update, a `pending` status, a missing `order` and a
+    /// `reference_id` longer than 35 characters, which Brazil's page
+    /// allows), so an India order's status breaking only India's rules is
+    /// left for Meta to refuse. The body's and footer's limits, the
+    /// `reference_id`'s alphabet and its 60 characters, an order update's
+    /// description, are checked either way.
+    fn into_message(self, body: String, footer: Option<String>) -> OrderStatus {
+        let Self {
+            reference_id,
+            order,
+            payment,
+        } = self;
+        let mut message = OrderStatus::brl(body, reference_id);
+        message.order = order;
+        message.payment = payment.map(|p| {
+            let update = PaymentUpdate::new(p.status);
+            match p.timestamp {
+                Some(timestamp) => update.timestamp(timestamp),
+                None => update,
+            }
+        });
+        message.footer = footer;
+        message
+    }
 }
 
 /// The one content object `type` names, never another.
@@ -857,9 +1112,34 @@ fn only_the_named_object(request: &SendMessage) -> Result<(), ServiceError> {
 /// # Errors
 ///
 /// `422 invalid_request` on the field at fault.
-pub fn message(request: SendMessage) -> Result<OutboundMessage, ServiceError> {
+pub fn message(mut request: SendMessage) -> Result<OutboundMessage, ServiceError> {
     only_the_named_object(&request)?;
-    let recipient = recipient(request.to)?;
+    let recipient = recipient(std::mem::take(&mut request.to))?;
+    build(recipient, request)
+}
+
+/// The library's message for a reply's `request`, addressed to
+/// `recipient` (the conversation's contact: the library's
+/// `Inbox::recipient`, never the request's word), checked as [`message`]
+/// checks a send: one content object, the one `type` names; the content
+/// object; then the library's checks, on the request's names for its
+/// fields (`reply_to`, `callback_data`).
+///
+/// # Errors
+///
+/// `422 invalid_request` on the field at fault.
+pub fn reply_message(
+    request: ReplyMessage,
+    recipient: Recipient,
+) -> Result<OutboundMessage, ServiceError> {
+    let request = request.into_send();
+    only_the_named_object(&request)?;
+    build(recipient, request)
+}
+
+/// The library's message of `request`'s content, to `recipient` (its `to`
+/// is not read: the caller read it into `recipient`, or has none).
+fn build(recipient: Recipient, request: SendMessage) -> Result<OutboundMessage, ServiceError> {
     let content: MessageContent = match request.kind {
         MessageType::Text => {
             let text = required("text", request.text)?;
@@ -1127,6 +1407,135 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&ok).unwrap()["to"],
             serde_json::json!("+16505551234")
+        );
+    }
+
+    /// A payment interactive (roadmap P2) of `kind`, with Meta's
+    /// `parameters` and `name`.
+    fn order(kind: InteractiveType, name: &str, parameters: serde_json::Value) -> SendMessage {
+        let serde_json::Value::Object(parameters) = parameters else {
+            panic!("an object");
+        };
+        let mut message = SendMessage::new(phone("+919876543210"), MessageType::Interactive);
+        message.interactive = Some(InteractiveObject {
+            kind,
+            header: None,
+            body: InteractiveText {
+                text: "your-text-body-content".to_owned(),
+            },
+            footer: None,
+            action: InteractiveAction {
+                name: Some(name.to_owned()),
+                parameters: Some(ActionParameters::Order(parameters)),
+                ..InteractiveAction::default()
+            },
+        });
+        message
+    }
+
+    /// `payments-in/pg`, step 6, and `payments-br/offsite-pix`'s simplified
+    /// order: read into the library's types and sent as the pages print
+    /// them; a key the library would drop, a wrong action name, a header on
+    /// an order status, a URL button's parameters, refused on their field.
+    /// Decisive: the two arms of `interactive`, `meta_object` on their
+    /// parameters, and their checks.
+    #[test]
+    fn payment_interactives_are_read_whole_and_checked() {
+        use serde_json::json;
+        let status = json!({"reference_id": "reference-id-value",
+            "order": {"status": "processing", "description": "optional-text"}});
+        let built = message(order(
+            InteractiveType::OrderStatus,
+            "review_order",
+            status.clone(),
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&built).unwrap()["interactive"],
+            json!({"type": "order_status", "body": {"text": "your-text-body-content"},
+                   "action": {"name": "review_order", "parameters": status}})
+        );
+        let pix = json!({
+          "reference_id": "unique-reference-id",
+          "type": "digital-goods",
+          "payment_type": "br",
+          "payment_settings": [{"type": "pix_dynamic_code", "pix_dynamic_code": {
+            "code": "00020101021226700014br.gov.bcb.pix2548pix.example.com...",
+            "merchant_name": "Account holder name", "key": "39580525000189", "key_type": "CNPJ"}}],
+          "currency": "BRL",
+          "total_amount": {"value": 50000, "offset": 100}
+        });
+        let built = message(order(
+            InteractiveType::OrderDetails,
+            "review_and_pay",
+            pix.clone(),
+        ))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&built).unwrap()["interactive"]["action"],
+            json!({"name": "review_and_pay", "parameters": pix})
+        );
+        let mut dropped = pix.clone();
+        dropped["refrence_id"] = json!("typo");
+        let mut header = order(InteractiveType::OrderStatus, "review_order", status.clone());
+        header.interactive.as_mut().unwrap().header = Some(InteractiveHeader {
+            kind: HeaderType::Text,
+            text: Some("h".to_owned()),
+            image: None,
+            video: None,
+            document: None,
+        });
+        let mut cta = order(InteractiveType::OrderDetails, "review_and_pay", pix.clone());
+        cta.interactive.as_mut().unwrap().action.parameters =
+            Some(ActionParameters::CtaUrl(CtaUrlParameters {
+                display_text: "Pay".to_owned(),
+                url: "https://example.com".to_owned(),
+            }));
+        let mut india_pending = status.clone();
+        india_pending["order"]["status"] = json!("pending");
+        for (request, field) in [
+            (
+                order(InteractiveType::OrderDetails, "review_and_pay", dropped),
+                "interactive.action.parameters.refrence_id",
+            ),
+            (
+                order(InteractiveType::OrderDetails, "review_order", pix.clone()),
+                "interactive.action.name",
+            ),
+            (
+                order(
+                    InteractiveType::OrderStatus,
+                    "review_and_pay",
+                    status.clone(),
+                ),
+                "interactive.action.name",
+            ),
+            (header, "interactive.header"),
+            (cta, "interactive.action.parameters"),
+            (
+                order(
+                    InteractiveType::OrderStatus,
+                    "review_order",
+                    json!({"reference_id": "x".repeat(61)}),
+                ),
+                "interactive.action.parameters.reference_id",
+            ),
+        ] {
+            assert_eq!(
+                message(request).unwrap_err().field(),
+                Some(field),
+                "{field}"
+            );
+        }
+        // The wire names no currency: a `pending` order status passes, as
+        // Brazil's rules allow it (India's refusal is Meta's).
+        assert!(
+            message(order(
+                InteractiveType::OrderStatus,
+                "review_order",
+                india_pending
+            ))
+            .is_ok()
         );
     }
 

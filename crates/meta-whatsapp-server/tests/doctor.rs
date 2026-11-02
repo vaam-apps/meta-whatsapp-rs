@@ -27,6 +27,7 @@ use meta_whatsapp_server::config::{Env, NotUnicode, Storage};
 use meta_whatsapp_server::doctor::{Doctor, Report, Status};
 use meta_whatsapp_server::model::TenantId;
 use meta_whatsapp_server::serve::{BackendFactory, BuiltinBackends};
+use meta_whatsapp_server::store::EventNotifier;
 use meta_whatsapp_server::store::{
     Backend, BackendKind, IdempotencyRecords, Janitor, LeaderLock, MemoryBackend, Outbox,
     RecordStore, SchemaMigrator,
@@ -152,6 +153,9 @@ impl Backend for Shared {
     }
     fn outbox(&self) -> Arc<dyn Outbox> {
         panic!("doctor asked for the outbox")
+    }
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        panic!("doctor asked for the notifier")
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         panic!("doctor asked for a lock")
@@ -1261,4 +1265,110 @@ async fn live_postgres_a_waba_listing_failure_shows_no_database_text() {
         "the bound WABAs cannot be listed: the storage backend failed",
     );
     assert_eq!(graph.remaining(), 0);
+}
+
+// ─── OTP ───────────────────────────────────────────────────────────────
+
+/// `otp.default_tenant` (roadmap M3c's review): with
+/// `WA_SERVER_OTP_DEFAULT_TENANT` set, a tenant that does not exist, is
+/// suspended, has no OTP settings, or whose settings name a number it no
+/// longer holds warns, naming it (`serve` starts, and only the tenants
+/// borrowing its settings get `409 otp_not_configured`); a default tenant
+/// holding its sending number is `OK`; unset, there is no such check.
+/// Never a failure, and no Graph call.
+#[tokio::test]
+async fn a_default_otp_tenant_that_cannot_lend_warns() {
+    use meta_whatsapp_rs::core::ids::PhoneNumberId;
+    use meta_whatsapp_server::model::{OtpSettings, TenantStatus};
+    const PLATFORM: &str = "platform";
+    const PN: &str = "106540352242922";
+    let memory = MemoryBackend::new();
+    let records = memory.records();
+    let platform = TenantId::parse(PLATFORM).unwrap();
+    records.create_tenant(&platform, "Platform").await.unwrap();
+    let number = PhoneNumberId::new(PN).unwrap();
+    records
+        .bind_waba(
+            &platform,
+            &WabaId::new(WABA).unwrap(),
+            std::slice::from_ref(&number),
+        )
+        .await
+        .unwrap();
+    let backend: Arc<dyn Backend> = Arc::new(Shared(memory));
+    // No app id: the Graph checks are skipped, this one is not.
+    let env = |tenant: Option<&str>| {
+        let env = production().unset("WA_APP_ID");
+        match tenant {
+            Some(tenant) => env.set("WA_SERVER_OTP_DEFAULT_TENANT", tenant),
+            None => env,
+        }
+    };
+    let otp = |report: &Report| report.get("otp.default_tenant").cloned();
+    let run = |tenant: Option<&'static str>| {
+        let backend = Arc::clone(&backend);
+        async move {
+            let graph = ScriptedTransport::new();
+            let report = doctor(&env(tenant), &Opens(backend), &graph).await;
+            assert!(graph.requests().is_empty());
+            report
+        }
+    };
+
+    assert_eq!(otp(&run(None).await), None, "unset: no check");
+    let says = |report: &Report, status: Status, says: &str| {
+        let (got, detail) = check(report, "otp.default_tenant");
+        assert_eq!(got, status, "{detail}");
+        assert!(detail.contains(says), "`{detail}` lacks `{says}`");
+    };
+    let missing = run(Some("nobody")).await;
+    says(&missing, Status::Warn, "names nobody, which does not exist");
+    says(&missing, Status::Warn, "409 otp_not_configured");
+    says(
+        &run(Some(PLATFORM)).await,
+        Status::Warn,
+        "has no OTP settings",
+    );
+
+    let settings = OtpSettings::new(number.clone(), "login_code", "en_US");
+    assert!(
+        records
+            .set_otp_settings(&platform, Some(&settings))
+            .await
+            .unwrap()
+    );
+    says(
+        &run(Some(PLATFORM)).await,
+        Status::Ok,
+        "platform, sending from 106540352242922",
+    );
+    records
+        .update_tenant(&platform, None, Some(TenantStatus::Suspended))
+        .await
+        .unwrap();
+    says(&run(Some(PLATFORM)).await, Status::Warn, "is suspended");
+    records
+        .update_tenant(&platform, None, Some(TenantStatus::Active))
+        .await
+        .unwrap();
+    // The number moves away.
+    let other = TenantId::parse("merchant-42").unwrap();
+    records.create_tenant(&other, "Merchant 42").await.unwrap();
+    records
+        .unbind_waba(&WabaId::new(WABA).unwrap())
+        .await
+        .unwrap();
+    records
+        .bind_waba(
+            &other,
+            &WabaId::new(WABA).unwrap(),
+            std::slice::from_ref(&number),
+        )
+        .await
+        .unwrap();
+    says(
+        &run(Some(PLATFORM)).await,
+        Status::Warn,
+        "name 106540352242922, which it no longer holds",
+    );
 }

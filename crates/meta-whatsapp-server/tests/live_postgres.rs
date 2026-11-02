@@ -29,6 +29,7 @@ use meta_whatsapp_server::model::{AllowedTenants, Scope, TenantId};
 use meta_whatsapp_server::store::events::NewEvent;
 use meta_whatsapp_server::store::{Outbox as EventStore, PgEventStore, PgStore, migrate};
 use meta_whatsapp_server_core::conformance::outbox as outbox_suite;
+use serde_json::json;
 
 /// An instance of the service on the test database: everything on
 /// Postgres.
@@ -36,6 +37,159 @@ async fn harness(db: &TestDb) -> Harness {
     let pool = db.pool(10).await;
     migrate(&pool).await.unwrap();
     Harness::with(Stores::postgres(&pool))
+}
+
+/// Acceptance test M2.1 on Postgres (roadmap M2a): an inbound webhook,
+/// the conversation list, the history, a reply within the window recorded
+/// `accepted`, which a status webhook moves to `delivered`; a free-form
+/// reply outside the window `409` with zero requests
+/// (`common::inbox::m2_1`).
+/// M3.5's decisive case on Postgres (roadmap M3c): the tenants' OTP
+/// settings in `wa_server_tenants.settings`, the library's codes in the
+/// Postgres key/value store; tenant A's code verifies at no other tenant
+/// on the same number.
+#[tokio::test]
+async fn live_postgres_m3_5_a_code_verifies_at_no_other_tenant_on_the_same_number() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(10).await;
+    migrate(&pool).await.unwrap();
+    let h = Harness::with_stores_and_settings(
+        Stores::postgres(&pool),
+        meta_whatsapp_server::state::Settings {
+            otp: Some(common::otp_deployment(Some(common::otp::PLATFORM))),
+            ..common::test_settings()
+        },
+    );
+    common::otp::a_code_verifies_at_no_other_tenant_on_the_same_number(&h).await;
+    // Stored as the layout pins it, under the tenant's `settings`.
+    let stored: serde_json::Value =
+        sqlx::query_scalar("SELECT settings -> 'otp' FROM wa_server_tenants WHERE id = 'platform'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored["v"], 1);
+    assert_eq!(stored["phone_number_id"], "106540352242922");
+    // No code and no phone number in any row the service or the library
+    // keeps: the codes are keyed hashes.
+    let dump: String = sqlx::query_scalar(
+        "SELECT coalesce(string_agg(t::text, ' '), '') FROM ( \
+           SELECT row_to_json(k)::text AS t FROM wa_kv k \
+           UNION ALL SELECT row_to_json(i)::text FROM wa_server_idempotency i \
+           UNION ALL SELECT row_to_json(s)::text FROM wa_server_tenants s) rows",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!dump.contains("6505551234"), "a phone number is stored");
+}
+
+#[tokio::test]
+async fn live_postgres_m2_1_an_inbound_message_is_listed_read_and_answered() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::inbox::m2_1(&harness(&db).await).await;
+}
+
+/// Roadmap M2e's decisive case on Postgres: the media id received by
+/// another tenant's number (`wa_server_events.media_id`, migration 7) is
+/// `404` with zero requests; the receiving tenant downloads it without
+/// `phone_number_id` (`common::media`).
+#[tokio::test]
+async fn live_postgres_another_tenants_received_media_id_is_not_found_with_no_request() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::media::another_tenants_received_media_id_is_not_found_with_no_request(
+        &harness(&db).await,
+    )
+    .await;
+}
+
+/// The binding epoch on Postgres (roadmap M2a, decision D10): a moved
+/// number's history is hidden from its new tenant, and kept.
+#[tokio::test]
+async fn live_postgres_a_moved_numbers_history_is_hidden_from_its_new_tenant() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::inbox::a_moved_numbers_history_is_hidden_from_its_new_tenant(&harness(&db).await).await;
+}
+
+/// Roadmap M2g on Postgres, decisive: a message of the number's previous
+/// holder is `404` by id to the new holder, its window is not shown, and
+/// no receipt goes for it (`common::inbox`).
+#[tokio::test]
+async fn live_postgres_the_previous_holders_message_window_and_receipt_never_reach_the_new_holder()
+{
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::inbox::the_previous_holders_message_window_and_receipt_never_reach_the_new_holder(
+        &harness(&db).await,
+    )
+    .await;
+}
+
+/// Roadmap M2g on Postgres, decisive: after the read route, `unread` is 0,
+/// and Meta got one read receipt for the latest inbound message only with
+/// `notify_customer`; its key replays (`common::inbox`).
+#[tokio::test]
+async fn live_postgres_the_read_route_resets_unread_and_receipts_the_latest_inbound_message() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::inbox::the_read_route_resets_unread_and_receipts_the_latest_inbound_message(
+        &harness(&db).await,
+    )
+    .await;
+}
+
+/// Roadmap M2h on Postgres: a number migrated between two tenants' WABAs,
+/// neither WABA moving, shows its new tenant none of the previous one's
+/// history, and keeps it.
+#[tokio::test]
+async fn live_postgres_a_number_migrated_between_two_tenants_wabas_hides_its_history() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history(
+        &harness(&db).await,
+    )
+    .await;
+}
+
+/// [`harness`] on a pool whose sessions are named `app`, for
+/// [`until_waiting`].
+async fn named_harness(db: &TestDb, app: &str) -> Harness {
+    let pool = db.named_pool(10, app).await;
+    migrate(&pool).await.unwrap();
+    Harness::with(Stores::postgres(&pool))
+}
+
+/// Wait until `n` sessions named `app` wait on a lock, or `done` says the
+/// racing operation finished without waiting. A wait, not a sleep: on a
+/// slow runner a fixed sleep can end before the session reaches its lock.
+async fn until_waiting(db: &TestDb, app: &str, n: i64, done: impl Fn() -> bool) {
+    use std::time::Duration;
+    let watch = db.pool(1).await;
+    for _ in 0..3000 {
+        let waiting: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pg_stat_activity \
+             WHERE application_name = $1 AND wait_event_type = 'Lock'",
+        )
+        .bind(app)
+        .fetch_one(&watch)
+        .await
+        .unwrap();
+        if waiting >= n || done() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{n} sessions of {app} never waited on a lock");
 }
 
 /// The attach's confirmation on Postgres (records and vault): an attach
@@ -92,6 +246,23 @@ async fn live_postgres_another_tenants_number_is_not_found_before_the_vault() {
             "/v1/wabas/102290129340398",
         )
         .key(&b),
+        // Roadmap P2: the payment routes, by WABA and by number.
+        Call::get("/v1/wabas/102290129340398/payment-configurations").key(&b),
+        Call::get("/v1/wabas/102290129340398/payment-configurations/test-payment-configuration")
+            .key(&platform)
+            .tenant("tenant-b"),
+        Call::get("/v1/numbers/106540352242922/payments/test-payment-configuration/BM345A-12")
+            .key(&b),
+        Call::new(
+            meta_whatsapp_rs::webhooks::axum::http::Method::POST,
+            "/v1/numbers/106540352242922/payments/refunds",
+        )
+        .key(&b)
+        .header("idempotency-key", "refund-b-1")
+        .json(
+            &json!({"reference_id": "BM345A-12", "payment_config_id": "test-payment-configuration",
+                      "amount": {"currency": "INR", "value": "100", "offset": "100"}}),
+        ),
     ] {
         let reply = h.call(call).await;
         assert_eq!(
@@ -101,6 +272,43 @@ async fn live_postgres_another_tenants_number_is_not_found_before_the_vault() {
     }
     assert_eq!(h.kv.vault_reads(), before);
     assert!(h.graph.requests().is_empty());
+}
+
+/// Roadmap P2 on Postgres: a key with the new `payments` scope is stored
+/// and read back (`wa_server_api_keys.scopes`), and it reaches its own
+/// WABA's payment configurations with that WABA's token; a key without it
+/// is `403 forbidden`.
+#[tokio::test]
+async fn live_postgres_a_payments_key_reaches_its_wabas_configurations() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let h = harness(&db).await;
+    h.tenant("tenant-a").await;
+    h.connect(
+        "tenant-a",
+        "102290129340398",
+        &["106540352242922"],
+        "TOKEN-OF-A",
+    )
+    .await;
+    let payments = h.tenant_key("tenant-a", &[Scope::Payments]).await;
+    let send = h.tenant_key("tenant-a", &[Scope::Send]).await;
+    let path = "/v1/wabas/102290129340398/payment-configurations";
+    let refused = h.call(Call::get(path).key(&send)).await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text);
+    h.graph
+        .push_json(200, json!({"data": [{"payment_configurations": []}]}));
+    let listed = h.call(Call::get(path).key(&payments)).await;
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);
+    assert_eq!(listed.json(), json!({"data": []}));
+    let request = h.graph.last_request().unwrap();
+    assert_eq!(
+        request.path(),
+        "/v25.0/102290129340398/payment_configurations"
+    );
+    assert_eq!(request.bearer(), Some("TOKEN-OF-A"));
+    assert_eq!(h.graph.remaining(), 0);
 }
 
 /// The value of a metric series of `h`, 0 when absent.
@@ -721,12 +929,13 @@ async fn live_postgres_an_event_whose_binding_moved_before_its_insert_is_nobodys
 #[tokio::test]
 async fn live_postgres_an_unbinding_waits_for_an_insert_in_flight() {
     use meta_whatsapp_rs::core::ids::WabaId;
-    use std::time::Duration;
     let Some(db) = TestDb::new().await else {
         return;
     };
+    // Its sessions, by name: the insert and the unbinding are seen to wait.
+    let app = format!("unbind-wait-{}", db.schema);
     for names_a_number in [true, false] {
-        let h = harness(&db).await;
+        let h = named_harness(&db, &app).await;
         sqlx::query("DELETE FROM wa_server_events")
             .execute(&db.pool(1).await)
             .await
@@ -760,13 +969,16 @@ async fn live_postgres_an_unbinding_waits_for_an_insert_in_flight() {
             .await
             .unwrap();
         let store = h.store.clone();
+        let (db, app) = (&db, app.as_str());
         let admin = async move {
             // The insert reaches the stream's row and waits there.
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            until_waiting(db, app, 1, || false).await;
             let unbind = tokio::spawn(async move {
                 store.unbind_waba(&WabaId::new(EXAMPLE_WABA).unwrap()).await
             });
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            // The unbinding waits behind the insert, or finishes without
+            // waiting (the defect this case is for).
+            until_waiting(db, app, 2, || unbind.is_finished()).await;
             let waited = !unbind.is_finished();
             holder.rollback().await.unwrap();
             (waited, unbind.await.unwrap().unwrap())
@@ -1099,9 +1311,7 @@ async fn live_postgres_a_timeout_is_replayed_and_a_131047_releases_its_key() {
         "TOKEN",
     )
     .await;
-    let key = h
-        .tenant_key("merchant-42", &[meta_whatsapp_server::model::Scope::Send])
-        .await;
+    let key = h.tenant_key("merchant-42", &[Scope::Send]).await;
     let send = |idempotency_key: &str| {
         Call::new(
             meta_whatsapp_rs::webhooks::axum::http::Method::POST,
@@ -1137,4 +1347,244 @@ async fn live_postgres_a_timeout_is_replayed_and_a_131047_releases_its_key() {
     assert_eq!(accepted.status, StatusCode::ACCEPTED, "{}", accepted.text);
     assert_eq!(h.graph.requests().len(), 3);
     assert_eq!(h.graph.remaining(), 0);
+}
+
+/// Acceptance test M2.2 (roadmap M2b), live: two replicas on one database
+/// (two services, each on a pool of its own: `NOTIFY` on the deployment's
+/// channel, each replica's own `LISTEN` connection). A webhook delivered to
+/// A reaches a stream open on B within 2 s; `Last-Event-ID` on B replays
+/// exactly the events it missed, those recorded while it was away
+/// included; a stream on another tenant's number on B sees none of them.
+/// Decisive: the notification crossing replicas (B's streams have no
+/// re-poll in the test's time).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_postgres_a_webhook_into_one_replica_reaches_a_stream_on_another() {
+    use common::sse::open;
+    use meta_whatsapp_server::state::Settings;
+    use meta_whatsapp_server_core::live::LiveSettings;
+    use std::time::Duration;
+    const WITHIN: Duration = Duration::from_secs(2);
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let woken_only = Settings {
+        live: LiveSettings {
+            heartbeat: Duration::from_secs(3600),
+            repoll: Duration::from_secs(3600),
+            ..LiveSettings::default()
+        },
+        ..common::test_settings()
+    };
+    let replica = async |settings: Settings| {
+        let pool = db.pool(10).await;
+        migrate(&pool).await.unwrap();
+        Harness::with_stores_and_settings(Stores::postgres(&pool), settings)
+    };
+    let a = replica(common::test_settings()).await;
+    let b = replica(woken_only).await;
+    a.tenant("tenant-a").await;
+    a.connect("tenant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
+        .await;
+    a.tenant("tenant-b").await;
+    a.connect(
+        "tenant-b",
+        "102290129340399",
+        &["106540352242923"],
+        "TOKEN-OF-B",
+    )
+    .await;
+    let key = b.tenant_key("tenant-a", &[Scope::Events]).await;
+    let b_key = b.tenant_key("tenant-b", &[Scope::Events]).await;
+    let mut on_b = open(&b.internal, Call::get("/v1/events/stream").key(&key))
+        .await
+        .unwrap_or_else(|reply| panic!("{}", reply.text));
+    let mut bs_number = open(
+        &b.internal,
+        Call::get("/v1/numbers/106540352242923/events/stream").key(&b_key),
+    )
+    .await
+    .unwrap_or_else(|reply| panic!("{}", reply.text));
+    let mut seen = Vec::new();
+    for i in 0..3 {
+        let started = tokio::time::Instant::now();
+        let reply = a
+            .webhook(&bytes(&text(
+                EXAMPLE_WABA,
+                EXAMPLE_PN,
+                &format!("wamid.m22.{i}"),
+            )))
+            .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+        let frame = on_b.event(WITHIN).await;
+        assert!(
+            started.elapsed() <= WITHIN,
+            "reached the other replica after {:?}",
+            started.elapsed()
+        );
+        assert_eq!(frame.json()["tenant_id"], "tenant-a");
+        seen.push(frame.sequence());
+    }
+    assert_eq!(seen, [1, 2, 3]);
+    // The client goes away after the first; two more arrive meanwhile.
+    drop(on_b);
+    for i in 3..5 {
+        let reply = a
+            .webhook(&bytes(&text(
+                EXAMPLE_WABA,
+                EXAMPLE_PN,
+                &format!("wamid.m22.{i}"),
+            )))
+            .await;
+        assert_eq!(reply.status, StatusCode::OK);
+    }
+    let mut resumed = open(
+        &b.internal,
+        Call::get("/v1/events/stream")
+            .key(&key)
+            .header("last-event-id", "1"),
+    )
+    .await
+    .unwrap_or_else(|reply| panic!("{}", reply.text));
+    let mut replayed = Vec::new();
+    for _ in 0..4 {
+        replayed.push(resumed.event(WITHIN).await.sequence());
+    }
+    assert_eq!(
+        replayed,
+        [2, 3, 4, 5],
+        "exactly the events after Last-Event-ID"
+    );
+    assert!(resumed.next(Duration::from_millis(400)).await.is_none());
+    assert!(
+        bs_number.next(Duration::from_millis(400)).await.is_none(),
+        "a stream on tenant b's number saw tenant a's events"
+    );
+}
+
+/// Roadmap M3d's decisive test on Postgres (decision D6): after a
+/// registration's whole flow (`common::registration::flow`), no row of any
+/// table of the service's schema (the records, the idempotency records
+/// and their kept answers, the outbox, the inbox, the library's `wa_kv`:
+/// the vault and the attempt counters) holds the PIN, the wrong PIN or the
+/// code, as text or as the hex Postgres prints a `bytea` in; while the
+/// sweep does find the number's id where it is stored (the control).
+/// Storing the PIN in any table fails it.
+#[tokio::test]
+async fn live_postgres_a_registration_leaves_its_pin_in_no_table() {
+    use common::registration::{self as flow, PN, SECRETS};
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let h = harness(&db).await;
+    let key = flow::connected(&h).await;
+    flow::flow(&h, &key).await;
+    flow::meta_got_the_secrets(&h);
+    let pool = db.pool(2).await;
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT table_name::text FROM information_schema.tables \
+         WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        tables.iter().any(|t| t == "wa_kv") && tables.iter().any(|t| t == "wa_server_idempotency"),
+        "{tables:?}"
+    );
+    let mut rows = 0;
+    let mut found_number = false;
+    for table in &tables {
+        let texts: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT t::text FROM \"{table}\" t"
+        )))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        for text in texts {
+            rows += 1;
+            found_number |= text.contains(PN);
+            for secret in SECRETS {
+                assert!(!text.contains(secret), "{table} holds {secret}: {text}");
+                let hex = hex::encode(secret);
+                assert!(
+                    !text.contains(&hex),
+                    "{table} holds {secret} as bytes: {text}"
+                );
+            }
+        }
+    }
+    assert!(rows > 5, "{rows} rows swept");
+    assert!(found_number, "the sweep reads the stored rows");
+}
+
+/// Roadmap M3d's budget across replicas on Postgres: two instances on one
+/// database, twelve registrations of one number at once (six on each), a
+/// budget of 3: no more than 3 reach Meta, the stored count is the number
+/// that did, and every other one is refused before Meta (`429`, or `503`
+/// when the compare-and-swap kept losing). Decisive: the charge's
+/// compare-and-swap on the shared `KvStore` (a plain write lets racing
+/// replicas all through).
+#[tokio::test]
+async fn live_postgres_a_numbers_budget_holds_across_racing_replicas() {
+    use common::registration::{self as flow, PIN, PN, post, success};
+    use meta_whatsapp_rs::core::ids::PhoneNumberId;
+    use meta_whatsapp_rs::core::store::KvStore;
+    use meta_whatsapp_server_core::registration::{
+        AttemptBudget, AttemptLimit, AttemptLimits, RegistrationAttempts,
+    };
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(20).await;
+    migrate(&pool).await.unwrap();
+    let settings = meta_whatsapp_server::state::Settings {
+        registration_attempts: AttemptLimits {
+            registration: AttemptLimit {
+                attempts: 3,
+                window: std::time::Duration::from_hours(72),
+            },
+            ..AttemptLimits::default()
+        },
+        ..common::test_settings()
+    };
+    let a = Harness::with_stores_and_settings(Stores::postgres(&pool), settings.clone());
+    let b = Harness::with_stores_and_settings(Stores::postgres(&pool), settings);
+    let key = flow::connected(&a).await;
+    for h in [&a, &b] {
+        for _ in 0..6 {
+            h.graph.push_json(200, success());
+        }
+    }
+    let calls = (0..12).map(|i| {
+        let h = if i % 2 == 0 { &a } else { &b };
+        h.call(post(&key, "register", &serde_json::json!({"pin": PIN})))
+    });
+    let replies = futures::future::join_all(calls).await;
+    let passed = replies
+        .iter()
+        .filter(|r| r.status == StatusCode::OK)
+        .count();
+    for reply in &replies {
+        assert!(
+            [200, 429, 503].contains(&reply.status.as_u16()),
+            "{}: {}",
+            reply.status,
+            reply.text
+        );
+    }
+    let asked = a.graph.requests().len() + b.graph.requests().len();
+    assert_eq!(asked, passed, "only the passed ones reached Meta");
+    assert!((1..=3).contains(&passed), "{passed} passed");
+    let stored =
+        a.kv.get(&RegistrationAttempts::store_key(
+            AttemptBudget::Registration,
+            &PhoneNumberId::new(PN).unwrap(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let count = serde_json::from_slice::<serde_json::Value>(&stored.value).unwrap()["count"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(usize::try_from(count).unwrap(), passed);
 }

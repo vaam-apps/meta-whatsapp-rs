@@ -65,11 +65,11 @@ use futures::Stream;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{CatalogId, ProductItemId, ProductSetId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::paging::Page;
 use serde::Deserialize;
 
 use crate::request::{PAGING_WITHHELD, paginate_or_error, reject_cursors};
-use crate::templates::macros::string_enum;
 use crate::waba::Waba;
 use crate::{Client, GraphRequest};
 
@@ -627,7 +627,8 @@ pub struct ProductError {
     pub other: serde_json::Map<String, serde_json::Value>,
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `availability` of a product item.
     pub enum ProductAvailability {
         /// `in stock`.
@@ -649,7 +650,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `condition` of a product item.
     pub enum ProductCondition {
         /// `new`.
@@ -671,7 +673,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `review_status` of a product item.
     pub enum ProductReviewStatus {
         /// The empty value the reference lists first; it does not say what
@@ -688,7 +691,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `visibility` of a product item.
     pub enum ProductVisibility {
         /// `staging`.
@@ -698,7 +702,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// Priority of a product item's issue (`error_priority`), and the
     /// products edges' filter of that name.
     pub enum ProductErrorPriority {

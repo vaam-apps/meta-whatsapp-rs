@@ -37,10 +37,11 @@ use crate::error::{ErrorCode, ServiceError};
 use crate::keys::MintedKey;
 use crate::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
-    MAX_NAME_CHARS, MAX_PAGE_SIZE, NewApiKey, NumberBinding, PageRequest, Scope, Tenant, TenantId,
-    TenantStatus, WabaBinding,
+    MAX_NAME_CHARS, MAX_PAGE_SIZE, NewApiKey, NumberBinding, OtpSettings, PageRequest, Scope,
+    Tenant, TenantId, TenantStatus, WabaBinding,
 };
 use crate::observe::Observer;
+use crate::signup::Signups;
 use crate::store::RecordStore;
 
 /// Most numbers an attach binds for one WABA (Meta allows far fewer): past
@@ -264,6 +265,9 @@ pub struct Admin<'a> {
     authz: &'a Authorizer,
     caller: &'a AdminCaller,
     observer: &'a dyn Observer,
+    /// The deployment's signup, whose Solution Partner mode revokes the
+    /// credit line of a deleted tenant's WABAs (decision D75).
+    signups: Option<&'a Signups>,
 }
 
 impl std::fmt::Debug for Admin<'_> {
@@ -289,6 +293,7 @@ impl<'a> Admin<'a> {
             authz,
             caller: admin,
             observer: &(),
+            signups: None,
         })
     }
 
@@ -296,6 +301,16 @@ impl<'a> Admin<'a> {
     #[must_use]
     pub fn observed_by(mut self, observer: &'a dyn Observer) -> Self {
         self.observer = observer;
+        self
+    }
+
+    /// Delete tenants as `signups`' deployment does (decision D75): in
+    /// Solution Partner mode each WABA's credit line is revoked before its
+    /// token and bindings are deleted ([`Signups::offboard`]). The unbind
+    /// revokes nothing ([`Self::unbind_waba`]).
+    #[must_use]
+    pub fn offboarded_by(mut self, signups: &'a Signups) -> Self {
+        self.signups = Some(signups);
         self
     }
 
@@ -364,6 +379,83 @@ impl<'a> Admin<'a> {
             .ok_or_else(ServiceError::not_found)
     }
 
+    /// The OTP settings of the tenant `id` (roadmap M3c, decision D8).
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found`: no such tenant, or it has no settings of its own
+    /// (it borrows the default OTP tenant's, if the deployment names one).
+    pub async fn otp_settings(&self, id: &str) -> Result<OtpSettings, ServiceError> {
+        let id = named_tenant(id)?;
+        self.records()
+            .otp_settings(&id)
+            .await?
+            .ok_or_else(ServiceError::not_found)
+    }
+
+    /// Set the OTP settings of the tenant `id` (roadmap M3c, decision D8):
+    /// the number its codes are sent from, which must be one of the
+    /// tenant's own numbers, the approved authentication template and its
+    /// language, and the library's limits (unset ones are the library's
+    /// defaults). Replaces the tenant's settings whole; audited
+    /// (`otp_settings_set`). Codes in flight sent from another number stop
+    /// verifying: a code is bound to its sending number.
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found` (no such tenant), before the body's fields. `422
+    /// invalid_request` on `phone_number_id` (not an id, or not one of the
+    /// tenant's numbers), `template.name`, `template.language`,
+    /// `code_length`, `ttl_seconds`, `max_attempts`,
+    /// `resend_cooldown_seconds` or `issue_limit`; the store's failure.
+    pub async fn set_otp_settings(
+        &self,
+        id: &str,
+        input: OtpSettingsInput,
+    ) -> Result<OtpSettings, ServiceError> {
+        let id = named_tenant(id)?;
+        if self.records().tenant(&id).await?.is_none() {
+            return Err(ServiceError::not_found());
+        }
+        let settings = input.settings()?;
+        // Decision D8: a tenant's codes go out from one of its own numbers
+        // (or, with no settings, from the default OTP tenant's own).
+        let held = self
+            .records()
+            .number(&settings.phone_number_id)
+            .await?
+            .is_some_and(|number| number.tenant_id == id);
+        if !held {
+            return Err(ServiceError::invalid("phone_number_id"));
+        }
+        if !self
+            .records()
+            .set_otp_settings(&id, Some(&settings))
+            .await?
+        {
+            return Err(ServiceError::not_found());
+        }
+        self.audit("otp_settings_set", tenant_subject(&id));
+        Ok(settings)
+    }
+
+    /// Clear the OTP settings of the tenant `id`: from now on it borrows the
+    /// default OTP tenant's, if the deployment names one, else its OTP
+    /// requests are `409 otp_not_configured`. Audited
+    /// (`otp_settings_cleared`).
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found`: no such tenant. The store's failure.
+    pub async fn clear_otp_settings(&self, id: &str) -> Result<(), ServiceError> {
+        let id = named_tenant(id)?;
+        if !self.records().set_otp_settings(&id, None).await? {
+            return Err(ServiceError::not_found());
+        }
+        self.audit("otp_settings_cleared", tenant_subject(&id));
+        Ok(())
+    }
+
     /// Rename (`name`), suspend or reactivate (`status`) the tenant `id`.
     ///
     /// # Errors
@@ -394,7 +486,12 @@ impl<'a> Admin<'a> {
 
     /// Delete the tenant `id`: disconnect every WABA it has (unsubscribe
     /// the app with its token, then delete the token and the bindings, as
-    /// a tenant's own disconnection does), then delete it and its keys
+    /// a tenant's own disconnection does; in Solution Partner mode
+    /// ([`Self::offboarded_by`], decision D75), the WABA's credit line
+    /// revoked between the two, audited `credit_line_revoked`, and a
+    /// revocation that fails deletes nothing and is the answer, so a
+    /// deleted tenant's WABAs never stay funded by the partner), then
+    /// delete it and its keys
     /// (its events and idempotency records go with it, in the backend).
     /// Stops at the first WABA that cannot be disconnected; the tenant
     /// stays. A WABA attached while this runs is disconnected by the next
@@ -404,8 +501,9 @@ impl<'a> Admin<'a> {
     /// # Errors
     ///
     /// `404 not_found`; a WABA's failure (no usable token, Meta's refusal
-    /// or failure to unsubscribe, with Meta's `details`); `500 internal`,
-    /// retryable, when every round found WABAs; the store's failure.
+    /// or failure to unsubscribe, with Meta's `details`; a revocation's,
+    /// `step: revoke_credit_line`); `500 internal`, retryable, when every
+    /// round found WABAs; the store's failure.
     pub async fn delete_tenant(&self, id: &str) -> Result<(), ServiceError> {
         let id = named_tenant(id)?;
         for _ in 0..DELETE_ROUNDS {
@@ -444,19 +542,37 @@ impl<'a> Admin<'a> {
                     let api = owned.failed(self.authz, &error).await;
                     return Err(self.counted(api, &error).with_details(&error));
                 }
+                let subject = Subject {
+                    tenant: Some(id.as_str()),
+                    waba_id: Some(binding.waba_id.as_str()),
+                    ..Subject::default()
+                };
+                if let Some(signups) = self.signups {
+                    // Revoked, then the token and the bindings deleted
+                    // (decision D75); nothing deleted when it fails.
+                    match signups.offboard(self.authz, &owned, self.observer).await {
+                        Ok(true) => {
+                            self.audit("credit_line_revoked", subject);
+                            self.audit("waba_disconnected", subject);
+                            continue;
+                        }
+                        Ok(false) => {}
+                        // Moved meanwhile: the next round sees it as it is.
+                        Err(error)
+                            if error.error_code() == ErrorCode::STORAGE_UNAVAILABLE
+                                && !self.still_listed(binding).await? =>
+                        {
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
                 if !owned.forget(self.authz).await? {
                     // Attached again (or its token rotated) meanwhile: the
                     // next round sees it as it is now.
                     continue;
                 }
-                self.audit(
-                    "waba_disconnected",
-                    Subject {
-                        tenant: Some(id.as_str()),
-                        waba_id: Some(binding.waba_id.as_str()),
-                        ..Subject::default()
-                    },
-                );
+                self.audit("waba_disconnected", subject);
             }
             match self.records().delete_tenant(&id).await? {
                 DeleteTenantOutcome::Deleted => {
@@ -792,7 +908,11 @@ impl<'a> Admin<'a> {
     /// Unbind the WABA `waba_id` (decision D4's admin unbind, which lets
     /// another tenant attach it; also the way to free a WABA whose token
     /// no longer works): [`Self::unbind`] on its binding, audited
-    /// (`waba_unbound`).
+    /// (`waba_unbound`). It revokes no Solution Partner credit line, unlike
+    /// a tenant's deletion (decision D75): the operator may be moving the
+    /// WABA to another tenant. An operator who means to end its funding
+    /// revokes explicitly (the library's
+    /// `EmbeddedSignup::revoke_credit_line`).
     ///
     /// # Errors
     ///
@@ -886,6 +1006,62 @@ impl<'a> Admin<'a> {
         let report = self.authz.rotate_vault(self.caller).await?;
         self.audit("vault_rotated", Subject::default());
         Ok(report)
+    }
+}
+
+/// A tenant's OTP settings as the request carried them (roadmap M3c):
+/// every field named as the API names it; an unset limit is the library's
+/// default ([`OtpSettings::new`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OtpSettingsInput {
+    /// The sending number's id: one of the tenant's own.
+    pub phone_number_id: String,
+    /// The approved authentication template's name.
+    pub template_name: String,
+    /// Its language.
+    pub template_language: String,
+    /// Digits per code, 4 to 8.
+    pub code_length: Option<u32>,
+    /// How long a code is valid, 1 to 5400 seconds.
+    pub ttl_seconds: Option<u32>,
+    /// Wrong guesses allowed per code.
+    pub max_attempts: Option<u32>,
+    /// Seconds between two codes for one recipient and purpose.
+    pub resend_cooldown_seconds: Option<u32>,
+    /// Codes allowed per recipient and purpose in the window.
+    pub max_issues: Option<u32>,
+    /// That window, in seconds.
+    pub issue_window_seconds: Option<u32>,
+}
+
+impl OtpSettingsInput {
+    /// The settings, checked ([`crate::otp::check`]).
+    fn settings(self) -> Result<OtpSettings, ServiceError> {
+        let phone_number_id: PhoneNumberId =
+            crate::request::typed_graph_id("phone_number_id", &self.phone_number_id)?;
+        let mut settings =
+            OtpSettings::new(phone_number_id, self.template_name, self.template_language);
+        if let Some(length) = self.code_length {
+            settings.code_length =
+                u8::try_from(length).map_err(|_| ServiceError::invalid("code_length"))?;
+        }
+        if let Some(ttl) = self.ttl_seconds {
+            settings.ttl_seconds = ttl;
+        }
+        if let Some(attempts) = self.max_attempts {
+            settings.max_attempts = attempts;
+        }
+        if let Some(cooldown) = self.resend_cooldown_seconds {
+            settings.resend_cooldown_seconds = cooldown;
+        }
+        if let Some(issues) = self.max_issues {
+            settings.max_issues = issues;
+        }
+        if let Some(window) = self.issue_window_seconds {
+            settings.issue_window_seconds = window;
+        }
+        crate::otp::check(&settings)?;
+        Ok(settings)
     }
 }
 

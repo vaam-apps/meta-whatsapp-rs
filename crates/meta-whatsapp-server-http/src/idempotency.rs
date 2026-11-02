@@ -6,9 +6,9 @@
 //! service's records, lease, expiry, error body and metrics, and renders
 //! what it answers.
 //!
-//! Sends, media uploads and template creation take an optional
-//! `Idempotency-Key` header (inbox replies and OTP issue will, with their
-//! routes). The key is **scoped to the tenant**. A request carrying one
+//! Sends, media uploads, template creation, inbox replies and marking a
+//! conversation read take an optional `Idempotency-Key` header (OTP issue
+//! will, with its route). The key is **scoped to the tenant**. A request carrying one
 //! claims it with the SHA-256 of its operation and its canonical input
 //! ([`Fingerprint`]: the number or WABA the path names, decoded, and the
 //! body; never the path's spelling, since roadmap S6), a lease of twice
@@ -74,13 +74,15 @@ impl<S: Send + Sync> FromRequestParts<S> for KeyHeader {
 }
 
 /// A successful answer of an idempotent route, as it is sent and kept: a
-/// status and a JSON body. Its `Debug` prints the body's length
+/// status and a JSON body, or none ([`Self::no_content`]). Its `Debug` prints the body's length
 /// (`body_len`), never its bytes: a kept answer names the tenant's
 /// customers.
 #[derive(Clone)]
 pub struct Success {
     status: StatusCode,
     body: Vec<u8>,
+    /// What a key keeps instead of `body` ([`Self::json_keeping`]).
+    kept: Option<Vec<u8>>,
 }
 
 impl std::fmt::Debug for Success {
@@ -88,6 +90,7 @@ impl std::fmt::Debug for Success {
         f.debug_struct("Success")
             .field("status", &self.status)
             .field("body_len", &self.body.len())
+            .field("kept_len", &self.kept.as_ref().map(Vec::len))
             .finish()
     }
 }
@@ -96,13 +99,49 @@ impl Success {
     /// `status` with `value` as its JSON body.
     pub fn json<T: Serialize>(status: StatusCode, value: &T) -> Result<Self, ApiError> {
         serde_json::to_vec(value)
-            .map(|body| Self { status, body })
+            .map(|body| Self {
+                status,
+                body,
+                kept: None,
+            })
             .map_err(|_| ApiError::internal())
+    }
+
+    /// `status` with `value` as its JSON body, and `kept` as what a key
+    /// keeps for a repeat: an answer holding a credential the records must
+    /// not store (a payment configuration's OAuth link, roadmap P2) keeps
+    /// the same answer without it, and a repeat gets that.
+    pub fn json_keeping<T: Serialize, K: Serialize>(
+        status: StatusCode,
+        value: &T,
+        kept: &K,
+    ) -> Result<Self, ApiError> {
+        let body = serde_json::to_vec(value).map_err(|_| ApiError::internal())?;
+        let kept = serde_json::to_vec(kept).map_err(|_| ApiError::internal())?;
+        Ok(Self {
+            status,
+            body,
+            kept: Some(kept),
+        })
+    }
+
+    /// `204 No Content`: no body, so no `Content-Type` either (roadmap M2g's
+    /// read route), also when it is replayed.
+    pub fn no_content() -> Self {
+        Self {
+            status: StatusCode::NO_CONTENT,
+            body: Vec::new(),
+            kept: None,
+        }
     }
 
     /// The core's answer, for its `run`.
     fn into_answer(self) -> Answer {
-        Answer::new(self.status.as_u16(), self.body)
+        let answer = Answer::new(self.status.as_u16(), self.body);
+        match self.kept {
+            Some(kept) => answer.keeping(kept),
+            None => answer,
+        }
     }
 }
 
@@ -112,7 +151,12 @@ impl IntoResponse for Success {
     }
 }
 
+/// `status` with `body` as JSON; an empty body (a `204`) is sent without
+/// a `Content-Type`.
 fn json_response(status: StatusCode, body: Vec<u8>) -> Response {
+    if body.is_empty() {
+        return status.into_response();
+    }
     (
         status,
         [(

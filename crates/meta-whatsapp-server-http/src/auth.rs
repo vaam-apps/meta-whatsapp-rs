@@ -77,6 +77,14 @@ pub struct VaultRotation {
     /// a key no longer configured, say): rotate again, or reconnect them,
     /// before dropping the old key.
     pub failed: Vec<String>,
+    /// Records the vault keeps past a binding walked besides: Solution
+    /// Partner mode's credit ledgers and revocation markers, which no
+    /// binding names once their WABA left (roadmap M3a).
+    pub records: usize,
+    /// Those that could not be read or rewritten, as `waba/<id>` (a
+    /// credit ledger) or `business/<id>` (a revocation marker). Drop the
+    /// old key only once both this and `failed` are empty.
+    pub failed_records: Vec<String>,
 }
 
 impl From<core_authz::VaultRotation> for VaultRotation {
@@ -85,20 +93,26 @@ impl From<core_authz::VaultRotation> for VaultRotation {
             wabas,
             rotated,
             failed,
+            records,
+            failed_records,
         } = report;
         Self {
             wabas,
             rotated,
             failed,
+            records,
+            failed_records,
         }
     }
 }
 
 /// Walk every bound WABA (`wa_server_wabas`: the vault cannot list its
 /// records) and re-encrypt its token and credit ledger under the active
-/// key with `TokenVault::rotate`. A record that fails is reported and the
-/// walk goes on; only the service's own storage failing stops it. The
-/// core's [`core_authz::rotate_vault`].
+/// key with `TokenVault::rotate`, then every record kept past a binding
+/// (`wa_server_vault_records`: credit ledgers, revocation markers; roadmap
+/// M3a). A record that fails is reported and the walk goes on; only the
+/// service's own storage failing stops it. The core's
+/// [`core_authz::rotate_vault`].
 pub async fn rotate_vault(
     store: &dyn RecordStore,
     vault: &TokenVault,
@@ -231,12 +245,21 @@ impl Operations {
     /// extractor then refuses the empty number). A stricter match than the
     /// router's would leave a routed request with no operation: `500`,
     /// and charged nothing.
+    ///
+    /// Of two templates a path matches, the one with a literal segment
+    /// where the other has a parameter, at the first segment where they
+    /// differ, is the path's, as axum's router decides
+    /// (`/v1/events/stream` before `/v1/events/{id}`):
+    /// [`crate::telemetry::most_specific`].
     pub fn of(&self, method: &str, path: &str) -> Option<Operation> {
         let method = if method == "HEAD" { "GET" } else { method };
-        self.0
-            .iter()
-            .find(|(m, template, _)| m == method && routed(template, path))
-            .map(|(_, _, operation)| *operation)
+        crate::telemetry::most_specific(
+            self.0
+                .iter()
+                .filter(|(m, template, _)| m == method && routed(template, path)),
+            |(_, template, _)| template,
+        )
+        .map(|(_, _, operation)| *operation)
     }
 
     /// Every `(method, route template, operation)`.
@@ -574,5 +597,53 @@ pub fn guard(state: &AppState, scope: Scope, operations: &Operations) -> Guard {
         state: state.clone(),
         scope,
         operations: operations.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Of two templates a path matches, the one with a literal segment
+    /// where the other has a parameter is the path's, whatever their
+    /// order in the table, as axum routes it (roadmap M2b: the stream is
+    /// not an event of id `stream`). Decisive: `most_specific` in
+    /// `Operations::of` (the first match wins in one of the two orders).
+    #[test]
+    fn a_literal_segment_beats_a_parameter_in_either_order() {
+        let routes = [
+            (
+                "GET".to_owned(),
+                "/v1/events/{id}".to_owned(),
+                Operation::GetEvent,
+            ),
+            (
+                "GET".to_owned(),
+                "/v1/events/stream".to_owned(),
+                Operation::StreamEvents,
+            ),
+        ];
+        for reversed in [false, true] {
+            let mut routes = routes.to_vec();
+            if reversed {
+                routes.reverse();
+            }
+            let operations = Operations::new(routes);
+            assert_eq!(
+                operations.of("GET", "/v1/events/stream"),
+                Some(Operation::StreamEvents),
+                "reversed: {reversed}"
+            );
+            assert_eq!(
+                operations.of("HEAD", "/v1/events/stream"),
+                Some(Operation::StreamEvents),
+                "reversed: {reversed}"
+            );
+            assert_eq!(
+                operations.of("GET", "/v1/events/evt_4042233518184f0e9822bebdbba028a8"),
+                Some(Operation::GetEvent),
+                "reversed: {reversed}"
+            );
+        }
     }
 }

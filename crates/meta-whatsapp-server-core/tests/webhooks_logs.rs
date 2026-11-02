@@ -29,6 +29,7 @@ use meta_whatsapp_rs::webhooks::sign;
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::inbound::{Inbound, LOG_TARGET, Pipeline, Refused};
 use meta_whatsapp_server_core::model::TenantId;
+use meta_whatsapp_server_core::notify::EventNotifier;
 use meta_whatsapp_server_core::outbox::{EventPage, EventQuery, NewEvent, Outbox};
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult,
@@ -134,6 +135,12 @@ impl Outbox for BrokenOutbox {
     async fn purge(&self, _: std::time::Duration) -> StoreResult<u64> {
         unimplemented!("the pipeline does not purge")
     }
+    async fn received_media(
+        &self,
+        _: &meta_whatsapp_rs::core::ids::MediaId,
+    ) -> StoreResult<Vec<meta_whatsapp_server_core::outbox::ReceivedMedia>> {
+        unimplemented!("the pipeline does not look media up")
+    }
 }
 
 /// The memory backend, its outbox [`BrokenOutbox`].
@@ -152,6 +159,9 @@ impl Backend for Broken {
     }
     fn outbox(&self) -> Arc<dyn Outbox> {
         Arc::new(BrokenOutbox)
+    }
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.0.notifier()
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         self.0.leader_lock()

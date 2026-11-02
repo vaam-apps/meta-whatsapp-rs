@@ -200,19 +200,32 @@ pub async fn run_with(cli: Cli, backends: &dyn BackendFactory) -> anyhow::Result
             let report = crate::auth::rotate_vault(backend.records().as_ref(), &vault).await;
             backend.close().await;
             let report = report?;
+            let failed: Vec<&str> = report
+                .failed
+                .iter()
+                .chain(&report.failed_records)
+                .map(String::as_str)
+                .collect();
             println!(
-                "{} WABAs walked, {} records re-encrypted, {} failed{}",
+                "{} WABAs walked, {} records re-encrypted, {} failed{}{}",
                 report.wabas,
                 report.rotated,
-                report.failed.len(),
-                if report.failed.is_empty() {
+                failed.len(),
+                if failed.is_empty() {
                     String::new()
                 } else {
-                    format!(": {}", report.failed.join(", "))
+                    format!(": {}", failed.join(", "))
+                },
+                // Roadmap M3a: the credit ledgers and revocation markers
+                // kept past a binding, walked besides.
+                if report.records == 0 {
+                    String::new()
+                } else {
+                    format!(" ({} records kept past a binding walked)", report.records)
                 }
             );
             anyhow::ensure!(
-                report.failed.is_empty(),
+                failed.is_empty(),
                 "some records were not rotated: keep the previous key"
             );
             Ok(())

@@ -47,11 +47,11 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
 | 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
-| 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2f |
-| 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
+| 4 | S10 (D20 (a): the owner's yes of 2026-11-02), S11, S12; M2a–M2h |
+| 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3g; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
-| last | P1a–P1c, P2 (payments) |
+| last | P1a–P1d, P2, P2b (payments; P1d and P2 done) |
 
 ## 1. The service's modular split (design §8, D26)
 
@@ -1260,6 +1260,29 @@ and `store-postgres`.
     1,400 events in two streams, one past a purge step) and
     `live_mongodb_migrate_makes_the_named_collections_and_indexes_once`;
     the stored names pinned by `schema::tests::the_stored_names_are_pinned`.
+    **Brought up to `main` on 2026-11-02** (PRs #92 to #108): the two
+    `Outbox` methods added since, implemented as Postgres does them.
+    `received_media` (M2e, required): an insert keeps the media id its
+    event records as received (`NewEvent::received_media`) in
+    `media_id`, beside `media_order`, an `ObjectId` the inserting process
+    draws (instants keep MongoDB's millisecond, so two rows of one
+    millisecond need it to come back newest first), and the lookup reads
+    the partial index `wa_server_events_media_idx` (`media_id`,
+    `created_at` descending, `media_order` descending; only the rows with
+    a string `media_id`) up to `RECEIVED_MEDIA_ROWS`, its filter
+    repeating the index's `$type` so that the planner may use it; the
+    rows go with their stream's purge and their tenant's. `get` (M2b,
+    which has a default that pages the stream): one lookup by `_id` in
+    the tenant's own stream. The bundle of the tests gained the ports'
+    new methods (the memory backend's notifier; the records' OTP
+    settings, credit allocation, signup attempts and vault entries,
+    delegated, as none changes a binding the outbox reads). Their tests:
+    `conformance::outbox::received_media` (in
+    `live_mongodb_outbox_passes_the_outbox_cases`), `conformance::live`'s
+    lookups by id (in the whole suite), and
+    `live_mongodb_received_media_reads_its_index_in_order` (no field on
+    a row without media, the index's use counted by `$indexStats`, thirty
+    rows of three tenants read back newest first).
     By mutation, live: the re-check dropped (the routed tenant kept), and
     `RouteGuard::admits` dropped (the binding's tenant and numbers still
     matched), each fail the invariants (`only the rows whose guard held`)
@@ -1299,18 +1322,26 @@ and `store-postgres`.
     driver a direct dependency (the facade re-exports none until S17).
     **Pending the owner** (stored names, before the first release): the
     collections `wa_server_events`, `wa_server_event_streams` and
-    `wa_server_wabas`, their fields and the index names
-    (docs/architecture.md § Stable identifiers). **And a licence, which
-    blocks the merge:** `cargo deny check` fails on this branch (licenses
-    only; advisories, bans and sources pass). The driver depends, through
+    `wa_server_wabas`, their fields (since the merge of 2026-11-02,
+    `media_id` and `media_order` among them) and the index names
+    (`wa_server_events_media_idx` among them; docs/architecture.md §
+    Stable identifiers). **The licence, decided by the owner on
+    2026-11-02** ("Yes, upgrade deny"): CC0-1.0 is allowed, in
+    `deny.toml`'s `allow` list with the decision's date beside it, for
+    `tiny-keccak` through the driver (S9, S17), and `just deny` passes;
+    removing the entry fails it again. The same day the owner said yes
+    to D20 (a), BlueOak-1.0.0 for `minicbor` and `minicbor-serde` only,
+    which S10 adds as a scoped exception, not this item. What the
+    licence check met before: `cargo deny check` failed on this branch
+    (licenses only; advisories, bans and sources passed). The driver depends, through
     `mongodb-internal-macros`, `macro_magic`, `const-random` and the
     proc-macro `const-random-macro`, on `tiny-keccak` 2.0.2, under
     CC0-1.0, which `deny.toml` does not allow. Since S8 that chain was a
     dev-dependency's (meta-whatsapp-adapters' tests), whose licences
     cargo-deny does not check; this crate makes the driver a normal
     dependency, so it is checked now (S17's `mongodb` feature will meet the
-    same). Allowing CC0-1.0, or an exception scoped to `tiny-keccak`, is a
-    licence choice: the owner's (§ Owner touchpoints), not made here.
+    same). Allowing CC0-1.0 was a licence choice: the owner's (§ Owner
+    touchpoints), made on 2026-11-02 as above.
   - **Left, and why:** the bindings are the fixture's mirror, consistent
     with the records only between two binding calls, and a deleted
     tenant's stream is purged after the records' deletion, not in its
@@ -1364,8 +1395,10 @@ and `store-postgres`.
   start, a minimal `meta-whatsapp-server-api-cratestack` with one
   procedure, not the default. A refusal of D20 (a) means no CrateStack
   in the build: S10–S16 do not happen.
-  - **After:** S7, and the owner's yes to D20 (a) (the coordinator asks
-    at this step; S10 does not merge without the answer).
+  - **After:** S7. The owner's yes to D20 (a) came on 2026-11-02
+    (BlueOak-1.0.0 allowed for `minicbor` and `minicbor-serde` only):
+    S10 adds that scoped exception to `deny.toml`, and nothing before
+    it does.
   - **Decisive:** `just deny` passes and fails again when the exception
     is removed; a live Postgres test with `sslmode=require` passes in a
     binary that links both providers (sqlx picks `ring` itself until
@@ -1441,7 +1474,7 @@ and `store-postgres`.
     replica set; removing the version check from compare-and-swap fails
     them.
 - [ ] **S18. `meta-whatsapp-server-store-mongodb`**, the whole bundle.
-  - **After:** S9, S17, M2a–M2f.
+  - **After:** S9, S17, M2a–M2h.
   - **Decisive:** the core conformance suite passes live; the service's
     M1–M2 acceptance tests pass on it.
 
@@ -1852,7 +1885,7 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     owner** (stable identifiers, before the first release): the five
     namespaces, their keys' derivations and their records' layouts
     (architecture.md § Stable identifiers, § Owner touchpoints below).
-- [ ] **B3b. A `JobStore` trait** (`meta-whatsapp-bot`; D29): the job
+- [x] **B3b. A `JobStore` trait** (`meta-whatsapp-bot`; D29): the job
   store's operations (schedule, cancel, re-run, get, the 131049
   feedback, and the runner's claim, markers and due index) behind a
   trait the runner takes, `KvJobs` its default, so a job queue of the
@@ -1860,6 +1893,82 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
   - **After:** B3.
   - **Decisive:** `KvJobs` implements it, and a second, in-memory
     implementation passes the same job suite.
+  - **Landed:** `JobStore` (module `jobs`), object-safe, the runner
+    holding an `Arc<dyn JobStore>` (`JobRunner::builder` takes any
+    `impl JobStore`, `JobRunner::builder_shared` an `Arc`; `Arc<T>`
+    forwards): `schedule`, `cancel`, `rerun`, `get`, the `131049`
+    feedback (`limit_message`, `observe` provided on top of it), and the
+    runner's steps: `claim_due` (the store claims each due job and hands
+    it, a `JobClaim`, to a `ClaimHandler`, the runner's pass, whose
+    `JobEnd` tells `KvJobs`'s due index whether to keep the minute),
+    `hold` (the claim still holds, renewed at half the lease),
+    `check_run` (the run unchanged, not cancelled), `recipient` (a
+    `RecipientMark`), `mark_sending`, `mark_outcome` (a `SendRecord`),
+    `unmark`, `limit_recipient`, `settle`, `retry` (each
+    `Option<JobHalt>`); `clock`, the time jobs are due and leases
+    expire by. Its rustdoc is the contract under concurrency (claims
+    atomic under a lease, a claim checked on every write, markers
+    created atomically and durably before the send and only their
+    runner's to complete or remove, a "sending" nobody completed an
+    outcome unknown, cancels winning or losing whole, the skip per job,
+    each job handed over once a call and no lock held while it sends).
+    `KvJobs` implements it with B3's code moved behind the trait (the
+    runner's cursor, claim, marker and settle steps now `KvJobs`'s; the
+    records, keys and namespaces unchanged). `MemoryJobs`, in memory
+    behind one mutex, independent of `KvStore`, is the second
+    implementation. `jobs::conformance::run` is the job suite, 24
+    checks: B3's tests that do not depend on `KvStore` (moved out of
+    `crates/meta-whatsapp-bot/tests/jobs.rs`, names kept) plus two
+    races (two to five runners on one job, four on twenty, interleaved
+    at every call they make to the store), a runner ticking during
+    another's send, a retry within a tick, and each method on its own
+    (`markers_are_exclusive_and_their_runners`,
+    `a_claim_is_checked_on_every_write`). In `tests/jobs.rs`:
+    `kv_jobs_pass_the_job_suite`, `memory_jobs_pass_the_job_suite` (the
+    decisive pair), `kv_jobs_pass_the_job_suite_raced_inside_the_store`
+    (on a `KvStore` that yields at every call: replacing the claim's
+    compare-and-swap by a plain put fails it, as it fails
+    `two_runners_on_one_store_send_a_due_job_once`), and
+    `runners_on_threads_send_each_recipient_once` (six runners on four
+    threads, twenty rounds, both stores); `KvJobs`'s own tests (the due
+    index, unreadable records, a failing store, the restart on one
+    `KvStore`) stay. Mutations of `MemoryJobs`, each failing the suite:
+    the claim checked, then an `.await`, then written
+    (`two_runners_racing_one_job_send_it_once`); the same without the
+    `.await` (only the threaded test, in three runs of four: the suite
+    runs on one task); no "sending" marker before the request
+    (`a_resumed_broadcast_never_resends_a_recipient_recorded_as_sent`),
+    a marker created over an existing one
+    (`a_runner_whose_lease_expired_mid_send_never_sends_after_the_new_claim`),
+    the `131049` skip ignored, or extended by a redelivery
+    (`a_131049_status_makes_a_rerun_within_24_hours_skip_that_recipient`),
+    the lease ignored, `check_run` blind to the run
+    (`a_send_checked_before_a_cancel_and_a_rerun_is_not_made`) or to a
+    cancel (`a_cancel_racing_a_claim_sends_nothing`), `hold` never
+    renewing (`a_long_marker_scan_keeps_the_lease`), `settle` not
+    checking the claim; and of the runner, the request made before the
+    marker. Not in it: a suite for a store on a clock of its own (a
+    database's `now()`: the suite moves a `ManualClock`), and
+    durability across processes (a restart in the suite is a new
+    runner on the same store value).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; design D29's amendment closed; each
+    swappable by implementing the trait): the trait object-safe
+    and held as `Arc<dyn JobStore>` (not a generic `JobRunner<S>`);
+    claims through a callback (`claim_due` with a `ClaimHandler`)
+    rather than a list of due ids and a `claim(id)`, which keeps
+    `KvJobs`'s cursor logic whole and fits a `FOR UPDATE SKIP LOCKED`
+    loop; recipients addressed by their index into the claimed job;
+    the store owning time (`JobStore::clock`) and the lease's
+    half-renewal rule written into `hold`'s contract; `KvJobs`
+    re-reading a marker before completing or removing it (one more
+    `KvStore` read per send) rather than carrying the marker's version
+    through the trait; the operations moved off `KvJobs` onto the trait
+    (callers import `JobStore`) rather than kept as inherent twins;
+    `MemoryJobs` public, nothing expiring in it but the `131049` skips
+    and the message ids; the suite in the library, always compiled, as
+    the adapters' `KvStore` suite is; design D29's amendment ("until
+    B3b") to be closed.
 - [x] **B4. Retention and auto-delete** (`meta-whatsapp-bot`; row 91): by
   age and a cap per chat, through `ConversationStore`'s erasure.
   - **After:** B1, L5.
@@ -1900,6 +2009,13 @@ facade), re-exported by the facade behind a feature. A `Bot` is an
     `live_postgres_the_locks_are_the_documented_ones`. Not caught: the
     key order of the summaries' locks (the ranking already yields them
     in key order); in memory a trim cannot race an append (one lock).
+    SQLite and Redis implement it since L8's merge of B4: SQLite in one
+    `BEGIN IMMEDIATE` transaction (summaries, then rows, on one
+    ranking), Redis in one script per conversation of at most 1024 rows
+    (several for a conversation further over its cap), over a new set of
+    each number's conversations with a history (`B:c:<pn>`); both pass
+    the trim cases, and `live_redis_a_trim_beyond_one_script_takes_several`
+    fails a trim stopping after one script.
     The server compiles and passes unchanged (it implements no
     `ConversationStore`); retention over HTTP is M5k. The sabotage
     review added what three surviving mutations showed missing: a cap
@@ -2030,7 +2146,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     (`ReplyChecks::trust_handover`, OPEN_QUESTIONS #44); a
     `user_id_update`'s `wa_id` is linked too. Row 139 stays partial (the
     thread control API, L15); `conversation_context` is not stored.
-- [ ] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
+- [x] **L8. Message and contact stores** (`meta-whatsapp-adapters`,
   features `redis` and a new `sqlite`; `meta_whatsapp_rs::inbox`; rows
   69, 111): a Redis `ConversationStore`, SQLite adapters for both ports,
   and `InboxSink` keeping the coexistence sync's contacts through L5's
@@ -2043,6 +2159,87 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** every adapter passes both conformance suites; a second
     `append` of one id on another number returns `false` on each, as the
     suite says today; the synced contacts are read back from the store.
+  - **Landed:** `store::{SqliteKvStore, SqliteConversationStore}`
+    (feature `sqlite`, `store::sqlite::{open, memory, migrate}`) pass
+    both suites in process, in `just test` (an in-memory database, and
+    a file shared by a pool of connections under another prefix);
+    `store::RedisConversationStore` passes the conversation suite live
+    (`live_redis_conversation_*`, both erasure modes and a retention).
+    The suite gains `conversation_conformance::ids_are_stored_once_per_store`,
+    outside `run` (the port allows either answer to OPEN_QUESTIONS #33,
+    which stays open): the memory store and both new stores pass it in
+    `just test`, Redis and Postgres live; it fails a SQLite store whose
+    id index is not unique, and a Redis store checking ids per number.
+    `InboxSink` records `smb_app_state_sync`, and
+    `crates/meta-whatsapp-rs/tests/synced_contacts.rs` reads Meta's
+    examples back through `Inbox::contacts` and `Inbox::contact` on
+    memory and SQLite (it fails when a removal is applied under one key
+    only). Rows 69 and 111 are done in the library (the service's sides
+    stay with M3b and M2a); categories 30 and 39 too. The sabotage
+    review added `conversation_conformance::erase_one_person_of_every_record`
+    and `purge_one_person_of_every_record` (outside `run`), after which
+    each adapter scans its own storage for what must be gone (Redis
+    kept a redacted group message's sender and index members naming the
+    person, with every port read passing), and `run`'s
+    `an_unbounded_limit_reads_everything` (Redis refused `usize::MAX`).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable behind the
+    `KvStore` and `ConversationStore` ports, or a switch):
+    1. **SQLite through sqlx's driver**, the library compiled in
+       (`sqlite-bundled`: MIT, no TLS); sqlx's Postgres driver, its TLS
+       and its macros move from the dependency to the `postgres`
+       feature, so `sqlite` alone links neither (`just features` checks
+       both alone). Its migrations are embedded with `include_str!` from
+       `migrations-sqlite/`, templates under the same `TablePrefix`, now
+       `store::TablePrefix` (still `store::postgres::TablePrefix`), and
+       each prefix keeps its own migration history
+       (`<prefix>sqlx_migrations`). Swappable: another store behind the
+       same ports.
+    2. **SQLite concurrency is SQLite's write lock**: every write one
+       `BEGIN IMMEDIATE` transaction (read, decide in Rust, write), the
+       busy timeout `store::sqlite::open` sets (30 s) the wait; times
+       `INTEGER` microseconds, identifiers `TEXT` refusing U+0000 (as on
+       Postgres), content `BLOB`; the key/value store's expiry on the
+       application's injectable clock (`SqliteKvStore::with_clock`), its
+       versions from one counter row, so a deleted record's row goes at
+       once. Swappable by building the pool yourself
+       (`store::sqlite::sqlx`).
+    3. **One Redis hash tag per conversation store**
+       (`<prefix>{conversations:<prefix>}`, so stores of other prefixes
+       hash to other slots: inboxes spread with one store per prefix,
+       `with_prefix`): every write one Lua script over keys of one slot.
+       Status updates are a compare-and-swap decided in Rust
+       (`DeliveryStatus::supersedes`); a purge of every number is one
+       script per number over the store's set of numbers, which never
+       shrinks (it names businesses only). Times are 16 hex digits that
+       sort as they compare.
+    4. **The inbox's contact rules, as built**: a switch,
+       `RecordingSwitches::contacts`, on in the library's
+       `RecordingSwitches::ALL`; an `add` stored under
+       `inbox::synced_contact_key` (the BSUID, else the phone number
+       without `+`, which is also the phone number stored, so that
+       `identities` meets the conversations' keys); a `remove` under
+       each key it names (the BSUID and the phone number), so that an
+       entry keyed by the phone number before Meta sent the BSUID does
+       not keep the person's names; a change without
+       `metadata.timestamp`, without a usable id or with U+0000 in one
+       is skipped with a warning, without content (Meta's order is the
+       timestamp; the sink's clock would let a late redelivery win). A
+       `remove` naming only a phone number leaves an entry keyed by the
+       BSUID (Meta's reference shows a removal with both).
+    5. **Category 39's library side is done**; MongoDB adapters stay
+       with S17.
+    6. **The service records no synced contacts until M3b**:
+       `meta-whatsapp-server-core`'s `inbound::INBOX_RECORDING` is the
+       library's switches with `contacts(false)`, the events still
+       reaching their tenant (decisive:
+       `conformance::webhooks::an_address_book_change_reaches_its_tenant_and_no_inbox`);
+       M3b turns it on with the routes that read them.
+  - **Pending the owner's confirmation before the first release**
+    (architecture § Stable identifiers): the new stored names, SQLite
+    migration 1 (`wa_kv_version`, the SQLite tables and their columns,
+    its checksum pinned) and the Redis conversation layout (keys,
+    fields, the hash tag, the time encoding).
 - [x] **L9. Phone numbers** (`meta-whatsapp-client`,
   `client::phone_numbers`; rows 66, 129–133, 151): the business
   username calls, deleting a contact book entry, search visibility,
@@ -2224,7 +2421,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     stays in the skill's `hosted_signup.rs`); the skill not re-stamped.
     The library's side of OPEN_QUESTIONS #11 is decided; the service's
     is M3f.
-- [ ] **L11b. Several WABAs in one signup** (`client::embedded_signup`;
+- [x] **L11b. Several WABAs in one signup** (`client::embedded_signup`;
   row 122; OPEN_QUESTIONS #5): opt-in onboarding of every granted WABA,
   each bound and resumable on its own.
   - **Kind:** additive.
@@ -2232,14 +2429,209 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** with the option off, a signup granting two WABAs
     onboards only the claimed one; with it on, both, and a failure on
     the second leaves the first stored and resumable.
-- [ ] **L11c. Pre-verified numbers** (`client::embedded_signup` and
+  - **Landed:** row 122 done in the library (the service's side stays
+    with M3f). `OnboardingRequest::every_granted_waba` (field and
+    setter, off by default) and `EmbeddedSignup::onboard_wabas` /
+    `onboard_wabas_with_approval` (module `embedded_signup::multi`):
+    `exchange_code` and `debug_token` once; with the option on, a
+    session info naming a WABA (`waba_id`, `waba_ids`) the token was not
+    granted fails the call at `verify_assets` before anything is read or
+    stored; then the claimed WABA (else the newest grant: what `onboard`
+    picks) with the request as it is, and every other grant of
+    `granular_scopes`' `whatsapp_business_management`, in Meta's order
+    (newest first), each through its own `verify_assets`, `approve`,
+    `store_token` and tail (its own vault record, phone index,
+    subscription, system user and credit line; the shared steps refactored
+    out of `onboard_granted` into `onboard_waba`, so `onboard` runs the
+    same code). The result is `WabasOnboarded` (`#[must_use]`), one
+    `WabaOnboarding` per WABA with a `WabaOutcome`: `Onboarded`, `Held`
+    or `Failed { error, steps_completed }` (an `Error::Step`;
+    `is_resumable` once `store_token` ran). Meta documents the
+    session info's `waba_ids` (`embedded-signup/implementation`) and the
+    grants, newest first (`solution-providers/manage-accounts`), and no
+    more: nothing on which grants a multi-WABA flow's token carries
+    beyond those, and no multi-WABA hosted flow. Nothing new is stored.
+    The decisive tests, in `embedded_signup::multi`:
+    `with_the_option_off_only_the_claimed_waba_is_onboarded` (through
+    `onboard` and `onboard_wabas`; the other grant never read),
+    `with_the_option_on_every_granted_waba_is_onboarded` (each request
+    exact: one exchange, one `debug_token`, the claimed WABA's owner,
+    numbers, subscription and registration, then the other's owner,
+    numbers and subscription, each record and phone index under its own
+    WABA), `a_failure_on_the_second_waba_leaves_the_first_and_both_resume`;
+    with `a_failure_on_the_claimed_waba_does_not_stop_the_others`,
+    `another_granted_waba_the_vault_holds_is_left_as_it_is`,
+    `a_claimed_waba_the_token_was_not_granted_refuses_the_signup`,
+    `one_waba_calls_refuse_the_option_before_any_request` (`onboard`,
+    `onboard_with_approval`, `onboard_hosted`),
+    `only_the_claimed_number_of_a_coexistence_signup_syncs`,
+    `a_solution_partner_approves_records_and_funds_each_waba` (one
+    approval per WABA, each recorded for its own token record, a share
+    for each though the business-wide lookup lists the first's
+    allocation, and a plain `resume` of the second sharing nothing
+    again) and `a_refused_approval_skips_that_waba_only`. Mutations that
+    each fail them: the option ignored, a WABA's failure returned as the
+    call's, a failure stopping the next WABAs, the other WABAs onboarded
+    without the approval, a held WABA replaced, the claimed session's
+    phone given to the others, an unbacked claim accepted, the others
+    registering or keeping the finish, `onboard` or `onboard_hosted`
+    accepting the option, `is_resumable` ignoring `store_token`.
+  - **Found in review** (sabotage review, security lens): a token's
+    `granular_scopes` list every WABA that granted the app, across
+    signups, and the token in Meta's own `debug_token` example is a
+    user's, whose grants may span businesses; the draft onboarded every
+    grant whoever owned it, under the request's credit settings (a
+    `reshare_after_revocation` meant for one business re-funding
+    another's revoked line). The other grants must now be the primary
+    WABA's business's: Meta must report, for each, the owner it reported
+    for the primary WABA, or the grant fails at `verify_assets` before
+    its numbers are read, approved or stored; when the primary's owner is
+    unknown (it failed before it was verified, or Meta reported none),
+    every other grant fails there with no request
+    (`a_grant_of_another_business_is_not_onboarded`,
+    `the_others_fail_closed_when_the_signup_business_is_unknown`). And
+    `Held` was a read followed, two Meta round trips and the approval
+    later, by a replacing `store`: another signup or a hosted
+    `PARTNER_ADDED` storing the WABA in that window was overwritten. The
+    other grants are now stored with `put_if_absent`
+    (`TokenVault::store_new`, crate-private, the phone index untouched
+    when it loses) and fail at `store_token` when the vault came to hold
+    them (`a_grant_stored_meanwhile_is_not_replaced`); `onboard_hosted`,
+    whose `holds` read had the same window the other way round (a
+    code-flow or multi-WABA onboarding storing after it was replaced),
+    now stores the same way and fails at `store_token`
+    (`a_hosted_signup_never_replaces_a_record_stored_meanwhile`). A read of the
+    vault that fails fails the grant closed
+    (`a_grant_whose_record_cannot_be_read_fails_closed`); the others keep
+    the request's subscription override
+    (`the_others_keep_the_subscription_override`) and a revoked
+    business is funded again for none of them
+    (`a_revoked_business_is_funded_again_for_no_waba`); with nothing
+    claimed the newest grant is the primary one, and every record carries
+    the code exchange's expiry
+    (`with_nothing_claimed_the_newest_grant_is_primary`). Mutations the
+    review added that each fail a test: the others' owner checked only
+    when reported, or not at all; the signup's owner taken from the
+    browser's `business_id`, or not recorded; the others stored with a
+    replacing `store` (or `store_new` with `put`); a failed vault read
+    taken as absent; the others' subscription override, or the token's
+    expiry, dropped. Three survive as equivalent: the `waba_id` claim
+    left out of the unbacked check (`verify_grant` already refuses it),
+    and the others' `currency` or `reshare_after_revocation` changed
+    (the credit plan is computed once, from the request, for every
+    WABA).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable):
+    1. the option is the request's (`OnboardingRequest::every_granted_waba`,
+       OPEN_QUESTIONS #5), and only the new calls, `onboard_wabas` and
+       `onboard_wabas_with_approval` (its approval an `FnMut`, called and,
+       for a Solution Partner, recorded once per WABA), act on it;
+    2. `onboard` and `onboard_hosted` refuse the option rather than drop
+       the other WABAs; `resume` ignores it (it resumes the WABA it is
+       given);
+    3. the token's grants decide what is onboarded, not the browser's
+       `waba_ids`: every WABA the session info names must be among them,
+       or the signup is refused before anything is stored; the claimed
+       WABA first, then the grants in Meta's order; tightened in review,
+       a grant other than the claimed WABA is onboarded only when Meta
+       reports the claimed WABA's owner as its owner too, and none is
+       when that owner is unknown;
+    4. the other WABAs register no number and request no coexistence
+       sync (the PIN, region and finish are the claimed number's;
+       registering counts against 10 per 72 hours, the sync is once per
+       number), and keep the request's subscription override and credit
+       settings;
+    5. another grant the vault holds is `Held` and left alone, and,
+       tightened in review, stored only where the vault still holds none
+       (`put_if_absent`): the read alone let a signup or a hosted
+       `PARTNER_ADDED` racing this one be overwritten; the claimed WABA is
+       replaced, as `onboard` replaces it;
+    6. per-WABA failures are outcomes in `WabasOnboarded` (`#[must_use]`),
+       not the call's error; only the shared steps fail the call;
+    7. hosted signup stays one WABA per `PARTNER_ADDED`;
+    8. `OnboardingRequest` carries an
+       `#[expect(clippy::struct_excessive_bools)]`: each bool is an
+       independent option of its own setter, not a state machine.
+
+    Swappable by the option (off: `onboard`'s behaviour), and by calling
+    `onboard` per signup instead. Not offered, a follow-up if wanted:
+    onboarding a WABA that failed before `store_token` from the token
+    another WABA of the same signup stored.
+- [x] **L11c. Pre-verified numbers** (`client::embedded_signup` and
   `client::waba`; row 123): pools, adding, codes, sharing, partners
   (`reference/business/*pre-verified*`,
   `reference/whatsapp-business-pre-verified-phone-number/*`).
-  - **Kind:** additive.
+  - **Kind:** additive, plus two breaking type changes before the first
+    release (CHANGELOG): `embedded_signup::PreVerifiedPhone::ids` and
+    `waba::NewPhoneNumber::preverified_id` take the new id type.
   - **After:** nothing.
   - **Decisive:** exact JSON per endpoint; a pre-verified phone id is
     checked as digits before any request.
+  - **Landed:** row 123 done in the library; the service's side stays
+    with M3f. Seven endpoints from Meta's seven pages (the guide, three
+    `reference/business/` pages and the four of
+    `reference/whatsapp-business-pre-verified-phone-number/`): the pool
+    on the partner's portfolio, `Business::add_pre_verified_number`
+    (`POST /{Business-ID}/add_phone_numbers`, a `CreatedPreVerifiedNumber`),
+    `Business::pre_verified_numbers` and `_stream`
+    (`GET …/preverified_numbers`, `ListPreVerifiedNumbers`: `fields`,
+    `phone_number`, `code_verification_status`, `limit`, cursors) and
+    `Business::share_pre_verified_number`
+    (`POST …/share_preverified_numbers`); each number through
+    `Client::pre_verified_phone_number` (`waba::PreVerifiedPhoneNumber`:
+    `get`, `request_code`, `verify_code`, `partners` and `_stream`, with
+    `ListPreVerifiedNumberPartners`, and `delete`), read as a
+    `PreVerifiedNumber` (the six fields of Meta's schema, the status the
+    phone numbers' `CodeVerificationStatus`). Its id is a new
+    `core::ids::PreVerifiedPhoneNumberId`, numeric (the node and
+    partners pages' own error examples: "must be a valid numeric
+    string"), checked when built and again as digits by every call
+    before its path or body is built, so an id built unchecked holding
+    `/` reaches nothing; the launch option and a WABA's new number
+    (`preverified_id`) take it and check it too. The code is the phone
+    numbers' secret `VerificationCode`, in the JSON body. The decisive
+    tests, in `waba::pre_verified`:
+    `a_pre_verified_id_that_is_not_digits_is_refused_before_any_request`
+    (five hostile ids, built unchecked, through each of the eight calls
+    that take one, every answer scripted: nothing is sent), one test per
+    endpoint asserting method, path, bearer, query and the exact body
+    (`adding_sends_the_number_in_the_body_and_parses_the_guides_answer`,
+    `the_pool_is_listed_with_every_documented_filter`,
+    `sharing_sends_both_ids_in_the_body`,
+    `a_code_request_sends_method_and_language`,
+    `verify_code_sends_the_code_in_the_body_only`,
+    `the_partners_are_listed_with_the_documented_parameters`,
+    `a_number_is_read_with_its_fields`,
+    `delete_addresses_the_number_and_maps_meta_errors`), with
+    `a_verification_code_reaches_no_debug_url_or_error` (a sentinel code
+    against a 403) and `no_post_is_replayed_after_a_timeout` (the four
+    POSTs, retries on); in core,
+    `ids::tests::a_numeric_id_is_one_to_sixty_four_ascii_digits` lists
+    the new type; the launch's `pre_verified_numbers_page_example`. Not
+    offered: unsharing (Meta documents its `DELETE` as removed) and the
+    reference's `IVR` code method (`CodeMethod` has `SMS` and `VOICE`,
+    the values both pages show). Meta's pages print no response example
+    for the pool list, a number or its partners: those tests parse
+    Meta's schemas with our values. No legal act: no endpoint accepts
+    terms. The time limits (30 days to verify, 90 to be claimed or
+    registered, re-verification from 45 days before expiry) are
+    documented, not enforced; tracking who claimed which number stays
+    the integrator's, as Meta says.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): the bodies are JSON, as the references define, not the
+    guide's query strings (the code and the phone number stay out of
+    URLs, as `PhoneNumber::verify_code` does; swapped per call by
+    moving a field to `.query`); a pre-verified id is numeric (one
+    `numeric_id_type!` line) and re-checked at request time, as
+    `commerce::catalog` does for its ids; the API lives in `client::waba`
+    (`Business` for the pool, a new accessor for the number) rather
+    than a new module, the launch option staying in
+    `client::embedded_signup`; the two breaking type changes above; the
+    status filter refuses `UNVERIFIED` and `Unknown`, which the
+    reference does not list; `delete` and `share_pre_verified_number`
+    are explicit calls no other call makes; `IVR` is left out until a
+    page shows it; the phone number to add is checked locally (digits,
+    with `+`, spaces, hyphens, parentheses: the reference's formats).
 - [x] **L11d. The coexistence sync inside onboarding**
   (`client::embedded_signup`; OPEN_QUESTIONS #7): a step right after a
   coexistence onboarding, on by default, that an option turns off. The
@@ -2931,7 +3323,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     - Row 48 stays partial, its rest planned in L19b.
     - CI proves the conversion: its runner installs `ffmpeg`, which no
       image or dev container does.
-- [ ] **L19b. Stickers and image resizing** (`meta-whatsapp-core`: new
+- [x] **L19b. Stickers and image resizing** (`meta-whatsapp-core`: new
   `TargetFormat`s; `meta-whatsapp-adapters`: their conversion behind the
   `ffmpeg` feature, or another converter; row 48): an image into a WebP
   sticker within Meta's limits (`image/webp`, 100 KB static, 500 KB
@@ -2948,7 +3340,407 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     5 MB comes out under it, both against a real
     converter in CI; a GIF or a crafted file off the format list is a
     `ConversionError::InputRejected`.
-- [ ] **L20a. One catch-all shape for open enums** (`meta-whatsapp-core`
+  - **Landed:** three `TargetFormat`s in core, `StaticSticker` (a
+    static WebP, `image/webp`, `.webp`, at most
+    `media::STATIC_STICKER_MAX_BYTES`, 100 000 bytes), `Jpeg` and `Png`
+    (8-bit, `image/jpeg` and `image/png`, `.jpeg` and `.png`, at most
+    `media::IMAGE_MAX_BYTES`, 5 000 000 bytes), read from
+    `messages/sticker-messages` and `business-phone-numbers/media` on
+    2026-11-01; the client's test keeps each within its upload table.
+    `FfmpegConverter` makes them from a PNG or a JPEG only: the input's
+    first bytes (a PNG's signature, a JPEG's start of image) are checked
+    before ffmpeg starts, and ffmpeg's own detection may land on nothing
+    but `png_pipe` or `jpeg_pipe` (`-format_whitelist`). Each attempt
+    runs fixed literal arguments: the L19 prefix (`-protocol_whitelist
+    pipe`, `-abort_on empty_output`, environment reduced to `PATH`,
+    stderr drained and withheld), `-max_alloc 268435456`, `-max_pixels
+    33554432` (32 Mi pixels), the first video frame, no metadata, a
+    filter and an encoder from a fixed table, `-f image2pipe` on stdout.
+    Each format is brought under its limit by a ladder of sizes and
+    qualities (sticker: its own size at quality 80, then 1024 at 80 and
+    50, 512 at 75 and 50, 256 at 50; JPEG: its own size at `-q:v` 2, 5,
+    10, then 2048 at 5, 1024 at 10; PNG: its own size, 2048, 1024), the
+    aspect ratio kept and never enlarged, each attempt killed once its
+    output passes the limit, the whole ladder within `with_timeout`; an
+    image no attempt brings under is a `ValidationError` on `input`. The
+    result's header is checked (a WebP whose RIFF size is its length and
+    whose first chunk is `VP8 `, `VP8L`, or `VP8X` without the animation
+    flag; a JPEG of 8 bits and 3 components; a PNG of 8-bit RGB or RGBA
+    ending in `IEND`). `FfmpegConverter::check_for(&[TargetFormat])`
+    checks each format's encoder; `check()` is it for `OggOpus`.
+    Decisive (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`, against ffmpeg
+    6.1.1, Ubuntu 24.04's package, the one CI's runner installs, built
+    with libwebp, a hard dependency of its `libavcodec60`):
+    `ffmpeg_turns_a_png_into_a_static_webp_sticker_that_upload_accepts`
+    (a 1600 × 1200 picture with noise, a 4 MB PNG whose own-size WebP is
+    nearly 700 KB, comes out as a 1024 × 768 static WebP within 100 000
+    bytes, its RIFF header, chunks and size read in the test, ffprobe
+    agreeing, `validate_upload` taking it as a sticker, and its upload's
+    exact request), `ffmpeg_brings_a_jpeg_over_five_megabytes_under_the_image_limit`
+    (a 10 MB, 4000 × 3000 JPEG, which `validate_upload` refuses, comes out
+    as an 8-bit colour JPEG under 5 000 000 bytes, 4:3 kept), and
+    `ffmpeg_refuses_a_gif_a_jpeg_ls_an_animated_png_and_a_crafted_png`
+    (each `InputRejected` for every image format; the JPEG-LS image
+    passes the first-bytes check, and without the whitelist ffmpeg reads
+    it from a pipe and converts it: the control). Also: a small
+    transparent PNG keeps its size and alpha; a 16-bit PNG over 5 MB
+    comes out 8-bit RGBA under it; a 6000 × 6000 PNG is refused by the
+    pixel bound (ffmpeg without it converts it); a JPEG whose EXIF says
+    Orientation 6 comes out rotated (640 × 480 to 480 × 640), its EXIF
+    gone. The inputs are made by the tests (`lavfi` sources, an EXIF
+    segment written in Rust); nothing is committed. Removing the
+    first-bytes check, the whitelist (or widening it to `jpegls_pipe`),
+    `-max_pixels`, the ladder (an overflow ending it), the aspect ratio,
+    the 8-bit PNG format, the WebP check or its RIFF-size or animation
+    test, the ladder-wide timeout, or setting the sticker limit to the
+    animated one fails a test (the first-bytes check only in the
+    adapters' tests: for a GIF, the whitelist is a second wall). Not
+    done: animated stickers (L19c; a GIF or an animated PNG is refused;
+    ffmpeg 6.1.1 cannot read an APNG from a pipe at all), WebP or HEIC
+    as an input, and a photo of more than 32 Mi pixels (a 48-megapixel
+    one), which has to be scaled down before it comes here.
+  - **Decided 2026-11-01** (coordinator, under the owner's delegation,
+    AGENTS.md § Decisions; each swappable by another `MediaConverter`,
+    or a literal of this one):
+    1. Meta's "100 KB" and "5 MB" read as decimal (100 000 and
+       5 000 000) for what a converter makes, under the upload check's
+       binary reading: a converted file then fits whichever Meta means.
+       `AUDIO_MAX_BYTES` keeps its binary reading (16 MiB), as L19
+       decided: a voice note is far under either.
+    2. Inputs: PNG and JPEG only, the formats of Meta's image table; no
+       GIF, WebP, HEIC or animation.
+    3. Static stickers only: no `AnimatedSticker` target here (L19c).
+    4. No sticker dimensions imposed (Meta gives none): a sticker that
+       fits keeps its size; the ladder's sizes (1024, 512, 256) are where
+       it steps down, not a requirement.
+    5. Bounds: 32 Mi pixels, 256 MiB a single allocation, the existing
+       64 MiB of input and 60 s, the timeout covering the whole ladder.
+    6. The ladders as built; a result over the limit after every attempt
+       is a `ValidationError` on `input`, as L19's result over the limit
+       is.
+    7. Row 48 stays partial on the library's side: L19b's text names
+       Meta's 500 KB animated limit and the row's capability is "stickers
+       from images", which Zaileys makes animated too; animated stickers
+       are L19c. The service's side stays M5c1's.
+    8. An input's ICC profile passes into a JPEG or PNG result, so its
+       colours stay right; its size is bounded by the output limit.
+       Stripping it is one filter in the fixed table. **Decided
+       2026-11-01** (coordinator): iCCP kept only up to 16 KiB
+       compressed, after a 660 MB measurement (`image::PNG_ICCP_MAX`,
+       one literal; the first `iCCP` chunk only). **Decided
+       2026-11-01** (coordinator): a JPEG's profile is kept likewise,
+       for parity with the PNG side: its first `APP2` `ICC_PROFILE`
+       segment, when it is a whole profile in one chunk (1 of 1) of at
+       most 16 KiB (`image::JPEG_ICC_MAX`, the same value); every other
+       `APP2` is dropped, so a profile split over several chunks is
+       dropped whole and that image loses its colour profile. JPEG and
+       PNG each keep one profile of at most 16 KiB. One chunk costs
+       ffmpeg nothing measurable (51.6 MB at 16 KiB, 51.9 MB at 64 KiB,
+       against 51.5 MB without); the largest profile in chunks (255 of
+       64 KiB, a 16.7 MB file) took 198 MB, bounded but some nine times
+       its size, and is dropped.
+    9. The allocation bound stays 256 MiB, its edge documented (a 16-bit
+       RGBA frame of 8192 × 4096 is refused by ffmpeg's padding, 8192 ×
+       4094 converts); headroom is one literal.
+  - **Review** (adversarial, 2026-11-01, against ffmpeg 6.1.1): a PNG's
+    `zTXt` chunks were a memory bomb inside every bound (ffmpeg inflates
+    each and keeps the text until the frame is decoded: four 100 KB
+    chunks inflating to 100 MiB each took 1.6 GB for a 16 × 16 image).
+    The converter now walks a PNG's chunks before ffmpeg starts, refuses
+    one cut short of `IEND`, and passes it on without `tEXt`, `zTXt`,
+    `iTXt` and `eXIf` and without anything after `IEND`
+    (`a_png_reaches_ffmpeg_without_its_text_and_nothing_after_its_end`,
+    `ffmpeg_gets_the_png_without_its_text_and_the_limit_is_inclusive`);
+    the PNG output check wants one image ending the file. Also found and
+    tested: the allocation bound refuses a 16-bit RGBA PNG of exactly
+    32 Mi pixels (ffmpeg's padding; the docs said it fits;
+    `ffmpeg_refuses_a_frame_over_the_allocation_bound`, its first
+    behavioural test on images), a result of exactly the limit is taken,
+    and only the first of two images in a row comes out. Three guards
+    survived their mutation and now have a test: the kill of an attempt
+    over the limit (`kill_on_drop` and SIGPIPE hid its removal;
+    `an_attempt_over_the_limit_is_killed_and_reaped`, a stand-in deaf to
+    SIGPIPE, each attempt reaped before the conversion returns), a failed
+    attempt ending the ladder (`a_failed_attempt_ends_the_ladder`) and the
+    encoder's kind in `check_for`
+    (`check_for_wants_the_encoder_s_kind_too`). `-map_metadata -1`
+    survives in behaviour (the `image2pipe` muxer and these encoders
+    write no tags) and is pinned by the arguments' literal test. Probed and
+    holding: a JPEG-LS image with an `APP0` segment first, or a `SOF0`
+    copy before its own frame header, still never reaches `jpeg_pipe`
+    (ffmpeg's probe lands on `mjpeg` or nothing, both off the list); an
+    animated PNG reaches only its default image at worst; the ladder's
+    last attempts stay far under their limits on noise with noisy
+    transparency (42 774 bytes for a sticker, 3.8 MB for a PNG); killed
+    attempts are reaped (`Child::kill` waits). Left as they are,
+    documented: the colour profile (ICC) passes into a JPEG or PNG
+    result; a truncated JPEG decodes partly, grey below the cut; the
+    first sticker attempt of a 24-megapixel photo takes about 18 s on a
+    4-core machine, encoding a WebP far over the limit, so a timeout
+    under the default can fail a large photo; an image over 256:1 can
+    fail at a smaller attempt (a side scaled to nothing).
+  - **Fix: EXIF and colour profile bombs** (2026-11-01, found by L19c's
+    implementer, against ffmpeg 6.1.1). The JPEG path passed EXIF
+    through for its orientation, and ffmpeg copies an EXIF value once
+    for every IFD entry pointing at it, over every `APP1`: a 67 KB JPEG
+    of one crafted segment took 916 MB, 264 KB of four 3.6 GB, 658 KB of
+    ten 8.4 GB; a PNG's 200 KB `iCCP` inflating to 200 MiB took 660 MB.
+    The converter now walks a JPEG's segments before ffmpeg starts
+    (`image::jpeg_prepared`) and passes on only what ffmpeg reads by the
+    segment's length, since ffmpeg moves on by the bytes it read, not by
+    the length (a scan header it skips, a JFIF thumbnail, which it does
+    not skip, would otherwise hide a segment from the walk): `DQT`,
+    `DHT`, `SOF0`–`SOF3`, `SOF55`, `DRI` and `SOS`, each refused unless
+    its length is exactly its content (a scan header with no `FF`), and
+    the scans' entropy-coded data; the first JFIF and Adobe segments at
+    their fixed fields; the first colour profile segment when it is one
+    chunk of at most 16 KiB (decision 8 above); in place of the first
+    EXIF segment a minimal
+    EXIF of 36 bytes (`image::minimal_exif`: big-endian TIFF, one IFD,
+    the Orientation alone, 1 to 8; no EXIF without a valid one); the end
+    of image. Everything else is dropped (every other `APP1` and `APP2`,
+    `APP13`, comments, other `APPn`, markers ffmpeg does not decode,
+    bytes between segments, anything after the end of image), and a
+    JPEG cut short or with a segment past its end is `InputRejected`,
+    which replaces the review's "a truncated JPEG decodes partly". A
+    PNG keeps its first `iCCP` only up to 16 KiB (decision 8 above).
+    Decisive: `ffmpeg_applies_the_orientation_of_a_jpeg_whose_exif_is_a_bomb`
+    (the 67 KB file as it is peaks at about 980 MB, the control; with a
+    second segment, through the converter, about 50 MB, under a 400 MB
+    bound, and Orientation 6 still applied) and
+    `ffmpeg_keeps_a_small_colour_profile_and_drops_a_large_one` (650 MB
+    against 48 MB; a 3 KB profile still reaches a PNG result), both
+    reading `VmHWM` from `/proc`; the bytes ffmpeg is given, exactly, in
+    `a_jpeg_reaches_ffmpeg_with_only_what_ffmpeg_reads_whole`,
+    `a_jpeg_s_exif_is_its_orientation_alone` (each orientation, both
+    byte orders), `a_jpeg_cut_short_or_with_a_wrong_length_is_refused`,
+    `a_png_keeps_one_colour_profile_of_at_most_16_kib`,
+    `a_jpeg_keeps_one_colour_profile_of_at_most_16_kib` and the stand-in
+    `ffmpeg_gets_the_jpeg_without_its_metadata`; a JPEG's small profile
+    reaching a JPEG and a PNG result, one in two chunks reaching neither,
+    in `ffmpeg_keeps_a_jpeg_s_small_colour_profile_in_one_chunk`. Removing the EXIF
+    rewrite, keeping a second `APP1`, dropping the length check, raising
+    the `iCCP` cap or keeping a second profile, raising or removing the
+    JPEG profile's cap, keeping a profile in chunks or a second one, or
+    never keeping one, dropping the scan
+    header's `FF` check or a table's exact length, keeping the JFIF
+    thumbnail, the tail after the end of image or an unknown marker, or
+    the orientation's range check, fails a test.
+- [x] **L19c. Animated stickers** (`meta-whatsapp-core`: an
+  `AnimatedSticker` `TargetFormat`; `meta-whatsapp-adapters`: its
+  conversion behind the `ffmpeg` feature, or another converter; row 48):
+  an animation (an animated GIF, PNG or WebP) into an animated WebP
+  sticker within Meta's 500 KB (`messages/sticker-messages`), through
+  the same port and the same safety rules as L19 and L19b (fixed
+  arguments, input formats restricted, bounded in pixels, frames and
+  time, diagnostics withheld). The input formats it adds are a decision
+  of its own (AGENTS.md § Decisions).
+  - **Kind:** additive.
+  - **After:** L19b.
+  - **Decisive:** an animated GIF comes out as a WebP whose `VP8X`
+    header has the animation flag and whose `ANIM` and `ANMF` chunks are
+    read apart from the converter, within 500 KB, which `Media::upload`'s
+    type check accepts as a sticker, against a real converter in CI; an
+    animation over the frame bound is refused, and removing that bound
+    fails a test.
+  - **Landed:** a sixth `TargetFormat` in core, `AnimatedSticker` (an
+    animated WebP, `image/webp`, `.webp`, at most
+    `media::ANIMATED_STICKER_MAX_BYTES`, 500 000 bytes), read from
+    `messages/sticker-messages` and `business-phone-numbers/media` on
+    2026-11-01, which give "500 KB" and no dimensions, frame rate or
+    length; the client's test keeps it within its upload table.
+    `FfmpegConverter` makes it from a GIF only: the input's first bytes
+    (`GIF87a`, `GIF89a`) are checked before ffmpeg starts, and ffmpeg's
+    own detection may land on nothing but `gif` (`-format_whitelist
+    gif`; from a pipe, ffmpeg 6.1.1 detects a GIF as `gif`, never
+    `gif_pipe`). The GIF is walked block by block first, and refused
+    (`InputRejected`, before ffmpeg starts) when cut short of its
+    trailer, with a block GIF does not define or a graphic control
+    extension not of four bytes, or out of bounds: a canvas of no pixels
+    or over 2 Mi (2 097 152), fewer than 2 frames or more than 500, more
+    than 100 frames of 512 × 512 or larger (each frame counted for its
+    canvas's pixels up to 512 × 512, 25 Mi in all), or longer than 10 s
+    (each frame counted for its delay, or 10 hundredths without one or
+    under 2); ffmpeg gets it with its header, colour tables, images and
+    the last graphic control extension before each image only, without
+    comments, plain text and application extensions, and without
+    anything after its trailer. Each attempt runs fixed literal
+    arguments: the L19 prefix (`-protocol_whitelist pipe`, `-abort_on
+    empty_output`, environment reduced to `PATH`, stderr drained and
+    withheld), `-max_alloc 268435456`, `-max_pixels 2097152`, the first
+    video stream, no metadata, `-fps_mode vfr`, `-frames:v 500` (a
+    second wall behind the walk's frame bound), a filter and
+    `libwebp_anim` from a fixed ladder (512 at the GIF's own frame rate
+    and quality 75; then 512 at 15 frames a second and 50, 384 at 12 and
+    40, 256 at 10 and 40, 192 at 8 and 30, 128 at 5 and 25; compression
+    level 4), `-f image2pipe` on stdout; the aspect ratio and the
+    transparency kept, never enlarged, the whole ladder within
+    `with_timeout`. A still result (libwebp's answer to frames all
+    alike) is `InputRejected`; the result is checked (a RIFF size that
+    is its length, chunks ending with the file, `VP8X` first with the
+    animation flag, `ANIM` before the `ANMF` frames, at least two
+    `ANMF`, no `VP8 `, `VP8L` or `ALPH` outside them).
+    `check_for(&[TargetFormat::AnimatedSticker])` wants `libwebp_anim`.
+    Decisive (`crates/meta-whatsapp-rs/tests/ffmpeg.rs`, against ffmpeg
+    6.1.1, Ubuntu 24.04's package, CI's):
+    `ffmpeg_turns_a_gif_into_an_animated_webp_sticker_that_upload_accepts`
+    (a 480 × 360 GIF of 100 frames at 20 a second, too large at the
+    first attempt, comes out as an animated WebP of 494 836 bytes in
+    about 3 s, its RIFF size, `VP8X` animation flag, `ANIM` before its
+    `ANMF` frames, loop count (0, forever), 5 s of play and 4:3 read in
+    the test apart from the converter, `validate_upload` taking it as a
+    sticker, and its upload's exact request) and
+    `ffmpeg_refuses_an_animation_over_the_frame_bound` (501 frames are
+    `InputRejected`, 500 convert; ffmpeg alone converts the 501: the
+    control). Also: the time bound (11 one-second frames refused, 10
+    converted, 10 s of play), the frame-pixel bound (101 frames of
+    512 × 512 refused, ffmpeg alone converting them), the pixel bound (2048 × 1026 refused,
+    ffmpeg alone converting it; 2048 × 1024 comes out 512 × 256), a GIF
+    with 2 MB of comments, XMP, an ICC profile and plain text converted
+    with none of them in the sticker, and an animated PNG, an animated
+    WebP, a PNG, a JPEG, a one-frame GIF and a GIF of identical frames
+    refused. The inputs are made by the tests (`lavfi` sources, GIF
+    blocks written in Rust); nothing is committed. Removing the walk's
+    frame bound, its pixel bound, its time bound (or counting a delay
+    under 2 hundredths as given), the two-frame minimum, the extension
+    stripping, the cut after the trailer, the first-bytes check, the
+    still-result refusal, the output check or any of its parts (the
+    animation flag, `VP8X` first, `ANIM`, `ANMF`, `ANIM` before `ANMF`,
+    the RIFF size, no image outside the frames), `-frames:v` or
+    `-max_pixels`, widening the format whitelist, checking for
+    `libwebp` instead of `libwebp_anim`, a 16 MiB allocation bound, or
+    setting the limit to 512 000 or the static one fails a test, 24
+    mutations in all. The extension stripping, the trailer cut, the
+    delay rule and the output check's parts fail only the adapters'
+    tests (libwebp writes none of a GIF's metadata, and a real ffmpeg
+    makes no malformed WebP); `-frames:v`, `-max_pixels`, the whitelist
+    and the allocation bound only the arguments' literal test: the
+    walk and the first-bytes check stand in front of them, so they are
+    second walls.
+    Timings (4 cores, ffmpeg 6.1.1, the whole ladder): the decisive GIF
+    3.4 s, two attempts; a 10 s, 512 × 512 GIF of 250 busy frames 15 s,
+    four; 500 frames of a fine moving pattern 17 s, three; 30 s of noise
+    at 15 frames a second (a 51 MB GIF) 34 s, five, fitting at 192
+    pixels in 455 180 bytes (the last attempt made 121 844). These were
+    made under the first bounds (500 frames, 30 s); the review below
+    found inputs within them that ran past the timeout.
+    Measured against ffmpeg 6.1.1 (peak resident memory, 4 cores): a
+    GIF's extensions are not compressed, so none inflates, but ffmpeg
+    holds them with the first frame: 60 MB of comments, XMP, ICC, plain
+    text or loop-count data around a 16 × 16 GIF took 162 MB against
+    51 MB without them, the same in one extension or 600 (the walk takes
+    them out); 60 MB of padding inside one image's data took 162 MB with
+    a 64 MiB allocation bound. Frames cost time, not memory: 5 001
+    frames of one changed pixel on a 1920 × 1080 canvas (a 2.5 MB GIF)
+    took 41 s for one attempt at 66 MB, 200 001 (7 MB) ran past 60 s.
+    The worst within the bounds: 500 frames of a fine moving pattern (a
+    0.9 MB GIF) made a 25 MB WebP at the first attempt, in 12.5 s and
+    130 MB (a 75 MB GIF of a pattern that compresses badly, over the
+    input bound, took 26 s and 257 MB). A WebP input never reaches
+    ffmpeg (its first bytes): an `EXIF` chunk of 300 entries naming the
+    same 1 MB took ffmpeg 2.7 GB. Not done: animated PNG or WebP input
+    (ffmpeg 6.1.1 reads neither from a pipe: the APNG reader seeks, the
+    WebP decoder skips `ANIM` and `ANMF`), a GIF's own loop count (the
+    sticker loops forever), and the service's side (M5c1).
+  - **Decided 2026-11-01** (coordinator, under the owner's delegation,
+    AGENTS.md § Decisions; each swappable by another `MediaConverter`,
+    or a literal of this one):
+    1. Meta's "500 KB" means 500 000 bytes (decimal, as L19b reads its
+       figures): under the upload check's 500 KiB, a converted file fits
+       whichever Meta means.
+    2. Inputs: GIF only. An animated PNG and an animated WebP are
+       refused by their first bytes, since ffmpeg 6.1 reads neither from
+       a pipe; an ffmpeg that does would make each one list entry and
+       one first-bytes check, with a walk of its metadata first
+       (ffmpeg's EXIF reader copies a value once per entry naming it).
+    3. Bounds: a canvas of 2 Mi pixels (1920 × 1080 fits), 500 frames,
+       256 MiB a single allocation, the existing 64 MiB of input and
+       60 s for the whole ladder, as decided; tightened by the review on
+       its measurements (below), as the decision allowed: 10 s rather
+       than 30 (WhatsApp's own rule for animated stickers, its sticker
+       app guide: "less than or equal to 10 seconds total"), and a bound
+       on frames times pixels, 25 Mi (100 frames of 512 × 512 or
+       larger, each frame counted for its canvas's pixels up to
+       512 × 512). Meta's Cloud API pages give no frame or length limit;
+       these are cost bounds.
+    4. The ladder as built, starting at 512 pixels rather than the
+       GIF's own size (Meta gives no dimensions; an attempt costs its
+       frames times its pixels), the frame rate kept on the first
+       attempt only; a GIF no attempt brings under is a
+       `ValidationError` on `input`, as L19b's.
+    5. Frames all alike (a still result) are `InputRejected`, not a
+       static sticker passed off as an animated one.
+    6. The sticker always loops forever (libwebp's default); the GIF's
+       loop count is dropped with its other application extensions.
+    7. Row 48 is done on the library's side: voice, stickers static and
+       animated, and resizing are all made; the service's side stays
+       M5c1's.
+  - **Review** (adversarial, 2026-11-01, against ffmpeg 6.1.1 on 4
+    cores; the inputs made by a script, nothing committed): the bounds
+    as first built let a legal GIF run past the 60 s timeout, a
+    `ConversionError::Timeout`, the one retryable error, for an input
+    that fails the same way every time. Measured with the ladder's own
+    arguments: 500 frames of 512 × 512 four-colour noise over 30 s (a
+    40 MB GIF) took 66 s, six attempts, the first 26 s and 241 MB; the
+    same with noisy transparency over 10 s, 59 s and 258 MB at the
+    first; 250 frames of 1024 × 1024 noise with transparency over
+    10 s, 77 s; 450 frames of 2048 × 1024 noise, 52 s. The cost is
+    frames times encoded pixels (libwebp at level 4: up to some 160 ms
+    a frame of 512 × 512), and every attempt decodes every frame
+    again. Hence the time bound of 10 s and the frame-pixel bound of
+    25 Mi (decision 3): within them the worst measured took 44 s (100
+    frames of 1024 × 1024 noise with transparency at 10 a second: six
+    attempts, none within the limit, a `ValidationError`, 136 MB at
+    the first), 39 s at 15 a second, 36 s for 2048 × 1024, 22 s for
+    512 × 512 noise of 256 colours, 5 s for 500 frames of 128 × 128; at
+    64 frames of 512 × 512 the worst would be 24 s, but the decisive
+    GIF (100 frames of 480 × 360) would be refused. Also found: a GIF's
+    graphic control extensions were all passed on, so 64 MB of them in
+    a row made ffmpeg hold a 169 MB packet (the same as the comments
+    the walk takes out); the walk now keeps only the last one before
+    each image, the one ffmpeg and browsers use
+    (`a_gif_reaches_ffmpeg_without_its_metadata_and_nothing_after_its_trailer`).
+    The output check took one `ANMF` frame as an animation, a still
+    image labelled animated; it wants two (libwebp itself makes a still
+    image of a single frame). Four guards survived their mutation and
+    now have a test: either half of the graphic control extension's
+    size check (four bytes in its first sub-block, eight in all), and a
+    stray `VP8L` or `ALPH` chunk outside the frames. Each new guard
+    fails a test when mutated: the frame-pixel bound removed, off by
+    one, without its 512 × 512 cap, at the cap alone or doubled; the
+    time bound back at 30 s; the last control extension not kept,
+    kept for the next image too, or every one kept; one `ANMF` taken
+    (`a_gif_over_the_frame_pixel_bound_is_refused`, the facade's
+    `ffmpeg_refuses_an_animation_over_the_frame_pixel_bound` and
+    `ffmpeg_refuses_an_animation_over_the_time_bound` against ffmpeg). Equivalent, and
+    left: the colour table's own end check and the sub-blocks' bound
+    (the next read past the end refuses the GIF anyway), and
+    `gathered`'s uncopied whole (a slice of all of it is the same
+    bytes). Probed and holding: a frame declared larger than the
+    canvas (65 535 × 65 535 on 16 × 16) or of no size is clipped to the
+    canvas by ffmpeg's decoder, so `-max_pixels` on the canvas bounds
+    each frame (500 such frames: 0.2 s, 51 MB); disposal 3 (restore
+    previous) keeps one copy of the canvas, not one a frame (100 frames
+    of 2048 × 1024: 80 MB); a frame without its own graphic control
+    extension is merged by ffmpeg's GIF parser into the packet before
+    it, so the walk counts at least the frames and the time ffmpeg
+    does; an LZW code size outside 2 to 8 is passed on (ffmpeg refuses
+    one under 1 or over 11, and its index line is a byte, so no colour
+    table is read past its end); a NETSCAPE loop count never reaches
+    ffmpeg; the delay sum (at most 500 delays of 65 535) cannot
+    overflow, nor the canvas product (65 535² fits a `u32`); and only a
+    `gif` demuxer may open the input, so nothing after the GIF's first
+    bytes can be sniffed as another format. The PNG walk's shared
+    helpers (`keep`, `gathered`) leave its behaviour as it was: its
+    tests pass and merging ranges is caught by them. Left as they are:
+    an image's LZW data may carry padding after its end code, which
+    ffmpeg holds with the frame (64 MB took 162 MB; the input bound
+    caps it); the frame rate rungs repeat the frames of a slower GIF,
+    which libwebp merges but still compares (50 repeats of 1024 × 1024
+    noise cost 2 s); and the worst measured ladder (44 s) is within the
+    default timeout on these 4 cores, so a slower host needs a longer
+    one.
+- [x] **L20a. One catch-all shape for open enums** (`meta-whatsapp-core`
   and every crate with an open enum; OPEN_QUESTIONS #27): `Other(String)`,
   generated by one macro in core.
   - **Kind:** breaking, before the first release.
@@ -2956,6 +3748,60 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** an unknown value round-trips unchanged through
     deserialize and serialize for every open enum; a unit `Unknown` left
     anywhere fails it.
+  - **Landed:** `meta_whatsapp_core::open_enum!` generates all 197 open
+    enums (133 in `meta-whatsapp-client`, 63 in `meta-whatsapp-webhooks`,
+    core's `WindowEventKind`): the webhooks' `open_enum!`, the client's
+    `string_enum!` and both `wire_enum!` copies are gone, and so are the
+    13 unit `#[serde(other)] Unknown` enums and the hand-written
+    `Other(String)` / `Unknown(String)` ones. Options cover what the
+    pages need: `#![case_insensitive]` (the former `string_enum!`s),
+    `#![normalize = fn]` (`RejectionReason`,
+    `PaymentConfigurationStatus`) and `#![string_only]` (Flow JSON's
+    enums, so a wrongly typed value still leaves its component raw).
+    Every other enum keeps a non-string JSON value as its text in
+    `Other`, as the webhooks' did. A documented `OTHER` is
+    `FlowCategory::OtherCategory` and `Vertical::OtherVertical`. The
+    decisive tests are in `crates/meta-whatsapp-rs/tests/open_enums.rs`:
+    `every_open_enum_keeps_an_unlisted_value_verbatim` (three unlisted
+    values through `Deserialize`, `Serialize`, `From`, `FromStr` and
+    `Display` for every enum, the list compared with the macro's enums
+    in the source, and `#![string_only]` exactly on Flow JSON's) and
+    `no_enum_has_a_catch_all_of_another_shape` (no `#[serde(other)]`,
+    unit `Unknown` or hand-written string catch-all, `String`,
+    `Box<str>`, `Cow<str>` or a one-field struct variant, in
+    `crates/*/src` or `tools/*/src`, outside `NOT_OPEN`, each entry
+    with its reason: `ErrorKind`, the bot's job states, the request-only
+    `WabaCurrency` and `GatewayProvider`). Left as they are, not string enums: the
+    structured catch-alls (`Unknown { raw }` of webhook messages and
+    fields and of Flow JSON, `WebhookEvent::Unparsed`, the templates'
+    `Other(Value)`, `EmbeddedSignupEvent::Unknown`) and
+    `MessageProductType::Other(u16)`.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable):
+    1. a JSON value that is not a string is kept as its JSON text in
+       `Other` by default, so a number where the prose says string never
+       fails a response or a webhook; Flow JSON's enums are
+       `#![string_only]`, as a document this crate writes and reads back
+       must keep a wrongly typed component raw. Swappable per enum: the
+       option is one line of its `open_enum!`;
+    2. the documented `OTHER` values are `FlowCategory::OtherCategory`
+       and `Vertical::OtherVertical`, since `Other` is the catch-all; the
+       wire value stays `"OTHER"`. Swappable: a variant's name is its
+       line of the macro;
+    3. `#![normalize = fn]`, a rewrite for the comparison only (spaces
+       and underscores, in `RejectionReason` and
+       `PaymentConfigurationStatus`), never applied to the value kept in
+       `Other`. Swappable per enum, by dropping or replacing the
+       function;
+    4. `WabaCurrency` and `GatewayProvider` stay hand-written, in the
+       test's `NOT_OPEN` with the reason: a request value whose parse
+       refuses an unlisted code, and a request union whose variants carry
+       each gateway's fields. Swappable: converting one is moving it into
+       the macro and out of `NOT_OPEN`;
+    5. the macro puts `#[non_exhaustive]` on every enum it generates, so
+       naming a value Meta adds is not a breaking change; this settles
+       L20b's rule for open enums ahead of it (below). Swappable: one
+       attribute in the macro.
 - [ ] **L20b. The `#[non_exhaustive]` rule** (`meta-whatsapp-client`,
   `meta-whatsapp-webhooks`, docs/architecture.md; OPEN_QUESTIONS #28): on
   every response struct, webhook payload struct and open enum, never on
@@ -2965,6 +3811,10 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a source scan over the crates fails on a response or
     webhook struct, or an open enum, without the attribute; removing it
     from one type fails the scan.
+  - **Overlap with L20a:** the open enums already carry it, every one
+    from `open_enum!`, which adds it (decided 2026-11-01, L20a's
+    Landed note); L20b's scan only has to keep it there, and its work is
+    the structs.
 - [x] **L20c. Ids checked against their documented shape**
   (`meta-whatsapp-core` ids and `client::GraphRequest`; OPEN_QUESTIONS
   #20): digits for numeric ids; whole-segment percent-encoding kept for
@@ -3348,7 +4198,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     library's migration versions compared, not only counted (their list
     is private to the adapters crate: it needs a public accessor there);
     the subscriptions read moved into the client.
-- [ ] **L22b. A docs MCP server** (a tool under `tools/`, outside the
+- [x] **L22b. A docs MCP server** (a tool under `tools/`, outside the
   library; row 117): search and read the docs and skills over MCP's
   stdio transport.
   - **Kind:** additive.
@@ -3356,6 +4206,58 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Decisive:** a scripted MCP client lists the tools, searches
     `Idempotency-Key` and gets the server guide's section; a missing
     page is an MCP error, not a panic.
+  - **Landed:** row 117 done in the library too. `tools/docs-mcp`
+    (package and binary `meta-whatsapp-docs-mcp`, run by `just
+    docs-mcp`) serves three read-only tools over stdio: `list` (every
+    page, with its title and a skill's description), `search` (the
+    sections holding every term of a query, best first, each with its
+    heading, line and snippet) and `read` (a page, or one section by its
+    heading or anchor, to the next heading of its level). It speaks MCP
+    revision 2026-07-28, the current one on 2026-11-01 (no handshake:
+    `_meta` on every request, `server/discover`, `resultType`, the
+    caching hints, `-32022` for a version it does not speak) and, after
+    an `initialize`, 2025-11-25 and 2025-06-18, the revisions clients
+    shipped with until then (dual-era, as 2026-07-28's versioning page
+    defines it). A missing page, a missing section, a path outside the
+    corpus and bad arguments are tool execution errors (a result with
+    `isError: true`, as the tools page sorts them: the model can correct
+    them); an unknown tool or malformed params are JSON-RPC `-32602`.
+    `tools/docs-mcp/tests/stdio.rs` runs the binary as a subprocess:
+    a legacy client and a modern one each list the tools, search
+    `Idempotency-Key`, read `docs/guides/server.md`'s `Idempotency keys`
+    section and get a missing page as `isError: true` with the server
+    still answering; twelve escapes (`..`, absolute paths, repository
+    files outside the corpus, `.meta-docs/`, `\`) and symbolic links out
+    of a corpus tree are refused, and the corpus covers every Markdown
+    page `llms.txt` links. Each guard was removed in turn and a test
+    failed: the path syntax check, the listing membership, the
+    resolved-path check, the walk's refusal of links and of hidden
+    directories, the missing page's `isError`, the read and search
+    bounds.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each a constant or a list in one
+    file of the tool, swapped by changing it): Rust, in the root workspace as a non-default member
+    (its tests, clippy, rustdoc and `cargo deny` run in `just ci`'s
+    `--workspace` recipes), a binary only so no crate can depend on it,
+    with no MCP SDK and no dependency but `serde_json` (no new crate in
+    `Cargo.lock`); dual-era rather than 2026-07-28 alone; the corpus
+    (`corpus::ROOT_FILES` and `corpus::TREES` in the tool): the root's
+    README, AGENTS, CONTRIBUTING, CHANGELOG and OPEN_QUESTIONS, `docs/`'s
+    Markdown and text, `skills/`'s Markdown and example sources, never
+    `.meta-docs/`, hidden directories, `node_modules/`, generated
+    `*.d.ts` or a symbolic link, read from disk on every call (no
+    state, no stale index); the bounds: 40 KiB a read (a longer one ends
+    with its `from_line` to continue and the page's headings), 10 hits
+    a search by default and 25 at most, 240-character snippets, files
+    over 1 MiB and messages over 1 MiB refused; search ASCII
+    case-insensitive, every term required, ranked by occurrences with a
+    bonus for the heading; no `.mcp.json` committed (registering the
+    server stays each developer's choice: docs/dev-environment.md shows
+    how).
+  - **Left:** MCP resources and prompts (the pages as `resources/read`
+    too); a search that folds Unicode case or ranks by more than counts;
+    `subscriptions/listen` for a changed page (the tool list never
+    changes).
 - [ ] **L23. Template groups and archiving** (`meta-whatsapp-client`,
   `client::templates`; rows 101, 153): template groups' create, read,
   update and delete, after reading the reference Meta's changelog links
@@ -3465,11 +4367,11 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     key's format, the fingerprint's algorithm, what the cloud key is,
     which connection statuses a business may set and to what effect,
     how `webhook_url` relates to the override).
-    **Left:** `StorageConfiguration::status` (from L9) is still required
-    and `StorageStatus` has no catch-all, so a `storage_configuration`
-    answer without a status, or with a status Meta adds, fails the whole
+    **Left:** `StorageConfiguration::status` (from L9) is still required,
+    so a `storage_configuration` answer without a status fails the whole
     `settings()` read, as `payload_encryption` did before this item
-    made its status optional (L20a's catch-all pass covers the enum);
+    made its status optional (a status Meta adds parses: L20a made
+    `StorageStatus` an open enum, the value kept in `Other`);
     and `CallbackOverride` does not check its URI's scheme, where
     `set_webhook_url` requires `https`.
 
@@ -3485,7 +4387,7 @@ design's (§9).
 
 ### M2. Inbox, live updates, webhooks out
 
-- [ ] **M2a. Inbox routes** (rows 91, 111, 119): conversation list,
+- [x] **M2a. Inbox routes** (rows 91, 111, 119): conversation list,
   history, a reply checked against the window, all filtered by the
   number's binding epoch; retention per store (D10): the inbox store
   built `with_retention` from a setting, and `apply_retention` run by
@@ -3508,11 +4410,332 @@ design's (§9).
     S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. If M2a lands before the first
     release, the next item of the service's to land after it carries
     this line.
-- [ ] **M2b. Live updates** (row 10): SSE through an `EventNotifier`
+  - **Landed:** three routes in `meta-whatsapp-server-api-axum`
+    (`api::inbox`, tag and scope `inbox`), each a core service
+    (`meta_whatsapp_server_core::inbox::Conversations`, opened on an
+    `OwnedNumber` its `Authorizer` admits, so key, tenant, scope,
+    ownership, then the vault, as every number route): `GET
+    /v1/numbers/{pn}/conversations` (`list_conversations`, read class)
+    and `GET /v1/numbers/{pn}/conversations/{contact}/messages`
+    (`list_conversation_messages`, read class), `?limit=&cursor=` and
+    `next_cursor` as every list but the events (the store's exclusive
+    `(time, id)` cursor, wrapped opaquely), and `POST
+    /v1/numbers/{pn}/conversations/{contact}/messages`
+    (`reply_to_conversation`, send class, `Idempotency-Key` over
+    `Fingerprint::reply_to_conversation`: the number, the contact decoded,
+    the canonical body; no legacy fingerprint), whose body is
+    `ReplyMessage` (a `SendMessage` without `to`) and whose answer is `202
+    MessageAccepted`. The reply goes through the library's `Inbox::send`
+    (what `Inbox::reply` calls, so `reply_to` and `callback_data` pass),
+    addressed to `Inbox::recipient`: a free-form reply outside the window
+    is `409 customer_service_window_closed`, one while another app owns
+    the thread `409 thread_owned_elsewhere` (`ErrorKind::ThreadOwnedElsewhere`,
+    already in §5.2), both before any request; a template is exempt. The
+    binding epoch is `authz::history_from` (a WABA with a previous
+    tenant shows its holder nothing dated before `attached_at`; `None`, all
+    of it, for a first onboarding, whose synced history predates its
+    binding), carried by the `OwnedNumber` from the binding it was made
+    from; a page is answered only if that binding still holds once read
+    (`503 storage_unavailable` otherwise); a conversation whose customer
+    last wrote before the cut shows no `last_inbound_at` and no `unread`.
+    Retention: `WA_SERVER_INBOX_RETENTION` (`keep` by default, or a
+    positive duration), the inbox store built with it
+    (`MemoryBackend::with_inbox_retention`, `PgBackend::with_inbox_retention`,
+    through `BackendFactory::open_with`, which `serve` calls), and
+    `housekeeping::round` runs `ConversationStore::apply_retention` under
+    its turn; `serve` refuses a backend whose inbox applies another
+    retention than the setting. `ReplyChecks` per number:
+    `WA_SERVER_INBOX_REPLY_CHECKS` (`inbox::ReplyChecksByNumber`). The
+    OpenAPI document is additive only (796 lines added, none removed:
+    two paths, the tag `inbox`, six schemas). Decisive tests:
+    `conformance::inbox` (in `conformance::run`: M2.1 with no HTTP layer,
+    the binding epoch, `control_taken`, the order's own number, the
+    retention) on the core's memory backend, the memory crate's (built
+    with a 30-day retention, and without one) and live on Postgres; over
+    HTTP, the service's `tests/inbox.rs` (M2.1, the epoch, the reply's
+    key, the ownership refusal and the setting, the scope, pages) and
+    `live_postgres_m2_1_an_inbound_message_is_listed_read_and_answered`
+    and `live_postgres_a_moved_numbers_history_is_hidden_from_its_new_tenant`;
+    the start's refusal (`composed.rs`), the settings (`config.rs`), the
+    M1.3 table, M1.5's sentinel and M1.7's log capture over the new
+    routes. By mutation: the epoch filter removed fails the memory and
+    core suites and the HTTP epoch test; the `apply_retention` call
+    removed fails the retention case on the memory backend and live on
+    Postgres; the window check, or the ownership refusal's mapping,
+    removed fails M2.1 and the ownership cases. **With M2h, in the same
+    pull request:** a number's own move record, so that a number Meta
+    migrated from one tenant's WABA to another tenant's, neither WABA
+    moving, is cut too. `NumberBinding` gains `attached_at` (when the
+    number came under its tenant: a refresh, and a move between the
+    tenant's own WABAs while bound, keep it) and
+    `previous_tenant_released_at` (when another tenant last released it,
+    from its `NumberTombstone`: a release is a binding that no longer
+    lists it, or an unbind of its WABA, recorded in the same step; a
+    deleted tenant counts as another), and `authz::history_from` is the
+    later of the WABA's cut and the number's (a number another tenant
+    released hides what is dated before its own `attached_at`; a first
+    binding of a number no other tenant held keeps everything). The port
+    rules are `RecordStore::bind_waba`'s and `unbind_waba`'s, applied by
+    `NumberBinding::newly_bound` and `NumberTombstone` in memory and in the
+    Postgres SQL. Postgres: migration 5, `number moves`
+    (`0005_number_moves.sql`, additive, metadata only on Postgres 16:
+    `wa_server_numbers.attached_at`, no default for the existing rows,
+    which read their WABA's `attached_at`, and `now()` for the rows a
+    replica of the previous release inserts;
+    `wa_server_numbers.previous_tenant_released_at`, the Unix epoch
+    (`UNRECORDED_MOVE`) by default, read as a move: fail closed; the table
+    `wa_server_number_tombstones`, and the trigger
+    `wa_server_numbers_released` with its function
+    `wa_server_number_released()`), checksums 1 to 4 unchanged; a released
+    number's tombstone is written in the releasing statement by the
+    trigger, for every deleted number row (an unbind's cascade, a binding
+    that no longer lists it, and the same deletions by a replica of the
+    previous release during a rolling deploy, which writes none of its
+    own), and a new
+    number binding reads it in a statement of its own after its insert,
+    its start `GREATEST(now(), clock_timestamp(), released_at)`, as S2b's
+    review had a WABA's. The event outbox's routing needs no per-number
+    rule: an event names the WABA of the entry Meta sent it under, and the
+    routing gives a number's event to its tenant only when that WABA is
+    the one the number is bound under, so the previous holder's events,
+    dated or not, redelivered or late, name its WABA and reach nobody
+    (S2b's window exists because a moved WABA keeps its id; a migrated
+    number does not keep its WABA). Decisive tests:
+    `conformance::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history`
+    (the core's memory backend, the memory crate's, live on Postgres) and
+    over HTTP `a_number_migrated_between_two_tenants_wabas_hides_its_history`
+    and `live_postgres_a_number_migrated_between_two_tenants_wabas_hides_its_history`;
+    `records::a_numbers_moves_are_recorded`,
+    `races::a_number_taken_while_released_records_the_move` (and the
+    number's assertions added to
+    `races::a_binding_racing_an_unbind_records_the_move`), on memory and
+    live; `live_postgres_migration_5_rewrites_no_table` (the numbers
+    table's file unchanged by migration 5, a number from before it read as
+    unrecorded, its start kept when another WABA of its tenant takes it);
+    `live_postgres_a_release_by_the_previous_release_is_recorded` (the
+    previous release's own deletions leave tombstones); the S7/S2b continuity test, which now adds migrations 4
+    and 5 to `main`'s database and reads `main`'s number as unrecorded,
+    its move then recorded. By mutation: the number's cut removed from
+    `history_from` fails the migration case on the core's memory backend,
+    the memory crate's and live on Postgres, and over HTTP on memory and
+    live; the read of the tombstone in a new number binding removed
+    (memory's `newly_bound` given none; Postgres's statement after the
+    insert skipped) fails `records::a_numbers_moves_are_recorded` and the
+    HTTP migration case, on memory and live; the trigger dropped fails
+    them too, live, and the rolling deploy's case. **The sabotage
+    review (2026-11-01), tenant isolation first,** added: a free-form
+    reply on a number with a cut needs a window opened from the cut on
+    (the customer's message, a call or a standby message dated from it,
+    or, with the handover trusted, a handover recorded since), else `409
+    customer_service_window_closed` with zero requests, so the new holder
+    neither continues the previous holder's conversation nor learns from
+    the answer that its customer wrote (`Conversations::reply`'s
+    `refuse_across_the_cut`; templates exempt; nothing on a number without
+    a cut or with the window check off); `unread` counts only the
+    customer's messages dated from the cut on (`inbox::UNREAD_SCAN`
+    latest messages read at most, only on a number with a cut); a page is
+    answered only if the number's own binding also holds (its tenant, WABA
+    and `attached_at`: a capability made before its number moved to
+    another WABA of its tenant and on to another tenant, its first WABA's
+    epoch unchanged, read the new holder's history);
+    migration 5's trigger (above) for the rolling deploy; and a refresh
+    that moves a number from before migration 5 to another WABA of its
+    tenant writes its start down (its first WABA's) before the move.
+    Decisive: `conformance::inbox::a_number_migrated_between_two_tenants_wabas_hides_its_history`
+    (the reply's refusal, `unread`) and
+    `a_capability_made_before_its_number_left_reads_nothing`, on memory
+    and live, the HTTP migration case, and the two live migration tests;
+    the WABA's cut, redundant with the number's for every move recorded
+    since migration 5, is decisive for a WABA moved before it
+    (`live_postgres_a_waba_moved_before_migration_5_still_cuts_its_numbers`).
+    Left, and why: a reply is dated by the service's clock, so one recorded in
+    the seconds after a move by a replica whose clock is behind the
+    database's could be hidden from its own tenant; the reads open an
+    `OwnedNumber`, so they read the vault and answer `409
+    reconnect_required` for a number whose token lapsed, although they
+    ask Meta nothing; the design's window and read routes, a message by
+    id, and the list's `window` are M2g's; `ReplyChecks` and the
+    retention are per deployment (by number id, and for every number),
+    not per tenant. No new stored identifier: the two settings are
+    environment variables.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable):
+    1. `ReplyChecks` per number as a deployment setting keyed by phone
+       number id, `WA_SERVER_INBOX_REPLY_CHECKS`, in the format as built,
+       not a field on the binding (no schema change; to swap, a column
+       read into `ReplyChecksByNumber`, which `Conversations::new` takes
+       as a value).
+    2. A binding made before migration 4 (and, with M2h, a number bound
+       before migration 5), which reads `UNRECORDED_MOVE`, counts as
+       moved: fail closed, hiding a pre-migration coexistence history
+       older than its binding (to swap, `authz::history_from`).
+    3. The inbox's reads go through the whole authorization order, the
+       vault included, so a number whose token lapsed answers `409
+       reconnect_required` (to swap, a token-less capability for reads).
+    4. `serve` refuses a backend whose inbox applies another retention
+       than `WA_SERVER_INBOX_RETENTION`, rather than warning.
+    5. M2g kept as an item of its own (the window and read routes, a
+       message by id).
+    6. A page read while the binding moved (the WABA's epoch, or, since
+       the review, the number's own binding) answers `503
+       storage_unavailable`, which is retryable (to swap,
+       `OwnedNumber::still_held`).
+    7. The reply goes through `Inbox::send` rather than `Inbox::reply`,
+       to carry `reply_to` and `callback_data`: the review confirmed that
+       `Inbox::reply` is `Inbox::send` on the conversation's recipient, so
+       every check (the window with its calls and standby messages, the
+       handover trust, the thread's owner, the template and Direct Send
+       exemptions, a recipient outside the conversation refused) runs the
+       same; the service never sets a Direct Send `category` (`422
+       unsupported_message_type`). The service adds its own check before
+       them on a number with a cut (the review's, above).
+    8. On a number with a cut, a free-form reply needs a window opened
+       since the cut (an inbound message or window event dated from the
+       cut on, or, with handover trust, a `ThisApp` handover recorded
+       since it); otherwise `409 customer_service_window_closed` with no
+       request, templates and Direct Send categories exempt. A previous
+       holder's window never opens one for the new holder, and the 409
+       cannot tell B whether A's customer wrote. The cost: the new holder
+       starts with a template. Swap: drop `Conversations::reply`'s
+       `refuse_across_the_cut` call.
+  - **Also, after the first release** (from S7, carried by M2a, which
+    landed before it): drop the legacy fingerprint (S6's window:
+    `Fingerprint::legacy_v1_json`, `legacy_v1_upload`, `or_legacy`, and
+    the handlers' `Uri`), once every deployment has run a release with
+    S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. The next item of the
+    service's to land after the first release carries this line if it
+    lands before it.
+- [x] **M2b. Live updates** (row 10): SSE through an `EventNotifier`
   port (Postgres `LISTEN/NOTIFY`, memory broadcast; resume by
   `Last-Event-ID`); `GET /v1/events/{id}`.
   - **After:** S7.
   - **Decisive:** M2.2, M2.3, M2.5.
+  - **Landed:** the core's port `notify::EventNotifier` (object-safe:
+    `notify(&Wakeup)`, `subscribe(&TenantId)` to a `Subscription`; a
+    replica's wake-ups through a `Hub`, a channel per tenant from its
+    first subscription to its last), in the `Backend` bundle
+    (`Backend::notifier`): memory's `LocalNotifier`, the process's hub;
+    Postgres' `PgNotifier`, `NOTIFY` on the channel `wa_server_events`
+    with `<sequence> <tenant>` and one `LISTEN` connection per replica,
+    of its own outside the pool, which wakes every stream of the replica
+    when it listens again. The webhook pipeline notifies once a row it
+    routed to a tenant committed (a failure logged, the delivery still
+    `200`). The streams are the core's `live::Streams`: a stream is a
+    cursor in its tenant's stream, reading the outbox after it, with
+    polling's filters, when woken and every 15 s whatever it heard (the
+    re-poll), so a notification is a wake-up and nothing else and a lost
+    one loses nothing; bounded per tenant and replica
+    (`WA_SERVER_STREAMS_PER_TENANT`, 20, `WA_SERVER_STREAMS_PER_REPLICA`,
+    1,000, `429 too_many_streams`), 1 MiB and 64 frames held per stream,
+    a client taking nothing for 30 s dropped with `event: lagged`
+    (`{"after": n}`), as is a stream behind a purge, a heartbeat every
+    15 s, and `event: shutdown` for every stream when the replica stops
+    (`AppState::begin_shutdown`). Routes (additive in `openapi/v1.json`):
+    `GET /v1/events/stream` and `GET /v1/numbers/{pn}/events/stream`
+    (the HTTP crate's `api::events::stream_routes`, behind scope
+    `events`; `Last-Event-ID` or `?after=`, `410`/`422` on the cursor
+    before the stream, `503 shutting_down`; the number's stream step 4
+    only, no vault) and `GET /v1/events/{id}` (the axum adapter's
+    `get_event`, over `Outbox::get` and `events::get_event`: the
+    tenant's own only, `404` alike for another's, an operator-only row's,
+    a purged or malformed id); operations `get_event`, `stream_events`,
+    `stream_number_events`, rate class `read`; the event envelope moved
+    to the HTTP crate (`api::events::EventEnvelope`, schema unchanged).
+    Conformance: `conformance::live` in `conformance::run` (memory and,
+    live, Postgres), and
+    `live::an_event_through_one_replica_wakes_a_stream_on_another` over
+    two Postgres pools. Decisive: M2.2 live over HTTP on two replicas
+    (`live_postgres_a_webhook_into_one_replica_reaches_a_stream_on_another`:
+    within 2 s, `Last-Event-ID` replaying exactly the missed events,
+    another tenant's number's stream seeing none); M2.3 through the core's
+    pipeline and over HTTP (`no_unknown_or_unparsed_event_reaches_a_stream`);
+    M2.5 on memory and live (200 streams, half never read, 100 events a
+    second for 3 s: every read stream gets its tenant's events in order,
+    the data held never past each stream's budget, 0.9 MB at peak live);
+    a lost notification still delivers (`a_lost_notification_still_delivers`,
+    core and HTTP, with its control); `Last-Event-ID` resumes exactly
+    after (`last_event_id_resumes_exactly_after_it`). Kept as tests: a
+    notifier new on each call, or waking every tenant, fails
+    `conformance::run`, and an outbox whose pages leave the tenant out
+    fails the tenant case (the memory crate's `tests/conformance.rs`).
+    **The sabotage review (2026-11-01), tenant isolation and resource
+    bounds first,** added: a stream's place among the 20 and the 1,000
+    is held by its producer as well as its body, and given back when the
+    stream ends (lagged, shut down, revoked, its client gone), whatever
+    the client does, and a lagged stream drops what it held then, so a
+    client stalled on a full TCP window keeps neither its place nor its
+    buffer (`lagged` names the last sequence its client took); the
+    listeners close a connection that takes no byte of its answer for a
+    minute (`listen::Limits::write_timeout`, both listeners), so the
+    stalled connection goes too; a stream asks again, before it reads (at
+    most every second, at least every re-poll), whether its key would
+    still be admitted (`authz::Recheck`: the key stored, neither revoked
+    nor expired, the scope, a platform key's tenants, the tenant stored
+    and not suspended), and ends with no last frame once not: before, a
+    revoked key's stream went on for as long as its connection lasted;
+    `429 too_many_streams` carries `Retry-After: 5`, as the service's
+    other limit does; the open streams are a metric,
+    `wa_server_event_streams_open` (design §7.3); and the Postgres
+    listener listens again on a lost connection itself, waking every
+    stream once it listens rather than before. Decisive:
+    `conformance::live::a_slow_client_is_dropped_with_its_buffer_bounded`
+    (no place nor buffer held while the client never reads; the frames
+    held counted apart from the budget's own count, `LiveStream::pending`)
+    and `a_stream_ends_once_its_key_or_tenant_is_no_longer_admitted`, on
+    memory and live on Postgres; over HTTP `a_slow_client_is_dropped_with_lagged`,
+    `a_stream_ends_once_its_key_is_revoked`, `streams_are_bounded_per_tenant`
+    (`Retry-After`) and `the_open_streams_are_a_metric`; the HTTP crate's
+    `a_client_that_stops_reading_is_closed_after_the_write_timeout`, with
+    its control; `live_postgres_a_killed_listener_listens_again` (the
+    listening session terminated on a channel of the test's own, so no
+    other test is disturbed). Each guard was removed or bent in turn and
+    a named test failed; two that survived gained a test (the HTTP
+    crate's `a_literal_segment_beats_a_parameter_in_either_order`: the
+    stream's operation held only by the table's order; the core's
+    `an_id_of_no_events_shape_is_not_looked_up`), and one is redundant by
+    construction (`Producer::end` gives the slot back, and so does the
+    producer's first field when it drops). Checked and
+    left as built: the `NOTIFY` payload is parsed as a sequence and a
+    `TenantId` or ignored, never trusted beyond a wake-up (a forged one,
+    which any role of the database may send, costs its tenant's streams
+    a read each); a cursor is a number of the caller's own tenant's
+    stream (another tenant's sequence names nothing of theirs; a negative
+    one is `422`, one past the newest `422`); `Operations::of` and
+    `telemetry::most_specific` change only `/v1/events/stream` against
+    `/v1/events/{id}`, the one pair of the document's templates that
+    overlap; the `Event` schema is byte-identical to main's.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable): D39 (each stream
+    reads, as built; one reader shared per replica is a later
+    optimisation behind `live::Streams`, not a roadmap item), D40 (the
+    channel `wa_server_events` and the payload `<sequence> <tenant>`, as
+    built, both stable identifiers pending the owner's confirmation
+    before the first release), D41 (no cursor starts at the newest
+    sequence; `Last-Event-ID` wins over `after`; a malformed event id is
+    `404`) and D42 (1 MiB and 64 frames per stream, a 30 s drop, a 15 s
+    re-poll), as design §10 records; and:
+    1. A number's stream takes step 4 of the authorization order only
+       (the number bound to the tenant), no vault read (to swap,
+       `Authorizer::owned_number` in `Streams::open_number_stream`).
+    2. The webhook pipeline notifies after the outbox insert committed,
+       for a row it routed to a tenant (to swap, `ServiceSink`'s call in
+       `inbound.rs`).
+    3. The event envelope's schemas move to the HTTP crate, the schema
+       unchanged (`api::events::EventEnvelope`).
+    4. tokio's `macros` feature in the service's core (`select!`).
+    5. `Backend::notifier()` is required, with no default: a backend
+       built outside this repository must add one (CHANGELOG, breaking
+       for it).
+  - **Confirmed 2026-11-01** (the coordinator, under the owner's
+    delegation): D43, as the review proposed it (the re-check before a read, the frames dropped on a lag, `Retry-After: 5`, the
+    one-minute write timeout).
+  - **Left, and why:** a delete and re-create of a tenant within the
+    re-check's second could let a stream read one event of the new
+    tenant before it checks (the tenant's keys go with it, so the next
+    check ends it); the re-check reads the key and the tenant, two
+    record reads per stream and second at most, for a busy tenant's 20
+    streams; webhooks-out (M2c) will need the notifier's wake-ups too,
+    and gets them through the same port.
 - [ ] **M2c. Webhooks out** (row 10): endpoints, dispatcher and retries
   (Standard Webhooks, a destination allow list).
   - **After:** M2b.
@@ -3527,7 +4750,7 @@ design's (§9).
   - **After:** S7, L7.
   - **Decisive:** M2.6; taking one of the three types out of
     `TENANT_EVENT_TYPES` fails it.
-- [ ] **M2e. Received media** (row 45; OPEN_QUESTIONS #43): a media id
+- [x] **M2e. Received media** (row 45; OPEN_QUESTIONS #43): a media id
   the service recorded as received on the tenant's number is asked from
   Meta without `phone_number_id`; every other id keeps the check; a live
   check against Meta records which behaviour Meta has.
@@ -3535,6 +4758,75 @@ design's (§9).
   - **Decisive:** another tenant's received media id is `404` with zero
     requests (removing the "recorded on this tenant's number" lookup
     fails it); the live check's result is recorded in OPEN_QUESTIONS #43.
+  - **Landed** (ticked for the first half of its decisive line; **the
+    live check against Meta is still to run**, OPEN_QUESTIONS #43 says
+    how): no route added; `GET` and `DELETE
+    /v1/numbers/{pn}/media/{media_id}` read, before Meta is asked, where
+    the id was recorded as received. The record is the outbox's
+    (D77): `NewEvent::received_media` (the core's `received_media_id`:
+    a `message_received` event's image, video, audio, document or
+    sticker `{type}.id`, or an edit's, digits only) is kept beside the
+    row at insert, on Postgres in `wa_server_events.media_id` with the
+    partial index `wa_server_events_media_idx` (migration 7, expand-only,
+    no table rewrite; a previous release's rows record none), in memory
+    beside the row; `Outbox::received_media` (a port change, required:
+    D79) answers the rows of an id, every stream, the operator-only one
+    included, newest first, at most 16 (`RECEIVED_MEDIA_ROWS`). The core's
+    `Media::received` reads them for the number (`media::Received`): a
+    row of this number routed to its tenant, received from the binding
+    epoch on (`authz::history_from`, on the row's `created_at`) is
+    `Here`, and a download asks `GET /{media_id}` without
+    `phone_number_id`, once `OwnedNumber::still_held` (`503` otherwise),
+    with the number's token, then Meta's URL through the library's
+    allow-list, within the same limits and verification; any other row
+    makes it `Elsewhere`, `404 not_found` for a download and a deletion
+    with nothing asked of Meta (D78; one `info` line, no id); no row,
+    `Never`, Meta's check as in M1b. A deletion is never unscoped.
+    `Media::new` takes the bundle's outbox (breaking for an adapter
+    calling it; the HTTP crate passes the state's). The OpenAPI document
+    is unchanged. Decisive tests, on the core's memory backend, the
+    memory crate's and live on Postgres:
+    `conformance::media::a_media_id_received_elsewhere_is_not_found_with_no_request`
+    (the received id downloaded unscoped with the number's token, each
+    request with the client's time limit; `404` with zero requests on
+    another tenant's number, the tenant's other number, the number's new
+    holder after a move, an operator-only row on it, and before the cut
+    once the number came back; `503` with zero requests for a capability
+    made before the move; a deletion and an upload's id keep the check;
+    Meta's URL off its host `502 upstream` with the token sent nowhere;
+    a reported size over `max_bytes` `413`) and
+    `conformance::outbox::received_media`; over HTTP,
+    `tests/media.rs`'s
+    `another_tenants_received_media_id_is_not_found_with_no_request`
+    (Meta's image webhook through `/webhooks/meta`; also live,
+    `live_postgres.rs`); `metas_media_messages_record_their_media_id_and_nothing_else_does`
+    over every fixture of the library; the log capture
+    `a_received_media_refusal_logs_no_url_id_or_token`; and on Postgres
+    `live_postgres_migration_7_rewrites_no_table_and_records_from_its_release_on`.
+    By mutation, each failing a test: the lookup removed (any recorded
+    row exempting), its tenant, its number or its cut left out; an id
+    received elsewhere sent to Meta's check instead, for a download or a
+    deletion; a received id kept scoped; the binding not read again; the
+    memory or Postgres backend recording no id; an edit not followed, the
+    type not matched, the id not checked; the library's host allow-list
+    and its request time limit removed. The security review (2026-11-02)
+    found the lookup walking the whole outbox on Postgres while
+    `media_id` had no statistics (from migration 7 until the next
+    analyze; a million rows read per request) and made the partial index
+    `(media_id, created_at)`, pinned by its plan in the migration's live
+    test; it pinned the cut's instant and the "one row here is enough"
+    rule (`Received::among`, sharing the inbox's `visible`), each media
+    type's own object, and the `RECEIVED_MEDIA_ROWS` bound in the outbox
+    suite; it documented the refusal's timing (D78). D77–D79 are the
+    coordinator's decisions (2026-11-02, under the owner's delegation,
+    swappable). Migration 7's names are stable identifiers pending the
+    owner (§ Owner touchpoints).
+  - **Left, and why:** the live check (no real account here: run by the
+    owner or the coordinator, OPEN_QUESTIONS #43); media of a coexistence
+    history sync (`history` webhooks) and of the business's own echoes
+    are not recorded (they are not a customer's message on a live
+    number), so they keep the check; a received id older than the
+    outbox's retention keeps the check (Meta keeps it about as long).
 - [ ] **M2f. Erasure in the service** (row 91; D10, D30, D31): an
   admin- or tenant-scoped route that erases a customer on a number
   through the library's `identities` and `erase_all`; deletes the
@@ -3552,9 +4844,123 @@ design's (§9).
     fails it; the journal and the audit event hold no identity in
     clear; a tenant's key cannot erase on another tenant's number.
 
+- [x] **M2g. The inbox's other routes** (row 111; added by M2a, kept as
+  an item by the coordinator's decision of 2026-11-01): the design's `GET
+  /v1/numbers/{pn}/conversations/{contact}/window` (`{open, closes_at}`,
+  `Inbox::check_reply`'s answer beside the recorded window) and `POST
+  …/{contact}/read` (unread reset, `notify_customer` marking the latest
+  inbound message read on Meta), the list's `window`, and a message by
+  id on the number (`ConversationStore::message`), each from the binding
+  epoch on.
+  - **After:** M2a.
+  - **Decisive:** a message of the number's previous holder is `404` by
+    id to the new holder (removing the epoch from the lookup fails it);
+    after the read route, `unread` is 0 and Meta got one read receipt for
+    the latest inbound message only with `notify_customer`.
+  - **Landed:** three routes in `meta-whatsapp-server-api-axum`
+    (`api::inbox`, tag and scope `inbox`), each over the core's
+    `inbox::Conversations` on an `OwnedNumber` (the whole authorization
+    order, the vault included, as M2a's decision 3), each answered only if
+    the number's binding still holds once read (`OwnedNumber::still_held`,
+    `503 storage_unavailable`): `GET
+    /v1/numbers/{pn}/conversations/{contact}/window`
+    (`get_conversation_window`, read class: `Conversations::window`,
+    `{open, closes_at}`, `open` the reply's own checks run with nothing
+    sent, the cut's then the library's `Inbox::check_reply`; `closes_at`
+    the recorded window, `null` for one opened before the cut); `POST
+    /v1/numbers/{pn}/conversations/{contact}/read` (`mark_conversation_read`,
+    send class: `Conversations::mark_read`; an optional body
+    `{notify_customer}`, unknown fields `422 body`; the receipt first, with
+    the number's token, for the latest inbound message among the
+    conversation's latest 1000 (`UNREAD_SCAN`), a revoke's tombstone
+    skipped, none for one dated before the cut or older than Meta's 30 days,
+    `inbox::READ_RECEIPT_MAX_AGE`; then `ConversationStore::mark_read`; a
+    refused receipt resets nothing; an optional `Idempotency-Key` over
+    `Fingerprint::mark_conversation_read`, the number, the contact decoded
+    and the body, `null` when empty; `204` with no body, kept and replayed
+    as such by the HTTP crate's `Success::no_content`); and `GET
+    /v1/numbers/{pn}/messages/{message_id}` (`get_inbox_message`, read
+    class: `Conversations::message`, the store's lookup on the number,
+    `{contact, message}`; dated before the cut, `404 not_found`, the body of
+    an id the number never had; `422 message_id` for a blank id, one with
+    a control character or over 256 bytes). The list's items gain
+    `window`, the window route's answer for each
+    (`Conversations::list_with_windows`; `Conversations::list` unchanged).
+    The reply's cut check is now `Conversations::cut_refuses_free_form`
+    (M2a's `refuse_across_the_cut`, split so the window shares it: the
+    swap of M2a's decision 8 drops its calls, the reply's and the window's).
+    Three tenant operations (`operation::Operation::GetConversationWindow`,
+    `MarkConversationRead`, `GetInboxMessage`). The OpenAPI document is
+    additive only (513 lines added: three paths, three schemas,
+    `Conversation`'s required `window`; the one line removed is a comma).
+    No new setting and no new stored name. Decisive tests, on the core's
+    memory backend, the memory crate's and live on Postgres:
+    `conformance::inbox::the_previous_holders_message_window_and_receipt_never_reach_the_new_holder`
+    and `marking_a_conversation_read_resets_unread_and_receipts_the_latest_inbound_message`,
+    with `the_window_is_what_a_reply_would_meet`,
+    `a_message_is_found_by_id_on_its_own_number` and the stale capability's
+    new reads in `a_capability_made_before_its_number_left_reads_nothing`;
+    over HTTP, `tests/inbox.rs`'s
+    `the_previous_holders_message_window_and_receipt_never_reach_the_new_holder`
+    and `the_read_route_resets_unread_and_receipts_the_latest_inbound_message`
+    (also live, `live_postgres.rs`), `the_window_route_answers_what_a_reply_would_meet`,
+    `a_refused_read_receipt_resets_nothing`, the scope test, M1.3's tables,
+    M1.5's sentinel and M1.7's log capture over the new routes. By
+    mutation, each failing a test: the cut removed from the lookup by id
+    (the core's and the HTTP decisive case), from the receipt's choice
+    (the same), from the window's `closes_at` or from its `open` (the
+    core's decisive case); the store's reset removed, the receipt sent
+    without `notify_customer`, the receipt's message not required inbound,
+    the receipt's age limit removed (the core's read case); the binding
+    not read again in the window, the lookup or before the receipt (the
+    stale capability's case); `open` from the recorded window alone, no
+    `check_reply` (`the_window_is_what_a_reply_would_meet`); the read
+    route's `Idempotency-Key` ignored (the HTTP read case); the window's
+    operation under another scope (the axum crate's
+    `each_tenant_route_is_one_core_operation_with_its_groups_scope`); and
+    step 4's tenant filters removed from `Authorizer::owned_number` (M1.3
+    and the HTTP scope case, over the new routes too). Left, and why: a group conversation
+    gets one receipt, for its latest message (Meta marks group messages
+    one by one); the window names no refusal reason (D62); the list reads a
+    few rows per conversation for its windows (D63). D60–D63 are the
+    coordinator's decisions of 2026-11-02, each swappable.
+  - **Review** (sabotage, security lens): the binding is read again after
+    the receipt, before the reset, so a number that moved while Meta
+    answered resets nothing (`503`; the next holder's count was the stale
+    request's to zero); three guards no test held are pinned, the receipt's
+    tombstone skip (without it the receipt named a message never
+    received), its scan past the history's first page and the 30 days'
+    bound, to the second
+    (`conformance::inbox::a_read_receipt_skips_a_tombstone_and_reads_past_the_first_page`,
+    `a_number_that_moves_during_the_receipt_resets_nothing`, in `run`);
+    the idempotency claim corrected: a `503` after the receipt went
+    releases its key, and its repeat sends the receipt again. Left: a
+    receipt for a message its customer revoked after it arrived (status
+    `deleted`) is still sent, and Meta documents neither its answer nor a
+    repeat's; the read reset and the window emit no live event (M2b's
+    stream carries Meta's events only).
+- [x] **M2h. A number's own move record** (row 111; added by M2a, and
+  folded into it by the coordinator: the inbox never ships with the leak):
+  the binding epoch for a number Meta migrated from
+  one tenant's WABA to another tenant's WABA, the WABA not moving (M2a
+  cuts by the WABA's move record only): a per-number record of the last
+  tenant that held it, written with every number a binding drops (an
+  unbind, a refresh that no longer lists it), read when a binding takes
+  it, on both backends; its names are stable identifiers, the owner's
+  to confirm (§ Owner touchpoints).
+  - **Kind:** port change (`RecordStore`, an additive migration).
+  - **After:** M2a.
+  - **Decisive:** a number dropped by tenant A's WABA and listed by
+    tenant B's WABA, bound long before, shows B none of A's history;
+    removing the number's record from the cut fails it, on memory and
+    live on Postgres.
+  - **Landed:** with M2a, in the same pull request: see M2a's Landed
+    note ("With M2h"). Migration 5's names are stable identifiers pending
+    the owner (§ Owner touchpoints).
+
 ### M3. Embedded Signup, OTP, coexistence
 
-- [ ] **M3a. Embedded Signup routes** (rows 120, 142): both partner
+- [x] **M3a. Embedded Signup routes** (rows 120, 142): both partner
   modes, persisted attempts, resume, disconnection, credit lines in
   Solution Partner mode, and vault rotation over the records partner
   mode keeps past a binding. Companion: `docs/guides/production.md`
@@ -3563,23 +4969,344 @@ design's (§9).
   reports no failure).
   - **After:** S7, L4.
   - **Decisive:** M3.1–M3.4.
+  - **Landed:** rows 120 and 142 done on the service's side. Four
+    routes on a new tag, `signup` (scope `signup`): `POST
+    /v1/signup/sessions` (`start_signup`, rate class `send`), `POST
+    /v1/signup/complete` (`complete_signup`, `send`; bodies of the group
+    at most 16 KiB), `GET /v1/signup/attempts` (`list_signup_attempts`,
+    `read`), `POST /v1/signup/resume` (`resume_signup`, `send`), and one
+    admin route, `POST /v1/admin/wabas/{waba_id}/credit-line/reshare`
+    (the operator's re-funding of a revoked business, audited
+    `credit_line_reshared`). Each is the core's `signup` module
+    (`Signups`, built by `AppState::from_backend` on the bundle's
+    `KvStore` and the service's clock with the deployment's
+    `SignupDeployment`, set by `serve` when `WA_APP_ID` and
+    `WA_ES_CONFIG_ID` are; `Signups::open` admits the `Caller`) over the
+    library's `EmbeddedSignup`, which makes every Meta call: the attempt
+    is the library's `SignupSessions` (`wa.es.session`, unchanged); a
+    completion checks every input before the redemption, refuses a
+    claimed WABA another tenant holds before it (D4, `409`, the attempt
+    kept), redeems for the caller's tenant (`403 stale_attempt`, another
+    tenant's never burnt), then runs `onboard_with_approval`, whose
+    approval binds the verified WABA and all its numbers (D4 again,
+    atomically, before anything is stored, subscribed or shared; in
+    Solution Partner mode also remembering the ledger for a rotation); a
+    step after `store_token` that fails keeps the attempt (`502
+    onboarding_failed`, `resumable: true`), resumed from the stored token
+    by `resume_with_approval` (its approval re-checking the binding before
+    any credit call; another tenant's resume `404 nothing_to_resume`,
+    nothing read). The vault is the `Authorizer`'s
+    (`Authorizer::vault_for_signup`, crate-private, a UI case). In
+    Solution Partner mode the credit line is shared with the partner's
+    system token only and the allocation recorded on the binding; a
+    revoked business stops a resume and a new signup at
+    `share_credit_line`, and only the admin route funds it again. The
+    tenant's `DELETE /v1/wabas/{waba_id}` revokes before it deletes in
+    Solution Partner mode (`numbers::Waba::offboarded_by`,
+    `Signups::offboard`); the webhook pipeline gains an `AccountActions`
+    hook (`Pipeline::with_account_actions`, run once an event is
+    recorded; a retryable failure fails the delivery, any other is logged
+    for the operator), which `signup::AccountUpdates` implements:
+    `PARTNER_APP_UNINSTALLED` of the deployment's app and
+    `ACCOUNT_DELETED` offboard (revoke, token, bindings), `PARTNER_REMOVED`
+    revokes (D14), each confirmed with Graph first (`debug_token` on the
+    stored token; `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION`, `graph` or
+    `signature`). The vault's rotation walks the records kept past a
+    binding after the bindings (`rotate_vault`, the answer gaining
+    `records` and `failed_records`). A `RecordStore` port change (seven
+    methods: the attempts, the allocation, the vault entries; both
+    backends; Postgres migration 6, `signup`, adding
+    `wa_server_signup_attempts` and `wa_server_vault_records`,
+    expand-only, its names pending the owner), held by the new
+    conformance suite `signup`. A new error code, `409
+    signup_not_configured`. The OpenAPI document is additive only (852
+    lines added, one changed by a trailing comma: four paths and the admin
+    one, the tag `signup`, eight schemas, the code, `VaultRotation`'s two
+    fields). The production guide gains the vault key cadence (§ 2, "Vault
+    key cadence"); the guide a section, Embedded Signup; a new skill,
+    `meta-whatsapp-rs-server-onboarding`. Decisive tests: `tests/signup.rs`
+    (`m3_1_the_happy_path_binds_the_verified_waba_and_all_its_numbers`,
+    `m3_2_another_tenants_state_is_stale_and_the_rightful_tenant_still_completes`,
+    `m3_3_a_133005_at_registration_resumes_in_a_new_process` and its
+    `live_postgres_m3_3_…` twin on two pools of one database, which also
+    sweeps every table for the token, the PINs and the code,
+    `m3_4_the_credit_line_request_carries_the_partners_system_token`,
+    `m3_4_missing_partner_settings_refuse_the_start`,
+    `m3_4_d4_is_enforced_before_any_credit_call`,
+    `m3_4_a_revoked_business_is_refunded_only_by_the_operator`,
+    `m3_4_a_cms_disconnect_revokes_first_and_deletes_second`,
+    `m3_4_uninstall_then_removal_end_revoked_then_deleted`,
+    `m3_4_removal_then_uninstall_end_revoked_then_deleted`), with
+    `an_unconfirmed_or_foreign_account_update_changes_nothing`,
+    `a_removal_naming_only_the_owner_revokes_by_business`,
+    `a_tech_providers_offboarding_revokes_nothing`,
+    `a_completion_over_16_kib_is_too_large`,
+    `a_coexistence_signup_syncs_and_never_registers`,
+    `a_cancelled_flow_redeems_nothing`,
+    `a_resume_whose_waba_moves_meanwhile_acts_on_nothing`,
+    `the_signup_routes_need_the_signup_scope`; `tests/signup_logs.rs`
+    (a partner's whole signup at `TRACE`: no token, system token, PIN,
+    code, state or Meta text); the core's `conformance::signup` (the
+    records' contract, M3.4's D4 case and a rotation reaching an
+    offboarded WABA's ledger and marker, on the core's memory backend,
+    the memory crate's and live on Postgres); M1.3's table, M1.5's
+    sentinel and M1.7's capture over the new routes. Left, and why: no
+    `number_disconnected` event (the service's number events are
+    M2c–M2e's); no per-signup currency, no two-call credit method, no
+    route clearing a lost credit share (`clear_pending_share`); a
+    Multi-Partner Solution's `PARTNER_REMOVED` is not acted on (no
+    setting names the deployment's partner business); the admin unbind
+    revokes nothing (D75: the operator revokes explicitly); hosted
+    signup, several WABAs and pre-verified numbers wait for M3f. The
+    review (2026-11-02) made a partner disconnection delete only the
+    token and the binding it started from (the library's
+    `EmbeddedSignup::offboard_if_unchanged`;
+    `an_uninstall_whose_waba_moves_mid_revocation_leaves_the_new_holder`,
+    `a_disconnect_whose_waba_moves_mid_revocation_leaves_the_new_holder`)
+    and a Solution Partner's tenant deletion revoke first
+    (`deleting_a_partners_tenant_revokes_its_wabas_lines_first`). D70–D76
+    decided by the coordinator on 2026-11-02; migration 6's stored names
+    stay pending the owner.
 - [ ] **M3b. Coexistence** (rows 69, 124): onboarding, the automatic
-  sync (D7), the synced contacts stored and readable by their tenant.
+  sync (D7), the synced contacts stored and readable by their tenant:
+  M3b turns the inbox's contacts recording on
+  (`meta-whatsapp-server-core`'s `inbound::INBOX_RECORDING`, off since
+  L8: the library's `RecordingSwitches::ALL` with `contacts(false)`),
+  with the routes that read them and their erasure.
   - **After:** M3a, L8, L11d.
   - **Decisive:** a coexistence onboarding over HTTP starts the sync
     exactly once, and a second onboarding of the number does not;
     another tenant's key reads none of the synced contacts (`404`).
-- [ ] **M3c. OTP and authentication templates** (row 98): OTP with
+- [x] **M3c. OTP and authentication templates** (row 98): OTP with
   per-tenant settings (the sending number, D8), authentication
   templates.
   - **After:** S7.
   - **Decisive:** M3.5.
-- [ ] **M3d. Registration and the PIN** (rows 108, 128): request and
+  - **Landed:** four routes on two tags. `POST /v1/otp/issue`
+    (`issue_otp`, scope `otp`, its own rate class `otp_issue`, 5/s and a
+    burst of 5, the design's; an `Idempotency-Key` over
+    `Fingerprint::issue_otp`, keyed: an HMAC-SHA256 under a key the
+    service derives from `WA_OTP_PEPPER`, since the body names a phone
+    number and design §6 keeps numbers only as keyed hashes) and `POST
+    /v1/otp/verify` (`verify_otp`, scope `otp`, class `otp_verify`, 20/s
+    and a burst of 20, the service's default: the design names none),
+    each a core service (`meta_whatsapp_server_core::otp`: `OtpCodes`,
+    built by `AppState::from_backend` on the bundle's `KvStore` and the
+    service's clock, opened for an admitted `Caller` only), over the
+    library's `OtpService`, which keeps every rule of its own (the codes,
+    stored as keyed hashes under `wa.otp` and `wa.otp.rate`, unchanged;
+    the constant-time comparison, the attempt counted before it, the
+    expiry, the cooldown and the issue limit per recipient and purpose).
+    The namespace is the calling tenant's id, never a setting or a
+    request's value; the sending number comes from the tenant's own OTP
+    settings, which may only name one of its own numbers, else from those
+    of the deployment's default OTP tenant (`WA_SERVER_OTP_DEFAULT_TENANT`:
+    the platform's number, D8's default), opened for the tenant whose
+    settings name it through the authorization order's steps 4 and 5
+    (`Authorizer::otp_sender`, crate-private, a UI case pins it); none,
+    or a number no longer that tenant's, is `409 otp_not_configured` (a
+    new code of §5.2), with the vault unread and Meta unasked. Outcomes
+    are `200` with a status, as the design says (`sent` with
+    `challenge_id` and `expires_at`, `cooling_down` and `rate_limited`
+    with `retry_after_seconds`; `verified`, `invalid` with
+    `attempts_left`, `expired`, `too_many_attempts`, `not_found`); a
+    failed send keeps Meta's code, subcode and trace id and never its
+    text or `details`; `phone` is strict E.164 with its `+` (a BSUID, a
+    `wa_id` and separators refused, `422`); `purpose` is 1 to 64 of
+    `[A-Za-z0-9._:-]`, `login` when absent. The tenants' settings:
+    `GET`, `PUT` and `DELETE /v1/admin/tenants/{id}/otp` (admin key;
+    audited `otp_settings_set` and `otp_settings_cleared`), the number,
+    the template and its language, and the library's limits, the issue
+    limit never off; stored in `wa_server_tenants.settings` under the key
+    `otp` (`OtpSettings::to_stored`, version 1, no migration: the column
+    exists since migration 1) through two new `RecordStore` methods,
+    `otp_settings` and `set_otp_settings` (a port change: both in-tree
+    backends, and the conformance suite `otp`). `POST
+    /v1/wabas/{waba_id}/templates/authentication`
+    (`create_authentication_template`, scope and class `templates`, an
+    `Idempotency-Key` over `Fingerprint::create_authentication_template`):
+    Meta's bulk management (`upsert_message_templates`) through the
+    library's `Authentication::upsert`, copy code or one-tap, one or more
+    languages, its body Meta's fields flattened; zero-tap is refused
+    (`422` on `otp_type`): creating one accepts Meta's zero-tap terms, a
+    legal act (M3g, § Owner touchpoints). The OTP outcomes are counted
+    (`wa_server_otp_outcomes_total`, `Observer::otp`). The OpenAPI document
+    is additive only (1086 lines added, none removed: four paths, the tag
+    `otp`, fourteen schemas, the code `otp_not_configured`). Decisive
+    tests: M3.5 over HTTP, `tests/otp.rs` (`m3_5_every_outcome`,
+    `m3_5_a_tenants_code_verifies_at_no_other_tenant_on_the_same_number`,
+    `m3_5_a_sentinel_in_a_graph_error_on_issue_reaches_no_response`) and
+    `tests/otp_logs.rs` (`m3_5_logs_hold_neither_code_nor_number`), live on
+    Postgres
+    (`live_postgres_m3_5_a_code_verifies_at_no_other_tenant_on_the_same_number`,
+    which also finds no phone number in the key/value, idempotency and
+    tenant rows), and the core's `conformance::otp` with no HTTP layer
+    (the core's memory backend, the memory crate's and live on Postgres);
+    the sending number's holder check, the rate limits per tenant and per
+    recipient, the scope, the issue's key, the admin's settings on the
+    tenant's own number only and Meta's documented upserts in
+    `tests/otp.rs`; M1.3's table, M1.5's sentinel and M1.7's capture over
+    the new routes. By mutation (each run, then reverted): a namespace
+    shared by every tenant fails both HTTP namespace cases, the core's
+    `conformance::otp` case and its unit test; `Authorizer::otp_sender`
+    opening the number for whoever holds it fails
+    `the_sending_number_is_its_holders_own` and the core's case; the
+    admin's own-number check removed fails
+    `the_admin_sets_a_tenants_otp_settings_on_its_own_number_only`; the
+    `otp_issue` class charged as `send` fails
+    `rate_limits_are_per_tenant_and_per_recipient` and the class table;
+    the issue limit dropped (`issue_limit: None`) fails
+    `m3_5_every_outcome`; Meta's `details` kept on the OTP route fails
+    the sentinel case; the fingerprint left unkeyed fails
+    `the_otp_fingerprint_is_keyed`; a phone with separators let through
+    fails `requests_are_checked_first_and_need_the_otp_scope`. Left,
+    and why: the design's verify takes the phone number and purpose, not a
+    challenge id (the library's `verify` is keyed so), so another tenant's
+    code is `200 not_found`, the design's answer, not a `404`; per-tenant
+    rate limit overrides are not settable (the deployment's
+    `WA_SERVER_RATE_*` for every tenant); the design's "one `OtpService`
+    per (tenant, sending number), cached" is built per request instead (it
+    holds no connection: an allocation); template previews and zero-tap
+    wait for M3g.
+  - **Review (security lens), in the same PR:** five fixes. The generic
+    `POST /v1/wabas/{waba_id}/templates` passed a zero-tap button's
+    `zero_tap_terms_accepted: true` through to Meta since M1b (a tenant
+    accepting Meta's terms): now `422 invalid_request` on the key's path
+    (`templates::ZERO_TAP_TERMS`), the only other route that could carry
+    it. A suspended or deleted default OTP tenant still lent its settings
+    and number: now `409 otp_not_configured`, issue and check (fail
+    closed). The library's issue limit is per namespace, so N tenants on
+    the platform's number (or N purposes) could send one recipient N
+    times it: the default tenant's number now has one issue limit per
+    recipient, shared by every tenant and purpose sending from it
+    (`otp::SharedLimit` on the bundle's `KvStore`, namespace
+    `wa_server.otp.shared_rate`, the key an HMAC of the number and the
+    recipient under a key derived from the pepper; reserved before the
+    library's call, given back when nothing was sent; design D59,
+    proposed). A failed OTP send logged Meta's texts at `debug`, as
+    every route does, and they can quote the template's parameter, the
+    code: withheld at every level on the OTP route
+    (`ServiceError::from_library_withholding_texts`). `doctor` warns
+    (`otp.default_tenant`) when the default
+    tenant is missing, suspended, without settings or no longer holding
+    its number. Decisive:
+    `templates::tests::a_definition_accepting_the_zero_tap_terms_is_refused`
+    and `tests/templates.rs`'s
+    `a_template_accepting_the_zero_tap_terms_is_refused`;
+    `a_suspended_or_deleted_default_tenant_lends_nothing`;
+    `m3_5_logs_hold_neither_code_nor_number` (a sentinel in each of
+    Meta's texts, captured at `TRACE`); `a_malformed_check_counts_no_attempt`;
+    `the_platform_numbers_issue_limit_per_recipient_is_shared` and the
+    core's `conformance::otp::the_default_numbers_issue_limit_is_shared_and_fails_closed`
+    (memory, and live on Postgres); `a_default_otp_tenant_that_cannot_lend_warns`.
+    Left: on a tenant's own number the library's limit stays per
+    purpose, so a tenant can still send one recipient its limit once per
+    purpose it invents (its own number and bill: a per-number limit
+    there is a roadmap item if wanted); a tenant suspended between the
+    settings' read and the send still sends that one code.
+- [ ] **M3g. Zero-tap templates and template previews** (row 98; added
+  by M3c): zero-tap authentication templates once the owner decides who
+  accepts Meta's zero-tap terms (`zero_tap_terms_accepted`, a terms
+  acknowledgement: a legal act, § Owner touchpoints), and `GET
+  /v1/wabas/{waba_id}/templates/authentication/previews` over the
+  library's `Authentication::previews`; a setting that swaps D59's
+  shared issue limit on the default OTP tenant's number for the
+  library's per-namespace one; and a borrowed send's delivery statuses
+  (which carry the recipient's number) routed to the borrowing tenant
+  rather than the default tenant.
+  - **After:** M3c.
+  - **Decisive:** with the deployment's setting off, a zero-tap creation
+    makes no request to Meta; on, one request and one audit event; a
+    preview answers Meta's documented example.
+- [x] **M3d. Registration and the PIN** (rows 108, 128): request and
   verify a code, register, deregister; the PIN typed per attempt and
   never stored (D6).
   - **After:** S7.
   - **Decisive:** a sentinel PIN is found in no stored row and no log
     capture after a registration (storing it anywhere fails the test).
+  - **Landed:** five routes in `meta-whatsapp-server-api-axum`
+    (`api::registration`, tag `registration`, scope `numbers`, the send
+    class), each over the core's `registration::Registration`, opened on
+    an `OwnedNumber` and a `Caller` its `Authorizer` admits (key, tenant,
+    scope, ownership, the vault, then the body): `POST
+    /v1/numbers/{pn}/request-code` (`request_verification_code`),
+    `…/verify-code` (`verify_code`), `…/register` (`register_number`),
+    `…/deregister` (`deregister_number`) and `…/two-step-pin`
+    (`set_two_step_pin`, the PIN row 128 counts), each `200
+    {phone_number_id, status}` and Meta's documented request with the
+    number's own token. The PIN and the code are read into the library's
+    `TwoStepPin` and `VerificationCode` before anything else
+    (`registration::pin`, `registration::verification_code`; the bodies
+    that hold them have no `Debug`, and `ApiJson` never quotes a body);
+    a failed call keeps Meta's code, subcode and trace id and none of its
+    texts, in the answer or any log (`OwnedNumber::failed_withholding_texts`
+    and `ServiceError::from_library_withholding_texts`, carried over
+    byte for byte from M3c's pull request). Attempts are counted per
+    number on the bundle's `KvStore`, shared by every replica, after
+    ownership and the local checks and before Meta
+    (`registration::RegistrationAttempts`, under
+    `wa.server.registration`, a stable identifier pending the owner):
+    register and deregister 5 in 72 hours, the code's request and check
+    10 an hour (`WA_SERVER_REGISTRATION_*`, `WA_SERVER_VERIFICATION_*`;
+    design D66). `Idempotency-Key` on the request of a code, a
+    registration and a deregistration, a registration's fingerprint
+    never over the PIN (`Fingerprint::register_number`, D67). A
+    deregistration takes the number's id again (`confirm`,
+    `registration::confirmed`, D68) and is audited
+    (`number_deregistered`), as the PIN change is (`two_step_pin_set`;
+    the audit `Subject` gained `phone_number_id`). The OpenAPI document
+    is additive only (912 lines added, none removed: five paths, the tag
+    `registration`, eight schemas). Decisive tests:
+    `a_registrations_pin_and_code_are_in_no_store_and_no_answer` (memory:
+    every answer, every value written to the `KvStore`, the idempotency
+    records and their fingerprints, the outbox),
+    `live_postgres_a_registration_leaves_its_pin_in_no_table` (every
+    table of the schema, as text and as `bytea` hex) and
+    `a_registration_logs_no_pin_no_code_and_none_of_metas_texts` (`TRACE`,
+    every target), with M1.7's capture over the new routes; the tenant's
+    isolation, the budgets across two replicas, the key's replay with
+    another PIN, the malformed bodies and the confirmation in
+    `tests/registration.rs`. By mutation: the PIN logged at `TRACE`, the
+    PIN in the kept answer, the fingerprint over the PIN, Meta's texts
+    logged, `details` answered, the budget's charge removed or moved
+    before the confirmation, the confirmation removed, axum's own JSON
+    extractor, the deregistration's audit removed: each fails a test.
+  - **Decided:** D65–D69, the coordinator's of 2026-11-02 under the
+    owner's delegation, each swappable (design §10); the namespace
+    `wa.server.registration` and its record wait for the owner, and so
+    does a scope of deregistration's own (§ Owner touchpoints).
+  - **Review (security lens), in the same PR:** one fix and the tests a
+    guard lacked. A counter record of another `v` whose fields parsed
+    was read as version 1: now refused (`503`, fail closed;
+    `a_record_that_does_not_read_refuses_the_attempt`). Pinned by new
+    tests, each by mutation: concurrent charges on one record pass the
+    limit exactly (`concurrent_charges_never_pass_the_limit`; a plain
+    write, or a plain first write, lets all through), and so on Postgres
+    across two replicas
+    (`live_postgres_a_numbers_budget_holds_across_racing_replicas`); a
+    store whose reads or writes fail refuses
+    (`a_store_that_fails_refuses_the_attempt`); a moving 72 hours never
+    holds more than 10 accepted attempts
+    (`two_back_to_back_windows_hold_at_most_ten`); `Registration::new`'s
+    tenant check, which HTTP never reached (the extractor refuses
+    first), in `conformance::numbers`
+    (`the_registration_services_open_on_the_callers_own_number_only`); the
+    region in the fingerprint; an encoded path's confirmation
+    (`deregistering_an_encoded_path_takes_the_decoded_id`); a timeout's
+    kept key, replayed with another PIN and no attempt spent; Meta's
+    refusal of a coexistence number (`502 unknown`, the key freed, no
+    texts; `metas_refusal_to_deregister_maps_cleanly`); callers without a
+    valid key. The shared flow now carries the PIN in malformed shapes
+    (a number, too long, signed, padded, other digits, a body that is not
+    JSON) through the store sweep, the `TRACE` capture and the live
+    sweep, keys and replays its deregistration (audited once), and the
+    metrics hold no secret. Docs: Meta limits registering and
+    deregistering to 10 each per moving 72 hours, not 10 shared; the
+    library's `PhoneNumber::deregister` said it turned local storage off,
+    which Meta's page says it does not. Left: the windows are measured on
+    each replica's clock, so a skew between replicas shortens one by the
+    skew; the settings accept budgets past Meta's limit without a
+    warning; a verification code has no length bound but the body's.
 - [ ] **M3e. The token-expiry event** (row 6; OPEN_QUESTIONS #8): an
   event and a metric ahead of a stored token's lapse.
   - **After:** M3a, L11e.
@@ -3603,6 +5330,13 @@ design's (§9).
   generated from `openapi/v1.json` by openapi-typescript, the `api-axum`
   client of D26's swap.
   - **After:** M2c, and S15 unless the owner refuses D20 (a).
+  - **Before the first release** (P2's security review, finding M2: a
+    v1 client generated from the document before P2 types the admin key
+    answers' `scopes` as the closed `Scope`, so `payments` falls outside
+    them; 4 of the 271 operation checks): `Key.scopes` in responses
+    becomes an open `KnownScope | string`, as `ErrorCode` and `EventType`
+    already are, while the request's scopes (a key's minting) stay
+    closed, so a scope added later is additive.
   - **Decisive:** M4.1–M4.3; the image's contents list matches the
     image (an extra binary fails it).
 
@@ -3776,7 +5510,7 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     configuration's name has at most 60 characters, an order's limit;
     the tests put numeric ids where the examples print placeholder
     names (`the-catalog_id`, `your-media-id`).
-- [ ] **P1b. Brazil** (`meta-whatsapp-client`; rows 38, 141): `BRL`
+- [x] **P1b. Brazil** (`meta-whatsapp-client`; rows 38, 141): `BRL`
   orders (`payment_type` `br`, the `order` object optional, a
   `reference_id` of 60), the payment settings `pix_dynamic_code`,
   `payment_link`, `boleto` and `offsite_card_pay`, and the `payment`
@@ -3788,7 +5522,49 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
   - **Kind:** additive.
   - **Decisive:** exact JSON from `payments/payments-br/*`; a `BRL`
     order checked by Brazil's rules, an `INR` one by India's.
-- [ ] **P1c. The payment template buttons and the payment webhooks**
+  - **Landed:** `Currency::Brl` selects Brazil's rules
+    (`OrderDetailsParameters::brl`, `brl_simplified`,
+    `OrderStatus::brl` with a `PaymentUpdate`), India's unchanged; the
+    settings `PixDynamicCode` (with `PixFlowType`, Pix with redirect),
+    `PaymentSetting::boleto`, `OffsiteCardPay` and the `payment_link`'s
+    `uri` alone; every message example of the five pages an exact-JSON
+    test (`payments/tests/brazil.rs`; the one-click page's
+    `payment_method` webhook is P1c's), the decisive pair
+    (`a_brl_order_is_checked_by_brazils_rules_and_an_inr_one_by_indias`,
+    `an_order_status_is_checked_by_its_currencys_rules`).
+  - **Review (fields, limits, mutations):** a `BRL` header by media id
+    is refused (Brazil's image object has `link` alone, required; the id
+    is India's), and the item image's refusal is pinned by its reason
+    (`an_item_image_is_refused_in_a_brl_order_as_indias`: Brazil's
+    required `retailer_id` conflicts with an image anyway, so deleting
+    the refusal left every test green), as is the simplified order's
+    header refusal being Brazil's alone
+    (`the_header_rules_are_brazils_only`).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions):
+    1. A field documented for one currency only is refused in the
+       other's orders (India's `payment_configuration`, beneficiaries,
+       header by media id, item images, importers, `quick_pay`, a link's
+       success and cancel URLs and settings in `BRL`; Brazil's settings,
+       `payment_type` `br` and `payment` update in `INR`).
+    2. Brazil's subtotal is checked against `Order::items_sum` (its
+       page says the sale price counts, its examples keep the rule);
+       India's stays unchecked (P1a).
+    3. `payment_settings` are optional in `BRL`: every Brazil table
+       says Optional.
+    4. A `BRL` `order_status` with neither `order` nor `payment` is
+       accepted: no page requires either.
+    5. `last_four_digits` must be exactly four ASCII digits.
+    6. Pix codes and keys, Boleto digitable lines, a card's last four
+       digits and `credential_id` are payment data shown to the buyer
+       or echoed to the merchant, not secrets: no secret type, and
+       `Debug` shows them. Meta's page calls `credential_id` "the ID of
+       the credential" the merchant looks the card up by; the module
+       docs (not Meta's) say never to put a card number or PSP token
+       there.
+    7. The `header` Brazil's `order_status` table lists, with no fields
+       and no example, is not modelled (a gap).
+- [x] **P1c. The payment template buttons and the payment webhooks**
   (`meta-whatsapp-client`, `meta-whatsapp-webhooks`; rows 38, 141): a
   template's `order_details` button and `order_status` component
   (`payments-in/orderdetailstemplate`, `orderstatustemplate`,
@@ -3803,10 +5579,387 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     conformance sweep (their manifest status moves from `OutOfScope` to
     `Typed`), with new event data snapshots only (no changed one); exact
     JSON of the template pages' examples.
-- [ ] **P2. Payment routes in the service** (rows 38, 141).
+  - **Landed:** webhooks: a status's `type` and `payment`
+    (`webhooks::fields::Status::payment`, `StatusPayment`: the
+    transaction, its method and error, the refunds, the gateways' echoed
+    fields), `MessageStatus::Captured` and `Pending`, and
+    `InteractiveReply::PaymentMethod` (`PaymentMethodReply`); both pages
+    `Typed` in the conformance manifest (the `OutOfScope` status, with no
+    page left, is gone), two fixtures, two new event data snapshots, no
+    existing one changed, no new event kind. Client: the
+    `ORDER_DETAILS` and `PAYMENT_REQUEST` buttons of a definition
+    (`client::templates::Button::OrderDetails`, `Button::PaymentRequest`),
+    `TemplateDefinition::sub_category` and `display_format`, and the send
+    side (`TemplateMessage::order_details_button`,
+    `payment_request_button`, `order_status`;
+    `client::payments::PaymentRequest`, `PaymentRequestSetting`,
+    `PaymentRequestCard`, `TemplateOrderStatus`), the order checked by
+    its currency's rules (P1a's and P1b's, with the template's field
+    paths), every example of the four pages an exact-JSON test both ways
+    (`payments/tests/templates.rs`). The order types now also
+    deserialize (the service reads a send through them). The service's
+    send refusal is lifted here, not in M5b: it read sends through the
+    library type, so typing them lifts it; creation was never refused
+    (the buttons parsed as `Button::Other`), and is now checked
+    (`request::tests::the_payment_templates_pass_with_no_key_dropped`,
+    the service's `payment_templates_are_sent_as_metas_objects_and_checked`).
+    Not done here: India's checkout button templates
+    (`payments-in/checkout-button-templates`, their checkout endpoint and
+    the configuration's data endpoint) and the alpha third-party
+    validation, P1d's (row 141 stays partial in the library).
+  - **Review (fields, parsing, the send path, mutations):** a payment
+    object in a catch-all was sent unchecked: a component `type` spelled
+    `Button` or `Order_Status`, an `index` that is not a number, a
+    parameter `type` `ACTION` or `ORDER_STATUS` land in
+    `SendComponent::Other` or `Parameter::Other`, which reach Meta as
+    written, so an order in `USD` (or a `pending` order status) skipped
+    every rule, through the service too. One holding `order_details`,
+    `payment_request` or `order_status` at any depth is now refused, as
+    is a definition's `ORDER_DETAILS` or `PAYMENT_REQUEST` button that
+    did not parse typed
+    (`a_payment_object_in_a_catch_all_is_refused`; the service's
+    `payment_templates_are_sent_as_metas_objects_and_checked`). And a
+    payment webhook that failed its typed parse turned an event tenants
+    received before P1c (`status_updated`, `message_received`) into an
+    operator-only `unknown`: the `payment`, and its amount, method and
+    error, are `None` when they do not parse, the reply an unknown reply,
+    `refunds` may be `null` and `notes` `[]`
+    (`a_payment_that_does_not_parse_typed_never_fails_its_change`).
+    Three guards survived their deletion and are now pinned
+    (`a_payment_button_carries_its_own_object_in_a_known_currency`): a
+    payment button's `action` without its own object, and `Currency`
+    refusing an unknown code (the catch-all tests' `USD` order lacked
+    required fields, so it failed to parse whatever its currency).
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions):
+    1. No new event kind. India's payment status stays a
+       `status_updated` event (tenants of the service receive it so
+       today, as a status `captured` or `pending`: a new kind, which
+       would start operator-only, would take it from them), with `type`
+       and `payment` added (`Status::is_payment` tells it from a
+       message's); the `payment_method` reply stays a `message_received`
+       event. Both already were tenant types.
+    2. `MessageStatus` gains `Captured` and `Pending`, the payment
+       statuses; the inbox ignores them (no delivery status maps), the
+       bot's 131049 feedback needs an error code they never carry.
+    3. The webhook types require only the identifiers (`reference_id`,
+       a transaction's and a refund's `id`, the reply's
+       `payment_method`); Razorpay's `notes` keep a non-string value as
+       its JSON text, as `open_enum!` does. Tightened by the review: no
+       payment object can fail the change it arrives in (a `payment`, an
+       amount, a method or an error that does not parse typed is `None`,
+       a reply that does not is `InteractiveReply::Unknown`), so a new
+       field or value never costs the event.
+    4. An order details template is `UTILITY` or `MARKETING` with a
+       `TEXT`, `IMAGE` or `DOCUMENT` header, whatever its currency
+       (Brazil's page says "must"; India's is silent and its examples
+       comply); its label is not checked (India fixes `Review and Pay`,
+       Brazil's example prints a placeholder).
+    5. A payment request button: the label its method requires; at most
+       three, each a different method, and then three buttons in all; a
+       sample value, no card at creation, the card at send
+       (`credential_id` optional, as this page says); `currency` and
+       `total_amount` required for a card, refused for Boleto and links,
+       and together or not at all for Pix ("used with").
+    6. An order status template is checked by India's rules (a
+       `reference_id` of 35, no `pending`): India alone documents it.
+    7. A payment button or order status component whose parameter does
+       not parse typed (a currency or payment method the client has no
+       rules for, a required field missing) is refused by `validate`,
+       not sent unchecked as the catch-all; so is a payment object in
+       any catch-all component or parameter, and, at creation, a payment
+       button that did not parse typed (the review's extension).
+    8. The button `index` stays a string, as every template button's,
+       though the order details pages print a number.
+- [x] **P1d. India's checkout button templates** (`meta-whatsapp-client`;
+  row 141): the checkout button templates
+  (`payments/payments-in/checkout-button-templates`: one `order_details`
+  button labelled `Buy now` per product, in a single product template or
+  a carousel, each sent with its order), the checkout endpoint they call
+  (its `get_coupons`, `apply_coupon`, `remove_coupon` and
+  `apply_shipping` sub-actions, encrypted as a Flows endpoint is), the
+  link of that endpoint to a payment configuration
+  (`payments/payments-in/onboarding-apis`, "Link or update data
+  endpoint"), and the alpha third-party validation
+  (`payments/payments-in/pg`, "Third party validation": a Razorpay or
+  `PayU` setting's `encrypted_payment_gateway_data`).
+  - **After:** P1c.
+  - **Kind:** additive.
+  - **Decisive:** exact JSON of the checkout button page's creation and
+    send examples; each endpoint sample request decrypted and answered
+    with its sample response through the Flows endpoint's crypto; the
+    two third-party validation payloads of `pg` as exact JSON.
+  - **Landed:** the checkout button (`client::templates::Button::checkout`,
+    `Button::CHECKOUT_LABEL`: an `ORDER_DETAILS` button labelled `Buy now`
+    is checked as one: a `MARKETING` template with an `IMAGE` or `VIDEO`
+    header, one checkout button and up to 9 quick replies, or the first
+    button of each media card), sent with
+    `TemplateMessage::order_details_button` and an order that may offer
+    `client::payments::ShippingInfo` (INR, physical goods; refused in an
+    `order_details` message), each order details button of a message
+    with its own `reference_id`; the checkout endpoint
+    (`client::payments::checkout`, feature `flows-endpoint`:
+    `FlowEndpointKey::decrypt_checkout_request` on the Flows endpoint's
+    `decrypt_request`, made generic inside the crate, `CheckoutRequest`,
+    `CheckoutSubAction`, `CheckoutResponse` checked by `validate` before
+    `ResponseSealer::seal`: India's rules, no payment settings, the total
+    less the `AppliedCoupon`'s discount, a coupon after `apply_coupon` and
+    none after `remove_coupon`); the link
+    (`PaymentConfigurations::link_data_endpoint`: an `https` URL,
+    replayed, its answer undocumented); the third party validation
+    (`PaymentSetting::third_party_validation`, `TpvGateway`,
+    `EncryptedPaymentGatewayData`, redacted from `Debug`). An
+    expiration's description is now optional
+    (`OrderExpiration::description` an `Option`, `OrderExpiration::at`),
+    still required in an `order_details` message. Every example of the
+    three pages an exact-JSON test (`payments/tests/checkout.rs`, the
+    endpoint's in `payments/tests/checkout/endpoint.rs`: each sample
+    request encrypted as the WhatsApp client does, decrypted, answered
+    with the typed sample response, sealed and opened again to the page's
+    JSON). Not wrapped, being undocumented: unlinking the data endpoint,
+    a shipping address's floor number (its key is never shown), and a
+    health check or error answer at the checkout endpoint (a request
+    without a sub-action parses, to be answered as a Flow endpoint's).
+  - **Review (crypto, secrets, money, the URL, mutations):** the
+    checkout endpoint is the Flows endpoint's crypto, not a copy
+    (`decrypt_request` and `decrypt_checkout_request` both call
+    `decrypt_as`, whose behaviour and error are `decrypt_request`'s
+    before: one `CryptoError::Decrypt` for a payload that does not
+    decrypt and one that does not parse, so no answer tells them
+    apart); the AES and private keys reach no `Debug` or error, nor
+    does `EncryptedPaymentGatewayData`, through a setting, an order, a
+    template message or a refusal. `link_data_endpoint` accepted what
+    the WHATWG parser repairs and sent it unrepaired (`https:host`,
+    `https:/host`, `https:///host`, backslashes, an empty `@`): it now
+    requires `https://` then a host, without `@` before the path or a
+    backslash (`link_data_endpoint_checks_first_and_reads_a_refusal`);
+    hosts stay unjudged, private addresses and IDNs included, since
+    only the deployment knows
+    (`link_data_endpoint_takes_any_https_host_as_given`). Nine guards
+    survived their deletion and are pinned: a checkout answer's
+    `payment_configuration`, Brazil's `payment_type` and India's
+    beneficiaries, the coupon's code, the shipping country and the
+    version (`a_checkout_answer_names_no_way_to_pay_and_is_whole`),
+    `shipping_info` in a BRL order
+    (`shipping_info_is_a_template_buttons_and_physical_goods_only`),
+    `expected_total` for a coupon worth more than the order
+    (`a_coupon_never_takes_the_total_below_zero`), and the exact label
+    (`a_checkout_template_is_marketing_with_an_image_or_video_header`,
+    `a_carousel_card_starts_with_its_checkout_button`). A checkout
+    button's own category check could never fire (the single product
+    rule and the carousel rule refuse first) and is gone. The carousel
+    rules hold on Meta's media card example with a button replaced
+    (`a_checkout_carousel_is_metas_media_card_example_with_a_button_replaced`).
+  - **Decided 2026-11-02** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable):
+    1. The exact label `Buy now` (`Button::CHECKOUT_LABEL`, the case and
+       spacing the page prints, "non-customizable") marks a checkout
+       button; any other label, `buy now` or `Buy now ` among them, keeps
+       P1c's order details rules. Side effect: a Brazil order details
+       template labelled `Buy now` (Brazil's example prints a
+       placeholder) is checked as a checkout button, so it must be
+       `MARKETING` with an `IMAGE` or `VIDEO` header. Swap: an explicit
+       marker (a `Button::Checkout` variant, or a flag on
+       `Button::OrderDetails`) read by `templates::validate::is_checkout`
+       and built by `Button::checkout`, in place of the label.
+    2. An expiration's description is optional
+       (`OrderExpiration::description` an `Option`, `OrderExpiration::at`)
+       except in an `order_details` message, where `payments-in/pg` says
+       the business "must define" it. Swap: the `(None,
+       OrderContext::Message)` arm of `Order::validate`, one arm per
+       context.
+    3. `shipping_info` is accepted in a template button's INR order of
+       physical goods and in the checkout endpoint's exchange, refused in
+       an `order_details` message, in BRL and for digital goods; its
+       absence for physical goods is not refused (a send cannot tell a
+       checkout button template from an order details template); its
+       `selected_address` only in a checkout answer; every address limit
+       of the page; the floor number, whose key no example shows, is not
+       modelled. Swap: `OrderDetailsParameters::validate_checkout_parts`
+       and `ShippingInfo::validate`, by `OrderContext`.
+    4. `coupon` (`AppliedCoupon`) only in a checkout answer, refused in a
+       send; its discount comes off `subtotal + tax + shipping -
+       discount` (`OrderDetailsParameters::expected_total`: the page's
+       examples, no sentence). Swap: `expected_total` and the coupon arm
+       of `validate_checkout_parts`.
+    5. A checkout answer refuses payment settings (`payment_settings`,
+       the older `payment_configuration`, Brazil's `payment_type`),
+       requires INR, and `CheckoutResponse::validate` refuses a
+       sub-action this client does not know (`CheckoutSubAction::Other`)
+       and data its sub-action does not take. Swap:
+       `CheckoutResponse::validate` and
+       `OrderDetailsParameters::validate_checkout_payment`; an answer to
+       a new sub-action can be sealed without `validate` meanwhile.
+    6. `CheckoutRequest::sub_action` and `data` are `Option` (a request
+       without them, a health check should one come, parses); a request
+       that decrypts but does not parse typed is `CryptoError::Decrypt`
+       (HTTP 421), the same error as one that does not decrypt, so no
+       answer tells the two apart. Swap: the crate-internal
+       `FlowEndpointKey::decrypt_as` made public (or a
+       `decrypt_as::<serde_json::Value>` entry), for a caller that wants
+       the untyped payload.
+    7. Signatures: the page does not say whether a checkout request
+       carries `X-Hub-Signature-256`; the module docs say to verify it
+       when present (`flows::endpoint::verify_request_signature`) and
+       never to price from the request's amounts, since anyone can
+       encrypt to a public key. Nothing enforces it. Swap: a caller-side
+       check; a signature required by `decrypt_checkout_request` would
+       be a new entry point beside it.
+    8. `link_data_endpoint` is replayed after a timeout (it sets a
+       value), sends `data_endpoint_url` (the example's spelling, not the
+       table's `data-endpoint-url`), and takes any 2xx JSON object but
+       `"success": false` as done. Swap: `.idempotent(true)` and the
+       `Body` field in `PaymentConfigurations::link_data_endpoint`.
+    9. Third party validation is `{"type": <gateway>, <gateway>:
+       {"encrypted_payment_gateway_data": …}}`, `TpvGateway` the page's
+       two (Razorpay, `PayU`; `#[non_exhaustive]`), INR only, with no
+       `payment_gateway` setting required beside it, the encryption the
+       caller's. Swap: `PaymentSetting`'s serde impls and
+       `only_currency`; a new gateway is a `TpvGateway` variant.
+    10. `reference_id`s are unique across every order details button of
+        one message, carousel cards included (the page says each
+        carousel button; a single product template has one). Swap:
+        `templates::send::unique_reference_ids`.
+- [x] **P2. Payment routes in the service** (rows 38, 141).
   - **After:** P1a, P1b, P1c.
   - **Decisive:** M1.3 over the new routes; an order-details send
     carries the tenant's token.
+  - **Found already working before P2:** the payment templates' sends
+    and creations (P1c: `type` `template`, read through the library's
+    types); the payment webhooks, routed to the tenant like every event
+    (`payment_configuration_updated`, already a tenant type, by WABA;
+    India's payment status in `status_updated` and Brazil's
+    `payment_method` reply in `message_received`, by number). Missing:
+    the `order_details` and `order_status` interactive messages (`422
+    unsupported_message_type`: design §4.3 listed `button`, `list`,
+    `cta_url` only) and every payment call (configurations, lookup,
+    refunds).
+  - **Landed:** the send union's `interactive` gains `order_details` and
+    `order_status` (`meta_whatsapp_server_core::messages::InteractiveType`,
+    `ActionParameters::Order`: Meta's `action.parameters` read into the
+    library's `OrderDetailsParameters`, or the order status's
+    `reference_id`, `order` and `payment`, with no key dropped, then the
+    library's checks; an `order_details` header an image only; an
+    `order_status` checked by Brazil's rules, its wire naming no
+    currency), for sends and inbox replies alike. Seven routes in
+    `meta-whatsapp-server-api-axum` (`api::payments`, tag and scope
+    `payments`, a new scope), each a core service
+    (`meta_whatsapp_server_core::payments`: `PaymentConfigurations` on an
+    `OwnedWaba`, `Payments` on an `OwnedNumber`, each opened only for the
+    admitted caller's own tenant, with the binding's vault token):
+    `GET`, `POST /v1/wabas/{waba_id}/payment-configurations`
+    (`list_payment_configurations`, read class;
+    `create_payment_configuration`, send class, an `Idempotency-Key` over
+    `Fingerprint::create_payment_configuration`), `GET`, `DELETE
+    …/{configuration_name}` (`get_payment_configuration`, read: `404`
+    for Meta's empty `data` or its refusal of the name;
+    `delete_payment_configuration`, send), `POST
+    …/{configuration_name}/oauth-link` (`regenerate_payment_oauth_link`,
+    send, a key over `Fingerprint::regenerate_payment_oauth_link`), `GET
+    /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}`
+    (`get_payment`, read) and `POST /v1/numbers/{pn}/payments/refunds`
+    (`refund_payment`, send, a key over `Fingerprint::refund_payment`).
+    A lookup and a refund look the configuration they name up in the
+    number's own WABA first (`GET /{waba_id}/payment_configuration/{name}`):
+    one the WABA has none of is `404`, nothing read or refunded. The
+    OAuth link is answered and never kept: the idempotency engine keeps a
+    second body when the handler gives one (`idempotency::Answer::keeping`,
+    the HTTP adapter's `Success::json_keeping`), the link's answer
+    without it. A refund, a creation, a removal and a new link are tenant
+    audit events (`payment_refunded`, `payment_configuration_created`,
+    `payment_configuration_deleted`, `payment_oauth_link_regenerated`).
+    Meta's `details` are kept on every payment route (the terms of
+    service's link is there); no route accepts Meta's terms. No new error
+    code; the OpenAPI document is additive (five paths, the tag
+    `payments`, eighteen schemas; `interactive.type` and `Scope` gain
+    values, `action.parameters` an `anyOf` alternative). Tests: the
+    service's `tests/payments.rs` (every route's exact request and its
+    page's sample response, the decisive token case
+    `an_order_details_send_carries_the_tenants_token_never_the_operators`,
+    the configuration check
+    `another_wabas_configuration_is_not_found_and_nothing_is_read_or_refunded`,
+    the refund's key `a_refund_is_never_made_twice`, the link never kept
+    `a_created_configurations_oauth_link_is_answered_never_kept`, the
+    scope, the terms' refusal), the M1.3 table pinning the seven routes
+    (`tests/authz.rs`, and live on Postgres
+    `live_postgres_another_tenants_number_is_not_found_before_the_vault`
+    with four of them, and
+    `live_postgres_a_payments_key_reaches_its_wabas_configurations`),
+    M1.5's sentinel over them (`tests/errors.rs`), M1.7's capture (every
+    payment route exercised, the OAuth links among the secrets, the audit
+    events in order), the core's
+    `payment_interactives_are_read_whole_and_checked`,
+    `a_configuration_is_checked_before_any_request`,
+    `a_refund_is_checked_before_any_request`, the conformance case
+    `templates::the_payment_services_open_for_their_own_tenant_only` (in
+    `conformance::run`: the core's memory backend, the memory crate's,
+    live on Postgres), and the classes' and scopes' tables. By mutation,
+    each failing its test: the configuration check dropped from the
+    lookup or the refund; the link kept for a repeat (in the handler, or
+    the engine keeping the answered body); the refund outside its key;
+    the send through the authorizer's tokenless client instead of the
+    number's; `order_details` or `order_status` out of the send union;
+    the payment routes' `details` dropped; a payment message's button
+    keys, or its parameters' dropped-key check, skipped; the provider
+    list unchecked; the payment group behind the `send` scope, or a
+    payment operation's scope moved; the tenant check of
+    `PaymentConfigurations::new` or `Payments::new` dropped; and step 4
+    of `owned_waba` dropped (the M1.3 table, the payment routes
+    included).
+  - **Decided** (the coordinator's decisions of 2026-11-01 under the
+    owner's delegation, each swappable: design §10, D50 to D58): a
+    `payments` scope (D50; its stored name pending the owner's
+    confirmation); the configuration check before a lookup or a refund
+    (D51); the OAuth link never kept (D52); an `order_status` checked by
+    Brazil's rules (D53); times as RFC 3339 strings under Meta's names
+    (D54); providers among Meta's four (D55); the refund's body (D56);
+    Meta's `details` kept (D57); the four audit events (D58).
+  - **Review** (adversarial, security lens): a configuration name holding
+    `/` or `\` is refused (Meta could read the library's `%2F` as
+    several segments); the check trusts only an answer of the very name
+    asked; a check that fails was not sent (`may_have_been_sent: false`,
+    the refund's key released, where it was kept as a refund that may
+    have been made); the payment changes' audit events name what
+    reconciles them, and a change cut by a timeout is audited, its
+    outcome `unknown`. New decisive tests:
+    `a_configuration_meta_answers_under_another_name_is_not_found`,
+    `a_refunds_amount_is_checked_before_any_request`,
+    `a_refund_whose_check_failed_was_not_sent_and_frees_its_key`,
+    `an_inbox_reply_carries_a_payment_message_checked_and_within_its_window`,
+    and M1.7's capture (`check_audit`).
+  - **Follow-ups decided on 2026-11-02** (the coordinator, the owner's
+    delegation): a refund requires an `Idempotency-Key` (D56 amended:
+    `428 idempotency_key_required`, a new code, additive; decisive
+    `a_refund_without_an_idempotency_key_sends_nothing`); the OAuth
+    link's answers carry `Cache-Control: no-store`; the open `Scope` of
+    the answers waits for the first release (M4).
+  - **Not done here:** the data endpoint link of a configuration and
+    India's checkout button templates (the library's P1d first); the
+    alpha third-party validation (P1d).
+  - **Also, after the first release** (from S7, carried by M2a and now
+    by P2, which landed before it): drop the legacy fingerprint (S6's
+    window: `Fingerprint::legacy_v1_json`, `legacy_v1_upload`,
+    `or_legacy`, and the handlers' `Uri`), once every deployment has run
+    a release with S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. The next item
+    of the service's to land after the first release carries this line
+    if it lands before it.
+- [ ] **P2b. The checkout endpoint's link in the service** (row 141;
+  added by P1d's review, kept by the coordinator's decision of
+  2026-11-02).
+  - **After:** P1d, P2.
+  - **Kind:** additive.
+  - **Decisive:** M1.3 over the new route; the link
+    (`PaymentConfigurations::link_data_endpoint`) carries the tenant's
+    token and Meta's body, `{"data_endpoint_url": …}`, exactly; a URL
+    the library refuses is `422` before any request.
+  - **Why:** with P1d merged, the service sends checkout button
+    templates and third party validation settings through
+    `POST /v1/numbers/{pn}/messages`, read through the library's types
+    (`checkout_templates_and_third_party_validation_are_sent_as_their_pages_print_them`
+    in `tests/payments.rs`), but has no route for the data endpoint's
+    link. Whether the service also hosts a tenant's checkout endpoint
+    (its private key in the vault, its pricing the tenant's) is this
+    item's design question, not decided here.
 
 ## Done criteria for parity
 
@@ -3827,11 +5980,10 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
 What waits for the owner before parity (AGENTS.md § Decisions);
 everything else goes into the parity-completion report.
 
-- **D20 (a)**, the BlueOak-1.0.0 licence of `minicbor`: asked at S10 as
-  one yes or no question. It blocks the CrateStack adoption (S10–S16)
-  and nothing else: after a refusal, `api-axum` and `store-postgres`
-  stay the defaults, and M4 publishes the client openapi-typescript
-  generates.
+- **D20 (a)**, the BlueOak-1.0.0 licence of `minicbor`: **decided by
+  the owner on 2026-11-02: yes**, for `minicbor` and `minicbor-serde`
+  only. S10 adds the scoped exception to `deny.toml` when CrateStack
+  enters the workspace; nothing waits on the owner for it any more.
 - **The merges of U1–U3** in the owner's cratestack repository. S16's
   default flip waits on U1.
 - **Publishing**: to crates.io (parity row 115) and to npm (D11, M4).
@@ -3851,22 +6003,55 @@ everything else goes into the parity-completion report.
   release is a data migration.
 - **New stable identifiers**, confirmed before the first release: each
   store namespace or stored name an item adds after the table in
-  architecture.md § Stable identifiers was last confirmed (B2b's
+  architecture.md § Stable identifiers was last confirmed (P2's key
+  scope `payments`, stored in `wa_server_api_keys.scopes`, added and
+  awaiting confirmation; B2b's
   `wa.bot.pacer` and its record layout, added and awaiting
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,
   with their keys' derivations and their records' shapes, added and
-  awaiting confirmation before the first release; S2b's Postgres
+  awaiting confirmation before the first release; M2h's Postgres
+  migration 5, "number moves": the columns
+  `wa_server_numbers.attached_at` (a row from before it read as its
+  WABA's start) and `wa_server_numbers.previous_tenant_released_at` with
+  its default, the Unix epoch read as "a move before the records began"
+  (`UNRECORDED_MOVE`, failing closed), and the table
+  `wa_server_number_tombstones` with its columns and its `ON DELETE SET
+  NULL` rule, and the trigger `wa_server_numbers_released` with its
+  function `wa_server_number_released()` (added by M2a's review), added
+  and awaiting confirmation; S2b's Postgres
   migration 4, "waba moves": the columns `wa_server_wabas.generation` and
   `wa_server_wabas.previous_tenant_unbound_at` with its default, the Unix
   epoch read as "a move before the records began" (`UNRECORDED_MOVE`),
   and the table `wa_server_waba_tombstones` with its columns and its
   `ON DELETE SET NULL` rule, added and awaiting confirmation; L11d's
   `wa.es.coexistence` and its record layout, added and awaiting
-  confirmation; L21a's
+  confirmation; L8's SQLite migration 1, its tables and columns, and its
+  Redis conversation layout, added and awaiting confirmation; and L21a's
   `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
   keys' derivations and their records' shapes, added and awaiting
-  confirmation before the first release; and S9's MongoDB outbox
+  confirmation before the first release; M2e's Postgres migration 7,
+  "received media": the column `wa_server_events.media_id` (no default:
+  `NULL` for the rows before it, and for those a previous release's
+  replica inserts) and its partial index `wa_server_events_media_idx`,
+  added and awaiting confirmation; M3d's `wa.server.registration`
+  namespace, its keys `<budget>:<phone_number_id>` and its record
+  `{"v":1,"since","count"}`, ephemeral, added and awaiting confirmation;
+  M2b's Postgres channel
+  `wa_server_events` and its payload `<sequence> <tenant>`, not stored
+  but what replicas of two releases must agree on, added and, the
+  coordinator having decided them as built (D40), awaiting confirmation
+  before the first release; M3c's tenant OTP settings, the
+  key `otp` of `wa_server_tenants.settings` and its version 1 layout,
+  and the label `meta-whatsapp-server/otp-fingerprint/v1` the issue's
+  idempotency fingerprint is keyed with, added and awaiting
+  confirmation; M3c's review's shared issue log, the namespace
+  `wa_server.otp.shared_rate`, its key's derivation and record, and the
+  label `meta-whatsapp-server/otp-shared-limit/v1`, added and awaiting
+  confirmation; M3a's migration 6, `signup`, its tables
+  `wa_server_signup_attempts` and `wa_server_vault_records`, their
+  columns and the kinds `waba` and `business`, added and awaiting
+  confirmation; S9's MongoDB outbox
   collections `wa_server_events`, `wa_server_event_streams` and
   `wa_server_wabas`, their fields and their index names, added by a spike
   composed into no binary and awaiting confirmation, which S18 may still
@@ -3874,11 +6059,25 @@ everything else goes into the parity-completion report.
 - **CC0-1.0 for the MongoDB driver** (S9, then S17 and S18): the
   `mongodb` crate reaches `tiny-keccak` (CC0-1.0, a public-domain
   dedication, compiled into a proc-macro that runs at build time)
-  through `macro_magic` and `const-random`; `deny.toml` allows no
-  CC0-1.0, so `just deny` fails once the driver is a normal dependency
-  (S9's crate). One yes or no: CC0-1.0 allowed (everywhere, or for
-  `tiny-keccak` alone). After a refusal, MongoDB waits for a driver
-  release without that chain.
+  through `macro_magic` and `const-random`. **Decided by the owner on
+  2026-11-02: yes**, CC0-1.0 allowed in `deny.toml`'s `allow` list (S9
+  adds it, with the decision's date beside it), so `just deny` passes
+  with the driver a normal dependency.
+- **A scope of its own for deregistering a number** (M3d, design D68):
+  the coordinator decided the scope `numbers`, a confirmation in the body
+  and an audit event; a separate scope would be a new stored name (keys
+  keep their scopes), so whether to add one is the owner's.
+- **Zero-tap authentication templates** (M3c, M3g): creating one sets
+  Meta's `zero_tap_terms_accepted`, an acknowledgement of the WhatsApp
+  Business terms for zero-tap and of the customers' expectation of an
+  automatic fill. M3c refuses it on the service's authentication route;
+  whether a tenant may accept them through the service, as an explicit
+  and audited action off by default, is the owner's (AGENTS.md §
+  Decisions, legal acts). The generic `POST /v1/wabas/{waba_id}/templates`
+  passed Meta's JSON through, a zero-tap button with the field included,
+  from M1b; M3c's review closed it (`422` on
+  `zero_tap_terms_accepted`), so neither route accepts the terms until
+  the owner decides.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored

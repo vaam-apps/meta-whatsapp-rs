@@ -20,16 +20,19 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use meta_whatsapp_rs::adapters::store::MemoryConversationStore;
-use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::ids::{MediaId, PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
-    IdempotencyRecord, IdempotencyState, KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus,
-    PageRequest, Tenant, TenantId, TenantStatus, WabaBinding, WabaTombstone,
+    IdempotencyRecord, IdempotencyState, KeyScope, Listing, NewApiKey, NewSignupAttempt,
+    NumberBinding, NumberStatus, NumberTombstone, OtpSettings, PageRequest, SignupAttempt, Tenant,
+    TenantId, TenantStatus, VaultEntry, WabaBinding, WabaTombstone,
 };
+use meta_whatsapp_server_core::notify::{EventNotifier, LocalNotifier};
 use meta_whatsapp_server_core::outbox::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
+    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RECEIVED_MEDIA_ROWS, ReceivedMedia,
+    RouteGuard, StoredEvent,
 };
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult, listing,
@@ -46,6 +49,33 @@ pub struct State {
     numbers: BTreeMap<String, NumberBinding>,
     /// Each WABA's last unbinding (roadmap S2b: the webhooks suite's moves).
     tombstones: BTreeMap<String, WabaTombstone>,
+    /// Each number's last release (roadmap M2h: the inbox suite's moves).
+    number_tombstones: BTreeMap<String, NumberTombstone>,
+    /// Each tenant's OTP settings, stored (roadmap M3c: the otp suite).
+    otp_settings: BTreeMap<String, serde_json::Value>,
+    /// Signup attempts by WABA, gone with their binding (roadmap M3a: the
+    /// signup suite).
+    signup_attempts: BTreeMap<String, SignupAttempt>,
+    /// The vault's records kept past a binding, by key (roadmap M3a).
+    vault_entries: BTreeMap<String, VaultEntry>,
+}
+
+/// Release the bound numbers of `waba_id` that `keep` does not list, each
+/// leaving its tombstone at `at`.
+fn release(state: &mut State, waba_id: &WabaId, keep: &[PhoneNumberId], at: OffsetDateTime) {
+    let gone: Vec<String> = state
+        .numbers
+        .iter()
+        .filter(|(pn, n)| &n.waba_id == waba_id && !keep.iter().any(|k| k.as_str() == *pn))
+        .map(|(pn, _)| pn.clone())
+        .collect();
+    for pn in gone {
+        if let Some(binding) = state.numbers.remove(&pn) {
+            state
+                .number_tombstones
+                .insert(pn, NumberTombstone::of(&binding, at));
+        }
+    }
 }
 
 /// Remove `waba_id`'s binding and its numbers, leaving its tombstone, in
@@ -54,7 +84,8 @@ fn unbind(state: &mut State, waba_id: &WabaId) -> bool {
     let Some(binding) = state.wabas.remove(waba_id.as_str()) else {
         return false;
     };
-    state.numbers.retain(|_, n| &n.waba_id != waba_id);
+    release(state, waba_id, &[], OffsetDateTime::now_utc());
+    state.signup_attempts.remove(waba_id.as_str());
     state.tombstones.insert(
         waba_id.as_str().to_owned(),
         WabaTombstone::of(&binding, OffsetDateTime::now_utc()),
@@ -103,11 +134,46 @@ impl RecordStore for Records {
     }
     async fn update_tenant(
         &self,
-        _: &TenantId,
-        _: Option<&str>,
-        _: Option<TenantStatus>,
+        id: &TenantId,
+        name: Option<&str>,
+        status: Option<TenantStatus>,
     ) -> StoreResult<Option<Tenant>> {
-        unimplemented!("not used by the suites this backend runs")
+        let mut state = self.state();
+        let Some(tenant) = state.tenants.get_mut(id.as_str()) else {
+            return Ok(None);
+        };
+        if let Some(name) = name {
+            name.clone_into(&mut tenant.name);
+        }
+        if let Some(status) = status {
+            tenant.status = status;
+        }
+        tenant.updated_at = OffsetDateTime::now_utc();
+        Ok(Some(tenant.clone()))
+    }
+    async fn otp_settings(&self, id: &TenantId) -> StoreResult<Option<OtpSettings>> {
+        Ok(self
+            .state()
+            .otp_settings
+            .get(id.as_str())
+            .map(|stored| OtpSettings::from_stored(stored).expect("stored by this backend")))
+    }
+    async fn set_otp_settings(
+        &self,
+        id: &TenantId,
+        settings: Option<&OtpSettings>,
+    ) -> StoreResult<bool> {
+        let mut state = self.state();
+        if !state.tenants.contains_key(id.as_str()) {
+            return Ok(false);
+        }
+        match settings {
+            Some(settings) => state
+                .otp_settings
+                .insert(id.as_str().to_owned(), settings.to_stored()),
+            None => state.otp_settings.remove(id.as_str()),
+        };
+        Ok(true)
     }
     async fn delete_tenant(&self, _: &TenantId) -> StoreResult<DeleteTenantOutcome> {
         unimplemented!("not used by the suites this backend runs")
@@ -192,20 +258,24 @@ impl RecordStore for Records {
         state.wabas.insert(waba_id.as_str().to_owned(), binding);
         // Exactly `numbers`: those the WABA had and the list lacks are
         // unbound (the port's contract).
-        state
-            .numbers
-            .retain(|pn, n| &n.waba_id != waba_id || numbers.iter().any(|p| p.as_str() == pn));
+        release(&mut state, waba_id, numbers, now);
         for pn in numbers {
-            state.numbers.insert(
-                pn.as_str().to_owned(),
-                NumberBinding {
-                    phone_number_id: pn.clone(),
+            let bound = match state.numbers.get(pn.as_str()) {
+                Some(held) => NumberBinding {
                     waba_id: waba_id.clone(),
-                    tenant_id: tenant.clone(),
                     status: NumberStatus::Connected,
                     updated_at: now,
+                    ..held.clone()
                 },
-            );
+                None => NumberBinding::newly_bound(
+                    pn.clone(),
+                    waba_id.clone(),
+                    tenant.clone(),
+                    now,
+                    state.number_tombstones.get(pn.as_str()),
+                ),
+            };
+            state.numbers.insert(pn.as_str().to_owned(), bound);
         }
         Ok(BindOutcome::Bound)
     }
@@ -325,6 +395,121 @@ impl RecordStore for Records {
         }
         Ok(true)
     }
+    async fn set_credit_allocation_if(
+        &self,
+        epoch: &BindingEpoch,
+        allocation_config_id: &str,
+    ) -> StoreResult<bool> {
+        let mut state = self.state();
+        match state.wabas.get_mut(epoch.waba_id.as_str()) {
+            Some(binding) if binding.epoch() == *epoch => {
+                binding.credit_allocation_id = Some(allocation_config_id.to_owned());
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+    async fn save_signup_attempt(&self, attempt: &NewSignupAttempt) -> StoreResult<bool> {
+        let mut state = self.state();
+        let bound = state
+            .wabas
+            .get(attempt.waba_id.as_str())
+            .is_some_and(|w| w.tenant_id == attempt.tenant_id);
+        if !bound {
+            return Ok(false);
+        }
+        let now = OffsetDateTime::now_utc();
+        let created_at = state
+            .signup_attempts
+            .get(attempt.waba_id.as_str())
+            .filter(|kept| kept.tenant_id == attempt.tenant_id)
+            .map_or(now, |kept| kept.created_at);
+        state.signup_attempts.insert(
+            attempt.waba_id.as_str().to_owned(),
+            SignupAttempt {
+                tenant_id: attempt.tenant_id.clone(),
+                waba_id: attempt.waba_id.clone(),
+                failed_step: attempt.failed_step.clone(),
+                session: attempt.session.clone(),
+                finish_kind: attempt.finish_kind.clone(),
+                created_at,
+                updated_at: now,
+            },
+        );
+        Ok(true)
+    }
+    async fn signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<Option<SignupAttempt>> {
+        Ok(self
+            .state()
+            .signup_attempts
+            .get(waba_id.as_str())
+            .filter(|a| &a.tenant_id == tenant)
+            .cloned())
+    }
+    async fn signup_attempts(
+        &self,
+        tenant: &TenantId,
+        page: &PageRequest,
+    ) -> StoreResult<Listing<SignupAttempt>> {
+        let items: Vec<SignupAttempt> = self
+            .state()
+            .signup_attempts
+            .iter()
+            .filter(|(id, a)| {
+                &a.tenant_id == tenant
+                    && page
+                        .after
+                        .as_deref()
+                        .is_none_or(|after| id.as_str() > after)
+            })
+            .take(page.limit + 1)
+            .map(|(_, a)| a.clone())
+            .collect();
+        Ok(listing(items, page.limit, |a| {
+            a.waba_id.as_str().to_owned()
+        }))
+    }
+    async fn delete_signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<bool> {
+        let mut state = self.state();
+        let theirs = state
+            .signup_attempts
+            .get(waba_id.as_str())
+            .is_some_and(|a| &a.tenant_id == tenant);
+        if theirs {
+            state.signup_attempts.remove(waba_id.as_str());
+        }
+        Ok(theirs)
+    }
+    async fn record_vault_entry(&self, entry: &VaultEntry) -> StoreResult<()> {
+        self.state()
+            .vault_entries
+            .entry(entry.key())
+            .or_insert_with(|| entry.clone());
+        Ok(())
+    }
+    async fn vault_entries(&self, page: &PageRequest) -> StoreResult<Listing<VaultEntry>> {
+        let items: Vec<VaultEntry> = self
+            .state()
+            .vault_entries
+            .iter()
+            .filter(|(key, _)| {
+                page.after
+                    .as_deref()
+                    .is_none_or(|after| key.as_str() > after)
+            })
+            .take(page.limit + 1)
+            .map(|(_, e)| e.clone())
+            .collect();
+        Ok(listing(items, page.limit, VaultEntry::key))
+    }
 }
 
 /// A key's record: the request's fingerprint, the claim holding it, its
@@ -440,6 +625,8 @@ impl IdempotencyRecords for Idempotency {
 struct Row {
     dedup_key: Option<String>,
     dedup_until: Option<OffsetDateTime>,
+    /// The media id it records as received (roadmap M2e).
+    media_id: Option<MediaId>,
     event: StoredEvent,
 }
 
@@ -519,6 +706,7 @@ impl Outbox for Events {
         streams.rows.push(Row {
             dedup_key: event.dedup_key.clone(),
             dedup_until: event.dedup_window.map(|window| window.until),
+            media_id: event.received_media(),
             event: StoredEvent {
                 sequence,
                 id: event.id.clone(),
@@ -573,6 +761,23 @@ impl Outbox for Events {
     async fn purge(&self, _: Duration) -> StoreResult<u64> {
         unimplemented!("not used by the suites this backend runs")
     }
+
+    async fn received_media(&self, media_id: &MediaId) -> StoreResult<Vec<ReceivedMedia>> {
+        let streams = self.streams.lock().unwrap();
+        let mut found: Vec<ReceivedMedia> = streams
+            .rows
+            .iter()
+            .filter(|row| row.media_id.as_ref() == Some(media_id))
+            .map(|row| ReceivedMedia {
+                tenant: row.event.tenant.clone(),
+                phone_number_id: row.event.phone_number_id.clone(),
+                received_at: row.event.created_at,
+            })
+            .collect();
+        found.sort_by_key(|row| std::cmp::Reverse(row.received_at));
+        found.truncate(RECEIVED_MEDIA_ROWS);
+        Ok(found)
+    }
 }
 
 /// A backend of the records, idempotency records and outbox above, a
@@ -584,6 +789,7 @@ pub struct Memory {
     pub kv: Arc<support::Kv>,
     pub outbox: Arc<Events>,
     pub conversations: Arc<MemoryConversationStore>,
+    pub notifier: Arc<LocalNotifier>,
 }
 
 impl Default for Memory {
@@ -595,6 +801,7 @@ impl Default for Memory {
             idempotency: Arc::default(),
             kv: Arc::default(),
             conversations: Arc::new(MemoryConversationStore::new()),
+            notifier: Arc::default(),
         }
     }
 }
@@ -612,6 +819,9 @@ impl Backend for Memory {
     }
     fn outbox(&self) -> Arc<dyn Outbox> {
         self.outbox.clone()
+    }
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.notifier.clone()
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         unimplemented!("not used by the suites this backend runs")

@@ -29,9 +29,25 @@
 //! | `WA_SERVER_MEDIA_MAX_BYTES` | 104857600 (100 MiB) | largest upload, and largest streamed download |
 //! | `WA_SERVER_MEDIA_CONCURRENCY` | 4 | uploads and whole-file downloads held in memory at once, per replica (half of them at most for one tenant) |
 //! | `WA_SERVER_MEDIA_STREAMS` | 16 | streamed downloads at once, per replica (half of them at most for one tenant) |
+//! | `WA_SERVER_STREAMS_PER_TENANT` | 20 | live event streams (`GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream`) one tenant holds open at once, per replica (the next is `429 too_many_streams`) |
+//! | `WA_SERVER_STREAMS_PER_REPLICA` | 1000 | live event streams open at once on a replica, every tenant's |
 //! | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | 20, 40 | per tenant and replica, a second ([`crate::ratelimit`]) |
 //! | `WA_SERVER_RATE_READ`, `WA_SERVER_RATE_READ_BURST` | 50, 50 | the same, for reads |
 //! | `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | 2, 2 | the same, for template management |
+//! | `WA_SERVER_RATE_OTP_ISSUE`, `WA_SERVER_RATE_OTP_ISSUE_BURST` | 5, 5 | the same, for sending OTP codes (roadmap M3c; per recipient, the library's cooldown and issue limit apply too) |
+//! | `WA_SERVER_RATE_OTP_VERIFY`, `WA_SERVER_RATE_OTP_VERIFY_BURST` | 20, 20 | the same, for checking OTP codes (the service's default: the design names no limit) |
+//! | `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` | `graph` | whether an `account_update` webhook that offboards a merchant (`PARTNER_APP_UNINSTALLED` of this app, `ACCOUNT_DELETED`) or revokes their credit line (`PARTNER_REMOVED`) is confirmed with Graph first (`graph`: `debug_token` on the WABA's stored token, which must no longer be valid or no longer granted the WABA) or acted on by its signature alone (`signature`) (roadmap M3a) |
+//! | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number, decision D8's default (roadmap M3c); unset, such a tenant's OTP requests are `409 otp_not_configured` |
+//! | `WA_SERVER_REGISTRATION_ATTEMPTS`, `WA_SERVER_REGISTRATION_WINDOW` | 5, `72h` | a number's registrations and deregistrations, per number and fixed window, shared by every replica (roadmap M3d; Meta allows 10 of each in a moving 72 hours and locks the number on the 11th) |
+//! | `WA_SERVER_VERIFICATION_ATTEMPTS`, `WA_SERVER_VERIFICATION_WINDOW` | 10, `1h` | a number's verification codes requested and checked, the same way |
+//! | `WA_SERVER_INBOX_REPLY_CHECKS` | none listed: every check on every number | the local checks an inbox reply makes, per number: `<phone_number_id>:<checks>` entries, comma-separated, `<checks>` being `all`, `none` or the checks left on joined by `+` (`window`, `trust_handover`, `thread_owner`; `trust_handover` only with `window`): `106540352242922:window+trust_handover` turns the ownership check off on that number (the core's `inbox::ReplyChecksByNumber`; roadmap M2a) |
+//!
+//! And the inbox's retention, the store's own setting, which housekeeping
+//! applies: `WA_SERVER_INBOX_RETENTION`, `keep` (the default: the inbox
+//! keeps everything, decision D10) or a positive duration such as `90d`,
+//! past which a customer's messages, window events and thread ownership
+//! records are purged ([`Config::inbox_retention`]). Which one a deployment
+//! sets follows its privacy obligations: the deployer's call.
 //!
 //! And the routing of a moved WABA's events ([`MoveRules`], roadmap S2b,
 //! design D36; none applies to a WABA no other tenant held):
@@ -51,12 +67,18 @@ use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use meta_whatsapp_rs::client::authentication::OtpPepper;
 use meta_whatsapp_rs::client::credit_lines::WabaCurrency;
 use meta_whatsapp_rs::client::embedded_signup::{VaultKey, VaultKeys};
 use meta_whatsapp_rs::core::config::{ApiVersion, GraphEndpoint};
 use meta_whatsapp_rs::core::ids::AppId;
-use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, VerifyToken};
+use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, SecretBytes, VerifyToken};
+use meta_whatsapp_rs::core::store::Retention;
+use meta_whatsapp_server_core::inbox::{InvalidReplyChecks, ReplyChecksByNumber};
+use meta_whatsapp_server_core::live::LiveSettings;
+use meta_whatsapp_server_core::model::TenantId;
+use meta_whatsapp_server_core::otp::OtpKeys;
+use meta_whatsapp_server_core::registration::{AttemptLimit, AttemptLimits};
+use meta_whatsapp_server_core::signup::AccountUpdateConfirmation;
 
 use crate::events::{
     DEFAULT_MOVE_SKEW_MARGIN, DEFAULT_UNDATED_AFTER_MOVE_WINDOW, MoveRules, UndatedAfterMove,
@@ -245,10 +267,20 @@ pub struct Config {
     pub vault_keys: VaultKeys,
     /// Whether the vault key was generated for this process.
     pub vault_key_is_throwaway: bool,
-    /// `WA_OTP_PEPPER`.
-    pub otp_pepper: Option<OtpPepper>,
+    /// `WA_OTP_PEPPER`: the library's OTP pepper and the key of the OTP
+    /// issue's idempotency fingerprint, derived from it (roadmap M3c). Unset
+    /// only on memory storage, where `serve` uses a throwaway one.
+    pub otp_pepper: Option<OtpKeys>,
+    /// `WA_SERVER_OTP_DEFAULT_TENANT` (roadmap M3c, decision D8): the
+    /// tenant whose OTP settings a tenant without its own borrows.
+    pub otp_default_tenant: Option<TenantId>,
     /// `WA_ONBOARDING_MODE` and its settings.
     pub onboarding: OnboardingMode,
+    /// `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` (roadmap M3a, proposed
+    /// decision D72): whether an `account_update` that offboards a merchant
+    /// or revokes their credit line is confirmed with Graph first (`graph`,
+    /// the default) or acted on by its signature alone (`signature`).
+    pub account_update_confirmation: AccountUpdateConfirmation,
     /// `WA_GRAPH_API_VERSION` and `WA_GRAPH_ENDPOINT`.
     pub graph_endpoint: GraphEndpoint,
     /// `WA_SERVER_MIGRATE`.
@@ -259,6 +291,12 @@ pub struct Config {
     /// event (default [`crate::events::DEFAULT_OUTBOX_RETENTION`], 7 days,
     /// until the owner decides retention, the design's decision D10).
     pub outbox_retention: Duration,
+    /// `WA_SERVER_INBOX_RETENTION`: how long the inbox keeps a customer's
+    /// messages, the store's own setting (`with_retention`), which
+    /// housekeeping applies ([`Retention::Keep`] unset, the default of
+    /// decision D10; roadmap M2a). The backend must be built with it: the
+    /// start refuses one whose inbox applies another.
+    pub inbox_retention: Retention,
     /// `WA_SERVER_LOG_FORMAT`.
     pub log_format: LogFormat,
     /// `RUST_LOG`.
@@ -286,6 +324,7 @@ impl fmt::Debug for Config {
             .field("graph_endpoint", &self.graph_endpoint)
             .field("migrate", &self.migrate)
             .field("outbox_retention", &self.outbox_retention)
+            .field("inbox_retention", &self.inbox_retention)
             .field("settings", &self.settings)
             .field("move_rules", &self.move_rules)
             .finish_non_exhaustive()
@@ -437,13 +476,32 @@ impl Config {
         let meta = meta_app(&r)?;
         let (vault_keys, vault_key_is_throwaway) = vault_keys(&r, postgres)?;
         let otp_pepper = match r.optional_secret("WA_OTP_PEPPER")? {
-            Some(pepper) => {
-                Some(OtpPepper::new(pepper.into_bytes()).map_err(|_| ConfigError::PepperTooShort)?)
-            }
+            Some(pepper) => Some(
+                OtpKeys::new(SecretBytes::new(pepper.into_bytes()))
+                    .map_err(|_| ConfigError::PepperTooShort)?,
+            ),
             None if postgres => return Err(ConfigError::PepperRequired),
             None => None,
         };
+        let otp_default_tenant = match r.plain("WA_SERVER_OTP_DEFAULT_TENANT")? {
+            None => None,
+            Some(id) => Some(TenantId::parse(id.trim()).ok_or(ConfigError::Invalid {
+                name: "WA_SERVER_OTP_DEFAULT_TENANT",
+                reason: "expected a tenant id: 1 to 64 of [A-Za-z0-9._:-]",
+            })?),
+        };
         let onboarding = onboarding(&r)?;
+        let account_update_confirmation =
+            match r.plain("WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION")?.as_deref() {
+                None | Some("graph") => AccountUpdateConfirmation::Graph,
+                Some("signature") => AccountUpdateConfirmation::Signature,
+                Some(_) => {
+                    return Err(ConfigError::Invalid {
+                        name: "WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION",
+                        reason: "expected graph or signature",
+                    });
+                }
+            };
         let graph_endpoint = graph_endpoint(&r, environment)?;
         let runtime = runtime(&r)?;
         let settings = settings(&r)?;
@@ -460,11 +518,14 @@ impl Config {
             vault_keys,
             vault_key_is_throwaway,
             otp_pepper,
+            otp_default_tenant,
             onboarding,
+            account_update_confirmation,
             graph_endpoint,
             migrate: runtime.migrate,
             shutdown_grace: runtime.shutdown_grace,
             outbox_retention: runtime.outbox_retention,
+            inbox_retention: runtime.inbox_retention,
             log_format: runtime.log_format,
             log_filter: runtime.log_filter,
             settings,
@@ -564,8 +625,67 @@ fn rate(
     Ok(Rate { per_second, burst })
 }
 
+/// A number's attempt budget: `attempts` (a positive whole number, at most
+/// 4294967295) and `window` (a positive duration), each `default`'s when
+/// unset.
+fn attempt_limit(
+    r: &Reader<'_>,
+    attempts: &'static str,
+    window: &'static str,
+    default: AttemptLimit,
+) -> Result<AttemptLimit, ConfigError> {
+    let count = match positive(r, attempts)? {
+        None => default.attempts,
+        Some(n) => u32::try_from(n).map_err(|_| ConfigError::Invalid {
+            name: attempts,
+            reason: "expected at most 4294967295",
+        })?,
+    };
+    let window = match r.plain(window)? {
+        None => default.window,
+        Some(value) => match duration(window, &value)? {
+            positive if !positive.is_zero() => positive,
+            _ => {
+                return Err(ConfigError::Invalid {
+                    name: window,
+                    reason: "expected a positive duration",
+                });
+            }
+        },
+    };
+    Ok(AttemptLimit {
+        attempts: count,
+        window,
+    })
+}
+
+/// `WA_SERVER_REGISTRATION_*` and `WA_SERVER_VERIFICATION_*` (roadmap
+/// M3d).
+fn attempt_limits(r: &Reader<'_>) -> Result<AttemptLimits, ConfigError> {
+    let defaults = AttemptLimits::default();
+    Ok(AttemptLimits {
+        registration: attempt_limit(
+            r,
+            "WA_SERVER_REGISTRATION_ATTEMPTS",
+            "WA_SERVER_REGISTRATION_WINDOW",
+            defaults.registration,
+        )?,
+        verification: attempt_limit(
+            r,
+            "WA_SERVER_VERIFICATION_ATTEMPTS",
+            "WA_SERVER_VERIFICATION_WINDOW",
+            defaults.verification,
+        )?,
+    })
+}
+
 /// `WA_SERVER_IDEMPOTENCY_TTL`, `WA_SERVER_MEDIA_MAX_BYTES`,
-/// `WA_SERVER_MEDIA_CONCURRENCY` and the rate limits.
+/// `WA_SERVER_MEDIA_CONCURRENCY`, `WA_SERVER_MEDIA_STREAMS`, the live
+/// event streams' bounds (`WA_SERVER_STREAMS_PER_TENANT`,
+/// `WA_SERVER_STREAMS_PER_REPLICA`), the rate limits, the attempt budgets
+/// ([`attempt_limits`]) and
+/// `WA_SERVER_INBOX_REPLY_CHECKS` (the core's
+/// `inbox::ReplyChecksByNumber::parse`).
 fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
     let defaults = Settings::default();
     let idempotency_ttl = match r.plain("WA_SERVER_IDEMPOTENCY_TTL")? {
@@ -597,6 +717,20 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
             reason: "expected a smaller number",
         })?,
     };
+    let streams = |name: &'static str, default: usize| -> Result<usize, ConfigError> {
+        match positive(r, name)? {
+            None => Ok(default),
+            Some(n) => usize::try_from(n).map_err(|_| ConfigError::Invalid {
+                name,
+                reason: "expected a smaller number",
+            }),
+        }
+    };
+    let live = LiveSettings {
+        per_tenant: streams("WA_SERVER_STREAMS_PER_TENANT", defaults.live.per_tenant)?,
+        per_replica: streams("WA_SERVER_STREAMS_PER_REPLICA", defaults.live.per_replica)?,
+        ..defaults.live
+    };
     let limits = RateLimits::default();
     Ok(Settings {
         rate_limits: RateLimits {
@@ -618,12 +752,37 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
                 "WA_SERVER_RATE_TEMPLATES_BURST",
                 limits.templates,
             )?,
+            otp_issue: rate(
+                r,
+                "WA_SERVER_RATE_OTP_ISSUE",
+                "WA_SERVER_RATE_OTP_ISSUE_BURST",
+                limits.otp_issue,
+            )?,
+            otp_verify: rate(
+                r,
+                "WA_SERVER_RATE_OTP_VERIFY",
+                "WA_SERVER_RATE_OTP_VERIFY_BURST",
+                limits.otp_verify,
+            )?,
         },
         idempotency_ttl,
         media_max_bytes: positive(r, "WA_SERVER_MEDIA_MAX_BYTES")?
             .unwrap_or(defaults.media_max_bytes),
         media_concurrency,
         media_streams,
+        live,
+        registration_attempts: attempt_limits(r)?,
+        inbox_reply_checks: match r.plain("WA_SERVER_INBOX_REPLY_CHECKS")? {
+            None => ReplyChecksByNumber::new(),
+            Some(value) => {
+                ReplyChecksByNumber::parse(&value).map_err(|InvalidReplyChecks(reason)| {
+                    ConfigError::Invalid {
+                        name: "WA_SERVER_INBOX_REPLY_CHECKS",
+                        reason,
+                    }
+                })?
+            }
+        },
         ..defaults
     })
 }
@@ -702,6 +861,7 @@ struct Runtime {
     migrate: MigrateMode,
     shutdown_grace: Duration,
     outbox_retention: Duration,
+    inbox_retention: Retention,
     log_format: LogFormat,
     log_filter: String,
 }
@@ -718,7 +878,8 @@ fn migrate_mode(r: &Reader<'_>) -> Result<MigrateMode, ConfigError> {
 }
 
 /// `WA_SERVER_MIGRATE`, `WA_SERVER_SHUTDOWN_GRACE`,
-/// `WA_SERVER_OUTBOX_RETENTION`, `WA_SERVER_LOG_FORMAT`, `RUST_LOG`.
+/// `WA_SERVER_OUTBOX_RETENTION`, `WA_SERVER_INBOX_RETENTION`,
+/// `WA_SERVER_LOG_FORMAT`, `RUST_LOG`.
 fn runtime(r: &Reader<'_>) -> Result<Runtime, ConfigError> {
     let shutdown_grace = match r.plain("WA_SERVER_SHUTDOWN_GRACE")? {
         None => DEFAULT_SHUTDOWN_GRACE,
@@ -737,6 +898,20 @@ fn runtime(r: &Reader<'_>) -> Result<Runtime, ConfigError> {
             retention => retention,
         },
     };
+    // `keep` (the default), or a positive duration: zero would purge the
+    // whole inbox at the next housekeeping.
+    let inbox_retention = match r.plain("WA_SERVER_INBOX_RETENTION")?.as_deref() {
+        None | Some("keep") => Retention::Keep,
+        Some(value) => match duration("WA_SERVER_INBOX_RETENTION", value) {
+            Ok(retention) if !retention.is_zero() => Retention::For(retention),
+            _ => {
+                return Err(ConfigError::Invalid {
+                    name: "WA_SERVER_INBOX_RETENTION",
+                    reason: "expected keep, or a positive duration such as 7d",
+                });
+            }
+        },
+    };
     let log_format = match r.plain("WA_SERVER_LOG_FORMAT")?.as_deref() {
         None | Some("json") => LogFormat::Json,
         Some("text") => LogFormat::Text,
@@ -751,6 +926,7 @@ fn runtime(r: &Reader<'_>) -> Result<Runtime, ConfigError> {
         migrate: migrate_mode(r)?,
         shutdown_grace,
         outbox_retention,
+        inbox_retention,
         log_format,
         log_filter: r.plain("RUST_LOG")?.unwrap_or_else(|| "info".to_owned()),
     })

@@ -23,7 +23,8 @@
 //!      it; a duplicate skipped) ─► the service's sink:
 //!        a. route: the tenant owning the number, else the WABA, since before the
 //!           event, by the backend's records (crate::events::route)
-//!        b. the inbox (the facade's InboxSink), when a tenant owns it
+//!        b. the inbox (the facade's InboxSink, INBOX_RECORDING: no synced
+//!           contacts before roadmap M3b), when a tenant owns it
 //!        c. the outbox row: that tenant, or none (operator-only); the outbox
 //!           checks the routing again, atomically with the insert
 //!      then the lease marked done (released when the sink failed)
@@ -77,7 +78,7 @@ use meta_whatsapp_rs::core::clock::{Clock, SystemClock};
 use meta_whatsapp_rs::core::error::{ConfigError, SinkError, StorageError, WebhookError};
 use meta_whatsapp_rs::core::secret::{AppSecret, VerifyToken};
 use meta_whatsapp_rs::core::sink::EventSink;
-use meta_whatsapp_rs::inbox::InboxSink;
+use meta_whatsapp_rs::inbox::{InboxSink, RecordingSwitches};
 use meta_whatsapp_rs::webhooks::{
     DEFAULT_MAX_BODY_BYTES, DedupGuard, DeliveryReport, SignatureVerifier, WebhookEvent,
     WebhookHandler,
@@ -87,6 +88,7 @@ use tokio::sync::Semaphore;
 
 use crate::backend::Backend;
 use crate::events::{EventIdKey, EventKey, MoveRules, Routing, outbox_row, route};
+use crate::notify::{EventNotifier, Wakeup};
 use crate::observe::Observer;
 use crate::outbox::Outbox;
 use crate::store::RecordStore;
@@ -269,6 +271,37 @@ impl Refused {
 /// (beside [`Refused::outcome`]'s).
 pub const DELIVERED: &str = "delivered";
 
+/// What the service's inbox records: everything the library's
+/// [`InboxSink`] does, but the coexistence address book
+/// (`smb_app_state_sync`): the service exposes no synced contacts before
+/// roadmap M3b, which turns this switch on (with their API and erasure),
+/// so it keeps none of that personal data meanwhile. The events still
+/// reach their tenant's outbox.
+pub const INBOX_RECORDING: RecordingSwitches = RecordingSwitches::ALL.contacts(false);
+
+/// What the service does about an event besides recording it (roadmap
+/// M3a): an `account_update` that offboards a merchant
+/// (`PARTNER_APP_UNINSTALLED` of the service's app, `ACCOUNT_DELETED`) or
+/// ends their credit line (`PARTNER_REMOVED`): the core's
+/// [`crate::signup::AccountUpdates`]. The pipeline hands it each
+/// `account_updated` event of a signed delivery, under its dedup lease,
+/// **once the event is recorded** (or found recorded already, on a
+/// redelivery): routed while the WABA is still bound, the event reaches
+/// its tenant before an offboarding unbinds the WABA.
+///
+/// Its failure decides the delivery: a retryable one
+/// ([`meta_whatsapp_rs::Error::is_retryable`]: Meta or the storage failing)
+/// fails it (`500`, the lease released, so Meta's redelivery, finding the
+/// event recorded, runs it again: what it does must be safe to repeat), and
+/// any other is logged at `warn` (the operator acts) and counted, so one
+/// account update the service cannot act on never holds back the events
+/// delivered with it.
+#[async_trait]
+pub trait AccountActions: Send + Sync + 'static {
+    /// Act on `event`, if it is one to act on.
+    async fn on_event(&self, event: &WebhookEvent) -> Result<(), meta_whatsapp_rs::Error>;
+}
+
 /// The webhook pipeline over one backend's stores: Meta's deliveries
 /// verified, deduplicated, routed and recorded ([module](self)).
 pub struct Pipeline {
@@ -301,13 +334,15 @@ impl Pipeline {
         let dedup = DedupGuard::new(backend.kv());
         let sink = ServiceSink {
             store: backend.records(),
-            inbox: InboxSink::new(backend.conversations()),
+            inbox: InboxSink::new(backend.conversations()).with_recording(INBOX_RECORDING),
             outbox: outbox.clone(),
+            notifier: backend.notifier(),
             observer: observer.clone(),
             ids: inbound.ids,
             replay_window: dedup.ttl(),
             clock: inbound.clock,
             moves: inbound.moves,
+            actions: None,
         };
         Self {
             verifier: inbound.verifier,
@@ -380,6 +415,16 @@ impl Pipeline {
         Ok(report)
     }
 
+    /// Hand each `account_updated` event to `actions` once it is recorded
+    /// (roadmap M3a: the Embedded Signup's offboarding on
+    /// `account_update`), instead of recording it only. See
+    /// [`AccountActions`] for when, and what its failure does.
+    #[must_use]
+    pub fn with_account_actions(mut self, actions: Arc<dyn AccountActions>) -> Self {
+        self.sink.actions = Some(actions);
+        self
+    }
+
     /// The outbox the events are recorded in (what polling reads).
     pub fn outbox(&self) -> &dyn Outbox {
         self.outbox.as_ref()
@@ -442,6 +487,8 @@ struct ServiceSink {
     store: Arc<dyn RecordStore>,
     inbox: InboxSink,
     outbox: Arc<dyn Outbox>,
+    /// Wakes the tenant's live streams once its row is stored.
+    notifier: Arc<dyn EventNotifier>,
     observer: Arc<dyn Observer>,
     ids: EventIdKey,
     /// Events Meta dated longer ago than this are replays: the dedup
@@ -453,6 +500,9 @@ struct ServiceSink {
     clock: Arc<dyn Clock>,
     /// The rules after a move (roadmap S2b).
     moves: MoveRules,
+    /// What is done about an `account_updated` event once it is recorded
+    /// (roadmap M3a).
+    actions: Option<Arc<dyn AccountActions>>,
 }
 
 impl ServiceSink {
@@ -469,9 +519,47 @@ impl ServiceSink {
         error
     }
 
+    /// Record `event`, keyed `key`, then act on it (roadmap M3a: an
+    /// `account_updated` event, [`AccountActions`]), also when it was
+    /// recorded already (a redelivery after the action failed).
+    async fn record(&self, event: WebhookEvent, key: &EventKey) -> Result<(), SinkError> {
+        let to_act = match (&self.actions, &event) {
+            (Some(actions), WebhookEvent::AccountUpdated { .. }) => {
+                Some((actions.clone(), event.clone()))
+            }
+            _ => None,
+        };
+        self.record_event(event, key).await?;
+        let Some((actions, event)) = to_act else {
+            return Ok(());
+        };
+        let kind = event.kind();
+        if let Err(error) = actions.on_event(&event).await {
+            // A retryable failure fails the delivery: Meta's redelivery
+            // finds the event recorded and runs the action again.
+            if error.is_retryable() {
+                return Err(self.failed(
+                    "account_actions",
+                    kind,
+                    SinkError::Delivery(anyhow::Error::msg(
+                        "acting on an account update failed: retried on Meta's redelivery",
+                    )),
+                ));
+            }
+            self.observer.webhook_failure("account_actions");
+            tracing::warn!(
+                target: LOG_TARGET,
+                event_type = kind,
+                error_kind = error.kind().as_str(),
+                "an account update was recorded, but acting on it failed for good: the operator acts"
+            );
+        }
+        Ok(())
+    }
+
     /// Record `event`, keyed `key`: route it, then the inbox, then the
     /// outbox.
-    async fn record(&self, event: WebhookEvent, key: &EventKey) -> Result<(), SinkError> {
+    async fn record_event(&self, event: WebhookEvent, key: &EventKey) -> Result<(), SinkError> {
         let kind = event.kind();
         let now = self.clock.now();
         let at = Routing {
@@ -526,6 +614,24 @@ impl ServiceSink {
                 tenant = tenant.as_str(),
                 "event recorded"
             );
+            // The row is committed: wake its tenant's live streams, on
+            // every replica. A wake-up only (roadmap M2b): a failure loses
+            // nothing, as the streams read the outbox again when their
+            // re-poll is due, so the delivery still succeeds. (Should the
+            // outbox have kept the row operator-only, `sequence` is the
+            // operator stream's, and the tenant's streams read nothing.)
+            let wakeup = Wakeup {
+                tenant: tenant.clone(),
+                sequence,
+            };
+            if let Err(error) = self.notifier.notify(&wakeup).await {
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    event_type = kind,
+                    error = %error,
+                    "the live streams were not notified of a recorded event (their re-poll will find it)"
+                );
+            }
         } else {
             self.observer.webhook_event(kind, "operator");
             tracing::info!(

@@ -107,6 +107,8 @@ codes! {
     TENANT_EXISTS = ("tenant_exists", 409, "A tenant with this id exists."),
     IDEMPOTENCY_IN_PROGRESS = ("idempotency_in_progress", 409, "A request with this Idempotency-Key is still running."),
     OUTCOME_UNKNOWN = ("outcome_unknown", 409, "The outcome of the request with this Idempotency-Key is unknown: reconcile before retrying."),
+    OTP_NOT_CONFIGURED = ("otp_not_configured", 409, "No OTP sender is set up for this tenant, or its sending number is no longer the sender's own: the operator sets one."),
+    SIGNUP_NOT_CONFIGURED = ("signup_not_configured", 409, "Embedded Signup is not set up for this deployment: the operator sets WA_APP_ID and WA_ES_CONFIG_ID (and, for a Solution Partner, its credit line)."),
     // 403: not allowed, by Meta or the service.
     PERMISSION = ("permission", 403, "The token lacks a permission, or access to this asset."),
     ACCOUNT_RESTRICTED = ("account_restricted", 403, "The account is restricted for a policy violation."),
@@ -125,6 +127,8 @@ codes! {
     CLASSIFICATION_LIMIT_REACHED = ("classification_limit_reached", 429, "The messaging limit was reached after template classification violations."),
     TOO_MANY_REQUESTS = ("too_many_requests", 429, "Too many requests: back off and retry."),
     TOO_MANY_STREAMS = ("too_many_streams", 429, "Too many open event streams."),
+    // 428
+    IDEMPOTENCY_KEY_REQUIRED = ("idempotency_key_required", 428, "This request moves money: send an Idempotency-Key, and repeat it with the same one."),
     // 404, 410, 413
     NOT_FOUND = ("not_found", 404, "Not found."),
     NOTHING_TO_RESUME = ("nothing_to_resume", 404, "There is no signup attempt to resume."),
@@ -326,6 +330,15 @@ impl ServiceError {
         error
     }
 
+    /// `429 too_many_streams`, retryable, with `Retry-After`: the live
+    /// event streams' bounds ([`crate::live`]), a limit of the service's
+    /// own, as [`Self::too_many_requests`] is.
+    pub fn too_many_streams(retry_after_secs: u64) -> Self {
+        let mut error = Self::new(ErrorCode::TOO_MANY_STREAMS).retryable(true);
+        error.0.retry_after = Some(retry_after_secs);
+        error
+    }
+
     /// `422 invalid_request` on `field`.
     pub fn invalid(field: impl Into<String>) -> Self {
         let mut error = Self::new(ErrorCode::INVALID_REQUEST);
@@ -448,6 +461,19 @@ impl ServiceError {
     /// `details`, see [`Self::with_details`]). Logs the error (Meta's texts
     /// at `debug` only).
     pub fn from_library(error: &Error) -> Self {
+        Self::from_library_logged(error, MetaTexts::Debug)
+    }
+
+    /// [`Self::from_library`], with Meta's texts (message, user texts,
+    /// `details`) in no log at any level: for the OTP routes, whose Graph
+    /// errors may quote a template parameter, the code (docs/design/server.md,
+    /// section 4.7: the code is in no response, log or error). Meta's code
+    /// and trace id are still logged at `warn`.
+    pub fn from_library_withholding_texts(error: &Error) -> Self {
+        Self::from_library_logged(error, MetaTexts::Withheld)
+    }
+
+    fn from_library_logged(error: &Error, texts: MetaTexts) -> Self {
         let mut api = Self::classify(error);
         api.0.retryable = error.is_retryable();
         api.0.may_have_been_sent = error.may_have_been_sent();
@@ -459,8 +485,23 @@ impl ServiceError {
                 details: None,
             });
         }
-        log(error, &api);
+        log(error, &api, texts);
         api
+    }
+
+    /// The same error, answered as `502 onboarding_failed` (an Embedded
+    /// Signup onboarding stopped at [`Self::step`]; roadmap M3a), with
+    /// `resumable`: `step`, `graph` (without `details`: the signup routes
+    /// never keep Meta's text), `retryable` and `may_have_been_sent` stay.
+    #[must_use]
+    pub fn as_onboarding_failed(mut self, resumable: bool) -> Self {
+        self.0.code = ErrorCode::ONBOARDING_FAILED;
+        self.0.field = None;
+        self.0.resumable = Some(resumable);
+        if let Some(graph) = self.0.graph.as_mut() {
+            graph.details = None;
+        }
+        self
     }
 
     /// Add Meta's `error_data.details` (or a string `error_data`) to
@@ -504,16 +545,33 @@ impl ServiceError {
                 inner.0.step = Some(step);
                 inner
             }
-            // Configuration, an undecryptable vault record, a sink, a
-            // credit line step (routes of later milestones), anything else.
+            // A Solution Partner credit line step that stopped without Meta
+            // refusing it (roadmap M3a): the library's kind for it (a busy
+            // lease `service_unavailable`, a share to reconcile `unknown`,
+            // a revocation part-way its cause's).
+            Error::Credit(credit) => {
+                Self::new(ErrorCode::of(kind_code(credit.kind())).unwrap_or(ErrorCode::INTERNAL))
+            }
+            // Configuration, an undecryptable vault record, a sink,
+            // anything else.
             _ => Self::internal(),
         }
     }
 }
 
+/// Whether a library error's log carries Meta's texts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetaTexts {
+    /// At `debug`.
+    Debug,
+    /// Never.
+    Withheld,
+}
+
 /// Log a library error: its kind, Meta's code and trace id at `warn`, and
-/// Meta's message at `debug` only (docs/design/server.md, section 6).
-fn log(error: &Error, api: &ServiceError) {
+/// Meta's message at `debug` only (docs/design/server.md, section 6), or
+/// never ([`MetaTexts::Withheld`]).
+fn log(error: &Error, api: &ServiceError, texts: MetaTexts) {
     let graph: Option<&GraphApiError> = error.graph();
     tracing::warn!(
         code = api.0.code.as_str(),
@@ -524,7 +582,7 @@ fn log(error: &Error, api: &ServiceError) {
         may_have_been_sent = api.0.may_have_been_sent,
         "request failed"
     );
-    if let Some(graph) = graph {
+    if let (Some(graph), MetaTexts::Debug) = (graph, texts) {
         tracing::debug!(
             graph_message = %graph.summary(),
             graph_details = graph.details(),

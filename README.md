@@ -249,11 +249,12 @@ coding agents of those apps: the `meta-whatsapp-rs-server` skill.
 | `memory` | yes | `MemoryKvStore`, `MemoryConversationStore`: tests, development, one instance |
 | `sinks` | yes | channel, broadcast, fan-out, filter, fn and tracing sinks |
 | `postgres` | | `PostgresKvStore`, `PostgresConversationStore`, embedded migrations (sqlx) |
-| `redis` | | `RedisKvStore`, and `RedisTls` for `rediss://` (aws-lc-rs, never the process default) |
+| `sqlite` | | `SqliteKvStore`, `SqliteConversationStore`, embedded migrations (sqlx, SQLite compiled in): one process on one machine |
+| `redis` | | `RedisKvStore`, `RedisConversationStore`, and `RedisTls` for `rediss://` (aws-lc-rs, never the process default) |
 | `axum` | | `webhooks::router` (webhook endpoint) and `webhooks::sse` (live inbox stream) |
 | `typst` | | `meta_whatsapp_rs::typst`: invoice, receipt and voucher templates → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto (aws-lc-rs) |
-| `ffmpeg` | | `adapters::media::FfmpegConverter`: media conversion (a recording into a voice message's Ogg Opus) by an `ffmpeg` you install; nothing is linked |
+| `ffmpeg` | | `adapters::media::FfmpegConverter`: media conversion (a recording into a voice message's Ogg Opus, an image into a sticker's WebP or under the image limit) by an `ffmpeg` you install; nothing is linked |
 | `bot` | | `meta_whatsapp_rs::bot`: a bot framework (commands, guards, cooldowns, middleware, plugins, Markdown replies, paced broadcasts) |
 | `testing` | | `core::testing::ScriptedTransport` for your own tests (enable in `[dev-dependencies]`) |
 | `full` | | all of the above |
@@ -325,6 +326,7 @@ workspace stays `publish = false` until a release is decided.
 | [CHANGELOG.md](CHANGELOG.md) | what changed |
 | [skills/](skills/README.md) | agent skills for code that uses meta-whatsapp-rs |
 | [docs/public/llms.txt](docs/public/llms.txt) | an index of these docs and skills for language models (the llms.txt convention), served at the docs site's root |
+| [`just docs-mcp`](docs/dev-environment.md#the-docs-mcp-server) | these docs and skills served to a coding agent over MCP (stdio): search them, read a page or one section |
 | `cargo doc --open -p meta-whatsapp-rs --all-features` | the API reference |
 
 ## License

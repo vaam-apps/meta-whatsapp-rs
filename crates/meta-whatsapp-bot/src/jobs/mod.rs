@@ -3,13 +3,14 @@
 //! one store, each recipient sent at most once.
 //!
 //! ```text
-//! KvJobs::new(kv, clock)                      a typed store on `KvStore`
+//! impl JobStore                               where jobs are kept: KvJobs (default), MemoryJobs, yours
 //!   .schedule(Job::new(id, from, at).to(…).payload(json))
 //!   .cancel(&id)   .rerun(&id, at)   .get(&id)
-//!   .observe(&event)                          a `131049` status webhook (or .feedback())
+//!   .observe(&event)                          a `131049` status webhook (or KvJobs::feedback())
 //! JobRunner::builder(jobs).client(…).pacer(…).compose(|job, to| …).build()?
 //!   .tick()                                   claim the jobs due, send, record
 //!   .run_until(every, stop)                   tick, sleep, until `stop`
+//! conformance::run(&|clock| …)                the job suite a store of yours passes
 //! ```
 //!
 //! ```no_run
@@ -20,7 +21,7 @@
 //! use std::sync::Arc;
 //! use std::time::Duration;
 //!
-//! use meta_whatsapp_bot::{Job, JobId, JobRunner, KvJobs, Pacer};
+//! use meta_whatsapp_bot::{Job, JobId, JobRunner, JobStore, KvJobs, Pacer};
 //! use meta_whatsapp_client::messages::OutboundMessage;
 //! use meta_whatsapp_client::templates::TemplateMessage;
 //! use meta_whatsapp_core::clock::SystemClock;
@@ -62,20 +63,38 @@
 //! have. One recipient is a scheduled message; many are a broadcast that
 //! resumes where it stopped.
 //!
+//! # The store is a trait
+//!
+//! The runner reaches its jobs only through [`JobStore`]: scheduling,
+//! cancelling, re-running and reading them, the `131049` feedback, and
+//! the runner's own steps (claiming what is due, holding the claim, a
+//! recipient's marker before and after each send, settling). Its rustdoc
+//! is the contract an implementation keeps under concurrency (claims
+//! atomic under a lease, markers created atomically before the send,
+//! cancels winning or losing whole), and [`conformance::run`] its
+//! executable form, which [`KvJobs`] (the default, on `KvStore`) and
+//! [`MemoryJobs`] (in memory, behind one mutex) both pass. A queue of your
+//! own (a table, a broker) stands in for either once it passes the suite;
+//! the runner holds it as an `Arc<dyn JobStore>`
+//! ([`JobRunner::builder_shared`]).
+//!
 //! # How a job runs
 //!
-//! [`JobRunner::tick`] reads the due index from the oldest bucket that may
-//! still hold a job to run up to now, and for each job due:
+//! [`JobRunner::tick`] asks the store for the jobs due
+//! ([`JobStore::claim_due`]; [`KvJobs`] reads its due index from the
+//! oldest bucket that may still hold a job to run up to now), and for
+//! each:
 //!
-//! 1. **Claims it** by compare-and-swap, from pending (or claimed with a
-//!    lease that expired) to claimed, with a lease ([`JobRunnerBuilder::lease`])
-//!    naming the runner. Two runners that read the same job: one claim
-//!    succeeds, the other's compare-and-swap fails and it moves on. No
-//!    send without a successful claim: a store error ends the tick.
+//! 1. **Claims it** atomically ([`KvJobs`]: by compare-and-swap), from
+//!    pending (or claimed with a lease that expired) to claimed, with a
+//!    lease ([`JobRunnerBuilder::lease`]) naming the runner. Two runners
+//!    that read the same job: one claim succeeds, the other's fails and it
+//!    moves on. No send without a successful claim: a store error ends the
+//!    tick.
 //! 2. **Skips** every recipient that already has a marker for this run
 //!    (sent, failed, or an outcome unknown; an unreadable marker is an
 //!    outcome unknown), and every one Meta refused with `131049` within
-//!    the last 24 hours ([`KvJobs::observe`]). Reading the markers renews
+//!    the last 24 hours ([`JobStore::observe`]). Reading the markers renews
 //!    the lease too, so a long scan is not taken over.
 //! 3. **Sends** to the others as a [`Broadcast`] does (its pacer, its
 //!    [`BroadcastPolicy`], its retries only when `Error::may_resend`
@@ -111,7 +130,7 @@
 //! pacer's wait), sees the job taken over. That costs a pass, never a
 //! duplicate: within a run, the recipient's marker decides who sends.
 //!
-//! **Cancel** ([`KvJobs::cancel`]) moves a pending or claimed job to
+//! **Cancel** ([`JobStore::cancel`]) moves a pending or claimed job to
 //! cancelled by compare-and-swap; a runner running it stops before its
 //! next send (a send already past its second check, with its marker in
 //! place, goes out).
@@ -120,14 +139,14 @@
 //! hours before resending, `templates/marketing-templates/per-user-limits`)
 //! arrives as a `failed` status webhook, after Meta accepted the send. The
 //! runner keeps each message's id (namespace [`JOBS_MESSAGE_NAMESPACE`],
-//! for [`KvJobs::message_ttl`]); [`KvJobs::observe`] finds the job and the
+//! for [`KvJobs::message_ttl`]); [`JobStore::observe`] finds the job and the
 //! recipient of a status carrying `131049` and marks that recipient
 //! limited for 24 hours ([`JOBS_LIMITED_NAMESPACE`]), and a re-run of the
-//! job in that time ([`KvJobs::rerun`]) skips them
+//! job in that time ([`JobStore::rerun`]) skips them
 //! ([`JobSummary::limited`]) and sends everyone else. A `131049` returned
 //! by the send itself marks them the same way.
 //!
-//! # The store
+//! # `KvJobs`'s store
 //!
 //! A typed store on the `KvStore` port, no port of its own; every record
 //! is JSON with a version (`"v": 1`). Keys are SHA-256 (hex) of
@@ -181,9 +200,13 @@
 //! [`Broadcast`]: crate::Broadcast
 //! [`BroadcastPolicy`]: crate::BroadcastPolicy
 
+pub mod conformance;
+mod memory;
+mod port;
 mod runner;
 mod store;
 
+use std::collections::HashSet;
 use std::fmt;
 
 use meta_whatsapp_core::error::ValidationError;
@@ -195,8 +218,12 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
+pub use memory::MemoryJobs;
+pub use port::{
+    ClaimHandler, Holding, JobClaim, JobFeedback, JobHalt, JobStore, RecipientMark, SendRecord,
+};
 pub use runner::{JobEnd, JobRun, JobRunner, JobRunnerBuilder, TickReport};
-pub use store::{JobFeedback, KvJobs};
+pub use store::KvJobs;
 
 /// Store namespace of the job records (`wa.<module>.<purpose>`, like every
 /// namespace of the library: `docs/architecture.md` § Stable identifiers;
@@ -280,7 +307,7 @@ impl fmt::Display for JobId {
     }
 }
 
-/// A job to schedule ([`KvJobs::schedule`]): from one business number, at
+/// A job to schedule ([`JobStore::schedule`]): from one business number, at
 /// a time, to its recipients, with a payload the runner's composer reads.
 #[derive(Debug, Clone)]
 #[must_use]
@@ -325,6 +352,50 @@ impl Job {
         self.payload = payload;
         self
     }
+
+    /// The job as a store keeps it once scheduled ([`JobStore::schedule`]):
+    /// pending, run 1, no retries, due at its time, its recipients each
+    /// person once (a later listing of the same person dropped, by the
+    /// rule of [`BroadcastBuilder::dedupe`](crate::BroadcastBuilder::dedupe)).
+    /// A `ValidationError` on `recipients` for a job without any, or with
+    /// a kind of recipient a job cannot key (one added to `Recipient`
+    /// after this release).
+    pub fn into_scheduled(self) -> Result<ScheduledJob> {
+        if self.recipients.is_empty() {
+            return Err(
+                ValidationError::new("recipients", "a job needs at least one recipient").into(),
+            );
+        }
+        if self.recipients.iter().any(|r| recipient_key(r).is_none()) {
+            return Err(ValidationError::new(
+                "recipients",
+                "a kind of recipient a job cannot store",
+            )
+            .into());
+        }
+        let dropped: HashSet<usize> = crate::broadcast::duplicates(&self.recipients)
+            .into_iter()
+            .map(|(index, _)| index)
+            .collect();
+        let recipients = self
+            .recipients
+            .into_iter()
+            .enumerate()
+            .filter(|(index, _)| !dropped.contains(index))
+            .map(|(_, recipient)| recipient)
+            .collect();
+        Ok(ScheduledJob {
+            id: self.id,
+            from: self.from,
+            due_at: self.at,
+            state: JobState::Pending,
+            run: 1,
+            retries: 0,
+            recipients,
+            payload: self.payload,
+            summary: None,
+        })
+    }
 }
 
 /// Where a job is.
@@ -341,8 +412,17 @@ pub enum JobState {
     /// Given up on after its last retry, with recipients provably unsent
     /// ([`JobSummary::unsent`]).
     Stopped,
-    /// Cancelled ([`KvJobs::cancel`]).
+    /// Cancelled ([`JobStore::cancel`]).
     Cancelled,
+}
+
+impl JobState {
+    /// Whether it is done, stopped or cancelled: no runner claims it
+    /// again unless it is re-run.
+    #[must_use]
+    pub fn is_settled(self) -> bool {
+        matches!(self, Self::Done | Self::Stopped | Self::Cancelled)
+    }
 }
 
 /// What a run of a job did, recipient by recipient (indices are into
@@ -360,7 +440,7 @@ pub struct JobSummary {
     /// status webhooks.
     pub unknown: Vec<usize>,
     /// The recipients skipped because Meta refused them with `131049`
-    /// within the last 24 hours ([`KvJobs::observe`]).
+    /// within the last 24 hours ([`JobStore::observe`]).
     pub limited: Vec<usize>,
     /// Recipients provably not sent (a stop, a throttled send out of
     /// retries, the rate limiter or the store failing): sent at the job's
@@ -368,7 +448,7 @@ pub struct JobSummary {
     pub unsent: usize,
 }
 
-/// A job as stored ([`KvJobs::get`]), and what the runner's composer reads.
+/// A job as stored ([`JobStore::get`]), and what the runner's composer reads.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ScheduledJob {
@@ -380,7 +460,7 @@ pub struct ScheduledJob {
     pub due_at: OffsetDateTime,
     /// Where it is.
     pub state: JobState,
-    /// Its run: 1, then one more per [`KvJobs::rerun`].
+    /// Its run: 1, then one more per [`JobStore::rerun`].
     pub run: u32,
     /// Retries of this run so far (each pass that left recipients unsent).
     pub retries: u32,

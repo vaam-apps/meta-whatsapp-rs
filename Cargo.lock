@@ -2339,6 +2339,7 @@ version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1f111c8c41e7c61a49cd34e44c7619462967221a6443b0ec299e0ac30cfb9b1"
 dependencies = [
+ "cc",
  "pkg-config",
  "vcpkg",
 ]
@@ -2583,6 +2584,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "meta-whatsapp-docs-mcp"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "meta-whatsapp-rs"
 version = "0.1.0"
 dependencies = [
@@ -2718,6 +2726,7 @@ dependencies = [
  "futures",
  "meta-whatsapp-rs",
  "meta-whatsapp-server-core",
+ "serde_json",
  "time",
  "tokio",
  "tracing",
@@ -2733,6 +2742,7 @@ dependencies = [
  "meta-whatsapp-server-core",
  "meta-whatsapp-server-store-memory",
  "mongodb",
+ "serde_json",
  "time",
  "tokio",
  "tracing",
@@ -2746,6 +2756,7 @@ dependencies = [
  "async-trait",
  "meta-whatsapp-rs",
  "meta-whatsapp-server-core",
+ "serde_json",
  "sha2 0.10.9",
  "time",
  "tokio",

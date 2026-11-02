@@ -17,6 +17,12 @@ export type TemplateDefinition = components["schemas"]["TemplateDefinition"];
 export type TemplatesQuery = NonNullable<
   paths["/v1/wabas/{waba_id}/templates"]["get"]["parameters"]["query"]
 >;
+export type ReplyMessage = components["schemas"]["ReplyMessage"];
+export type ConversationsQuery = NonNullable<
+  paths["/v1/numbers/{pn}/conversations"]["get"]["parameters"]["query"]
+>;
+export type ConversationWindow = components["schemas"]["ConversationWindow"];
+export type NumberInboxMessage = components["schemas"]["NumberInboxMessage"];
 
 // One client per key. A platform key also names the tenant it acts for.
 export function whatsapp(baseUrl: string, key: string, tenant?: string) {
@@ -42,6 +48,7 @@ export type Outcome =
   | { kind: "reconcile" } // may have gone out: wait for its status event
   | { kind: "retry_later"; afterSeconds: number | undefined }
   | { kind: "send_a_template" } // the 24-hour window is closed
+  | { kind: "handled_elsewhere" } // another app owns the thread
   | { kind: "fix_request"; field: string | null }
   | { kind: "give_up"; code: string };
 
@@ -54,6 +61,8 @@ export function outcome(error: ErrorObject, retryAfter: string | null): Outcome 
   switch (error.code as KnownErrorCode) {
     case "customer_service_window_closed":
       return { kind: "send_a_template" };
+    case "thread_owned_elsewhere":
+      return { kind: "handled_elsewhere" };
     case "invalid_request":
     case "unsupported_message_type":
     case "template_parameter_mismatch":
@@ -99,6 +108,75 @@ export function orderConfirmation(phone: string, customer: string): SendMessage 
       components: [{ type: "body", parameters: [{ type: "text", text: customer }] }],
     },
   };
+}
+
+// The number's conversations, most recent activity first (scope inbox):
+// `contact` is the customer's BSUID, else their wa_id.
+export async function conversations(api: WhatsApp, pn: string, cursor?: string) {
+  const query: ConversationsQuery = cursor === undefined ? { limit: 50 } : { limit: 50, cursor };
+  const { data, error } = await api.GET("/v1/numbers/{pn}/conversations", {
+    params: { path: { pn }, query },
+  });
+  if (error) {
+    throw new WhatsAppError(error.error);
+  }
+  return data;
+}
+
+// Reply in a conversation (scope inbox): no `to`, the conversation's
+// contact receives it. The service checks the 24-hour window and the
+// thread's owner first: a refusal (409) sent nothing.
+export async function reply(api: WhatsApp, pn: string, contact: string, message: ReplyMessage, reference: string): Promise<Outcome> {
+  const { data, error, response } = await api.POST("/v1/numbers/{pn}/conversations/{contact}/messages", {
+    params: { path: { pn, contact }, header: { "Idempotency-Key": reference } },
+    body: { ...message, callback_data: reference },
+  });
+  if (error) {
+    return outcome(error.error, response.headers.get("Retry-After"));
+  }
+  return { kind: "sent", messageId: data.message_id };
+}
+
+// The conversation's 24-hour window (scope inbox): `open` is what a
+// free-form reply would meet now, so the composer and the reply agree;
+// otherwise offer a template.
+export async function replyWindow(api: WhatsApp, pn: string, contact: string): Promise<ConversationWindow> {
+  const { data, error } = await api.GET("/v1/numbers/{pn}/conversations/{contact}/window", {
+    params: { path: { pn, contact } },
+  });
+  if (error) {
+    throw new WhatsAppError(error.error);
+  }
+  return data;
+}
+
+// The merchant opened the conversation (scope inbox): unread back to 0, and
+// with notifyCustomer the blue ticks on the customer's latest message.
+// The same reference sends no second receipt once answered (a 503, the
+// reset failing after the receipt, releases it).
+export async function markConversationRead(api: WhatsApp, pn: string, contact: string, notifyCustomer: boolean, reference: string) {
+  const { error } = await api.POST("/v1/numbers/{pn}/conversations/{contact}/read", {
+    params: { path: { pn, contact }, header: { "Idempotency-Key": reference } },
+    body: { notify_customer: notifyCustomer },
+  });
+  if (error) {
+    throw new WhatsAppError(error.error);
+  }
+}
+
+// A message of the number's inbox by id (a status event's), with the
+// conversation it belongs to; undefined when the inbox has none.
+export async function inboxMessage(api: WhatsApp, pn: string, messageId: string): Promise<NumberInboxMessage | undefined> {
+  const { data, error, response } = await api.GET("/v1/numbers/{pn}/messages/{message_id}", {
+    params: { path: { pn, message_id: messageId } },
+  });
+  if (response.status === 404) {
+    return undefined;
+  }
+  if (error) {
+    throw new WhatsAppError(error.error);
+  }
+  return data;
 }
 
 // Blue ticks on a received message; "typing…" only when a reply follows.

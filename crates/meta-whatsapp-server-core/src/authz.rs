@@ -104,8 +104,8 @@ use time::OffsetDateTime;
 use crate::error::{ErrorCode, ServiceError};
 use crate::keys::PresentedKey;
 use crate::model::{
-    ApiKeyRecord, BindingEpoch, KeyOwner, MAX_PAGE_SIZE, NumberStatus, PageRequest, Scope,
-    TenantId, TenantStatus, WabaBinding,
+    ApiKeyRecord, BindingEpoch, KeyOwner, MAX_PAGE_SIZE, NumberBinding, NumberStatus, PageRequest,
+    Scope, TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
 use crate::store::RecordStore;
 
@@ -202,7 +202,8 @@ impl Tokens {
     }
 }
 
-/// What a vault rotation did.
+/// What a vault rotation did. The old key can go only once both `failed`
+/// and `failed_records` are empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VaultRotation {
     /// WABAs walked.
@@ -213,12 +214,24 @@ pub struct VaultRotation {
     /// a key no longer configured, say): rotate again, or reconnect them,
     /// before dropping the old key.
     pub failed: Vec<String>,
+    /// The records kept past a binding walked besides (roadmap M3a:
+    /// [`VaultEntry`], the credit ledgers and revocation markers of
+    /// Solution Partner mode, which no binding names once their WABA left).
+    pub records: usize,
+    /// Those that could not be read or rewritten, by
+    /// [`VaultEntry::key`] (`waba/<id>`, `business/<id>`).
+    pub failed_records: Vec<String>,
 }
 
-/// Walk every bound WABA (the bindings: the vault cannot list its
-/// records) and re-encrypt its token and credit ledger under the active
-/// key with `TokenVault::rotate`. A record that fails is reported and the
-/// walk goes on; only the service's own storage failing stops it.
+/// Re-encrypt the vault under the active key, walking what can name its
+/// records (the vault cannot list them): every bound WABA (the bindings),
+/// with `TokenVault::rotate` (its token, its credit ledger and the
+/// revocation marker of the business that ledger names), then every
+/// record kept past a binding ([`RecordStore::vault_entries`], roadmap
+/// M3a): a WABA's with `TokenVault::rotate` again (its ledger outlives its
+/// token), a business's marker with `TokenVault::rotate_business`. A
+/// record that fails is reported and the walk goes on; only the service's
+/// own storage failing stops it.
 pub async fn rotate_vault(
     store: &dyn RecordStore,
     vault: &TokenVault,
@@ -242,6 +255,36 @@ pub async fn rotate_vault(
                         "a vault record could not be rotated"
                     );
                     report.failed.push(binding.waba_id.as_str().to_owned());
+                }
+            }
+        }
+        let Some(after) = listing.next_after else {
+            break;
+        };
+        page.after = Some(after);
+    }
+    let mut page = PageRequest {
+        after: None,
+        limit: MAX_PAGE_SIZE,
+    };
+    loop {
+        let listing = store.vault_entries(&page).await?;
+        for entry in &listing.items {
+            report.records += 1;
+            let rotated = match entry {
+                VaultEntry::Waba(waba_id) => vault.rotate(waba_id).await,
+                VaultEntry::Business(business_id) => vault.rotate_business(business_id).await,
+            };
+            match rotated {
+                Ok(true) => report.rotated += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        kind = error.kind().as_str(),
+                        record = entry.key(),
+                        "a vault record kept past a binding could not be rotated"
+                    );
+                    report.failed_records.push(entry.key());
                 }
             }
         }
@@ -467,6 +510,19 @@ impl Authorizer {
         self.records.as_ref()
     }
 
+    /// The vault, for the core's Embedded Signup services
+    /// ([`crate::signup`], roadmap M3a), which hand it to the library's
+    /// onboarding (`EmbeddedSignup::onboard_with_approval`, `resume`,
+    /// `offboard`, the credit line's revocation): those store, read and
+    /// delete a WABA's token themselves, in the port rule's order (the
+    /// signup services bind the WABA in the approval, before the library
+    /// stores its token; they delete it before its binding). Crate-private,
+    /// and only the signup services call it (a UI case pins that it does
+    /// not compile outside the core).
+    pub(crate) fn vault_for_signup(&self) -> &TokenVault {
+        &self.tokens.vault
+    }
+
     /// Step 1: the key in `authorization` (the `Authorization` header's
     /// value: `Bearer wak_…`), if it exists, its secret matches (in
     /// constant time), and it is neither revoked nor expired. Records the
@@ -571,6 +627,52 @@ impl Authorizer {
         })
     }
 
+    /// What [`Recheck::still_admitted`] asks again, later, of `caller`
+    /// (steps 1 to 3, the secret apart: its key, its tenant, `scope`), for
+    /// an operation that outlives its request: a live event stream
+    /// ([`crate::live`]), which a key revoked or expired, a scope or a
+    /// platform key's tenant withdrawn, or a tenant suspended or deleted
+    /// must end.
+    ///
+    /// # Errors
+    ///
+    /// `caller` another [`Authorizer`] made: `403 forbidden`.
+    pub(crate) fn recheck(&self, caller: &Caller, scope: Scope) -> Result<Recheck, ServiceError> {
+        self.check(&caller.issuer, "recheck")?;
+        Ok(Recheck {
+            records: self.records.clone(),
+            clock: self.clock.clone(),
+            key_id: caller.key_id.clone(),
+            tenant: caller.tenant.clone(),
+            scope,
+        })
+    }
+
+    /// Step 4 alone for the number `pn`: bound to `caller`'s tenant, else
+    /// `404 not_found` (it does not exist for them). For an operation that
+    /// reads only the service's own records of the number (its live event
+    /// stream, [`crate::live::Streams::open_number_stream`]) and needs no
+    /// token: the vault is not read, and the number's connection status
+    /// does not matter. A `caller` another [`Authorizer`] made is `403
+    /// forbidden`.
+    ///
+    /// # Errors
+    ///
+    /// `403 forbidden`, `404 not_found`, `503 storage_unavailable`.
+    pub async fn tenant_number(
+        &self,
+        caller: &Caller,
+        pn: &PhoneNumberId,
+    ) -> Result<(), ServiceError> {
+        self.check(&caller.issuer, "tenant_number")?;
+        self.records
+            .number(pn)
+            .await?
+            .filter(|binding| binding.tenant_id == caller.tenant)
+            .map(|_| ())
+            .ok_or_else(ServiceError::not_found)
+    }
+
     /// Steps 4 and 5 for the number `pn`: bound to `caller`'s tenant (else
     /// it does not exist), connected, with a usable token. A `caller`
     /// another [`Authorizer`] made is `403 forbidden`.
@@ -580,12 +682,41 @@ impl Authorizer {
         pn: PhoneNumberId,
     ) -> Result<OwnedNumber, ServiceError> {
         self.check(&caller.issuer, "owned_number")?;
+        self.number_of(&caller.tenant, pn).await
+    }
+
+    /// Steps 4 and 5 for the number an OTP is sent from (roadmap M3c,
+    /// decision D8), for `caller`: the number `pn` bound to `holder`, the
+    /// tenant whose OTP settings name it, which is `caller`'s own tenant,
+    /// or the deployment's default OTP tenant (the platform's number) for a
+    /// caller without settings of its own. `holder` is never a request's
+    /// value: the core's OTP services pass the caller's tenant or the
+    /// deployment's setting, and nothing else calls this (crate-private).
+    /// A number no longer `holder`'s is `404 not_found`, which the OTP
+    /// services answer `409 otp_not_configured`. A `caller` another
+    /// [`Authorizer`] made is `403 forbidden`, before anything is read.
+    pub(crate) async fn otp_sender(
+        &self,
+        caller: &Caller,
+        holder: &TenantId,
+        pn: PhoneNumberId,
+    ) -> Result<OwnedNumber, ServiceError> {
+        self.check(&caller.issuer, "otp_sender")?;
+        self.number_of(holder, pn).await
+    }
+
+    /// Steps 4 and 5 for the number `pn`, bound to `tenant`.
+    async fn number_of(
+        &self,
+        tenant: &TenantId,
+        pn: PhoneNumberId,
+    ) -> Result<OwnedNumber, ServiceError> {
         // Step 4: bound to this tenant, else it does not exist.
         let binding = self
             .records
             .number(&pn)
             .await?
-            .filter(|binding| binding.tenant_id == caller.tenant)
+            .filter(|binding| &binding.tenant_id == tenant)
             .ok_or_else(ServiceError::not_found)?;
         // Step 5.
         match binding.status {
@@ -603,7 +734,7 @@ impl Authorizer {
             .records
             .waba(&binding.waba_id)
             .await?
-            .filter(|waba| waba.tenant_id == caller.tenant)
+            .filter(|waba| &waba.tenant_id == tenant)
             .ok_or_else(ServiceError::not_found)?;
         // What the vault answers (a token, none, a failure) is this
         // binding's only if the binding held throughout the read.
@@ -613,6 +744,8 @@ impl Authorizer {
         Ok(OwnedNumber {
             client: self.client.with_token(token.token),
             phone_number_id: pn,
+            history_from: history_from(&waba, &binding),
+            number_attached_at: binding.attached_at,
             waba_id: binding.waba_id,
             issuer: self.issuer.clone(),
             epoch: waba.epoch(),
@@ -850,6 +983,13 @@ impl Authorizer {
     /// marks the numbers of the binding the capability was made from, and
     /// nothing when the WABA was unbound (and attached again) since.
     async fn graph_failed_at(&self, epoch: &BindingEpoch, error: &Error) -> ServiceError {
+        self.mark_failed_at(epoch, error).await;
+        ServiceError::from_library(error)
+    }
+
+    /// What [`Self::graph_failed_at`] marks: a `190` (or `0`) marks the
+    /// numbers of `epoch`'s binding `reconnect_required`.
+    async fn mark_failed_at(&self, epoch: &BindingEpoch, error: &Error) {
         if error.kind() == ErrorKind::Authentication {
             match self
                 .records
@@ -865,8 +1005,75 @@ impl Authorizer {
                 }
             }
         }
-        ServiceError::from_library(error)
     }
+}
+
+/// A [`Caller`]'s authorization, asked again ([`Authorizer::recheck`]):
+/// what a live event stream checks before it reads, so that it ends once
+/// its key or its tenant no longer would be admitted.
+pub(crate) struct Recheck {
+    records: Arc<dyn RecordStore>,
+    clock: Arc<dyn Clock>,
+    key_id: String,
+    tenant: TenantId,
+    scope: Scope,
+}
+
+impl Recheck {
+    /// Whether the caller's key would still be admitted for its tenant
+    /// and scope now: the key stored, neither revoked nor expired, still
+    /// holding the scope and acting as the tenant (a platform key's
+    /// allowed tenants), and the tenant stored and not suspended.
+    ///
+    /// # Errors
+    ///
+    /// `503 storage_unavailable`: it could not be told.
+    pub(crate) async fn still_admitted(&self) -> Result<bool, ServiceError> {
+        let Some(key) = self.records.key(&self.key_id).await? else {
+            return Ok(false);
+        };
+        if !key.is_usable(self.clock.now()) || !key.scopes.contains(&self.scope) {
+            return Ok(false);
+        }
+        let acts_as_tenant = match &key.owner {
+            KeyOwner::Tenant(own) => *own == self.tenant,
+            KeyOwner::Platform(allowed) => allowed.allows(&self.tenant),
+            KeyOwner::Admin => false,
+        };
+        if !acts_as_tenant {
+            return Ok(false);
+        }
+        Ok(self
+            .records
+            .tenant(&self.tenant)
+            .await?
+            .is_some_and(|tenant| tenant.status != TenantStatus::Suspended))
+    }
+}
+
+/// From when the inbox history of `number`, bound under `waba`, is their
+/// tenant's to read (docs/design/server.md, decision D10; roadmaps M2a,
+/// M2h): the later of two cuts. A WABA that moved from another tenant
+/// ([`WabaBinding::previous_tenant_unbound_at`] set) shows nothing dated
+/// before its binding began ([`WabaBinding::attached_at`]), and a number
+/// another tenant released ([`NumberBinding::previous_tenant_released_at`]
+/// set: Meta migrated it from that tenant's WABA, its WABA not moving)
+/// nothing dated before it came under this tenant
+/// ([`NumberBinding::attached_at`]). A binding made before the store
+/// recorded moves ([`UNRECORDED_MOVE`]) counts as moved: fail closed. The
+/// previous holders' messages stay hidden, never purged. `None` when
+/// neither moved (a first onboarding, or a tenant's own WABA or number
+/// bound again): all of it, its coexistence history synced from before the
+/// binding included. A refresh keeps every field, so the cut does not move
+/// with it.
+///
+/// [`UNRECORDED_MOVE`]: crate::model::UNRECORDED_MOVE
+pub fn history_from(waba: &WabaBinding, number: &NumberBinding) -> Option<OffsetDateTime> {
+    let waba_cut = waba.previous_tenant_unbound_at.map(|_| waba.attached_at);
+    let number_cut = number
+        .previous_tenant_released_at
+        .map(|_| number.attached_at);
+    waba_cut.max(number_cut)
 }
 
 /// Step 5 for one WABA: the token, or why there is none to use at `now`.
@@ -897,6 +1104,11 @@ pub struct OwnedNumber {
     client: Client,
     issuer: Issuer,
     epoch: BindingEpoch,
+    /// The binding's history cut ([`history_from`]).
+    history_from: Option<OffsetDateTime>,
+    /// When the number came under its tenant, as its binding read then
+    /// ([`NumberBinding::attached_at`]): [`Self::still_held`] compares it.
+    number_attached_at: OffsetDateTime,
 }
 
 impl std::fmt::Debug for OwnedNumber {
@@ -933,6 +1145,41 @@ impl OwnedNumber {
         &self.epoch.tenant_id
     }
 
+    /// From when the number's inbox history is its tenant's to read
+    /// ([`history_from`], for the binding this was made from): `None`,
+    /// all of it. Crate-private, read by the inbox services
+    /// ([`crate::inbox`]).
+    pub(crate) fn history_from(&self) -> Option<OffsetDateTime> {
+        self.history_from
+    }
+
+    /// Whether the WABA is still bound as it was when this was made (its
+    /// [`BindingEpoch`]: no unbinding, no attach since), and the number
+    /// still under it as it was (the same tenant, WABA and
+    /// [`NumberBinding::attached_at`]: not moved to another WABA of the
+    /// tenant, nor released and bound again, roadmap M2h), read now: what
+    /// the inbox services ask once they read a page, so that a page read
+    /// while the number moved is never answered (`503
+    /// storage_unavailable`, retryable, as a capability met by a move
+    /// answers). Through an `authz` that did not make it: `403 forbidden`.
+    pub(crate) async fn still_held(&self, authz: &Authorizer) -> Result<(), ServiceError> {
+        authz.check(&self.issuer, "OwnedNumber::still_held")?;
+        // The number's binding first, then the WABA's: a number that left
+        // the WABA (its WABA refreshed, or unbound) moved the WABA's epoch
+        // too, and one that left for another WABA of the tenant did not.
+        let number = authz.records.number(&self.phone_number_id).await?;
+        let number_held = number.is_some_and(|number| {
+            number.tenant_id == self.epoch.tenant_id
+                && number.waba_id == self.waba_id
+                && number.attached_at == self.number_attached_at
+        });
+        if number_held && authz.holds(&self.epoch).await? {
+            return Ok(());
+        }
+        tracing::info!("a number's binding moved while its inbox was being read");
+        Err(ServiceError::from(StorageError::Busy))
+    }
+
     /// The error of a failed Graph call made with this number's token
     /// (through `authz`, which made it): a `190` (or `0`) marks the WABA's
     /// numbers `reconnect_required`, if the WABA is still bound as it was
@@ -947,6 +1194,21 @@ impl OwnedNumber {
             return refused;
         }
         authz.graph_failed_at(&self.epoch, error).await
+    }
+
+    /// [`Self::failed`], with Meta's texts in no log
+    /// ([`ServiceError::from_library_withholding_texts`]): for a send whose
+    /// Graph error may quote a secret parameter (an OTP code).
+    pub async fn failed_withholding_texts(
+        &self,
+        authz: &Authorizer,
+        error: &Error,
+    ) -> ServiceError {
+        if let Err(refused) = authz.check(&self.issuer, "OwnedNumber::failed") {
+            return refused;
+        }
+        authz.mark_failed_at(&self.epoch, error).await;
+        ServiceError::from_library_withholding_texts(error)
     }
 }
 
@@ -989,6 +1251,20 @@ impl OwnedWaba {
     /// capability's fields are its maker's word.
     pub(crate) fn tenant(&self) -> &TenantId {
         &self.epoch.tenant_id
+    }
+
+    /// The binding this was made from: what the signup services' partner
+    /// disconnection unbinds, and nothing made since (roadmap M3a).
+    /// Crate-private.
+    pub(crate) fn epoch(&self) -> &BindingEpoch {
+        &self.epoch
+    }
+
+    /// The vault record this was made from: what the signup services'
+    /// partner disconnection deletes, and no token stored since (roadmap
+    /// M3a). Crate-private.
+    pub(crate) fn token_version(&self) -> TokenVersion {
+        self.token
     }
 
     /// See [`OwnedNumber::failed`].

@@ -52,8 +52,8 @@ anyhow = "1"
 | `reqwest` | yes | `ReqwestTransport` and the `meta_whatsapp_rs::client(token)` / `meta_whatsapp_rs::client_builder()` shortcuts |
 | `memory` | yes | `MemoryKvStore`, `MemoryConversationStore` (tests, one instance) |
 | `sinks` | yes | channel, broadcast, fan-out, filter, fn and tracing sinks |
-| `postgres` | | `PostgresKvStore`, `PostgresConversationStore`, migrations |
-| `redis` | | `RedisKvStore` |
+| `postgres`, `sqlite` | | `PostgresKvStore`, `PostgresConversationStore`; `SqliteKvStore`, `SqliteConversationStore`; migrations |
+| `redis` | | `RedisKvStore`, `RedisConversationStore` |
 | `axum` | | `webhooks::router` (the endpoint) and `webhooks::sse` (live stream) |
 | `typst` | | `meta_whatsapp_rs::typst`: invoices, receipts, vouchers → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto |
@@ -95,7 +95,7 @@ the inbox. It leaves out `Result`: write `meta_whatsapp_rs::Result`.
 | Secrets, logs, limits, several instances, going live | `meta-whatsapp-rs-production` |
 | An app not written in Rust, through the HTTP service meta-whatsapp-server | `meta-whatsapp-rs-server` |
 | Receiving WhatsApp events through meta-whatsapp-server (Meta's webhook, polling) | `meta-whatsapp-rs-server-events` |
-| Sending messages, media and templates through that service | `meta-whatsapp-rs-server-send` |
+| Sending messages, media and templates through that service; login codes (OTP) and authentication templates; merchants connecting their number (Embedded Signup); registering a number and its two-step PIN | `meta-whatsapp-rs-server-send`; `meta-whatsapp-rs-server-otp`; `meta-whatsapp-rs-server-onboarding`; `meta-whatsapp-rs-server-registration` |
 
 Anything else the client wraps: its rustdoc
 (`cargo doc -p meta-whatsapp-rs --all-features --open`), starting at `meta_whatsapp_rs::client`.
@@ -144,8 +144,8 @@ own gate. On another `rev`, trust the rustdoc
 ## What meta-whatsapp-rs does not do
 
 - No tenant model, no job queue or outbox, no consent registry.
-- Not wrapped: Multi-Partner Solutions and migration intents (credit lines and
-  partner-led business verification are), payments, the thread control API (its webhooks are typed)
+- Not wrapped: Multi-Partner Solutions and migration intents (credit lines and partner-led
+  business verification are)
   ([coverage](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/coverage.md),
   [parity](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/parity.md),
   [roadmap](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/roadmap.md)).

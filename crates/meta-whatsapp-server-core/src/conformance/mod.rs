@@ -26,17 +26,21 @@
 //!
 //! | Suite | What it holds a backend to |
 //! | --- | --- |
-//! | [`records`] | [`RecordStore`] and [`IdempotencyRecords`]: tenants, keys, bindings (decision D4), idempotency keys gone with their tenant, the referential rules (roadmap S2: `NoSuchTenant`, a binding and a deletion of one tenant serialize), byte order; a WABA's moves recorded by its tombstone, a deleted tenant counting as another, and the bind generation a refresh moves (roadmap S2b) |
+//! | [`records`] | [`RecordStore`] and [`IdempotencyRecords`]: tenants, keys, bindings (decision D4), idempotency keys gone with their tenant, the referential rules (roadmap S2: `NoSuchTenant`, a binding and a deletion of one tenant serialize), byte order; a WABA's moves recorded by its tombstone, a deleted tenant counting as another, and the bind generation a refresh moves (roadmap S2b); a number's moves recorded by its own tombstone, its start kept by a refresh and a move within its tenant (roadmap M2h) |
 //! | [`outbox`] | [`Outbox`]: each tenant's own stream, pages and their byte budget, dedup and its window, filters, purges per stream that take no lock |
 //! | [`invariants`] | what crosses ports, which a backend made of loose stores loses: every accessor hands out the same data; deleting a tenant purges its stream; the routing checked again with each insert (the [`RouteGuard`] cases: a binding moved before the insert, begun after the event, of the event's own second after a move; since S2b a first onboarding's first second, the skew margin after a move only, an undated event within the window after a move); each tenant's inserts commit in sequence order |
 //! | [`capabilities`] | through the core's [`Authorizer`]: a capability acts only on the binding and the vault record it was made from (roadmap S2, SR-L2, the `failed` race, M1), and not on a binding refreshed since (S2b, the bind generation) |
-//! | [`races`] | the atomic contracts raced on two tasks: an insert against its binding moving, a binding against its tenant's deletion, each conditioned write against a re-attach |
+//! | [`races`] | the atomic contracts raced on two tasks: an insert against its binding moving, a binding against its tenant's deletion, another tenant's WABA taking a number against its release (roadmap M2h), each conditioned write against a re-attach |
 //! | [`admin`] | the core's admin services over the bundle, with no HTTP layer (roadmap S5a): attaching a WABA another tenant holds is refused with nothing stored, subscribed or shared, whether its holder is seen before Meta is asked or only by the binding's own check |
 //! | [`messages`] | the core's message services under its idempotency engine, over the bundle's records, vault and [`IdempotencyRecords`], with no HTTP layer (roadmap S5b, M1.4): a digits-only phone number refused before any request; a timeout `may_have_been_sent`, its key replaying it with no second request; a `131047` releasing its key; another authorizer's caller refused before the key is read |
 //! | [`templates`] | the core's template services over the bundle's records and vault, with no HTTP layer (roadmap S5c): tenant B's caller on tenant A's template id is not found with zero vault reads (A's WABA not B's, A's capability refused to B, A's id not in B's WABA, nothing deleted); another authorizer's caller or capability refused; Meta's documented requests, the cache and its invalidation (by a creation or deletion Meta refuses too); a template id past the lookup's 5 pages not found, nothing deleted |
 //! | [`media`] | the core's media services over the bundle's records and vault, with no HTTP layer (roadmap S5d): a download through the core's stream ends before its last chunk on a digest mismatch (M1b's rule), passes the file on while it arrives (one chunk held), and stops past `max_bytes`; a failed or oddly chunked download (empty chunks, a cut connection, one chunk, none) never yields its last chunk unverified, and gives its slot back on every path; a `190` from Meta's URL marks the number; a whole download answers no byte of a tampered file; the reported size, digest and URL checked before the download; another number's media id not found, nothing deleted; Meta's documented upload and deletion; only the order's own capability; a slot of the tenant's share first |
 //! | [`numbers`] | the core's number services over the bundle's records and vault, with no HTTP layer (roadmap S5c): only the order's own capabilities; a number's details and profile, a change of it (an empty one only reads, a refused one sends nothing); a disconnection deleting nothing until Meta unsubscribed the app, and nothing for a WABA that moved |
-//! | [`webhooks`] | the core's webhook pipeline over the bundle's records, key/value store, inbox and outbox, with no listener (roadmap S5e, M1.2): routing is an allow-list (an unowned number's event, a stale binding's, a replay's are operator-only, whatever the payload says of a tenant; an event dated before its binding, or seen past the replay window, too; a number moved while its event records gives it to neither tenant); the signature checked before any store is touched or a turn waited for; at most `MAX_DELIVERIES_RECORDING` deliveries recording, another waiting with no lease claimed (its `503 busy` after the wait is `webhooks::a_delivery_with_no_turn_is_busy_after_the_wait`, on a paused clock, not in `run`); each event once, under its dedup lease; the answer only once every event is recorded, a failed or busy outbox refused and redelivered once; `unknown` and `unparsed` acknowledged as operator-only rows; after a move, undated events (a history chunk, an error, an undated group update) reaching no tenant within the window, the new holder under `CurrentHolder` or past it, a first onboarding always, and an event of the binding's first second a first onboarding's only (roadmap S2b, design D36) |
+//! | [`live`] | the bundle's [`EventNotifier`] and the core's live streams over it (roadmap M2b): the notifier wakes its tenant's subscriptions only, through any of the bundle's handles; a stream sends what the outbox holds after its cursor and resumes exactly after it (`Last-Event-ID`); only its tenant's events, never an `unknown` or `unparsed` one (M2.3, through the pipeline); a lost notification still delivers (the re-poll); a cursor past the newest sequence `422` and one below a purge `410` before the stream starts; streams bounded per tenant and replica (`429 too_many_streams`); a slow client dropped with `lagged`, its buffer within its budget; a shutdown ends every stream; an event read by id in its tenant's stream only; a number stream on the tenant's own number only; a stream behind a purge ends `lagged`. M2.5's load (`live::many_streams_at_a_steady_rate_hold_bounded_memory`) is a case of its own, not in `run` |
+//! | [`inbox`] | the core's inbox services over the bundle's records, vault and inbox, the webhooks recorded by the core's pipeline, with no HTTP layer (roadmap M2a): M2.1 (an inbound message listed, read, answered within its window, Meta's documented request, recorded `accepted`, then `delivered` by its status; a free-form reply outside the window `409` with zero requests, a template not; pages by the store's cursor); the binding epoch (a moved number's history hidden from its new tenant and kept, its own shown, a first onboarding's synced history shown; a number migrated between two tenants' WABAs, neither moving, cut at its own start (M2h); a capability made before the move reads nothing); `control_taken` refusing a free-form reply `409 thread_owned_elsewhere` with zero requests, unless the number's ownership check is off; only the order's own number; since roadmap M2g, the window as a reply meets it, marking read (`unread` 0, one read receipt for the latest inbound message only with `notify_customer`, none past 30 days, a refused one resetting nothing), a message by id on its own number only, and the previous holder's message, window and receipt never reaching the new holder; housekeeping applying the inbox store's retention |
+//! | [`otp`] | the core's OTP services over the bundle's records, key/value store and vault, with no HTTP layer (roadmap M3c): a tenant's OTP settings are its own record (read back whole, replaced, cleared, gone with the tenant, none for a tenant created again under its id); acceptance test M3.5's decisive case, the namespace (tenant A's code, sent from the number tenant B sends from too, verifies at no other tenant, whose checks count no attempt against it); settings naming a number no longer its holder's are `409 otp_not_configured` with no request; another authorizer's caller opens nothing |
+//! | [`signup`] | what Embedded Signup needs of a backend, and the core's signup services over its bundle, with no HTTP layer (roadmap M3a): a kept attempt is its tenant's (kept only while the WABA is that tenant's, read back whole by it alone, replaced with its start kept, listed per tenant in byte order) and goes with its binding (every unbind); the vault's records kept past a binding are kept for good, idempotent, in byte order of their keys; a credit allocation is recorded on the binding it was made for only; acceptance test M3.4's D4 case (a second tenant onboarding a WABA another holds is `409`, claimed or found by Meta's verification, nothing stored, subscribed or shared, the binding and the token unchanged); a key rotation reaching the credit ledger and the revocation marker an offboarded WABA left, so the old key can go once it reports no failure |
+//! | [`webhooks`] | the core's webhook pipeline over the bundle's records, key/value store, inbox and outbox, with no listener (roadmap S5e, M1.2): routing is an allow-list (an unowned number's event, a stale binding's, a replay's are operator-only, whatever the payload says of a tenant; an event dated before its binding, or seen past the replay window, too; a number moved while its event records gives it to neither tenant); the signature checked before any store is touched or a turn waited for; at most `MAX_DELIVERIES_RECORDING` deliveries recording, another waiting with no lease claimed (its `503 busy` after the wait is `webhooks::a_delivery_with_no_turn_is_busy_after_the_wait`, on a paused clock, not in `run`); each event once, under its dedup lease; the answer only once every event is recorded, a failed or busy outbox refused and redelivered once; `unknown` and `unparsed` acknowledged as operator-only rows; after a move, undated events (a history chunk, an error, an undated group update) reaching no tenant within the window, the new holder under `CurrentHolder` or past it, a first onboarding always, and an event of the binding's first second a first onboarding's only (roadmap S2b, design D36); an address book change reaches its tenant and the inbox keeps no synced contact (before roadmap M3b, design D38) |
 //!
 //! Every case panics on a broken contract, with what broke: this is test
 //! code.
@@ -44,6 +48,7 @@
 //! [`RecordStore`]: crate::store::RecordStore
 //! [`IdempotencyRecords`]: crate::store::IdempotencyRecords
 //! [`Outbox`]: crate::outbox::Outbox
+//! [`EventNotifier`]: crate::notify::EventNotifier
 //! [`RouteGuard`]: crate::outbox::RouteGuard
 //! [`Authorizer`]: crate::authz::Authorizer
 #![allow(
@@ -55,13 +60,17 @@
 
 pub mod admin;
 pub mod capabilities;
+pub mod inbox;
 pub mod invariants;
+pub mod live;
 pub mod media;
 pub mod messages;
 pub mod numbers;
+pub mod otp;
 pub mod outbox;
 pub mod races;
 pub mod records;
+pub mod signup;
 pub mod templates;
 pub mod webhooks;
 
@@ -75,48 +84,66 @@ pub async fn run<F>(fresh: F) -> races::Report
 where
     F: AsyncFn() -> Arc<dyn Backend>,
 {
+    // Each suite boxed: their futures are large, and this one would hold
+    // the largest of them (clippy's `large_futures` in the backends' crates).
     let backend = fresh().await;
-    records::run(backend.as_ref()).await;
+    Box::pin(records::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    outbox::run(backend.as_ref()).await;
+    Box::pin(outbox::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    invariants::run(backend.as_ref()).await;
+    Box::pin(invariants::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    capabilities::run(backend.as_ref()).await;
+    Box::pin(capabilities::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    let report = races::run(backend.as_ref()).await;
+    let report = Box::pin(races::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    admin::run(backend.as_ref()).await;
+    Box::pin(admin::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    messages::run(backend.as_ref()).await;
+    Box::pin(messages::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    templates::run(backend.as_ref()).await;
+    Box::pin(templates::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    numbers::run(backend.as_ref()).await;
+    Box::pin(numbers::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    media::run(backend.as_ref()).await;
+    Box::pin(media::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    webhooks::run(backend.as_ref()).await;
+    Box::pin(webhooks::run(backend.as_ref())).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    Box::pin(live::run(backend.as_ref())).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    Box::pin(inbox::run(backend.as_ref())).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    Box::pin(otp::run(backend.as_ref())).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    Box::pin(signup::run(backend.as_ref())).await;
     backend.close().await;
     report
 }

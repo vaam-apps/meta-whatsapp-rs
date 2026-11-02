@@ -17,6 +17,9 @@ members = [
   "crates/meta-whatsapp-server-http",
   "crates/meta-whatsapp-server-api-axum",
   "crates/meta-whatsapp-server",
+  # The docs MCP server (roadmap L22b): a tool, a binary only, on
+  # serde_json alone. Not a default member, and no crate depends on it.
+  "tools/docs-mcp",
 ]
 # Repository automation is its own workspace (own Cargo.lock): its HTTP
 # client (ureq → rustls with `ring`) must not be resolved into the
@@ -32,7 +35,8 @@ exclude = [".xtask"]
 # spike, meta-whatsapp-server-store-mongodb, which the binary does not
 # compose: roadmap S9) are members (every `--workspace` recipe, and so `just ci`, covers them)
 # but not default ones: a bare `cargo build` or `cargo test` in the root
-# builds the library alone, with the features its crates choose.
+# builds the library alone, with the features its crates choose. The docs
+# MCP server under tools/ is a member on the same terms.
 default-members = [
   "crates/meta-whatsapp-core",
   "crates/meta-whatsapp-client",

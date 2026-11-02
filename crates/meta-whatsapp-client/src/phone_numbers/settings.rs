@@ -10,94 +10,54 @@ use base64::alphabet;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
-use serde::de::Deserializer;
-use serde::ser::Serializer;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 
-use crate::templates::macros::string_enum;
-
-/// Country where message data is stored at rest (local storage).
-///
-/// The documented set (`business-phone-numbers/registration` and the
-/// `phone-number-registration` reference agree on it). [`Self::Other`]
-/// carries a code Meta adds later; it must still be a two-letter uppercase
-/// ISO 3166 code, which [`Self::validate`] checks.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum DataLocalizationRegion {
-    /// Australia.
-    Au,
-    /// Indonesia.
-    Id,
-    /// India.
-    In,
-    /// Japan.
-    Jp,
-    /// Singapore.
-    Sg,
-    /// South Korea.
-    Kr,
-    /// EU (Germany).
-    De,
-    /// Switzerland.
-    Ch,
-    /// United Kingdom.
-    Gb,
-    /// Brazil.
-    Br,
-    /// Bahrain.
-    Bh,
-    /// South Africa.
-    Za,
-    /// United Arab Emirates.
-    Ae,
-    /// Canada.
-    Ca,
-    /// A code not in the documented list.
-    Other(String),
+open_enum! {
+    /// Country where message data is stored at rest (local storage).
+    ///
+    /// The documented set (`business-phone-numbers/registration` and the
+    /// `phone-number-registration` reference agree on it).
+    /// [`DataLocalizationRegion::Other`] carries a code Meta adds later; it
+    /// must still be a two-letter uppercase ISO 3166 code, which
+    /// [`DataLocalizationRegion::validate`] checks.
+    pub enum DataLocalizationRegion {
+        /// Australia.
+        Au => "AU",
+        /// Indonesia.
+        Id => "ID",
+        /// India.
+        In => "IN",
+        /// Japan.
+        Jp => "JP",
+        /// Singapore.
+        Sg => "SG",
+        /// South Korea.
+        Kr => "KR",
+        /// EU (Germany).
+        De => "DE",
+        /// Switzerland.
+        Ch => "CH",
+        /// United Kingdom.
+        Gb => "GB",
+        /// Brazil.
+        Br => "BR",
+        /// Bahrain.
+        Bh => "BH",
+        /// South Africa.
+        Za => "ZA",
+        /// United Arab Emirates.
+        Ae => "AE",
+        /// Canada.
+        Ca => "CA",
+    }
 }
 
 impl DataLocalizationRegion {
-    /// The ISO 3166 code Meta expects.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Au => "AU",
-            Self::Id => "ID",
-            Self::In => "IN",
-            Self::Jp => "JP",
-            Self::Sg => "SG",
-            Self::Kr => "KR",
-            Self::De => "DE",
-            Self::Ch => "CH",
-            Self::Gb => "GB",
-            Self::Br => "BR",
-            Self::Bh => "BH",
-            Self::Za => "ZA",
-            Self::Ae => "AE",
-            Self::Ca => "CA",
-            Self::Other(code) => code,
-        }
-    }
-
-    /// Map a code to a variant (unknown codes become [`Self::Other`]).
+    /// Map a code to a variant (unknown codes become [`Self::Other`]); the
+    /// same as `DataLocalizationRegion::from(code)`.
     pub fn from_code(code: &str) -> Self {
-        match code {
-            "AU" => Self::Au,
-            "ID" => Self::Id,
-            "IN" => Self::In,
-            "JP" => Self::Jp,
-            "SG" => Self::Sg,
-            "KR" => Self::Kr,
-            "DE" => Self::De,
-            "CH" => Self::Ch,
-            "GB" => Self::Gb,
-            "BR" => Self::Br,
-            "BH" => Self::Bh,
-            "ZA" => Self::Za,
-            "AE" => Self::Ae,
-            "CA" => Self::Ca,
-            other => Self::Other(other.to_owned()),
-        }
+        Self::from(code)
     }
 
     /// Check the documented format: a two-letter uppercase country code.
@@ -111,18 +71,6 @@ impl DataLocalizationRegion {
                 "must be a two-letter uppercase ISO 3166 country code",
             ))
         }
-    }
-}
-
-impl Serialize for DataLocalizationRegion {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for DataLocalizationRegion {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        String::deserialize(d).map(|s| Self::from_code(&s))
     }
 }
 
@@ -145,7 +93,8 @@ pub struct PhoneNumberSettings {
     pub payload_encryption: Option<PayloadEncryption>,
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// Whether payload encryption is on (`status` of `payload_encryption`,
     /// `settings-api`: `enabled`, `disabled`).
     pub enum PayloadEncryptionStatus {
@@ -322,33 +271,21 @@ pub struct StorageConfiguration {
     pub data_localization_region: Option<DataLocalizationRegion>,
 }
 
-/// Local storage status.
-///
-/// `local-storage` (guide, with examples) uses
-/// `IN_COUNTRY_STORAGE_ENABLED`/`IN_COUNTRY_STORAGE_DISABLED`; the
-/// `settings-api` reference lists `default`/`in_country_storage_enabled` in
-/// lowercase. Requests follow the guide's examples; parsing accepts both.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[non_exhaustive]
-pub enum StorageStatus {
-    /// Data at rest stays in `data_localization_region`.
-    #[serde(
-        rename = "IN_COUNTRY_STORAGE_ENABLED",
-        alias = "in_country_storage_enabled"
-    )]
-    InCountryStorageEnabled,
-    /// Local storage off.
-    #[serde(
-        rename = "IN_COUNTRY_STORAGE_DISABLED",
-        alias = "in_country_storage_disabled"
-    )]
-    InCountryStorageDisabled,
-    /// Meta's default storage (reference wording).
-    #[serde(rename = "default", alias = "DEFAULT")]
-    Default,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
+open_enum! {
+    /// Local storage status.
+    ///
+    /// `local-storage` (guide, with examples) uses
+    /// `IN_COUNTRY_STORAGE_ENABLED`/`IN_COUNTRY_STORAGE_DISABLED`; the
+    /// `settings-api` reference lists `default`/`in_country_storage_enabled` in
+    /// lowercase. Requests follow the guide's examples; parsing accepts both.
+    pub enum StorageStatus {
+        /// Data at rest stays in `data_localization_region`.
+        InCountryStorageEnabled => "IN_COUNTRY_STORAGE_ENABLED" | "in_country_storage_enabled",
+        /// Local storage off.
+        InCountryStorageDisabled => "IN_COUNTRY_STORAGE_DISABLED" | "in_country_storage_disabled",
+        /// Meta's default storage (reference wording).
+        Default => "default" | "DEFAULT",
+    }
 }
 
 #[derive(Serialize)]

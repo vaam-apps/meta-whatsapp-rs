@@ -1066,18 +1066,22 @@ async fn history(
     .unwrap()
 }
 
-/// Roadmap S7's continuity, and S2b's migration forward: a database
+/// Roadmap S7's continuity, and S2b's, M2h's and M2e's migrations forward: a database
 /// `main`'s binary migrated (the service's migrations 1 to 3, moved to
 /// `meta-whatsapp-server-store-postgres`), holding a binding `main` made,
 /// is migrated forward by this binary's `migrate` with no checksum error:
 /// migrations 1 to 3 row for row what `main` left (`installed_on`
-/// included), migration 4 (S2b's, additive) added once, and `serve` then
+/// included), migrations 4 to 7 (S2b's, M2h's, M3a's and M2e's, additive)
+/// added once each, and `serve` then
 /// runs none (both migrating by default, `WA_SERVER_MIGRATE=auto`;
 /// `/readyz` answers 200); the library's history is unchanged. `main`'s
 /// binding keeps its semantics: its start, generation 1, and a previous
 /// tenant recorded as unknown (`UNRECORDED_MOVE`), so an event of its own
 /// second stays operator-only and its undated events reach it, as before;
-/// unbound and bound to another tenant, it is a recorded move. Decisive: an
+/// unbound and bound to another tenant, it is a recorded move. Its number
+/// reads its WABA's start and a previous tenant unknown (migration 5's
+/// defaults: the inbox shows it nothing dated before that start, failing
+/// closed), and moved with the WABA, its move is recorded. Decisive: an
 /// edited migration file (`VersionMismatch`), a renamed history table (its
 /// migrations run again, on tables that exist), a renumbered migration, or
 /// migration 4's defaults (a NULL `previous_tenant_unbound_at` would give
@@ -1190,14 +1194,22 @@ fn live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migrat
         .iter()
         .map(|row| (row.0, row.1.as_str(), row.2, row.3.clone()))
         .collect();
-    let fourth = meta_whatsapp_server::store::migrations()
-        .into_iter()
-        .find(|m| m.version == 4)
-        .unwrap();
+    let checksum = |version: i64| {
+        let migration = meta_whatsapp_server::store::migrations()
+            .into_iter()
+            .find(|m| m.version == version)
+            .unwrap();
+        hex::encode(&*migration.checksum)
+    };
     assert_eq!(
         added,
-        [(4, "waba moves", true, hex::encode(&*fourth.checksum))],
-        "migration 4, once"
+        [
+            (4, "waba moves", true, checksum(4)),
+            (5, "number moves", true, checksum(5)),
+            (6, "signup", true, checksum(6)),
+            (7, "received media", true, checksum(7))
+        ],
+        "migrations 4 to 7, once each"
     );
     let mut serving = Command::new(BIN);
     with_db(&mut serving);
@@ -1220,6 +1232,7 @@ fn live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migrat
         after, forward,
         "`serve` ran a migration again, or a new one"
     );
+    runtime.block_on(main_number_reads_as_unrecorded(&pool, main_attached_at));
     runtime.block_on(main_binding_keeps_its_semantics(&pool, main_attached_at));
     runtime.block_on(pool.close());
 }
@@ -1318,5 +1331,45 @@ async fn main_binding_keeps_its_semantics(
             .previous_tenant_unbound_at
             .is_some_and(|left| left > main_attached_at),
         "the move from main's binding: {moved:?}"
+    );
+    let number = records
+        .number(&PhoneNumberId::new(LEGACY_PN).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let left = number
+        .previous_tenant_released_at
+        .expect("the number's move from main's binding");
+    assert!(
+        left > main_attached_at && number.attached_at >= left,
+        "the number's move from main's binding: {number:?}"
+    );
+}
+
+/// `main`'s number, read through this build's Postgres backend after
+/// migration 5 and before any move: its WABA's start (the row has no
+/// `attached_at` of its own) and a previous tenant unknown
+/// (`UNRECORDED_MOVE`, the column's default), so the inbox's cut is its
+/// start (roadmap M2h: fail closed).
+async fn main_number_reads_as_unrecorded(
+    pool: &meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool,
+    main_attached_at: time::OffsetDateTime,
+) {
+    use meta_whatsapp_rs::core::ids::PhoneNumberId;
+    use meta_whatsapp_server::model::UNRECORDED_MOVE;
+    use meta_whatsapp_server::store::{Backend as _, PgBackend};
+    let backend = PgBackend::new(pool.clone());
+    let number = backend
+        .records()
+        .number(&PhoneNumberId::new(LEGACY_PN).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(number.tenant_id.as_str(), "legacy-a");
+    assert_eq!(number.attached_at, main_attached_at, "its WABA's start");
+    assert_eq!(
+        number.previous_tenant_released_at,
+        Some(UNRECORDED_MOVE),
+        "a previous tenant, unknown"
     );
 }

@@ -21,6 +21,14 @@ use crate::messages::{MessageContent, OutboundMessage};
 use crate::{Client, RetryPolicy};
 use meta_whatsapp_core::ids::CatalogId;
 
+/// Brazil's pages and rules (roadmap P1b), on this module's helpers.
+mod brazil;
+/// India's checkout button templates, their endpoint and the third party
+/// validation (roadmap P1d), on this module's helpers.
+mod checkout;
+/// The payment templates (roadmap P1c), on this module's helpers.
+mod templates;
+
 const PHONE_ID: &str = "106540352242922";
 const WABA: &str = "102290129340398";
 const TO: &str = "919876543210";

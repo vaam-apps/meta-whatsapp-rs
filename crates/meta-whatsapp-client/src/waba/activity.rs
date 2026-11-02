@@ -6,6 +6,7 @@
 use futures::Stream;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::ids::{AppId, BusinessId, SolutionId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::paging::Page;
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +15,6 @@ use super::{Waba, check_limit, fields_query};
 use crate::GraphRequest;
 use crate::partners::solutions::{PendingRequestStatus, SolutionApp, SolutionStatus};
 use crate::request::{paginate_or_error, reject_cursors};
-use crate::templates::macros::string_enum;
 
 /// Options for a paged WABA read that takes fields, a page size and
 /// cursors: [`Waba::activities`] and [`Waba::solutions`].
@@ -71,7 +71,8 @@ impl ListWabaRecords {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// The `category` of an activity (`WhatsAppBusinessAccountHistoryComponentType`).
     pub enum ActivityCategory {
         /// The account.
@@ -95,7 +96,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// The `event_type` of an activity (`WhatsAppBusinessAccountHistoryEventType`,
     /// every value of the reference).
     pub enum ActivityEventType {

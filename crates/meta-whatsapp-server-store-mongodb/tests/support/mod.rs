@@ -24,8 +24,10 @@ use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, KeyScope, Listing, NewApiKey,
-    NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
+    NewSignupAttempt, NumberBinding, NumberStatus, OtpSettings, PageRequest, SignupAttempt, Tenant,
+    TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
+use meta_whatsapp_server_core::notify::EventNotifier;
 use meta_whatsapp_server_core::outbox::Outbox;
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult,
@@ -216,6 +218,16 @@ impl RecordStore for MirroredRecords {
     ) -> StoreResult<Option<Tenant>> {
         self.inner.update_tenant(id, name, status).await
     }
+    async fn otp_settings(&self, id: &TenantId) -> StoreResult<Option<OtpSettings>> {
+        self.inner.otp_settings(id).await
+    }
+    async fn set_otp_settings(
+        &self,
+        id: &TenantId,
+        settings: Option<&OtpSettings>,
+    ) -> StoreResult<bool> {
+        self.inner.set_otp_settings(id, settings).await
+    }
     async fn delete_tenant(&self, id: &TenantId) -> StoreResult<DeleteTenantOutcome> {
         let _changing = self.changing.lock().await;
         let outcome = self.inner.delete_tenant(id).await?;
@@ -320,6 +332,47 @@ impl RecordStore for MirroredRecords {
     ) -> StoreResult<bool> {
         self.inner.set_waba_status_if(epoch, status).await
     }
+    // What follows changes no binding the outbox reads (its tenant, its
+    // start, its previous tenant, its numbers): not mirrored.
+    async fn set_credit_allocation_if(
+        &self,
+        epoch: &BindingEpoch,
+        allocation_config_id: &str,
+    ) -> StoreResult<bool> {
+        self.inner
+            .set_credit_allocation_if(epoch, allocation_config_id)
+            .await
+    }
+    async fn save_signup_attempt(&self, attempt: &NewSignupAttempt) -> StoreResult<bool> {
+        self.inner.save_signup_attempt(attempt).await
+    }
+    async fn signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<Option<SignupAttempt>> {
+        self.inner.signup_attempt(tenant, waba_id).await
+    }
+    async fn signup_attempts(
+        &self,
+        tenant: &TenantId,
+        page: &PageRequest,
+    ) -> StoreResult<Listing<SignupAttempt>> {
+        self.inner.signup_attempts(tenant, page).await
+    }
+    async fn delete_signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<bool> {
+        self.inner.delete_signup_attempt(tenant, waba_id).await
+    }
+    async fn record_vault_entry(&self, entry: &VaultEntry) -> StoreResult<()> {
+        self.inner.record_vault_entry(entry).await
+    }
+    async fn vault_entries(&self, page: &PageRequest) -> StoreResult<Listing<VaultEntry>> {
+        self.inner.vault_entries(page).await
+    }
 }
 
 /// [`MongoOutbox`] in a bundle: the memory backend's other ports, its
@@ -365,6 +418,11 @@ impl Backend for SpikeBackend {
     }
     fn outbox(&self) -> Arc<dyn Outbox> {
         self.outbox.clone()
+    }
+    /// The memory backend's: one process, one notifier (the live streams
+    /// read the events from this outbox).
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.memory.notifier()
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         self.memory.leader_lock()

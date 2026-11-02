@@ -60,6 +60,18 @@
 //! media "uploaded on" the number; that it holds for media received by
 //! webhook on it is not documented (docs/guides/server.md, "Media").
 //!
+//! **Received media** (roadmap M2e, `OPEN_QUESTIONS.md` #43). A media id
+//! the service recorded as received on the number (the outbox row of a
+//! `message_received` event routed to the caller's tenant, from the
+//! number's binding epoch on) is downloaded with `GET /{media_id}`,
+//! without `phone_number_id`, then the URL Meta answers, through the same
+//! allow-list, limits and verification; one recorded anywhere else
+//! (another number or tenant, an operator-only row, before the binding
+//! epoch) is `404 not_found` for a download and a deletion alike, and
+//! nothing is asked of Meta; a deletion of one received here keeps the
+//! check. Every other id goes through the check as above
+//! ([`meta_whatsapp_server_core::media`], "Received media").
+//!
 //! Since roadmap S5d the rules are the core's
 //! ([`meta_whatsapp_server_core::media`]: the type and size checks, the
 //! file name, the download's limits, its verification as a framework-free
@@ -364,9 +376,10 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
     )?)
 }
 
-/// The core's media operations on `owned`, with `state`'s slots, counted
-/// in its metrics (`owned` is the state's own: the extractor made it with
-/// `state.authz()`, which admits it).
+/// The core's media operations on `owned`, with `state`'s slots, reading
+/// the media ids the state's outbox recorded as received (roadmap M2e),
+/// counted in its metrics (`owned` is the state's own: the extractor made
+/// it with `state.authz()`, which admits it).
 fn media<'a>(state: &'a AppState, owned: &'a OwnedNumber) -> Result<Media<'a>, ApiError> {
     Ok(Media::new(
         state.authz(),
@@ -375,6 +388,7 @@ fn media<'a>(state: &'a AppState, owned: &'a OwnedNumber) -> Result<Media<'a>, A
             transfers: state.media_slots(),
             streams: state.stream_slots(),
         },
+        state.events().outbox(),
     )?
     .observed_by(state.metrics()))
 }

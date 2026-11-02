@@ -55,11 +55,90 @@ pub enum Operation {
     GetTemplate,
     /// `list_events`: the tenant's events, polled.
     ListEvents,
+    /// `get_event`: one of the tenant's events, by id (roadmap M2b).
+    GetEvent,
+    /// `stream_events`: the tenant's events, live (Server-Sent Events,
+    /// roadmap M2b).
+    StreamEvents,
+    /// `stream_number_events`: one of the tenant's numbers' events, live.
+    StreamNumberEvents,
+    /// `list_conversations`: a number's inbox, newest activity first.
+    ListConversations,
+    /// `list_conversation_messages`: one conversation's history, newest
+    /// first.
+    ListConversationMessages,
+    /// `reply_to_conversation`: a reply to a conversation's contact,
+    /// checked against the window and the thread's owner first.
+    ReplyToConversation,
+    /// `get_conversation_window`: a conversation's 24-hour window, as a
+    /// reply would meet it (roadmap M2g).
+    GetConversationWindow,
+    /// `mark_conversation_read`: a conversation's unread count reset, and
+    /// on request its latest inbound message marked read on Meta (roadmap
+    /// M2g).
+    MarkConversationRead,
+    /// `get_inbox_message`: a message of a number's inbox, by id (roadmap
+    /// M2g).
+    GetInboxMessage,
+    /// `create_authentication_template`: an authentication template
+    /// created or updated in one or more languages (roadmap M3c).
+    CreateAuthenticationTemplate,
+    /// `issue_otp`: a one-time passcode sent with the tenant's
+    /// authentication template (roadmap M3c).
+    IssueOtp,
+    /// `verify_otp`: a typed code checked, which always counts as an
+    /// attempt (roadmap M3c).
+    VerifyOtp,
+    /// `request_verification_code`: a verification code sent to a number
+    /// by SMS or voice call (roadmap M3d).
+    RequestVerificationCode,
+    /// `verify_code`: a number's verification code checked (roadmap M3d).
+    VerifyCode,
+    /// `register_number`: a number registered with its two-step
+    /// verification PIN (roadmap M3d).
+    RegisterNumber,
+    /// `deregister_number`: a number deregistered (roadmap M3d).
+    DeregisterNumber,
+    /// `set_two_step_pin`: a number's two-step verification PIN set
+    /// (roadmap M3d).
+    SetTwoStepPin,
+    /// `list_payment_configurations`: a WABA's payment configurations
+    /// (roadmap P2).
+    ListPaymentConfigurations,
+    /// `create_payment_configuration`: a payment configuration created in
+    /// a WABA.
+    CreatePaymentConfiguration,
+    /// `get_payment_configuration`: one payment configuration of a WABA,
+    /// by name.
+    GetPaymentConfiguration,
+    /// `delete_payment_configuration`: a payment configuration removed.
+    DeletePaymentConfiguration,
+    /// `regenerate_payment_oauth_link`: a new OAuth link for a payment
+    /// gateway configuration.
+    RegeneratePaymentOauthLink,
+    /// `get_payment`: the payment of an order, looked up by its
+    /// configuration and reference id.
+    GetPayment,
+    /// `refund_payment`: a refund of an order paid through a payment
+    /// gateway.
+    RefundPayment,
+    /// `start_signup`: an Embedded Signup attempt bound to the tenant, and
+    /// what the page's `FB.login` needs (roadmap M3a).
+    StartSignup,
+    /// `complete_signup`: the attempt redeemed for the tenant, then the
+    /// business onboarded (roadmap M3a).
+    CompleteSignup,
+    /// `list_signup_attempts`: the tenant's resumable attempts (roadmap
+    /// M3a).
+    ListSignupAttempts,
+    /// `resume_signup`: an attempt's steps after the stored token run
+    /// again (roadmap M3a).
+    ResumeSignup,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 44] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -76,6 +155,34 @@ impl Operation {
         Self::DeleteTemplates,
         Self::GetTemplate,
         Self::ListEvents,
+        Self::GetEvent,
+        Self::StreamEvents,
+        Self::StreamNumberEvents,
+        Self::ListConversations,
+        Self::ListConversationMessages,
+        Self::ReplyToConversation,
+        Self::GetConversationWindow,
+        Self::MarkConversationRead,
+        Self::GetInboxMessage,
+        Self::CreateAuthenticationTemplate,
+        Self::IssueOtp,
+        Self::VerifyOtp,
+        Self::RequestVerificationCode,
+        Self::VerifyCode,
+        Self::RegisterNumber,
+        Self::DeregisterNumber,
+        Self::SetTwoStepPin,
+        Self::ListPaymentConfigurations,
+        Self::CreatePaymentConfiguration,
+        Self::GetPaymentConfiguration,
+        Self::DeletePaymentConfiguration,
+        Self::RegeneratePaymentOauthLink,
+        Self::GetPayment,
+        Self::RefundPayment,
+        Self::StartSignup,
+        Self::CompleteSignup,
+        Self::ListSignupAttempts,
+        Self::ResumeSignup,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -97,6 +204,34 @@ impl Operation {
             Self::DeleteTemplates => "delete_templates",
             Self::GetTemplate => "get_template",
             Self::ListEvents => "list_events",
+            Self::GetEvent => "get_event",
+            Self::StreamEvents => "stream_events",
+            Self::StreamNumberEvents => "stream_number_events",
+            Self::ListConversations => "list_conversations",
+            Self::ListConversationMessages => "list_conversation_messages",
+            Self::ReplyToConversation => "reply_to_conversation",
+            Self::GetConversationWindow => "get_conversation_window",
+            Self::MarkConversationRead => "mark_conversation_read",
+            Self::GetInboxMessage => "get_inbox_message",
+            Self::CreateAuthenticationTemplate => "create_authentication_template",
+            Self::IssueOtp => "issue_otp",
+            Self::VerifyOtp => "verify_otp",
+            Self::RequestVerificationCode => "request_verification_code",
+            Self::VerifyCode => "verify_code",
+            Self::RegisterNumber => "register_number",
+            Self::DeregisterNumber => "deregister_number",
+            Self::SetTwoStepPin => "set_two_step_pin",
+            Self::ListPaymentConfigurations => "list_payment_configurations",
+            Self::CreatePaymentConfiguration => "create_payment_configuration",
+            Self::GetPaymentConfiguration => "get_payment_configuration",
+            Self::DeletePaymentConfiguration => "delete_payment_configuration",
+            Self::RegeneratePaymentOauthLink => "regenerate_payment_oauth_link",
+            Self::GetPayment => "get_payment",
+            Self::RefundPayment => "refund_payment",
+            Self::StartSignup => "start_signup",
+            Self::CompleteSignup => "complete_signup",
+            Self::ListSignupAttempts => "list_signup_attempts",
+            Self::ResumeSignup => "resume_signup",
         }
     }
 
@@ -113,14 +248,40 @@ impl Operation {
             | Self::GetNumber
             | Self::GetProfile
             | Self::UpdateProfile
-            | Self::DisconnectWaba => Scope::Numbers,
+            | Self::DisconnectWaba
+            | Self::RequestVerificationCode
+            | Self::VerifyCode
+            | Self::RegisterNumber
+            | Self::DeregisterNumber
+            | Self::SetTwoStepPin => Scope::Numbers,
             Self::SendMessage | Self::MarkRead => Scope::Send,
             Self::UploadMedia | Self::DownloadMedia | Self::DeleteMedia => Scope::Media,
             Self::ListTemplates
             | Self::CreateTemplate
             | Self::DeleteTemplates
-            | Self::GetTemplate => Scope::Templates,
-            Self::ListEvents => Scope::Events,
+            | Self::GetTemplate
+            | Self::CreateAuthenticationTemplate => Scope::Templates,
+            Self::ListEvents | Self::GetEvent | Self::StreamEvents | Self::StreamNumberEvents => {
+                Scope::Events
+            }
+            Self::ListConversations
+            | Self::ListConversationMessages
+            | Self::ReplyToConversation
+            | Self::GetConversationWindow
+            | Self::MarkConversationRead
+            | Self::GetInboxMessage => Scope::Inbox,
+            Self::IssueOtp | Self::VerifyOtp => Scope::Otp,
+            Self::ListPaymentConfigurations
+            | Self::CreatePaymentConfiguration
+            | Self::GetPaymentConfiguration
+            | Self::DeletePaymentConfiguration
+            | Self::RegeneratePaymentOauthLink
+            | Self::GetPayment
+            | Self::RefundPayment => Scope::Payments,
+            Self::StartSignup
+            | Self::CompleteSignup
+            | Self::ListSignupAttempts
+            | Self::ResumeSignup => Scope::Signup,
         }
     }
 }

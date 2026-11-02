@@ -4,9 +4,15 @@
 #![allow(dead_code)] // each test binary uses a different subset
 
 pub mod capture;
+pub mod inbox;
+pub mod media;
 pub mod meta;
 pub mod moving;
+pub mod otp;
+pub mod registration;
 pub mod scenarios;
+pub mod signup;
+pub mod sse;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -37,8 +43,8 @@ use meta_whatsapp_server::ratelimit::{Rate, RateLimits};
 use meta_whatsapp_server::state::{AppState, Grant, Settings};
 use meta_whatsapp_server::store::events::{EventPage, EventQuery, NewEvent};
 use meta_whatsapp_server::store::{
-    Backend, BackendKind, IdempotencyRecords, Janitor, LeaderLock, MemoryBackend, MemoryStore,
-    Outbox as EventStore, RecordStore, SchemaMigrator, Store,
+    Backend, BackendKind, EventNotifier, IdempotencyRecords, Janitor, LeaderLock, LocalNotifier,
+    MemoryBackend, MemoryStore, Outbox as EventStore, RecordStore, SchemaMigrator, Store,
 };
 use serde_json::Value;
 use tower::ServiceExt;
@@ -56,11 +62,14 @@ pub const PREVIOUS_APP_SECRET: &str = "previous-app-secret-for-tests";
 /// [`PREVIOUS_APP_SECRET`].
 pub const DEFAULT_APP_SECRETS: &[&str] = &[APP_SECRET, PREVIOUS_APP_SECRET];
 
-/// A `KvStore` that counts reads of the token vault's namespace.
+/// A `KvStore` that counts reads of the token vault's namespace, and
+/// keeps every key written, and every value but a compare and swap's
+/// deletion (roadmap M3d's sweep for a PIN).
 #[derive(Debug)]
 pub struct CountingKv {
     inner: Arc<dyn KvStore>,
     vault_reads: AtomicUsize,
+    writes: Mutex<Vec<(StoreKey, Option<Vec<u8>>)>>,
 }
 
 impl CountingKv {
@@ -69,7 +78,37 @@ impl CountingKv {
         Self {
             inner,
             vault_reads: AtomicUsize::new(0),
+            writes: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Every key and value written so far (put, put if absent, compare and
+    /// swap), in order; a compare and swap that deletes wrote no value.
+    pub fn writes(&self) -> Vec<(StoreKey, Vec<u8>)> {
+        self.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(key, value)| Some((key.clone(), value.clone()?)))
+            .collect()
+    }
+
+    /// Every key written so far (put, put if absent, compare and swap), in
+    /// order.
+    pub fn written(&self) -> Vec<StoreKey> {
+        self.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
+    fn wrote(&self, key: &StoreKey, value: Option<&[u8]>) {
+        self.writes
+            .lock()
+            .unwrap()
+            .push((key.clone(), value.map(<[u8]>::to_vec)));
     }
 
     /// Reads of the vault's namespace so far.
@@ -92,6 +131,7 @@ impl KvStore for CountingKv {
         value: Vec<u8>,
         expiry: Expiry,
     ) -> Result<u64, StorageError> {
+        self.wrote(key, Some(&value));
         self.inner.put(key, value, expiry).await
     }
     async fn put_if_absent(
@@ -100,6 +140,7 @@ impl KvStore for CountingKv {
         value: Vec<u8>,
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
+        self.wrote(key, Some(&value));
         self.inner.put_if_absent(key, value, expiry).await
     }
     async fn compare_and_swap(
@@ -109,6 +150,7 @@ impl KvStore for CountingKv {
         new: Option<Vec<u8>>,
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
+        self.wrote(key, new.as_deref());
         self.inner
             .compare_and_swap(key, expected, new, expiry)
             .await
@@ -229,8 +271,23 @@ impl EventStore for RecordingEvents {
         self.inner.page(query).await
     }
 
+    async fn get(
+        &self,
+        tenant: &TenantId,
+        id: &str,
+    ) -> Result<Option<meta_whatsapp_server::store::events::StoredEvent>, StorageError> {
+        self.inner.get(tenant, id).await
+    }
+
     async fn purge(&self, older_than: std::time::Duration) -> Result<u64, StorageError> {
         self.inner.purge(older_than).await
+    }
+
+    async fn received_media(
+        &self,
+        media_id: &meta_whatsapp_rs::core::ids::MediaId,
+    ) -> Result<Vec<meta_whatsapp_server_core::outbox::ReceivedMedia>, StorageError> {
+        self.inner.received_media(media_id).await
     }
 }
 
@@ -244,6 +301,7 @@ pub struct HarnessBackend {
     kv: Arc<CountingKv>,
     conversations: Arc<dyn ConversationStore>,
     outbox: Arc<RecordingEvents>,
+    notifier: Arc<dyn EventNotifier>,
     memory: MemoryBackend,
 }
 
@@ -260,6 +318,9 @@ impl Backend for HarnessBackend {
     }
     fn outbox(&self) -> Arc<dyn EventStore> {
         self.outbox.clone()
+    }
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.notifier.clone()
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         self.memory.leader_lock()
@@ -314,6 +375,10 @@ pub struct Stores {
     pub kv: Arc<dyn KvStore>,
     pub conversations: Arc<dyn ConversationStore>,
     pub events: Arc<dyn EventStore>,
+    /// The live streams' wake-ups: the process's broadcast, or Postgres'
+    /// `NOTIFY` on the database (two harnesses on one database are two
+    /// replicas).
+    pub notifier: Arc<dyn EventNotifier>,
 }
 
 impl Stores {
@@ -325,14 +390,16 @@ impl Stores {
             store: Arc::new(store),
             kv: Arc::new(MemoryKvStore::new()),
             conversations: Arc::new(MemoryConversationStore::new()),
+            notifier: Arc::new(LocalNotifier::new()),
         }
     }
 
     /// Everything on Postgres, on `pool` (migrated).
     pub fn postgres(pool: &meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool) -> Self {
         use meta_whatsapp_rs::adapters::store::{PostgresConversationStore, PostgresKvStore};
-        use meta_whatsapp_server::store::{PgEventStore, PgStore};
+        use meta_whatsapp_server::store::{PgEventStore, PgNotifier, PgStore};
         Self {
+            notifier: Arc::new(PgNotifier::new(pool.clone())),
             store: Arc::new(PgStore::new(pool.clone())),
             kv: Arc::new(PostgresKvStore::new(pool.clone())),
             conversations: Arc::new(PostgresConversationStore::new(pool.clone())),
@@ -471,7 +538,26 @@ pub async fn send(router: &Router, request: Request<Body>) -> Reply {
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let headers = response.headers().clone();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let live = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("text/event-stream"));
+    let bytes = if live {
+        // A live event stream never ends: what it sent within a moment,
+        // then it is dropped (the client went away).
+        let mut body = response.into_body();
+        let mut bytes = Vec::new();
+        while let Ok(Some(Ok(frame))) =
+            tokio::time::timeout(std::time::Duration::from_millis(100), body.frame()).await
+        {
+            if let Ok(data) = frame.into_data() {
+                bytes.extend_from_slice(&data);
+            }
+        }
+        bytes.into()
+    } else {
+        response.into_body().collect().await.unwrap().to_bytes()
+    };
     Reply {
         status,
         headers,
@@ -490,13 +576,35 @@ pub fn unlimited() -> RateLimits {
         send: rate,
         read: rate,
         templates: rate,
+        otp_issue: rate,
+        otp_verify: rate,
     }
 }
 
-/// The settings of a test service: the defaults, without rate limits.
+/// The OTP pepper of every test service (roadmap M3c): 32 bytes or more.
+pub const OTP_PEPPER: &str = "otp-pepper-of-the-test-services-32-bytes-or-more";
+
+/// The OTP settings of a test service: [`OTP_PEPPER`], and `default_tenant`
+/// for the tenants without settings of their own.
+pub fn otp_deployment(
+    default_tenant: Option<&str>,
+) -> meta_whatsapp_server_core::otp::OtpDeployment {
+    meta_whatsapp_server_core::otp::OtpDeployment::new(
+        meta_whatsapp_server_core::otp::OtpKeys::new(
+            meta_whatsapp_rs::core::secret::SecretBytes::new(OTP_PEPPER.as_bytes().to_vec()),
+        )
+        .unwrap(),
+        default_tenant.map(|id| TenantId::parse(id).unwrap()),
+    )
+}
+
+/// The settings of a test service: the defaults, without rate limits, and
+/// OTP set up with no default OTP tenant (a tenant without OTP settings is
+/// `409 otp_not_configured`).
 pub fn test_settings() -> Settings {
     Settings {
         rate_limits: unlimited(),
+        otp: Some(otp_deployment(None)),
         ..Settings::default()
     }
 }
@@ -527,6 +635,14 @@ impl Harness {
             kv,
             ..Stores::memory()
         };
+        Self::build(stores, settings, DEFAULT_APP_SECRETS, |graph| {
+            Arc::new(graph)
+        })
+    }
+
+    /// On `stores`, with `settings` (roadmap M3c: a default OTP tenant on
+    /// Postgres).
+    pub fn with_stores_and_settings(stores: Stores, settings: Settings) -> Self {
         Self::build(stores, settings, DEFAULT_APP_SECRETS, |graph| {
             Arc::new(graph)
         })
@@ -567,6 +683,7 @@ impl Harness {
             kv,
             conversations,
             events,
+            notifier,
         } = stores;
         let kv = Arc::new(CountingKv::new(kv));
         let outbox = Arc::new(RecordingEvents::new(events));
@@ -591,6 +708,7 @@ impl Harness {
             kv: kv.clone(),
             conversations: conversations.clone(),
             outbox: outbox.clone(),
+            notifier,
             memory: MemoryBackend::new(),
         };
         // The state and its grant, which the internal router is served
@@ -746,7 +864,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 9] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 10] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -816,7 +934,10 @@ impl Sample {
                 "id" => &self.tenant,
                 "key_id" => &self.key_id,
                 "message_id" => SAMPLE_MESSAGE_ID,
+                "contact" => SAMPLE_CONTACT,
                 "media_id" => SAMPLE_MEDIA_ID,
+                "configuration_name" => SAMPLE_PAYMENT_CONFIGURATION,
+                "reference_id" => SAMPLE_REFERENCE_ID,
                 _ => "placeholder",
             });
             rest = &rest[end + 1..];
@@ -829,11 +950,20 @@ impl Sample {
 /// A received message's id (`messages/mark-message-as-read`).
 pub const SAMPLE_MESSAGE_ID: &str = "wamid.HBgLMTY1MDM4Nzk0MzkVAgARGBJDQjZCMzlEQUE4OTJBMTE4RTUA";
 
+/// A conversation's contact: a BSUID (`business-scoped-user-ids`).
+pub const SAMPLE_CONTACT: &str = "US.13491208655302741918";
+
 /// A media id (`business-phone-numbers/media`).
 pub const SAMPLE_MEDIA_ID: &str = "1037543291543636";
 
 /// A template id (`templates/template-management`).
 pub const SAMPLE_TEMPLATE_ID: &str = "1407680676729941";
+
+/// A payment configuration's name (`payments/payments-in/onboarding-apis`).
+pub const SAMPLE_PAYMENT_CONFIGURATION: &str = "test-payment-configuration";
+
+/// An order's `reference_id` (`payments/payments-in/pg`).
+pub const SAMPLE_REFERENCE_ID: &str = "BM345A-12";
 
 /// The phone number every sample send goes to (`messages/text-messages`).
 pub const SAMPLE_TO: &str = "+16505551234";
@@ -881,6 +1011,11 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "text": {"body": "Your order has shipped."}
         }),
         ("POST", "/v1/wabas/{waba_id}/templates") => sample_template_definition(),
+        // A template: a reply that needs no open window, so it reaches Meta.
+        ("POST", "/v1/numbers/{pn}/conversations/{contact}/messages") => serde_json::json!({
+            "type": "template",
+            "template": {"name": "order_confirmation", "language": {"code": "en_US"}}
+        }),
         ("POST", "/v1/admin/tenants") => serde_json::json!({"id": "sample-new-tenant"}),
         ("PATCH", "/v1/admin/tenants/{id}") => serde_json::json!({"name": "Renamed"}),
         ("POST", "/v1/admin/tenants/{id}/keys") => serde_json::json!({"scopes": ["numbers"]}),
@@ -891,10 +1026,52 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             serde_json::json!({"waba_id": "555000111", "token": "SYSTEM-TOKEN-FOR-SAMPLES"})
         }
         ("PATCH", "/v1/numbers/{pn}/profile") => serde_json::json!({"about": "Open 9 to 5"}),
+        // Roadmap M3c: OTP, its settings and authentication templates.
+        ("POST", "/v1/otp/issue") => serde_json::json!({"phone": SAMPLE_TO}),
+        ("POST", "/v1/otp/verify") => serde_json::json!({"phone": SAMPLE_TO, "code": "123456"}),
+        ("PUT", "/v1/admin/tenants/{id}/otp") => serde_json::json!({
+            "phone_number_id": "106540352242922",
+            "template": {"name": "login_code", "language": "en_US"}
+        }),
+        ("POST", "/v1/wabas/{waba_id}/templates/authentication") => serde_json::json!({
+            "name": "authentication_code_copy_code_button",
+            "languages": ["en_US", "es_ES", "fr"],
+            "otp_type": "copy_code",
+            "add_security_recommendation": true,
+            "code_expiration_minutes": 10
+        }),
+        // business-phone-numbers/registration's and the request-code
+        // reference's examples (roadmap M3d).
+        ("POST", "/v1/numbers/{pn}/request-code") => {
+            serde_json::json!({"code_method": "SMS", "language": "en_US"})
+        }
+        ("POST", "/v1/numbers/{pn}/verify-code") => serde_json::json!({"code": "123830"}),
+        ("POST", "/v1/numbers/{pn}/register" | "/v1/numbers/{pn}/two-step-pin") => {
+            serde_json::json!({"pin": SAMPLE_PIN})
+        }
+        // payments-in/onboarding-apis, "Create a payment configuration".
+        ("POST", "/v1/wabas/{waba_id}/payment-configurations") => serde_json::json!({
+            "configuration_name": SAMPLE_PAYMENT_CONFIGURATION,
+            "purpose_code": "00",
+            "merchant_category_code": "0000",
+            "provider_name": "razorpay",
+            "redirect_url": "https://test-redirect-url.com"
+        }),
+        // payments-in/pg, "Step 8: Refunds".
+        ("POST", "/v1/numbers/{pn}/payments/refunds") => serde_json::json!({
+            "reference_id": SAMPLE_REFERENCE_ID,
+            "speed": "normal",
+            "payment_config_id": SAMPLE_PAYMENT_CONFIGURATION,
+            "amount": {"currency": "INR", "value": "100", "offset": "100"}
+        }),
         ("POST" | "PATCH" | "PUT", _) => serde_json::json!({}),
         _ => return None,
     })
 }
+
+/// The PIN every sample registration sends
+/// (`business-phone-numbers/registration`'s example).
+pub const SAMPLE_PIN: &str = "212834";
 
 /// The file every sample upload sends: a PNG signature.
 pub const SAMPLE_PNG: &[u8] = b"\x89PNG\r\n\x1a\n-sample-image";
@@ -917,8 +1094,23 @@ pub fn sample_call(operation: &Operation, sample: &Sample, key: Option<&str>) ->
             ("file", Some("voucher.png"), SAMPLE_PNG),
         ]);
     }
+    // A deregistration confirms the path's number (roadmap M3d).
+    if (operation.method.as_str(), operation.template.as_str())
+        == ("POST", "/v1/numbers/{pn}/deregister")
+    {
+        return call.json(&serde_json::json!({"confirm": sample.pn}));
+    }
     if let Some(body) = sample_body(&operation.method, &operation.template) {
         call = call.json(&body);
+    }
+    // A refund requires an `Idempotency-Key` (design D56): a fresh one per
+    // call, so that no call replays another's answer.
+    if (operation.method.as_str(), operation.template.as_str())
+        == ("POST", "/v1/numbers/{pn}/payments/refunds")
+    {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        call = call.header("idempotency-key", &format!("sample-refund-{n}"));
     }
     call
 }
@@ -1018,6 +1210,30 @@ impl TestDb {
             .map_err(|e| e.to_string())?;
             conn.close().await.map_err(|e| e.to_string())
         })
+    }
+
+    /// A pool whose connections use the schema and are named `app` in
+    /// `pg_stat_activity`, so a test can see its own sessions wait on a
+    /// lock while other tests run on the same server.
+    pub async fn named_pool(
+        &self,
+        size: u32,
+        app: &str,
+    ) -> meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool {
+        use std::str::FromStr;
+
+        use meta_whatsapp_rs::adapters::store::postgres::sqlx::postgres::{
+            PgConnectOptions, PgPoolOptions,
+        };
+        let options = PgConnectOptions::from_str(&self.url)
+            .unwrap()
+            .application_name(app)
+            .options([("search_path", self.schema.as_str())]);
+        PgPoolOptions::new()
+            .max_connections(size)
+            .connect_with(options)
+            .await
+            .unwrap()
     }
 
     /// A pool whose connections use the schema.

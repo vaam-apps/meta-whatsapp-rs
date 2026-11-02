@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::ids::{BusinessId, PhoneNumberId, WabaId};
 use time::OffsetDateTime;
 
 /// A tenant id: the integrator's own (e.g. the CMS merchant id), 1 to 64
@@ -113,11 +113,15 @@ pub enum Scope {
     Otp,
     /// WABAs, numbers and profiles.
     Numbers,
+    /// Payments: a WABA's payment configurations, a payment's lookup and
+    /// its refunds (roadmap P2). The payment messages themselves are
+    /// sends (`send`).
+    Payments,
 }
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 9] = [
+    pub const ALL: [Scope; 10] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -127,6 +131,7 @@ impl Scope {
         Self::Signup,
         Self::Otp,
         Self::Numbers,
+        Self::Payments,
     ];
 
     /// Stored and API name.
@@ -141,6 +146,7 @@ impl Scope {
             Self::Signup => "signup",
             Self::Otp => "otp",
             Self::Numbers => "numbers",
+            Self::Payments => "payments",
         }
     }
 
@@ -333,7 +339,8 @@ pub struct WabaBinding {
     pub previous_tenant_unbound_at: Option<OffsetDateTime>,
 }
 
-/// What [`WabaBinding::previous_tenant_unbound_at`] reads for a binding
+/// What [`WabaBinding::previous_tenant_unbound_at`] (and, since roadmap
+/// M2h, [`NumberBinding::previous_tenant_released_at`]) reads for a binding
 /// made before the store recorded moves (Postgres: its rows from before
 /// migration 4, and those a replica of an earlier release writes during a
 /// rolling deploy): the Unix epoch, as "a previous tenant may have held
@@ -474,6 +481,96 @@ pub struct NumberBinding {
     pub status: NumberStatus,
     /// When the status last changed.
     pub updated_at: OffsetDateTime,
+    /// When the number came under its tenant: when a binding of the tenant
+    /// first listed it (roadmap M2h). A refresh of its WABA, and a move to
+    /// another WABA of the same tenant while it is bound, keep it; listed
+    /// again after its tenant released it, it begins again. Never before
+    /// its last release ([`NumberTombstone::released_at`]). A number bound
+    /// before the store recorded numbers' moves (on Postgres, before
+    /// migration 5) reads its WABA's [`WabaBinding::attached_at`].
+    pub attached_at: OffsetDateTime,
+    /// When the number was last released by a tenant other than its
+    /// current one: the record of its last move (roadmap M2h, the
+    /// number's counterpart of [`WabaBinding::previous_tenant_unbound_at`]),
+    /// read from its [`NumberTombstone`] when it came under its tenant and
+    /// kept while it stays there. `None`: no other tenant held it. A
+    /// tenant deleted since counts as another tenant. A number bound before
+    /// the store recorded numbers' moves reads [`UNRECORDED_MOVE`].
+    pub previous_tenant_released_at: Option<OffsetDateTime>,
+}
+
+impl NumberBinding {
+    /// `phone_number_id`, newly bound to `tenant` under `waba_id` at
+    /// `now` (it was not `tenant`'s a moment before), after its last
+    /// release `released` (`None`: never released): connected, its
+    /// [`Self::attached_at`] `now` but never before that release, and its
+    /// previous tenant read from the release ([`NumberTombstone::previous_for`]).
+    /// The memory backends apply this as written; the Postgres one in its
+    /// SQL; the conformance suite holds both to it.
+    pub fn newly_bound(
+        phone_number_id: PhoneNumberId,
+        waba_id: WabaId,
+        tenant: TenantId,
+        now: OffsetDateTime,
+        released: Option<&NumberTombstone>,
+    ) -> Self {
+        Self {
+            previous_tenant_released_at: released.and_then(|t| t.previous_for(&tenant)),
+            attached_at: released.map_or(now, |t| now.max(t.released_at)),
+            phone_number_id,
+            waba_id,
+            tenant_id: tenant,
+            status: NumberStatus::Connected,
+            updated_at: now,
+        }
+    }
+}
+
+/// The record a number's last release leaves (roadmap M2h, the number's
+/// counterpart of [`WabaTombstone`]): which tenant held it (`None` once
+/// that tenant was deleted), when it was released (its WABA unbound, or a
+/// binding that no longer lists it), and when it had last been released
+/// by a tenant other than that one. A store keeps one per number ever
+/// released (Postgres: `wa_server_number_tombstones`), written atomically
+/// with the release, and reads it when a binding takes the number anew
+/// ([`NumberBinding::newly_bound`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberTombstone {
+    /// The tenant that released it; `None` once that tenant was deleted.
+    pub tenant_id: Option<TenantId>,
+    /// When it was released.
+    pub released_at: OffsetDateTime,
+    /// The released binding's [`NumberBinding::previous_tenant_released_at`].
+    pub previous_tenant_released_at: Option<OffsetDateTime>,
+}
+
+impl NumberTombstone {
+    /// The record `binding`'s release at `at` leaves.
+    pub fn of(binding: &NumberBinding, at: OffsetDateTime) -> Self {
+        Self {
+            tenant_id: Some(binding.tenant_id.clone()),
+            released_at: at,
+            previous_tenant_released_at: binding.previous_tenant_released_at,
+        }
+    }
+
+    /// When the number was last released by a tenant other than `tenant`,
+    /// for a binding of it to `tenant`: this release, when it was another
+    /// tenant's (or a deleted tenant's); else the one before it.
+    pub fn previous_for(&self, tenant: &TenantId) -> Option<OffsetDateTime> {
+        if self.tenant_id.as_ref() == Some(tenant) {
+            self.previous_tenant_released_at
+        } else {
+            Some(self.released_at)
+        }
+    }
+
+    /// `tenant` was deleted: from now on, any tenant is another.
+    pub fn forget_tenant(&mut self, tenant: &TenantId) {
+        if self.tenant_id.as_ref() == Some(tenant) {
+            self.tenant_id = None;
+        }
+    }
 }
 
 /// A page request: at most `limit` items after the exclusive cursor
@@ -521,6 +618,100 @@ pub enum DeleteTenantOutcome {
     NotFound,
     /// It still has WABAs: disconnect or unbind them first.
     HasWabas,
+}
+
+/// A signup attempt to keep (roadmap M3a): an Embedded Signup onboarding
+/// that stopped after its token was stored, which the tenant resumes
+/// (`POST /v1/signup/resume`). What [`RecordStore::save_signup_attempt`](crate::store::RecordStore::save_signup_attempt)
+/// writes; the store adds the times. **Never the code or the PIN**: the
+/// session info is the browser's ids (the library's `SessionInfo`,
+/// serialized), checked against what onboarding stored when the attempt
+/// is resumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewSignupAttempt {
+    /// The tenant whose attempt it is: the WABA's binding's.
+    pub tenant_id: TenantId,
+    /// The verified WABA.
+    pub waba_id: WabaId,
+    /// The step it stopped at (the library's `steps`, e.g.
+    /// `register_phone`).
+    pub failed_step: String,
+    /// The session info, as the library serializes it (`SessionInfo`).
+    pub session: serde_json::Value,
+    /// Which completion the flow reported (the `event` string, e.g.
+    /// `FINISH` or `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`), when known:
+    /// a coexistence attempt resumes its sync steps.
+    pub finish_kind: Option<String>,
+}
+
+/// A kept signup attempt, as a store reads it back (roadmap M3a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignupAttempt {
+    /// The tenant whose attempt it is.
+    pub tenant_id: TenantId,
+    /// The verified WABA: one attempt per WABA.
+    pub waba_id: WabaId,
+    /// The step it last stopped at.
+    pub failed_step: String,
+    /// The session info ([`NewSignupAttempt::session`]).
+    pub session: serde_json::Value,
+    /// [`NewSignupAttempt::finish_kind`].
+    pub finish_kind: Option<String>,
+    /// When it was first kept.
+    pub created_at: OffsetDateTime,
+    /// When it last stopped.
+    pub updated_at: OffsetDateTime,
+}
+
+/// A record the token vault keeps past a WABA's binding, which a key
+/// rotation must reach though no binding names it any more (roadmap M3a,
+/// design section 4.2): the vault cannot list its records. Solution Partner
+/// mode writes them, in the vault's own store, under the vault's keys.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum VaultEntry {
+    /// A WABA whose credit ledger may exist (the library's
+    /// `credit/<WABA_ID>`), which outlives its token: the library's
+    /// `TokenVault::rotate` reseals it, and the revocation marker of the
+    /// business it names.
+    Waba(WabaId),
+    /// A business whose revocation marker may exist (the library's
+    /// `revoked/<BUSINESS_ID>`): `TokenVault::rotate_business` reseals it.
+    Business(BusinessId),
+}
+
+impl VaultEntry {
+    /// Its stored kind: `waba` or `business`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Waba(_) => "waba",
+            Self::Business(_) => "business",
+        }
+    }
+
+    /// Its id.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Waba(id) => id.as_str(),
+            Self::Business(id) => id.as_str(),
+        }
+    }
+
+    /// Its key in a listing: `<kind>/<id>`, which the listing is in byte
+    /// order of, and its cursor names.
+    pub fn key(&self) -> String {
+        format!("{}/{}", self.kind(), self.id())
+    }
+
+    /// The entry of `kind` and `id` as a store keeps them; `None` for a
+    /// kind or an id this release did not write (a backend answers that
+    /// as a storage failure).
+    pub fn parse(kind: &str, id: &str) -> Option<Self> {
+        match kind {
+            "waba" => WabaId::new(id).ok().map(Self::Waba),
+            "business" => BusinessId::new(id).ok().map(Self::Business),
+            _ => None,
+        }
+    }
 }
 
 /// Longest `Idempotency-Key` accepted, in bytes.
@@ -621,5 +812,204 @@ impl fmt::Debug for IdempotencyState {
                 .field("body_len", &body.len())
                 .finish(),
         }
+    }
+}
+
+/// A tenant's OTP settings (docs/design/server.md, section 4.7; roadmap
+/// M3c, decision D8): the number its codes are sent from, which must be
+/// one of the tenant's own numbers, the approved authentication template
+/// and its language, and the library's `OtpConfig` but for the namespace,
+/// which is always the issuing tenant's id, never a setting. A tenant
+/// without settings borrows those of the deployment's default OTP tenant
+/// (`WA_SERVER_OTP_DEFAULT_TENANT`: the platform's number, D8's default),
+/// if one is set.
+///
+/// Stored in the tenant's record (Postgres: `wa_server_tenants.settings`,
+/// under the key `otp`), in the layout [`Self::to_stored`] writes and
+/// [`Self::from_stored`] reads (version 1, its field names pinned by
+/// `the_stored_otp_settings_are_pinned`): a stored name, pending the
+/// owner's confirmation (docs/architecture.md, § Stable identifiers).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OtpSettings {
+    /// The number codes are sent from: one of the tenant's own.
+    pub phone_number_id: PhoneNumberId,
+    /// The approved authentication template's name.
+    pub template_name: String,
+    /// The language it was approved in.
+    pub template_language: String,
+    /// Digits per code, 4 to 8 (the library's `OtpConfig::code_length`).
+    pub code_length: u8,
+    /// How long a code is valid, 1 second to 90 minutes: keep it equal to
+    /// the template's `code_expiration_minutes` (`OtpConfig::ttl`).
+    pub ttl_seconds: u32,
+    /// Wrong guesses allowed per code, at least 1
+    /// (`OtpConfig::max_attempts`).
+    pub max_attempts: u32,
+    /// Seconds between two codes for one phone number and purpose
+    /// (`OtpConfig::resend_cooldown`).
+    pub resend_cooldown_seconds: u32,
+    /// Codes allowed per phone number and purpose in any rolling window, at
+    /// least 1 (`IssueLimit::max_issues`). The service never turns the
+    /// library's issue limit off: it is what bounds an online brute force.
+    pub max_issues: u32,
+    /// That window, in seconds, at least 1 (`IssueLimit::window`).
+    pub issue_window_seconds: u32,
+}
+
+/// The stored layout of [`OtpSettings`], version 1.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredOtpSettings {
+    v: u8,
+    phone_number_id: String,
+    template: StoredOtpTemplate,
+    code_length: u8,
+    ttl_seconds: u32,
+    max_attempts: u32,
+    resend_cooldown_seconds: u32,
+    issue_limit: StoredIssueLimit,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredOtpTemplate {
+    name: String,
+    language: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredIssueLimit {
+    max_issues: u32,
+    window_seconds: u32,
+}
+
+impl OtpSettings {
+    /// The library's defaults (`OtpConfig::new`: 6 digits, 10 minutes, 5
+    /// attempts, a 30-second cooldown, 5 codes per rolling hour) for
+    /// `template_name` in `template_language`, sent from `phone_number_id`.
+    pub fn new(
+        phone_number_id: PhoneNumberId,
+        template_name: impl Into<String>,
+        template_language: impl Into<String>,
+    ) -> Self {
+        Self {
+            phone_number_id,
+            template_name: template_name.into(),
+            template_language: template_language.into(),
+            code_length: 6,
+            ttl_seconds: 600,
+            max_attempts: 5,
+            resend_cooldown_seconds: 30,
+            max_issues: 5,
+            issue_window_seconds: 3600,
+        }
+    }
+
+    /// The stored form: a JSON object, version 1.
+    pub fn to_stored(&self) -> serde_json::Value {
+        let stored = StoredOtpSettings {
+            v: 1,
+            phone_number_id: self.phone_number_id.as_str().to_owned(),
+            template: StoredOtpTemplate {
+                name: self.template_name.clone(),
+                language: self.template_language.clone(),
+            },
+            code_length: self.code_length,
+            ttl_seconds: self.ttl_seconds,
+            max_attempts: self.max_attempts,
+            resend_cooldown_seconds: self.resend_cooldown_seconds,
+            issue_limit: StoredIssueLimit {
+                max_issues: self.max_issues,
+                window_seconds: self.issue_window_seconds,
+            },
+        };
+        serde_json::to_value(stored).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Read the stored form back; `None` for anything [`Self::to_stored`]
+    /// did not write (another version, a field missing, an id that is not
+    /// one): a backend answers that as a storage failure, never as no
+    /// settings.
+    pub fn from_stored(value: &serde_json::Value) -> Option<Self> {
+        let stored: StoredOtpSettings = serde::Deserialize::deserialize(value).ok()?;
+        if stored.v != 1 {
+            return None;
+        }
+        Some(Self {
+            phone_number_id: PhoneNumberId::new(stored.phone_number_id).ok()?,
+            template_name: stored.template.name,
+            template_language: stored.template.language,
+            code_length: stored.code_length,
+            ttl_seconds: stored.ttl_seconds,
+            max_attempts: stored.max_attempts,
+            resend_cooldown_seconds: stored.resend_cooldown_seconds,
+            max_issues: stored.issue_limit.max_issues,
+            issue_window_seconds: stored.issue_limit.window_seconds,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The kinds of the vault's records kept past a binding (roadmap M3a,
+    /// `wa_server_vault_records.kind`) and the listing's key: stored names,
+    /// pending the owner's confirmation (docs/architecture.md, § Stable
+    /// identifiers). Renamed, the kept entries stop reading (a storage
+    /// failure), and a rotation reaches none of them.
+    #[test]
+    fn the_vault_entry_kinds_are_pinned() {
+        let waba = VaultEntry::Waba(WabaId::new("524126980791429").unwrap());
+        let business = VaultEntry::Business(BusinessId::new("2729063490586005").unwrap());
+        assert_eq!(
+            (waba.kind(), waba.key()),
+            ("\x77aba", "\x77aba/524126980791429".to_owned())
+        );
+        assert_eq!(
+            (business.kind(), business.key()),
+            ("business", "business/2729063490586005".to_owned())
+        );
+        assert_eq!(VaultEntry::parse("\x77aba", "524126980791429"), Some(waba));
+        assert_eq!(
+            VaultEntry::parse("business", "2729063490586005"),
+            Some(business)
+        );
+        assert_eq!(VaultEntry::parse("token", "1"), None, "another kind");
+        assert_eq!(VaultEntry::parse("\x77aba", "../1"), None, "not an id");
+    }
+
+    /// The stored layout of a tenant's OTP settings (roadmap M3c): its
+    /// version and field names are a stored name, pending the owner's
+    /// confirmation (docs/architecture.md, § Stable identifiers). Renamed,
+    /// every tenant's settings stop reading (a storage failure), so the
+    /// literal is spelled out here, not derived.
+    #[test]
+    fn the_stored_otp_settings_are_pinned() {
+        let settings = OtpSettings::new(
+            PhoneNumberId::new("106540352242922").unwrap(),
+            "login_code",
+            "en_US",
+        );
+        let stored = settings.to_stored();
+        assert_eq!(
+            stored,
+            serde_json::json!({
+                "v": 1,
+                "phone_number_id": "106540352242922",
+                "template": {"name": "login_code", "language": "en_US"},
+                "code_length": 6,
+                "ttl_seconds": 600,
+                "max_attempts": 5,
+                "resend_cooldown_seconds": 30,
+                "issue_limit": {"max_issues": 5, "window_seconds": 3600}
+            })
+        );
+        assert_eq!(OtpSettings::from_stored(&stored), Some(settings));
+        let mut other = stored.clone();
+        other["v"] = 2.into();
+        assert_eq!(OtpSettings::from_stored(&other), None, "another version");
+        let mut bad = stored;
+        bad["phone_number_id"] = "../1".into();
+        assert_eq!(OtpSettings::from_stored(&bad), None, "not an id");
+        assert_eq!(OtpSettings::from_stored(&serde_json::json!({})), None);
     }
 }

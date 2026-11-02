@@ -12,9 +12,11 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use meta_whatsapp_rs::core::ids::MediaId;
 use meta_whatsapp_server_core::model::TenantId;
 use meta_whatsapp_server_core::outbox::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
+    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RECEIVED_MEDIA_ROWS, ReceivedMedia,
+    RouteGuard, StoredEvent,
 };
 use meta_whatsapp_server_core::store::StoreResult;
 use time::OffsetDateTime;
@@ -74,6 +76,9 @@ struct MemoryRow {
     dedup_key: Option<String>,
     /// Until when it holds it: `None`, for as long as it is stored.
     dedup_until: Option<OffsetDateTime>,
+    /// The media id it records as received (`NewEvent::received_media`,
+    /// roadmap M2e), kept at insert.
+    media_id: Option<MediaId>,
     event: StoredEvent,
 }
 
@@ -183,6 +188,7 @@ impl Outbox for MemoryEventStore {
             MemoryRow {
                 dedup_key: event.dedup_key.clone(),
                 dedup_until: event.dedup_window.map(|window| window.until),
+                media_id: event.received_media(),
                 event: StoredEvent {
                     sequence,
                     id: event.id.clone(),
@@ -245,6 +251,40 @@ impl Outbox for MemoryEventStore {
             purged_through: stream.purged_through,
             high_water: stream.last,
         })
+    }
+
+    async fn get(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<StoredEvent>> {
+        // The tenant's own stream only: another tenant's rows, and the
+        // operator-only ones, are never looked at.
+        let state = self.lock();
+        Ok(state.streams.get(tenant.as_str()).and_then(|stream| {
+            stream
+                .rows
+                .values()
+                .map(|row| &row.event)
+                .find(|event| event.id == id)
+                .cloned()
+        }))
+    }
+
+    async fn received_media(&self, media_id: &MediaId) -> StoreResult<Vec<ReceivedMedia>> {
+        // Every stream, the operator-only one included: a media id
+        // recorded on another tenant's row is what keeps it from Meta.
+        let state = self.lock();
+        let mut found: Vec<ReceivedMedia> = state
+            .streams
+            .values()
+            .flat_map(|stream| stream.rows.values())
+            .filter(|row| row.media_id.as_ref() == Some(media_id))
+            .map(|row| ReceivedMedia {
+                tenant: row.event.tenant.clone(),
+                phone_number_id: row.event.phone_number_id.clone(),
+                received_at: row.event.created_at,
+            })
+            .collect();
+        found.sort_by_key(|row| std::cmp::Reverse(row.received_at));
+        found.truncate(RECEIVED_MEDIA_ROWS);
+        Ok(found)
     }
 
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {

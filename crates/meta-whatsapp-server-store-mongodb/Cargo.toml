@@ -52,6 +52,8 @@ tracing.workspace = true
 # (`meta_whatsapp_server_core::conformance`).
 meta-whatsapp-server-core = { workspace = true, features = ["conformance"] }
 meta-whatsapp-server-store-memory.workspace = true
+# tests/live_mongodb.rs: a media message's event data.
+serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }
 
 [lints]

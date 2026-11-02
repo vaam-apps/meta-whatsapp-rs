@@ -117,6 +117,11 @@ the template.
   one.
 - No messaging-limit accounting. Campaign pacing (one template to many,
   under the number's throughput): `Broadcast`, in `meta-whatsapp-rs-bot`.
+- Payment buttons take a typed order, not a text parameter:
+  `TemplateMessage::order_details_button` (an order details or a "Buy now"
+  checkout button, one per carousel card, each with its own
+  `reference_id`) and `payment_request_button`, from
+  `meta_whatsapp_rs::client::payments`.
 
 ## Related skills
 

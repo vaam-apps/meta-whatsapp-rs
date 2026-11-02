@@ -3,14 +3,15 @@
 use std::fmt;
 
 use meta_whatsapp_core::error::ValidationError;
-use meta_whatsapp_core::ids::{BusinessId, WabaId};
+use meta_whatsapp_core::ids::{
+    BusinessId, MAX_NUMERIC_ID_LEN, PreVerifiedPhoneNumberId, WabaId, is_numeric_id,
+};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::secret::VerifyToken;
 use serde::de::Deserializer;
-use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
 use crate::common::HealthStatus;
-use crate::templates::macros::string_enum;
 
 /// Maximum length of a callback override URL (`webhooks/override`).
 pub const MAX_CALLBACK_URI_CHARS: usize = 200;
@@ -136,44 +137,35 @@ pub struct BusinessRef {
     pub name: Option<String>,
 }
 
-/// WABA review status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
-pub enum AccountReviewStatus {
-    /// Approved.
-    Approved,
-    /// Deferred.
-    Deferred,
-    /// Pending.
-    Pending,
-    /// Rejected.
-    Rejected,
-    /// Restricted.
-    Restricted,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
+open_enum! {
+    /// WABA review status.
+    pub enum AccountReviewStatus {
+        /// Approved.
+        Approved => "APPROVED",
+        /// Deferred.
+        Deferred => "DEFERRED",
+        /// Pending.
+        Pending => "PENDING",
+        /// Rejected.
+        Rejected => "REJECTED",
+        /// Restricted.
+        Restricted => "RESTRICTED",
+    }
 }
 
-/// WABA ownership type (values from both the WABA and business references).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
-pub enum OwnershipType {
-    /// Owned by a client business.
-    ClientOwned,
-    /// On behalf of (deprecated OBO model).
-    OnBehalfOf,
-    /// Owned by the business itself: `SELF` (WABA reference) or
-    /// `SELF_OWNED` (business reference).
-    #[serde(rename = "SELF", alias = "SELF_OWNED")]
-    SelfOwned,
-    /// Owned by an agency.
-    AgencyOwned,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
+open_enum! {
+    /// WABA ownership type (values from both the WABA and business references).
+    pub enum OwnershipType {
+        /// Owned by a client business.
+        ClientOwned => "CLIENT_OWNED",
+        /// On behalf of (deprecated OBO model).
+        OnBehalfOf => "ON_BEHALF_OF",
+        /// Owned by the business itself: `SELF` (WABA reference) or
+        /// `SELF_OWNED` (business reference).
+        SelfOwned => "SELF" | "SELF_OWNED",
+        /// Owned by an agency.
+        AgencyOwned => "AGENCY_OWNED",
+    }
 }
 
 /// Body of `POST /{WABA_ID}`.
@@ -254,110 +246,51 @@ pub struct AssignedUser {
     pub user_type: Option<AssignedUserType>,
 }
 
-/// Kind of assigned user.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
-pub enum AssignedUserType {
-    /// Business user.
-    BusinessUser,
-    /// System user.
-    SystemUser,
-    /// Personal user.
-    PersonalUser,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
-}
-
-/// A permission task on a WABA.
-///
-/// The union of the `assigned-users-management-api` reference and the
-/// `manage-system-users` guide (which adds `VIEW_INSIGHTS`, `MANAGE_USERS`,
-/// `MANAGE_BILLING`); [`Self::Other`] keeps anything newer.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum WabaTask {
-    /// Admin access.
-    Manage,
-    /// Developer access.
-    Develop,
-    /// Manage templates.
-    ManageTemplates,
-    /// Manage phone numbers.
-    ManagePhone,
-    /// View cost.
-    ViewCost,
-    /// Manage extensions.
-    ManageExtensions,
-    /// View phone assets.
-    ViewPhoneAssets,
-    /// Manage phone assets.
-    ManagePhoneAssets,
-    /// View templates.
-    ViewTemplates,
-    /// Send and receive messages.
-    Messaging,
-    /// View insights.
-    ViewInsights,
-    /// Manage users.
-    ManageUsers,
-    /// Manage billing (needed to share a line of credit).
-    ManageBilling,
-    /// Any other task string.
-    Other(String),
-}
-
-impl WabaTask {
-    /// The string Meta uses.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Manage => "MANAGE",
-            Self::Develop => "DEVELOP",
-            Self::ManageTemplates => "MANAGE_TEMPLATES",
-            Self::ManagePhone => "MANAGE_PHONE",
-            Self::ViewCost => "VIEW_COST",
-            Self::ManageExtensions => "MANAGE_EXTENSIONS",
-            Self::ViewPhoneAssets => "VIEW_PHONE_ASSETS",
-            Self::ManagePhoneAssets => "MANAGE_PHONE_ASSETS",
-            Self::ViewTemplates => "VIEW_TEMPLATES",
-            Self::Messaging => "MESSAGING",
-            Self::ViewInsights => "VIEW_INSIGHTS",
-            Self::ManageUsers => "MANAGE_USERS",
-            Self::ManageBilling => "MANAGE_BILLING",
-            Self::Other(s) => s,
-        }
-    }
-
-    fn from_str_lossless(s: &str) -> Self {
-        match s {
-            "MANAGE" => Self::Manage,
-            "DEVELOP" => Self::Develop,
-            "MANAGE_TEMPLATES" => Self::ManageTemplates,
-            "MANAGE_PHONE" => Self::ManagePhone,
-            "VIEW_COST" => Self::ViewCost,
-            "MANAGE_EXTENSIONS" => Self::ManageExtensions,
-            "VIEW_PHONE_ASSETS" => Self::ViewPhoneAssets,
-            "MANAGE_PHONE_ASSETS" => Self::ManagePhoneAssets,
-            "VIEW_TEMPLATES" => Self::ViewTemplates,
-            "MESSAGING" => Self::Messaging,
-            "VIEW_INSIGHTS" => Self::ViewInsights,
-            "MANAGE_USERS" => Self::ManageUsers,
-            "MANAGE_BILLING" => Self::ManageBilling,
-            other => Self::Other(other.to_owned()),
-        }
+open_enum! {
+    /// Kind of assigned user.
+    pub enum AssignedUserType {
+        /// Business user.
+        BusinessUser => "BUSINESS_USER",
+        /// System user.
+        SystemUser => "SYSTEM_USER",
+        /// Personal user.
+        PersonalUser => "PERSONAL_USER",
     }
 }
 
-impl Serialize for WabaTask {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for WabaTask {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        String::deserialize(d).map(|s| Self::from_str_lossless(&s))
+open_enum! {
+    /// A permission task on a WABA.
+    ///
+    /// The union of the `assigned-users-management-api` reference and the
+    /// `manage-system-users` guide (which adds `VIEW_INSIGHTS`, `MANAGE_USERS`,
+    /// `MANAGE_BILLING`); [`WabaTask::Other`] keeps anything newer.
+    pub enum WabaTask {
+        /// Admin access.
+        Manage => "MANAGE",
+        /// Developer access.
+        Develop => "DEVELOP",
+        /// Manage templates.
+        ManageTemplates => "MANAGE_TEMPLATES",
+        /// Manage phone numbers.
+        ManagePhone => "MANAGE_PHONE",
+        /// View cost.
+        ViewCost => "VIEW_COST",
+        /// Manage extensions.
+        ManageExtensions => "MANAGE_EXTENSIONS",
+        /// View phone assets.
+        ViewPhoneAssets => "VIEW_PHONE_ASSETS",
+        /// Manage phone assets.
+        ManagePhoneAssets => "MANAGE_PHONE_ASSETS",
+        /// View templates.
+        ViewTemplates => "VIEW_TEMPLATES",
+        /// Send and receive messages.
+        Messaging => "MESSAGING",
+        /// View insights.
+        ViewInsights => "VIEW_INSIGHTS",
+        /// Manage users.
+        ManageUsers => "MANAGE_USERS",
+        /// Manage billing (needed to share a line of credit).
+        ManageBilling => "MANAGE_BILLING",
     }
 }
 
@@ -417,9 +350,11 @@ pub struct NewPhoneNumber {
     /// On-Premises → Cloud API migration.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub migrate_phone_number: Option<bool>,
-    /// Pre-verified phone number id to use.
+    /// Pre-verified phone number id to use
+    /// (`embedded-signup/pre-verified-numbers`, § Registering pre-verified
+    /// numbers programmatically), checked as digits before a request.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub preverified_id: Option<String>,
+    pub preverified_id: Option<PreVerifiedPhoneNumberId>,
 }
 
 impl NewPhoneNumber {
@@ -440,7 +375,7 @@ impl NewPhoneNumber {
 
     /// Use a pre-verified number.
     #[must_use]
-    pub fn preverified_id(mut self, id: impl Into<String>) -> Self {
+    pub fn preverified_id(mut self, id: impl Into<PreVerifiedPhoneNumberId>) -> Self {
         self.preverified_id = Some(id.into());
         self
     }
@@ -454,6 +389,14 @@ impl NewPhoneNumber {
             if value.trim().is_empty() {
                 return Err(ValidationError::new(field, "required"));
             }
+        }
+        if let Some(id) = &self.preverified_id
+            && !is_numeric_id(id.as_str())
+        {
+            return Err(ValidationError::new(
+                "preverified_id",
+                format!("expected a numeric id: 1 to {MAX_NUMERIC_ID_LEN} ASCII digits"),
+            ));
         }
         Ok(())
     }
@@ -488,7 +431,8 @@ impl BusinessInfo {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A business portfolio's `verification_status` (the ten values of the
     /// `Business` node's reference,
     /// `ads-commerce/marketing-api/reference/business`). Parsed
@@ -608,7 +552,10 @@ mod tests {
         let v = r#"{"id": "1", "timezone_id": 5, "account_review_status": "NEWLY_INVENTED", "ownership_type": "CLIENT_OWNED"}"#;
         let w: WabaInfo = serde_json::from_str(v).unwrap();
         assert_eq!(w.timezone_id.as_deref(), Some("5"));
-        assert_eq!(w.account_review_status, Some(AccountReviewStatus::Unknown));
+        assert_eq!(
+            w.account_review_status,
+            Some(AccountReviewStatus::Other("NEWLY_INVENTED".into()))
+        );
         assert_eq!(w.ownership_type, Some(OwnershipType::ClientOwned));
     }
 

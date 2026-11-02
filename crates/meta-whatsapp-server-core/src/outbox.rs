@@ -24,11 +24,22 @@
 //!   insert, a WABA can move to another tenant, or its tenant be deleted,
 //!   created again under the same id and bound again; the row is then
 //!   operator-only, never the new holder's.
+//!
+//! **What a row records as received** (roadmap M2e, `OPEN_QUESTIONS.md`
+//! #43): a `message_received` event of an image, a video, an audio, a
+//! document or a sticker, or an edit of a message into one, names the
+//! media id its customer sent ([`NewEvent::received_media`]); a backend
+//! keeps it beside the row, and [`Outbox::received_media`] finds the rows
+//! by it. The core's media services read them: a media id recorded on the
+//! caller's own number, routed to its tenant, is asked from Meta without
+//! `phone_number_id`, and one recorded anywhere else is not asked at all
+//! (`crate::media`).
 
 use std::time::Duration;
 
 use async_trait::async_trait;
-use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::ids::{MediaId, PhoneNumberId, WabaId};
+use serde::Deserialize;
 use time::OffsetDateTime;
 
 use crate::model::TenantId;
@@ -65,6 +76,93 @@ pub struct NewEvent {
     pub event_type: String,
     /// The event's JSON (the library's `WebhookEvent` serialization).
     pub data: String,
+}
+
+impl NewEvent {
+    /// The media id this event records as received
+    /// ([`received_media_id`]): what a backend keeps beside its row for
+    /// [`Outbox::received_media`].
+    pub fn received_media(&self) -> Option<MediaId> {
+        received_media_id(&self.event_type, &self.data)
+    }
+}
+
+/// The message types whose object carries a media id a customer sent
+/// (`webhooks/reference/messages/image`, `…/video`, `…/audio`,
+/// `…/document`, `…/sticker`: each `{type}.id`).
+pub const RECEIVED_MEDIA_TYPES: [&str; 5] = ["image", "video", "audio", "document", "sticker"];
+
+/// The media id an event of type `event_type`, its JSON `data` (the
+/// library's `WebhookEvent` serialization), records as received
+/// (roadmap M2e): for `message_received` only, its message's
+/// `{type}.id` when its `type` is one of [`RECEIVED_MEDIA_TYPES`], or, for
+/// an edit (`webhooks/reference/messages/edit`), the edited message's.
+/// Only an id the media routes accept (`crate::request::graph_id`: digits,
+/// no leading `0`). `None` for anything else, an event that does not read
+/// as one included: a backend then records no media id for it, and the
+/// media routes check that id with Meta's `phone_number_id`, as for any id
+/// they never saw.
+pub fn received_media_id(event_type: &str, data: &str) -> Option<MediaId> {
+    #[derive(Deserialize)]
+    struct Event {
+        message: Option<Message>,
+    }
+    #[derive(Deserialize)]
+    struct Message {
+        #[serde(rename = "type")]
+        kind: Option<String>,
+        image: Option<Object>,
+        video: Option<Object>,
+        audio: Option<Object>,
+        document: Option<Object>,
+        sticker: Option<Object>,
+        edit: Option<Edit>,
+    }
+    #[derive(Deserialize)]
+    struct Edit {
+        message: Option<Box<Message>>,
+    }
+    #[derive(Deserialize)]
+    struct Object {
+        id: Option<String>,
+    }
+    fn media_of(message: Message, nested: bool) -> Option<String> {
+        let object = match message.kind.as_deref()? {
+            "image" => message.image,
+            "video" => message.video,
+            "audio" => message.audio,
+            "document" => message.document,
+            "sticker" => message.sticker,
+            // One level: an edit's message is never an edit itself.
+            "edit" if !nested => return media_of(*message.edit?.message?, true),
+            _ => None,
+        };
+        object?.id
+    }
+    if event_type != "message_received" {
+        return None;
+    }
+    let event: Event = serde_json::from_str(data).ok()?;
+    let id = media_of(event.message?, false)?;
+    crate::request::graph_id("media_id", &id).ok()?;
+    MediaId::new(id).ok()
+}
+
+/// Most rows [`Outbox::received_media`] answers for one media id: a media
+/// id is one customer's file, in one message (and its edits).
+pub const RECEIVED_MEDIA_ROWS: usize = 16;
+
+/// A row of the outbox that recorded a media id as received
+/// ([`Outbox::received_media`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceivedMedia {
+    /// The row's tenant; `None` for an operator-only row (an event no
+    /// binding gave a tenant: a number no tenant held, a move's window).
+    pub tenant: Option<TenantId>,
+    /// The business phone number the event names.
+    pub phone_number_id: Option<PhoneNumberId>,
+    /// When the service received it (the row's [`StoredEvent::created_at`]).
+    pub received_at: OffsetDateTime,
 }
 
 impl std::fmt::Debug for NewEvent {
@@ -360,6 +458,46 @@ pub trait Outbox: Send + Sync + 'static {
     /// from one consistent read.
     async fn page(&self, query: &EventQuery) -> StoreResult<EventPage>;
 
+    /// The event of id `id` in `tenant`'s stream, if it is stored there
+    /// (`GET /v1/events/{id}`, roadmap M2b): never another tenant's event
+    /// nor an operator-only row, whatever its id, and none once purged.
+    ///
+    /// The default pages the tenant's stream from its oldest retained
+    /// event until it finds the id: correct, and as slow as the stream is
+    /// long. The in-tree backends answer it with one lookup by id (an
+    /// index), and a backend of yours should too.
+    ///
+    /// # Errors
+    ///
+    /// The library's `StorageError`.
+    async fn get(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<StoredEvent>> {
+        let mut after = None;
+        loop {
+            let page = self
+                .page(&EventQuery {
+                    tenant: tenant.clone(),
+                    after,
+                    types: None,
+                    phone_number_id: None,
+                    limit: 100,
+                    max_bytes: crate::events::MAX_PAGE_DATA_BYTES,
+                })
+                .await?;
+            let last = page.events.last().map(|event| event.sequence);
+            if let Some(found) = page
+                .events
+                .into_iter()
+                .find(|event| event.id == id && event.tenant.as_ref() == Some(tenant))
+            {
+                return Ok(Some(found));
+            }
+            match last {
+                Some(last) if page.more => after = Some(last),
+                _ => return Ok(None),
+            }
+        }
+    }
+
     /// Delete the events received more than `older_than` ago, as a prefix
     /// of each stream, and record how far each went; how many went. It
     /// takes no lock of its own (housekeeping runs it under a
@@ -367,11 +505,164 @@ pub trait Outbox: Send + Sync + 'static {
     /// stream's `purged_through` only moves forward, and a row two purges
     /// both chose is deleted once.
     async fn purge(&self, older_than: Duration) -> StoreResult<u64>;
+
+    /// The rows that recorded `media_id` as received (roadmap M2e): each
+    /// row whose [`NewEvent::received_media`] was `media_id` when it was
+    /// inserted, operator-only rows included, newest first, at most
+    /// [`RECEIVED_MEDIA_ROWS`]; none once purged, or gone with their
+    /// tenant. A backend keeps the id beside the row at insert (Postgres:
+    /// `wa_server_events.media_id`, indexed), so this is one lookup, never
+    /// a scan of the rows' data.
+    ///
+    /// # Errors
+    ///
+    /// The library's `StorageError`.
+    async fn received_media(&self, media_id: &MediaId) -> StoreResult<Vec<ReceivedMedia>>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The media id each of Meta's documented webhooks records as received
+    /// (the library's fixtures, `webhooks/reference/*`, as the service
+    /// stores their events: `crate::events::event_data`): the five media
+    /// types' `{type}.id` and an edit's, nothing else. Decisive: the type
+    /// match in `received_media_id`, and the edit's one level.
+    #[test]
+    fn metas_media_messages_record_their_media_id_and_nothing_else_does() {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../meta-whatsapp-webhooks/tests/fixtures");
+        let mut found = Vec::new();
+        let mut events = 0;
+        let mut dirs = vec![fixtures.clone()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "json") {
+                    continue;
+                }
+                let body = std::fs::read(&path).unwrap();
+                let Ok(payload) = meta_whatsapp_rs::webhooks::WebhookPayload::from_slice(&body)
+                else {
+                    continue;
+                };
+                for event in payload.into_events() {
+                    events += 1;
+                    let data = crate::events::event_data(&event).unwrap();
+                    if let Some(id) = received_media_id(event.kind(), &data) {
+                        let name = path.strip_prefix(&fixtures).unwrap();
+                        found.push((name.to_string_lossy().into_owned(), id.into_inner()));
+                    }
+                }
+            }
+        }
+        found.sort();
+        assert!(events > 100, "the fixtures were not read: {events} events");
+        let expected = [
+            ("messages/audio.json", "1908647269898587"),
+            ("messages/document.json", "622684793477189"),
+            ("messages/edit.json", "1234567890"),
+            ("messages/image.json", "1003383421387256"),
+            ("messages/sticker.json", "1908647269898587"),
+            ("messages/video.json", "731675419373506"),
+            // `business-scoped-user-ids`' edit example, and a voicemail
+            // (`calling/call-settings`): an audio message.
+            (
+                "pages/business-scoped-user-ids__edit_messages_webhooks.json",
+                "1234567890",
+            ),
+            (
+                "pages/calling.call-settings__voicemail_webhook_payload.json",
+                "1002764438271669",
+            ),
+        ]
+        .map(|(f, id)| (f.to_owned(), id.to_owned()));
+        assert_eq!(found, expected);
+    }
+
+    /// What is not a received media id: another event type, a type whose
+    /// object is missing (the object of another type present instead), an
+    /// id the media routes refuse (a leading `0`, not digits), an edit of
+    /// an edit, a body that is not an event.
+    #[test]
+    fn only_a_media_message_of_its_own_type_records_a_routable_id() {
+        let message =
+            |message: &str| format!("{{\"event\":\"message_received\",\"message\":{message}}}");
+        let image = message(r#"{"type":"image","image":{"id":"1003383421387256"}}"#);
+        assert_eq!(
+            received_media_id("message_received", &image).map(MediaId::into_inner),
+            Some("1003383421387256".to_owned())
+        );
+        // Each media type reads its own object, and only its own: the
+        // others' objects present, its own missing, record nothing.
+        for kind in RECEIVED_MEDIA_TYPES {
+            let own = message(&format!(
+                r#"{{"type":"{kind}","{kind}":{{"id":"1003383421387256"}}}}"#
+            ));
+            assert_eq!(
+                received_media_id("message_received", &own).map(MediaId::into_inner),
+                Some("1003383421387256".to_owned()),
+                "{kind}"
+            );
+            let others: Vec<String> = RECEIVED_MEDIA_TYPES
+                .iter()
+                .filter(|other| **other != kind)
+                .map(|other| format!(r#""{other}":{{"id":"1003383421387256"}}"#))
+                .collect();
+            let theirs = message(&format!(r#"{{"type":"{kind}",{}}}"#, others.join(",")));
+            assert_eq!(
+                received_media_id("message_received", &theirs),
+                None,
+                "{kind}: another type's object"
+            );
+        }
+        for (event_type, data, why) in [
+            ("status_updated", image.clone(), "another event type"),
+            (
+                "message_received",
+                message(r#"{"type":"image","video":{"id":"1003383421387256"}}"#),
+                "the object of another type",
+            ),
+            (
+                "message_received",
+                message(
+                    r#"{"type":"text","text":{"body":"hi"},"image":{"id":"1003383421387256"}}"#,
+                ),
+                "a text message",
+            ),
+            (
+                "message_received",
+                message(r#"{"type":"image","image":{"id":"01003383421387256"}}"#),
+                "a leading 0",
+            ),
+            (
+                "message_received",
+                message(r#"{"type":"image","image":{"id":"../me"}}"#),
+                "not digits",
+            ),
+            (
+                "message_received",
+                message(r#"{"type":"image","image":{"id":1003383421387256}}"#),
+                "a number, not Meta's string",
+            ),
+            (
+                "message_received",
+                message(
+                    r#"{"type":"edit","edit":{"message":{"type":"edit","edit":{"message":{"type":"image","image":{"id":"1003383421387256"}}}}}}"#,
+                ),
+                "an edit of an edit",
+            ),
+            ("message_received", "not json".to_owned(), "not JSON"),
+            ("message_received", "{}".to_owned(), "no message"),
+        ] {
+            assert_eq!(received_media_id(event_type, &data), None, "{why}");
+        }
+    }
 
     fn guard(not_after: Option<OffsetDateTime>, after_move: AfterMove) -> RouteGuard {
         RouteGuard {

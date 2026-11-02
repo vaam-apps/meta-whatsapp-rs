@@ -512,7 +512,10 @@ fn parses_bsuid_and_pacing_responses() {
         "Y2FwaV9ncm91cDox"
     );
     assert_eq!(r.messages[1].message_status, Some(MessageStatus::Paused));
-    assert_eq!(r.messages[2].message_status, Some(MessageStatus::Unknown));
+    assert_eq!(
+        r.messages[2].message_status,
+        Some(MessageStatus::Other("brand_new_status".into()))
+    );
 }
 
 #[test]

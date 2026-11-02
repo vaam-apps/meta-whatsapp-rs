@@ -55,6 +55,7 @@ use crate::model::{
 };
 use crate::observe::Observer;
 use crate::operation::Operation;
+use crate::otp::OtpKeys;
 use crate::store::IdempotencyRecords;
 
 /// SHA-256 of what a request asks: its operation ([`Operation`], by id)
@@ -68,6 +69,13 @@ use crate::store::IdempotencyRecords;
 /// | `send_message` ([`Self::send_message`]) | the number's id, as a [`PhoneNumberId`] (the path parameter decoded: `%31` and `1` are one number); the JSON body as the request carried it, parsed (an escape is the character it spells; of a key given twice, the last, as the operation reads it), its object keys sorted and its whitespace ignored; nothing else is folded (`1` and `1.0` are two bodies) |
 /// | `upload_media` ([`Self::upload_media`]) | the number's id; the checked [`Upload`]'s MIME type, the file name sent to Meta, and the file's SHA-256 |
 /// | `create_template` ([`Self::create_template`]) | the WABA's id, as a [`WabaId`]; the JSON body, canonical as above |
+/// | `reply_to_conversation` ([`Self::reply_to_conversation`]) | the number's id; the conversation's contact, as the path named it decoded; the JSON body, canonical as above |
+/// | `mark_conversation_read` ([`Self::mark_conversation_read`]) | the number's id; the conversation's contact, as the path named it decoded; the JSON body, canonical as above (`null` for an empty one) |
+/// | `create_authentication_template` ([`Self::create_authentication_template`]) | the WABA's id; the JSON body, canonical as above |
+/// | `issue_otp` ([`Self::issue_otp`]) | the JSON body, canonical as above; the digest then keyed with the OTP pepper's fingerprint key (an HMAC-SHA256): the body names a phone number |
+/// | `request_verification_code` ([`Self::request_verification_code`]) | the number's id; the delivery method and the language, as a JSON object, canonical as above |
+/// | `register_number` ([`Self::register_number`]) | the number's id; the data localization region, or none: **never the PIN** (roadmap M3d, decisions D6 and D67), so no record holds anything derived from it |
+/// | `deregister_number` ([`Self::deregister_number`]) | the number's id (the body's confirmation is that id again) |
 ///
 /// The same request always has the same fingerprint; another operation,
 /// another number or WABA, or another body has another. Fingerprints are
@@ -123,6 +131,131 @@ impl Fingerprint {
             &[("waba_id", waba.as_str())],
             body,
         )
+    }
+
+    /// `reply_to_conversation` on `number`, to the conversation of
+    /// `contact` (as the path named it, decoded), with the JSON body the
+    /// request carried (roadmap M2a). A release before it had no such
+    /// operation, so there is no legacy fingerprint to match.
+    pub fn reply_to_conversation(
+        number: &PhoneNumberId,
+        contact: &str,
+        body: &serde_json::Value,
+    ) -> Self {
+        Self::json(
+            Operation::ReplyToConversation,
+            &[("pn", number.as_str()), ("contact", contact)],
+            body,
+        )
+    }
+
+    /// `mark_conversation_read` on `number`, of the conversation of
+    /// `contact` (as the path named it, decoded), with the JSON body the
+    /// request carried, `null` when it had none (roadmap M2g). A release
+    /// before it had no such operation, so there is no legacy fingerprint
+    /// to match.
+    pub fn mark_conversation_read(
+        number: &PhoneNumberId,
+        contact: &str,
+        body: &serde_json::Value,
+    ) -> Self {
+        Self::json(
+            Operation::MarkConversationRead,
+            &[("pn", number.as_str()), ("contact", contact)],
+            body,
+        )
+    }
+
+    /// `create_authentication_template` in `waba`, with the JSON body the
+    /// request carried (roadmap M3c). No release before it had the
+    /// operation: no legacy fingerprint.
+    pub fn create_authentication_template(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreateAuthenticationTemplate,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `issue_otp` with the JSON body the request carried (roadmap M3c),
+    /// **keyed**: the body names a phone number, and design section 6 keeps
+    /// numbers only as keyed hashes, so the stored digest is an HMAC-SHA256
+    /// of the canonical input's SHA-256 under a key derived from the OTP
+    /// pepper ([`OtpKeys`]), never a bare SHA-256 a list of phone numbers
+    /// would invert. No release before it had the operation: no legacy
+    /// fingerprint.
+    pub fn issue_otp(keys: &OtpKeys, body: &serde_json::Value) -> Self {
+        let plain = Self::json(Operation::IssueOtp, &[], body);
+        Self::of(keys.fingerprint(&plain.digest))
+    }
+
+    /// `request_verification_code` on `number`, by `method` (Meta's name,
+    /// `SMS` or `VOICE`) in `language` (roadmap M3d).
+    pub fn request_verification_code(number: &PhoneNumberId, method: &str, language: &str) -> Self {
+        Self::json(
+            Operation::RequestVerificationCode,
+            &[("pn", number.as_str())],
+            &serde_json::json!({"code_method": method, "language": language}),
+        )
+    }
+
+    /// `register_number` on `number`, with the data localization region
+    /// the request named, if any (roadmap M3d). The PIN is no input: a
+    /// 6-digit secret's digest is the secret (a million guesses), so the
+    /// stored fingerprint holds nothing of it. The cost: a repeat with the
+    /// same key and another PIN is the same request (it gets the kept
+    /// answer, or `409 idempotency_in_progress`); a wrong PIN Meta refused
+    /// releases the key (nothing was registered), so the corrected PIN
+    /// may reuse it.
+    pub fn register_number(number: &PhoneNumberId, region: Option<&str>) -> Self {
+        Self::json(
+            Operation::RegisterNumber,
+            &[("pn", number.as_str())],
+            &serde_json::json!({"data_localization_region": region}),
+        )
+    }
+
+    /// `deregister_number` on `number` (roadmap M3d).
+    pub fn deregister_number(number: &PhoneNumberId) -> Self {
+        Self::json(
+            Operation::DeregisterNumber,
+            &[("pn", number.as_str())],
+            &serde_json::json!({}),
+        )
+    }
+
+    /// `create_payment_configuration` in `waba`, with the JSON body the
+    /// request carried (roadmap P2; no legacy fingerprint).
+    pub fn create_payment_configuration(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreatePaymentConfiguration,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `regenerate_payment_oauth_link` of the configuration
+    /// `configuration_name` (as the path named it, decoded) in `waba`, with
+    /// the JSON body the request carried, `null` for none (roadmap P2).
+    pub fn regenerate_payment_oauth_link(
+        waba: &WabaId,
+        configuration_name: &str,
+        body: &serde_json::Value,
+    ) -> Self {
+        Self::json(
+            Operation::RegeneratePaymentOauthLink,
+            &[
+                ("waba_id", waba.as_str()),
+                ("configuration_name", configuration_name),
+            ],
+            body,
+        )
+    }
+
+    /// `refund_payment` on `number`, with the JSON body the request carried
+    /// (roadmap P2).
+    pub fn refund_payment(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::RefundPayment, &[("pn", number.as_str())], body)
     }
 
     /// `operation` with its named parameters `params` (in any order: they
@@ -569,6 +702,9 @@ impl Drop for Claim {
 pub struct Answer {
     status: u16,
     body: Vec<u8>,
+    /// What a key keeps for a repeat, when it is not `body`
+    /// ([`Self::keeping`]).
+    kept: Option<Vec<u8>>,
     replayed: bool,
 }
 
@@ -577,6 +713,7 @@ impl std::fmt::Debug for Answer {
         f.debug_struct("Answer")
             .field("status", &self.status)
             .field("body_len", &self.body.len())
+            .field("kept_len", &self.kept.as_ref().map(Vec::len))
             .field("replayed", &self.replayed)
             .finish()
     }
@@ -588,8 +725,19 @@ impl Answer {
         Self {
             status,
             body,
+            kept: None,
             replayed: false,
         }
+    }
+
+    /// Keep `kept` for a repeat instead of the body answered now: for an
+    /// answer holding a credential the records must not store (a payment
+    /// configuration's OAuth link, roadmap P2), the same answer without it.
+    /// A repeat then gets `kept`, never the body.
+    #[must_use]
+    pub fn keeping(mut self, kept: Vec<u8>) -> Self {
+        self.kept = Some(kept);
+        self
     }
 
     /// The status.
@@ -727,6 +875,7 @@ where
             Ok(Answer {
                 status,
                 body,
+                kept: None,
                 replayed: true,
             })
         }
@@ -735,10 +884,11 @@ where
                 claim
                     .settle(Outcome::Answered {
                         status: answer.status,
-                        body: &answer.body,
+                        body: answer.kept.as_deref().unwrap_or(&answer.body),
                     })
                     .await;
                 Ok(Answer {
+                    kept: None,
                     replayed: false,
                     ..answer
                 })
@@ -1060,6 +1210,44 @@ mod tests {
         );
     }
 
+    /// Roadmap M3c: an OTP issue's fingerprint is keyed. Its body names a
+    /// phone number, which a bare SHA-256 would give away to whoever reads
+    /// the idempotency records and tries the numbers of a country (design
+    /// section 6: numbers only as keyed hashes). It is the HMAC-SHA256,
+    /// under HMAC-SHA256(pepper, `meta-whatsapp-server/otp-fingerprint/v1`),
+    /// of the canonical input's digest (derived here apart from the code:
+    /// the label is a stored name, pending the owner). Decisive: an unkeyed
+    /// fingerprint, or one keyed otherwise, fails it.
+    #[test]
+    fn the_otp_fingerprint_is_keyed() {
+        use hmac::{Hmac, Mac};
+        use meta_whatsapp_rs::core::secret::SecretBytes;
+        let body = serde_json::json!({"phone": "+16505551234", "purpose": "login"});
+        let pepper = [7u8; 32];
+        let keys = OtpKeys::new(SecretBytes::new(pepper.to_vec())).unwrap();
+        let other = OtpKeys::new(SecretBytes::new(vec![8u8; 32])).unwrap();
+        let keyed = Fingerprint::issue_otp(&keys, &body);
+        let plain = Fingerprint::json(Operation::IssueOtp, &[], &body);
+        assert_ne!(keyed.as_bytes(), plain.as_bytes(), "keyed");
+        assert_ne!(
+            keyed.as_bytes(),
+            Fingerprint::issue_otp(&other, &body).as_bytes(),
+            "by the pepper"
+        );
+        let mac = |key: &[u8], message: &[u8]| -> [u8; 32] {
+            let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
+            mac.update(message);
+            mac.finalize().into_bytes().into()
+        };
+        let key = mac(&pepper, b"meta-whatsapp-server/otp-fingerprint/v1");
+        assert_eq!(*keyed.as_bytes(), mac(&key, plain.as_bytes()));
+        // Another body, another fingerprint; the same body, the same one.
+        let again = serde_json::json!({"purpose": "login", "phone": "+16505551234"});
+        assert_eq!(keyed, Fingerprint::issue_otp(&keys, &again));
+        let another = serde_json::json!({"phone": "+16505551235", "purpose": "login"});
+        assert_ne!(keyed, Fingerprint::issue_otp(&keys, &another));
+    }
+
     /// The legacy fingerprint is exactly the one stored before roadmap S6:
     /// main's known answers (`fingerprints_are_pinned` before S6, computed
     /// apart from the code, at f1d125b), for a JSON body and for parts; an
@@ -1205,6 +1393,21 @@ mod tests {
             Fingerprint::json(Operation::SendMessage, &[("pn", "1")], &a),
             Fingerprint::json(Operation::CreateTemplate, &[("pn", "1")], &a)
         );
+        // A conversation's read and a reply to it, on one contact and body
+        // (roadmap M2g); another contact is another read.
+        let read = serde_json::json!({"notify_customer": true});
+        assert_ne!(
+            Fingerprint::mark_conversation_read(&one, "US.1", &read),
+            Fingerprint::reply_to_conversation(&one, "US.1", &read)
+        );
+        assert_ne!(
+            Fingerprint::mark_conversation_read(&one, "US.1", &read),
+            Fingerprint::mark_conversation_read(&one, "US.2", &read)
+        );
+        assert_ne!(
+            Fingerprint::mark_conversation_read(&one, "US.1", &read),
+            Fingerprint::mark_conversation_read(&one, "US.1", &serde_json::Value::Null)
+        );
         // The parameters, by name, in any order.
         assert_eq!(
             Fingerprint::json(Operation::SendMessage, &[("a", "1"), ("b", "2")], &a),
@@ -1331,5 +1534,44 @@ mod tests {
             assert!(!debug.contains("7, 7, 7"), "the fingerprint: {debug}");
         }
         assert!(printed[3].starts_with("Replay"), "{}", printed[3]);
+    }
+
+    /// The registration operations' fingerprints (roadmap M3d): each its
+    /// operation's and its number's, the region and the code's delivery
+    /// counting, and the PIN no input at all (`register_number` takes none:
+    /// what the record keeps holds nothing derived from it). The HTTP
+    /// tests decide the rest (`tests/registration.rs`: a repeat under the
+    /// same key with another PIN replays).
+    #[test]
+    fn the_registration_fingerprints_are_their_operations_and_hold_no_pin() {
+        let one = pn("106540352242922");
+        let registered = Fingerprint::register_number(&one, None);
+        assert_eq!(
+            registered,
+            Fingerprint::json(
+                Operation::RegisterNumber,
+                &[("pn", one.as_str())],
+                &serde_json::json!({"data_localization_region": null}),
+            )
+        );
+        assert_ne!(registered, Fingerprint::register_number(&one, Some("CH")));
+        assert_ne!(
+            registered,
+            Fingerprint::register_number(&pn("106540352242923"), None)
+        );
+        assert_ne!(registered, Fingerprint::deregister_number(&one));
+        let sms = Fingerprint::request_verification_code(&one, "SMS", "en_US");
+        assert_ne!(
+            sms,
+            Fingerprint::request_verification_code(&one, "VOICE", "en_US")
+        );
+        assert_ne!(
+            sms,
+            Fingerprint::request_verification_code(&one, "SMS", "fr_FR")
+        );
+        assert_eq!(
+            sms,
+            Fingerprint::request_verification_code(&one, "SMS", "en_US")
+        );
     }
 }

@@ -96,10 +96,9 @@ mod tests;
 use std::collections::BTreeMap;
 
 use meta_whatsapp_core::error::ValidationError;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-
-use crate::flows::types::wire_enum;
 
 pub use actions::{
     Action, CompleteAction, DataExchangeAction, NavigateAction, NextScreen, OpenUrlAction, Payload,
@@ -378,11 +377,12 @@ impl Screen {
     }
 }
 
-wire_enum! {
+open_enum! {
+    #![string_only]
     /// A layout's `type`.
     pub enum LayoutType {
         /// `SingleColumnLayout`: a vertical stack, the only layout so far.
-        SingleColumnLayout = "SingleColumnLayout",
+        SingleColumnLayout => "SingleColumnLayout",
     }
 }
 
@@ -410,20 +410,21 @@ impl Layout {
     }
 }
 
-wire_enum! {
+open_enum! {
+    #![string_only]
     /// A data field's `type` (JSON Schema types; Flows check them per RFC
     /// 8927 and do not support `null`).
     pub enum DataType {
         /// `string`.
-        String = "string",
+        String => "string",
         /// `number`.
-        Number = "number",
+        Number => "number",
         /// `boolean`.
-        Boolean = "boolean",
+        Boolean => "boolean",
         /// `object`.
-        Object = "object",
+        Object => "object",
         /// `array`.
-        Array = "array",
+        Array => "array",
     }
 }
 

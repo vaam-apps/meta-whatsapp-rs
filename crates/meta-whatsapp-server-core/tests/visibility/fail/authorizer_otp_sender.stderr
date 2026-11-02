@@ -1,0 +1,15 @@
+error[E0624]: method `otp_sender` is private
+  --> tests/visibility/fail/authorizer_otp_sender.rs:10:19
+   |
+10 |       let _ = authz.otp_sender(caller, holder, pn).await;
+   |                     ^^^^^^^^^^ private method
+   |
+  ::: src/authz.rs
+   |
+   | /     pub(crate) async fn otp_sender(
+   | |         &self,
+   | |         caller: &Caller,
+   | |         holder: &TenantId,
+   | |         pn: PhoneNumberId,
+   | |     ) -> Result<OwnedNumber, ServiceError> {
+   | |__________________________________________- private method defined here

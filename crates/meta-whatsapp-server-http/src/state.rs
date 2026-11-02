@@ -12,10 +12,17 @@ use crate::ratelimit::{RateLimiter, RateLimits, Slots};
 use crate::store::{Backend, IdempotencyRecords, Outbox, RecordStore};
 use meta_whatsapp_rs::client::DEFAULT_TIMEOUT;
 use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
+use meta_whatsapp_rs::core::clock::Clock;
 use meta_whatsapp_rs::core::config::ApiVersion;
 use meta_whatsapp_rs::core::secret::VerifyToken;
+use meta_whatsapp_rs::core::store::ConversationStore;
 use meta_whatsapp_rs::webhooks::axum::extract::FromRef;
 use meta_whatsapp_rs::{Client, Error};
+use meta_whatsapp_server_core::inbox::ReplyChecksByNumber;
+use meta_whatsapp_server_core::live::{LiveSettings, Streams};
+use meta_whatsapp_server_core::otp::{OtpCodes, OtpDeployment};
+use meta_whatsapp_server_core::registration::{AttemptLimits, RegistrationAttempts};
+use meta_whatsapp_server_core::signup::{SignupDeployment, Signups};
 use meta_whatsapp_server_core::templates::TemplateCache;
 
 /// Default `WA_SERVER_IDEMPOTENCY_TTL`: how long an idempotency key's
@@ -64,6 +71,32 @@ pub struct Settings {
     pub media_streams: usize,
     /// [`TEMPLATE_CACHE_TTL`].
     pub template_cache_ttl: Duration,
+    /// The live event streams' bounds (`WA_SERVER_STREAMS_PER_TENANT`,
+    /// `WA_SERVER_STREAMS_PER_REPLICA`) and the design's fixed values
+    /// (heartbeat, re-poll, buffer, slow client), which tests shorten.
+    pub live: LiveSettings,
+    /// `WA_SERVER_INBOX_REPLY_CHECKS`: the local checks an inbox reply
+    /// makes, per number (every one on a number it does not list; roadmap
+    /// M2a).
+    pub inbox_reply_checks: ReplyChecksByNumber,
+    /// `WA_OTP_PEPPER` and `WA_SERVER_OTP_DEFAULT_TENANT` (roadmap M3c):
+    /// `None`, OTP is not set up and every OTP request is `409
+    /// otp_not_configured` (the default, for tests; `serve` always sets
+    /// it, with a throwaway pepper on memory storage in development).
+    /// `Debug` shows no pepper.
+    pub otp: Option<OtpDeployment>,
+    /// The deployment's Embedded Signup (roadmap M3a): the Meta app
+    /// (`WA_APP_ID`, `WA_APP_SECRET`), its configuration
+    /// (`WA_ES_CONFIG_ID`) and the mode (`WA_ONBOARDING_MODE`, a Solution
+    /// Partner's credit line). `None`, every signup route is `409
+    /// signup_not_configured` and no account update is acted on (the
+    /// default, for tests; `serve` sets it when `WA_APP_ID` and
+    /// `WA_ES_CONFIG_ID` are). `Debug` shows no secret.
+    pub signup: Option<SignupDeployment>,
+    /// `WA_SERVER_REGISTRATION_*` and `WA_SERVER_VERIFICATION_*`: a
+    /// number's registration and verification attempts, per number,
+    /// shared by every replica (roadmap M3d).
+    pub registration_attempts: AttemptLimits,
 }
 
 impl Default for Settings {
@@ -76,6 +109,11 @@ impl Default for Settings {
             media_concurrency: DEFAULT_MEDIA_CONCURRENCY,
             media_streams: DEFAULT_MEDIA_STREAMS,
             template_cache_ttl: TEMPLATE_CACHE_TTL,
+            live: LiveSettings::default(),
+            inbox_reply_checks: ReplyChecksByNumber::new(),
+            otp: None,
+            signup: None,
+            registration_attempts: AttemptLimits::default(),
         }
     }
 }
@@ -93,7 +131,10 @@ pub struct AppState {
 struct Inner {
     store: Arc<dyn RecordStore>,
     idempotency: Arc<dyn IdempotencyRecords>,
-    authz: Authorizer,
+    conversations: Arc<dyn ConversationStore>,
+    clock: Arc<dyn Clock>,
+    /// Shared with the webhook pipeline's account actions (roadmap M3a).
+    authz: Arc<Authorizer>,
     metrics: Metrics,
     events: Events,
     shutting_down: AtomicBool,
@@ -102,6 +143,10 @@ struct Inner {
     media_slots: Slots,
     stream_slots: Slots,
     templates: TemplateCache,
+    otp: OtpCodes,
+    signups: Signups,
+    streams: Streams,
+    registration_attempts: RegistrationAttempts,
 }
 
 impl std::fmt::Debug for AppState {
@@ -113,7 +158,8 @@ impl std::fmt::Debug for AppState {
 impl AppState {
     /// The service on `backend`, and on nothing else: its records and
     /// idempotency records, the token vault on its `KvStore` under
-    /// `vault_keys`, and the webhook pipeline `inbound` describes, built
+    /// `vault_keys` (and, on that store, the numbers' registration
+    /// attempts), and the webhook pipeline `inbound` describes, built
     /// here on its `KvStore` (dedup leases), `ConversationStore` (the
     /// inbox), `Outbox` and records (routing). Graph is called with
     /// `client` (built without a default token: each call runs with the
@@ -148,11 +194,32 @@ impl AppState {
         let store = backend.records();
         let vault = TokenVault::new(backend.kv(), vault_keys)?;
         // One clock for the whole service: the webhook pipeline's.
-        let authz = Authorizer::new(store.clone(), vault, client)?.with_clock(inbound.clock());
-        let events = Events::new(inbound, backend.as_ref(), metrics.clone());
+        let clock = inbound.clock();
+        let authz =
+            Arc::new(Authorizer::new(store.clone(), vault, client)?.with_clock(clock.clone()));
+        // Embedded Signup's attempts in the bundle's key/value store, as the
+        // vault; its offboarding acts on the webhook pipeline's account
+        // updates, through the same authorization order (roadmap M3a).
+        let signups = Signups::new(backend.kv(), clock.clone(), settings.signup.clone());
+        let events = Events::new(
+            inbound,
+            backend.as_ref(),
+            metrics.clone(),
+            signups.account_actions(authz.clone()),
+        );
+        // The codes in the bundle's key/value store, as the vault, on the
+        // service's one clock.
+        let otp = OtpCodes::new(backend.kv(), clock.clone(), settings.otp.clone());
+        // The live streams read the outbox the pipeline writes, woken by the
+        // same backend's notifier, which the pipeline notifies.
+        let streams = Streams::new(backend.outbox(), backend.notifier(), settings.live);
+        let registration_attempts =
+            RegistrationAttempts::new(backend.kv(), settings.registration_attempts, clock.clone());
         let state = Self {
             inner: Arc::new(Inner {
                 idempotency: backend.idempotency(),
+                conversations: backend.conversations(),
+                clock,
                 authz,
                 store,
                 metrics,
@@ -162,6 +229,10 @@ impl AppState {
                 media_slots: Slots::new(settings.media_concurrency),
                 stream_slots: Slots::new(settings.media_streams),
                 templates: TemplateCache::new(settings.template_cache_ttl),
+                otp,
+                signups,
+                streams,
+                registration_attempts,
                 settings,
             }),
         };
@@ -236,14 +307,40 @@ impl AppState {
         &self.inner.templates
     }
 
+    /// The inbox: the backend's conversation store, the one the webhook
+    /// pipeline records into.
+    pub(crate) fn conversations(&self) -> &Arc<dyn ConversationStore> {
+        &self.inner.conversations
+    }
+
+    /// The service's one clock (the webhook pipeline's, the authorization
+    /// order's).
+    pub fn clock(&self) -> Arc<dyn Clock> {
+        self.inner.clock.clone()
+    }
+
     /// The Graph API version calls use.
     pub fn graph_api_version(&self) -> ApiVersion {
         self.client().endpoint().version()
     }
 
-    /// Mark the service as shutting down: `/readyz` fails from now on.
+    /// The live event streams of this replica.
+    pub(crate) fn streams(&self) -> &Streams {
+        &self.inner.streams
+    }
+
+    /// Live event streams open now on this replica.
+    pub fn open_streams(&self) -> usize {
+        self.inner.streams.open()
+    }
+
+    /// Mark the service as shutting down: `/readyz` fails from now on, and
+    /// every live event stream ends with `event: shutdown` (its client
+    /// resumes on another replica), so the listeners' open connections
+    /// can finish within the grace period.
     pub fn begin_shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
+        self.inner.streams.shut_down();
     }
 
     /// Whether [`Self::begin_shutdown`] was called.
@@ -318,6 +415,35 @@ impl Grant {
     /// The template lists cached per WABA.
     pub fn template_cache(&self) -> &TemplateCache {
         self.0.template_cache()
+    }
+
+    /// The OTP services (roadmap M3c): codes in the backend's key/value
+    /// store, opened for an admitted caller only
+    /// (`meta_whatsapp_server_core::otp::OtpCodes::open`).
+    pub fn otp(&self) -> &OtpCodes {
+        &self.0.inner.otp
+    }
+
+    /// The Embedded Signup services (roadmap M3a): attempts in the
+    /// backend's key/value store, opened for an admitted caller only
+    /// (`meta_whatsapp_server_core::signup::Signups::open`).
+    pub fn signups(&self) -> &Signups {
+        &self.0.inner.signups
+    }
+
+    /// A number's registration and verification attempts, counted on the
+    /// bundle's `KvStore` (roadmap M3d), for the core's registration
+    /// services (`meta_whatsapp_server_core::registration::Registration`),
+    /// which open only on a number the authorization order made.
+    pub fn registration_attempts(&self) -> &RegistrationAttempts {
+        &self.0.inner.registration_attempts
+    }
+
+    /// The inbox (the backend's conversation store), for the core's inbox
+    /// services (`meta_whatsapp_server_core::inbox::Conversations`), which
+    /// open only on a number the authorization order made.
+    pub fn conversations(&self) -> Arc<dyn ConversationStore> {
+        self.0.conversations().clone()
     }
 }
 

@@ -19,6 +19,7 @@ use super::definition::{
     AppDeepLink, Button, CarouselCard, FlowAction, FlowButton, HeaderComponent, HeaderFormat,
     OtpButton, SupportedApp, TemplateComponent, TemplateDefinition, TemplateEdit,
 };
+use super::payments::PaymentRequestSetting;
 use super::types::{ParameterFormat, TemplateCategory};
 
 type Check = Result<(), ValidationError>;
@@ -173,6 +174,7 @@ struct Ctx<'a> {
     auth: bool,
     lto: bool,
     product_header: bool,
+    header_format: Option<&'a HeaderFormat>,
 }
 
 fn components(
@@ -185,11 +187,13 @@ fn components(
     let mut n = Counts::default();
     let mut has_otp = false;
     let mut product_header = false;
+    let mut header_format = None;
     for c in list {
         match c {
             TemplateComponent::Header(h) => {
                 n.header += 1;
                 product_header |= h.format == HeaderFormat::Product;
+                header_format = Some(&h.format);
             }
             TemplateComponent::Body(_) => n.body += 1,
             TemplateComponent::Footer(_) => n.footer += 1,
@@ -273,6 +277,8 @@ fn components(
         }
     }
 
+    checkout_template(list, category, header_format, path)?;
+
     let ctx = Ctx {
         category,
         format,
@@ -280,6 +286,7 @@ fn components(
         auth,
         lto: n.lto == 1,
         product_header,
+        header_format,
     };
     if auth {
         auth_components(list, path)?;
@@ -674,6 +681,7 @@ fn button_list(buttons: &[Button], ctx: &Ctx<'_>, field: &str) -> Check {
             "at most 1 COPY_CODE button",
         ));
     }
+    payment_request_buttons(buttons, field)?;
     // `templates/components#quick-reply-buttons`: quick replies and other
     // buttons must form two groups ("Quick Reply, URL, Quick Reply" is
     // invalid).
@@ -778,6 +786,12 @@ fn button(b: &Button, ctx: &Ctx<'_>, field: &str) -> Check {
             }
             Ok(())
         }
+        Button::OrderDetails { text: t } => order_details_button(t, ctx, field),
+        Button::PaymentRequest {
+            text: t,
+            payment_setting,
+        } => payment_request_button(t, payment_setting, field),
+        Button::Other(raw) => untyped_payment_button(raw, field),
         Button::RequestContactInfo { text: t } => {
             // `business-scoped-user-ids#using-templates`: utility and
             // marketing templates; label fixed.
@@ -799,6 +813,175 @@ fn button(b: &Button, ctx: &Ctx<'_>, field: &str) -> Check {
         }
         _ => Ok(()),
     }
+}
+
+/// A payment button that did not parse typed (a method this client has
+/// no rules for, a setting without its object, `type` spelled
+/// `Payment_Request`) would be created unchecked: refused, as in a send.
+/// Any other button this client does not model passes as written.
+fn untyped_payment_button(raw: &serde_json::Value, field: &str) -> Check {
+    let payment = raw
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|t| {
+            t.eq_ignore_ascii_case("ORDER_DETAILS") || t.eq_ignore_ascii_case("PAYMENT_REQUEST")
+        });
+    if payment {
+        return Err(err(
+            field,
+            "an ORDER_DETAILS or PAYMENT_REQUEST button must be typed: a label, and a payment method this client knows with its object",
+        ));
+    }
+    Ok(())
+}
+
+/// `payments-br/payment-request-cta`, the buttons table: `text` "Must be
+/// `Copy Pix code` for `pix_dynamic_code`, …"; a sample value, and none
+/// for `offsite_card_pay` ("set `type` to `offsite_card_pay` and omit this
+/// object").
+fn payment_request_button(t: &str, setting: &PaymentRequestSetting, field: &str) -> Check {
+    let label = setting.label();
+    if t != label {
+        return Err(err(
+            format!("{field}.text"),
+            format!(
+                "must be `{label}` for a `{}` payment request",
+                setting.type_name()
+            ),
+        ));
+    }
+    setting.validate(&format!("{field}.payment_setting"), false)
+}
+
+/// `payments-br/payment-request-cta`: "up to three payment request
+/// buttons in a message, each supporting a different payment method";
+/// "A template that includes a payment request button supports three
+/// buttons in total".
+fn payment_request_buttons(buttons: &[Button], field: &str) -> Check {
+    let mut methods = BTreeSet::new();
+    for (i, b) in buttons.iter().enumerate() {
+        if let Button::PaymentRequest {
+            payment_setting, ..
+        } = b
+            && !methods.insert(payment_setting.type_name())
+        {
+            return Err(err(
+                format!("{field}.buttons[{i}].payment_setting.type"),
+                "each payment request button needs a different payment method",
+            ));
+        }
+    }
+    if !methods.is_empty() && buttons.len() > 3 {
+        return Err(err(
+            format!("{field}.buttons"),
+            "a template with a payment request button has at most 3 buttons",
+        ));
+    }
+    Ok(())
+}
+
+/// `payments-br/orderdetailstemplate`: "The `category` must be `UTILITY`
+/// or `MARKETING`, and the header `format` must be `TEXT`, `IMAGE`, or
+/// `DOCUMENT`" (India's page: "categorized as Utility", or marketing with
+/// `display_format`). The label is not checked beyond being there: India
+/// fixes it to `Review and Pay`, Brazil's example prints a placeholder.
+///
+/// One label is read: `Buy now`, which the checkout button template page
+/// calls the checkout button's "non-customizable syntax", makes the button
+/// a checkout button, under that page's rules instead ("Checkout button
+/// templates are marketing templates").
+fn order_details_button(t: &str, ctx: &Ctx<'_>, field: &str) -> Check {
+    if t.trim().is_empty() {
+        return Err(err(format!("{field}.text"), "must not be empty"));
+    }
+    if t == Button::CHECKOUT_LABEL {
+        // A checkout button: its template's rules are `checkout_template`'s
+        // (a single product: MARKETING, the header, the other buttons) and
+        // `card_components`' (a carousel card, whose template the carousel
+        // rule already holds to MARKETING), both checked before this.
+        return Ok(());
+    }
+    if ctx
+        .category
+        .is_some_and(|c| !matches!(c, TemplateCategory::Utility | TemplateCategory::Marketing))
+    {
+        return Err(err(
+            field,
+            "ORDER_DETAILS requires a UTILITY or MARKETING template",
+        ));
+    }
+    if let Some(format) = ctx.header_format
+        && !matches!(
+            format,
+            HeaderFormat::Text | HeaderFormat::Image | HeaderFormat::Document
+        )
+    {
+        return Err(err(
+            field,
+            "an order details template's header is TEXT, IMAGE or DOCUMENT",
+        ));
+    }
+    Ok(())
+}
+
+/// Whether `b` is a checkout button: `ORDER_DETAILS` labelled `Buy now`.
+fn is_checkout(b: &Button) -> bool {
+    matches!(b, Button::OrderDetails { text } if text == Button::CHECKOUT_LABEL)
+}
+
+/// A single product checkout button template
+/// (`payments-in/checkout-button-templates`): "a single product image or
+/// video header, along with message body text, message footer, a single
+/// checkout button, and up to 9 quick-reply buttons"; the header format
+/// "Required … Value can be `image` or `video`". The carousel's checkout
+/// buttons are checked with their cards (`card_components`).
+fn checkout_template(
+    list: &[TemplateComponent],
+    category: Option<&TemplateCategory>,
+    header_format: Option<&HeaderFormat>,
+    path: &str,
+) -> Check {
+    for (i, c) in list.iter().enumerate() {
+        let TemplateComponent::Buttons { buttons } = c else {
+            continue;
+        };
+        let field = format!("{path}[{i}].buttons");
+        let checkout = buttons.iter().filter(|b| is_checkout(b)).count();
+        if checkout == 0 {
+            continue;
+        }
+        if category.is_some_and(|c| *c != TemplateCategory::Marketing) {
+            return Err(err(
+                &field,
+                "a checkout button template is a MARKETING template",
+            ));
+        }
+        if checkout > 1 {
+            return Err(err(
+                &field,
+                "a single product checkout button template has one checkout button (a carousel gives each card its own)",
+            ));
+        }
+        if !matches!(
+            header_format,
+            Some(HeaderFormat::Image | HeaderFormat::Video)
+        ) {
+            return Err(err(
+                path,
+                "a checkout button template needs an IMAGE or VIDEO header",
+            ));
+        }
+        if let Some(j) = buttons
+            .iter()
+            .position(|b| !is_checkout(b) && !matches!(b, Button::QuickReply { .. }))
+        {
+            return Err(err(
+                format!("{field}[{j}]"),
+                "a checkout button template's other buttons are quick replies",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// `marketing-messages/deep-links`: `android_deep_link` and
@@ -1011,6 +1194,7 @@ fn button_kind(b: &Button) -> &'static str {
         Button::Url { .. } => "URL",
         Button::PhoneNumber { .. } => "PHONE_NUMBER",
         Button::Spm { .. } => "SPM",
+        Button::OrderDetails { .. } => "ORDER_DETAILS",
         _ => "OTHER",
     }
 }
@@ -1056,18 +1240,22 @@ fn card_components(list: &[TemplateComponent], ctx: &Ctx<'_>, path: &str) -> Che
                 )?;
             }
             TemplateComponent::Buttons { buttons } => {
-                // Media cards: "up to two buttons", quick reply / phone / URL.
+                // Media cards: "up to two buttons", quick reply / phone / URL,
+                // or a checkout button (`payments-in/checkout-button-templates`:
+                // "replace one of the buttons with a checkout button, and
+                // make sure that it is the first button in the card").
                 // Product cards: "a single View button or URL button".
                 let (max, allowed): (usize, fn(&Button) -> bool) = if product {
                     (1, |b| matches!(b, Button::Spm { .. } | Button::Url { .. }))
                 } else {
                     (2, |b| {
-                        matches!(
-                            b,
-                            Button::QuickReply { .. }
-                                | Button::Url { .. }
-                                | Button::PhoneNumber { .. }
-                        )
+                        is_checkout(b)
+                            || matches!(
+                                b,
+                                Button::QuickReply { .. }
+                                    | Button::Url { .. }
+                                    | Button::PhoneNumber { .. }
+                            )
                     })
                 };
                 if buttons.len() > max {
@@ -1080,6 +1268,12 @@ fn card_components(list: &[TemplateComponent], ctx: &Ctx<'_>, path: &str) -> Che
                     return Err(err(
                         format!("{field}.buttons[{j}]"),
                         "button type not allowed on this kind of card",
+                    ));
+                }
+                if let Some(j) = buttons.iter().skip(1).position(is_checkout) {
+                    return Err(err(
+                        format!("{field}.buttons[{}]", j + 1),
+                        "a card's checkout button is its first button",
                     ));
                 }
                 button_list(buttons, ctx, &field)?;

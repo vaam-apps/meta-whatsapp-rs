@@ -97,8 +97,8 @@ use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 
 use crate::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
-    KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus, PageRequest, Tenant, TenantId,
-    TenantStatus, WabaBinding,
+    KeyScope, Listing, NewApiKey, NewSignupAttempt, NumberBinding, NumberStatus, OtpSettings,
+    PageRequest, SignupAttempt, Tenant, TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
 
 /// Result of a store call. Every failure is the library's
@@ -130,6 +130,25 @@ pub trait RecordStore: Send + Sync + 'static {
         name: Option<&str>,
         status: Option<TenantStatus>,
     ) -> StoreResult<Option<Tenant>>;
+
+    /// A tenant's OTP settings (roadmap M3c, decision D8): `None` when it
+    /// has none, or there is no such tenant. They go with the tenant
+    /// ([`Self::delete_tenant`]): a tenant created again under its id has
+    /// none.
+    async fn otp_settings(&self, id: &TenantId) -> StoreResult<Option<OtpSettings>>;
+
+    /// Set (`Some`) or clear (`None`) a tenant's OTP settings, moving its
+    /// `updated_at`; `false` when there is no such tenant, and nothing is
+    /// written. A backend keeps [`OtpSettings::to_stored`]'s form (Postgres:
+    /// under the key `otp` of `wa_server_tenants.settings`) and reads it
+    /// back with [`OtpSettings::from_stored`], whose `None` (a record this
+    /// release did not write) it answers as a storage failure, never as no
+    /// settings.
+    async fn set_otp_settings(
+        &self,
+        id: &TenantId,
+        settings: Option<&OtpSettings>,
+    ) -> StoreResult<bool>;
 
     /// Delete a tenant, its keys, its idempotency records and its events,
     /// unless it still has WABAs; its event stream records its events
@@ -182,6 +201,15 @@ pub trait RecordStore: Send + Sync + 'static {
     /// from the WABA's tombstone, if it has one
     /// ([`WabaTombstone::previous_for`](crate::model::WabaTombstone::previous_for)),
     /// in the same step: an unbinding that committed before it is seen.
+    /// The numbers follow the same rules (roadmap M2h): one the WABA had
+    /// and `numbers` lacks is released, leaving its tombstone
+    /// ([`NumberTombstone::of`](crate::model::NumberTombstone::of): the
+    /// tenant, now, and its `previous_tenant_released_at`) in the same
+    /// step; one already `tenant`'s (under this WABA or another of
+    /// `tenant`'s) keeps its `attached_at` and `previous_tenant_released_at`;
+    /// one newly bound reads its tombstone, if it has one, in the same step
+    /// ([`NumberBinding::newly_bound`](crate::model::NumberBinding::newly_bound):
+    /// its `attached_at` now, never before that release).
     /// Serialized with [`Self::delete_tenant`] of the
     /// same tenant: a binding lands before the deletion (which then finds
     /// the WABA) or after it (which then finds no tenant), never beside it.
@@ -201,7 +229,9 @@ pub trait RecordStore: Send + Sync + 'static {
     /// rule: see the [module](self)). The WABA's tombstone
     /// ([`WabaTombstone::of`](crate::model::WabaTombstone::of): its tenant,
     /// now, and the binding's `previous_tenant_unbound_at`) replaces the
-    /// one it had, atomically with the removal (roadmap S2b).
+    /// one it had, atomically with the removal (roadmap S2b), and so does
+    /// each of its numbers' ([`NumberTombstone::of`](crate::model::NumberTombstone::of),
+    /// roadmap M2h). [`Self::unbind_waba_if`] leaves the same records.
     async fn unbind_waba(&self, waba_id: &WabaId) -> StoreResult<bool>;
 
     /// Remove the binding of `epoch.waba_id` and its numbers only if it is
@@ -259,6 +289,59 @@ pub trait RecordStore: Send + Sync + 'static {
         epoch: &BindingEpoch,
         status: NumberStatus,
     ) -> StoreResult<bool>;
+
+    /// Record the Solution Partner credit allocation that funds
+    /// `epoch.waba_id` ([`WabaBinding::credit_allocation_id`]; roadmap
+    /// M3a), only if the WABA is still `epoch`'s, checked atomically with
+    /// the write (as [`Self::set_waba_status_if`]). Whether it was.
+    async fn set_credit_allocation_if(
+        &self,
+        epoch: &BindingEpoch,
+        allocation_config_id: &str,
+    ) -> StoreResult<bool>;
+
+    /// Keep a signup attempt (roadmap M3a: an onboarding that stopped
+    /// after its token was stored), replacing the WABA's previous one,
+    /// only while the WABA is bound to `attempt.tenant_id`, checked
+    /// atomically with the write: `false`, and nothing written, otherwise.
+    /// An attempt goes with its binding: every unbind
+    /// ([`Self::unbind_waba`], [`Self::unbind_waba_if`]) deletes it in the
+    /// same step (Postgres: a foreign key, `ON DELETE CASCADE`), so a WABA
+    /// bound again, to any tenant, has none. The store sets `created_at`
+    /// (kept by a replacement of the same tenant's) and `updated_at`, on
+    /// its clock.
+    async fn save_signup_attempt(&self, attempt: &NewSignupAttempt) -> StoreResult<bool>;
+
+    /// `tenant`'s attempt for `waba_id`: `None` when it has none (another
+    /// tenant's attempt included: it does not exist for `tenant`).
+    async fn signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<Option<SignupAttempt>>;
+
+    /// `tenant`'s attempts, in byte order of their WABA ids.
+    async fn signup_attempts(
+        &self,
+        tenant: &TenantId,
+        page: &PageRequest,
+    ) -> StoreResult<Listing<SignupAttempt>>;
+
+    /// Delete `tenant`'s attempt for `waba_id` (resumed, or superseded by
+    /// a new onboarding); `false` when it had none.
+    async fn delete_signup_attempt(&self, tenant: &TenantId, waba_id: &WabaId)
+    -> StoreResult<bool>;
+
+    /// Remember a record the token vault may keep past a binding
+    /// ([`VaultEntry`]: a credit ledger, a revocation marker; roadmap M3a),
+    /// so that a key rotation reaches it. Idempotent; kept for good: a
+    /// tenant's deletion and every unbind leave it, as the vault's records
+    /// outlive both.
+    async fn record_vault_entry(&self, entry: &VaultEntry) -> StoreResult<()>;
+
+    /// The entries [`Self::record_vault_entry`] kept, in byte order of
+    /// their [`VaultEntry::key`] (the page's cursor).
+    async fn vault_entries(&self, page: &PageRequest) -> StoreResult<Listing<VaultEntry>>;
 }
 
 /// The records of `Idempotency-Key`s (docs/design/server.md, section

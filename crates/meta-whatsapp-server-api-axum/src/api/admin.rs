@@ -14,7 +14,9 @@ use meta_whatsapp_rs::core::secret::AccessToken;
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
-use meta_whatsapp_server_core::admin::{self as core_admin, Admin, KeyRequest, TenantsInput};
+use meta_whatsapp_server_core::admin::{
+    self as core_admin, Admin, KeyRequest, OtpSettingsInput, TenantsInput,
+};
 pub use meta_whatsapp_server_core::admin::{MAX_WABA_NUMBERS, MintError, mint};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -23,7 +25,8 @@ use super::common::{ApiJson, PageParams, PageQuery, json, next_cursor, rfc3339};
 use crate::auth::{AdminCaller, VaultRotation};
 use crate::error::{ApiError, ErrorBody};
 use crate::model::{
-    AllowedTenants, ApiKeyRecord, KeyKind, KeyOwner, Listing, Scope, Tenant, TenantStatus,
+    AllowedTenants, ApiKeyRecord, KeyKind, KeyOwner, Listing, OtpSettings, Scope, Tenant,
+    TenantStatus,
 };
 use crate::state::Grant;
 
@@ -231,7 +234,9 @@ pub(crate) async fn update_tenant(
 }
 
 /// Delete a tenant: disconnect every WABA it has (as
-/// `DELETE /v1/wabas/{waba_id}` does), then delete it and its keys. Stops
+/// `DELETE /v1/wabas/{waba_id}` does: in Solution Partner mode its credit
+/// line revoked before its token and bindings go, decision D75), then
+/// delete it and its keys. Stops
 /// at the first WABA that cannot be disconnected; the tenant stays. Its
 /// events go with it, and every platform key listing it stops allowing
 /// it, for good: no route edits a key's tenants, so a tenant created
@@ -249,7 +254,8 @@ pub(crate) async fn update_tenant(
         (status = 403, description = "Not an admin key, or Meta refused to unsubscribe a WABA", body = ErrorBody),
         (status = 404, description = "`not_found`", body = ErrorBody),
         (status = 409, description = "A WABA has no usable token (`number_not_connected`, `reconnect_required`): unbind it first", body = ErrorBody),
-        (status = 502, description = "Unsubscribing a WABA failed", body = ErrorBody),
+        (status = 502, description = "Unsubscribing a WABA failed, or, in Solution Partner mode, revoking its credit line (`step: revoke_credit_line`): nothing of that WABA deleted", body = ErrorBody),
+        (status = 503, description = "`storage_unavailable`: a WABA's token changed while it was being disconnected (retryable)", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
@@ -258,7 +264,195 @@ pub(crate) async fn delete_tenant(
     admin: AdminCaller,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    operations(&state, &admin)?.delete_tenant(&id).await?;
+    // In Solution Partner mode each WABA's credit line is revoked before
+    // its token and bindings go (decision D75).
+    operations(&state, &admin)?
+        .offboarded_by(state.signups())
+        .delete_tenant(&id)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ─── OTP settings ────────────────────────────────────────────────────────
+
+/// The authentication template a tenant's codes are sent with.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = OtpTemplate)]
+pub struct OtpTemplateBody {
+    /// The approved authentication template's name (lowercase letters,
+    /// digits and underscores).
+    pub name: String,
+    /// The language it was approved in (`en_US`).
+    pub language: String,
+}
+
+/// An issue limit: at most `max_issues` codes per recipient and purpose in
+/// any rolling `window_seconds`.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = OtpIssueLimit)]
+pub struct OtpIssueLimitBody {
+    /// Codes allowed per window, 1 to 1000.
+    pub max_issues: u32,
+    /// The window, in seconds (at least 1).
+    pub window_seconds: u32,
+}
+
+/// `PUT /v1/admin/tenants/{id}/otp`: a tenant's OTP settings (decision D8).
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = OtpSettingsRequest)]
+pub struct OtpSettingsBody {
+    /// The number codes are sent from: one of the tenant's own numbers.
+    pub phone_number_id: String,
+    /// The approved authentication template and its language.
+    pub template: OtpTemplateBody,
+    /// Digits per code, 4 to 8 (6 when absent).
+    pub code_length: Option<u32>,
+    /// How long a code verifies, 1 to 5400 seconds (600 when absent): keep
+    /// it equal to the template's `code_expiration_minutes`.
+    pub ttl_seconds: Option<u32>,
+    /// Wrong guesses allowed per code, at least 1 (5 when absent).
+    pub max_attempts: Option<u32>,
+    /// Seconds between two codes for one recipient and purpose (30 when
+    /// absent).
+    pub resend_cooldown_seconds: Option<u32>,
+    /// Codes per recipient and purpose in a rolling window (5 per hour
+    /// when absent). It cannot be turned off.
+    pub issue_limit: Option<OtpIssueLimitBody>,
+}
+
+/// A tenant's OTP settings, every limit filled in.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = OtpSettings)]
+pub struct OtpSettingsView {
+    /// The number codes are sent from.
+    pub phone_number_id: String,
+    /// The authentication template and its language.
+    pub template: OtpTemplateBody,
+    /// Digits per code.
+    pub code_length: u32,
+    /// How long a code verifies, in seconds.
+    pub ttl_seconds: u32,
+    /// Wrong guesses allowed per code.
+    pub max_attempts: u32,
+    /// Seconds between two codes for one recipient and purpose.
+    pub resend_cooldown_seconds: u32,
+    /// Codes per recipient and purpose in a rolling window.
+    pub issue_limit: OtpIssueLimitBody,
+}
+
+impl From<OtpSettings> for OtpSettingsView {
+    fn from(settings: OtpSettings) -> Self {
+        Self {
+            phone_number_id: settings.phone_number_id.as_str().to_owned(),
+            template: OtpTemplateBody {
+                name: settings.template_name,
+                language: settings.template_language,
+            },
+            code_length: settings.code_length.into(),
+            ttl_seconds: settings.ttl_seconds,
+            max_attempts: settings.max_attempts,
+            resend_cooldown_seconds: settings.resend_cooldown_seconds,
+            issue_limit: OtpIssueLimitBody {
+                max_issues: settings.max_issues,
+                window_seconds: settings.issue_window_seconds,
+            },
+        }
+    }
+}
+
+impl From<OtpSettingsBody> for OtpSettingsInput {
+    fn from(body: OtpSettingsBody) -> Self {
+        Self {
+            phone_number_id: body.phone_number_id,
+            template_name: body.template.name,
+            template_language: body.template.language,
+            code_length: body.code_length,
+            ttl_seconds: body.ttl_seconds,
+            max_attempts: body.max_attempts,
+            resend_cooldown_seconds: body.resend_cooldown_seconds,
+            max_issues: body.issue_limit.as_ref().map(|limit| limit.max_issues),
+            issue_window_seconds: body.issue_limit.as_ref().map(|limit| limit.window_seconds),
+        }
+    }
+}
+
+/// A tenant's own OTP settings.
+#[utoipa::path(
+    get,
+    path = "/v1/admin/tenants/{id}/otp",
+    tag = "admin",
+    security(("api_key" = [])),
+    params(("id" = String, Path, description = "Tenant id")),
+    responses(
+        (status = 200, description = "The tenant's own OTP settings", body = OtpSettingsView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "Not an admin key", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such tenant, or it has no settings of its own (it borrows the default OTP tenant's, if the deployment names one)", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_otp_settings(
+    State(state): State<Grant>,
+    admin: AdminCaller,
+    Path(id): Path<String>,
+) -> Result<Json<OtpSettingsView>, ApiError> {
+    let settings = operations(&state, &admin)?.otp_settings(&id).await?;
+    Ok(Json(settings.into()))
+}
+
+/// Set a tenant's OTP settings (decision D8): the sending number, one of
+/// its own, the authentication template and the limits. Replaces them
+/// whole; codes in flight sent from another number stop verifying.
+#[utoipa::path(
+    put,
+    path = "/v1/admin/tenants/{id}/otp",
+    tag = "admin",
+    security(("api_key" = [])),
+    params(("id" = String, Path, description = "Tenant id")),
+    request_body = OtpSettingsBody,
+    responses(
+        (status = 200, description = "The settings, every limit filled in", body = OtpSettingsView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "Not an admin key", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such tenant", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `phone_number_id` (not one of the tenant's numbers), `template.name`, `template.language`, `code_length`, `ttl_seconds`, `max_attempts`, `issue_limit` or `body`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn set_otp_settings(
+    State(state): State<Grant>,
+    admin: AdminCaller,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<OtpSettingsBody>,
+) -> Result<Json<OtpSettingsView>, ApiError> {
+    let settings = operations(&state, &admin)?
+        .set_otp_settings(&id, body.into())
+        .await?;
+    Ok(Json(settings.into()))
+}
+
+/// Clear a tenant's OTP settings: it borrows the default OTP tenant's from
+/// now on, if the deployment names one.
+#[utoipa::path(
+    delete,
+    path = "/v1/admin/tenants/{id}/otp",
+    tag = "admin",
+    security(("api_key" = [])),
+    params(("id" = String, Path, description = "Tenant id")),
+    responses(
+        (status = 204, description = "Cleared (also when it had none)"),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "Not an admin key", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such tenant", body = ErrorBody),
+    )
+)]
+pub(crate) async fn clear_otp_settings(
+    State(state): State<Grant>,
+    admin: AdminCaller,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    operations(&state, &admin)?.clear_otp_settings(&id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -287,6 +481,8 @@ pub enum ScopeName {
     Otp,
     /// WABAs, numbers, profiles.
     Numbers,
+    /// Payment configurations, payment lookups and refunds.
+    Payments,
 }
 
 impl From<ScopeName> for Scope {
@@ -301,6 +497,7 @@ impl From<ScopeName> for Scope {
             ScopeName::Signup => Scope::Signup,
             ScopeName::Otp => Scope::Otp,
             ScopeName::Numbers => Scope::Numbers,
+            ScopeName::Payments => Scope::Payments,
         }
     }
 }
@@ -317,6 +514,7 @@ impl From<Scope> for ScopeName {
             Scope::Signup => ScopeName::Signup,
             Scope::Otp => ScopeName::Otp,
             Scope::Numbers => ScopeName::Numbers,
+            Scope::Payments => ScopeName::Payments,
         }
     }
 }

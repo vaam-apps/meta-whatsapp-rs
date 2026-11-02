@@ -36,13 +36,13 @@
 //!   items carry the identities of the `messages` webhook they copy.
 
 use meta_whatsapp_core::ids::{AppId, MessageId, PhoneNumberId, UserId, WaId};
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 
 use super::common::{Contact, Metadata};
 use super::messages::{InboundMessage, Status};
-use crate::open_enum::open_enum;
 
 /// `value` of a `messaging_handovers` change: a thread changed owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`; messages `send`; media `media`; templates `templates`), `/v1/events` (scope `events`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`), `/v1/events` (scope `events`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -20,8 +20,13 @@
 
 pub mod admin;
 pub mod events;
+pub mod inbox;
 pub mod messages;
 pub mod numbers;
+pub mod otp;
+pub mod payments;
+pub mod registration;
+pub mod signup;
 pub mod templates;
 
 pub use meta_whatsapp_server_http::api::{
@@ -33,6 +38,7 @@ use std::sync::LazyLock;
 
 use meta_whatsapp_rs::webhooks::axum;
 use meta_whatsapp_rs::webhooks::axum::Router;
+use meta_whatsapp_rs::webhooks::axum::extract::DefaultBodyLimit;
 use meta_whatsapp_rs::webhooks::axum::http::{StatusCode, header};
 use meta_whatsapp_rs::webhooks::axum::middleware;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
@@ -77,14 +83,19 @@ impl Modify for Security {
                        `error.code` (`ErrorCode`), and resend only when `may_have_been_sent` is false."
     ),
     modifiers(&Security),
-    components(schemas(ErrorBody, ErrorCodeSchema, KnownErrorCodeSchema, events::EventType, events::KnownEventType)),
+    components(schemas(ErrorBody, ErrorCodeSchema, KnownErrorCodeSchema, events::EventType, events::KnownEventType, messages::CtaUrlParameters, messages::OrderParameters)),
     tags(
         (name = "admin", description = "Tenants, keys, WABA bindings and the vault key (admin key)"),
         (name = "numbers", description = "WABAs, numbers and business profiles (scope `numbers`)"),
+        (name = "registration", description = "A number's verification code, registration, deregistration and two-step PIN, the PIN typed per attempt and never stored (scope `numbers`)"),
         (name = "messages", description = "Sending messages and read receipts (scope `send`)"),
         (name = "media", description = "Uploading, downloading and deleting media (scope `media`)"),
         (name = "templates", description = "Listing, creating and deleting message templates (scope `templates`)"),
+        (name = "payments", description = "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"),
+        (name = "inbox", description = "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"),
         (name = "events", description = "Meta's webhook events, routed to their tenant (scope `events`)"),
+        (name = "otp", description = "One-time passcodes sent with the tenant's authentication template, and checked (scope `otp`)"),
+        (name = "signup", description = "Embedded Signup: an attempt bound to the tenant, its completion (the business onboarded, the WABA and its numbers bound to the tenant), and the attempts to resume (scope `signup`)"),
         (name = "operations", description = "Health, metrics, this document, versions (no key)"),
     )
 )]
@@ -103,9 +114,15 @@ fn admin_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(admin::mint_platform_key, admin::list_platform_keys))
         .routes(routes!(admin::revoke_platform_key))
         .routes(routes!(admin::attach_waba))
+        .routes(routes!(
+            admin::get_otp_settings,
+            admin::set_otp_settings,
+            admin::clear_otp_settings
+        ))
         .routes(routes!(admin::get_waba))
         .routes(routes!(admin::unbind_waba))
         .routes(routes!(admin::rotate_vault))
+        .routes(routes!(signup::reshare_credit_line))
 }
 
 fn numbers_routes() -> OpenApiRouter<Grant> {
@@ -117,14 +134,55 @@ fn numbers_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(numbers::disconnect_waba))
 }
 
+fn registration_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(registration::request_verification_code))
+        .routes(routes!(registration::verify_code))
+        .routes(routes!(registration::register_number))
+        .routes(routes!(registration::deregister_number))
+        .routes(routes!(registration::set_two_step_pin))
+}
+
 fn events_routes() -> OpenApiRouter<Grant> {
-    OpenApiRouter::new().routes(routes!(events::list_events))
+    OpenApiRouter::new()
+        .routes(routes!(events::list_events))
+        .routes(routes!(events::get_event))
+        // The live streams (Server-Sent Events): the HTTP crate's, as
+        // media's are.
+        .merge(events::stream_routes())
 }
 
 fn messages_routes() -> OpenApiRouter<Grant> {
     OpenApiRouter::new()
         .routes(routes!(messages::send_message))
         .routes(routes!(messages::mark_read))
+}
+
+fn inbox_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(inbox::list_conversations))
+        .routes(routes!(
+            inbox::list_conversation_messages,
+            inbox::reply_to_conversation
+        ))
+        .routes(routes!(inbox::get_conversation_window))
+        .routes(routes!(inbox::mark_conversation_read))
+        .routes(routes!(inbox::get_inbox_message))
+}
+
+fn payments_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(
+            payments::list_payment_configurations,
+            payments::create_payment_configuration
+        ))
+        .routes(routes!(
+            payments::get_payment_configuration,
+            payments::delete_payment_configuration
+        ))
+        .routes(routes!(payments::regenerate_payment_oauth_link))
+        .routes(routes!(payments::get_payment))
+        .routes(routes!(payments::refund_payment))
 }
 
 fn templates_routes() -> OpenApiRouter<Grant> {
@@ -135,6 +193,24 @@ fn templates_routes() -> OpenApiRouter<Grant> {
             templates::delete_templates
         ))
         .routes(routes!(templates::get_template))
+        .routes(routes!(templates::create_authentication_template))
+}
+
+fn otp_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(otp::issue_otp))
+        .routes(routes!(otp::verify_otp))
+}
+
+/// Embedded Signup's routes, their bodies at most 16 KiB (the design's
+/// limit for the completion, section 4.1; roadmap M3a).
+fn signup_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(signup::start_signup))
+        .routes(routes!(signup::complete_signup))
+        .routes(routes!(signup::list_signup_attempts))
+        .routes(routes!(signup::resume_signup))
+        .layer(DefaultBodyLimit::max(signup::MAX_SIGNUP_BODY_BYTES))
 }
 
 /// The HTTP crate's operations routes, and this document's own.
@@ -172,10 +248,15 @@ fn api_routes(
     OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(admin(admin_routes()))
         .merge(tenant(numbers_routes(), Scope::Numbers))
+        .merge(tenant(registration_routes(), Scope::Numbers))
         .merge(tenant(messages_routes(), Scope::Send))
         .merge(tenant(media::routes(), Scope::Media))
         .merge(tenant(templates_routes(), Scope::Templates))
+        .merge(tenant(inbox_routes(), Scope::Inbox))
+        .merge(tenant(payments_routes(), Scope::Payments))
         .merge(tenant(events_routes(), Scope::Events))
+        .merge(tenant(otp_routes(), Scope::Otp))
+        .merge(tenant(signup_routes(), Scope::Signup))
         .merge(ops_routes())
 }
 
@@ -297,6 +378,16 @@ mod tests {
         let operations = tenant_operations();
         assert!(operations.routes().len() >= 16);
         for (method, template, operation) in operations.routes() {
+            // OTP's routes came after: classes of their own (roadmap M3c).
+            if operation.scope() == Scope::Otp {
+                let class = if *operation == Operation::IssueOtp {
+                    RouteClass::OtpIssue
+                } else {
+                    RouteClass::OtpVerify
+                };
+                assert_eq!(RouteClass::of(*operation), class, "{method} {template}");
+                continue;
+            }
             let before = if operation.scope() == Scope::Templates {
                 RouteClass::Templates
             } else if method == "GET" {
@@ -319,9 +410,14 @@ mod tests {
             ("mod.rs", include_str!("mod.rs")),
             ("admin.rs", include_str!("admin.rs")),
             ("numbers.rs", include_str!("numbers.rs")),
+            ("registration.rs", include_str!("registration.rs")),
             ("events.rs", include_str!("events.rs")),
+            ("inbox.rs", include_str!("inbox.rs")),
             ("messages.rs", include_str!("messages.rs")),
+            ("payments.rs", include_str!("payments.rs")),
             ("templates.rs", include_str!("templates.rs")),
+            ("otp.rs", include_str!("otp.rs")),
+            ("signup.rs", include_str!("signup.rs")),
         ];
         let mut plain = Vec::new();
         for (file, source) in sources {
@@ -346,6 +442,17 @@ mod tests {
             && a.iter()
                 .zip(&b)
                 .all(|(x, y)| param(x) || param(y) || x == y)
+    }
+
+    /// Whether, at the first segment where `a` and `b` differ, one has a
+    /// literal and the other a parameter: the router then routes the
+    /// literal's path to its template.
+    fn literal_beats_parameter(a: &str, b: &str) -> bool {
+        let param = |s: &str| s.starts_with('{') && s.ends_with('}');
+        a.split('/')
+            .zip(b.split('/'))
+            .find(|(x, y)| x != y)
+            .is_some_and(|(x, y)| param(x) != param(y))
     }
 
     /// Every tenant route is one core operation (roadmap S6): each
@@ -399,12 +506,17 @@ mod tests {
                 .unwrap_or_else(|| panic!("{method} {template}: `{id}` is no core operation"));
             assert_eq!(operation.scope(), *scope, "{id}");
             assert!(served.insert(operation), "{id} served twice");
-            // No path of this template is another's of the same method.
+            // No path of this template is another's of the same method,
+            // but where one template has a literal segment and the other a
+            // parameter (`/v1/events/stream` and `/v1/events/{id}`): axum
+            // routes the literal's paths to it, and so does the guard
+            // (`Operations::of`, checked below with the literal path).
             let others: Vec<_> = operations
                 .routes()
                 .iter()
                 .filter(|(m, t, _)| m == method && t != template)
                 .filter(|(_, t, _)| templates_overlap(t, template))
+                .filter(|(_, t, _)| !literal_beats_parameter(t, template))
                 .collect();
             assert!(
                 others.is_empty(),
@@ -444,5 +556,20 @@ mod tests {
         assert_eq!(operations.of("get", "/v1/numbers"), None);
         assert_eq!(operations.of("GET", "/v1/numbers/x/y"), None);
         assert_eq!(operations.of("GET", "/v1/numbers/1/profile/"), None);
+        // A literal segment beats a parameter, as axum routes it (roadmap
+        // M2b): the stream is not an event of id `stream`.
+        assert!(literal_beats_parameter(
+            "/v1/events/stream",
+            "/v1/events/{id}"
+        ));
+        assert!(!literal_beats_parameter("/v1/{a}/x", "/v1/{b}/y"));
+        assert_eq!(
+            operations.of("GET", "/v1/events/stream"),
+            Some(Operation::StreamEvents)
+        );
+        assert_eq!(
+            operations.of("GET", "/v1/events/evt_4042233518184f0e9822bebdbba028a8"),
+            Some(Operation::GetEvent)
+        );
     }
 }

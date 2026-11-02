@@ -72,6 +72,7 @@ fn call(operation: &common::Operation, key: &str, tenant: Option<&str>) -> Call 
 /// M1.3. Decisive: step 4 (ownership) of the authorization order. Without
 /// it, B's call reads A's token from the vault.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // the routes it must find, then every call
 async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read() {
     let h = two_tenants().await;
     let b_key = h.tenant_key(B, &ALL_SCOPES).await;
@@ -92,10 +93,49 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::POST, "/v1/numbers/{pn}/media"),
         (Method::GET, "/v1/numbers/{pn}/media/{media_id}"),
         (Method::DELETE, "/v1/numbers/{pn}/media/{media_id}"),
+        (Method::GET, "/v1/numbers/{pn}/conversations"),
+        (
+            Method::GET,
+            "/v1/numbers/{pn}/conversations/{contact}/messages",
+        ),
+        (
+            Method::POST,
+            "/v1/numbers/{pn}/conversations/{contact}/messages",
+        ),
+        (
+            Method::GET,
+            "/v1/numbers/{pn}/conversations/{contact}/window",
+        ),
+        (
+            Method::POST,
+            "/v1/numbers/{pn}/conversations/{contact}/read",
+        ),
+        (Method::GET, "/v1/numbers/{pn}/messages/{message_id}"),
         (Method::GET, "/v1/wabas/{waba_id}/templates"),
         (Method::POST, "/v1/wabas/{waba_id}/templates"),
         (Method::DELETE, "/v1/wabas/{waba_id}/templates"),
         (Method::GET, "/v1/wabas/{waba_id}/templates/{id}"),
+        // Roadmap P2: a payment configuration is its WABA's; a payment and
+        // a refund their number's.
+        (Method::GET, "/v1/wabas/{waba_id}/payment-configurations"),
+        (Method::POST, "/v1/wabas/{waba_id}/payment-configurations"),
+        (
+            Method::GET,
+            "/v1/wabas/{waba_id}/payment-configurations/{configuration_name}",
+        ),
+        (
+            Method::DELETE,
+            "/v1/wabas/{waba_id}/payment-configurations/{configuration_name}",
+        ),
+        (
+            Method::POST,
+            "/v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
+        ),
+        (
+            Method::GET,
+            "/v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
+        ),
+        (Method::POST, "/v1/numbers/{pn}/payments/refunds"),
     ] {
         assert!(
             routes
@@ -131,7 +171,7 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
             checked += 1;
         }
     }
-    assert!(checked >= 28, "only {checked} calls");
+    assert!(checked >= 42, "only {checked} calls");
     assert!(h.graph.requests().is_empty(), "no call reached Meta");
     assert_eq!(h.graph.remaining(), 0);
     // Nothing of A's changed.
@@ -213,6 +253,40 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
     assert!(h.graph.requests().is_empty(), "no call reached Meta");
 }
 
+/// The owned routes that ask Meta nothing, and what A's own sample call
+/// answers: the inbox's reads (roadmaps M2a and M2g), which read the
+/// service's own store, and marking a conversation read without
+/// `notify_customer` (the sample's empty body). They still take the whole
+/// authorization order, the vault included, as every owned route does. A
+/// message by id A's inbox does not hold is `404`, after the vault.
+const ASK_META_NOTHING: [(Method, &str, StatusCode); 5] = [
+    (
+        Method::GET,
+        "/v1/numbers/{pn}/conversations",
+        StatusCode::OK,
+    ),
+    (
+        Method::GET,
+        "/v1/numbers/{pn}/conversations/{contact}/messages",
+        StatusCode::OK,
+    ),
+    (
+        Method::GET,
+        "/v1/numbers/{pn}/conversations/{contact}/window",
+        StatusCode::OK,
+    ),
+    (
+        Method::POST,
+        "/v1/numbers/{pn}/conversations/{contact}/read",
+        StatusCode::NO_CONTENT,
+    ),
+    (
+        Method::GET,
+        "/v1/numbers/{pn}/messages/{message_id}",
+        StatusCode::NOT_FOUND,
+    ),
+];
+
 /// The control of M1.3: the counter counts, and A's own key does reach the
 /// vault on the same routes.
 #[tokio::test]
@@ -224,8 +298,31 @@ async fn the_owner_reads_the_vault_on_every_owned_route() {
             continue;
         }
         let label = operation.label();
+        // A number's live event stream needs the number to be the
+        // tenant's (step 4, the first test above), and no token: it reads
+        // the service's own outbox, never the vault nor Meta (roadmap M2b).
+        if operation.template == "/v1/numbers/{pn}/events/stream" {
+            let before = h.kv.vault_reads();
+            let reply = h.call(call(&operation, &a_key, None)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{label}: {}", reply.text);
+            assert_eq!(h.kv.vault_reads(), before, "{label} read the vault");
+            continue;
+        }
         let before = h.kv.vault_reads();
         let asked = h.graph.requests().len();
+        if let Some((_, _, status)) = ASK_META_NOTHING
+            .iter()
+            .find(|(m, t, _)| *m == operation.method && *t == operation.template)
+        {
+            let reply = h.call(call(&operation, &a_key, None)).await;
+            assert_eq!(reply.status, *status, "{label}: {}", reply.text);
+            assert!(
+                h.kv.vault_reads() > before,
+                "{label}: A's own call did not read the vault"
+            );
+            assert_eq!(h.graph.requests().len(), asked, "{label} asked Meta");
+            continue;
+        }
         // Graph answers with an error: the point is the vault read before it.
         h.graph.push_json(
             500,

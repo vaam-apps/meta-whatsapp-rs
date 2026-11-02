@@ -48,9 +48,9 @@
 
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
-use meta_whatsapp_core::ids::{BusinessId, PhoneNumberId, WabaId};
+use meta_whatsapp_core::ids::{BusinessId, PreVerifiedPhoneNumberId, WabaId, is_numeric_id};
+use meta_whatsapp_core::open_enum;
 use serde::Serialize;
-use serde::ser::Serializer;
 
 /// Maximum characters of the business portfolio name (`pre-filled-data`).
 pub const MAX_BUSINESS_NAME_CHARS: usize = 100;
@@ -210,11 +210,16 @@ impl BusinessPhonePrefill {
 
 /// `setup.preVerifiedPhone`. Only the first id is shown on the WABA
 /// selection screen.
+///
+/// The ids are pre-verified numbers of your pool
+/// ([`crate::waba::Business::pre_verified_numbers`]), verified
+/// (`code_verification_status` `VERIFIED`): a claimed or expired one is not
+/// shown. Not business phone number ids.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct PreVerifiedPhone {
     /// Pre-verified phone number ids.
-    pub ids: Vec<PhoneNumberId>,
+    pub ids: Vec<PreVerifiedPhoneNumberId>,
 }
 
 /// `setup.phone`: the number's WhatsApp profile. All three fields are
@@ -256,124 +261,63 @@ pub struct WabaPrefill {
     pub ids: Vec<WabaId>,
 }
 
-/// `extras.featureType`: which custom flow to run.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum FeatureType {
-    /// Coexistence: onboard a number already used with the WhatsApp
-    /// Business app (all versions up to v4).
-    WhatsappBusinessAppOnboarding,
-    /// Skip the phone number screens (v2 only; `FINISH_ONLY_WABA`).
-    OnlyWabaSharing,
-    /// Marketing Messages API onboarding (v2 only; v3+ uses `features`).
-    MarketingMessagesLite,
-    /// Any other documented value.
-    Other(String),
-}
-
-impl FeatureType {
-    /// The string Meta expects.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::WhatsappBusinessAppOnboarding => "whatsapp_business_app_onboarding",
-            Self::OnlyWabaSharing => "only_waba_sharing",
-            Self::MarketingMessagesLite => "marketing_messages_lite",
-            Self::Other(s) => s,
-        }
+open_enum! {
+    /// `extras.featureType`: which custom flow to run.
+    pub enum FeatureType {
+        /// Coexistence: onboard a number already used with the WhatsApp
+        /// Business app (all versions up to v4).
+        WhatsappBusinessAppOnboarding => "whatsapp_business_app_onboarding",
+        /// Skip the phone number screens (v2 only; `FINISH_ONLY_WABA`).
+        OnlyWabaSharing => "only_waba_sharing",
+        /// Marketing Messages API onboarding (v2 only; v3+ uses `features`).
+        MarketingMessagesLite => "marketing_messages_lite",
     }
 }
 
-impl Serialize for FeatureType {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
-    }
-}
-
-/// `extras.features[].name` (v3 and the previews).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum FeatureName {
-    /// Only business tokens can access the onboarded assets
-    /// (`FINISH_GRANT_ONLY_API_ACCESS`). Not combinable with coexistence.
-    AppOnlyInstall,
-    /// Marketing Messages API onboarding.
-    MarketingMessagesLite,
-    /// Any other documented value.
-    Other(String),
-}
-
-impl FeatureName {
-    /// The string Meta expects.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::AppOnlyInstall => "app_only_install",
-            Self::MarketingMessagesLite => "marketing_messages_lite",
-            Self::Other(s) => s,
-        }
+open_enum! {
+    /// `extras.features[].name` (v3 and the previews).
+    pub enum FeatureName {
+        /// Only business tokens can access the onboarded assets
+        /// (`FINISH_GRANT_ONLY_API_ACCESS`). Not combinable with coexistence.
+        AppOnlyInstall => "app_only_install",
+        /// Marketing Messages API onboarding.
+        MarketingMessagesLite => "marketing_messages_lite",
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct Feature {
-    #[serde(serialize_with = "ser_feature_name")]
     name: FeatureName,
 }
 
-fn ser_feature_name<S: Serializer>(name: &FeatureName, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(name.as_str())
-}
-
-/// `extras.version`. Plain v4 has no value: the login configuration selects
-/// it.
-///
-/// Meta deprecates Embedded Signup v2 and v3, **including their public
-/// previews**, on 2026-10-15
-/// (`embedded-signup/onboarding-customers-as-a-solution-partner`, updated
-/// 2026-08-05; the other pages still name only v2). Those four variants are
-/// `#[deprecated]`: migrate to v4, which needs no `version` at all.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum EsVersion {
-    /// `v4-public-preview` (phone-number-first flow).
-    V4PublicPreview,
-    /// `v3-public-preview`.
-    #[deprecated(
-        note = "Embedded Signup v3 and its public preview are deprecated on 2026-10-15: use v4 (no `version`)"
-    )]
-    V3PublicPreview,
-    /// `v2-public-preview`.
-    #[deprecated(
-        note = "Embedded Signup v2 and its public preview are deprecated on 2026-10-15: use v4 (no `version`)"
-    )]
-    V2PublicPreview,
-    /// `v3`.
-    #[deprecated(note = "Embedded Signup v3 is deprecated on 2026-10-15: use v4 (no `version`)")]
-    V3,
-    /// `v2`.
-    #[deprecated(note = "Embedded Signup v2 is deprecated on 2026-10-15: use v4 (no `version`)")]
-    V2,
-    /// Any other value.
-    Other(String),
-}
-
-impl EsVersion {
-    /// The string Meta expects.
-    #[allow(deprecated)] // it still has to spell them
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::V4PublicPreview => "v4-public-preview",
-            Self::V3PublicPreview => "v3-public-preview",
-            Self::V2PublicPreview => "v2-public-preview",
-            Self::V3 => "v3",
-            Self::V2 => "v2",
-            Self::Other(s) => s,
-        }
-    }
-}
-
-impl Serialize for EsVersion {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
+open_enum! {
+    /// `extras.version`. Plain v4 has no value: the login configuration selects
+    /// it.
+    ///
+    /// Meta deprecates Embedded Signup v2 and v3, **including their public
+    /// previews**, on 2026-10-15
+    /// (`embedded-signup/onboarding-customers-as-a-solution-partner`, updated
+    /// 2026-08-05; the other pages still name only v2). Those four variants are
+    /// `#[deprecated]`: migrate to v4, which needs no `version` at all.
+    pub enum EsVersion {
+        /// `v4-public-preview` (phone-number-first flow).
+        V4PublicPreview => "v4-public-preview",
+        /// `v3-public-preview`.
+        #[deprecated(
+            note = "Embedded Signup v3 and its public preview are deprecated on 2026-10-15: use v4 (no `version`)"
+        )]
+        V3PublicPreview => "v3-public-preview",
+        /// `v2-public-preview`.
+        #[deprecated(
+            note = "Embedded Signup v2 and its public preview are deprecated on 2026-10-15: use v4 (no `version`)"
+        )]
+        V2PublicPreview => "v2-public-preview",
+        /// `v3`.
+        #[deprecated(note = "Embedded Signup v3 is deprecated on 2026-10-15: use v4 (no `version`)")]
+        V3 => "v3",
+        /// `v2`.
+        #[deprecated(note = "Embedded Signup v2 is deprecated on 2026-10-15: use v4 (no `version`)")]
+        V2 => "v2",
     }
 }
 
@@ -436,11 +380,12 @@ impl LaunchOptions {
     }
 
     /// Offer pre-verified phone numbers (skips phone addition and
-    /// verification).
+    /// verification): ids of your pool's verified numbers
+    /// ([`crate::waba::Business::pre_verified_numbers`]).
     #[must_use]
     pub fn pre_verified_phone_ids(
         mut self,
-        ids: impl IntoIterator<Item = impl Into<PhoneNumberId>>,
+        ids: impl IntoIterator<Item = impl Into<PreVerifiedPhoneNumberId>>,
     ) -> Self {
         self.extras.setup.pre_verified_phone = Some(PreVerifiedPhone {
             ids: ids.into_iter().map(Into::into).collect(),
@@ -522,13 +467,21 @@ impl LaunchOptions {
                 ));
             }
         }
-        if let Some(p) = &setup.pre_verified_phone
-            && p.ids.is_empty()
-        {
-            return Err(ValidationError::new(
-                "extras.setup.preVerifiedPhone.ids",
-                "at least one id",
-            ));
+        if let Some(p) = &setup.pre_verified_phone {
+            if p.ids.is_empty() {
+                return Err(ValidationError::new(
+                    "extras.setup.preVerifiedPhone.ids",
+                    "at least one id",
+                ));
+            }
+            // An id built unchecked is checked here, before it reaches the
+            // page: Meta's pre-verified ids are numeric strings.
+            if !p.ids.iter().all(|id| is_numeric_id(id.as_str())) {
+                return Err(ValidationError::new(
+                    "extras.setup.preVerifiedPhone.ids",
+                    "each id must be a numeric pre-verified phone number id",
+                ));
+            }
         }
         if let Some(w) = &setup.whatsapp_business_account
             && w.ids.is_empty()
@@ -619,7 +572,7 @@ mod tests {
         business.timezone = Some("UTC-07:00".into());
         let v = LaunchOptions::new("31602279155865")
             .business(business)
-            .pre_verified_phone_ids([PhoneNumberId::new("106540352242922").unwrap()])
+            .pre_verified_phone_ids([PreVerifiedPhoneNumberId::new("106540352242922").unwrap()])
             .phone_profile(PhoneProfilePrefill::new(
                 "Wind & Wool",
                 "APPAREL",
@@ -667,6 +620,23 @@ mod tests {
     }
 
     #[test]
+    fn pre_verified_numbers_page_example() {
+        // embedded-signup/pre-verified-numbers, § Displaying pre-verified
+        // numbers in Embedded Signup: the `setup.preVerifiedPhone` object.
+        let v = LaunchOptions::new("C")
+            .pre_verified_phone_ids([
+                PreVerifiedPhoneNumberId::new("106540352242922").unwrap(),
+                PreVerifiedPhoneNumberId::new("105954558954427").unwrap(),
+            ])
+            .to_json()
+            .unwrap();
+        assert_eq!(
+            v["extras"]["setup"],
+            json!({"preVerifiedPhone": {"ids": ["106540352242922", "105954558954427"]}})
+        );
+    }
+
+    #[test]
     fn existing_portfolio_and_waba_prefill() {
         // pre-filled-data, "Existing business portfolio …" and the
         // whatsAppBusinessAccount example.
@@ -674,7 +644,7 @@ mod tests {
             .business(BusinessPrefill::existing(
                 BusinessId::new("2729063490586005").unwrap(),
             ))
-            .pre_verified_phone_ids([PhoneNumberId::new("106540352242922").unwrap()])
+            .pre_verified_phone_ids([PreVerifiedPhoneNumberId::new("106540352242922").unwrap()])
             .waba_ids([WabaId::new("432428883295692").unwrap()])
             .to_json()
             .unwrap();
@@ -798,8 +768,28 @@ mod tests {
             "extras.setup.phone.category"
         );
         assert_eq!(
-            field(LaunchOptions::new("c").pre_verified_phone_ids(Vec::<PhoneNumberId>::new())),
+            field(
+                LaunchOptions::new("c")
+                    .pre_verified_phone_ids(Vec::<PreVerifiedPhoneNumberId>::new())
+            ),
             "extras.setup.preVerifiedPhone.ids"
+        );
+        // An id built unchecked, holding a separator, is refused too.
+        assert_eq!(
+            field(LaunchOptions::new("c").pre_verified_phone_ids([
+                PreVerifiedPhoneNumberId::new("106540352242922").unwrap(),
+                PreVerifiedPhoneNumberId::new_unchecked("1/../x"),
+            ])),
+            "extras.setup.preVerifiedPhone.ids"
+        );
+        assert!(
+            LaunchOptions::new("c")
+                .pre_verified_phone_ids([
+                    PreVerifiedPhoneNumberId::new("106540352242922").unwrap(),
+                    PreVerifiedPhoneNumberId::new("105954558954427").unwrap(),
+                ])
+                .validate()
+                .is_ok()
         );
     }
 }

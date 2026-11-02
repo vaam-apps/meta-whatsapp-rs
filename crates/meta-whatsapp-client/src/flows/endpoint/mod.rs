@@ -122,12 +122,12 @@ use base64::Engine;
 use base64::alphabet;
 use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
 use meta_whatsapp_core::error::CryptoError;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 
 pub use media::{FlowMedia, MediaEncryptionMetadata, decrypt_media};
 pub use signature::{SIGNATURE_HEADER, verify_request_signature};
 
-use super::types::wire_enum;
 use pem::{PemPrivateKey, Scrubbed, scrub};
 
 /// AES-128-GCM with the 128-bit IV WhatsApp uses.
@@ -206,21 +206,21 @@ pub struct EncryptedFlowRequest {
     pub initial_vector: String,
 }
 
-wire_enum! {
+open_enum! {
     /// Why WhatsApp called the endpoint (`action` of a Flow endpoint
     /// request). Not the `flow_action` a Flow message or template button
     /// starts with: that is [`crate::common::FlowAction`].
     pub enum EndpointAction {
         /// Periodic health check; answer [`FlowResponse::health_check`].
-        Ping = "ping",
+        Ping => "ping",
         /// The user opened the Flow (the message was sent with
         /// `flow_action: data_exchange`).
-        Init = "INIT",
+        Init => "INIT",
         /// The user pressed back on a screen with `refresh_on_back`.
-        Back = "BACK",
+        Back => "BACK",
         /// A screen was submitted, or a component with `on-select-action`
         /// changed.
-        DataExchange = "data_exchange",
+        DataExchange => "data_exchange",
     }
 }
 
@@ -521,9 +521,21 @@ impl FlowEndpointKey {
         &self,
         request: &EncryptedFlowRequest,
     ) -> Result<(FlowRequest, ResponseSealer), CryptoError> {
+        self.decrypt_as(request)
+    }
+
+    /// [`Self::decrypt_request`] into another payload shape: the same
+    /// crypto for every endpoint WhatsApp encrypts this way (the Payments
+    /// API's checkout endpoint,
+    /// [`crate::payments::checkout`]). A payload that does not parse as
+    /// `T` is [`CryptoError::Decrypt`], as any other failure.
+    pub(crate) fn decrypt_as<T: serde::de::DeserializeOwned>(
+        &self,
+        request: &EncryptedFlowRequest,
+    ) -> Result<(T, ResponseSealer), CryptoError> {
         let (plaintext, sealer) = self.open(request).ok_or(CryptoError::Decrypt)?;
-        let request = serde_json::from_slice::<FlowRequest>(&plaintext.0)
-            .map_err(|_| CryptoError::Decrypt)?;
+        let request =
+            serde_json::from_slice::<T>(&plaintext.0).map_err(|_| CryptoError::Decrypt)?;
         Ok((request, sealer))
     }
 

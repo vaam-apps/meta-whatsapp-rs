@@ -13,10 +13,11 @@
 //! agreement's path (a test checks).
 
 use meta_whatsapp_core::error::ValidationError;
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{MarketingBusiness, wire_enum};
+use super::MarketingBusiness;
 use crate::RetryPolicy;
 
 /// [`SIGNER_WITHHELD`] as text, the snippet of an [`Error::Http`].
@@ -43,15 +44,15 @@ fn withhold_signer(error: Error) -> Error {
     }
 }
 
-wire_enum! {
+open_enum! {
     /// Where a business is with the max price beta agreement.
     pub enum AgreementStatus {
         /// No agreement requested (`none`).
-        NoAgreement = "none",
+        NoAgreement => "none",
         /// Requested; the acceptance email is out, not yet accepted.
-        Pending = "pending",
+        Pending => "pending",
         /// Accepted: Meta allowlists the business's own WABAs.
-        Accepted = "accepted",
+        Accepted => "accepted",
     }
 }
 

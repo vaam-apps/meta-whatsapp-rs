@@ -10,12 +10,14 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use meta_whatsapp_rs::core::error::StorageError;
-use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::ids::{MediaId, PhoneNumberId, WabaId};
 use meta_whatsapp_server_core::model::{TenantId, WabaBinding};
 use meta_whatsapp_server_core::outbox::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, StoredEvent,
+    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RECEIVED_MEDIA_ROWS, ReceivedMedia,
+    StoredEvent,
 };
 use meta_whatsapp_server_core::store::StoreResult;
+use mongodb::bson::oid::ObjectId;
 use mongodb::bson::{self, Bson, Document, doc};
 use mongodb::error::{
     ErrorKind, TRANSIENT_TRANSACTION_ERROR, UNKNOWN_TRANSACTION_COMMIT_RESULT, WriteFailure,
@@ -380,6 +382,15 @@ impl MongoOutbox {
                     .name(s::INDEX_CREATED_AT.to_owned())
                     .build(),
             ),
+            // `received_media`'s lookup, read in its order and up to its
+            // limit: only the rows that record a media id.
+            index(
+                doc! { s::EVENT_MEDIA_ID: 1, s::EVENT_CREATED_AT: -1, s::EVENT_MEDIA_ORDER: -1 },
+                IndexOptions::builder()
+                    .name(s::INDEX_MEDIA.to_owned())
+                    .partial_filter_expression(doc! { s::EVENT_MEDIA_ID: { "$type": "string" } })
+                    .build(),
+            ),
         ];
         self.events()
             .create_indexes(indexes)
@@ -669,6 +680,12 @@ impl MongoOutbox {
         if let Some(waba) = &event.waba_id {
             row.insert(s::EVENT_WABA, waba.as_str());
         }
+        // The media id the event records as received (roadmap M2e), with
+        // what orders it among the same millisecond's rows.
+        if let Some(media) = event.received_media() {
+            row.insert(s::EVENT_MEDIA_ID, media.as_str());
+            row.insert(s::EVENT_MEDIA_ORDER, ObjectId::new());
+        }
         // An upsert, so that `created_at` is the server's clock; one that
         // matches is an event id stored already (not a redelivery: those
         // share a dedup key, above), refused as Postgres' unique id is.
@@ -893,6 +910,55 @@ impl Outbox for MongoOutbox {
 
     async fn page(&self, query: &EventQuery) -> StoreResult<EventPage> {
         self.transaction(&PageStep(query)).await
+    }
+
+    async fn get(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<StoredEvent>> {
+        // By `_id` (the event's public id), in the tenant's own stream
+        // only: another tenant's row, or an operator-only one (stream
+        // `""`, which no tenant's id is), is never read.
+        self.events()
+            .find_one(doc! { "_id": id, s::EVENT_STREAM: tenant.as_str() })
+            .await
+            .map_err(backend)?
+            .as_ref()
+            .map(stored_event)
+            .transpose()
+    }
+
+    async fn received_media(&self, media_id: &MediaId) -> StoreResult<Vec<ReceivedMedia>> {
+        // Every stream's rows, the operator-only ones included, by the
+        // partial index on `media_id`: never a scan of the rows' data. The
+        // filter repeats the index's own (`$type`), so that the planner
+        // can tell the index covers it.
+        let mut cursor = self
+            .events()
+            .find(doc! { s::EVENT_MEDIA_ID: { "$type": "string", "$eq": media_id.as_str() } })
+            .sort(doc! { s::EVENT_CREATED_AT: -1, s::EVENT_MEDIA_ORDER: -1 })
+            .limit(i64_saturating(RECEIVED_MEDIA_ROWS))
+            .projection(doc! {
+                "_id": 0,
+                s::EVENT_TENANT: 1,
+                s::EVENT_PHONE_NUMBER: 1,
+                s::EVENT_CREATED_AT: 1,
+            })
+            .await
+            .map_err(backend)?;
+        let mut found = Vec::new();
+        while cursor.advance().await.map_err(backend)? {
+            let row = cursor.deserialize_current().map_err(backend)?;
+            let created_at = row
+                .get_datetime(s::EVENT_CREATED_AT)
+                .map_err(|_| corrupt(s::EVENTS, s::EVENT_CREATED_AT))?;
+            found.push(ReceivedMedia {
+                tenant: optional_str(&row, s::EVENTS, s::EVENT_TENANT)?
+                    .map(|t| TenantId::parse(t).ok_or_else(|| corrupt(s::EVENTS, s::EVENT_TENANT)))
+                    .transpose()?,
+                phone_number_id: optional_str(&row, s::EVENTS, s::EVENT_PHONE_NUMBER)?
+                    .map(PhoneNumberId::new_unchecked),
+                received_at: time_of(*created_at, s::EVENTS, s::EVENT_CREATED_AT)?,
+            });
+        }
+        Ok(found)
     }
 
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {

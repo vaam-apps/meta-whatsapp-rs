@@ -87,8 +87,12 @@ async fn live_mongodb_outbox_in_a_bundle_passes_the_conformance_suite() {
     let Some(live) = Live::new().await else {
         return;
     };
-    let report =
-        conformance::run(async || Arc::new(live.backend().await) as Arc<dyn Backend>).await;
+    // Boxed: the whole suite's future is past clippy's `large_futures`
+    // bound (as the memory backend's test boxes it).
+    let report = Box::pin(conformance::run(async || {
+        Arc::new(live.backend().await) as Arc<dyn Backend>
+    }))
+    .await;
     eprintln!("mongodb outbox in a bundle, the races: {report:?}");
 }
 
@@ -311,7 +315,116 @@ async fn live_mongodb_migrate_makes_the_named_collections_and_indexes_once() {
             "_id_",
             schema::INDEX_CREATED_AT,
             schema::INDEX_DEDUP_KEY,
+            schema::INDEX_MEDIA,
             schema::INDEX_STREAM_SEQUENCE,
         ]
+    );
+}
+
+/// Roadmap M2e on MongoDB: a row keeps the media id its event records as
+/// received ([`schema::EVENT_MEDIA_ID`], beside its ordering
+/// [`schema::EVENT_MEDIA_ORDER`]), a row recording none has neither field,
+/// and `received_media` reads the partial index `INDEX_MEDIA` (its use
+/// counted by `$indexStats`), never the rows' data. Rows of one millisecond
+/// come back newest first all the same: thirty inserts in a row, many of
+/// them in the same millisecond on a fast server, read back in reverse.
+/// Decisive: the field written at insert, the lookup's filter repeating the
+/// index's (without it, the planner may not use a partial index), and the
+/// tie-break (in a run where two inserts shared a millisecond).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_mongodb_received_media_reads_its_index_in_order() {
+    use meta_whatsapp_rs::core::ids::MediaId;
+    use meta_whatsapp_server_core::outbox::{NewEvent, RECEIVED_MEDIA_ROWS};
+
+    let Some(live) = Live::new().await else {
+        return;
+    };
+    let backend = live.backend().await;
+    let records = backend.records();
+    let outbox = backend.outbox();
+    let media = MediaId::new("1003383421387256").unwrap();
+    let mut tenants = Vec::new();
+    for (i, pn) in ["41", "42", "43"].into_iter().enumerate() {
+        let tenant = format!("media-order-{i}");
+        bind(records.as_ref(), &tenant, pn).await;
+        tenants.push((tenant, pn));
+    }
+    // A text first: it records no media id, and has neither field.
+    let text = row(Some("media-order-0"), "message_received", "41", None);
+    outbox.insert(&text).await.unwrap().unwrap();
+    let mut inserted = Vec::new();
+    for n in 0..30 {
+        let (tenant, pn) = &tenants[n % tenants.len()];
+        let event = NewEvent {
+            data: serde_json::json!({
+                "event": "message_received",
+                "phone_number_id": pn,
+                "message": {"type": "image", "image": {"id": media.as_str()}},
+            })
+            .to_string(),
+            ..row(Some(tenant), "message_received", pn, None)
+        };
+        outbox.insert(&event).await.unwrap().unwrap();
+        inserted.push(tenant.clone());
+    }
+    let events = backend
+        .mongo_outbox()
+        .database()
+        .collection::<Document>(schema::EVENTS);
+    let stored = events
+        .find_one(doc! { "_id": text.id.as_str() })
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!stored.contains_key(schema::EVENT_MEDIA_ID), "{stored:?}");
+    assert!(
+        !stored.contains_key(schema::EVENT_MEDIA_ORDER),
+        "{stored:?}"
+    );
+    let with_media = events
+        .count_documents(doc! { schema::EVENT_MEDIA_ID: media.as_str() })
+        .await
+        .unwrap();
+    assert_eq!(with_media, 30);
+
+    let uses = || async {
+        let mut cursor = events
+            .aggregate([doc! { "$indexStats": {} }])
+            .await
+            .unwrap();
+        let mut ops = None;
+        while cursor.advance().await.unwrap() {
+            let stats = cursor.deserialize_current().unwrap();
+            if stats.get_str("name").unwrap() == schema::INDEX_MEDIA {
+                let accesses = stats.get_document("accesses").unwrap();
+                ops = Some(match accesses.get("ops").unwrap() {
+                    mongodb::bson::Bson::Int64(n) => *n,
+                    mongodb::bson::Bson::Int32(n) => i64::from(*n),
+                    other => panic!("ops: {other:?}"),
+                });
+            }
+        }
+        ops.expect("the media index exists")
+    };
+    let before = uses().await;
+    let found = outbox.received_media(&media).await.unwrap();
+    assert!(
+        uses().await > before,
+        "received_media did not read its index"
+    );
+
+    let expected: Vec<Option<String>> = inserted
+        .iter()
+        .rev()
+        .take(RECEIVED_MEDIA_ROWS)
+        .map(|tenant| Some(tenant.clone()))
+        .collect();
+    let seen: Vec<Option<String>> = found
+        .iter()
+        .map(|row| row.tenant.as_ref().map(|t| t.as_str().to_owned()))
+        .collect();
+    assert_eq!(
+        seen, expected,
+        "not the newest {RECEIVED_MEDIA_ROWS}, newest first"
     );
 }

@@ -70,10 +70,13 @@ One task each, installable with `npx skills add vaam-apps/meta-whatsapp-rs`.
 - [meta-whatsapp-rs-server](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server/SKILL.md): deploying and calling meta-whatsapp-server from an app not written in Rust
 - [meta-whatsapp-rs-server-send](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-send/SKILL.md): messages, media and templates through the service
 - [meta-whatsapp-rs-server-events](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-events/SKILL.md): Meta's webhooks and polled events through the service
+- [meta-whatsapp-rs-server-otp](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-otp/SKILL.md): WhatsApp login codes and authentication templates through the service
+- [meta-whatsapp-rs-server-onboarding](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-onboarding/SKILL.md): merchants connecting their WhatsApp number through the service (Embedded Signup), in both partner modes
+- [meta-whatsapp-rs-server-registration](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-registration/SKILL.md): a number's registration and two-step PIN through the service
 
 ## Optional
 
 - [Changelog](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/CHANGELOG.md): what changed, release by release
 - [Contributing](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/CONTRIBUTING.md): process, merging and how the skills are kept true
-- [Development environment](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/dev-environment.md): the Claude Code dev container, its toolchain and its firewall
+- [Development environment](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/docs/dev-environment.md): the Claude Code dev container, its toolchain and its firewall, and the docs MCP server, which serves these docs and skills to a coding agent from a checkout
 - [Agent guide](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/AGENTS.md): conventions and commands for working on the repository itself

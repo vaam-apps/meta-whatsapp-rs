@@ -44,6 +44,14 @@
 //! **A page reads no more data than it answers.** The page's rows are
 //! chosen from their sizes (`data_bytes`) first, then only those rows'
 //! data is read.
+//!
+//! **A row keeps the media id it records as received** (roadmap M2e,
+//! migration 7): `media_id`, set at insert from the core's
+//! `NewEvent::received_media`, and found by the partial index
+//! `wa_server_events_media_idx` on `(media_id, created_at)`
+//! ([`Outbox::received_media`]: read in order, up to its limit, whatever
+//! the column's statistics). A row a replica of the release before it
+//! inserted has none.
 
 use std::time::Duration;
 
@@ -51,12 +59,13 @@ use async_trait::async_trait;
 use meta_whatsapp_rs::adapters::store::postgres::sqlx::postgres::PgRow;
 use meta_whatsapp_rs::adapters::store::postgres::sqlx::{self, PgPool, Row};
 use meta_whatsapp_rs::core::error::StorageError;
-use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::ids::{MediaId, PhoneNumberId, WabaId};
 use time::OffsetDateTime;
 
 use meta_whatsapp_server_core::model::TenantId;
 use meta_whatsapp_server_core::outbox::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
+    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RECEIVED_MEDIA_ROWS, ReceivedMedia,
+    RouteGuard, StoredEvent,
 };
 use meta_whatsapp_server_core::store::StoreResult;
 
@@ -166,6 +175,8 @@ fn binding_admits(alias: &str) -> String {
 
 #[async_trait]
 impl Outbox for PgEventStore {
+    // One statement and its fifteen parameters, read top to bottom.
+    #[allow(clippy::too_many_lines)]
     async fn insert(&self, event: &NewEvent) -> StoreResult<Option<i64>> {
         let data_bytes = i32::try_from(event.data.len())
             .map_err(|_| StorageError::Backend(anyhow::anyhow!("an event over 2 GiB")))?;
@@ -252,8 +263,8 @@ impl Outbox for PgEventStore {
              ) \
              INSERT INTO wa_server_events \
              (tenant_id, sequence, id, dedup_key, dedup_until, phone_number_id, waba_id, \
-              event_type, data, data_bytes) \
-             SELECT fresh.tenant_id, drawn.last_sequence, $1, $2, $10, $4, $5, $6, $7::json, $8 \
+              event_type, data, data_bytes, media_id) \
+             SELECT fresh.tenant_id, drawn.last_sequence, $1, $2, $10, $4, $5, $6, $7::json, $8, $15 \
              FROM fresh, drawn \
              ON CONFLICT (dedup_key) DO NOTHING RETURNING sequence, tenant_id",
             number_admits = binding_admits("nw"),
@@ -274,6 +285,7 @@ impl Outbox for PgEventStore {
             .bind(guard_waba)
             .bind(bounds.map(|b| b.after_move))
             .bind(undated_moved_by)
+            .bind(event.received_media().map(MediaId::into_inner))
             .fetch_optional(&mut *tx)
             .await
             .map_err(busy_or_backend)?;
@@ -364,6 +376,23 @@ impl Outbox for PgEventStore {
         })
     }
 
+    async fn get(&self, tenant: &TenantId, id: &str) -> StoreResult<Option<StoredEvent>> {
+        // By the unique `id`, and in the tenant's own stream only: another
+        // tenant's row, or an operator-only one (`tenant_id` NULL), is not
+        // read.
+        let row = sqlx::query(
+            "SELECT sequence, id, tenant_id, phone_number_id, waba_id, event_type, \
+                    data::text AS data, created_at \
+             FROM wa_server_events WHERE id = $1 AND tenant_id = $2",
+        )
+        .bind(id)
+        .bind(tenant.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        row.as_ref().map(event_row).transpose().map(Option::flatten)
+    }
+
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
         // No lock of its own (housekeeping holds its turn): two purges at
         // once delete a row once (the second finds it gone), and
@@ -394,5 +423,32 @@ impl Outbox for PgEventStore {
         .await
         .map_err(busy_or_backend)?;
         Ok(u64::try_from(deleted).unwrap_or_default())
+    }
+
+    async fn received_media(&self, media_id: &MediaId) -> StoreResult<Vec<ReceivedMedia>> {
+        // Every stream's rows, the operator-only ones included, by the
+        // partial index on `media_id`: never a scan of the rows' data.
+        let limit = i64::try_from(RECEIVED_MEDIA_ROWS).unwrap_or(i64::MAX);
+        let rows = sqlx::query(
+            "SELECT tenant_id, phone_number_id, created_at FROM wa_server_events \
+             WHERE media_id = $1 ORDER BY created_at DESC LIMIT $2",
+        )
+        .bind(media_id.as_str())
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        rows.iter()
+            .map(|row| {
+                Ok(ReceivedMedia {
+                    tenant: get::<Option<String>>(row, "tenant_id")?
+                        .map(|t| TenantId::parse(&t).ok_or_else(|| corrupt("tenant_id")))
+                        .transpose()?,
+                    phone_number_id: get::<Option<String>>(row, "phone_number_id")?
+                        .map(PhoneNumberId::new_unchecked),
+                    received_at: get(row, "created_at")?,
+                })
+            })
+            .collect()
     }
 }

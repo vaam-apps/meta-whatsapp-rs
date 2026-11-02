@@ -136,9 +136,10 @@ late "typing…" after the answer looks broken).
 ## What meta-whatsapp-rs does not do
 
 - No send queue, rate limiting across your fleet, or retry scheduler.
-- Payment messages are typed for India only
-  (`meta_whatsapp_rs::client::payments`); Brazil's go through
-  `MessageContent::Raw`.
+- Payment messages are typed for India and Brazil
+  (`meta_whatsapp_rs::client::payments`), and so are the payment
+  templates (`TemplateMessage::order_details_button`, `payment_request_button`, `order_status`),
+  India's checkout button templates included (one order per "Buy now" button).
 - The 24-hour window is not tracked here; the CMS inbox tracks it from
   recorded messages and calls (`meta-whatsapp-rs-cms-inbox`).
 

@@ -26,10 +26,10 @@ concrete products:
 
 ```
 crates/
-  meta-whatsapp-core       error tree, ids, config, ports (traits). No I/O, no runtime.
+  meta-whatsapp-core       error tree, ids, config, ports (traits), open_enum!. No I/O, no runtime.
   meta-whatsapp-client     Graph API client; one module per endpoint family.
   meta-whatsapp-webhooks   verify, parse, normalize, dedup, dispatch; axum router (feature).
-  meta-whatsapp-adapters   port implementations: reqwest, memory/Postgres/Redis stores, sinks.
+  meta-whatsapp-adapters   port implementations: reqwest, memory/Postgres/SQLite/Redis stores, sinks.
   meta-whatsapp-typst      Typst → PDF/PNG for document and image messages.
   meta-whatsapp-bot        bot framework over webhooks: commands, guards, cooldowns, middleware,
                            compile-time plugins, Markdown → WhatsApp formatting, paced broadcasts.
@@ -50,6 +50,9 @@ crates/
 .xtask                     repo automation (`cargo xtask meta-docs`): a workspace of its own,
                            with its own Cargo.lock, excluded from the root one, so its ureq
                            (rustls with `ring`) never enters a library or test build.
+tools/docs-mcp             the docs MCP server (`just docs-mcp`): the docs and skills over MCP's
+                           stdio transport. A binary on serde_json alone, a member of the
+                           root workspace but not a default one; nothing depends on it.
 ```
 
 Dependency rule: every library crate depends on `meta-whatsapp-core`; no
@@ -74,7 +77,7 @@ leaks its library's types through a port.
 | `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at`; `message` (the lookup, scoped: `phone_number_id, id`, never another number's); `record_window_event`, `window_events` (a call or a standby message that reopens the window: never history, never the summary); `set_thread_owner`, `thread_owner` (Conversation Routing: the latest record wins); `put_contact`, `remove_contact`, `contact`, `contacts` (the coexistence address book; a removal is kept, key and time only, so an older sync arriving after it is refused); `link_identity`, `identity_links` (two identities of one person on one number, as Meta reports a BSUID or number change); `identities` (a person's keys on one number: the closure over the synced contacts and the links, read only); `erase_all` (a person on one number, deleted: every record under their keys, the contacts and links naming them, and their messages in groups redacted or deleted per the store's `ErasureMode`); `purge_before` (by age, one number or all); `trim_conversations` (a cap on each conversation's history: its newest rows kept, every row counting, the summary deleted when its latest message goes; one number or all); `erase` (one key), `erasure_mode`, `retention`, `apply_retention` (provided: redact group messages and keep everything unless the adapter is configured) | `meta_whatsapp_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
-| `media::MediaConverter` | `convert` (a `MediaInput` into a `TargetFormat`, today `OggOpus`: a voice message's mono Ogg Opus, uploaded as `audio/ogg`; `TargetFormat::max_bytes` is core's own `media::AUDIO_MAX_BYTES`, kept equal to the client's upload table by `every_target_format_is_what_the_upload_check_takes`) | rustdoc; `meta-whatsapp-client` re-exports it from `client::media` (`Media::upload_converted`) |
+| `media::MediaConverter` | `convert` (a `MediaInput` into a `TargetFormat`: `OggOpus`, a voice message's mono Ogg Opus, uploaded as `audio/ogg`; `StaticSticker`, a static WebP sticker, and `AnimatedSticker`, an animated one, both `image/webp`; `Jpeg` and `Png`, 8-bit images, `image/jpeg` and `image/png`; `TargetFormat::max_bytes` is core's own `media::AUDIO_MAX_BYTES`, `media::STATIC_STICKER_MAX_BYTES` (100 000), `media::ANIMATED_STICKER_MAX_BYTES` (500 000) and `media::IMAGE_MAX_BYTES` (5 000 000: Meta's figures read as decimal), kept within the client's upload table by `every_target_format_is_what_the_upload_check_takes`) | rustdoc; `meta-whatsapp-client` re-exports it from `client::media` (`Media::upload_converted`) |
 
 Typed stores are built **on `KvStore`**, never as new ports: token vault,
 OTP challenges, webhook dedup, Embedded Signup sessions, bot cooldowns,
@@ -142,23 +145,32 @@ rewrite them along with the code.
 | `wa.es.session` | `SESSION_NAMESPACE`, `meta-whatsapp-client/src/embedded_signup/session.rs` | store namespace of signup sessions in flight | `the_session_namespace_is_pinned` |
 | `wa.es.coexistence` (added by roadmap L11d; the namespace and the record layout **pending the owner's confirmation**, roadmap § Owner touchpoints) | `COEXISTENCE_NAMESPACE`, `meta-whatsapp-client/src/embedded_signup/coexistence.rs` | store namespace of the coexistence sync records (key: the phone number id; value: plain JSON, `"v":1`, the WABA id, the stored token record's `created_at` in Unix seconds, and per request, `contacts` and `history`, its `state`, `pending`, `requested` with Meta's `request_id` or `refused` with its code, and `at`). **Not ephemeral**: changing it forgets which requests an onboarding made, and Meta allows each once per number, so a `resume` would post again one that was accepted, or whose answer was lost | `the_sync_record_is_pinned` |
 | `wa.webhook.dedup` | `DEDUP_NAMESPACE`, `meta-whatsapp-webhooks/src/dedup.rs` | store namespace of the dedup markers (key: SHA-256 hex of the event's dedup key) | `the_marker_key_is_pinned` |
-| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/postgres/mod.rs` | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_identity_links`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
+| `wa_` | `TablePrefix::DEFAULT`, `meta-whatsapp-adapters/src/store/table_prefix.rs` (in `store/postgres/mod.rs` until roadmap L8; the SQLite adapters share it) | default table prefix: `wa_kv`, `wa_messages`, `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_identity_links`, `wa_sqlx_migrations` | `the_default_tables_and_migration_checksums_are_pinned`, `prefix_validation`, the `live_postgres_*` table-name tests |
 | `customer_call`, `call_accepted`, `standby_message`; `this_app`, `another_app`, `idle`; `revoked`, `erased` | `WindowEventKind::as_str`, `ThreadOwner` (its serde names), `StoredMessage::REVOKED`, `StoredMessage::ERASED`, `meta-whatsapp-core/src/store/conversation.rs` | the names a conversation store keeps for a window event's kind, a thread's owner and this crate's own message kinds (`wa_window_events.kind`, `wa_thread_owners.owner`, `wa_messages.kind_utf8`) | `stored_names_are_pinned` |
 | the number lock `('wa_messages'::regclass::oid::int4, hashtext(<phone_number_id>))`, the purge lock `('wa_conversations'::regclass::oid::int4, 0)` | `number_lock`, `purge_lock`, `meta-whatsapp-adapters/src/store/postgres/conversation.rs` | Postgres advisory locks (the two-key form, the table's object id as class) that order `erase`, `purge_before` and `trim_conversations` (under the purge lock, like a purge) against appends and each other: replicas of two releases must take the same ones | `the_locks_are_pinned`, `live_postgres_the_locks_are_the_documented_ones` |
 | the migration files | `meta-whatsapp-adapters/migrations/*.sql` | sqlx records each file's checksum; an edit, a comment included, makes `migrate` refuse every database migrated before. So they keep naming `wa_adapters`, including in the hint migration 3 raises, and the columns and indexes they create keep their names (migration 4's `wa_messages.sender`, `wa_messages_sender_idx`, `wa_messages_unsent_idx`, `wa_identity_links_idx`, among others) | `the_default_tables_and_migration_checksums_are_pinned` |
 | a message's sender: the payload's `from_user_id`, else its `from`, of an inbound message (an empty value, or one holding U+0000, is none) | `StoredMessage::sender`, `meta-whatsapp-core/src/store/conversation.rs`; migration 4's back-fill | what a store keeps beside each message (`wa_messages.sender`) and an erasure matches a person's group messages on: a changed rule leaves the rows written before out of every erasure | `the_sender_is_the_bsuid_else_the_phone_number_of_an_inbound_message`, `live_postgres_migration_4_backfills_senders_by_the_rust_rule` |
 | `wa:` | `RedisKvStore::new`, `meta-whatsapp-adapters/src/store/redis_kv.rs` | default Redis key prefix, before `{<len>:<namespace>}:<key>` | `the_default_prefix_and_key_layout_are_pinned` |
+| the SQLite migration files and tables (added by roadmap L8; **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `MIGRATIONS`, `meta-whatsapp-adapters/src/store/sqlite/mod.rs`; `meta-whatsapp-adapters/migrations-sqlite/*.sql` | the SQLite adapters' schema under the default prefix: `wa_kv`, `wa_kv_version` (the version counter), `wa_messages` (keyed by business number and id; `wa_messages_id_idx`, unique, keeps an id once per store, `OPEN_QUESTIONS.md` #33), `wa_conversations`, `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`, `wa_identity_links`, `wa_sqlx_migrations`, their columns (`kind_utf8`, `text_utf8`, `payload_json`, `ts` in unix microseconds, …) and the stored names the Postgres adapter keeps (statuses, directions, owners, kinds); sqlx records each file's checksum, so an edit, a comment included, makes `migrate` refuse a database migrated before | `the_default_tables_and_migration_checksums_are_pinned` (`store::sqlite`) |
+| `{conversations:<prefix>}` and the Redis conversation layout (added by roadmap L8; **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `RedisConversationStore::base`, `key`, `ts16`, `PRELUDE`, `meta-whatsapp-adapters/src/store/redis_conversation.rs` | the hash tag after the `wa:` prefix of every key of a conversation store (naming the prefix: one slot per store), the keys under it (`:m:`, `:id:`, `:h:`, `:s:`, `:l:`, … with length-prefixed parts), the fields of each record (`c`, `d`, `k`, `t`, `p`, `s`, `ts`, …) and the time encoding (16 hex digits of the unix microseconds, sign bit flipped) | `the_conversation_layout_is_pinned`, `each_prefix_has_its_own_hash_tag`, `live_redis_conversation_layout_and_erasure_leaves_nothing` |
 | `meta-whatsapp-server/outbox-key/v1` | `outbox_key`, `meta-whatsapp-server-core/src/events.rs` | domain of the SHA-256 stored as `wa_server_events.dedup_key` (with the tags `library` and `delivery`, the NUL separators and a keyless event's position as 8 big-endian bytes): derived otherwise, a redelivery across the upgrade is recorded twice | `the_outbox_key_is_pinned` (known answers) |
 | `meta-whatsapp-server/event-id/v1`, `evt_` + 32 hex digits | `EventIdKey`, same file | HMAC label of the key event ids are derived with under the app secret, and the id's shape: stored as `wa_server_events.id` and what receivers deduplicate on | `event_ids_are_pinned` (known answers) |
 | `meta-whatsapp-server/migrate`, `meta-whatsapp-server/housekeeping` | `MIGRATION_LOCK`, `HOUSEKEEPING_LOCK`, `lock_key`, `meta-whatsapp-server-store-postgres/src/postgres.rs` (`meta-whatsapp-server/src/store/postgres.rs` until roadmap S7) | Postgres advisory lock keys (the first 8 bytes of their SHA-256; `lock_key` derives the leader lock's the same way, so its `housekeeping` turn is `HOUSEKEEPING_LOCK`): replicas of two releases take the same ones | `the_lock_key_is_derived_as_documented`, `the_leader_locks_keys_are_the_services_locks` |
 | the service's migration files, `wa_server_sqlx_migrations` | `meta-whatsapp-server-store-postgres/migrations/*.sql` (moved byte for byte from `meta-whatsapp-server/migrations/` in roadmap S7: sqlx knows a migration by its version and checksum, never its path), `MIGRATIONS_TABLE` | the service's `wa_server_*` tables (the operator-only event stream `''` included) and its migration history; an edited file makes `migrate` refuse every database migrated before | `the_migrations_and_their_checksums_are_pinned`, `live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration` |
 | `wa_server_wabas.generation`, `wa_server_wabas.previous_tenant_unbound_at` and its default `1970-01-01 00:00:00+00` (`UNRECORDED_MOVE`), `wa_server_waba_tombstones` (`waba_id`, `tenant_id` with `ON DELETE SET NULL`, `unbound_at`, `previous_tenant_unbound_at`), migration 4's description `waba moves` (added by roadmap S2b; the names, the default's meaning and the tombstone's rules **pending the owner's confirmation**, roadmap § Owner touchpoints) | `meta-whatsapp-server-store-postgres/migrations/0004_waba_moves.sql`, `WABA_COLUMNS` and `unbind_sql`, `meta-whatsapp-server-store-postgres/src/postgres.rs`; `WabaBinding`, `WabaTombstone`, `UNRECORDED_MOVE`, `meta-whatsapp-server-core/src/model.rs` | a binding's attach count (what a capability's conditioned writes compare beside `attached_at`) and when its WABA was last unbound from another tenant (`NULL`: never; the epoch: a binding made before migration 4, its history unknown), and each WABA's last unbinding, which a new binding reads: what decides whether an event is routed by the rules after a move (design D36). Renamed, the rows written before lose their history (every move forgotten, so the window after it fails open); the epoch default read otherwise would give `main`'s bindings the first-onboarding rules | `the_migrations_and_their_checksums_are_pinned` (checksum and description), `live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration` (the default's semantics on `main`'s rows), `records::a_move_is_recorded`, `records::a_refresh_moves_the_generation` (both backends) |
+| `wa_server_numbers.attached_at` (no default for the rows before it, read as their WABA's `attached_at`; `now()` for the rows inserted after), `wa_server_numbers.previous_tenant_released_at` and its default `1970-01-01 00:00:00+00` (`UNRECORDED_MOVE`), `wa_server_number_tombstones` (`phone_number_id`, `tenant_id` with `ON DELETE SET NULL`, `released_at`, `previous_tenant_released_at`), the trigger `wa_server_numbers_released` on `wa_server_numbers` and its function `wa_server_number_released()` (every deleted number row leaves its tombstone, a previous release's replica's deletions included), migration 5's description `number moves` (added by roadmap M2h, folded into M2a; the names, the defaults' meaning and the tombstone's rules **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `meta-whatsapp-server-store-postgres/migrations/0005_number_moves.sql`, `NUMBER_COLUMNS` and `unbind_sql`, `meta-whatsapp-server-store-postgres/src/postgres.rs`; `NumberBinding`, `NumberTombstone`, `UNRECORDED_MOVE`, `meta-whatsapp-server-core/src/model.rs` | when a number came under its tenant and when it was last released by another tenant (`NULL`: never; the epoch: a number bound before migration 5, its history unknown, read as a move), and each number's last release, which a new binding of it reads: what the inbox's binding epoch cuts a number's history at (`authz::history_from`, design D10). Renamed, the rows written before lose their history (every number's move forgotten: a migrated number's previous holder's history shown to its new tenant); the epoch default read otherwise would show `main`'s numbers everything | `the_migrations_and_their_checksums_are_pinned` (checksum and description), `live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migration` and `live_postgres_migration_5_rewrites_no_table` (the defaults' semantics on rows written before), `live_postgres_a_release_by_the_previous_release_is_recorded` (the trigger), `records::a_numbers_moves_are_recorded`, `races::a_number_taken_while_released_records_the_move` (both backends) |
+| `wa_server_events.media_id` (no default: `NULL` for the rows before it and for those a previous release inserts), its partial index `wa_server_events_media_idx` (`(media_id, created_at) WHERE media_id IS NOT NULL`), migration 7's description `received media` (added by roadmap M2e; the names and the column's rule **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints, design D77) | `meta-whatsapp-server-store-postgres/migrations/0007_received_media.sql`, `PgEventStore::insert` and `received_media`, `meta-whatsapp-server-store-postgres/src/events.rs`; `NewEvent::received_media`, `received_media_id`, `meta-whatsapp-server-core/src/outbox.rs` | the media id an outbox row's `message_received` event records as received (the five media types' `{type}.id`, an edit's), which the media routes read: one recorded on the caller's own number and tenant is asked from Meta without `phone_number_id`, one recorded on any other row is `404` with nothing asked. Renamed, the rows written before lose it (their media keep Meta's check, for the outbox's retention: no file leaks, received files may answer `404`); a rule that read another field would exempt ids the customer did not send | `the_migrations_and_their_checksums_are_pinned` (checksum and description), `live_postgres_migration_7_rewrites_no_table_and_records_from_its_release_on`, `metas_media_messages_record_their_media_id_and_nothing_else_does`, `outbox::received_media` (both backends) |
+| a tenant's OTP settings: the key `otp` of `wa_server_tenants.settings` and its version 1 layout (`v`, `phone_number_id`, `template.name`, `template.language`, `code_length`, `ttl_seconds`, `max_attempts`, `resend_cooldown_seconds`, `issue_limit.max_issues`, `issue_limit.window_seconds`); the label `meta-whatsapp-server/otp-fingerprint/v1` (added by roadmap M3c); the shared issue log's store namespace `wa_server.otp.shared_rate`, its key's derivation and record (`{"issued_at": [<ms>, …]}`), and its label `meta-whatsapp-server/otp-shared-limit/v1` (added by M3c's review, design D59) (all **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `OtpSettings::to_stored`, `from_stored`, `meta-whatsapp-server-core/src/model.rs`, kept by `set_otp_settings` in both backends (`meta-whatsapp-server-store-postgres/src/postgres.rs`: `jsonb_set` on the existing column, no migration); `FINGERPRINT_LABEL`, `SHARED_LIMIT_LABEL`, `SHARED_ISSUE_LOG`, `OtpKeys::shared_key`, `meta-whatsapp-server-core/src/otp.rs` | which number and template send a tenant's codes, and its limits (renamed, every tenant's settings stop reading: a storage failure, not "no settings"); the HMAC label of the key an OTP issue's idempotency fingerprint is keyed with, under `WA_OTP_PEPPER` (changed, a repeat within the TTL of an issue made before is `422 idempotency_key_reused`, never a second code); the shared issue log, per sending number of the default OTP tenant and recipient (key: hex HMAC-SHA256 of the netstrings of the number's id and the recipient's digits; **ephemeral**: changed, every shared count starts again, one window's worth of codes more, nothing stranded). The codes themselves stay the library's `wa.otp` and `wa.otp.rate`, with the tenant's id as the namespace (`model.rs`'s `TenantId`: immutable for that reason) and `login` as the purpose of a request naming none (ephemeral: changing it strands only the codes in flight) | `the_stored_otp_settings_are_pinned`, `the_otp_fingerprint_is_keyed`, `the_shared_issue_logs_key_is_pinned_and_keyed` (known answers derived apart from the code), `live_postgres_m3_5_a_code_verifies_at_no_other_tenant_on_the_same_number` |
+| `wa_server_signup_attempts` (`waba_id`, its primary key, referencing `wa_server_wabas` `ON DELETE CASCADE`; `tenant_id`; `failed_step`, one of the library's step names; `session`, the library's `SessionInfo` as JSON; `finish_kind`, a `FinishKind`'s event string; `created_at`, `updated_at`), `wa_server_vault_records` (`kind`, `waba` or `business`; `id`; `recorded_at`; primary key `(kind, id)`), migration 6 (`signup`) (added by roadmap M3a; every name **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `meta-whatsapp-server-store-postgres/migrations/0006_signup.sql`; `NewSignupAttempt`, `SignupAttempt`, `VaultEntry`, `meta-whatsapp-server-core/src/model.rs`; both backends' `save_signup_attempt`, `signup_attempt`, `signup_attempts`, `delete_signup_attempt`, `record_vault_entry`, `vault_entries` | the attempts an Embedded Signup tenant resumes (renamed, the kept attempts are lost: each merchant connects again from the start, nothing else is stranded); the records of the token vault kept past a binding (Solution Partner mode's credit ledgers, `credit/<WABA_ID>`, and revocation markers, `revoked/<BUSINESS_ID>`, of the library's `wa.token`) that a key rotation walks besides the bindings: renamed, a rotation no longer reaches them, and dropping the old key afterwards leaves them undecryptable (an offboarded merchant's line can no longer be revoked from the ledger). The library's `wa.es.session` (the attempts' states) and `wa.token` are unchanged | `the_migrations_and_their_checksums_are_pinned` (migration 6's checksum), `the_vault_entry_kinds_are_pinned`, `conformance::signup::the_records_keep_attempts_and_vault_entries` (memory, and live on Postgres) |
+| `wa_server_events`, the channel; `<sequence> <tenant>`, its payload (added by roadmap M2b; both **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints, design D40) | `EVENTS_CHANNEL`, `payload`, `wakeup`, `meta-whatsapp-server-store-postgres/src/notify.rs` | the Postgres channel every replica of a deployment `NOTIFY`s when its webhook pipeline recorded a tenant's event, and `LISTEN`s on to wake its live streams; the payload is the event's sequence in its tenant's stream, a space, and the tenant's id. Not stored: what replicas of two releases must agree on while a deploy rolls (a replica on another channel, or reading another payload, wakes its streams by their re-poll only, every 15 s) | `the_payload_is_the_sequence_and_the_tenant`, `live_postgres_the_channel_is_the_deployments` |
+| `payments`, a key scope (added by roadmap P2; the name **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `Scope::Payments`, `Scope::as_str`, `meta-whatsapp-server-core/src/model.rs` | the stored name of the scope a key needs for the payment routes, in `wa_server_api_keys.scopes` beside the older scopes' names (`send`, `numbers`, …), and the API's name for it (`Scope` in `openapi/v1.json`). Renamed, every key minted with it fails to load (`Scope::parse` refuses the stored name: the key is corrupt). The payment operations' ids (`create_payment_configuration`, `regenerate_payment_oauth_link`, `refund_payment`) are hashed into idempotency fingerprints, which expire with their records (`WA_SERVER_IDEMPOTENCY_TTL`): ephemeral | `each_operation_has_one_id`, `live_postgres_a_payments_key_reaches_its_wabas_configurations` |
 | the MongoDB outbox's collections `wa_server_events`, `wa_server_event_streams` and `wa_server_wabas`, their fields (an event's `_id` its public id, `stream` its tenant's id or `""`, `sequence`, `tenant_id`, `dedup_key`, `dedup_until`, `phone_number_id`, `waba_id`, `event_type`, `data` (a string), `data_bytes`, `created_at`; a stream's `_id`, `last_sequence`, `purged_through`; a WABA's `_id`, `tenant_id`, `attached_at`, `previous_tenant_unbound_at`, `numbers`, `insert_checks`) and its index names `wa_server_events_stream_sequence`, `wa_server_events_dedup_key` (partial, over string keys) and `wa_server_events_created_idx` (added by roadmap S9, a spike composed into no binary; the names and the documents' shapes **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `meta-whatsapp-server-store-mongodb/src/schema.rs` | where a MongoDB backend keeps the event outbox and the bindings its inserts check; the names follow the Postgres tables and columns where one exists. Renamed once a database holds events, a stream's sequences restart and its events are lost to the service | `the_stored_names_are_pinned`, `live_mongodb_migrate_makes_the_named_collections_and_indexes_once` |
 | `wak_` | `PREFIX`, `KEY_ID_CHARS`, `SECRET_CHARS`, `meta-whatsapp-server-core/src/keys.rs` | API keys' prefix and layout (`wak_` + 17 + `_` + 43 base62 characters), held by every integrator | `the_key_layout_is_pinned` (literals); `a_minted_key_parses_and_matches_its_digest_only`, `malformed_keys_do_not_parse`, `base62_is_fixed_width_big_endian` |
 | `wa.bot.cooldown`, `wa.bot.cooldown.notice` | `COOLDOWN_NAMESPACE`, `COOLDOWN_NOTICE_NAMESPACE`, `meta-whatsapp-bot/src/guard.rs` | store namespaces of the bot's command cooldowns and of their "please wait" markers (key: SHA-256 hex of the length-prefixed business number, command and user key; for a subcommand, the command part is its path, `order status`). **Ephemeral**: changing it forgets running cooldowns (they last one period at most) and may repeat one notice each; no data is stranded | `the_cooldown_key_is_pinned_and_hashed`, `a_subcommands_cooldown_key_is_over_its_path` |
 | `wa.bot.pacer` (added by roadmap B2b; the namespace and the record layout **pending the owner's confirmation**, roadmap § Owner touchpoints) | `PACER_NAMESPACE`, `meta-whatsapp-bot/src/pacer/kv.rs` | store namespace of `KvRateLimiter`'s per-number schedules (key: SHA-256 hex of the length-prefixed phone number id, `<len>:<id>,`; value: the 49-byte version 1 record, its first byte the version). **Ephemeral**: changing it forgets each number's schedule, slow-down and raised rate (records expire 24 hours after their last slot by default), so while replicas of two releases run side by side they book from two budgets; no data is stranded | `the_pacer_key_is_pinned_and_hashed` (known answer), `the_pacer_record_is_pinned` |
 | `wa.webhook.deadletter`, `wa.webhook.deadletter.contact` (added by roadmap L21a; the namespaces, the keys' derivations and the records' shapes **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `DEAD_LETTER_NAMESPACE`, `DEAD_LETTER_INDEX_NAMESPACE`, `slot_key`, `index_key`, `meta-whatsapp-webhooks/src/deadletter.rs` | store namespaces of the webhook dead letters: the ring (slots `0`…`capacity - 1`, decimal, each a letter at `id % capacity`, and its head under the key `head`, `{"v":1,"next":<id>}`, never expiring) and the per-contact index (key: SHA-256 hex of the length-prefixed business number, empty for an event that names none, and contact: `<len>:<phone_number_id>,<len>:<contact>,`; value `{"v":1,"letters":[[<id>,<slot>],…]}`); a letter is JSON with `"v":1`, in a pinned field order (`id`, `at`, `attempts`, `kind`, `error`, `phone_number_id`, `contacts`, `event_bytes`, `event`). **Not ephemeral**: changing a name, a derivation or a record's shape strands the letters written before, and an erasure no longer reaches them (they age out after 14 days by default) | `the_keys_are_pinned_and_hashed` (known answers), `the_record_bytes_are_pinned` (written and read back) |
 | `wa.bot.jobs`, `wa.bot.jobs.due`, `wa.bot.jobs.sent`, `wa.bot.jobs.message`, `wa.bot.jobs.limited` (**pending the owner's confirmation before the first release**, roadmap § Owner touchpoints; added by B3) | `JOBS_NAMESPACE`, `JOBS_DUE_NAMESPACE`, `JOBS_SENT_NAMESPACE`, `JOBS_MESSAGE_NAMESPACE`, `JOBS_LIMITED_NAMESPACE`, `BUCKET_SECONDS`, `meta-whatsapp-bot/src/jobs/mod.rs`; the records, `meta-whatsapp-bot/src/jobs/store.rs` | store namespaces of the durable jobs: the job records (key: SHA-256 hex of the length-prefixed job id), the due index (pages `<minute start, unix seconds>:<page>` of job ids, and its `cursor`, with the page versions of the minute behind it once moved forward), the per-recipient markers (digest of the job id, the run and the recipient's key: `user:<BSUID>` first, else `phone:<digits>`, or `group:<id>`), the sent messages' ids (digest of the `wamid`) and the marketing-limited markers (digest of the job id and the recipient's key); every record JSON with `"v":1`, in a pinned field order. **Not ephemeral**: changing a name, a key's derivation or a record's shape strands the jobs scheduled, or makes a resumed job send again to recipients it sent to | `the_job_keys_are_pinned_and_hashed`, `a_recipient_is_keyed_by_bsuid_first`, `buckets_are_minutes_in_unix_seconds` (key bytes, known answers); `the_job_records_are_pinned`, `the_index_and_marker_records_are_pinned` (record bytes, written and read back) |
+| `wa.server.registration` (added by roadmap M3d; the namespace, the key layout and the record **pending the owner's confirmation before the first release**, roadmap § Owner touchpoints) | `ATTEMPTS_NAMESPACE`, `RegistrationAttempts::store_key`, `meta-whatsapp-server-core/src/registration.rs` | store namespace of a number's registration and verification attempt counters (key: `registration:<phone_number_id>` or `verification:<phone_number_id>`; value: plain JSON `{"v":1,"since":<Unix seconds>,"count":<n>}`, expiring with its window). **Ephemeral**: changing it forgets the counts (one window at most), so while replicas of two releases run side by side they count apart; no data is stranded | `the_counter_key_and_record_are_pinned` |
 
 Library store namespaces are `wa.<module>[.<purpose>]` (`wa.token`,
 `wa.otp.rate`, `wa.webhook.dedup`, `wa.bot.cooldown`): a new typed store
@@ -338,14 +350,28 @@ Rules for every endpoint module:
    ids outright is the swap, at the cost of a legitimate id.
 2. **Requests are typed structs with `Serialize`, responses typed with
    `Deserialize`.** Unknown response fields are ignored (never
-   `deny_unknown_fields`); enums Meta may extend get a catch-all variant
-   so a new value never breaks parsing. Which name and shape all of them
-   share, and the `#[non_exhaustive]` policy, were decided on 2026-09-26
-   (`OPEN_QUESTIONS.md` #27, #28) and land with roadmap L20a and L20b. Until then,
-   follow the module you are in, and
-   add no new unit `#[serde(other)] Unknown` variants: they drop Meta's
-   value, and a type that also derives `Serialize` writes its own name
-   (e.g. `"UNKNOWN"`) back instead.
+   `deny_unknown_fields`); enums Meta may extend are **open enums**, all
+   of one shape (roadmap L20a): generated by
+   `meta_whatsapp_core::open_enum!`, the documented values as variants
+   and any other value kept verbatim in `Other(String)`, so a new value
+   never breaks parsing and serializes back unchanged. Never write one
+   by hand (the exceptions, two request values Meta never sends, are
+   listed with their reasons in the test's `NOT_OPEN`: `WabaCurrency`,
+   whose parse refuses an unlisted code, and `GatewayProvider`, whose
+   variants carry fields), and never a unit `#[serde(other)] Unknown`
+   (it drops Meta's value, and writes its own name back where Meta's
+   was); a value Meta documents as `UNKNOWN` is a variant like any
+   other. The macro's
+   options cover what Meta's pages need: `#![case_insensitive]`,
+   `#![normalize = fn]` (one value spelled two ways), and
+   `#![string_only]` for documents this crate writes and reads back whole
+   (Flow JSON), where a non-string value must fail rather than be kept as
+   its JSON text. `crates/meta-whatsapp-rs/tests/open_enums.rs` checks
+   every one and scans the source for any other shape; a structured
+   catch-all (`Unknown { raw }`, the templates' `Other(Value)`) is not a
+   string enum and stays as it is. The `#[non_exhaustive]` policy was
+   decided on 2026-09-26 (#28) and lands with roadmap L20b; the macro's
+   enums already carry it.
 3. **Validate locally what Meta documents as a hard limit** (lengths,
    counts, formats) and return `ValidationError` naming the field. Do not
    invent limits the docs do not state.
@@ -411,8 +437,9 @@ Rules for every endpoint module:
    signups' `default_messaging_customer_base_id`; `OnboardingRequested::request_id`;
    the calling settings' `app_id`; `SubscribedAppData::id` and
    `AssignedUser::id`; `CommerceSettings::id`; `LibraryTemplate::id`; the
-   template's `ad_*_id`s; `preverified_id`; the phone number
-   `request_id`; the ids of an Embedded Signup session event
+   template's `ad_*_id`s; the phone number `request_id` (a new
+   number's `preverified_id` is a `PreVerifiedPhoneNumberId` since
+   roadmap L11c); the ids of an Embedded Signup session event
    (`ad_account_ids`, `page_ids`, `dataset_ids`, `catalog_ids`,
    `instagram_account_ids`, `session_id`), the launch's `solution_id` and
    the token's `user_id`; and `HealthEntity::id`, on purpose: a health
@@ -687,7 +714,21 @@ system token's `appsecret_proof` in a form body) in place of
 `exchange_code`, then the same steps, writing the same vault record; the
 WABA's owner as Meta reports it must be the webhook's, and a WABA the vault
 already holds is refused before any request (`PARTNER_ADDED` also comes for
-the code flow's onboardings). Each failure is
+the code flow's onboardings), and one stored after that read is not replaced
+(`store_token` stores only where none is, `put_if_absent`). Several WABAs in one signup (roadmap L11b,
+`OPEN_QUESTIONS.md` #5): with `OnboardingRequest::every_granted_waba(true)`
+(off by default), `onboard_wabas(&request, &vault) → WabasOnboarded` (and
+`onboard_wabas_with_approval`, its approval called once per WABA) exchanges
+the code and inspects the token once, refuses a signup whose session info
+names a WABA the token was not granted, then runs `verify_assets` to the end
+of the tail for each granted WABA on its own (its own vault record, phone
+index, approval, subscription and credit line), the claimed one first with
+the request as it is, the others registering and syncing nothing, refused
+unless Meta reports the claimed WABA's owner as theirs, left alone when the
+vault holds them and stored only where it still holds none (`put_if_absent`);
+a WABA that fails is reported in its
+`WabaOutcome`, the next one runs, and each is resumed on its own. `onboard`
+and `onboard_hosted` refuse the option. Nothing new is stored. Each failure is
 `Error::in_step("exchange_code" | "debug_token" | "verify_assets" |
 "approve" | "store_token" | "subscribe_app" | "assign_system_user" |
 "share_credit_line" | "register_phone")`; `offboard` adds
@@ -834,7 +875,10 @@ cannot be taken back, so the design is fail-closed:
   address and no share in the ledger it just deletes, a recorded share
   revocation cannot find is `Reconcile` with the token kept, and a
   pending share it revoked nothing for is `RevocationIncomplete` with the
-  token kept. A recorded business is marked revoked even when nothing
+  token kept. `offboard_if_unchanged` revokes the same way, then deletes
+  only the token at the version the caller read (`delete_if_unchanged`):
+  for a caller whose records may move the WABA to another holder during
+  the revocation's calls (the service). A recorded business is marked revoked even when nothing
   was ever shared with it (the owner's decision, 2026-09-25): the marker
   precedes any lookup, which is what stops a racing share from
   surviving, and funding that business later takes
@@ -865,15 +909,28 @@ token a solution gives is an `AccessToken`, decoded so that a body that
 fails to parse reaches no error; no call there is replayed after a
 timeout but the reads.
 
-Payments (India so far, roadmap P1a) are `meta_whatsapp_client::payments`:
-the `order_details` and `order_status` messages are `Interactive`
-variants of `messages` (re-exported there), checked against every rule
-the pages state, with amounts as `{value, offset}`; the payment lookup
+Payments (India and Brazil, roadmap P1a to P1d) are
+`meta_whatsapp_client::payments`: the `order_details` and `order_status`
+messages are `Interactive` variants of `messages` (re-exported there),
+checked against every rule the pages state for their currency (`INR`
+India's, `BRL` Brazil's), with amounts as `{value, offset}`; the payment
+templates' order details and payment request buttons and order status
+component are `templates` parts, checked by the same rules, and a
+payment object the client does not type is refused, never sent
+unchecked. The payment webhooks (India's status of type `payment`,
+Brazil's `payment_method` reply) are typed in
+`meta_whatsapp_webhooks::fields::payments`, and never fail their change.
+The payment lookup
 and refunds hang off the phone number (`Client::payments`), the payment
 configurations off the WABA (`Client::payment_configurations`). A refund,
 a configuration's creation and an OAuth link are never replayed after a
 timeout; the OAuth link is a `SecretUrl`. No call accepts the WhatsApp
-Payments terms of service.
+Payments terms of service. India's checkout button templates (P1d) add
+the checkout endpoint, `payments::checkout` behind `flows-endpoint`: it
+reuses the Flows endpoint's key and crypto (`FlowEndpointKey`, one
+generic decryption inside the crate), never a copy, and checks an
+answer before it is sealed. A third party validation's encrypted bank
+details are a secret newtype, out of `Debug`.
 
 `EsVersion`'s v2, v3 and their public previews are `#[deprecated]`: Meta
 deprecates them on 2026-10-15.
@@ -1014,6 +1071,42 @@ keyed by business number and contact, and
   redacts or deletes are the number's, so the number lock covers them;
   `set_thread_owner` and `put_contact` one upsert
   whose update applies only when the stored record is not later.
+- `store::{SqliteKvStore, SqliteConversationStore}` (feature `sqlite`,
+  roadmap L8; sqlx's SQLite driver with the library compiled in, no TLS;
+  embedded migrations of their own, `migrations-sqlite/`, under the same
+  `TablePrefix`). For one process on one machine (a CLI, an edge or
+  desktop deployment, a small single-instance service, tests); several
+  processes may share the file, never over a network file system. Every
+  write is one `BEGIN IMMEDIATE` transaction: SQLite's write lock is
+  taken first, so each write reads, decides in Rust and writes as one
+  step, across processes too (`store::sqlite::open` sets a 30-second busy
+  timeout). Times are `INTEGER` microseconds; identifiers `TEXT`
+  compared byte for byte, refusing U+0000 as on Postgres; content
+  `BLOB` (UTF-8 bytes) and payloads JSON text, so U+0000 round-trips.
+  The key/value store decides expiry with the application's clock (an
+  injectable `Clock`) and draws versions from one counter row
+  (`wa_kv_version`) under the write lock. `store::sqlite::memory` is a
+  private in-memory database on one connection the pool never closes.
+  `trim_conversations` (roadmap B4) is one write transaction too: it
+  ranks each conversation's rows on the conversation index, deletes the
+  summaries whose latest message ranks beyond the cap, then those rows;
+  appends wait for the write lock, so none is ranked half-way or lost.
+- `store::RedisConversationStore` (feature `redis`, roadmap L8): every
+  key under `<prefix>{conversations:<prefix>}`, one hash tag per store
+  (it names the prefix), so a store's inbox is one slot (one shard on
+  Cluster; stores of other prefixes hash elsewhere, which spreads inboxes) and every write is one Lua script over it; status updates are
+  a compare-and-swap decided in Rust, as on Postgres; history, the
+  conversation list, window events and contacts page with
+  `ZRANGEBYLEX` over sorted sets of 16-hex-digit times and ids (byte
+  order is time order); the scripts compare strings byte by byte, never
+  with Lua's locale-dependent `<`. A purge of every number runs one
+  script per number. `trim_conversations` (roadmap B4) runs one script
+  per conversation (from a set of each number's conversations with a
+  history, `B:c:<pn>`), each deleting at most 1024 of its oldest rows
+  beyond the cap (and the summary when its latest message is one of
+  them), so a conversation further over takes several; each is atomic
+  with the appends, so an append is never lost. Needs `noeviction` and
+  persistence (AOF or snapshots): the history is data.
 - `media::FfmpegConverter` (feature `ffmpeg`): core's
   `media::MediaConverter` port over an `ffmpeg` binary the integrator
   installs, run with `tokio::process` (no shell) and fixed literal
@@ -1030,9 +1123,44 @@ keyed by business number and contact, and
   index first in memory before ffmpeg reads it (a pipe cannot seek
   back); its stderr is drained and never kept (it names files); an input
   that decodes to no audio fails (`-abort_on empty_output`), and the
-  output is checked to be mono Ogg Opus. An empty or oversized input (or result)
-  is a `ValidationError` on `input`; every other failure an
-  `Error::Conversion` (see Error tree).
+  output is checked to be mono Ogg Opus. Images (a static WebP sticker,
+  a JPEG, a PNG; roadmap L19b) are made from a PNG or a JPEG only:
+  checked by the input's first bytes before ffmpeg starts, and by
+  ffmpeg's own detection (`-format_whitelist png_pipe,jpeg_pipe`); a
+  PNG walked chunk by chunk first (one cut short refused, its text and
+  EXIF chunks, any colour profile over 16 KiB or after the first, and
+  anything after its end not passed on: ffmpeg inflates every `zTXt`
+  and every profile and keeps them); a JPEG walked segment by segment
+  (one cut short, or with a length running past the end, refused; only
+  the segments ffmpeg reads whole passed on, its tables, frame header,
+  scans and their data, the JFIF and Adobe segments at their fixed
+  size, its colour profile when it is one chunk of at most 16 KiB (as a
+  PNG's: each keeps one profile of at most 16 KiB; a profile in several
+  chunks is dropped), and in place of its EXIF a minimal one of the
+  Orientation alone:
+  ffmpeg copies an EXIF value once for every entry pointing at it, and
+  reads every `APP1`); the
+  first frame, no metadata, at most 32 Mi pixels (`-max_pixels`) and
+  256 MiB a single allocation; brought under the format's limit by a
+  fixed ladder of sizes and qualities (each attempt killed once past
+  it, the whole ladder within the timeout), the result's header
+  checked. An animated sticker (roadmap L19c) is made from a GIF only
+  (its first bytes, then `-format_whitelist gif`; ffmpeg 6.1 reads no
+  animated PNG or WebP from a pipe), walked block by block first: one
+  cut short or with a block GIF does not define is refused, and so is
+  one out of bounds (a canvas over 2 Mi pixels, fewer than 2 frames or
+  more than 500, more than 100 of 512 × 512 or larger, longer than
+  10 s), and ffmpeg gets it without its comments, plain text and
+  application extensions, with only the last graphic control extension
+  before each frame, and without anything after its trailer (ffmpeg holds them in memory with the first frame);
+  `libwebp_anim` on a fixed ladder of sizes, frame rates and qualities,
+  256 MiB a single allocation (the whole file is one packet), and the
+  result's chunks checked (`VP8X` with the animation flag, `ANIM`
+  before the `ANMF` frames, none outside them); frames all alike, which
+  libwebp makes a still image of, are refused. An empty or oversized
+  input (or a result over the limit
+  after every attempt) is a `ValidationError` on `input`; every other
+  failure an `Error::Conversion` (see Error tree).
 - `store::RedisKvStore` (feature `redis`; CAS via Lua). Requires the
   `noeviction` policy: every key with a TTL here enforces a limit (OTP
   issue logs, dedup markers), and Redis evicts silently.
@@ -1068,7 +1196,13 @@ keyed by business number and contact, and
   `KvStore` values are `BYTEA`. `messages.id` is the primary key on its
   own, so
   a message id is stored once per store whatever the business number (the
-  memory store does the same; `OPEN_QUESTIONS.md` #33).
+  memory store does the same; `OPEN_QUESTIONS.md` #33). The SQLite and
+  Redis stores (roadmap L8) key a message by business number and id and
+  keep that rule with a separate index (`wa_messages_id_idx`, unique;
+  `{conversations:<prefix>}:id:<id>`), which ids unique per number would drop.
+  `conversation_conformance::ids_are_stored_once_per_store` (outside
+  `run`: the port allows either answer) pins today's rule; every adapter
+  passes it.
 - Redis: per-namespace version counter (a per-key counter would leak one key
   per dedup marker forever); every mutating op is one Lua script. **TLS**
   (`rediss://`, roadmap L21c) is `store::RedisTls`, not redis-rs's TLS:
@@ -1092,7 +1226,9 @@ keyed by business number and contact, and
   `META_WHATSAPP_RS_REQUIRE_LIVE=1` (`just test-live` sets it). Every `KvStore`
   adapter runs `store::conformance`, every `ConversationStore` adapter runs
   `store::conversation_conformance` (including concurrency, collation and
-  real-time expiry under load).
+  real-time expiry under load). The SQLite adapters run both in
+  process (`just test`); the Redis conversation store's suite is live
+  (`live_redis_conversation_*`).
 
 ## CMS inbox (`meta_whatsapp_rs::inbox`)
 
@@ -1193,6 +1329,18 @@ and the thread's owner, and sends replies.
   latest message, preview, window or unread count, and no summary of its
   own). A media placeholder revoked before its content arrives is never
   filled.
+- The coexistence address book (`smb_app_state_sync`, roadmap L8):
+  `InboxSink` stores an `add` (also how an edit arrives) as a synced
+  contact under `synced_contact_key` (the BSUID, else the phone number
+  without `+`, the form conversations are keyed by, also the phone number
+  stored) and applies a `remove` under each key it names, so that an
+  entry keyed by the phone number before Meta sent the BSUID goes too;
+  the store keeps the latest by the change's `metadata.timestamp`, a
+  removal kept (key and time) so that an older `add` is refused. A
+  change without a timestamp, without a usable id, or with U+0000 in
+  one is skipped and logged without content. `Inbox::contacts` and
+  `Inbox::contact` read them back; `RecordingSwitches::contacts` turns
+  the recording off.
 - Coexistence (a merchant who keeps the WhatsApp Business app): echoes
   (`MessageEchoed`, messages the merchant sent from the app) are recorded
   as `Outbound`, status `Sent` (the payload has none), in the customer's
@@ -1280,7 +1428,7 @@ for every event, after the ban and the match.
   cooldown, and only the refusal that creates it tells the user, so
   repeated attempts get one notice per period. Records expire in place:
   invisible at once, deleted by Redis itself or by `purge_expired` on the
-  memory and Postgres stores.
+  memory, Postgres and SQLite stores.
 - **Errors**: a handler's error is logged (kinds only) and acknowledged
   by default, because an error answers `500` and Meta redelivers the
   whole batch, repeating replies already sent; a transient failure is
@@ -1362,9 +1510,10 @@ for every event, after the ban and the match.
   handlers; `PacedGroups` and `PacedGroup` wrap the client's group
   operations the same way, and `Pacer::acquire` is the hook for any other
   call. No new port and no persistence: a run lives in memory.
-- **Durable jobs** (`jobs`, roadmap B3; design D29): `KvJobs` keeps
-  `Job`s (a number, a due time, the recipients each person once, a JSON
-  payload) as a typed store on `KvStore`, no port of its own. `KvStore`
+- **Durable jobs** (`jobs`, roadmap B3, B3b; design D29): a `JobStore`
+  keeps `Job`s (a number, a due time, the recipients each person once, a
+  JSON payload); by default `KvJobs`, a typed store on `KvStore`, no
+  port of its own. `KvStore`
   has no range scan, so due times are bucketed by the minute: a job's id
   is appended to its minute's page by compare-and-swap (256 ids a page,
   then the next page; a due time already past, to the current minute's),
@@ -1385,11 +1534,19 @@ for every event, after the ban and the match.
   by a race. A pass that leaves recipients provably unsent
   (`Error::may_resend`, a stop, a store failure) is retried with backoff,
   then stopped. A message's id is kept for its status webhooks: a
-  `131049` marks that recipient for 24 hours (`KvJobs::observe`,
-  `JobFeedback`), and a re-run (`KvJobs::rerun`) skips them. The job
-  store is not behind a trait yet (the `KvStore` adapter is what swaps;
-  a `JobStore` trait is roadmap B3b); the runner's outbound, pacer,
-  failure policy and composer are.
+  `131049` marks that recipient for 24 hours (`JobStore::observe`,
+  `JobFeedback`), and a re-run (`JobStore::rerun`) skips them. The job
+  store is a trait (`JobStore`, B3b), object-safe and held by the runner
+  as an `Arc<dyn JobStore>`: scheduling, cancel, re-run, reads, the
+  `131049` feedback, and the runner's own steps (claiming what is due,
+  holding the claim, each recipient's marker, settling), with the
+  contract under concurrency in its rustdoc (claims atomic under a
+  lease, a claim checked on every write, markers created atomically
+  before the send and only their runner's, cancels winning or losing
+  whole) and `jobs::conformance` its executable form, which `KvJobs`
+  and `MemoryJobs` (in memory behind one mutex, independent of
+  `KvStore`) pass. The runner's outbound, pacer, failure policy and
+  composer are traits too.
 
 ## Typst (`meta-whatsapp-typst`)
 
@@ -1526,7 +1683,10 @@ decisions and the delivery milestones, is
   (explicit since S7): an operator's filters name them.
 - **Ports, and a backend as the unit of swapping.** The core stores
   through ports: `RecordStore` (tenants, keys, bindings),
-  `IdempotencyRecords`, `Outbox`, `LeaderLock` (a lease,
+  `IdempotencyRecords`, `Outbox`, `EventNotifier` (since roadmap M2b:
+  what wakes every replica's live event streams on a new event, a
+  wake-up only, the outbox staying the source of truth; Postgres
+  `LISTEN`/`NOTIFY`, a broadcast in memory), `LeaderLock` (a lease,
   `try_exclusive(name, lease)`), `Janitor` (expired rows nothing else
   deletes) and `SchemaMigrator`. A `Backend` gives all of them, and the
   library's `KvStore` and `ConversationStore`, over one database, because
@@ -1605,7 +1765,8 @@ decisions and the delivery milestones, is
   characters or line separators.
 - **Sends are never repeated behind the caller's back.** The service
   adds no send retries to the library's; a caller's `Idempotency-Key`
-  (sends, uploads, template creation) keeps the answer of a request that
+  (sends, inbox replies, marking a conversation read, uploads, template
+  creation) keeps the answer of a request that
   may have taken effect and replays it, and releases the key only when
   the library's `Error::may_have_been_sent` is `false`. A key's
   fingerprint is the operation and its canonical input (the number or

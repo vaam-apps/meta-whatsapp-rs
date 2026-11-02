@@ -23,12 +23,12 @@ use std::fmt;
 
 use meta_whatsapp_core::GraphApiError;
 use meta_whatsapp_core::ids::{GroupId, UserId, WaId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::secret::RedactedPath;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::common::Metadata;
-use crate::open_enum::open_enum;
 
 /// `value` of any `group_*` change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

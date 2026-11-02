@@ -7,10 +7,11 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use async_trait::async_trait;
 use meta_whatsapp_rs::adapters::store::{MemoryConversationStore, MemoryKvStore};
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
-use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
+use meta_whatsapp_rs::core::store::{ConversationStore, KvStore, Retention};
 use time::{Duration, OffsetDateTime};
 
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
+use meta_whatsapp_server_core::notify::{EventNotifier, LocalNotifier};
 use meta_whatsapp_server_core::outbox::Outbox;
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, LeaderTurn, RecordStore, SchemaMigrator, StoreResult,
@@ -21,8 +22,8 @@ use crate::MemoryEventStore;
 use meta_whatsapp_server_core::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
-    NumberBinding, NumberStatus, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
-    WabaTombstone,
+    NewSignupAttempt, NumberBinding, NumberStatus, NumberTombstone, OtpSettings, PageRequest,
+    SignupAttempt, Tenant, TenantId, TenantStatus, VaultEntry, WabaBinding, WabaTombstone,
 };
 
 /// In-memory [`RecordStore`] and [`IdempotencyRecords`]. Its event outbox is [`MemoryStore::outbox`]: one
@@ -86,8 +87,19 @@ pub(super) struct State {
     pub(super) numbers: BTreeMap<String, NumberBinding>,
     /// Each WABA's last unbinding, by WABA id (roadmap S2b).
     tombstones: BTreeMap<String, WabaTombstone>,
+    /// Each number's last release, by phone number id (roadmap M2h).
+    number_tombstones: BTreeMap<String, NumberTombstone>,
     /// Idempotency records by (tenant, key).
     idempotency: BTreeMap<(String, String), IdempotencyEntry>,
+    /// Each tenant's OTP settings, by tenant id, in their stored form
+    /// (`OtpSettings::to_stored`), as Postgres keeps them (roadmap M3c).
+    otp_settings: BTreeMap<String, serde_json::Value>,
+    /// Signup attempts, by WABA id (roadmap M3a): one per WABA, gone with
+    /// its binding.
+    signup_attempts: BTreeMap<String, SignupAttempt>,
+    /// The vault's records kept past a binding, by [`VaultEntry::key`]
+    /// (roadmap M3a): kept for good.
+    vault_entries: BTreeMap<String, VaultEntry>,
 }
 
 /// Lock `state`, a poisoned lock included (no invariant spans a panic).
@@ -213,6 +225,41 @@ impl RecordStore for MemoryStore {
         Ok(Some(tenant.clone()))
     }
 
+    async fn otp_settings(&self, id: &TenantId) -> StoreResult<Option<OtpSettings>> {
+        let state = self.lock();
+        let Some(stored) = state.otp_settings.get(id.as_str()) else {
+            return Ok(None);
+        };
+        OtpSettings::from_stored(stored).map(Some).ok_or_else(|| {
+            meta_whatsapp_rs::core::error::StorageError::Backend(anyhow::anyhow!(
+                "a tenant's OTP settings are not in a layout this release reads"
+            ))
+        })
+    }
+
+    async fn set_otp_settings(
+        &self,
+        id: &TenantId,
+        settings: Option<&OtpSettings>,
+    ) -> StoreResult<bool> {
+        let mut state = self.lock();
+        let Some(tenant) = state.tenants.get_mut(id.as_str()) else {
+            return Ok(false);
+        };
+        tenant.updated_at = OffsetDateTime::now_utc();
+        match settings {
+            Some(settings) => {
+                state
+                    .otp_settings
+                    .insert(id.as_str().to_owned(), settings.to_stored());
+            }
+            None => {
+                state.otp_settings.remove(id.as_str());
+            }
+        }
+        Ok(true)
+    }
+
     async fn delete_tenant(&self, id: &TenantId) -> StoreResult<DeleteTenantOutcome> {
         let mut state = self.lock();
         if !state.tenants.contains_key(id.as_str()) {
@@ -222,6 +269,9 @@ impl RecordStore for MemoryStore {
             return Ok(DeleteTenantOutcome::HasWabas);
         }
         state.tenants.remove(id.as_str());
+        // Its OTP settings go with its record, as on Postgres (a column of
+        // the tenant's row).
+        state.otp_settings.remove(id.as_str());
         state
             .keys
             .retain(|_, key| !matches!(&key.owner, KeyOwner::Tenant(t) if t == id));
@@ -239,6 +289,9 @@ impl RecordStore for MemoryStore {
         // The WABAs it was unbound from forget it (Postgres: ON DELETE SET
         // NULL): a tenant created again under its id is another tenant.
         for tombstone in state.tombstones.values_mut() {
+            tombstone.forget_tenant(id);
+        }
+        for tombstone in state.number_tombstones.values_mut() {
             tombstone.forget_tenant(id);
         }
         // Its events: under the store's lock, as Postgres does it in the
@@ -358,20 +411,34 @@ impl RecordStore for MemoryStore {
                 generation: 1,
                 previous_tenant_unbound_at: previous,
             });
-        state
+        // The numbers the WABA had and the list lacks are released, each
+        // leaving its tombstone (roadmap M2h).
+        let dropped: Vec<String> = state
             .numbers
-            .retain(|pn, b| &b.waba_id != waba_id || numbers.iter().any(|n| n.as_str() == pn));
+            .iter()
+            .filter(|(pn, b)| &b.waba_id == waba_id && !numbers.iter().any(|n| n.as_str() == *pn))
+            .map(|(pn, _)| pn.clone())
+            .collect();
+        release(&mut state, &dropped, now);
         for number in numbers {
-            state.numbers.insert(
-                number.as_str().to_owned(),
-                NumberBinding {
-                    phone_number_id: number.clone(),
+            let bound = match state.numbers.get(number.as_str()) {
+                // Already this tenant's (D4 refused another's): it keeps
+                // its start and its previous tenant.
+                Some(held) => NumberBinding {
                     waba_id: waba_id.clone(),
-                    tenant_id: tenant.clone(),
                     status: NumberStatus::Connected,
                     updated_at: now,
+                    ..held.clone()
                 },
-            );
+                None => NumberBinding::newly_bound(
+                    number.clone(),
+                    waba_id.clone(),
+                    tenant.clone(),
+                    now,
+                    state.number_tombstones.get(number.as_str()),
+                ),
+            };
+            state.numbers.insert(number.as_str().to_owned(), bound);
         }
         Ok(BindOutcome::Bound)
     }
@@ -470,6 +537,115 @@ impl RecordStore for MemoryStore {
         }
         Ok(true)
     }
+
+    async fn set_credit_allocation_if(
+        &self,
+        epoch: &BindingEpoch,
+        allocation_config_id: &str,
+    ) -> StoreResult<bool> {
+        let mut state = self.lock();
+        if !holds(&state, epoch) {
+            return Ok(false);
+        }
+        if let Some(binding) = state.wabas.get_mut(epoch.waba_id.as_str()) {
+            binding.credit_allocation_id = Some(allocation_config_id.to_owned());
+        }
+        Ok(true)
+    }
+
+    async fn save_signup_attempt(&self, attempt: &NewSignupAttempt) -> StoreResult<bool> {
+        let now = OffsetDateTime::now_utc();
+        let mut state = self.lock();
+        let bound = state
+            .wabas
+            .get(attempt.waba_id.as_str())
+            .is_some_and(|w| w.tenant_id == attempt.tenant_id);
+        if !bound {
+            return Ok(false);
+        }
+        // A replacement of the same tenant's attempt keeps when it began.
+        let created_at = state
+            .signup_attempts
+            .get(attempt.waba_id.as_str())
+            .filter(|kept| kept.tenant_id == attempt.tenant_id)
+            .map_or(now, |kept| kept.created_at);
+        state.signup_attempts.insert(
+            attempt.waba_id.as_str().to_owned(),
+            SignupAttempt {
+                tenant_id: attempt.tenant_id.clone(),
+                waba_id: attempt.waba_id.clone(),
+                failed_step: attempt.failed_step.clone(),
+                session: attempt.session.clone(),
+                finish_kind: attempt.finish_kind.clone(),
+                created_at,
+                updated_at: now,
+            },
+        );
+        Ok(true)
+    }
+
+    async fn signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<Option<SignupAttempt>> {
+        Ok(self
+            .lock()
+            .signup_attempts
+            .get(waba_id.as_str())
+            .filter(|attempt| &attempt.tenant_id == tenant)
+            .cloned())
+    }
+
+    async fn signup_attempts(
+        &self,
+        tenant: &TenantId,
+        request: &PageRequest,
+    ) -> StoreResult<Listing<SignupAttempt>> {
+        let state = self.lock();
+        let items = page(&state.signup_attempts, request, |a: &SignupAttempt| {
+            &a.tenant_id == tenant
+        });
+        Ok(listing(
+            items.into_iter().map(|(_, a)| a).collect(),
+            request.limit,
+            |a: &SignupAttempt| a.waba_id.as_str().to_owned(),
+        ))
+    }
+
+    async fn delete_signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<bool> {
+        let mut state = self.lock();
+        let theirs = state
+            .signup_attempts
+            .get(waba_id.as_str())
+            .is_some_and(|attempt| &attempt.tenant_id == tenant);
+        if theirs {
+            state.signup_attempts.remove(waba_id.as_str());
+        }
+        Ok(theirs)
+    }
+
+    async fn record_vault_entry(&self, entry: &VaultEntry) -> StoreResult<()> {
+        self.lock()
+            .vault_entries
+            .entry(entry.key())
+            .or_insert_with(|| entry.clone());
+        Ok(())
+    }
+
+    async fn vault_entries(&self, request: &PageRequest) -> StoreResult<Listing<VaultEntry>> {
+        let state = self.lock();
+        let items = page(&state.vault_entries, request, |_| true);
+        Ok(listing(
+            items.into_iter().map(|(_, e)| e).collect(),
+            request.limit,
+            VaultEntry::key,
+        ))
+    }
 }
 
 /// Whether `epoch.waba_id` is still bound as `epoch` says: the same
@@ -487,12 +663,33 @@ fn unbind(state: &mut State, waba_id: &WabaId) -> bool {
     let Some(binding) = state.wabas.remove(waba_id.as_str()) else {
         return false;
     };
-    state.numbers.retain(|_, b| &b.waba_id != waba_id);
+    let now = OffsetDateTime::now_utc();
+    let numbers: Vec<String> = state
+        .numbers
+        .iter()
+        .filter(|(_, b)| &b.waba_id == waba_id)
+        .map(|(pn, _)| pn.clone())
+        .collect();
+    release(state, &numbers, now);
+    // Its signup attempt goes with it (Postgres: ON DELETE CASCADE).
+    state.signup_attempts.remove(waba_id.as_str());
     state.tombstones.insert(
         waba_id.as_str().to_owned(),
-        WabaTombstone::of(&binding, OffsetDateTime::now_utc()),
+        WabaTombstone::of(&binding, now),
     );
     true
+}
+
+/// Release the numbers `numbers` (their bindings removed), each leaving its
+/// tombstone at `at` (roadmap M2h), in the same step.
+fn release(state: &mut State, numbers: &[String], at: OffsetDateTime) {
+    for pn in numbers {
+        if let Some(binding) = state.numbers.remove(pn) {
+            state
+                .number_tombstones
+                .insert(pn.clone(), NumberTombstone::of(&binding, at));
+        }
+    }
 }
 
 #[async_trait]
@@ -696,6 +893,7 @@ impl SchemaMigrator for Nothing {
 pub struct MemoryBackend {
     store: Arc<MemoryStore>,
     outbox: Arc<MemoryEventStore>,
+    notifier: Arc<LocalNotifier>,
     leader: Arc<MemoryLeaderLock>,
     kv: Arc<MemoryKvStore>,
     conversations: Arc<MemoryConversationStore>,
@@ -714,10 +912,22 @@ impl MemoryBackend {
         Self {
             outbox: store.outbox(),
             store: Arc::new(store),
+            notifier: Arc::new(LocalNotifier::new()),
             leader: Arc::new(MemoryLeaderLock::new()),
             kv: Arc::new(MemoryKvStore::new()),
             conversations: Arc::new(MemoryConversationStore::new()),
         }
+    }
+
+    /// Its inbox built anew, empty, with `retention`
+    /// (`MemoryConversationStore::with_retention`: what housekeeping's
+    /// `ConversationStore::apply_retention` purges; the service's
+    /// `WA_SERVER_INBOX_RETENTION`, roadmap M2a). Call it while building:
+    /// the inbox it replaces is dropped with what it held.
+    #[must_use]
+    pub fn with_inbox_retention(mut self, retention: Retention) -> Self {
+        self.conversations = Arc::new(MemoryConversationStore::new().with_retention(retention));
+        self
     }
 }
 
@@ -737,6 +947,10 @@ impl Backend for MemoryBackend {
 
     fn outbox(&self) -> Arc<dyn Outbox> {
         self.outbox.clone()
+    }
+
+    fn notifier(&self) -> Arc<dyn EventNotifier> {
+        self.notifier.clone()
     }
 
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {

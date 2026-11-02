@@ -9,15 +9,21 @@
 //! `templates/components`, `templates/template-media`,
 //! `templates/tap-target-url-title-override`, `templates/marketing-templates/*`,
 //! `templates/utility-templates/*`, `templates/authentication-templates/*`,
-//! `catalogs/*-template-messages`, `flows/guides/flows-templates` and
-//! `calling/call-button-messages-deep-links`.
+//! `catalogs/*-template-messages`, `flows/guides/flows-templates`,
+//! `calling/call-button-messages-deep-links`, and the Payments API's
+//! `payments/payments-in/orderdetailstemplate`,
+//! `payments/payments-in/orderstatustemplate`,
+//! `payments/payments-in/checkout-button-templates`,
+//! `payments/payments-br/orderdetailstemplate` and
+//! `payments/payments-br/payment-request-cta`.
 //!
 //! ## Button `index`
 //!
 //! Meta's examples write the button index both as a string (`"0"`, the
 //! authentication, Flow, carousel and URL-encoding examples) and as a number
-//! (`0`, the coupon, limited-time-offer and catalog examples). It is sent as
-//! a string here and either form is accepted when parsing.
+//! (`0`, the coupon, limited-time-offer, catalog and order details
+//! examples). It is sent as a string here and either form is accepted when
+//! parsing.
 //!
 //! ## Debug output
 //!
@@ -31,10 +37,12 @@ use std::fmt;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{CatalogId, MediaId};
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-use super::macros::string_enum;
+use super::payments::{PaymentRequest, TemplateOrderStatus};
+use crate::messages::payments::{OrderContext, OrderDetailsParameters, OrderUpdate};
 
 /// The `template` object of a send request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -171,6 +179,34 @@ impl TemplateMessage {
         })
     }
 
+    /// The order details button at `index`: the order to pay
+    /// (`payments-in/orderdetailstemplate`,
+    /// `payments-br/orderdetailstemplate`), checked by the rules of its
+    /// currency, as an `order_details` message's parameters. A checkout
+    /// button's too (`payments-in/checkout-button-templates`: one per
+    /// product, in a carousel one per card), whose INR order may carry the
+    /// [`ShippingInfo`](crate::payments::ShippingInfo) offered to the buyer
+    /// and an expiration without a description. Each order details button
+    /// of a message has its own `reference_id`.
+    #[must_use]
+    pub fn order_details_button(self, index: u32, parameters: OrderDetailsParameters) -> Self {
+        self.component(SendComponent::order_details_button(index, parameters))
+    }
+
+    /// The payment request button at `index`
+    /// (`payments-br/payment-request-cta`).
+    #[must_use]
+    pub fn payment_request_button(self, index: u32, request: PaymentRequest) -> Self {
+        self.component(SendComponent::payment_request_button(index, request))
+    }
+
+    /// The `order_status` component of an order status template: the
+    /// order `reference_id`'s new status (`payments-in/orderstatustemplate`).
+    #[must_use]
+    pub fn order_status(self, reference_id: impl Into<String>, order: OrderUpdate) -> Self {
+        self.component(SendComponent::order_status(reference_id, order))
+    }
+
     /// Tap-target override: the message opens `url` with `title`
     /// (`templates/tap-target-url-title-override`).
     #[must_use]
@@ -195,8 +231,54 @@ impl TemplateMessage {
                 "must not be empty",
             ));
         }
-        validate_components(&self.components, "template.components")
+        validate_components(&self.components, "template.components")?;
+        unique_reference_ids(&self.components, "template.components")
     }
+}
+
+/// `payments-in/checkout-button-templates`, `<REFERENCE_ID>`: "If sending
+/// a carousel template, each checkout button must have a unique reference
+/// ID." Checked across every order details button of the message, the
+/// carousel's cards included (a single product template has one).
+fn unique_reference_ids(list: &[SendComponent], path: &str) -> Result<(), ValidationError> {
+    fn walk<'a>(
+        list: &'a [SendComponent],
+        path: &str,
+        seen: &mut std::collections::BTreeSet<&'a str>,
+    ) -> Result<(), ValidationError> {
+        for (i, c) in list.iter().enumerate() {
+            let field = format!("{path}[{i}]");
+            match c {
+                SendComponent::Carousel { cards } => {
+                    for (j, card) in cards.iter().enumerate() {
+                        walk(
+                            &card.components,
+                            &format!("{field}.cards[{j}].components"),
+                            seen,
+                        )?;
+                    }
+                }
+                SendComponent::Button { parameters, .. } => {
+                    for (j, p) in parameters.iter().enumerate() {
+                        if let Parameter::Action { action } = p
+                            && let Some(details) = &action.order_details
+                            && !seen.insert(details.reference_id.as_str())
+                        {
+                            return Err(ValidationError::new(
+                                format!(
+                                    "{field}.parameters[{j}].action.order_details.reference_id"
+                                ),
+                                "each order details button of a message needs its own reference id",
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    walk(list, path, &mut std::collections::BTreeSet::new())
 }
 
 fn validate_components(list: &[SendComponent], path: &str) -> Result<(), ValidationError> {
@@ -218,6 +300,44 @@ fn validate_components(list: &[SendComponent], path: &str) -> Result<(), Validat
                     )?;
                 }
             }
+            SendComponent::Button {
+                sub_type: sub_type @ (ButtonSubType::OrderDetails | ButtonSubType::PaymentRequest),
+                parameters,
+                ..
+            } => {
+                // Both pages send one `action` parameter carrying the
+                // payment. One that is not typed (a currency or payment
+                // method this client has no rules for, a required field
+                // missing) would skip every check: refused.
+                let typed = match (sub_type, parameters.as_slice()) {
+                    (ButtonSubType::OrderDetails, [Parameter::Action { action }]) => {
+                        action.order_details.is_some()
+                    }
+                    (ButtonSubType::PaymentRequest, [Parameter::Action { action }]) => {
+                        action.payment_request.is_some()
+                    }
+                    _ => false,
+                };
+                if !typed {
+                    return Err(ValidationError::new(
+                        format!("{field}.parameters"),
+                        format!(
+                            "a button of `sub_type` `{sub_type}` takes one `action` parameter with its `{sub_type}` object, of a currency and payment method this client knows"
+                        ),
+                    ));
+                }
+                validate_parameter(&parameters[0], &format!("{field}.parameters[0]"))?;
+            }
+            SendComponent::OrderStatus { parameters } => {
+                let [p @ Parameter::OrderStatus { .. }] = parameters.as_slice() else {
+                    return Err(ValidationError::new(
+                        format!("{field}.parameters"),
+                        "an `order_status` component takes one `order_status` parameter",
+                    ));
+                };
+                validate_parameter(p, &format!("{field}.parameters[0]"))?;
+            }
+            SendComponent::Other(raw) => untyped_payment(raw, &field)?,
             SendComponent::Header { parameters }
             | SendComponent::Body { parameters }
             | SendComponent::Button { parameters, .. } => {
@@ -248,7 +368,19 @@ fn validate_parameter(p: &Parameter, field: &str) -> Result<(), ValidationError>
         Parameter::Payload { payload } if payload.chars().count() > 512 => {
             fail(format!("{field}.payload"), "must be at most 512 characters")
         }
+        Parameter::OrderStatus { order_status } => {
+            order_status.validate(&format!("{field}.order_status"))
+        }
         Parameter::Action { action } => {
+            if let Some(details) = &action.order_details {
+                details.validate_at(
+                    &format!("{field}.action.order_details"),
+                    OrderContext::TemplateButton,
+                )?;
+            }
+            if let Some(request) = &action.payment_request {
+                request.validate(&format!("{field}.action.payment_request"))?;
+            }
             let Some(sections) = &action.sections else {
                 return Ok(());
             };
@@ -275,8 +407,39 @@ fn validate_parameter(p: &Parameter, field: &str) -> Result<(), ValidationError>
             }
             Ok(())
         }
+        Parameter::Other(raw) => untyped_payment(raw, field),
         _ => Ok(()),
     }
+}
+
+/// The keys of the payment objects a send carries: an order details
+/// button's `order_details`, a payment request button's `payment_request`,
+/// an order status component's `order_status`.
+const PAYMENT_KEYS: [&str; 3] = ["order_details", "payment_request", "order_status"];
+
+/// A component or parameter that did not parse typed (the catch-all:
+/// a `type` spelled `Button` or `ORDER_STATUS` in a parameter, an `index`
+/// that is not a number, a currency this client has no rules for) is sent
+/// as written, unchecked. One holding a payment object at any depth is
+/// refused, as a payment button whose parameter is not typed is: it would
+/// skip every payment rule, the per-currency ones included.
+fn untyped_payment(raw: &Value, field: &str) -> Result<(), ValidationError> {
+    fn holds_payment(v: &Value) -> bool {
+        match v {
+            Value::Object(map) => map
+                .iter()
+                .any(|(k, v)| PAYMENT_KEYS.contains(&k.as_str()) || holds_payment(v)),
+            Value::Array(items) => items.iter().any(holds_payment),
+            _ => false,
+        }
+    }
+    if holds_payment(raw) {
+        return Err(ValidationError::new(
+            field,
+            "a payment object (`order_details`, `payment_request`, `order_status`) must be in its typed component and parameter, of a currency and payment method this client knows",
+        ));
+    }
+    Ok(())
 }
 
 /// `template.language`.
@@ -289,7 +452,8 @@ pub struct TemplateLanguage {
     pub policy: Option<String>,
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `sub_type` of a button component. Spelled as each page does,
     /// including the catalog page's upper-case `CATALOG`.
     pub enum ButtonSubType {
@@ -307,6 +471,10 @@ string_enum! {
         Mpm => "mpm",
         /// Voice-call button (sent without an `index`).
         VoiceCall => "voice_call",
+        /// Order details button (Payments API).
+        OrderDetails => "order_details",
+        /// Payment request button (Payments API, Brazil).
+        PaymentRequest => "payment_request",
     }
 }
 
@@ -362,6 +530,13 @@ pub enum SendComponent {
     #[serde(alias = "TAP_TARGET_CONFIGURATION")]
     TapTargetConfiguration {
         /// One `tap_target_configuration` parameter.
+        parameters: Vec<Parameter>,
+    },
+    /// An order status template's new status
+    /// (`payments-in/orderstatustemplate`).
+    #[serde(alias = "ORDER_STATUS")]
+    OrderStatus {
+        /// One `order_status` parameter.
         parameters: Vec<Parameter>,
     },
     /// Anything this version does not model, verbatim.
@@ -504,6 +679,45 @@ impl SendComponent {
         )
     }
 
+    /// Order details button: `{"type": "action", "action": {"order_details":
+    /// …}}`.
+    pub fn order_details_button(index: u32, parameters: OrderDetailsParameters) -> Self {
+        Self::button(
+            ButtonSubType::OrderDetails,
+            Some(index),
+            vec![Parameter::Action {
+                action: ParameterAction {
+                    order_details: Some(Box::new(parameters)),
+                    ..ParameterAction::default()
+                },
+            }],
+        )
+    }
+
+    /// Payment request button: `{"type": "action", "action":
+    /// {"payment_request": …}}`.
+    pub fn payment_request_button(index: u32, request: PaymentRequest) -> Self {
+        Self::button(
+            ButtonSubType::PaymentRequest,
+            Some(index),
+            vec![Parameter::Action {
+                action: ParameterAction {
+                    payment_request: Some(request),
+                    ..ParameterAction::default()
+                },
+            }],
+        )
+    }
+
+    /// An order status template's component.
+    pub fn order_status(reference_id: impl Into<String>, order: OrderUpdate) -> Self {
+        Self::OrderStatus {
+            parameters: vec![Parameter::OrderStatus {
+                order_status: TemplateOrderStatus::new(reference_id, order),
+            }],
+        }
+    }
+
     /// Voice-call button overrides (no `index`, per the calling page).
     pub fn voice_call_button(ttl_minutes: Option<u32>, payload: Option<String>) -> Self {
         let mut parameters = Vec::new();
@@ -595,7 +809,8 @@ pub enum Parameter {
         /// Code copied to the clipboard, at most 20 characters.
         coupon_code: String,
     },
-    /// Flow, catalog and MPM button actions.
+    /// Flow, catalog, MPM, order details and payment request button
+    /// actions.
     Action {
         /// The action object.
         action: ParameterAction,
@@ -614,6 +829,11 @@ pub enum Parameter {
     TtlMinutes {
         /// 1–43200 minutes.
         ttl_minutes: u32,
+    },
+    /// An order status template's new status.
+    OrderStatus {
+        /// The order and its status.
+        order_status: TemplateOrderStatus,
     },
     /// Anything this version does not model, verbatim.
     #[serde(untagged)]
@@ -678,6 +898,10 @@ impl fmt::Debug for Parameter {
             Self::TtlMinutes { ttl_minutes } => f
                 .debug_struct("TtlMinutes")
                 .field("ttl_minutes", ttl_minutes)
+                .finish(),
+            Self::OrderStatus { order_status } => f
+                .debug_struct("OrderStatus")
+                .field("order_status", order_status)
                 .finish(),
             Self::Other(v) => f.debug_tuple("Other").field(v).finish(),
         }
@@ -891,6 +1115,13 @@ pub struct ParameterAction {
     /// MPM buttons: up to 10 sections, 30 products in total.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sections: Option<Vec<MpmSection>>,
+    /// Order details buttons: the order, as an `order_details` message's
+    /// parameters, checked by its currency's rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order_details: Option<Box<OrderDetailsParameters>>,
+    /// Payment request buttons: the payment method and amount.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payment_request: Option<PaymentRequest>,
 }
 
 /// A multi-product message section.

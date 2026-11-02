@@ -72,6 +72,39 @@ fn refused(vars: &Vars) -> ConfigError {
     }
 }
 
+/// Roadmap M2a: the inbox keeps everything and checks every reply by
+/// default; `WA_SERVER_INBOX_RETENTION` sets the inbox store's retention
+/// (`keep`, or a duration) and `WA_SERVER_INBOX_REPLY_CHECKS` a number's
+/// reply checks, every other number keeping all of them.
+#[test]
+fn the_inbox_settings_read_a_retention_and_each_numbers_reply_checks() {
+    use meta_whatsapp_rs::core::ids::PhoneNumberId;
+    use meta_whatsapp_rs::core::store::Retention;
+    use meta_whatsapp_rs::inbox::ReplyChecks;
+    let defaults = Config::from_env(&production()).unwrap();
+    assert_eq!(defaults.inbox_retention, Retention::Keep);
+    assert!(defaults.settings.inbox_reply_checks.is_empty());
+    let keep = Config::from_env(&production().set("WA_SERVER_INBOX_RETENTION", "keep")).unwrap();
+    assert_eq!(keep.inbox_retention, Retention::Keep);
+    let config = Config::from_env(&production().set("WA_SERVER_INBOX_RETENTION", "90d").set(
+        "WA_SERVER_INBOX_REPLY_CHECKS",
+        "106540352242922:window+trust_handover, 106540352242923:window",
+    ))
+    .unwrap();
+    assert_eq!(config.inbox_retention, Retention::days(90));
+    let checks = &config.settings.inbox_reply_checks;
+    let number = |id: &str| PhoneNumberId::new(id).unwrap();
+    assert_eq!(
+        checks.of(&number("106540352242922")),
+        ReplyChecks::ALL.thread_owner(false)
+    );
+    assert_eq!(
+        checks.of(&number("106540352242923")),
+        ReplyChecks::NONE.window(true)
+    );
+    assert_eq!(checks.of(&number("106540352242924")), ReplyChecks::ALL);
+}
+
 #[test]
 fn a_valid_production_configuration_starts_with_safe_defaults() {
     let config = Config::from_env(&production()).unwrap();
@@ -285,6 +318,19 @@ fn refuses_what_it_cannot_parse_without_quoting_it() {
         // Zero would purge every event at the next housekeeping round.
         ("WA_SERVER_OUTBOX_RETENTION", "0"),
         ("WA_SERVER_OUTBOX_RETENTION", "0d"),
+        // Zero would purge the whole inbox (roadmap M2a).
+        ("WA_SERVER_INBOX_RETENTION", "0d"),
+        ("WA_SERVER_INBOX_RETENTION", "forever"),
+        ("WA_SERVER_INBOX_REPLY_CHECKS", "106540352242922:windows"),
+        ("WA_SERVER_INBOX_REPLY_CHECKS", "106540352242922"),
+        (
+            "WA_SERVER_INBOX_REPLY_CHECKS",
+            "106540352242922:none,106540352242922:all",
+        ),
+        (
+            "WA_SERVER_INBOX_REPLY_CHECKS",
+            "106540352242922:trust_handover",
+        ),
         ("WA_SERVER_LOG_FORMAT", "xml"),
         ("WA_ONBOARDING_MODE", "reseller"),
         ("WA_APP_ID", "not-digits"),
@@ -494,6 +540,74 @@ fn the_service_limits_default_to_the_designs_and_parse() {
             ConfigError::Invalid { name: named, .. } => assert_eq!(named, name, "{value}"),
             other => panic!("{name}={value}: {other:?}"),
         }
+    }
+}
+
+/// Roadmap M3d: a number's attempt budgets. Unset, 5 registrations in 72
+/// hours (two windows back to back stay within Meta's 10 in a moving 72
+/// hours) and 10 verifications an hour; each count and window parses;
+/// zero, a count past `u32` and an unparsable or zero window are refused,
+/// naming the variable and quoting nothing. Decisive: each default, each
+/// variable, each refusal.
+#[test]
+fn a_numbers_attempt_budgets_are_set_by_four_variables() {
+    use std::time::Duration;
+
+    use meta_whatsapp_server_core::registration::{AttemptLimit, AttemptLimits};
+    let settings = Config::from_env(&production()).unwrap().settings;
+    assert_eq!(
+        settings.registration_attempts,
+        AttemptLimits {
+            registration: AttemptLimit {
+                attempts: 5,
+                window: Duration::from_hours(72)
+            },
+            verification: AttemptLimit {
+                attempts: 10,
+                window: Duration::from_hours(1)
+            },
+        }
+    );
+    let settings = Config::from_env(
+        &production()
+            .set("WA_SERVER_REGISTRATION_ATTEMPTS", "3")
+            .set("WA_SERVER_REGISTRATION_WINDOW", "7d")
+            .set("WA_SERVER_VERIFICATION_ATTEMPTS", "4")
+            .set("WA_SERVER_VERIFICATION_WINDOW", "30m"),
+    )
+    .unwrap()
+    .settings;
+    assert_eq!(
+        settings.registration_attempts,
+        AttemptLimits {
+            registration: AttemptLimit {
+                attempts: 3,
+                window: Duration::from_hours(168)
+            },
+            verification: AttemptLimit {
+                attempts: 4,
+                window: Duration::from_mins(30)
+            },
+        }
+    );
+    for (name, value) in [
+        ("WA_SERVER_REGISTRATION_ATTEMPTS", "0"),
+        ("WA_SERVER_REGISTRATION_ATTEMPTS", "4294967296"),
+        ("WA_SERVER_REGISTRATION_ATTEMPTS", "five"),
+        ("WA_SERVER_REGISTRATION_WINDOW", "0h"),
+        ("WA_SERVER_REGISTRATION_WINDOW", "three days"),
+        ("WA_SERVER_VERIFICATION_ATTEMPTS", "-1"),
+        ("WA_SERVER_VERIFICATION_WINDOW", "0"),
+    ] {
+        let error = refused(&production().set(name, value));
+        assert!(
+            matches!(error, ConfigError::Invalid { name: n, .. } if n == name),
+            "{name}={value}: {error:?}"
+        );
+        assert!(
+            !error.to_string().contains(value),
+            "{error} quotes the value"
+        );
     }
 }
 

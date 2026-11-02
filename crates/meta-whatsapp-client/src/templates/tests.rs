@@ -343,6 +343,56 @@ fn media_card_carousel_template() {
     assert_definition(&def, doc);
 }
 
+/// `payments/payments-in/checkout-button-templates`, "Multiple products":
+/// "create a media card carousel template as you normally would, but
+/// replace one of the buttons with a checkout button, and make sure that
+/// it is the first button in the card", on Meta's media card example.
+#[test]
+fn a_checkout_carousel_is_metas_media_card_example_with_a_button_replaced() {
+    let (example, _) = media_card_example();
+    let edited = |edit: &dyn Fn(&mut Vec<Button>)| {
+        let mut d = example.clone();
+        let TemplateComponent::Carousel { cards } = &mut d.components[1] else {
+            panic!("the example's carousel");
+        };
+        for card in cards {
+            let TemplateComponent::Buttons { buttons } = &mut card.components[1] else {
+                panic!("the example's card buttons");
+            };
+            edit(buttons);
+        }
+        d
+    };
+    // The quick reply replaced: the checkout button is first.
+    edited(&|b| b[0] = Button::checkout()).validate().unwrap();
+    // The URL button replaced: second, refused, until moved first.
+    let e = edited(&|b| b[1] = Button::checkout())
+        .validate()
+        .unwrap_err();
+    assert_eq!(e.field, "components[1].cards[0].components[1].buttons[1]");
+    assert!(e.reason.contains("first button"), "{e:?}");
+    edited(&|b| {
+        b[1] = Button::checkout();
+        b.swap(0, 1);
+    })
+    .validate()
+    .unwrap();
+    // A card's buttons stay two at most, and one checkout button.
+    assert!(
+        edited(&|b| b.insert(0, Button::checkout()))
+            .validate()
+            .is_err()
+    );
+    assert!(
+        edited(&|b| {
+            b[0] = Button::checkout();
+            b[1] = Button::checkout();
+        })
+        .validate()
+        .is_err()
+    );
+}
+
 #[test]
 fn product_card_carousel_template() {
     // catalogs/product-card-carousel-template-messages, example request. It

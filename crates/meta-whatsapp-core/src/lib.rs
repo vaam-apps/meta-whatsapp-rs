@@ -12,7 +12,7 @@
 //! | [`store::ConversationStore`] | Inbox history for in-app chat | memory, Postgres |
 //! | [`sink::EventSink`] | Where webhook events go | channel, broadcast, fan-out, fn, tracing |
 //! | [`clock::Clock`] | "Now", injectable for tests | system, manual |
-//! | [`media::MediaConverter`] | Convert media before an upload (a recording into a voice message's Ogg Opus) | `ffmpeg` (runs one you install) |
+//! | [`media::MediaConverter`] | Convert media before an upload (a recording into a voice message's Ogg Opus, an image into a sticker's WebP or under the image limit) | `ffmpeg` (runs one you install) |
 //!
 //! See `docs/architecture.md` at the repository root for how they compose.
 
@@ -21,6 +21,7 @@ pub mod config;
 pub mod error;
 pub mod ids;
 pub mod media;
+pub mod open_enum;
 pub mod paging;
 pub mod recipient;
 pub mod secret;
@@ -33,3 +34,9 @@ pub mod transport;
 pub mod testing;
 
 pub use error::{Error, ErrorKind, GraphApiError, Result};
+
+/// What [`open_enum!`] expands to refers to; not part of the API.
+#[doc(hidden)]
+pub mod __private {
+    pub use serde;
+}

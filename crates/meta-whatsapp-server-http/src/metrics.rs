@@ -17,7 +17,9 @@
 //! | `wa_server_webhook_duplicate_events_total` | `stage`: `dedup` (the dedup lease had seen it), `outbox` (the outbox had it) |
 //! | `wa_server_webhook_sink_failures_total` | `stage`: `routing`, `serialization`, `inbox`, `outbox`, `outbox_busy` (the outbox reported contention, `StorageError::Busy`: on Postgres, a lock waited for over 2 s; the delivery is `busy`) |
 //! | `wa_server_idempotency_total` | `outcome`: `replayed`, `reused`, `in_progress`, `outcome_unknown` (a repeat that met a key's record) |
-//! | `wa_server_rate_limited_total` | `class` (`send`, `read`, `templates`): requests refused `429` by the service's own limits |
+//! | `wa_server_rate_limited_total` | `class` (`send`, `read`, `templates`, `otp_issue`, `otp_verify`): requests refused `429` by the service's own limits |
+//! | `wa_server_otp_outcomes_total` | `operation` (`issue`, `verify`), `outcome` (an issue's `sent`, `cooling_down`, `rate_limited`, `failed`; a check's `verified`, `invalid`, `expired`, `too_many_attempts`, `not_found`, `failed`): the OTP outcomes (roadmap M3c), never a number or a code |
+//! | `wa_server_event_streams_open` | none: the live event streams open on the replica, read when scraped (a gauge; roadmap M2b) |
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -26,6 +28,7 @@ use meta_whatsapp_rs::webhooks::axum::http::Method;
 use prometheus_client::encoding::EncodeLabelSet;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
+use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::metrics::histogram::{Histogram, exponential_buckets};
 use prometheus_client::registry::Registry;
 
@@ -73,6 +76,12 @@ struct ClassLabels {
     class: String,
 }
 
+#[derive(Debug, Clone, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct OtpLabels {
+    operation: String,
+    outcome: String,
+}
+
 type DurationFamily = Family<RouteLabels, Histogram, fn() -> Histogram>;
 
 /// An HTTP method as a label or a log field: the methods an API client
@@ -105,6 +114,8 @@ pub struct Metrics {
     webhook_failures: Family<StageLabels, Counter>,
     idempotency: Family<OutcomeLabels, Counter>,
     rate_limited: Family<ClassLabels, Counter>,
+    otp: Family<OtpLabels, Counter>,
+    streams_open: Gauge,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -182,6 +193,18 @@ impl Metrics {
             "Requests refused by the service's rate limits, by route class",
             rate_limited.clone(),
         );
+        let otp = Family::<OtpLabels, Counter>::default();
+        registry.register(
+            "otp_outcomes",
+            "OTP issues and checks, by operation and outcome",
+            otp.clone(),
+        );
+        let streams_open = Gauge::default();
+        registry.register(
+            "event_streams_open",
+            "Live event streams open on this replica",
+            streams_open.clone(),
+        );
         Self {
             registry: Arc::new(Mutex::new(registry)),
             requests,
@@ -193,6 +216,8 @@ impl Metrics {
             webhook_failures,
             idempotency,
             rate_limited,
+            otp,
+            streams_open,
         }
     }
 
@@ -298,6 +323,24 @@ impl Metrics {
             .inc();
     }
 
+    /// Count an OTP operation's outcome (roadmap M3c): both labels from a
+    /// fixed set (`meta_whatsapp_server_core::observe::Observer::otp`).
+    pub fn otp(&self, operation: &'static str, outcome: &'static str) {
+        self.otp
+            .get_or_create(&OtpLabels {
+                operation: operation.to_owned(),
+                outcome: outcome.to_owned(),
+            })
+            .inc();
+    }
+
+    /// Set how many live event streams are open on this replica (what
+    /// `/metrics` does before it renders).
+    pub fn streams_open(&self, open: usize) {
+        self.streams_open
+            .set(i64::try_from(open).unwrap_or(i64::MAX));
+    }
+
     /// The Prometheus text exposition.
     pub fn render(&self) -> String {
         let mut out = String::new();
@@ -313,7 +356,8 @@ impl Metrics {
 /// key's record (`wa_server_idempotency_total`), and what the webhook
 /// pipeline recorded (`wa_server_webhook_events_total`), met again
 /// (`wa_server_webhook_duplicate_events_total`) or failed to record
-/// (`wa_server_webhook_sink_failures_total`), are counted.
+/// (`wa_server_webhook_sink_failures_total`), and the OTP outcomes
+/// (`wa_server_otp_outcomes_total`), are counted.
 impl meta_whatsapp_server_core::observe::Observer for Metrics {
     fn graph_error(&self, code: &'static str) {
         Metrics::graph_error(self, code);
@@ -333,5 +377,9 @@ impl meta_whatsapp_server_core::observe::Observer for Metrics {
 
     fn webhook_failure(&self, stage: &'static str) {
         Metrics::webhook_failure(self, stage);
+    }
+
+    fn otp(&self, operation: &'static str, outcome: &'static str) {
+        Metrics::otp(self, operation, outcome);
     }
 }

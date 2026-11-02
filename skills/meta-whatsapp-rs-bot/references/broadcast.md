@@ -1,6 +1,6 @@
 # Paced broadcasts
 
-> **Verified against meta-whatsapp-rs df598e6647242d4f471579d7f84df12c3032c651 (2026-10-27).** Also checked against Meta's
+> **Verified against meta-whatsapp-rs 8a675b0eb925f90de831184ab43065009e8ad3c3 (2026-11-01).** Also checked against Meta's
 > `throughput`, `about-the-platform` (pair rate limits), `support/error-codes`,
 > `templates/marketing-templates/per-user-limits` and `messaging-limits` pages
 > as mirrored on 2026-09-24.
@@ -168,14 +168,18 @@ recipient, in order (`index`, `attempts`, `outcome`), its counts
 `tokio::sync::mpsc::Sender`) as it settles and keeps none: the run waits
 for the sink, and one that fails stops the run. A restart loses a run in
 progress. For one that survives it, or a send at a time, schedule a `Job`
-in `KvJobs` (a typed store on `KvStore`) and run a `JobRunner` per
-replica: a job is claimed by compare-and-swap under a lease, sent through
-a paced broadcast, and each recipient is marked before its send, so a
-resumed job sends nobody twice and never resends an outcome unknown
-(`JobSummary::unknown`). The message is made from the job's JSON payload
-by the runner's composer at each send. A `131049` status webhook handed to
-`KvJobs::observe` (or `KvJobs::feedback` as a listener) makes a re-run
-(`KvJobs::rerun`) skip that recipient for 24 hours. Guide, section 10.
+in a `JobStore` (`KvJobs`, a typed store on `KvStore`; `MemoryJobs` in
+tests) and run a `JobRunner` per replica: a job is claimed atomically
+under a lease, sent through a paced broadcast, and each recipient is
+marked before its send, so a resumed job sends nobody twice and never
+resends an outcome unknown (`JobSummary::unknown`). The message is made
+from the job's JSON payload by the runner's composer at each send. A
+`131049` status webhook handed to `JobStore::observe` (or
+`KvJobs::feedback` as a listener) makes a re-run (`JobStore::rerun`) skip
+that recipient for 24 hours. The trait's methods need it in scope
+(`use meta_whatsapp_rs::bot::JobStore;`). A queue of your own can stand
+in for `KvJobs` once it passes the job suite
+(`meta_whatsapp_rs::bot::jobs::conformance::run`). Guide, section 10.
 
 ## Testing
 
