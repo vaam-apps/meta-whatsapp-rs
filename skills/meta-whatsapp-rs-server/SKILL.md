@@ -17,13 +17,10 @@ Rust code uses the library directly (`meta-whatsapp-rs`).
 
 ## What the service does today (milestones M1a to M1c, M2a, M2b, M3a, M3c and M3d)
 
-Webhooks to your backend do not exist yet: write no code against them.
-The rest does, by skill: sends, media, templates, the inbox
-(`meta-whatsapp-rs-server-send`), Meta's webhooks, polling, one event by
-id and live events (`meta-whatsapp-rs-server-events`), login codes
-(`meta-whatsapp-rs-server-otp`), merchants connecting their number
-(`meta-whatsapp-rs-server-onboarding`), a number's registration
-(`meta-whatsapp-rs-server-registration`).
+Webhooks to your backend do not exist yet: write no code against them. The rest does, by skill:
+sends, media, templates, the inbox (`meta-whatsapp-rs-server-send`), Meta's webhooks, polling, one event by
+id and live events (`meta-whatsapp-rs-server-events`), login codes (`meta-whatsapp-rs-server-otp`), merchants
+connecting their number (`meta-whatsapp-rs-server-onboarding`), a number's registration (`meta-whatsapp-rs-server-registration`).
 
 | Route | Needs | Does |
 | --- | --- | --- |
@@ -156,9 +153,8 @@ export function nextStep(error: ErrorObject): Next {
 
 ## Related skills
 
-`meta-whatsapp-rs-server-send`, `meta-whatsapp-rs-server-events`,
-`meta-whatsapp-rs-server-otp`, `meta-whatsapp-rs-server-onboarding`,
-`meta-whatsapp-rs-server-registration` (the routes above),
+`meta-whatsapp-rs-server-send`, `meta-whatsapp-rs-server-events`, `meta-whatsapp-rs-server-otp`,
+`meta-whatsapp-rs-server-onboarding`, `meta-whatsapp-rs-server-registration` (the routes above),
 `meta-whatsapp-rs` (the Rust library, when you write Rust),
 `meta-whatsapp-rs-errors` (the error kinds behind the Meta codes),
 `meta-whatsapp-rs-production` (what the service does for you: secrets, logs, several instances).

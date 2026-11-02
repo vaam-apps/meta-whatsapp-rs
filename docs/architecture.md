@@ -871,7 +871,10 @@ cannot be taken back, so the design is fail-closed:
   address and no share in the ledger it just deletes, a recorded share
   revocation cannot find is `Reconcile` with the token kept, and a
   pending share it revoked nothing for is `RevocationIncomplete` with the
-  token kept. A recorded business is marked revoked even when nothing
+  token kept. `offboard_if_unchanged` revokes the same way, then deletes
+  only the token at the version the caller read (`delete_if_unchanged`):
+  for a caller whose records may move the WABA to another holder during
+  the revocation's calls (the service). A recorded business is marked revoked even when nothing
   was ever shared with it (the owner's decision, 2026-09-25): the marker
   precedes any lookup, which is what stops a racing share from
   surviving, and funding that business later takes
