@@ -160,3 +160,56 @@ async fn the_media_lines_warn_under_the_services_target() {
         }
     }
 }
+
+/// Roadmap M2e's case: a media id received elsewhere is refused with one
+/// `info` line under the service's target, which names neither the id nor
+/// the number; Meta's URL off its host warns as before; nothing logged
+/// names Meta's URL (its query: the handle and the hash), the other host
+/// or the token, and no line of the media services names a media id.
+/// Decisive: the refusal's line, and the absence of the URL and the token
+/// from every line.
+#[tokio::test]
+async fn a_received_media_refusal_logs_no_url_id_or_token() {
+    let backend = memory::Memory::default();
+    let logged = Logged::default();
+    let guard = tracing::subscriber::set_default(logged.clone());
+    conformance::media::a_media_id_received_elsewhere_is_not_found_with_no_request(&backend).await;
+    drop(guard);
+    let events = logged.0.lock().unwrap().clone();
+    let ours: Vec<_> = events
+        .iter()
+        .filter(|(_, target, _, _)| target == "meta_whatsapp_server::api::media")
+        .map(|(level, _, message, _)| (*level, message.as_str()))
+        .collect();
+    let refused = "a media id received on another number, or before the number's binding: \
+                   not found, Meta not asked";
+    assert!(
+        ours.contains(&(tracing::Level::INFO, refused)),
+        "{events:?}"
+    );
+    assert!(
+        ours.contains(&(
+            tracing::Level::WARN,
+            "Meta's media URL was refused by the library's host allow-list"
+        )),
+        "{events:?}"
+    );
+    for (_, target, _, all) in &events {
+        for secret in [
+            "lookaside",
+            "hash=abc",
+            "mid=",
+            "media.example.net",
+            "EAAG-",
+        ] {
+            assert!(!all.contains(secret), "{target}: {all}");
+        }
+        // The library's request lines name a Graph path (the id is its
+        // segment); the media services' own lines name no id.
+        if target == "meta_whatsapp_server::api::media" {
+            for id in ["1003383421387256", "1003383421387257", "1003383421387258"] {
+                assert!(!all.contains(id), "{target}: {all}");
+            }
+        }
+    }
+}

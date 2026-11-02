@@ -70,6 +70,7 @@ pub async fn run(backend: &dyn Backend) {
         .await;
     the_media_services_upload_and_delete_as_meta_documents(backend).await;
     a_failed_download_yields_no_unverified_end_and_frees_its_slot(backend).await;
+    a_media_id_received_elsewhere_is_not_found_with_no_request(backend).await;
 }
 
 /// The script, with each media download's body in the chunks a case
@@ -80,6 +81,9 @@ pub async fn run(backend: &dyn Backend) {
 pub(crate) struct Chunked {
     script: ScriptedTransport,
     bodies: Arc<Mutex<VecDeque<ByteStream>>>,
+    /// Each request's time limit, in order (the script records no
+    /// timeout).
+    timeouts: Arc<Mutex<Vec<Option<std::time::Duration>>>>,
 }
 
 impl std::fmt::Debug for Chunked {
@@ -97,6 +101,21 @@ impl Chunked {
         self.body(Box::pin(futures::stream::iter(chunks)));
     }
 
+    /// Each request's time limit so far, in order.
+    fn timeouts(&self) -> Vec<Option<std::time::Duration>> {
+        self.timeouts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn timed(&self, request: &HttpRequest) {
+        self.timeouts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request.timeout);
+    }
+
     /// The next media download's body: `body`.
     fn body(&self, body: ByteStream) {
         self.bodies
@@ -109,6 +128,7 @@ impl Chunked {
 #[async_trait]
 impl HttpTransport for Chunked {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+        self.timed(&request);
         self.script.send(request).await
     }
 
@@ -116,6 +136,7 @@ impl HttpTransport for Chunked {
         &self,
         request: HttpRequest,
     ) -> Result<StreamingResponse, TransportError> {
+        self.timed(&request);
         let head = self.script.send(request).await?;
         let queued = self
             .bodies
@@ -297,6 +318,7 @@ fn refusal(error: &ServiceError) -> (u16, &'static str, Option<&str>) {
 pub async fn a_download_through_the_cores_stream_ends_before_its_last_chunk_on_a_digest_mismatch(
     backend: &dyn Backend,
 ) {
+    let outbox = backend.outbox();
     let meta = Chunked::default();
     let script = meta.script.clone();
     let (authz, number, vault) = connected(backend, meta.clone(), (TENANT, WABA, PN)).await;
@@ -324,9 +346,12 @@ pub async fn a_download_through_the_cores_stream_ends_before_its_last_chunk_on_a
         .await
         .unwrap();
     for (refused, which) in [
-        (Media::new(&authz, &theirs, slots).map(drop), "their number"),
         (
-            Media::new(&other, &number, slots).map(drop),
+            Media::new(&authz, &theirs, slots, outbox.as_ref()).map(drop),
+            "their number",
+        ),
+        (
+            Media::new(&other, &number, slots, outbox.as_ref()).map(drop),
             "the number through their order",
         ),
     ] {
@@ -336,8 +361,8 @@ pub async fn a_download_through_the_cores_stream_ends_before_its_last_chunk_on_a
             "{which}"
         );
     }
-    assert!(Media::new(&other, &theirs, slots).is_ok());
-    let media = Media::new(&authz, &number, slots)
+    assert!(Media::new(&other, &theirs, slots, outbox.as_ref()).is_ok());
+    let media = Media::new(&authz, &number, slots, outbox.as_ref())
         .unwrap()
         .observed_by(&told);
 
@@ -541,6 +566,7 @@ pub async fn a_download_through_the_cores_stream_ends_before_its_last_chunk_on_a
             transfers: &transfers,
             streams: &streams,
         },
+        outbox.as_ref(),
     )
     .unwrap();
     let held = narrow.transfer_slot().unwrap();
@@ -585,6 +611,7 @@ pub async fn a_download_through_the_cores_stream_ends_before_its_last_chunk_on_a
 /// does Meta's `details` dropped; the lookup before the deletion, or the
 /// id compared, dropped fails step 2 (a `DELETE`).
 pub async fn the_media_services_upload_and_delete_as_meta_documents(backend: &dyn Backend) {
+    let outbox = backend.outbox();
     let meta = Chunked::default();
     let script = meta.script.clone();
     let (authz, number, _) = connected(backend, meta, UPLOADER).await;
@@ -599,6 +626,7 @@ pub async fn the_media_services_upload_and_delete_as_meta_documents(backend: &dy
             transfers: &transfers,
             streams: &streams,
         },
+        outbox.as_ref(),
     )
     .unwrap()
     .observed_by(&told);
@@ -773,6 +801,7 @@ pub async fn the_media_services_upload_and_delete_as_meta_documents(backend: &dy
 /// number fails step 7; the slot taken before the id is checked, or the
 /// digest before the size, fails step 5.
 pub async fn a_failed_download_yields_no_unverified_end_and_frees_its_slot(backend: &dyn Backend) {
+    let outbox = backend.outbox();
     let meta = Chunked::default();
     let script = meta.script.clone();
     let (authz, number, _) = connected(backend, meta.clone(), FAILING).await;
@@ -788,6 +817,7 @@ pub async fn a_failed_download_yields_no_unverified_end_and_frees_its_slot(backe
             transfers: &transfers,
             streams: &streams,
         },
+        outbox.as_ref(),
     )
     .unwrap()
     .observed_by(&told);
@@ -1081,5 +1111,391 @@ pub async fn a_failed_download_yields_no_unverified_end_and_frees_its_slot(backe
     assert_eq!(query(lookup), pairs(&[("phone_number_id", FAILING.2)]));
     assert_eq!(file_request.url.as_str(), URL);
     assert_eq!(file_request.bearer(), Some(TOKEN));
+    assert_eq!(script.remaining(), 0);
+}
+
+// ─── Received media (roadmap M2e) ─────────────────────────────────────────
+
+/// The received-media case's tenants, WABAs and numbers: A's two WABAs
+/// (one number each) and B's.
+const RECEIVER_A: (&str, &str, &str) = ("media-receiver-a", "102290129340402", "106540352242925");
+const RECEIVER_A2: (&str, &str, &str) = ("media-receiver-a", "102290129340403", "106540352242926");
+const RECEIVER_B: (&str, &str, &str) = ("media-receiver-b", "102290129340404", "106540352242927");
+/// The media ids customers sent: to A's number, then to it again once it
+/// came back to A.
+const RECEIVED: &str = "1003383421387256";
+const RECEIVED_LATER: &str = "1003383421387257";
+/// A media id a customer sent to A's number before it moved, delivered
+/// only once it moved (Meta redelivers for days): an operator-only row.
+const RECEIVED_LATE: &str = "1003383421387258";
+/// The Meta app's secret, which signs the deliveries of the case.
+const APP_SECRET: &str = "app-secret-of-the-media-suite";
+/// A host that is not Meta's: the token must never go there.
+const ELSEWHERE: &str =
+    "https://media.example.net/whatsapp/attachments/?mid=1003383421387256&hash=abc";
+
+/// `GET /{media-id}`'s answer for `id` (`business-phone-numbers/media`,
+/// "Response syntax"), its file at `url`.
+fn info_of(id: &str, url: &str, sha256: &str, file_size: Option<usize>) -> Value {
+    let mut info = media_info(url, sha256, file_size);
+    info["id"] = json!(id);
+    info
+}
+
+/// `webhooks/reference/messages/image`, its example: a customer's image
+/// `media_id` to `pn` of `waba`, dated `at`.
+fn image_received(waba: &str, pn: &str, wamid: &str, media_id: &str, at: i64) -> Value {
+    json!({
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "id": waba,
+            "changes": [{
+                "value": {
+                    "messaging_product": "whatsapp",
+                    "metadata": {"display_phone_number": "15550783881", "phone_number_id": pn},
+                    "contacts": [{"profile": {"name": "Sheena Nelson"}, "wa_id": "16505551234"}],
+                    "messages": [{
+                        "from": "16505551234",
+                        "id": wamid,
+                        "timestamp": at.to_string(),
+                        "type": "image",
+                        "image": {
+                            "caption": "Taj Mahal",
+                            "mime_type": "image/jpeg",
+                            "sha256": "SfInY0gGKTsJlUWbwxC1k+FAD0FZHvzwfpvO0zX0GUI=",
+                            "id": media_id,
+                            "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=133"
+                        }
+                    }]
+                },
+                "field": "messages"
+            }]
+        }]
+    })
+}
+
+/// `payload` delivered through the core's pipeline on `backend`, signed as
+/// Meta signs it; it must be delivered.
+async fn deliver(backend: &dyn Backend, payload: &Value) {
+    let inbound = crate::inbound::Inbound::new(
+        vec![meta_whatsapp_rs::core::secret::AppSecret::new(APP_SECRET)],
+        meta_whatsapp_rs::core::secret::VerifyToken::new("verify-token-of-the-media-suite"),
+    )
+    .unwrap();
+    let pipeline = crate::inbound::Pipeline::new(inbound, backend, Arc::new(Told::default()));
+    let body = serde_json::to_vec(payload).unwrap();
+    pipeline
+        .deliver(
+            Some(&meta_whatsapp_rs::webhooks::sign(
+                &meta_whatsapp_rs::core::secret::AppSecret::new(APP_SECRET),
+                &body,
+            )),
+            Bytes::from(body),
+        )
+        .await
+        .unwrap();
+}
+
+/// Now, in Unix seconds (Meta dates in whole seconds).
+fn unix_now() -> i64 {
+    time::OffsetDateTime::now_utc().unix_timestamp()
+}
+
+/// The lookup of a received media id: `GET /{id}` without
+/// `phone_number_id`, with the token.
+fn assert_received_lookup(request: &RecordedRequest, id: &str) {
+    assert_eq!(
+        (request.method.as_str(), request.path()),
+        ("GET", format!("/v25.0/{id}").as_str())
+    );
+    assert_eq!(
+        query(request),
+        pairs(&[]),
+        "a received media id is asked without phone_number_id"
+    );
+    assert_eq!(request.bearer(), Some(TOKEN));
+}
+
+/// `id` downloaded whole by `media`: the file, verified, after the two
+/// requests of a received media id, each within the client's time limit.
+async fn download_received(media: &Media<'_>, meta: &Chunked, id: &str) {
+    let script = &meta.script;
+    let file = b"\xff\xd8\xff\xe0 the customer's photo".to_vec();
+    script.push_json(200, info_of(id, URL, &sha256_hex(&file), Some(file.len())));
+    script.push_bytes(200, "image/jpeg", file.clone());
+    let before = script.requests().len();
+    let downloaded = media
+        .download(id, DownloadLimits::parse(None, None, STREAM_CAP).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(downloaded.sha256_hex(), sha256_hex(&file));
+    match downloaded.body {
+        DownloadBody::Whole(data) => assert_eq!(&data[..], &file[..]),
+        DownloadBody::Stream(_) => panic!("a stream, where a whole file was asked for"),
+    }
+    let requests = script.requests();
+    let [lookup, url] = &requests[before..] else {
+        panic!("{requests:?}")
+    };
+    assert_received_lookup(lookup, id);
+    assert_eq!((url.method.as_str(), url.url.as_str()), ("GET", URL));
+    assert_eq!(url.bearer(), Some(TOKEN));
+    let timeouts = meta.timeouts();
+    assert!(
+        timeouts[timeouts.len() - 2..].iter().all(Option::is_some),
+        "a request of a received media id without a time limit: {timeouts:?}"
+    );
+}
+
+/// `media`'s download and deletion of `id` are `404 not_found`, the answer
+/// for a missing id, and nothing is asked of Meta.
+async fn not_found_unasked(media: &Media<'_>, script: &ScriptedTransport, id: &str, which: &str) {
+    let before = script.requests().len();
+    let whole = DownloadLimits::parse(None, None, STREAM_CAP).unwrap();
+    let stream = DownloadLimits::parse(Some("true"), None, STREAM_CAP).unwrap();
+    for limits in [whole, stream] {
+        let refused = media.download(id, limits).await.unwrap_err();
+        assert_eq!(
+            refusal(&refused),
+            (404, "not_found", None),
+            "{which}: downloaded"
+        );
+    }
+    let refused = media.delete(id).await.unwrap_err();
+    assert_eq!(
+        refusal(&refused),
+        (404, "not_found", None),
+        "{which}: deleted"
+    );
+    assert_eq!(
+        script.requests().len(),
+        before,
+        "{which}: Meta was asked: {:?}",
+        &script.requests()[before..]
+    );
+}
+
+/// Roadmap M2e, decisive (`OPEN_QUESTIONS.md` #43): a media id the service
+/// recorded as received on the tenant's number is asked from Meta without
+/// `phone_number_id`; one recorded anywhere else is `404` with **zero
+/// requests**; every other id keeps Meta's check.
+///
+/// 1. A customer's image reaches tenant A's number (the core's pipeline,
+///    Meta's documented webhook): A downloads it with `GET /{media_id}`,
+///    no `phone_number_id`, then Meta's URL, each with the number's token,
+///    the file verified.
+/// 2. Tenant B (the same token reaches both tenants' numbers, as the
+///    platform's system user token does) asks for it on B's number, and A
+///    on its other number: `404 not_found`, download and deletion alike,
+///    with zero requests.
+/// 3. A's deletion of it keeps the check (`phone_number_id={pn}`); an id
+///    never recorded (an upload's) is downloaded with the check.
+/// 4. On the received path, Meta's URL off its media host is `502
+///    upstream` with the token sent nowhere but the lookup, and a size
+///    Meta reports over `max_bytes` is `413` before any download; each of
+///    its requests carries the client's time limit (step 1).
+/// 5. The number moves to B with its WABA: B, on that number, gets `404`
+///    with zero requests for the previous holder's customer's file, and
+///    for one Meta dated before the move but delivered after it (an
+///    operator-only row, received after B's cut); A's capability made
+///    before the move gets `503 storage_unavailable` with zero requests
+///    (the binding moved).
+/// 6. The number comes back to A (a binding with a previous tenant: a
+///    cut): the file received before the cut is `404` with zero requests;
+///    one received since downloads without the check.
+///
+/// Decisive: removing the "recorded on this tenant's number" lookup (any
+/// recorded row exempting the id) fails step 2; the tenant left out of it
+/// fails step 5 (the operator-only row), the number step 2, the cut step
+/// 6; the refusal of an id
+/// received elsewhere dropped (Meta's check instead) fails step 2's zero
+/// requests, for a download and for a deletion; the check kept on a
+/// received id fails step 1; the binding not read again fails step 5.
+pub async fn a_media_id_received_elsewhere_is_not_found_with_no_request(backend: &dyn Backend) {
+    let outbox = backend.outbox();
+    let meta = Chunked::default();
+    let script = meta.script.clone();
+    let (authz_a, number_a, vault_a) = connected(backend, meta.clone(), RECEIVER_A).await;
+    let (authz_a2, number_a2, _) = connected(backend, meta.clone(), RECEIVER_A2).await;
+    let (authz_b, number_b, vault_b) = connected(backend, meta.clone(), RECEIVER_B).await;
+    let transfers = Slots::new(8);
+    let streams = Slots::new(8);
+    let slots = MediaSlots {
+        transfers: &transfers,
+        streams: &streams,
+    };
+    let (_, waba_a, pn_a) = RECEIVER_A;
+    let wamid = format!("wamid.M2E-{}", super::unique());
+    deliver(
+        backend,
+        &image_received(waba_a, pn_a, &wamid, RECEIVED, unix_now() + 1),
+    )
+    .await;
+    let received = outbox
+        .received_media(&meta_whatsapp_rs::core::ids::MediaId::new(RECEIVED).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(received.len(), 1, "{received:?}");
+    assert_eq!(
+        received[0].tenant.as_ref().map(TenantId::as_str),
+        Some(RECEIVER_A.0)
+    );
+
+    // 1. A's own number: no `phone_number_id`.
+    let media_a = Media::new(&authz_a, &number_a, slots, outbox.as_ref()).unwrap();
+    download_received(&media_a, &meta, RECEIVED).await;
+
+    // 2. Anywhere else: not found, nothing asked.
+    let media_b = Media::new(&authz_b, &number_b, slots, outbox.as_ref()).unwrap();
+    not_found_unasked(&media_b, &script, RECEIVED, "another tenant's number").await;
+    let media_a2 = Media::new(&authz_a2, &number_a2, slots, outbox.as_ref()).unwrap();
+    not_found_unasked(&media_a2, &script, RECEIVED, "the tenant's other number").await;
+
+    // 3. A deletion keeps the check; an id never recorded too.
+    script.push_json(200, info_of(RECEIVED, URL, &sha256_hex(b"x"), None));
+    script.push_json(200, json!({"success": true}));
+    media_a.delete(RECEIVED).await.unwrap();
+    let requests = script.requests();
+    let [.., lookup, deleted] = &requests[..] else {
+        panic!("{requests:?}")
+    };
+    for request in [lookup, deleted] {
+        assert_eq!(request.path(), format!("/v25.0/{RECEIVED}"));
+        assert_eq!(query(request), pairs(&[("phone_number_id", pn_a)]));
+    }
+    assert_eq!(deleted.method.as_str(), "DELETE");
+    let file = b"an uploaded voucher".to_vec();
+    script.push_json(200, info_of(MEDIA, URL, &sha256_hex(&file), None));
+    script.push_bytes(200, "image/jpeg", file.clone());
+    media_a
+        .download(
+            MEDIA,
+            DownloadLimits::parse(None, None, STREAM_CAP).unwrap(),
+        )
+        .await
+        .unwrap();
+    let requests = script.requests();
+    let [.., lookup, _] = &requests[..] else {
+        panic!("{requests:?}")
+    };
+    assert_lookup(lookup, "GET", pn_a);
+
+    // 4. The received path's own guards: Meta's host only, the limits.
+    let before = script.requests().len();
+    script.push_json(200, info_of(RECEIVED, ELSEWHERE, &sha256_hex(b"x"), None));
+    let refused = media_a
+        .download(
+            RECEIVED,
+            DownloadLimits::parse(None, None, STREAM_CAP).unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refusal(&refused), (502, "upstream", None));
+    let requests = script.requests();
+    let [lookup] = &requests[before..] else {
+        panic!("the token went to another host: {requests:?}")
+    };
+    assert_received_lookup(lookup, RECEIVED);
+    script.push_json(200, info_of(RECEIVED, URL, &sha256_hex(b"x"), Some(101)));
+    let refused = media_a
+        .download(
+            RECEIVED,
+            DownloadLimits::parse(None, Some("100"), STREAM_CAP).unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refusal(&refused), (413, "media_too_large", None));
+    assert_eq!(script.requests().len(), before + 2, "the lookup only");
+    assert_eq!(script.remaining(), 0);
+
+    // 5. The number moves to B, with its WABA.
+    let records = backend.records();
+    let waba = WabaId::new(waba_a).unwrap();
+    let pn = PhoneNumberId::new(pn_a).unwrap();
+    assert!(records.unbind_waba(&waba).await.unwrap());
+    let tenant_b = TenantId::parse(RECEIVER_B.0).unwrap();
+    assert_eq!(
+        records
+            .bind_waba(&tenant_b, &waba, std::slice::from_ref(&pn))
+            .await
+            .unwrap(),
+        BindOutcome::Bound
+    );
+    vault_b
+        .store(
+            &StoredBusinessToken::new(waba.clone(), AccessToken::new(TOKEN))
+                .phone_number_ids([pn.clone()]),
+        )
+        .await
+        .unwrap();
+    let caller_b = caller_of(backend, &authz_b, RECEIVER_B.0).await;
+    let moved = authz_b.owned_number(&caller_b, pn.clone()).await.unwrap();
+    let media_moved = Media::new(&authz_b, &moved, slots, outbox.as_ref()).unwrap();
+    not_found_unasked(&media_moved, &script, RECEIVED, "the number's new holder").await;
+    let late = format!("wamid.M2E-LATE-{}", super::unique());
+    deliver(
+        backend,
+        &image_received(waba_a, pn_a, &late, RECEIVED_LATE, unix_now() - 60),
+    )
+    .await;
+    let rows = outbox
+        .received_media(&meta_whatsapp_rs::core::ids::MediaId::new(RECEIVED_LATE).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(
+        rows[0].tenant, None,
+        "dated before B's binding: operator-only"
+    );
+    not_found_unasked(
+        &media_moved,
+        &script,
+        RECEIVED_LATE,
+        "an operator-only row on the number",
+    )
+    .await;
+    let stale = Media::new(&authz_a, &number_a, slots, outbox.as_ref()).unwrap();
+    let before = script.requests().len();
+    let refused = stale
+        .download(
+            RECEIVED,
+            DownloadLimits::parse(None, None, STREAM_CAP).unwrap(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(refusal(&refused), (503, "storage_unavailable", None));
+    assert_eq!(
+        script.requests().len(),
+        before,
+        "a stale capability asked Meta"
+    );
+
+    // 6. Back to A: a cut at its new binding.
+    assert!(records.unbind_waba(&waba).await.unwrap());
+    let tenant_a = TenantId::parse(RECEIVER_A.0).unwrap();
+    assert_eq!(
+        records
+            .bind_waba(&tenant_a, &waba, std::slice::from_ref(&pn))
+            .await
+            .unwrap(),
+        BindOutcome::Bound
+    );
+    vault_a
+        .store(
+            &StoredBusinessToken::new(waba, AccessToken::new(TOKEN)).phone_number_ids([pn.clone()]),
+        )
+        .await
+        .unwrap();
+    let caller_a = caller_of(backend, &authz_a, RECEIVER_A.0).await;
+    let back = authz_a.owned_number(&caller_a, pn).await.unwrap();
+    let media_back = Media::new(&authz_a, &back, slots, outbox.as_ref()).unwrap();
+    not_found_unasked(&media_back, &script, RECEIVED, "received before the cut").await;
+    let later = format!("wamid.M2E-LATER-{}", super::unique());
+    deliver(
+        backend,
+        &image_received(waba_a, pn_a, &later, RECEIVED_LATER, unix_now() + 1),
+    )
+    .await;
+    download_received(&media_back, &meta, RECEIVED_LATER).await;
     assert_eq!(script.remaining(), 0);
 }

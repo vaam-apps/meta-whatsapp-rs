@@ -315,6 +315,13 @@ mod tests {
         async fn purge(&self, _: std::time::Duration) -> StoreResult<u64> {
             panic!("the outbox was purged")
         }
+
+        async fn received_media(
+            &self,
+            _: &meta_whatsapp_rs::core::ids::MediaId,
+        ) -> StoreResult<Vec<crate::outbox::ReceivedMedia>> {
+            panic!("the outbox was read")
+        }
     }
 
     /// The `data` of each type, exactly: what a tenant switches on, part

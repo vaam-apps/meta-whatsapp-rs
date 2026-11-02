@@ -1121,3 +1121,14 @@ async fn a_streamed_download_forwards_the_file_before_it_ends() {
     );
     assert_eq!(h.graph.remaining(), 0);
 }
+
+/// Roadmap M2e over HTTP, decisive (`OPEN_QUESTIONS.md` #43): a media id
+/// received by another tenant's number is `404 not_found` with zero
+/// requests to Meta, download and deletion alike; the receiving tenant's
+/// key downloads it without `phone_number_id`, with its own token
+/// (`common::media`, run on Postgres by `live_postgres.rs`).
+#[tokio::test]
+async fn another_tenants_received_media_id_is_not_found_with_no_request() {
+    common::media::another_tenants_received_media_id_is_not_found_with_no_request(&Harness::new())
+        .await;
+}

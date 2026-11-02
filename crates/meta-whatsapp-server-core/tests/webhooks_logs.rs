@@ -135,6 +135,12 @@ impl Outbox for BrokenOutbox {
     async fn purge(&self, _: std::time::Duration) -> StoreResult<u64> {
         unimplemented!("the pipeline does not purge")
     }
+    async fn received_media(
+        &self,
+        _: &meta_whatsapp_rs::core::ids::MediaId,
+    ) -> StoreResult<Vec<meta_whatsapp_server_core::outbox::ReceivedMedia>> {
+        unimplemented!("the pipeline does not look media up")
+    }
 }
 
 /// The memory backend, its outbox [`BrokenOutbox`].

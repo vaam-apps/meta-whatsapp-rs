@@ -79,6 +79,11 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
         include_str!("../migrations/0005_number_moves.sql"),
     ),
     (6, "signup", include_str!("../migrations/0006_signup.sql")),
+    (
+        7,
+        "received media",
+        include_str!("../migrations/0007_received_media.sql"),
+    ),
 ];
 
 /// The advisory lock a housekeeping round runs under: the key of the
@@ -1426,7 +1431,7 @@ mod tests {
     /// `(version, SHA-384 hex)` of every service migration, as sqlx records
     /// it. A new migration adds a line; an existing line never changes (an
     /// edited migration makes `migrate` refuse every database it ran on).
-    const PINNED_CHECKSUMS: [(i64, &str); 6] = [
+    const PINNED_CHECKSUMS: [(i64, &str); 7] = [
         (
             1,
             "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
@@ -1450,6 +1455,10 @@ mod tests {
         (
             6,
             "4d5988da61c5955cb42e9827a24ad4bf0ca4d6aaecba8bdde18ad9c49cc9c2308070ac8f8ca275bbe5b72a0c1606a8e5",
+        ),
+        (
+            7,
+            "aafa19ce1aa066caa0464aeac5ecc436acb994873108f0d51b002bae0155e0a9f8b8e47208fecb15d2420471dd555702",
         ),
     ];
 
@@ -1482,7 +1491,8 @@ mod tests {
                 "events",
                 "waba moves",
                 "number moves",
-                "signup"
+                "signup",
+                "received media"
             ]
         );
         // `\x77` is `w`: spelled so that a search-and-replace of the table

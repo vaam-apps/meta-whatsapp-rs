@@ -1066,13 +1066,13 @@ async fn history(
     .unwrap()
 }
 
-/// Roadmap S7's continuity, and S2b's and M2h's migrations forward: a database
+/// Roadmap S7's continuity, and S2b's, M2h's and M2e's migrations forward: a database
 /// `main`'s binary migrated (the service's migrations 1 to 3, moved to
 /// `meta-whatsapp-server-store-postgres`), holding a binding `main` made,
 /// is migrated forward by this binary's `migrate` with no checksum error:
 /// migrations 1 to 3 row for row what `main` left (`installed_on`
-/// included), migrations 4 to 6 (S2b's, M2h's and M3a's, additive) added once
-/// each, and `serve` then
+/// included), migrations 4 to 7 (S2b's, M2h's, M3a's and M2e's, additive)
+/// added once each, and `serve` then
 /// runs none (both migrating by default, `WA_SERVER_MIGRATE=auto`;
 /// `/readyz` answers 200); the library's history is unchanged. `main`'s
 /// binding keeps its semantics: its start, generation 1, and a previous
@@ -1206,9 +1206,10 @@ fn live_postgres_a_database_mains_binary_migrated_starts_this_one_with_no_migrat
         [
             (4, "waba moves", true, checksum(4)),
             (5, "number moves", true, checksum(5)),
-            (6, "signup", true, checksum(6))
+            (6, "signup", true, checksum(6)),
+            (7, "received media", true, checksum(7))
         ],
-        "migrations 4 to 6, once each"
+        "migrations 4 to 7, once each"
     );
     let mut serving = Command::new(BIN);
     with_db(&mut serving);
