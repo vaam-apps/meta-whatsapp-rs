@@ -459,15 +459,17 @@ pub(crate) async fn update_profile(
 )]
 pub(crate) async fn disconnect_waba(
     State(state): State<Grant>,
+    caller: Caller,
     owned: OwnedWaba,
 ) -> Result<StatusCode, ApiError> {
     // The core's `Waba::disconnect`: a WABA moved since the capability was
     // made is `503`, retryable, and nothing is unsubscribed or deleted.
     // In Solution Partner mode the credit line is revoked between the two
-    // (roadmap M3a): a failed revocation deletes nothing.
+    // (roadmap M3a), audited for the caller: a failed revocation deletes
+    // nothing.
     Waba::new(state.authz(), owned.capability(&state))?
         .observed_by(state.metrics())
-        .offboarded_by(state.signups())
+        .offboarded_by(state.signups(), &caller)
         .disconnect()
         .await?;
     Ok(StatusCode::NO_CONTENT)

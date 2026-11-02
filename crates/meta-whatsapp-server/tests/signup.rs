@@ -1415,6 +1415,202 @@ async fn an_unconfirmed_or_foreign_account_update_changes_nothing() {
     );
 }
 
+/// Moves [`WABA`] to merchant-b, with merchant-b's own token, once `moving`
+/// records the next vault entry: an offboarding's last write before the
+/// revocation's calls to Meta, after it read the binding and the token.
+fn move_to_b_mid_revocation(moving: &Moving, h: &Harness) {
+    let (store, vault) = (h.store.clone(), h.vault.clone());
+    moving.after_recording_vault_entry(Box::pin(async move {
+        move_waba(
+            store.as_ref(),
+            &vault,
+            &WabaId::new(WABA).unwrap(),
+            &PhoneNumberId::new(PHONE).unwrap(),
+            B,
+            Some("TOKEN-OF-B"),
+        )
+        .await;
+    }));
+}
+
+/// merchant-b's token and binding, as the move left them.
+async fn assert_held_by_b(h: &Harness) {
+    let waba = WabaId::new(WABA).unwrap();
+    let kept = h.vault.get(&waba).await.unwrap().unwrap();
+    assert_eq!(
+        kept.token.expose_secret(),
+        "TOKEN-OF-B",
+        "the new holder's token left alone"
+    );
+    assert_eq!(
+        h.store.waba(&waba).await.unwrap().unwrap().tenant_id,
+        tenant(B),
+        "the new holder's binding left alone"
+    );
+    assert!(
+        h.store
+            .number(&PhoneNumberId::new(PHONE).unwrap())
+            .await
+            .unwrap()
+            .is_some(),
+        "its number's binding left alone"
+    );
+}
+
+/// A partner disconnection by webhook deletes only the token and the
+/// binding it read before the revocation's calls: a WABA moved to another
+/// tenant meanwhile keeps its new holder's token and binding, and the
+/// delivery is acknowledged (logged, not retried). Decisive: the
+/// conditional delete (the library's unconditional `offboard` deletes
+/// merchant-b's token).
+#[tokio::test]
+async fn an_uninstall_whose_waba_moves_mid_revocation_leaves_the_new_holder() {
+    let moving = Arc::new(Moving::new(Arc::new(MemoryStore::new())));
+    let h = Harness::on_with(
+        moving.clone(),
+        Arc::new(MemoryKvStore::new()),
+        settings(solution_partner()),
+    );
+    let (a, _) = tenants(&h).await;
+    onboard_partner(&h, &a).await;
+    move_to_b_mid_revocation(&moving, &h);
+    script_confirmed(&h.graph);
+    script_revocation(&h.graph);
+    assert_eq!(h.webhook(&uninstalled()).await.status, StatusCode::OK);
+    assert!(!moving.armed(), "the move happened");
+    assert_eq!(h.graph.remaining(), 0, "revoked");
+    assert_held_by_b(&h).await;
+}
+
+/// The same race on the tenant's own disconnection: `503` (retryable),
+/// and merchant-b's token and binding left alone.
+#[tokio::test]
+async fn a_disconnect_whose_waba_moves_mid_revocation_leaves_the_new_holder() {
+    let moving = Arc::new(Moving::new(Arc::new(MemoryStore::new())));
+    let h = Harness::on_with(
+        moving.clone(),
+        Arc::new(MemoryKvStore::new()),
+        settings(solution_partner()),
+    );
+    let (a, _) = tenants(&h).await;
+    onboard_partner(&h, &a).await;
+    move_to_b_mid_revocation(&moving, &h);
+    h.graph.push_json(200, success()); // subscribed_apps
+    script_revocation(&h.graph);
+    let done = h
+        .call(Call::new(Method::DELETE, format!("/v1/wabas/{WABA}")).key(&a))
+        .await;
+    assert!(!moving.armed(), "the move happened");
+    assert_eq!(
+        (done.status, done.code().as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable"),
+        "{}",
+        done.text
+    );
+    assert_eq!(h.graph.remaining(), 0);
+    assert_held_by_b(&h).await;
+}
+
+/// Decision D75: in Solution Partner mode, deleting a tenant revokes the
+/// credit line of each WABA it holds before its token and bindings go,
+/// with the partner's system token; a revocation that fails deletes
+/// nothing (the tenant, its WABA, its token stay) and is the answer.
+/// Decisive: the revocation in the tenant's deletion (without it, the
+/// tenant is deleted and its WABA stays funded by the partner).
+#[tokio::test]
+async fn deleting_a_partners_tenant_revokes_its_wabas_lines_first() {
+    let h = harness(solution_partner());
+    let (a, _) = tenants(&h).await;
+    onboard_partner(&h, &a).await;
+    let admin = h.admin_key().await;
+    let waba = WabaId::new(WABA).unwrap();
+    let delete = || Call::new(Method::DELETE, format!("/v1/admin/tenants/{A}")).key(&admin);
+    // Unsubscribed, then Meta unreachable for the revocation.
+    h.graph.push_json(200, success());
+    for _ in 0..3 {
+        h.graph
+            .push_error(|| TransportError::Connect(anyhow::anyhow!("unreachable")));
+    }
+    let failed = h.call(delete()).await;
+    assert_eq!(failed.status, StatusCode::BAD_GATEWAY, "{}", failed.text);
+    assert_eq!(failed.json()["error"]["step"], "revoke_credit_line");
+    assert_eq!(h.graph.remaining(), 0);
+    assert!(
+        h.vault.get(&waba).await.unwrap().is_some(),
+        "the token kept"
+    );
+    assert!(
+        h.store.waba(&waba).await.unwrap().is_some(),
+        "the binding kept"
+    );
+    assert!(
+        h.store.tenant(&tenant(A)).await.unwrap().is_some(),
+        "the tenant kept"
+    );
+    // Again: unsubscribed, revoked, then deleted.
+    let failed_at = h.graph.requests().len();
+    h.graph.push_json(200, success());
+    script_revocation(&h.graph);
+    let done = h.call(delete()).await;
+    assert_eq!(done.status, StatusCode::NO_CONTENT, "{}", done.text);
+    assert_eq!(h.graph.remaining(), 0);
+    let revoked = h.graph.requests()[failed_at..]
+        .iter()
+        .filter(|r| r.method == Method::DELETE && r.path() == format!("/v25.0/{ALLOCATION}"))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(revoked.len(), 1, "the allocation revoked");
+    assert_eq!(revoked[0].bearer(), Some(SYSTEM_TOKEN));
+    assert!(
+        h.vault
+            .revoked_business(&BusinessId::new(BUSINESS).unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        h.vault.get(&waba).await.unwrap().is_none(),
+        "the token deleted"
+    );
+    assert!(h.store.waba(&waba).await.unwrap().is_none(), "unbound");
+    assert!(
+        h.store.tenant(&tenant(A)).await.unwrap().is_none(),
+        "the tenant deleted"
+    );
+}
+
+/// Decision D75: the operator's unbind revokes nothing (the operator may
+/// be moving the WABA): the token and the binding go, the line stays.
+#[tokio::test]
+async fn the_operators_unbind_revokes_no_line() {
+    let h = harness(solution_partner());
+    let (a, _) = tenants(&h).await;
+    onboard_partner(&h, &a).await;
+    let admin = h.admin_key().await;
+    let asked = h.graph.requests().len();
+    h.graph.push_json(200, success()); // subscribed_apps
+    let done = h
+        .call(Call::new(Method::DELETE, format!("/v1/admin/wabas/{WABA}/binding")).key(&admin))
+        .await;
+    assert_eq!(done.status, StatusCode::NO_CONTENT, "{}", done.text);
+    assert_eq!(h.graph.requests().len(), asked + 1, "the unsubscribe only");
+    assert!(
+        h.vault
+            .revoked_business(&BusinessId::new(BUSINESS).unwrap())
+            .await
+            .unwrap()
+            .is_none(),
+        "nothing revoked"
+    );
+    assert!(
+        h.store
+            .waba(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 /// A Tech Provider's uninstall deletes the token and the bindings (no
 /// credit call), confirmed first; the tenant's own disconnection makes no
 /// credit call either (as before roadmap M3a).

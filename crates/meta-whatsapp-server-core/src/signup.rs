@@ -61,8 +61,8 @@ use meta_whatsapp_rs::Error;
 use meta_whatsapp_rs::client::AppCredentials;
 use meta_whatsapp_rs::client::embedded_signup::{
     EmbeddedSignup, EmbeddedSignupEvent, FinishKind, LaunchOptions, Onboarded, OnboardingRequest,
-    SessionInfo, SignupCode, SignupSessions, SignupState, SolutionPartner, VerifiedOnboarding,
-    steps,
+    SessionInfo, SignupCode, SignupSessions, SignupState, SolutionPartner, StoredBusinessToken,
+    TokenVersion, VerifiedOnboarding, steps,
 };
 use meta_whatsapp_rs::client::phone_numbers::TwoStepPin;
 use meta_whatsapp_rs::core::clock::Clock;
@@ -80,7 +80,7 @@ use crate::error::{ErrorCode, ServiceError};
 use crate::inbound::AccountActions;
 use crate::model::{
     BindOutcome, BindingEpoch, Listing, NewSignupAttempt, PageRequest, SignupAttempt, TenantId,
-    VaultEntry,
+    VaultEntry, WabaBinding,
 };
 use crate::observe::Observer;
 use crate::request::typed_graph_id;
@@ -100,13 +100,18 @@ pub enum AccountUpdateConfirmation {
     /// token. A token Meta still reports valid and still granted the WABA
     /// contradicts the webhook, which is then recorded and not acted on
     /// (logged at `warn`, target `audit`). A WABA with no stored token
-    /// leaves nothing to confirm with: what the library acts on then is its
-    /// own records (a revocation finds the line's records, or none).
+    /// leaves nothing to confirm with, and nothing to delete: only its
+    /// credit line is revoked then, from the vault's ledger, else the
+    /// webhook's `owner_business_id`, on the signature alone; so is a
+    /// `PARTNER_REMOVED` naming no WABA (decision D72: a revocation the
+    /// operator's reshare undoes, never a deletion).
     #[default]
     Graph,
     /// Act on the signature alone (`WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION=signature`):
     /// for a deployment whose merchants' tokens Meta keeps valid after
-    /// such an event, which Meta does not document either way.
+    /// such an event, which Meta does not document either way. The app
+    /// secret is then the only gate: whoever holds it can sign a delivery
+    /// that deletes any merchant's token and revokes their line.
     Signature,
 }
 
@@ -364,19 +369,25 @@ impl Signups {
     }
 
     /// Disconnect `owned` in Solution Partner mode (the tenant's `DELETE
-    /// /v1/wabas/{waba_id}`, after the app was unsubscribed): the credit
-    /// line revoked first and the token deleted second (the library's
-    /// `EmbeddedSignup::offboard`), then the bindings, only those `owned`
-    /// was made from. `Ok(false)` outside Solution Partner mode: nothing
-    /// done, the caller forgets the WABA as a Tech Provider does.
+    /// /v1/wabas/{waba_id}`, after the app was unsubscribed, and an
+    /// admin's deletion of its tenant, decision D75): the credit line
+    /// revoked first and the token deleted second (the library's
+    /// `EmbeddedSignup::offboard_if_unchanged`), then the bindings, only
+    /// the token and the binding `owned` was made from: the revocation
+    /// takes several calls to Meta, and a WABA moved meanwhile keeps its
+    /// new holder's token and binding. `Ok(false)` outside Solution Partner
+    /// mode: nothing done, the caller forgets the WABA as a Tech Provider
+    /// does. The callers audit it (`credit_line_revoked`).
     ///
     /// # Errors
     ///
     /// `owned` another [`Authorizer`] made: `403 forbidden`. The WABA moved
     /// since `owned` was made, before the revocation (`503`, nothing
-    /// revoked or deleted) or during it (`503`, the binding left). A
-    /// revocation that failed: its error (`step: revoke_credit_line`, with
-    /// Meta's `details`), and nothing deleted.
+    /// revoked or deleted) or during it (`503`, the token and the binding
+    /// left, logged at `warn`); its token re-encrypted by a rotation
+    /// meanwhile (`503`, a repeat reads it anew). A revocation that failed:
+    /// its error (`step: revoke_credit_line`, with Meta's `details`), and
+    /// nothing deleted.
     pub async fn offboard(
         &self,
         authz: &Authorizer,
@@ -397,17 +408,34 @@ impl Signups {
             .record_vault_entry(&VaultEntry::Waba(waba_id.clone()))
             .await?;
         let es = deployment.onboarding(authz.client());
-        if let Err(error) = es.offboard(waba_id, None, authz.vault_for_signup()).await {
-            let api = ServiceError::from_library(&error).with_details(&error);
-            if error.graph().is_some() {
-                observer.graph_error(api.code());
+        let offboarded = match es
+            .offboard_if_unchanged(
+                waba_id,
+                None,
+                authz.vault_for_signup(),
+                Some(owned.token_version()),
+            )
+            .await
+        {
+            Ok(offboarded) => offboarded,
+            Err(error) => {
+                let api = ServiceError::from_library(&error).with_details(&error);
+                if error.graph().is_some() {
+                    observer.graph_error(api.code());
+                }
+                return Err(api);
             }
-            return Err(api);
-        }
-        if !records.unbind_waba_if(owned.epoch()).await? {
+        };
+        // The token `owned` read, then the binding it was made from: a
+        // token stored or a binding made since is the new holder's.
+        if !offboarded.token_deleted || !records.unbind_waba_if(owned.epoch()).await? {
+            let moved = !owned.still_bound(authz).await.unwrap_or(false);
             tracing::warn!(
                 waba_id = waba_id.as_str(),
-                "a WABA was unbound, maybe bound to another tenant, while it was being offboarded"
+                moved,
+                token_deleted = offboarded.token_deleted,
+                "a WABA's token or binding changed while its credit line was being revoked: \
+                 what changed was left"
             );
             return Err(ServiceError::from(StorageError::Busy));
         }
@@ -1108,14 +1136,19 @@ impl AccountActions for AccountUpdates {
 }
 
 impl AccountUpdates {
-    /// Whether Graph confirms that `waba_id` left: its stored token is no
-    /// longer valid, or no longer granted it (`debug_token`). No token
-    /// stored: nothing to confirm with, `true`.
-    async fn confirmed(&self, es: &EmbeddedSignup, waba_id: &WabaId) -> Result<bool, Error> {
+    /// Whether Graph confirms that `waba_id` left: its stored token
+    /// (`stored`, as read) is no longer valid, or no longer granted it
+    /// (`debug_token`). No token stored: nothing to confirm with, `true`.
+    async fn confirmed(
+        &self,
+        es: &EmbeddedSignup,
+        waba_id: &WabaId,
+        stored: Option<&StoredBusinessToken>,
+    ) -> Result<bool, Error> {
         if self.deployment.confirmation == AccountUpdateConfirmation::Signature {
             return Ok(true);
         }
-        let Some(stored) = self.authz.vault_for_signup().get(waba_id).await? else {
+        let Some(stored) = stored else {
             return Ok(true);
         };
         let debug = es.debug_token(&stored.token).await?;
@@ -1132,7 +1165,33 @@ impl AccountUpdates {
         Ok(!still_granted)
     }
 
-    /// Offboard `waba_id` (see the type's docs).
+    /// The WABA's binding and stored token, read together: the token read
+    /// while the binding held (read again after it), as a capability is
+    /// made. A WABA that moved between the reads is `StorageError::Busy`
+    /// (retryable: Meta's redelivery reads them anew).
+    async fn held(
+        &self,
+        waba_id: &WabaId,
+    ) -> Result<
+        (
+            Option<WabaBinding>,
+            Option<(StoredBusinessToken, TokenVersion)>,
+        ),
+        Error,
+    > {
+        let records = self.authz.records();
+        let binding = records.waba(waba_id).await?;
+        let token = self.authz.vault_for_signup().get_versioned(waba_id).await?;
+        let again = records.waba(waba_id).await?;
+        if binding.as_ref().map(WabaBinding::epoch) != again.as_ref().map(WabaBinding::epoch) {
+            return Err(StorageError::Busy.into());
+        }
+        Ok((binding, token))
+    }
+
+    /// Offboard `waba_id` (see the type's docs): only the token and the
+    /// binding read before the revocation's calls, so a WABA moved to
+    /// another holder meanwhile loses nothing of the new holder's.
     async fn offboard(
         &self,
         waba_id: &WabaId,
@@ -1140,17 +1199,44 @@ impl AccountUpdates {
         reason: &'static str,
     ) -> Result<(), Error> {
         let es = self.deployment.onboarding(self.authz.client());
-        if !self.confirmed(&es, waba_id).await? {
+        let (binding, token) = self.held(waba_id).await?;
+        if !self
+            .confirmed(&es, waba_id, token.as_ref().map(|(stored, _)| stored))
+            .await?
+        {
             return Ok(());
         }
         let records = self.authz.records();
-        let binding = records.waba(waba_id).await?;
         if self.deployment.is_solution_partner() {
             remember(records, waba_id, owner).await?;
         }
+        let version = token.map(|(_, version)| version);
         let offboarded = es
-            .offboard(waba_id, owner, self.authz.vault_for_signup())
+            .offboard_if_unchanged(waba_id, owner, self.authz.vault_for_signup(), version)
             .await?;
+        let still_held = || async {
+            Ok::<_, Error>(
+                records.waba(waba_id).await?.map(|now| now.epoch())
+                    == binding.as_ref().map(WabaBinding::epoch),
+            )
+        };
+        if version.is_some() && !offboarded.token_deleted {
+            if still_held().await? {
+                // Re-encrypted by a rotation, or stored again by the same
+                // holder: Meta's redelivery reads it anew.
+                return Err(StorageError::Busy.into());
+            }
+            tracing::warn!(
+                target: "audit",
+                origin = "webhook",
+                reason,
+                waba_id = waba_id.as_str(),
+                credit_revoked = offboarded.credit.is_some(),
+                "a WABA moved to another holder while it was being offboarded: the new \
+                 holder's token and binding were left"
+            );
+            return Ok(());
+        }
         let unbound = match &binding {
             Some(binding) => records.unbind_waba_if(&binding.epoch()).await?,
             None => false,
@@ -1173,7 +1259,8 @@ impl AccountUpdates {
     /// Revoke the credit line of `waba_id`'s business (`PARTNER_REMOVED`).
     async fn revoke(&self, waba_id: &WabaId, owner: Option<&BusinessId>) -> Result<(), Error> {
         let es = self.deployment.onboarding(self.authz.client());
-        if !self.confirmed(&es, waba_id).await? {
+        let stored = self.authz.vault_for_signup().get(waba_id).await?;
+        if !self.confirmed(&es, waba_id, stored.as_ref()).await? {
             return Ok(());
         }
         let records = self.authz.records();

@@ -37,6 +37,9 @@ pub struct Moving {
     after_wabas: Mutex<Option<Hook>>,
     /// Run once the next `bind_waba` has bound.
     after_bind: Mutex<Option<Hook>>,
+    /// Run once the next `record_vault_entry` has recorded: an
+    /// offboarding's last write before the revocation's calls to Meta.
+    after_vault_entry: Mutex<Option<Hook>>,
 }
 
 impl Moving {
@@ -46,7 +49,13 @@ impl Moving {
             after_waba: Mutex::new(None),
             after_wabas: Mutex::new(None),
             after_bind: Mutex::new(None),
+            after_vault_entry: Mutex::new(None),
         }
+    }
+
+    /// Run `hook` once the next `record_vault_entry` has recorded.
+    pub fn after_recording_vault_entry(&self, hook: Hook) {
+        *self.after_vault_entry.lock().unwrap() = Some(hook);
     }
 
     /// Run `hook` once the next `bind_waba` has bound.
@@ -70,6 +79,7 @@ impl Moving {
         self.after_waba.lock().unwrap().is_some()
             || self.after_wabas.lock().unwrap().is_some()
             || self.after_bind.lock().unwrap().is_some()
+            || self.after_vault_entry.lock().unwrap().is_some()
     }
 }
 
@@ -356,7 +366,12 @@ impl RecordStore for Moving {
         self.inner.delete_signup_attempt(tenant, waba_id).await
     }
     async fn record_vault_entry(&self, entry: &VaultEntry) -> StoreResult<()> {
-        self.inner.record_vault_entry(entry).await
+        let recorded = self.inner.record_vault_entry(entry).await;
+        let hook = self.after_vault_entry.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook.await;
+        }
+        recorded
     }
     async fn vault_entries(&self, page: &PageRequest) -> StoreResult<Listing<VaultEntry>> {
         self.inner.vault_entries(page).await

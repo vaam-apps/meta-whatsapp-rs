@@ -20,7 +20,7 @@ use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 use super::EmbeddedSignup;
 use super::ledger::{ClearedShare, StoredCredit};
 use super::onboard::steps::{DELETE_TOKEN, REVOKE_CREDIT_LINE};
-use super::vault::{StoredBusinessToken, TokenVault};
+use super::vault::{StoredBusinessToken, TokenVault, TokenVersion};
 use crate::Client;
 use crate::credit_lines::{
     CreditLines, CreditRevocation, WabaCurrency, WabaFunding, finish, is_shared, owned_by,
@@ -490,13 +490,9 @@ impl EmbeddedSignup {
         owner_business_id: Option<&BusinessId>,
         vault: &TokenVault,
     ) -> Result<Offboarded> {
-        let credit = match &self.partner {
-            Some(_) => self
-                .offboard_credit(waba_id, owner_business_id, vault)
-                .await
-                .map_err(|e| e.in_step(REVOKE_CREDIT_LINE))?,
-            None => None,
-        };
+        let credit = self
+            .offboard_revocation(waba_id, owner_business_id, vault)
+            .await?;
         let token_deleted = vault
             .delete(waba_id)
             .await
@@ -506,6 +502,67 @@ impl EmbeddedSignup {
             credit,
             token_deleted,
         })
+    }
+
+    /// [`Self::offboard`], deleting only the token you read: the record at
+    /// `version` ([`TokenVault::get_versioned`], read before this call),
+    /// or none when `version` is `None` (no token was stored when you
+    /// read). The revocation is [`Self::offboard`]'s, and a failed one
+    /// deletes nothing either; the delete is
+    /// [`TokenVault::delete_if_unchanged`], so a token stored while the
+    /// revocation's calls ran (the WABA connected again, maybe by another
+    /// holder of yours) is never deleted: [`Offboarded::token_deleted`] is
+    /// then `false`, and the token is left. A record re-encrypted by a
+    /// rotation meanwhile is at a new version too, and left: read it again
+    /// and repeat (the revocation is safe to repeat).
+    ///
+    /// For a caller whose own records may move the WABA to another holder
+    /// while it offboards it (a service binding WABAs to tenants): the
+    /// revocation takes several calls to Meta, during which an unconditional
+    /// delete could take the new holder's token.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::offboard`].
+    pub async fn offboard_if_unchanged(
+        &self,
+        waba_id: &WabaId,
+        owner_business_id: Option<&BusinessId>,
+        vault: &TokenVault,
+        version: Option<TokenVersion>,
+    ) -> Result<Offboarded> {
+        let credit = self
+            .offboard_revocation(waba_id, owner_business_id, vault)
+            .await?;
+        let token_deleted = match version {
+            Some(version) => vault
+                .delete_if_unchanged(waba_id, version)
+                .await
+                .map_err(|e| e.in_step(DELETE_TOKEN))?,
+            None => false,
+        };
+        Ok(Offboarded {
+            waba_id: waba_id.clone(),
+            credit,
+            token_deleted,
+        })
+    }
+
+    /// The revocation of an offboarding (step `revoke_credit_line`): none
+    /// for a Tech Provider.
+    async fn offboard_revocation(
+        &self,
+        waba_id: &WabaId,
+        owner_business_id: Option<&BusinessId>,
+        vault: &TokenVault,
+    ) -> Result<Option<CreditRevocation>> {
+        match &self.partner {
+            Some(_) => self
+                .offboard_credit(waba_id, owner_business_id, vault)
+                .await
+                .map_err(|e| e.in_step(REVOKE_CREDIT_LINE)),
+            None => Ok(None),
+        }
     }
 
     async fn offboard_credit(
@@ -3431,6 +3488,95 @@ mod tests {
         assert_eq!(off.credit, None);
         assert!(off.token_deleted);
         assert!(tp.t.requests().is_empty());
+    }
+
+    /// `offboard_if_unchanged` revokes as `offboard` does, then deletes
+    /// only the token read: one stored while the revocation ran (the WABA
+    /// connected again) is kept, and a revocation that fails deletes
+    /// nothing. Decisive: the conditional delete (an unconditional one
+    /// takes the token stored since).
+    #[tokio::test]
+    async fn offboarding_if_unchanged_keeps_a_token_stored_meanwhile() {
+        let h = harness(CreditSharing::ShareAndAttach);
+        onboarded(&h).await;
+        let (_, read) = h.vault.get_versioned(&waba()).await.unwrap().unwrap();
+        // Stored again before the delete: a new holder's token.
+        h.vault
+            .store(
+                &StoredBusinessToken::new(waba(), AccessToken::new("TOKEN-OF-THE-NEW-HOLDER"))
+                    .phone_number_ids([PhoneNumberId::new(PHONE).unwrap()]),
+            )
+            .await
+            .unwrap();
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, success());
+        h.t.push_json(200, deleted());
+        let off =
+            h.es.offboard_if_unchanged(&waba(), None, &h.vault, Some(read))
+                .await
+                .unwrap();
+        assert_eq!(
+            off.credit.unwrap().revoked,
+            [AllocationConfigId::new(ALLOCATION)]
+        );
+        assert!(!off.token_deleted);
+        let kept = h.vault.get(&waba()).await.unwrap().unwrap();
+        assert_eq!(kept.token.expose_secret(), "TOKEN-OF-THE-NEW-HOLDER");
+        assert!(
+            h.vault
+                .get_by_phone_number(&PhoneNumberId::new(PHONE).unwrap())
+                .await
+                .unwrap()
+                .is_some(),
+            "its phone index kept"
+        );
+        assert_eq!(h.t.remaining(), 0);
+
+        // The token read, unchanged: deleted, after the revocation.
+        let h = harness(CreditSharing::ShareAndAttach);
+        onboarded(&h).await;
+        let (_, read) = h.vault.get_versioned(&waba()).await.unwrap().unwrap();
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, success());
+        h.t.push_json(200, deleted());
+        let off =
+            h.es.offboard_if_unchanged(&waba(), None, &h.vault, Some(read))
+                .await
+                .unwrap();
+        assert!(off.token_deleted);
+        assert!(h.vault.get(&waba()).await.unwrap().is_none());
+        assert_eq!(h.t.remaining(), 0);
+
+        // None read: none deleted; a failed revocation deletes nothing.
+        let h = harness(CreditSharing::ShareAndAttach);
+        onboarded(&h).await;
+        h.t.push_json(200, shared_record(ALLOCATION));
+        h.t.push_json(200, active());
+        h.t.push_json(200, success());
+        h.t.push_json(200, deleted());
+        let off =
+            h.es.offboard_if_unchanged(&waba(), None, &h.vault, None)
+                .await
+                .unwrap();
+        assert!(!off.token_deleted);
+        assert!(h.vault.get(&waba()).await.unwrap().is_some());
+        assert_eq!(h.t.remaining(), 0);
+        let h = harness(CreditSharing::ShareAndAttach);
+        onboarded(&h).await;
+        let (_, read) = h.vault.get_versioned(&waba()).await.unwrap().unwrap();
+        h.t.push_json(
+            500,
+            json!({"error": {"message": "unknown", "type": "OAuthException", "code": 1}}),
+        );
+        let err =
+            h.es.offboard_if_unchanged(&waba(), None, &h.vault, Some(read))
+                .await
+                .unwrap_err();
+        assert_eq!(step(&err), REVOKE_CREDIT_LINE);
+        assert!(h.vault.get(&waba()).await.unwrap().is_some());
+        assert_eq!(h.t.remaining(), 0);
     }
 
     /// The marker is written before anything is sent: a revocation that

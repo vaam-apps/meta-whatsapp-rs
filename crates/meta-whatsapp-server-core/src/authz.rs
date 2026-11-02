@@ -1260,6 +1260,13 @@ impl OwnedWaba {
         &self.epoch
     }
 
+    /// The vault record this was made from: what the signup services'
+    /// partner disconnection deletes, and no token stored since (roadmap
+    /// M3a). Crate-private.
+    pub(crate) fn token_version(&self) -> TokenVersion {
+        self.token
+    }
+
     /// See [`OwnedNumber::failed`].
     pub async fn failed(&self, authz: &Authorizer, error: &Error) -> ServiceError {
         if let Err(refused) = authz.check(&self.issuer, "OwnedWaba::failed") {
