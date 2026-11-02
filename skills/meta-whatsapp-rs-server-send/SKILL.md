@@ -151,7 +151,7 @@ sent; a platform key shares the tenant's budget. Meta's own limits answer
   and pace your own sends.
 - Meta documents its per-number media check for uploads only: a file
   received by webhook answering `not_found` may be that; report it.
-- No Direct Send, Flows, product or carousel messages, and no authentication templates yet; no documents route (M4).
+- No Direct Send, Flows, product or carousel messages; no documents route (M4). Authentication templates and login codes: `meta-whatsapp-rs-server-otp`.
 
 ## Related skills
 

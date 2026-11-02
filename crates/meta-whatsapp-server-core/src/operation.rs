@@ -80,11 +80,20 @@ pub enum Operation {
     /// `get_inbox_message`: a message of a number's inbox, by id (roadmap
     /// M2g).
     GetInboxMessage,
+    /// `create_authentication_template`: an authentication template
+    /// created or updated in one or more languages (roadmap M3c).
+    CreateAuthenticationTemplate,
+    /// `issue_otp`: a one-time passcode sent with the tenant's
+    /// authentication template (roadmap M3c).
+    IssueOtp,
+    /// `verify_otp`: a typed code checked, which always counts as an
+    /// attempt (roadmap M3c).
+    VerifyOtp,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 28] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -110,6 +119,9 @@ impl Operation {
         Self::GetConversationWindow,
         Self::MarkConversationRead,
         Self::GetInboxMessage,
+        Self::CreateAuthenticationTemplate,
+        Self::IssueOtp,
+        Self::VerifyOtp,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -140,6 +152,9 @@ impl Operation {
             Self::GetConversationWindow => "get_conversation_window",
             Self::MarkConversationRead => "mark_conversation_read",
             Self::GetInboxMessage => "get_inbox_message",
+            Self::CreateAuthenticationTemplate => "create_authentication_template",
+            Self::IssueOtp => "issue_otp",
+            Self::VerifyOtp => "verify_otp",
         }
     }
 
@@ -162,7 +177,8 @@ impl Operation {
             Self::ListTemplates
             | Self::CreateTemplate
             | Self::DeleteTemplates
-            | Self::GetTemplate => Scope::Templates,
+            | Self::GetTemplate
+            | Self::CreateAuthenticationTemplate => Scope::Templates,
             Self::ListEvents | Self::GetEvent | Self::StreamEvents | Self::StreamNumberEvents => {
                 Scope::Events
             }
@@ -172,6 +188,7 @@ impl Operation {
             | Self::GetConversationWindow
             | Self::MarkConversationRead
             | Self::GetInboxMessage => Scope::Inbox,
+            Self::IssueOtp | Self::VerifyOtp => Scope::Otp,
         }
     }
 }

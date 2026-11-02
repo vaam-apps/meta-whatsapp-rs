@@ -38,6 +38,7 @@
 //! | [`numbers`] | the core's number services over the bundle's records and vault, with no HTTP layer (roadmap S5c): only the order's own capabilities; a number's details and profile, a change of it (an empty one only reads, a refused one sends nothing); a disconnection deleting nothing until Meta unsubscribed the app, and nothing for a WABA that moved |
 //! | [`live`] | the bundle's [`EventNotifier`] and the core's live streams over it (roadmap M2b): the notifier wakes its tenant's subscriptions only, through any of the bundle's handles; a stream sends what the outbox holds after its cursor and resumes exactly after it (`Last-Event-ID`); only its tenant's events, never an `unknown` or `unparsed` one (M2.3, through the pipeline); a lost notification still delivers (the re-poll); a cursor past the newest sequence `422` and one below a purge `410` before the stream starts; streams bounded per tenant and replica (`429 too_many_streams`); a slow client dropped with `lagged`, its buffer within its budget; a shutdown ends every stream; an event read by id in its tenant's stream only; a number stream on the tenant's own number only; a stream behind a purge ends `lagged`. M2.5's load (`live::many_streams_at_a_steady_rate_hold_bounded_memory`) is a case of its own, not in `run` |
 //! | [`inbox`] | the core's inbox services over the bundle's records, vault and inbox, the webhooks recorded by the core's pipeline, with no HTTP layer (roadmap M2a): M2.1 (an inbound message listed, read, answered within its window, Meta's documented request, recorded `accepted`, then `delivered` by its status; a free-form reply outside the window `409` with zero requests, a template not; pages by the store's cursor); the binding epoch (a moved number's history hidden from its new tenant and kept, its own shown, a first onboarding's synced history shown; a number migrated between two tenants' WABAs, neither moving, cut at its own start (M2h); a capability made before the move reads nothing); `control_taken` refusing a free-form reply `409 thread_owned_elsewhere` with zero requests, unless the number's ownership check is off; only the order's own number; since roadmap M2g, the window as a reply meets it, marking read (`unread` 0, one read receipt for the latest inbound message only with `notify_customer`, none past 30 days, a refused one resetting nothing), a message by id on its own number only, and the previous holder's message, window and receipt never reaching the new holder; housekeeping applying the inbox store's retention |
+//! | [`otp`] | the core's OTP services over the bundle's records, key/value store and vault, with no HTTP layer (roadmap M3c): a tenant's OTP settings are its own record (read back whole, replaced, cleared, gone with the tenant, none for a tenant created again under its id); acceptance test M3.5's decisive case, the namespace (tenant A's code, sent from the number tenant B sends from too, verifies at no other tenant, whose checks count no attempt against it); settings naming a number no longer its holder's are `409 otp_not_configured` with no request; another authorizer's caller opens nothing |
 //! | [`webhooks`] | the core's webhook pipeline over the bundle's records, key/value store, inbox and outbox, with no listener (roadmap S5e, M1.2): routing is an allow-list (an unowned number's event, a stale binding's, a replay's are operator-only, whatever the payload says of a tenant; an event dated before its binding, or seen past the replay window, too; a number moved while its event records gives it to neither tenant); the signature checked before any store is touched or a turn waited for; at most `MAX_DELIVERIES_RECORDING` deliveries recording, another waiting with no lease claimed (its `503 busy` after the wait is `webhooks::a_delivery_with_no_turn_is_busy_after_the_wait`, on a paused clock, not in `run`); each event once, under its dedup lease; the answer only once every event is recorded, a failed or busy outbox refused and redelivered once; `unknown` and `unparsed` acknowledged as operator-only rows; after a move, undated events (a history chunk, an error, an undated group update) reaching no tenant within the window, the new holder under `CurrentHolder` or past it, a first onboarding always, and an event of the binding's first second a first onboarding's only (roadmap S2b, design D36); an address book change reaches its tenant and the inbox keeps no synced contact (before roadmap M3b, design D38) |
 //!
 //! Every case panics on a broken contract, with what broke: this is test
@@ -64,6 +65,7 @@ pub mod live;
 pub mod media;
 pub mod messages;
 pub mod numbers;
+pub mod otp;
 pub mod outbox;
 pub mod races;
 pub mod records;
@@ -130,6 +132,10 @@ where
 
     let backend = fresh().await;
     inbox::run(backend.as_ref()).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    otp::run(backend.as_ref()).await;
     backend.close().await;
     report
 }

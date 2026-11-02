@@ -8,7 +8,10 @@
 > rotation, the numbers routes, errors, operations, the committed OpenAPI
 > document; M1b: messages, read receipts, media, templates, idempotency
 > keys and rate limits; M1c: `POST /webhooks/meta` into the inbox and the
-> event outbox, and `GET /v1/events`; [§9](#9-delivery-plan) says which
+> event outbox, and `GET /v1/events`; since then, roadmap M2a the inbox
+> routes, M2b one event by id and live events ([§4.5](#45-live-updates-sse)),
+> and M3c OTP, its per-tenant settings and authentication templates
+> ([§4.7](#47-otp)); [§9](#9-delivery-plan) says which
 > acceptance tests they meet, [coverage.md](../coverage.md) row 33 what
 > is missing); the rest is design. Written against `main` =
 > bbf24a3 (2026-09-24), Graph API v25.0; the library changes it assumed have
@@ -595,8 +598,8 @@ Rules the service implements:
 | --- | --- | --- | --- |
 | `GET /v1/wabas/{waba_id}/templates` | list, `?status=&name=&cursor=`, cached 60 s per WABA (Meta allows 200 management calls an hour per WABA) | → page of `{id, name, language, status, category, components}` | |
 | `GET /v1/wabas/{waba_id}/templates/{id}` | one | → template | *as built in M1b*: 422 `id` (not digits); the id's name read, then the id looked for in the WABA's own list of that name (5 pages of 100 at most): 404 for another WABA's template, or one past those pages |
-| `POST /v1/wabas/{waba_id}/templates` | create from Meta's JSON shape (`TemplateDefinition` deserializes it), validated locally | → `201 {id, status, category}` | 422 `template_rejected`; 409 `template_limit_reached`; *as built in M1b*: 422 `invalid_request` on a key `TemplateDefinition` would not send (never dropped; the shapes it cannot carry are listed in the guide's Templates section) |
-| `POST /v1/wabas/{waba_id}/templates/authentication` (M3) | copy-code, one-tap or zero-tap, several languages | → 201 | |
+| `POST /v1/wabas/{waba_id}/templates` | create from Meta's JSON shape (`TemplateDefinition` deserializes it), validated locally | → `201 {id, status, category}` | 422 `template_rejected`; 409 `template_limit_reached`; *as built in M1b*: 422 `invalid_request` on a key `TemplateDefinition` would not send (never dropped; the shapes it cannot carry are listed in the guide's Templates section); *since M3c's review*: 422 `invalid_request` on the path of a `zero_tap_terms_accepted: true` (`components[2].buttons[0].zero_tap_terms_accepted`), wherever it is: it accepts Meta's zero-tap terms, a legal act no tenant's request takes ([§10](#10-decisions), "Legal acts"; it reached Meta from M1b until then) |
+| `POST /v1/wabas/{waba_id}/templates/authentication` (M3) | copy-code, one-tap or zero-tap, several languages; *as built in M3c*: Meta's bulk management (`upsert_message_templates`), its fields flattened (`name`, `languages`, `otp_type`, `supported_apps`, `add_security_recommendation`, `code_expiration_minutes`, `message_send_ttl_seconds`), copy code and one-tap only, an `Idempotency-Key` as on a creation | → 201; *as built*: `{data: [{id, status, language}]}` | *as built*: 422 `invalid_request` on `otp_type` for `zero_tap` (accepting Meta's zero-tap terms is a legal act, the owner's: roadmap M3g) |
 | `DELETE /v1/wabas/{waba_id}/templates?name=[&id=]` | every language of a name, or one | → 204 | *as built in M1b*: with an id, looked for in the WABA's own list of that name first: 404 when it is not there, nothing deleted |
 
 Review results arrive as `template_status_updated` events.
@@ -636,8 +639,8 @@ receives its own tenant's events.
 | `GET /v1/signup/attempts` | the tenant's resumable attempts | → `{data: [{waba_id, failed_step, updated_at}]}` | |
 | `POST /v1/signup/resume` | rerun the steps after the stored token | `{waba_id, pin?}` → like `complete` | 404 `nothing_to_resume`; 502 `onboarding_failed` |
 | `POST /v1/numbers/{pn}/coexistence-sync` | start the contacts and history sync, once, within 24 h (D7) | `{types}` → 202 | 409 `sync_not_allowed` |
-| `POST /v1/otp/issue` | send a code with the tenant's authentication template | `{phone, purpose?}` → `{status: sent, challenge_id, expires_at}` or `{status: cooling_down \| rate_limited, retry_after_seconds}` | 422 `phone`, `recipient_not_supported`; 502/504 with `may_have_been_sent: true` |
-| `POST /v1/otp/verify` | check the typed code; always counts as an attempt | `{phone, purpose?, code}` → `{result: verified \| invalid \| expired \| too_many_attempts \| not_found, attempts_left?}` | 422 |
+| `POST /v1/otp/issue` | send a code with the tenant's authentication template; *as built in M3c*: from the sending number of the tenant's OTP settings, else the default OTP tenant's (D8, [§4.7](#47-otp)), an `Idempotency-Key` as on a send (its fingerprint keyed with the pepper), rate class `otp_issue` | `{phone, purpose?}` → `{status: sent, challenge_id, expires_at}` or `{status: cooling_down \| rate_limited, retry_after_seconds}` | 422 `phone`, `recipient_not_supported`; 502/504 with `may_have_been_sent: true`; *as built*: 409 `otp_not_configured` |
+| `POST /v1/otp/verify` | check the typed code; always counts as an attempt; *as built in M3c*: asks Meta nothing and reads no token, rate class `otp_verify`; another tenant's code is `not_found`, the namespace being the caller's tenant | `{phone, purpose?, code}` → `{result: verified \| invalid \| expired \| too_many_attempts \| not_found, attempts_left?}` | 422; *as built*: 409 `otp_not_configured` |
 
 The signup state travels in bodies only (URLs reach access logs). OTP
 outcomes are `200` with a status, as the library returns them as `Ok`:
@@ -647,7 +650,7 @@ a caller's generic error handling can never swallow `invalid`.
 
 | Method and path | Does |
 | --- | --- |
-| `POST`, `GET`, `PATCH`, `DELETE /v1/admin/tenants[/{id}]` | create, list, suspend, configure (OTP sender and template, limits), delete (disconnects every WABA) |
+| `POST`, `GET`, `PATCH`, `DELETE /v1/admin/tenants[/{id}]` | create, list, suspend, configure (OTP sender and template, limits), delete (disconnects every WABA); *as built in M3c*: the OTP settings are a resource of their own, `GET`, `PUT` and `DELETE /v1/admin/tenants/{id}/otp` (the sending number, which must be one of the tenant's, the template and language, the library's limits; audited), and `PATCH` stays name and status; per-tenant rate limits are not settable |
 | `…/tenants/{id}/keys[/{key_id}]`, `/v1/admin/platform-keys[/{key_id}]` | mint, list, revoke keys; platform keys with their allowed tenants |
 | `POST /v1/admin/tenants/{id}/wabas`; `GET /v1/admin/wabas/{waba_id}`; `DELETE /v1/admin/wabas/{waba_id}/binding` | attach an own WABA, verified with Meta and subscribed; which tenant holds a WABA, and its numbers; unbind (D4: token deleted too, [§3.4](#34-how-numbers-get-bound)) |
 | `POST /v1/admin/vault/rotate` | re-encrypt every WABA's token under the active key, walking `wa_server_wabas` (the vault cannot list itself), within the request deadline: a walk cut there answers `504 timeout` and is repeated (idempotent), and `meta-whatsapp-server vault rotate` has no deadline. It walks bound WABAs only, which holds every vault record in M1a; M3 keeps records past a binding (credit ledgers of offboarded WABAs, revocation markers), and the walk must cover those too (`TokenVault::rotate` on each such WABA, `rotate_business` on each marker) before an operator may drop an old key |
@@ -874,6 +877,40 @@ records them for tenants too).
 - The code is in no response, log or error; OTP routes drop Meta's text
   and `details` (a template error could quote a parameter: the code).
   Per-IP throttling stays the caller's (the service sees only the backend).
+- *As built in M3c*: the core's `otp` module (`OtpCodes`, opened for an
+  admitted caller) over the library's `OtpService`, built per request
+  rather than cached (it holds no connection); the namespace is the
+  calling tenant's id. A tenant's settings
+  (`wa_server_tenants.settings`, key `otp`, set by
+  `PUT /v1/admin/tenants/{id}/otp`) name one of its own numbers, checked
+  when they are set and again, through the authorization order, at every
+  issue; a tenant without settings borrows those of the deployment's
+  default OTP tenant (`WA_SERVER_OTP_DEFAULT_TENANT`, the platform's
+  number: D8's default, D45), whose number is opened for that tenant,
+  never for the caller's. No settings, no default, or a sending number
+  no longer its holder's: `409 otp_not_configured`, nothing read or sent.
+  A suspended or deleted default tenant lends nothing: its borrowers'
+  issues and checks are `409 otp_not_configured` too (fail closed;
+  `doctor` warns, `otp.default_tenant`, when the tenant named is missing,
+  suspended, without settings or no longer holding its number).
+  The issue limit cannot be turned off over the API. On the default OTP
+  tenant's number, a second issue limit is **shared** by every tenant and
+  purpose sending from it: per recipient, that tenant's `issue_limit`,
+  reserved before the library's call and given back when nothing was
+  sent (a cooldown, a tenant's own limit, a refusal before the send);
+  past it, `200 rate_limited`. Without it, N borrowing tenants (or N
+  purposes) could send one recipient N times the limit, on the
+  platform's bill (SMS pumping, harassment); the cost is that one
+  tenant's codes to a recipient count against every borrower's, which a
+  tenant with its own number avoids. Its records live in the backend's
+  key/value store (`wa_server.otp.shared_rate`), keyed by the hex
+  HMAC-SHA256, under HMAC-SHA256(`WA_OTP_PEPPER`,
+  `meta-whatsapp-server/otp-shared-limit/v1`), of the number's id and
+  the recipient's digits: no phone number in a key; both names are
+  stored names pending the owner's confirmation (D59). The design's verify
+  takes the phone number and purpose (the library's `verify` is keyed
+  so), not the challenge id, so another tenant's code answers `200
+  not_found`, the namespace's answer.
 
 **Decision (D8): which number sends a tenant's codes.** (a) One
 platform number for all (the user sees the platform's name); (b) each
@@ -913,7 +950,7 @@ each new kind into `unknown` silently.
 | HTTP | Codes | Meaning |
 | --- | --- | --- |
 | 422 | `invalid_request` (local validation, with `field`), `invalid_parameter`, `unsupported_message_type`, `recipient_not_supported`, `undeliverable`, `template_parameter_mismatch`, `template_not_found`, `template_text_too_long`, `template_policy_violation`, `template_rejected`, `sample_template_not_allowed` (Meta's `hello_world` from a number that is not one of its public test numbers), `idempotency_key_reused` | fix the request; nothing was sent |
-| 409 | `customer_service_window_closed`, `thread_owned_elsewhere` (Meta's `131070`, a service message without owning the thread, and the inbox's local refusal while another app owns it), `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a stored token: a merchant's, or an attached WABA's once stored), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown` | a state must change first |
+| 409 | `customer_service_window_closed`, `thread_owned_elsewhere` (Meta's `131070`, a service message without owning the thread, and the inbox's local refusal while another app owns it), `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a stored token: a merchant's, or an attached WABA's once stored), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown`, `otp_not_configured` (roadmap M3c: no OTP settings for the tenant and no default OTP tenant, or the sending number is no longer its holder's) | a state must change first |
 | 403 | `permission`, `account_restricted`, `country_restricted`, `payment`, `feature_not_available`, `marketing_not_allowed`; `forbidden`, `tenant_suspended`, `stale_attempt` | not allowed, by Meta or the service |
 | 429 | `rate_limited` (Meta's throttling codes, `ErrorKind::RateLimited`: 4, 80007, 130429, and the Graph API's Business Use Case limits 80008, 80009, 80014), `pair_rate_limited`, `spam_rate_limited`, `ecosystem_engagement_limit`, `classification_limit_reached`, `too_many_requests`, `too_many_streams` | `Retry-After` when known (the service's own limits, `too_many_requests` and `too_many_streams`: Meta's wait is not forwarded); `retryable` says whether waiting helps (false for 131048, 131049) |
 | 404, 410, 413 | `not_found`, `nothing_to_resume`; `cursor_expired`; `payload_too_large`, `media_too_large` | |
@@ -990,7 +1027,10 @@ the route template, not the raw path (contacts identify customers).
 
 **Rate limits** per tenant and replica, overridable by the admin: sends
 20/s (burst 40), reads 50/s, template management 2/s, OTP issue 5/s, 20
-streams; `429` with `Retry-After`. Meta's limits (80 messages/s per number,
+streams; `429` with `Retry-After`; *as built in M3c*: OTP issue is a
+class of its own (`otp_issue`, 5/s, a burst of 5) and so is checking a
+code (`otp_verify`, 20/s, a burst of 20: the service's default, D46),
+per tenant, beside the library's limits per recipient. Meta's limits (80 messages/s per number,
 portfolio limits) still apply; pacing campaigns is the caller's job.
 *As built in M1b*: token buckets keyed by tenant and route class, checked
 after the scope and before ownership; the bursts this paragraph does not
@@ -1052,6 +1092,8 @@ third-party licences of what it contains (M4); it contains no `ffmpeg`
 | `WA_SERVER_MEDIA_CONCURRENCY` (M1b) | 4 | uploads and whole-file downloads held in memory at once per replica (section 6's "bounded media concurrency"; the next is `429`); one tenant holds half at most (the service's default, not the design's) |
 | `WA_SERVER_MEDIA_STREAMS` (M1b) | 16 | streamed downloads at once per replica, one tenant holding half at most (the service's defaults, not the design's) |
 | `WA_SERVER_RATE_SEND`, `…_READ`, `…_TEMPLATES`, each with `…_BURST` (M1b) | 20 and 40, 50 and 50, 2 and 2 | section 6's rates, per tenant and replica; the bursts of reads and template management are the service's defaults (section 6 states none) |
+| `WA_SERVER_RATE_OTP_ISSUE`, `…_OTP_VERIFY`, each with `…_BURST` (M3c) | 5 and 5, 20 and 20 | section 6's OTP issue rate and the service's default for checks (D46), per tenant and replica |
+| `WA_SERVER_OTP_DEFAULT_TENANT` (M3c) | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number (D8's default, D45); unset, such a tenant's OTP requests are `409 otp_not_configured` |
 | `WA_SERVER_UNDATED_AFTER_MOVE` (S2b) | `operator_only` | D36's `undated_after_move`: an undated event (an error, a history chunk, an undated group update) of a WABA that moved from another tenant is operator-only within the window after the move; `current_holder` gives it to the holder, the behaviour before S2b. A WABA no other tenant held is never concerned |
 | `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` (S2b) | `169h` (7 days and an hour) | the window, from the WABA's last unbinding from another tenant; a positive duration, with `operator_only` only (refused with `current_holder`) |
 | `WA_SERVER_MOVE_SKEW_MARGIN` (S2b) | `0s` | after a move only: an event Meta dated must be this much past the second its binding began in, and more, to reach the holder (Meta's clock ahead of the database's) |
@@ -1667,6 +1709,24 @@ What it holds today, where it differs from the target above:
   The admin's unbind of a WABA without a usable token, and the admin's
   own `190` right after attaching, are not a capability's and stay
   unconditioned.
+- **OTP is the core's** (M3c). `otp` holds `OtpCodes`, built by the
+  HTTP crate's `AppState::from_backend` on the bundle's `KvStore` (the
+  library's `wa.otp` and `wa.otp.rate`, unchanged) and the service's
+  clock, with the deployment's `OtpDeployment` (the pepper's `OtpKeys`
+  and the default OTP tenant); `OtpCodes::open` admits the `Caller`, and
+  its `Otp` service issues and verifies through the library's
+  `OtpService` under the caller's tenant as the namespace. The sending
+  number is opened by `Authorizer::otp_sender`, crate-private (a UI case
+  pins it): steps 4 and 5 for the tenant whose settings name the number
+  (the caller's, or the default OTP tenant's), never a request's value.
+  The settings are a `RecordStore` port change, `otp_settings` and
+  `set_otp_settings` (a stored layout of the core's,
+  `OtpSettings::to_stored`), set by the admin services
+  (`Admin::set_otp_settings`, the number checked to be the tenant's).
+  The idempotency fingerprint of an issue is keyed
+  (`Fingerprint::issue_otp`, D47). The conformance suite `otp` holds a
+  backend to the settings' record and runs M3.5's namespace case with no
+  HTTP layer.
 - **Adapter-neutral pieces** (S6). The tenant operations are named by
   id (`operation::Operation`: the HTTP adapter's `operationId`s, with
   their scope), and what the core decides about a request follows its
@@ -2025,7 +2085,14 @@ that no other call makes, and the service as an explicit, audited
 operator action, off until the deployment enables it and never taken
 automatically. Performing it is the deployer's decision, for their own
 deployment (`OPEN_QUESTIONS.md` #26, #45); the same holds for the legal
-half of D10.
+half of D10. Zero-tap authentication templates are one (Meta's
+`zero_tap_terms_accepted`, the creator's acceptance of its zero-tap
+terms): the service refuses them on both template routes, `otp_type:
+zero_tap` on `POST /v1/wabas/{waba_id}/templates/authentication` (M3c)
+and any `zero_tap_terms_accepted: true` on `POST
+/v1/wabas/{waba_id}/templates` (M3c's review; passed through to Meta
+from M1b until then), and they stay the owner's (roadmap M3g, §
+Owner touchpoints).
 
 Who decided what: the owner decided D1–D4 and D7 on 2026-09-24, D13–D14
 and D15–D18 on 2026-09-25 (the recommended option each time, except D17,
@@ -2040,8 +2107,10 @@ reviews of roadmap L5), as are the changes to D15 (widened), D16 (the
 gate) and D18 (revised) that day. D36 is the coordinator's of
 2026-09-27 (amended with roadmap S2b's build on 2026-11-01), D37 of
 2026-10-26, D38 of 2026-11-01 (roadmap L8), D39–D43 of 2026-11-01
-(roadmap M2b) and D60–D63 of 2026-11-02 (roadmap M2g), each under the
-delegation. D20's (a), a licence, is the owner's: roadmap S10
+(roadmap M2b, D43 on its review; see below), D45–D49 of 2026-11-01
+(roadmap M3c), D59 of 2026-11-01 on M3c's review and D60–D63 of
+2026-11-02 (roadmap M2g), each under the delegation. D20's (a), a
+licence, is the owner's: roadmap S10
 asks for it. D5 is settled as "support both modes, chosen per
 deployment"; which mode a production deployment runs follows the
 platform's agreements with Meta (partner status, who pays), so that
@@ -2092,6 +2161,12 @@ choice stays the owner's.
 | D41 | Where a stream starts, and an event id's shape | without a cursor: the newest sequence / the oldest retained, as a poll does; `Last-Event-ID` over `?after=`; a malformed event id `404` / `422` | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: as proposed.** Without a cursor a stream starts at the newest sequence (a live stream is for what comes next; history is the poll); `Last-Event-ID` wins over `?after=` (what an `EventSource` sends on its own when it reconnects, newer than the URL's `after`); a malformed event id is `404` (an id of no event's shape names nothing, as a non-numeric `{pn}` is `404`, roadmap L20c). To swap, `live::StreamQuery` (an adapter passes `after: Some(0)` to start at the oldest) and `events::get_event` | M2b |
 | D42 | A stream's buffer, a slow client, the re-poll | per stream 1 MiB and 64 frames, a client taking nothing for 30 s dropped with `lagged`, a re-poll every 15 s / other numbers | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: as proposed, 1 MiB and 64 frames per stream, a client taking nothing for 30 s dropped, a re-poll every 15 s.** §7's limits bound the streams (20 per tenant, 1,000 per replica: settings) but not their buffers: 1 MiB per stream bounds 1,000 streams to about 1 GiB at worst (M2.5 measures 200 streams, half never read, under 1 MiB in all); a dropped client loses nothing of the outbox and resumes from `after`; the re-poll at the heartbeat's interval bounds a lost notification's delay to 15 s. To swap, `live::LiveSettings` (the service's `Settings::live`; the two bounds are `WA_SERVER_STREAMS_PER_TENANT` and `WA_SERVER_STREAMS_PER_REPLICA`) | M2b |
 | D43 | What M2b's review added to the live streams: when a stream asks again whether its key is admitted, what a dropped stream keeps, the `Retry-After` of `too_many_streams`, a write timeout on the listeners | a check before a read, at most every second and at least every re-poll / at each re-poll only / none (the connection's lifetime); a lagged stream drops what it held at once / delivers it first; `Retry-After: 5` / none; a minute / none | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: the first of each, as M2b's sabotage review proposed.** A stream outlived its key: a revoked or expired key, a suspended or deleted tenant, kept reading for as long as its connection lasted. The check before a read costs two record reads per stream at most once a second (an idle stream's once per re-poll), and a stream ends within a second of a revocation on a busy tenant, a re-poll on an idle one. A stalled client (its TCP window full) never takes a last frame: the stream gives its place and its buffer back when it ends, and the frames it held are dropped then (its client resumes from the last sequence it took, which `lagged` names); the listeners close a connection that takes no byte of its answer for a minute, longer than the slow-client wait, so that stalled connections do not pile up under the connection cap. `Retry-After` is a hint (a slot frees when any stream ends); 5 s is above `EventSource`'s usual reconnect delay. To swap, `LiveSettings::recheck` and `LiveSettings::retry_after`, `Producer::end` (`live.rs`), and `listen::Limits::write_timeout` (`WRITE_TIMEOUT`) | M2b |
+| D45 | Who sends the codes of a tenant without OTP settings (D8's "the platform's number by default") | a deployment-wide sending number and template / a default OTP tenant whose own settings are borrowed / none: every tenant configures its own | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: a default OTP tenant whose own settings are borrowed.** `WA_SERVER_OTP_DEFAULT_TENANT` names it; its settings name one of its own numbers, which is opened for that tenant only (the authorization order's steps 4 and 5 on its binding), never for the borrower, so a binding that moves never lends another tenant's token; the namespace stays the caller's. Fail closed (M3c's review): a default tenant suspended, deleted or without settings lends nothing, and its borrowers get `409 otp_not_configured`. Pending the owner's confirmation, as stored names (architecture.md § Stable identifiers): the settings' layout, version 1 under the key `otp` of `wa_server_tenants.settings`. To swap, the setting: unset it (every tenant configures its own), or name another tenant, or give the platform's tenant other settings | M3 |
+| D46 | The rate class of checking a code, which section 6 does not name | the read budget / the send budget / a class of its own | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: a class of its own, `otp_verify`, 20/s with a burst of 20**, beside `otp_issue` (5/s, a burst of 5, the design's); brute force stays bounded per recipient by the library's attempts and issue limit. To swap, the environment variables `WA_SERVER_RATE_OTP_VERIFY` and `WA_SERVER_RATE_OTP_VERIFY_BURST` ([§7.2](#72-environment)) | M3 |
+| D47 | An OTP issue's idempotency fingerprint, whose body names a phone number | SHA-256 of the canonical input, as every other operation (D27) / keyed with the OTP pepper | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: keyed with the pepper**, an HMAC-SHA256 under HMAC-SHA256(`WA_OTP_PEPPER`, `meta-whatsapp-server/otp-fingerprint/v1`) of the canonical input's SHA-256, since section 6 keeps numbers only as keyed hashes. The label is a stored name, pending the owner's confirmation (architecture.md § Stable identifiers). Rotating the pepper makes a repeat within the TTL `422 idempotency_key_reused`, never a second code. To swap, the fingerprint the API adapter hands the core (`idempotency::Fingerprint::issue_otp`; another adapter passes its own) | M3 |
+| D48 | Where the admin sets a tenant's OTP settings | `PATCH /v1/admin/tenants/{id}` (section 4.2) / a resource of their own | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: a resource of their own**, `GET`, `PUT`, `DELETE /v1/admin/tenants/{id}/otp`, replaced whole after their checks, so a tenant's read stays one row and `PATCH` keeps its fields. To swap, the routes, the API adapter's (the core's `admin::Admin::set_otp_settings` and `clear_otp_settings` stay); adding `otp` to `PATCH` later would be additive | M3 |
+| D49 | The purpose of an OTP request that names none | required / a default | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: `login`.** A purpose is hashed into the code's store key, so changing the default strands the codes in flight (10 minutes by default), nothing else. To swap, the constant `otp::DEFAULT_PURPOSE` (a caller can always name its own) | M3 |
+| D59 | How many codes one recipient gets from the default OTP tenant's number, which every tenant without settings sends from (M3c's review: the library's issue limit is per namespace, so N tenants, or N purposes, could send one recipient N times it, on the platform's bill) | per tenant and purpose only (as M3c built it) / one limit per (sending number, recipient), shared by every tenant and purpose sending from the default tenant's number | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable (the setting roadmap M3g adds), as M3c's review proposed**: shared, the default tenant's own `issue_limit` per recipient, reserved before the library's call and given back when nothing was sent ([§4.7](#47-otp)); the cost, documented: one tenant's codes count against every borrower's, which a tenant with its own number avoids. Pending the owner's confirmation, as stored names: the key/value namespace `wa_server.otp.shared_rate` and the HMAC label `meta-whatsapp-server/otp-shared-limit/v1`. No setting swaps it yet: a setting for its limit, apart from the default tenant's `issue_limit`, would be its swap | M3 |
 | D60 | A message by id on a number (roadmap M2g: the design named the lookup, `ConversationStore::message`, not its route) | `GET /v1/numbers/{pn}/messages/{message_id}` / `GET /v1/numbers/{pn}/conversations/{contact}/messages/{message_id}`; the answer the history's message alone / with its conversation's contact | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: `GET /v1/numbers/{pn}/messages/{message_id}`, scope `inbox`, answering `{contact, message}`, as built.** The number's path, because a caller holding a status event's message id finds its conversation without knowing which of the customer's ids (a BSUID or a `wa_id`) keys it; scope `inbox`, because it reads the inbox and asks Meta nothing, although its siblings under `/messages` are scope `send`. The lookup is the store's on the business number, never another number's (`ConversationStore::message`), and a message dated before the binding epoch is `404`, as a missing one. Within v1, the conversation's path can be added beside it; this one stays. To swap, the API adapter's route (`api::inbox::get_inbox_message`, over the core's `Conversations::message`, which takes the id alone) | M2g |
 | D61 | The read route's receipt (roadmap M2g) | the latest inbound message / each unread one; before or after the unread reset; past Meta's 30 days sent anyway / skipped; an `Idempotency-Key` or none | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: one receipt, for the latest inbound message, sent before the reset; none past 30 days or before the cut; an optional `Idempotency-Key`, as built.** Meta marks the earlier messages of a one-to-one conversation read with the latest (`messages/mark-message-as-read`; a group's are marked one by one, a gap the roadmap item records); sending it first means a receipt Meta refuses resets nothing, and the binding is read again between the two, so a number that moved while Meta answered resets nothing either (`503`). A latest inbound message older than Meta's 30 days (`inbox::READ_RECEIPT_MAX_AGE`) or dated before the binding epoch gets none, and the count is reset all the same, so no receipt names a message the holder did not receive. The key is optional, as on the design's other POSTs, and the rate class is the writes' (`send`): a repeated receipt names the same message again on the tenant's own number (Meta documents no effect for a repeat), at most the `send` budget's 20 a second. To swap, `Conversations::mark_read` and the constant | M2g |
 | D62 | What the window route's `open` means (roadmap M2g) | the recorded window open now / what a free-form reply would meet now; a refusal's reason in the answer or not | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: what a free-form reply would meet now, with no reason field, as built.** `open` runs the reply's own checks with nothing sent (the cut's, then the library's `Inbox::check_reply`), so the route and the reply's `409` never disagree; `closes_at` is the recorded window from the epoch on. The design names only `{open, closes_at}`; a reason (`customer_service_window_closed` or `thread_owned_elsewhere`) can be added later without a break, as an optional field. To swap, `Conversations::window` | M2g |
@@ -2103,7 +2178,8 @@ delegation, each with its roadmap item: #5 (multi-WABA signups: opt-in,
 L11b and M3f), #8 (no token refresh: the service reports
 `reconnect_required`, and the expiry is surfaced before it lapses, L11e
 and M3e), #9 (vault key custody and cadence: rotation is one call, the
-cadence documented with M3a), #13 (the OTP issue limit, kept), #26 (the
+cadence documented with M3a), #13 (the OTP issue limit, kept; M3c
+keeps it on, never settable off over the API), #26 (the
 In-App Signup terms: an explicit, audited operator action, M5i), #30
 (dead-lettering a permanently failing event, L21a), #32 (calls reopen
 the inbox's window, L5 and L7), #45 (the max-price agreement: an
@@ -2119,5 +2195,6 @@ swappable as its row says. D40's channel and payload are a contract
 between replicas of two releases during a rolling deploy, so their
 names stay stable identifiers, pending the owner's confirmation before
 the first release
-([architecture.md](../architecture.md#stable-identifiers)). **D43 is
-proposed** by M2b's sabotage review, for the coordinator.
+([architecture.md](../architecture.md#stable-identifiers)). D43 came
+out of M2b's sabotage review and was decided the same day, as the
+review proposed it.

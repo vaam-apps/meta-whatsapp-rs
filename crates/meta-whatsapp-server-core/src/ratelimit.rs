@@ -19,7 +19,13 @@
 //! | --- | --- | --- |
 //! | `send` | every write that is not template management: `send_message`, `mark_read`, `upload_media`, `delete_media`, `update_profile`, `disconnect_waba`, `reply_to_conversation`, `mark_conversation_read` | 20/s, burst 40 (the design's "sends") |
 //! | `read` | every read but templates': `list_wabas`, `list_numbers`, `get_number`, `get_profile`, `download_media`, `list_events`, `get_event`, `stream_events`, `stream_number_events`, `list_conversations`, `list_conversation_messages`, `get_conversation_window`, `get_inbox_message` (a stream is charged once, when it opens; how many stay open is bounded apart, `crate::live`) | 50/s, burst 50 (the design's "reads"; it states no burst) |
-//! | `templates` | every template operation: `list_templates`, `get_template`, `create_template`, `delete_templates` | 2/s, burst 2 (the design's "template management"; it states no burst) |
+//! | `templates` | every template operation: `list_templates`, `get_template`, `create_template`, `delete_templates`, `create_authentication_template` | 2/s, burst 2 (the design's "template management"; it states no burst) |
+//! | `otp_issue` | `issue_otp` (roadmap M3c) | 5/s, burst 5 (the design's "OTP issue"; it states no burst) |
+//! | `otp_verify` | `verify_otp` (roadmap M3c) | 20/s, burst 20 (the service's default: the design names no limit for checking a code, whose brute force the library's attempt and issue limits bound per recipient) |
+//!
+//! These limits are the tenant's; what bounds codes per **recipient** is
+//! the library's OTP issue limit and cooldown, per tenant and recipient
+//! (`meta_whatsapp_server_core::otp`).
 //!
 //! The design names classes for sends, reads and template management; it
 //! does not say where read receipts, media and profile writes belong: they
@@ -48,11 +54,21 @@ pub enum RouteClass {
     Read,
     /// Template management.
     Templates,
+    /// Sending one-time passcodes (roadmap M3c).
+    OtpIssue,
+    /// Checking one-time passcodes (roadmap M3c).
+    OtpVerify,
 }
 
 impl RouteClass {
     /// Every class.
-    pub const ALL: [Self; 3] = [Self::Send, Self::Read, Self::Templates];
+    pub const ALL: [Self; 5] = [
+        Self::Send,
+        Self::Read,
+        Self::Templates,
+        Self::OtpIssue,
+        Self::OtpVerify,
+    ];
 
     /// The class of `operation` (the module's table): its own, whatever
     /// HTTP method, or none, an adapter serves it with.
@@ -82,7 +98,10 @@ impl RouteClass {
             Operation::ListTemplates
             | Operation::CreateTemplate
             | Operation::DeleteTemplates
-            | Operation::GetTemplate => Self::Templates,
+            | Operation::GetTemplate
+            | Operation::CreateAuthenticationTemplate => Self::Templates,
+            Operation::IssueOtp => Self::OtpIssue,
+            Operation::VerifyOtp => Self::OtpVerify,
         }
     }
 
@@ -92,6 +111,8 @@ impl RouteClass {
             Self::Send => "send",
             Self::Read => "read",
             Self::Templates => "templates",
+            Self::OtpIssue => "otp_issue",
+            Self::OtpVerify => "otp_verify",
         }
     }
 }
@@ -114,13 +135,18 @@ pub struct RateLimits {
     pub read: Rate,
     /// [`RouteClass::Templates`].
     pub templates: Rate,
+    /// [`RouteClass::OtpIssue`].
+    pub otp_issue: Rate,
+    /// [`RouteClass::OtpVerify`].
+    pub otp_verify: Rate,
 }
 
 impl Default for RateLimits {
     /// The design's numbers (section 6), per tenant and replica: sends
-    /// 20/s with a burst of 40, reads 50/s, template management 2/s; the
-    /// design states no burst for the last two, which get one second's
-    /// worth.
+    /// 20/s with a burst of 40, reads 50/s, template management 2/s, OTP
+    /// issue 5/s; the design states no burst for the last three, which get
+    /// one second's worth. Checking a code, which the design does not
+    /// limit, 20/s with a burst of 20 (the service's default).
     fn default() -> Self {
         Self {
             send: Rate {
@@ -135,6 +161,14 @@ impl Default for RateLimits {
                 per_second: 2,
                 burst: 2,
             },
+            otp_issue: Rate {
+                per_second: 5,
+                burst: 5,
+            },
+            otp_verify: Rate {
+                per_second: 20,
+                burst: 20,
+            },
         }
     }
 }
@@ -146,6 +180,8 @@ impl RateLimits {
             RouteClass::Send => self.send,
             RouteClass::Read => self.read,
             RouteClass::Templates => self.templates,
+            RouteClass::OtpIssue => self.otp_issue,
+            RouteClass::OtpVerify => self.otp_verify,
         }
     }
 }
@@ -317,6 +353,7 @@ mod tests {
         );
         assert_eq!(limits.read.per_second, 50, "reads 50/s");
         assert_eq!(limits.templates.per_second, 2, "template management 2/s");
+        assert_eq!(limits.otp_issue.per_second, 5, "OTP issue 5/s");
     }
 
     /// A burst, then one token per `1 / per_second`; each tenant and
@@ -405,6 +442,9 @@ mod tests {
             ("get_conversation_window", RouteClass::Read),
             ("mark_conversation_read", RouteClass::Send),
             ("get_inbox_message", RouteClass::Read),
+            ("create_authentication_template", RouteClass::Templates),
+            ("issue_otp", RouteClass::OtpIssue),
+            ("verify_otp", RouteClass::OtpVerify),
         ];
         assert_eq!(table.len(), Operation::ALL.len(), "every operation");
         for (id, class) in table {
@@ -444,6 +484,8 @@ mod tests {
                 burst,
             },
             templates: one,
+            otp_issue: one,
+            otp_verify: one,
         });
         let a = tenant("a");
         // What an adapter hands the core: the operation's id, never the

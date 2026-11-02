@@ -38,7 +38,8 @@ use crate::notify::PgNotifier;
 use meta_whatsapp_server_core::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
-    NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus, WabaBinding,
+    NumberBinding, NumberStatus, OtpSettings, PageRequest, Scope, Tenant, TenantId, TenantStatus,
+    WabaBinding,
 };
 use meta_whatsapp_server_core::notify::EventNotifier;
 
@@ -395,6 +396,55 @@ impl RecordStore for PgStore {
         .await
         .map_err(backend)?;
         row.as_ref().map(tenant_row).transpose()
+    }
+
+    async fn otp_settings(&self, id: &TenantId) -> StoreResult<Option<OtpSettings>> {
+        // The key `otp` of the tenant's `settings` (roadmap M3c): SQL NULL
+        // when it has none, or there is no such tenant.
+        let row =
+            sqlx::query("SELECT settings -> 'otp' AS otp FROM wa_server_tenants WHERE id = $1")
+                .bind(id.as_str())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(backend)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        match get::<Option<serde_json::Value>>(&row, "otp")? {
+            None => Ok(None),
+            Some(stored) => OtpSettings::from_stored(&stored)
+                .map(Some)
+                .ok_or_else(|| corrupt("settings")),
+        }
+    }
+
+    async fn set_otp_settings(
+        &self,
+        id: &TenantId,
+        settings: Option<&OtpSettings>,
+    ) -> StoreResult<bool> {
+        let done =
+            match settings {
+                Some(settings) => {
+                    sqlx::query(
+                        "UPDATE wa_server_tenants SET settings = jsonb_set(settings, '{otp}', $2), \
+                     updated_at = now() WHERE id = $1",
+                    )
+                    .bind(id.as_str())
+                    .bind(settings.to_stored())
+                    .execute(&self.pool)
+                    .await
+                }
+                None => sqlx::query(
+                    "UPDATE wa_server_tenants SET settings = settings - 'otp', updated_at = now() \
+                     WHERE id = $1",
+                )
+                .bind(id.as_str())
+                .execute(&self.pool)
+                .await,
+            }
+            .map_err(backend)?;
+        Ok(done.rows_affected() == 1)
     }
 
     async fn delete_tenant(&self, id: &TenantId) -> StoreResult<DeleteTenantOutcome> {

@@ -339,6 +339,58 @@ async fn a_creation_is_checked_locally_then_posted() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// A legal act is no tenant's request (AGENTS.md, § Decisions, "Legal
+/// acts"): Meta's zero-tap example
+/// (`templates/authentication-templates/zero-tap-authentication-templates`,
+/// "Example request", as the library's `zero_tap_template_matches_the_docs`
+/// carries it), whose `zero_tap_terms_accepted: true` accepts Meta's
+/// zero-tap terms, is `422 invalid_request` on that key's path through the
+/// generic route, with or without an `Idempotency-Key`, and Meta is not
+/// asked; it was passed through since M1b. Decisive: the core's
+/// `templates::ZERO_TAP_TERMS` check.
+#[tokio::test]
+async fn a_template_accepting_the_zero_tap_terms_is_refused() {
+    let (h, key) = connected().await;
+    let zero_tap = json!({
+      "name": "zero_tap_auth_template",
+      "language": "en_US",
+      "category": "authentication",
+      "message_send_ttl_seconds": 60,
+      "components": [
+        {"type": "body", "add_security_recommendation": true},
+        {"type": "footer", "code_expiration_minutes": 5},
+        {"type": "buttons", "buttons": [{
+          "type": "otp",
+          "otp_type": "zero_tap",
+          "text": "Copy Code",
+          "autofill_text": "Autofill",
+          "zero_tap_terms_accepted": true,
+          "supported_apps": [{"package_name": "com.example.luckyshrub", "signature_hash": "K8a/AINcGX7"}]
+        }]}
+      ]
+    });
+    for idempotency in [None, Some("zero-tap:1")] {
+        let mut call = Call::new(Method::POST, format!("/v1/wabas/{WABA}/templates"))
+            .key(&key)
+            .json(&zero_tap);
+        if let Some(k) = idempotency {
+            call = call.header("idempotency-key", k);
+        }
+        let reply = h.call(call).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::UNPROCESSABLE_ENTITY, "invalid_request"),
+            "{}",
+            reply.text
+        );
+        assert_eq!(
+            reply.json()["error"]["field"],
+            "components[2].buttons[0].zero_tap_terms_accepted"
+        );
+    }
+    assert!(h.graph.requests().is_empty(), "nothing reached Meta");
+}
+
 /// templates/components, "Positional parameters syntax": the body's
 /// `example.body_text` is a flat list, one value per parameter. The
 /// library writes it as the reference's `[[..]]`, which loses nothing:

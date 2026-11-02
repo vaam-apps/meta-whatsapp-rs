@@ -20,6 +20,7 @@ use meta_whatsapp_rs::webhooks::axum::extract::FromRef;
 use meta_whatsapp_rs::{Client, Error};
 use meta_whatsapp_server_core::inbox::ReplyChecksByNumber;
 use meta_whatsapp_server_core::live::{LiveSettings, Streams};
+use meta_whatsapp_server_core::otp::{OtpCodes, OtpDeployment};
 use meta_whatsapp_server_core::templates::TemplateCache;
 
 /// Default `WA_SERVER_IDEMPOTENCY_TTL`: how long an idempotency key's
@@ -76,6 +77,12 @@ pub struct Settings {
     /// makes, per number (every one on a number it does not list; roadmap
     /// M2a).
     pub inbox_reply_checks: ReplyChecksByNumber,
+    /// `WA_OTP_PEPPER` and `WA_SERVER_OTP_DEFAULT_TENANT` (roadmap M3c):
+    /// `None`, OTP is not set up and every OTP request is `409
+    /// otp_not_configured` (the default, for tests; `serve` always sets
+    /// it, with a throwaway pepper on memory storage in development).
+    /// `Debug` shows no pepper.
+    pub otp: Option<OtpDeployment>,
 }
 
 impl Default for Settings {
@@ -90,6 +97,7 @@ impl Default for Settings {
             template_cache_ttl: TEMPLATE_CACHE_TTL,
             live: LiveSettings::default(),
             inbox_reply_checks: ReplyChecksByNumber::new(),
+            otp: None,
         }
     }
 }
@@ -118,6 +126,7 @@ struct Inner {
     media_slots: Slots,
     stream_slots: Slots,
     templates: TemplateCache,
+    otp: OtpCodes,
     streams: Streams,
 }
 
@@ -168,6 +177,9 @@ impl AppState {
         let clock = inbound.clock();
         let authz = Authorizer::new(store.clone(), vault, client)?.with_clock(clock.clone());
         let events = Events::new(inbound, backend.as_ref(), metrics.clone());
+        // The codes in the bundle's key/value store, as the vault, on the
+        // service's one clock.
+        let otp = OtpCodes::new(backend.kv(), clock.clone(), settings.otp.clone());
         // The live streams read the outbox the pipeline writes, woken by the
         // same backend's notifier, which the pipeline notifies.
         let streams = Streams::new(backend.outbox(), backend.notifier(), settings.live);
@@ -185,6 +197,7 @@ impl AppState {
                 media_slots: Slots::new(settings.media_concurrency),
                 stream_slots: Slots::new(settings.media_streams),
                 templates: TemplateCache::new(settings.template_cache_ttl),
+                otp,
                 streams,
                 settings,
             }),
@@ -368,6 +381,13 @@ impl Grant {
     /// The template lists cached per WABA.
     pub fn template_cache(&self) -> &TemplateCache {
         self.0.template_cache()
+    }
+
+    /// The OTP services (roadmap M3c): codes in the backend's key/value
+    /// store, opened for an admitted caller only
+    /// (`meta_whatsapp_server_core::otp::OtpCodes::open`).
+    pub fn otp(&self) -> &OtpCodes {
+        &self.0.inner.otp
     }
 
     /// The inbox (the backend's conversation store), for the core's inbox

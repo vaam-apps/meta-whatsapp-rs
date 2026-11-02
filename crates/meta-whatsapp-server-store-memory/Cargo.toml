@@ -23,6 +23,8 @@ meta-whatsapp-server-core.workspace = true
 # A storage failure's opaque leaf (`StorageError::backend`).
 anyhow.workspace = true
 async-trait.workspace = true
+# A tenant's OTP settings, kept in their stored JSON form (roadmap M3c).
+serde_json.workspace = true
 time.workspace = true
 tracing.workspace = true
 
