@@ -356,6 +356,8 @@ async fn every_rate_limited_operation_declares_its_429() {
             send: one,
             read: one,
             templates: one,
+            otp_issue: one,
+            otp_verify: one,
         },
         ..common::test_settings()
     });
@@ -426,7 +428,9 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/numbers/{pn}/conversations/{contact}/messages",
             "POST /v1/numbers/{pn}/media",
             "POST /v1/numbers/{pn}/messages",
+            "POST /v1/otp/issue",
             "POST /v1/wabas/{waba_id}/templates",
+            "POST /v1/wabas/{waba_id}/templates/authentication",
         ]
     );
     let upload = &spec["paths"]["/v1/numbers/{pn}/media"]["post"]["requestBody"]["content"];

@@ -70,11 +70,20 @@ pub enum Operation {
     /// `reply_to_conversation`: a reply to a conversation's contact,
     /// checked against the window and the thread's owner first.
     ReplyToConversation,
+    /// `create_authentication_template`: an authentication template
+    /// created or updated in one or more languages (roadmap M3c).
+    CreateAuthenticationTemplate,
+    /// `issue_otp`: a one-time passcode sent with the tenant's
+    /// authentication template (roadmap M3c).
+    IssueOtp,
+    /// `verify_otp`: a typed code checked, which always counts as an
+    /// attempt (roadmap M3c).
+    VerifyOtp,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 25] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -97,6 +106,9 @@ impl Operation {
         Self::ListConversations,
         Self::ListConversationMessages,
         Self::ReplyToConversation,
+        Self::CreateAuthenticationTemplate,
+        Self::IssueOtp,
+        Self::VerifyOtp,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -124,6 +136,9 @@ impl Operation {
             Self::ListConversations => "list_conversations",
             Self::ListConversationMessages => "list_conversation_messages",
             Self::ReplyToConversation => "reply_to_conversation",
+            Self::CreateAuthenticationTemplate => "create_authentication_template",
+            Self::IssueOtp => "issue_otp",
+            Self::VerifyOtp => "verify_otp",
         }
     }
 
@@ -146,13 +161,15 @@ impl Operation {
             Self::ListTemplates
             | Self::CreateTemplate
             | Self::DeleteTemplates
-            | Self::GetTemplate => Scope::Templates,
+            | Self::GetTemplate
+            | Self::CreateAuthenticationTemplate => Scope::Templates,
             Self::ListEvents | Self::GetEvent | Self::StreamEvents | Self::StreamNumberEvents => {
                 Scope::Events
             }
             Self::ListConversations
             | Self::ListConversationMessages
             | Self::ReplyToConversation => Scope::Inbox,
+            Self::IssueOtp | Self::VerifyOtp => Scope::Otp,
         }
     }
 }

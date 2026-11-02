@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`; messages `send`; media `media`; templates `templates`; conversations `inbox`), `/v1/events` (scope `events`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`; messages `send`; media `media`; templates `templates`; conversations `inbox`), `/v1/events` (scope `events`), `/v1/otp/…` (scope `otp`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -23,6 +23,7 @@ pub mod events;
 pub mod inbox;
 pub mod messages;
 pub mod numbers;
+pub mod otp;
 pub mod templates;
 
 pub use meta_whatsapp_server_http::api::{
@@ -87,6 +88,7 @@ impl Modify for Security {
         (name = "templates", description = "Listing, creating and deleting message templates (scope `templates`)"),
         (name = "inbox", description = "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"),
         (name = "events", description = "Meta's webhook events, routed to their tenant (scope `events`)"),
+        (name = "otp", description = "One-time passcodes sent with the tenant's authentication template, and checked (scope `otp`)"),
         (name = "operations", description = "Health, metrics, this document, versions (no key)"),
     )
 )]
@@ -105,6 +107,11 @@ fn admin_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(admin::mint_platform_key, admin::list_platform_keys))
         .routes(routes!(admin::revoke_platform_key))
         .routes(routes!(admin::attach_waba))
+        .routes(routes!(
+            admin::get_otp_settings,
+            admin::set_otp_settings,
+            admin::clear_otp_settings
+        ))
         .routes(routes!(admin::get_waba))
         .routes(routes!(admin::unbind_waba))
         .routes(routes!(admin::rotate_vault))
@@ -151,6 +158,13 @@ fn templates_routes() -> OpenApiRouter<Grant> {
             templates::delete_templates
         ))
         .routes(routes!(templates::get_template))
+        .routes(routes!(templates::create_authentication_template))
+}
+
+fn otp_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(otp::issue_otp))
+        .routes(routes!(otp::verify_otp))
 }
 
 /// The HTTP crate's operations routes, and this document's own.
@@ -193,6 +207,7 @@ fn api_routes(
         .merge(tenant(templates_routes(), Scope::Templates))
         .merge(tenant(inbox_routes(), Scope::Inbox))
         .merge(tenant(events_routes(), Scope::Events))
+        .merge(tenant(otp_routes(), Scope::Otp))
         .merge(ops_routes())
 }
 
@@ -314,6 +329,16 @@ mod tests {
         let operations = tenant_operations();
         assert!(operations.routes().len() >= 16);
         for (method, template, operation) in operations.routes() {
+            // OTP's routes came after: classes of their own (roadmap M3c).
+            if operation.scope() == Scope::Otp {
+                let class = if *operation == Operation::IssueOtp {
+                    RouteClass::OtpIssue
+                } else {
+                    RouteClass::OtpVerify
+                };
+                assert_eq!(RouteClass::of(*operation), class, "{method} {template}");
+                continue;
+            }
             let before = if operation.scope() == Scope::Templates {
                 RouteClass::Templates
             } else if method == "GET" {
@@ -340,6 +365,7 @@ mod tests {
             ("inbox.rs", include_str!("inbox.rs")),
             ("messages.rs", include_str!("messages.rs")),
             ("templates.rs", include_str!("templates.rs")),
+            ("otp.rs", include_str!("otp.rs")),
         ];
         let mut plain = Vec::new();
         for (file, source) in sources {

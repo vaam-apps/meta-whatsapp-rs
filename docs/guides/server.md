@@ -8,7 +8,7 @@ its reasons and the owner's decisions, is
 [docs/design/server.md](../design/server.md); the rules it keeps are in
 [architecture.md](../architecture.md#service-meta-whatsapp-server).
 
-> **What exists today (milestones M1a, M1b and M1c, M2a and M2b).** Tenants, API
+> **What exists today (milestones M1a, M1b and M1c, M2a, M2b and M3c).** Tenants, API
 > keys, the admin API, attaching the platform's own WhatsApp Business
 > Accounts (WABAs), the numbers and business profile routes, vault key
 > rotation, sending messages (with idempotency keys), read receipts,
@@ -16,11 +16,11 @@ its reasons and the owner's decisions, is
 > and deletion, per-tenant rate limits, Meta's webhooks into the inbox
 > and the event outbox, polling events (`GET /v1/events`), one event by
 > id and live events as Server-Sent Events (M2b), the inbox's
-> conversations, history and replies (M2a), health, metrics and the
+> conversations, history and replies (M2a), OTP codes with per-tenant
+> settings and authentication templates (M3c), health, metrics and the
 > OpenAPI document. **Not yet**: webhooks to your backend (M2), Embedded
-> Signup, OTP
-> and authentication templates (M3), the Docker image and the TypeScript
-> client (M4).
+> Signup (M3), zero-tap templates and template previews (M3g), the
+> Docker image and the TypeScript client (M4).
 > [coverage.md](../coverage.md) tracks it.
 
 ## The shape of it
@@ -104,7 +104,8 @@ read yet: set, it stops the start.
 | `WA_VAULT_KEY` | required with Postgres | base64 of 32 random bytes (`openssl rand -base64 32`): encrypts the business tokens |
 | `WA_VAULT_KEY_ID` | `k1` | the key's id, recorded with each token |
 | `WA_VAULT_PREVIOUS_KEYS` | — | older keys still read, `<id>:<base64>` comma-separated; every id once, the active one's included |
-| `WA_OTP_PEPPER` | required with Postgres | at least 32 bytes, kept out of the database (OTP arrives in M3) |
+| `WA_OTP_PEPPER` | required with Postgres | at least 32 bytes, kept out of the database: it keys every OTP code's and store key's hash, and an OTP issue's idempotency fingerprint; rotating it kills the codes in flight (memory storage in development: a throwaway one) |
+| `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number and template (decision D8's default). Unset, a tenant without settings answers `409 otp_not_configured` |
 | `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` also needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` (AUD, EUR, GBP, IDR, INR or USD) |
 | `WA_GRAPH_API_VERSION`, `WA_GRAPH_ENDPOINT` | `v25.0`, Graph | a proxy or a test stub: every token travels to it, so `https` outside development, and `serve` warns with its host |
 | `WA_SERVER_MIGRATE` | `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
@@ -120,6 +121,8 @@ read yet: set, it stops the start.
 | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | `20`, `40` | requests a second per tenant and replica for writes (sends, read receipts, media, profile) |
 | `WA_SERVER_RATE_READ`, `WA_SERVER_RATE_READ_BURST` | `50`, `50` | the same for reads |
 | `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | `2`, `2` | the same for template management |
+| `WA_SERVER_RATE_OTP_ISSUE`, `WA_SERVER_RATE_OTP_ISSUE_BURST` | `5`, `5` | the same for sending OTP codes (per recipient, the codes' own cooldown and issue limit apply too) |
+| `WA_SERVER_RATE_OTP_VERIFY`, `WA_SERVER_RATE_OTP_VERIFY_BURST` | `20`, `20` | the same for checking OTP codes |
 | `WA_SERVER_UNDATED_AFTER_MOVE` | `operator_only` | after a WABA moved to its tenant from another one, who gets its undated events (errors, history chunks, group updates without a date), which may be the previous tenant's that Meta redelivers: nobody within the window (`operator_only`, the operator still sees them), or the new holder (`current_holder`, the behaviour before this setting). A WABA no other tenant held is never concerned (design D36) |
 | `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` | `169h` (7 days and an hour) | that window, from when the previous tenant's binding was removed; a positive duration, with `operator_only` only (set with `current_holder`, the start is refused) |
 | `WA_SERVER_MOVE_SKEW_MARGIN` | `0s` | after a move only: how far past the second the new binding began an event Meta dated must be to reach the new holder (widen it if Meta's clock may run ahead of the database's) |
@@ -210,8 +213,8 @@ immutable. Three kinds of API key, all `wak_<key id>_<secret>`, sent as
 | admin key | nobody: `/v1/admin` only | operators |
 
 Tenant and platform keys carry scopes (`numbers`, `send`, `media`,
-`templates`, `inbox` and `events` today; `webhooks`, `signup`, `otp` for
-the routes to come). The service keeps only each key's id and the SHA-256 of its
+`templates`, `inbox`, `events` and `otp` today; `webhooks` and `signup`
+for the routes to come). The service keeps only each key's id and the SHA-256 of its
 secret, and shows the key once. Rotate by minting a new one, deploying
 it, then revoking the old one: revocation and suspension take effect on
 the next request, on every replica.
@@ -494,6 +497,7 @@ With scope `templates`, on a WABA of the tenant:
 | `GET /v1/wabas/{waba_id}/templates/{id}` | one template of this WABA (2 to 6 management calls: its name, then the WABA's templates of that name, below) |
 | `POST /v1/wabas/{waba_id}/templates` | create from Meta's JSON (`name`, `language`, `category`, `components`), checked locally first; `201 {id, status, category}`; takes an `Idempotency-Key` |
 | `DELETE /v1/wabas/{waba_id}/templates?name=…[&id=…]` | every language of a name, or one (with an id, the WABA's templates of that name are listed first) |
+| `POST /v1/wabas/{waba_id}/templates/authentication` | an authentication template in one or more languages (Meta's bulk management: each language created, or updated when it exists): `name`, `languages`, `otp_type` (`copy_code`, or `one_tap` with `supported_apps`), and optionally `add_security_recommendation`, `code_expiration_minutes` (keep it equal to the OTP settings' `ttl_seconds`) and `message_send_ttl_seconds`; `201 {data: [{id, status, language}]}`; takes an `Idempotency-Key`. `zero_tap` is refused (`422` on `otp_type`): creating one accepts Meta's zero-tap terms, which the service does not do for you (roadmap M3g) |
 
 A definition breaking a documented limit is `422 invalid_request` with
 `field`, before any request, and so is a key the service would not pass
@@ -516,6 +520,15 @@ refused on the key named:
   write them in the button's `supported_apps`;
 - a template as `GET` answers it, which is not a definition: its `id`,
   `status` or `correct_category`.
+
+**Zero-tap is refused on both routes.** A zero-tap button's
+`zero_tap_terms_accepted: true` accepts Meta's zero-tap terms, a legal
+act the service does not take for a tenant: a definition holding it is
+`422 invalid_request` on its path
+(`components[2].buttons[0].zero_tap_terms_accepted`), and nothing
+reaches Meta (it was passed through from M1b until M3c's review; `false`
+is refused too, Meta would not create it). Who may accept them is the
+owner's (roadmap M3g).
 
 Meta refusing a definition is `422 template_rejected`, a WABA
 at its limit `409 template_limit_reached`. Review results arrive as
@@ -598,12 +611,99 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.1349120
 - Reads answer `409 reconnect_required` or `number_not_connected` for a
   number whose token does not work, as every number route does.
 
+## OTP
+
+One-time passcodes over WhatsApp, for a login or a password reset
+(scope `otp`; roadmap M3c). The service runs the library's OTP service:
+codes are random, kept only as keyed hashes (under `WA_OTP_PEPPER`),
+compared in constant time, expire, and allow a few attempts; a recipient
+gets a new code at most every 30 seconds and 5 an hour for one purpose.
+You never see the code: Meta delivers it, your user types it, you check
+it.
+
+| Route | Does |
+| --- | --- |
+| `POST /v1/otp/issue` | `{phone, purpose?}`: send a code to `phone` (E.164 with its `+`) with your authentication template; `200` with `{"status": "sent", "challenge_id", "expires_at"}`, or `{"status": "cooling_down" \| "rate_limited", "retry_after_seconds"}` and nothing sent; takes an `Idempotency-Key` |
+| `POST /v1/otp/verify` | `{phone, purpose?, code}`: check the code your user typed; `200` with `{"result": "verified"}`, `{"result": "invalid", "attempts_left"}`, `expired`, `too_many_attempts` or `not_found`. Every check of an outstanding code counts as an attempt |
+
+```bash
+curl -sS -X POST "$WA_SERVER/v1/otp/issue" -H "Authorization: Bearer $KEY" \
+  -H "Idempotency-Key: login:user-881:1" -H "Content-Type: application/json" \
+  -d '{"phone": "+16505551234", "purpose": "login"}'
+curl -sS -X POST "$WA_SERVER/v1/otp/verify" -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"phone": "+16505551234", "purpose": "login", "code": "123456"}'
+```
+
+- **Outcomes are `200`**, never errors: branch on `status` and `result`.
+  Errors are for what you must fix: `422` on `phone` (no `+`, separators,
+  a BSUID: Meta cannot send an authentication template to a BSUID), on
+  `purpose` (1 to 64 of `[A-Za-z0-9._:-]`, `login` when absent) or on
+  `code` (1 to 15 characters); `409 otp_not_configured` (below); `429
+  too_many_requests` past your tenant's budget (5 issues and 20 checks a
+  second by default); Meta's errors on a send, with
+  `may_have_been_sent`: when it is `true` (a timeout, a Meta failure)
+  the code may be on its way and still verifies, so do not issue
+  another at once, let the user type what arrives.
+- **Codes are your tenant's.** A code verifies only for the tenant that
+  issued it, the phone number and the purpose it was sent for: another
+  tenant checking it, on the same sending number too, gets `not_found`
+  and costs it no attempt. The purpose is a constant of your code
+  (`login`, `reset_password`), never a value your end user chooses.
+- **Which number sends it** (decision D8): the operator sets each
+  tenant's OTP settings, the sending number (one of the tenant's own),
+  the approved authentication template and its language, and the
+  limits. A tenant without settings sends from the default OTP tenant's
+  number (`WA_SERVER_OTP_DEFAULT_TENANT`, the platform's), with that
+  tenant's template; the user then sees the platform's name. No
+  settings and no default, a default tenant that is suspended, deleted
+  or without settings, or settings naming a number the tenant no longer
+  holds: `409 otp_not_configured`, nothing sent (`doctor` warns about
+  the default tenant, below). Changing a tenant's sending number kills
+  its codes in flight.
+- **The platform's number has one limit per recipient.** On the default
+  OTP tenant's number, every tenant and purpose sending from it share
+  that tenant's issue limit per recipient (5 codes an hour by default),
+  on top of each tenant's own: past it, `rate_limited`. So tenants
+  sharing the platform's number cannot send one person five codes an
+  hour each, on the platform's bill; the cost is that one tenant's codes
+  to a recipient count against the others'. A tenant with its own
+  number and settings has only its own limits. An answer that sent
+  nothing (`cooling_down`, your own `rate_limited`, a refusal before the
+  send) does not count; a timeout does.
+- **The code is in no answer, log or error.** A failed send keeps Meta's
+  code and trace id, never its text or `details` (a template error could
+  quote its parameter, the code). The idempotency record of an issue
+  keeps the answer (no code) and a fingerprint keyed with the pepper, so
+  a database dump does not name the recipient. Throttling by IP stays
+  yours: the service sees only your backend.
+
+The operator's routes (admin key):
+
+```bash
+curl -sS -X PUT "$WA_SERVER/v1/admin/tenants/merchant-42/otp" \
+  -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"phone_number_id": "106540352242922",
+       "template": {"name": "login_code", "language": "en_US"},
+       "ttl_seconds": 600, "issue_limit": {"max_issues": 5, "window_seconds": 3600}}'
+```
+
+`PUT /v1/admin/tenants/{id}/otp` replaces the settings whole and answers
+them with every limit filled in (6 digits, 600 seconds, 5 attempts, a
+30-second cooldown, 5 codes an hour per recipient and purpose by
+default; the issue limit cannot be turned off); `422` on
+`phone_number_id` when the number is not the tenant's. `GET` reads them
+(`404` when the tenant has none of its own), `DELETE` clears them. Keep
+`ttl_seconds` equal to the template's `code_expiration_minutes`, so the
+message never promises a lifetime the code does not have. Each change is
+an `audit` event.
+
 ## Rate limits
 
 Each tenant has a budget per class of route, per replica (a deployment
 of N replicas allows N times as much): writes (sends, read receipts,
 media, profile changes) 20 a second with bursts of 40, reads 50 a second,
-template management 2 a second. A platform key acting for a tenant draws
+template management 2 a second, OTP issues 5 a second and OTP checks 20. A platform key acting for a tenant draws
 from that tenant's budget. Past it: `429 too_many_requests`, `retryable:
 true`, with `Retry-After` in seconds, before anything is read or sent.
 Change them with `WA_SERVER_RATE_*` (the same for every tenant: per-tenant
@@ -862,8 +962,8 @@ Every error answers one body:
   the `ErrorCode` schema of the OpenAPI document) and Meta's code under
   `graph`; Meta's own error message never reaches you. `graph.details` is
   Meta's text, not the service's (at most 512 characters, without control
-  or format characters or line separators): show it to an operator,
-  never branch on it.
+  or format characters or line separators; never on the OTP routes, where
+  it could quote the code): show it to an operator, never branch on it.
 - A path called with a method it does not take is `405
   method_not_allowed`, with `Allow`.
 - **Resend only when `may_have_been_sent` is `false`.** A `504 timeout`
@@ -901,6 +1001,7 @@ without their credentials, Meta's failures by code).
 | `token.partner` | (Solution Partner mode) `debug_token` says `WA_PARTNER_SYSTEM_TOKEN` is invalid, expired or another app's |
 | `token.waba.<id>` | a bound WABA has no token in the vault, one the vault keys cannot open, or one `debug_token` says is invalid, expired (a warning within 7 days), another app's, without `whatsapp_business_management` or `whatsapp_business_messaging`, or granted for other WABAs |
 | `webhooks.waba.<id>` | the app is not among the WABA's `subscribed_apps`: Meta sends nothing for its numbers (attach it again) |
+| `otp.default_tenant` | never (with `WA_SERVER_OTP_DEFAULT_TENANT` set): it warns when the tenant named does not exist, is suspended, has no OTP settings, or no longer holds their sending number, since the tenants without settings of their own then get `409 otp_not_configured`; skipped on memory storage |
 
 The Graph checks need `WA_APP_ID` (they skip without it) and an accepted
 configuration. The WABA checks walk the first 100 bound WABAs, two calls
@@ -939,9 +1040,10 @@ SKIP token.wabas: the configuration is refused
   `payload_too_large`, `slow_body`, `busy`: the replica at capacity,
   `in_flight`: a run of them means recording outlasts the 60 s lease,
   `failed`), recorded events by type and audience (`tenant`,
-  `operator`), duplicates and recording failures by stage, and the live
+  `operator`), duplicates and recording failures by stage, OTP issues
+  and checks by outcome (`wa_server_otp_outcomes_total`), and the live
   event streams open on the replica (`wa_server_event_streams_open`);
-  never an id, a number or a key.
+  never an id, a number, a code or a key.
 - Expired idempotency records are purged every 10 minutes by one replica
   at a time, with the outbox's housekeeping.
 - Logs are JSON, one line per request with its id (`X-Request-Id`, echoed
@@ -969,11 +1071,12 @@ SKIP token.wabas: the configuration is refused
 
 The inbox's window and read routes and a message by id (M2g),
 webhooks-out and the service's own number events (M2); Embedded Signup,
-disconnection by Meta's webhooks, coexistence sync and OTP (M3); the
+disconnection by Meta's webhooks and coexistence sync (M3); zero-tap
+authentication templates and template previews (M3g); the
 Docker image, a Compose file, the documents route and the TypeScript
-client (M4). Tenant settings (OTP sender and template, limits) in `PATCH
-/v1/admin/tenants/{id}` come with OTP (M3); until then the rate limits
-are the deployment's, for every tenant. The design's TOML file of
+client (M4). The tenants' OTP settings have their own route
+(`/v1/admin/tenants/{id}/otp`); per-tenant rate limits are not
+settable: they are the deployment's, for every tenant. The design's TOML file of
 non-secrets (`WA_SERVER_CONFIG`) is not read (set, it stops the start),
 and OpenTelemetry export is not wired. The `/v1/version` revision reads
 `unknown` unless the build sets `META_WHATSAPP_RS_REVISION`.

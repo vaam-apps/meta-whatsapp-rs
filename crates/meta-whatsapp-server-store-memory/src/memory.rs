@@ -22,8 +22,8 @@ use crate::MemoryEventStore;
 use meta_whatsapp_server_core::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
-    NumberBinding, NumberStatus, NumberTombstone, PageRequest, Tenant, TenantId, TenantStatus,
-    WabaBinding, WabaTombstone,
+    NumberBinding, NumberStatus, NumberTombstone, OtpSettings, PageRequest, Tenant, TenantId,
+    TenantStatus, WabaBinding, WabaTombstone,
 };
 
 /// In-memory [`RecordStore`] and [`IdempotencyRecords`]. Its event outbox is [`MemoryStore::outbox`]: one
@@ -91,6 +91,9 @@ pub(super) struct State {
     number_tombstones: BTreeMap<String, NumberTombstone>,
     /// Idempotency records by (tenant, key).
     idempotency: BTreeMap<(String, String), IdempotencyEntry>,
+    /// Each tenant's OTP settings, by tenant id, in their stored form
+    /// (`OtpSettings::to_stored`), as Postgres keeps them (roadmap M3c).
+    otp_settings: BTreeMap<String, serde_json::Value>,
 }
 
 /// Lock `state`, a poisoned lock included (no invariant spans a panic).
@@ -216,6 +219,41 @@ impl RecordStore for MemoryStore {
         Ok(Some(tenant.clone()))
     }
 
+    async fn otp_settings(&self, id: &TenantId) -> StoreResult<Option<OtpSettings>> {
+        let state = self.lock();
+        let Some(stored) = state.otp_settings.get(id.as_str()) else {
+            return Ok(None);
+        };
+        OtpSettings::from_stored(stored).map(Some).ok_or_else(|| {
+            meta_whatsapp_rs::core::error::StorageError::Backend(anyhow::anyhow!(
+                "a tenant's OTP settings are not in a layout this release reads"
+            ))
+        })
+    }
+
+    async fn set_otp_settings(
+        &self,
+        id: &TenantId,
+        settings: Option<&OtpSettings>,
+    ) -> StoreResult<bool> {
+        let mut state = self.lock();
+        let Some(tenant) = state.tenants.get_mut(id.as_str()) else {
+            return Ok(false);
+        };
+        tenant.updated_at = OffsetDateTime::now_utc();
+        match settings {
+            Some(settings) => {
+                state
+                    .otp_settings
+                    .insert(id.as_str().to_owned(), settings.to_stored());
+            }
+            None => {
+                state.otp_settings.remove(id.as_str());
+            }
+        }
+        Ok(true)
+    }
+
     async fn delete_tenant(&self, id: &TenantId) -> StoreResult<DeleteTenantOutcome> {
         let mut state = self.lock();
         if !state.tenants.contains_key(id.as_str()) {
@@ -225,6 +263,9 @@ impl RecordStore for MemoryStore {
             return Ok(DeleteTenantOutcome::HasWabas);
         }
         state.tenants.remove(id.as_str());
+        // Its OTP settings go with its record, as on Postgres (a column of
+        // the tenant's row).
+        state.otp_settings.remove(id.as_str());
         state
             .keys
             .retain(|_, key| !matches!(&key.owner, KeyOwner::Tenant(t) if t == id));

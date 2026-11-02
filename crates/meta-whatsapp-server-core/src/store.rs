@@ -97,8 +97,8 @@ use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 
 use crate::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
-    KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus, PageRequest, Tenant, TenantId,
-    TenantStatus, WabaBinding,
+    KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus, OtpSettings, PageRequest, Tenant,
+    TenantId, TenantStatus, WabaBinding,
 };
 
 /// Result of a store call. Every failure is the library's
@@ -130,6 +130,25 @@ pub trait RecordStore: Send + Sync + 'static {
         name: Option<&str>,
         status: Option<TenantStatus>,
     ) -> StoreResult<Option<Tenant>>;
+
+    /// A tenant's OTP settings (roadmap M3c, decision D8): `None` when it
+    /// has none, or there is no such tenant. They go with the tenant
+    /// ([`Self::delete_tenant`]): a tenant created again under its id has
+    /// none.
+    async fn otp_settings(&self, id: &TenantId) -> StoreResult<Option<OtpSettings>>;
+
+    /// Set (`Some`) or clear (`None`) a tenant's OTP settings, moving its
+    /// `updated_at`; `false` when there is no such tenant, and nothing is
+    /// written. A backend keeps [`OtpSettings::to_stored`]'s form (Postgres:
+    /// under the key `otp` of `wa_server_tenants.settings`) and reads it
+    /// back with [`OtpSettings::from_stored`], whose `None` (a record this
+    /// release did not write) it answers as a storage failure, never as no
+    /// settings.
+    async fn set_otp_settings(
+        &self,
+        id: &TenantId,
+        settings: Option<&OtpSettings>,
+    ) -> StoreResult<bool>;
 
     /// Delete a tenant, its keys, its idempotency records and its events,
     /// unless it still has WABAs; its event stream records its events

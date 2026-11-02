@@ -34,6 +34,9 @@
 //! | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | 20, 40 | per tenant and replica, a second ([`crate::ratelimit`]) |
 //! | `WA_SERVER_RATE_READ`, `WA_SERVER_RATE_READ_BURST` | 50, 50 | the same, for reads |
 //! | `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | 2, 2 | the same, for template management |
+//! | `WA_SERVER_RATE_OTP_ISSUE`, `WA_SERVER_RATE_OTP_ISSUE_BURST` | 5, 5 | the same, for sending OTP codes (roadmap M3c; per recipient, the library's cooldown and issue limit apply too) |
+//! | `WA_SERVER_RATE_OTP_VERIFY`, `WA_SERVER_RATE_OTP_VERIFY_BURST` | 20, 20 | the same, for checking OTP codes (the service's default: the design names no limit) |
+//! | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number, decision D8's default (roadmap M3c); unset, such a tenant's OTP requests are `409 otp_not_configured` |
 //! | `WA_SERVER_INBOX_REPLY_CHECKS` | none listed: every check on every number | the local checks an inbox reply makes, per number: `<phone_number_id>:<checks>` entries, comma-separated, `<checks>` being `all`, `none` or the checks left on joined by `+` (`window`, `trust_handover`, `thread_owner`; `trust_handover` only with `window`): `106540352242922:window+trust_handover` turns the ownership check off on that number (the core's `inbox::ReplyChecksByNumber`; roadmap M2a) |
 //!
 //! And the inbox's retention, the store's own setting, which housekeeping
@@ -61,15 +64,16 @@ use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
-use meta_whatsapp_rs::client::authentication::OtpPepper;
 use meta_whatsapp_rs::client::credit_lines::WabaCurrency;
 use meta_whatsapp_rs::client::embedded_signup::{VaultKey, VaultKeys};
 use meta_whatsapp_rs::core::config::{ApiVersion, GraphEndpoint};
 use meta_whatsapp_rs::core::ids::AppId;
-use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, VerifyToken};
+use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, SecretBytes, VerifyToken};
 use meta_whatsapp_rs::core::store::Retention;
 use meta_whatsapp_server_core::inbox::{InvalidReplyChecks, ReplyChecksByNumber};
 use meta_whatsapp_server_core::live::LiveSettings;
+use meta_whatsapp_server_core::model::TenantId;
+use meta_whatsapp_server_core::otp::OtpKeys;
 
 use crate::events::{
     DEFAULT_MOVE_SKEW_MARGIN, DEFAULT_UNDATED_AFTER_MOVE_WINDOW, MoveRules, UndatedAfterMove,
@@ -258,8 +262,13 @@ pub struct Config {
     pub vault_keys: VaultKeys,
     /// Whether the vault key was generated for this process.
     pub vault_key_is_throwaway: bool,
-    /// `WA_OTP_PEPPER`.
-    pub otp_pepper: Option<OtpPepper>,
+    /// `WA_OTP_PEPPER`: the library's OTP pepper and the key of the OTP
+    /// issue's idempotency fingerprint, derived from it (roadmap M3c). Unset
+    /// only on memory storage, where `serve` uses a throwaway one.
+    pub otp_pepper: Option<OtpKeys>,
+    /// `WA_SERVER_OTP_DEFAULT_TENANT` (roadmap M3c, decision D8): the
+    /// tenant whose OTP settings a tenant without its own borrows.
+    pub otp_default_tenant: Option<TenantId>,
     /// `WA_ONBOARDING_MODE` and its settings.
     pub onboarding: OnboardingMode,
     /// `WA_GRAPH_API_VERSION` and `WA_GRAPH_ENDPOINT`.
@@ -457,11 +466,19 @@ impl Config {
         let meta = meta_app(&r)?;
         let (vault_keys, vault_key_is_throwaway) = vault_keys(&r, postgres)?;
         let otp_pepper = match r.optional_secret("WA_OTP_PEPPER")? {
-            Some(pepper) => {
-                Some(OtpPepper::new(pepper.into_bytes()).map_err(|_| ConfigError::PepperTooShort)?)
-            }
+            Some(pepper) => Some(
+                OtpKeys::new(SecretBytes::new(pepper.into_bytes()))
+                    .map_err(|_| ConfigError::PepperTooShort)?,
+            ),
             None if postgres => return Err(ConfigError::PepperRequired),
             None => None,
+        };
+        let otp_default_tenant = match r.plain("WA_SERVER_OTP_DEFAULT_TENANT")? {
+            None => None,
+            Some(id) => Some(TenantId::parse(id.trim()).ok_or(ConfigError::Invalid {
+                name: "WA_SERVER_OTP_DEFAULT_TENANT",
+                reason: "expected a tenant id: 1 to 64 of [A-Za-z0-9._:-]",
+            })?),
         };
         let onboarding = onboarding(&r)?;
         let graph_endpoint = graph_endpoint(&r, environment)?;
@@ -480,6 +497,7 @@ impl Config {
             vault_keys,
             vault_key_is_throwaway,
             otp_pepper,
+            otp_default_tenant,
             onboarding,
             graph_endpoint,
             migrate: runtime.migrate,
@@ -656,6 +674,18 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
                 "WA_SERVER_RATE_TEMPLATES",
                 "WA_SERVER_RATE_TEMPLATES_BURST",
                 limits.templates,
+            )?,
+            otp_issue: rate(
+                r,
+                "WA_SERVER_RATE_OTP_ISSUE",
+                "WA_SERVER_RATE_OTP_ISSUE_BURST",
+                limits.otp_issue,
+            )?,
+            otp_verify: rate(
+                r,
+                "WA_SERVER_RATE_OTP_VERIFY",
+                "WA_SERVER_RATE_OTP_VERIFY_BURST",
+                limits.otp_verify,
             )?,
         },
         idempotency_ttl,

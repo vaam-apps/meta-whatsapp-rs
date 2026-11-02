@@ -5,7 +5,7 @@ description: "Sending WhatsApp messages, media and templates, and replying from 
 
 # meta-whatsapp-rs-server-send
 
-> **Verified against meta-whatsapp-rs 73e660893a3c034b3b9193db949390f92a8c1bef (2026-11-01).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs a8af9415a0771c8e6266c5b52f359898f79fdabf (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/send.ts](examples/send.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -151,7 +151,7 @@ sent; a platform key shares the tenant's budget. Meta's own limits answer
   and pace your own sends.
 - Meta documents its per-number media check for uploads only: a file
   received by webhook answering `not_found` may be that; report it.
-- No Direct Send, Flows, product or carousel messages, and no authentication templates yet; no documents route (M4).
+- No Direct Send, Flows, product or carousel messages; no documents route (M4). Authentication templates and login codes: `meta-whatsapp-rs-server-otp`.
 
 ## Related skills
 

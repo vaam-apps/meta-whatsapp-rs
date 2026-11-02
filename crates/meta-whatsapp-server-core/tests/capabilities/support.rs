@@ -23,8 +23,8 @@ pub use meta_whatsapp_server_core::authz::{
 pub use meta_whatsapp_server_core::keys::MintedKey;
 pub use meta_whatsapp_server_core::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
-    NewApiKey, NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus,
-    WabaBinding,
+    NewApiKey, NumberBinding, NumberStatus, OtpSettings, PageRequest, Scope, Tenant, TenantId,
+    TenantStatus, WabaBinding,
 };
 pub use meta_whatsapp_server_core::store::{RecordStore, StoreResult};
 pub use time::OffsetDateTime;
@@ -238,6 +238,14 @@ impl RecordStore for Records {
     ) -> StoreResult<Option<Tenant>> {
         self.call("update_tenant");
         Ok(None)
+    }
+    async fn otp_settings(&self, _: &TenantId) -> StoreResult<Option<OtpSettings>> {
+        self.call("otp_settings");
+        Ok(None)
+    }
+    async fn set_otp_settings(&self, _: &TenantId, _: Option<&OtpSettings>) -> StoreResult<bool> {
+        self.call("set_otp_settings");
+        Ok(false)
     }
     async fn delete_tenant(&self, _: &TenantId) -> StoreResult<DeleteTenantOutcome> {
         self.call("delete_tenant");

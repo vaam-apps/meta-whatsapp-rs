@@ -6,6 +6,7 @@
 //! | [`Templates::list`] | `GET /{waba_id}/message_templates?fields=name,language,status,category,components&limit=…[&status=…][&name=…][&after=…]`, cached per WABA ([`TemplateCache`]) |
 //! | [`Templates::get`] | `GET /{id}?fields=name`, then `GET /{waba_id}/message_templates?fields=…&name=…` (the id must be among them) |
 //! | [`Templates::create`] | `POST /{waba_id}/message_templates` |
+//! | [`Templates::create_authentication`] | `POST /{waba_id}/upsert_message_templates` (`templates/authentication-templates/bulk-management`: one authentication template in one or more languages, created or updated; roadmap M3c) |
 //! | [`Templates::delete`] | `DELETE /{waba_id}/message_templates?name=…`; with an id, `GET /{waba_id}/message_templates?fields=name&name=…` first (the id must be among them), then `…&hsm_id=…` |
 //!
 //! Pages: `templates/template-management`, `templates/overview`,
@@ -46,6 +47,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use meta_whatsapp_rs::Error;
+use meta_whatsapp_rs::client::authentication::{AuthenticationUpsert, OtpButton, SupportedApp};
 use meta_whatsapp_rs::client::templates::{
     TemplateCreated as Submitted, TemplateDefinition, TemplateInfo, TemplateListQuery,
     TemplateStatus,
@@ -158,6 +160,109 @@ impl From<Submitted> for TemplateCreated {
             id: created.id,
         }
     }
+}
+
+/// An authentication template's button (roadmap M3c): Meta's `otp_type`
+/// values the service creates. Zero-tap is not among them: creating one
+/// sets Meta's `zero_tap_terms_accepted`, an acceptance of the WhatsApp
+/// Business terms for zero-tap, a legal act the service does not take for
+/// a tenant (AGENTS.md, § Decisions: the owner's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OtpButtonType {
+    /// `copy_code`: the user copies the code.
+    CopyCode,
+    /// `one_tap`: Android apps (`supported_apps`) fill the code in.
+    OneTap,
+}
+
+/// An authentication template to create or update, as the request carried
+/// it (roadmap M3c): Meta's bulk management fields
+/// (`templates/authentication-templates/bulk-management`), its components'
+/// own fields flattened, each named as Meta names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticationRequest {
+    /// The template's name.
+    pub name: String,
+    /// Its languages: each is created, or updated when it exists.
+    pub languages: Vec<String>,
+    /// The button.
+    pub otp_type: OtpButtonType,
+    /// A one-tap button's Android apps, `(package_name, signature_hash)`,
+    /// 1 to 5; none for copy code.
+    pub supported_apps: Vec<(String, String)>,
+    /// The body's "For your security, do not share this code."
+    pub add_security_recommendation: Option<bool>,
+    /// The footer's "This code expires in N minutes.", 1 to 90.
+    pub code_expiration_minutes: Option<u32>,
+    /// The message's time to live: 30 to 900 seconds, or -1.
+    pub message_send_ttl_seconds: Option<i64>,
+}
+
+/// One language of an authentication template created or updated, as Meta
+/// answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticationTemplateCreated {
+    /// Template id.
+    pub id: TemplateId,
+    /// Its status, as Meta wrote it.
+    pub status: Option<String>,
+    /// Its language.
+    pub language: Option<String>,
+}
+
+/// The library's upsert of `request`, checked against every limit the
+/// docs state before any request.
+///
+/// # Errors
+///
+/// `422 invalid_request` on `name`, `languages`, `supported_apps`,
+/// `code_expiration_minutes` or `message_send_ttl_seconds` (the field the
+/// library's check names, as this request names it; `body` otherwise).
+pub fn authentication(
+    request: AuthenticationRequest,
+) -> Result<AuthenticationUpsert, ServiceError> {
+    template_name("name", &request.name)?;
+    if request.languages.is_empty() {
+        return Err(ServiceError::invalid("languages"));
+    }
+    let otp = match request.otp_type {
+        OtpButtonType::CopyCode if request.supported_apps.is_empty() => {
+            OtpButton::CopyCode { text: None }
+        }
+        OtpButtonType::CopyCode => return Err(ServiceError::invalid("supported_apps")),
+        OtpButtonType::OneTap => OtpButton::OneTap {
+            text: None,
+            autofill_text: None,
+            supported_apps: request
+                .supported_apps
+                .into_iter()
+                .map(|(package, hash)| SupportedApp::new(package, hash))
+                .collect(),
+        },
+    };
+    let upsert = AuthenticationUpsert {
+        name: request.name,
+        languages: request.languages,
+        otp,
+        add_security_recommendation: request.add_security_recommendation,
+        code_expiration_minutes: request.code_expiration_minutes,
+        message_send_ttl_seconds: request.message_send_ttl_seconds,
+    };
+    upsert.validate().map_err(|invalid| {
+        let field = invalid.field.as_str();
+        ServiceError::invalid(
+            [
+                "supported_apps",
+                "code_expiration_minutes",
+                "message_send_ttl_seconds",
+                "languages",
+            ]
+            .into_iter()
+            .find(|name| field.contains(name))
+            .unwrap_or(if field == "name" { "name" } else { "body" }),
+        )
+    })?;
+    Ok(upsert)
 }
 
 /// A list's filters, as the request carried them.
@@ -275,7 +380,7 @@ impl TemplateCache {
 
 /// A template name: `a-z 0-9 _`, at most 512 characters, else `422
 /// invalid_request` on `field`.
-fn template_name(field: &'static str, name: &str) -> Result<(), ServiceError> {
+pub(crate) fn template_name(field: &'static str, name: &str) -> Result<(), ServiceError> {
     let valid = !name.is_empty()
         && name.len() <= MAX_NAME_LEN
         && name
@@ -301,6 +406,64 @@ fn status_filter(status: &str) -> Result<String, ServiceError> {
     }
 }
 
+/// The key of a zero-tap authentication button by which the template's
+/// creator accepts Meta's zero-tap terms
+/// (`templates/authentication-templates/zero-tap-authentication-templates`:
+/// "If set to false, the template will not be created"). Setting it is a
+/// legal act, which the service never takes for a tenant (AGENTS.md,
+/// § Decisions, "Legal acts"; design section 10): a definition holding it
+/// `true` is refused on its path, before anything is sent. Zero-tap stays
+/// the owner's (roadmap M3g); `false` is the library's own refusal.
+pub const ZERO_TAP_TERMS: &str = "zero_tap_terms_accepted";
+
+/// The path of the first [`ZERO_TAP_TERMS`] set `true` in `value`, at
+/// `path`, wherever it is (a button of the `BUTTONS` component, a
+/// carousel card's, any other). Below a key that is not a plain name the
+/// path stops growing (the deepest plain one, `body` at the root), so the
+/// answer never echoes arbitrary input ([`meta_object`]'s rule).
+fn zero_tap_terms(value: &Value, path: &str) -> Option<String> {
+    walk_zero_tap_terms(value, path, false)
+}
+
+fn walk_zero_tap_terms(value: &Value, path: &str, opaque: bool) -> Option<String> {
+    let root = || {
+        if path.is_empty() {
+            "body".to_owned()
+        } else {
+            path.to_owned()
+        }
+    };
+    let below = |key: &str| {
+        let plain = !key.is_empty()
+            && key.len() <= 64
+            && key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+        match (opaque || !plain, path.is_empty()) {
+            (true, _) => (root(), true),
+            (false, true) => (key.to_owned(), false),
+            (false, false) => (format!("{path}.{key}"), false),
+        }
+    };
+    match value {
+        Value::Object(object) => object.iter().find_map(|(key, value)| {
+            let (at, opaque) = below(key);
+            if key == ZERO_TAP_TERMS && value.as_bool() == Some(true) {
+                Some(at)
+            } else {
+                walk_zero_tap_terms(value, &at, opaque)
+            }
+        }),
+        Value::Array(items) => items.iter().enumerate().find_map(|(i, item)| {
+            let at = if opaque {
+                root()
+            } else {
+                format!("{}[{i}]", root())
+            };
+            walk_zero_tap_terms(item, &at, opaque)
+        }),
+        _ => None,
+    }
+}
+
 /// The template definition a request carries, in Meta's JSON (`name`,
 /// `language`, `category`, `parameter_format`, `components`, as
 /// `templates/overview` writes it), read with no key dropped
@@ -310,10 +473,19 @@ fn status_filter(status: &str) -> Result<String, ServiceError> {
 /// # Errors
 ///
 /// `422 invalid_request`: on `body` (not a definition), on the path of a
-/// key the library would not send to Meta, or on the field breaking a
-/// documented limit (`name`, `components[2].buttons[0].package_name`, …).
+/// key the library would not send to Meta, on the path of a
+/// `zero_tap_terms_accepted: true` ([`ZERO_TAP_TERMS`]), or on the field
+/// breaking a documented limit (`name`,
+/// `components[2].buttons[0].package_name`, …).
 pub fn definition(body: &Value) -> Result<TemplateDefinition, ServiceError> {
     let definition: TemplateDefinition = meta_object("", body)?;
+    if let Some(path) = zero_tap_terms(body, "") {
+        tracing::warn!(
+            field = path.as_str(),
+            "refused a template accepting Meta's zero-tap terms: a legal act the service does not take for a tenant"
+        );
+        return Err(ServiceError::invalid(path));
+    }
     definition
         .validate()
         .map_err(|invalid| ServiceError::invalid(invalid.field))?;
@@ -552,6 +724,41 @@ impl<'a> Templates<'a> {
         self.cache.invalidate(self.waba.waba_id());
         match created {
             Ok(created) => Ok(TemplateCreated::from(created)),
+            Err(error) => Err(self.failed(&error).await),
+        }
+    }
+
+    /// Create or update the authentication template `upsert` in each of
+    /// its languages (`POST /{waba_id}/upsert_message_templates`, the
+    /// library's `Authentication::upsert`; roadmap M3c). The WABA's cached
+    /// lists go, whatever Meta answers. Not replayed on a timeout: updating
+    /// an approved template counts against its edit limit.
+    ///
+    /// # Errors
+    ///
+    /// Meta's refusal or failure, with its `details` (`422
+    /// template_rejected`, `409 template_limit_reached`; a timeout
+    /// `may_have_been_sent`).
+    pub async fn create_authentication(
+        &self,
+        upsert: &AuthenticationUpsert,
+    ) -> Result<Vec<AuthenticationTemplateCreated>, ServiceError> {
+        let upserted = self
+            .waba
+            .client()
+            .authentication(self.waba.waba_id().clone())
+            .upsert(upsert)
+            .await;
+        self.cache.invalidate(self.waba.waba_id());
+        match upserted {
+            Ok(upserted) => Ok(upserted
+                .into_iter()
+                .map(|template| AuthenticationTemplateCreated {
+                    status: wire(template.status.as_ref()),
+                    id: template.id,
+                    language: template.language,
+                })
+                .collect()),
             Err(error) => Err(self.failed(&error).await),
         }
     }
@@ -803,6 +1010,63 @@ mod tests {
         assert_eq!(
             definition(&serde_json::json!([])).unwrap_err().field(),
             Some("body")
+        );
+    }
+
+    /// Meta's zero-tap example
+    /// (`templates/authentication-templates/zero-tap-authentication-templates`,
+    /// "Example request"), which the library accepts: refused on the
+    /// terms' path, the legal act the service never takes for a tenant.
+    /// With `false`, the library's own refusal, on the same path; the
+    /// one-tap example, which carries no terms, passes. Decisive: the
+    /// walk for `zero_tap_terms_accepted`.
+    #[test]
+    fn a_definition_accepting_the_zero_tap_terms_is_refused() {
+        let zero_tap = |accepted: bool| {
+            serde_json::json!({"name": "zero_tap_auth_template", "language": "en_US",
+                "category": "authentication", "message_send_ttl_seconds": 60,
+                "components": [
+                    {"type": "body", "add_security_recommendation": true},
+                    {"type": "footer", "code_expiration_minutes": 5},
+                    {"type": "buttons", "buttons": [{"type": "otp", "otp_type": "zero_tap",
+                        "text": "Copy Code", "autofill_text": "Autofill",
+                        "zero_tap_terms_accepted": accepted,
+                        "supported_apps": [{"package_name": "com.example.luckyshrub",
+                                            "signature_hash": "K8a/AINcGX7"}]}]}]})
+        };
+        let accepting = zero_tap(true);
+        let typed: TemplateDefinition = meta_object("", &accepting).unwrap();
+        assert!(typed.validate().is_ok(), "the library would send it");
+        assert_eq!(
+            definition(&accepting).unwrap_err().field(),
+            Some("components[2].buttons[0].zero_tap_terms_accepted")
+        );
+        assert_eq!(
+            definition(&zero_tap(false)).unwrap_err().field(),
+            Some("components[2].buttons[0].zero_tap_terms_accepted")
+        );
+        let mut one_tap = zero_tap(true);
+        let button = &mut one_tap["components"][2]["buttons"][0];
+        button["otp_type"] = "one_tap".into();
+        button.as_object_mut().unwrap().remove(ZERO_TAP_TERMS);
+        assert!(definition(&one_tap).is_ok());
+        // Wherever it is, and a key that is not a plain name is never
+        // echoed.
+        assert_eq!(
+            zero_tap_terms(&serde_json::json!({"a b": [{ZERO_TAP_TERMS: true}]}), ""),
+            Some("body".to_owned())
+        );
+        assert_eq!(
+            zero_tap_terms(
+                &serde_json::json!({"cards": [{}, {ZERO_TAP_TERMS: true}]}),
+                ""
+            ),
+            Some("cards[1].zero_tap_terms_accepted".to_owned())
+        );
+        assert_eq!(
+            zero_tap_terms(&serde_json::json!({ZERO_TAP_TERMS: "true"}), ""),
+            None,
+            "only `true`: a string is no definition anyway"
         );
     }
 }

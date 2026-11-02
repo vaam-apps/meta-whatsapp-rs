@@ -48,7 +48,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
 | 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2h |
-| 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3f; B2–B4 |
+| 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3g; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
 | last | P1a–P1d, P2 (payments) |
@@ -4668,11 +4668,147 @@ design's (§9).
   - **Decisive:** a coexistence onboarding over HTTP starts the sync
     exactly once, and a second onboarding of the number does not;
     another tenant's key reads none of the synced contacts (`404`).
-- [ ] **M3c. OTP and authentication templates** (row 98): OTP with
+- [x] **M3c. OTP and authentication templates** (row 98): OTP with
   per-tenant settings (the sending number, D8), authentication
   templates.
   - **After:** S7.
   - **Decisive:** M3.5.
+  - **Landed:** four routes on two tags. `POST /v1/otp/issue`
+    (`issue_otp`, scope `otp`, its own rate class `otp_issue`, 5/s and a
+    burst of 5, the design's; an `Idempotency-Key` over
+    `Fingerprint::issue_otp`, keyed: an HMAC-SHA256 under a key the
+    service derives from `WA_OTP_PEPPER`, since the body names a phone
+    number and design §6 keeps numbers only as keyed hashes) and `POST
+    /v1/otp/verify` (`verify_otp`, scope `otp`, class `otp_verify`, 20/s
+    and a burst of 20, the service's default: the design names none),
+    each a core service (`meta_whatsapp_server_core::otp`: `OtpCodes`,
+    built by `AppState::from_backend` on the bundle's `KvStore` and the
+    service's clock, opened for an admitted `Caller` only), over the
+    library's `OtpService`, which keeps every rule of its own (the codes,
+    stored as keyed hashes under `wa.otp` and `wa.otp.rate`, unchanged;
+    the constant-time comparison, the attempt counted before it, the
+    expiry, the cooldown and the issue limit per recipient and purpose).
+    The namespace is the calling tenant's id, never a setting or a
+    request's value; the sending number comes from the tenant's own OTP
+    settings, which may only name one of its own numbers, else from those
+    of the deployment's default OTP tenant (`WA_SERVER_OTP_DEFAULT_TENANT`:
+    the platform's number, D8's default), opened for the tenant whose
+    settings name it through the authorization order's steps 4 and 5
+    (`Authorizer::otp_sender`, crate-private, a UI case pins it); none,
+    or a number no longer that tenant's, is `409 otp_not_configured` (a
+    new code of §5.2), with the vault unread and Meta unasked. Outcomes
+    are `200` with a status, as the design says (`sent` with
+    `challenge_id` and `expires_at`, `cooling_down` and `rate_limited`
+    with `retry_after_seconds`; `verified`, `invalid` with
+    `attempts_left`, `expired`, `too_many_attempts`, `not_found`); a
+    failed send keeps Meta's code, subcode and trace id and never its
+    text or `details`; `phone` is strict E.164 with its `+` (a BSUID, a
+    `wa_id` and separators refused, `422`); `purpose` is 1 to 64 of
+    `[A-Za-z0-9._:-]`, `login` when absent. The tenants' settings:
+    `GET`, `PUT` and `DELETE /v1/admin/tenants/{id}/otp` (admin key;
+    audited `otp_settings_set` and `otp_settings_cleared`), the number,
+    the template and its language, and the library's limits, the issue
+    limit never off; stored in `wa_server_tenants.settings` under the key
+    `otp` (`OtpSettings::to_stored`, version 1, no migration: the column
+    exists since migration 1) through two new `RecordStore` methods,
+    `otp_settings` and `set_otp_settings` (a port change: both in-tree
+    backends, and the conformance suite `otp`). `POST
+    /v1/wabas/{waba_id}/templates/authentication`
+    (`create_authentication_template`, scope and class `templates`, an
+    `Idempotency-Key` over `Fingerprint::create_authentication_template`):
+    Meta's bulk management (`upsert_message_templates`) through the
+    library's `Authentication::upsert`, copy code or one-tap, one or more
+    languages, its body Meta's fields flattened; zero-tap is refused
+    (`422` on `otp_type`): creating one accepts Meta's zero-tap terms, a
+    legal act (M3g, § Owner touchpoints). The OTP outcomes are counted
+    (`wa_server_otp_outcomes_total`, `Observer::otp`). The OpenAPI document
+    is additive only (1086 lines added, none removed: four paths, the tag
+    `otp`, fourteen schemas, the code `otp_not_configured`). Decisive
+    tests: M3.5 over HTTP, `tests/otp.rs` (`m3_5_every_outcome`,
+    `m3_5_a_tenants_code_verifies_at_no_other_tenant_on_the_same_number`,
+    `m3_5_a_sentinel_in_a_graph_error_on_issue_reaches_no_response`) and
+    `tests/otp_logs.rs` (`m3_5_logs_hold_neither_code_nor_number`), live on
+    Postgres
+    (`live_postgres_m3_5_a_code_verifies_at_no_other_tenant_on_the_same_number`,
+    which also finds no phone number in the key/value, idempotency and
+    tenant rows), and the core's `conformance::otp` with no HTTP layer
+    (the core's memory backend, the memory crate's and live on Postgres);
+    the sending number's holder check, the rate limits per tenant and per
+    recipient, the scope, the issue's key, the admin's settings on the
+    tenant's own number only and Meta's documented upserts in
+    `tests/otp.rs`; M1.3's table, M1.5's sentinel and M1.7's capture over
+    the new routes. By mutation (each run, then reverted): a namespace
+    shared by every tenant fails both HTTP namespace cases, the core's
+    `conformance::otp` case and its unit test; `Authorizer::otp_sender`
+    opening the number for whoever holds it fails
+    `the_sending_number_is_its_holders_own` and the core's case; the
+    admin's own-number check removed fails
+    `the_admin_sets_a_tenants_otp_settings_on_its_own_number_only`; the
+    `otp_issue` class charged as `send` fails
+    `rate_limits_are_per_tenant_and_per_recipient` and the class table;
+    the issue limit dropped (`issue_limit: None`) fails
+    `m3_5_every_outcome`; Meta's `details` kept on the OTP route fails
+    the sentinel case; the fingerprint left unkeyed fails
+    `the_otp_fingerprint_is_keyed`; a phone with separators let through
+    fails `requests_are_checked_first_and_need_the_otp_scope`. Left,
+    and why: the design's verify takes the phone number and purpose, not a
+    challenge id (the library's `verify` is keyed so), so another tenant's
+    code is `200 not_found`, the design's answer, not a `404`; per-tenant
+    rate limit overrides are not settable (the deployment's
+    `WA_SERVER_RATE_*` for every tenant); the design's "one `OtpService`
+    per (tenant, sending number), cached" is built per request instead (it
+    holds no connection: an allocation); template previews and zero-tap
+    wait for M3g.
+  - **Review (security lens), in the same PR:** five fixes. The generic
+    `POST /v1/wabas/{waba_id}/templates` passed a zero-tap button's
+    `zero_tap_terms_accepted: true` through to Meta since M1b (a tenant
+    accepting Meta's terms): now `422 invalid_request` on the key's path
+    (`templates::ZERO_TAP_TERMS`), the only other route that could carry
+    it. A suspended or deleted default OTP tenant still lent its settings
+    and number: now `409 otp_not_configured`, issue and check (fail
+    closed). The library's issue limit is per namespace, so N tenants on
+    the platform's number (or N purposes) could send one recipient N
+    times it: the default tenant's number now has one issue limit per
+    recipient, shared by every tenant and purpose sending from it
+    (`otp::SharedLimit` on the bundle's `KvStore`, namespace
+    `wa_server.otp.shared_rate`, the key an HMAC of the number and the
+    recipient under a key derived from the pepper; reserved before the
+    library's call, given back when nothing was sent; design D59,
+    proposed). A failed OTP send logged Meta's texts at `debug`, as
+    every route does, and they can quote the template's parameter, the
+    code: withheld at every level on the OTP route
+    (`ServiceError::from_library_withholding_texts`). `doctor` warns
+    (`otp.default_tenant`) when the default
+    tenant is missing, suspended, without settings or no longer holding
+    its number. Decisive:
+    `templates::tests::a_definition_accepting_the_zero_tap_terms_is_refused`
+    and `tests/templates.rs`'s
+    `a_template_accepting_the_zero_tap_terms_is_refused`;
+    `a_suspended_or_deleted_default_tenant_lends_nothing`;
+    `m3_5_logs_hold_neither_code_nor_number` (a sentinel in each of
+    Meta's texts, captured at `TRACE`); `a_malformed_check_counts_no_attempt`;
+    `the_platform_numbers_issue_limit_per_recipient_is_shared` and the
+    core's `conformance::otp::the_default_numbers_issue_limit_is_shared_and_fails_closed`
+    (memory, and live on Postgres); `a_default_otp_tenant_that_cannot_lend_warns`.
+    Left: on a tenant's own number the library's limit stays per
+    purpose, so a tenant can still send one recipient its limit once per
+    purpose it invents (its own number and bill: a per-number limit
+    there is a roadmap item if wanted); a tenant suspended between the
+    settings' read and the send still sends that one code.
+- [ ] **M3g. Zero-tap templates and template previews** (row 98; added
+  by M3c): zero-tap authentication templates once the owner decides who
+  accepts Meta's zero-tap terms (`zero_tap_terms_accepted`, a terms
+  acknowledgement: a legal act, § Owner touchpoints), and `GET
+  /v1/wabas/{waba_id}/templates/authentication/previews` over the
+  library's `Authentication::previews`; a setting that swaps D59's
+  shared issue limit on the default OTP tenant's number for the
+  library's per-namespace one; and a borrowed send's delivery statuses
+  (which carry the recipient's number) routed to the borrowing tenant
+  rather than the default tenant.
+  - **After:** M3c.
+  - **Decisive:** with the deployment's setting off, a zero-tap creation
+    makes no request to Meta; on, one request and one audit event; a
+    preview answers Meta's documented example.
 - [ ] **M3d. Registration and the PIN** (rows 108, 128): request and
   verify a code, register, deregister; the PIN typed per attempt and
   never stored (D6).
@@ -5131,7 +5267,25 @@ everything else goes into the parity-completion report.
   `wa_server_events` and its payload `<sequence> <tenant>`, not stored
   but what replicas of two releases must agree on, added and, the
   coordinator having decided them as built (D40), awaiting confirmation
-  before the first release), for the same reason as L5's.
+  before the first release; M3c's tenant OTP settings, the
+  key `otp` of `wa_server_tenants.settings` and its version 1 layout,
+  and the label `meta-whatsapp-server/otp-fingerprint/v1` the issue's
+  idempotency fingerprint is keyed with, added and awaiting
+  confirmation; M3c's review's shared issue log, the namespace
+  `wa_server.otp.shared_rate`, its key's derivation and record, and the
+  label `meta-whatsapp-server/otp-shared-limit/v1`, added and awaiting
+  confirmation), for the same reason as L5's.
+- **Zero-tap authentication templates** (M3c, M3g): creating one sets
+  Meta's `zero_tap_terms_accepted`, an acknowledgement of the WhatsApp
+  Business terms for zero-tap and of the customers' expectation of an
+  automatic fill. M3c refuses it on the service's authentication route;
+  whether a tenant may accept them through the service, as an explicit
+  and audited action off by default, is the owner's (AGENTS.md §
+  Decisions, legal acts). The generic `POST /v1/wabas/{waba_id}/templates`
+  passed Meta's JSON through, a zero-tap button with the field included,
+  from M1b; M3c's review closed it (`422` on
+  `zero_tap_terms_accepted`), so neither route accepts the terms until
+  the owner decides.
 - **OPEN_QUESTIONS #46**, a number under several Messaging Accounts
   (Meta's account model evolution): keying the service's numbers by
   `(waba_id, phone_number_id)` is a primary-key migration of stored
