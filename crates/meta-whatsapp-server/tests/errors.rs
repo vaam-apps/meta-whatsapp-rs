@@ -351,6 +351,7 @@ const CALLS_META: &[&str] = &[
     "DELETE /v1/wabas/{waba_id}/templates",
     "GET /v1/wabas/{waba_id}/templates/{id}",
     "POST /v1/numbers/{pn}/conversations/{contact}/messages",
+    "POST /v1/wabas/{waba_id}/templates/authentication",
 ];
 
 /// Operations whose call to Meta is best effort: whatever Meta answers,
@@ -377,6 +378,7 @@ const DETAILS_KEPT: &[&str] = &[
     "DELETE /v1/wabas/{waba_id}/templates",
     "GET /v1/wabas/{waba_id}/templates/{id}",
     "POST /v1/numbers/{pn}/conversations/{contact}/messages",
+    "POST /v1/wabas/{waba_id}/templates/authentication",
 ];
 
 /// Operations on an object named by id (a media id, a template id): Meta

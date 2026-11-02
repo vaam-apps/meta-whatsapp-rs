@@ -152,6 +152,9 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     // Sends, media and templates (M1b), with what M1.7 keeps out of the
     // logs: message text, recipients, contacts.
     secrets.extend(send_media_and_templates(h, &admin).await);
+    // OTP and authentication templates (roadmap M3c): the recipient's
+    // number is not logged (the code's own case is `tests/otp_logs.rs`).
+    secrets.extend(otp(h, &admin).await);
     // Failures log too: a refused key, and Meta refusing a token.
     let refused = h
         .call(Call::get("/v1/numbers").key(&format!("{tenant_key}x")))
@@ -473,13 +476,19 @@ async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
 pub const INBOX_REPLY_TEXT: &str = "Yes, the Echeveria comes in blue";
 pub const INBOX_STRANGER: &str = "16505559876";
 /// The caller's references for those replies.
-pub const INBOX_KEYS: [&str; 2] = ["inbox-reply-order-1234", "inbox-reply-order-5678"];
+pub const INBOX_KEYS: [&str; 3] = [
+    "inbox-reply-order-1234",
+    "inbox-reply-order-5678",
+    "inbox-read-ticket-881",
+];
 
-/// The inbox routes (roadmap M2a) on merchant-42's first number, which
-/// [`webhooks`] filled: its conversations, the history of Meta's example
-/// customer, a reply to them within the window, and one to a contact with
-/// no conversation (refused `409`); returns the key it minted and what
-/// the logs must not hold (the reply's text, the stranger).
+/// The inbox routes (roadmaps M2a and M2g) on merchant-42's first number,
+/// which [`webhooks`] filled: its conversations, the history of Meta's
+/// example customer, a reply to them within the window, and one to a
+/// contact with no conversation (refused `409`); their window, a message
+/// by id, and the conversation marked read with a receipt to Meta; returns
+/// the key it minted and what the logs must not hold (the reply's text,
+/// the stranger, the caller's references).
 async fn inbox(h: &Harness, admin: &str) -> Vec<String> {
     const PN: &str = "1972385232742141";
     let minted = h
@@ -531,6 +540,35 @@ async fn inbox(h: &Harness, admin: &str) -> Vec<String> {
         "{}",
         refused.text
     );
+    let window = h
+        .call(
+            Call::get(format!(
+                "/v1/numbers/{PN}/conversations/{EXAMPLE_WA_ID}/window"
+            ))
+            .key(&key),
+        )
+        .await;
+    assert_eq!(window.status.as_u16(), 200, "{}", window.text);
+    assert_eq!(window.json()["open"], true, "{}", window.text);
+    let found = h
+        .call(Call::get(format!("/v1/numbers/{PN}/messages/wamid.CAPTURE-1")).key(&key))
+        .await;
+    assert_eq!(found.status.as_u16(), 200, "{}", found.text);
+    h.graph.push_json(200, json!({"success": true}));
+    let asked = h.graph.requests().len();
+    let read = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("/v1/numbers/{PN}/conversations/{EXAMPLE_WA_ID}/read"),
+            )
+            .key(&key)
+            .header("idempotency-key", INBOX_KEYS[2])
+            .json(&json!({"notify_customer": true})),
+        )
+        .await;
+    assert_eq!(read.status.as_u16(), 204, "{}", read.text);
+    assert_eq!(h.graph.requests().len(), asked + 1, "one read receipt");
     vec![
         key.clone(),
         key.rsplit('_').next().unwrap().to_owned(),
@@ -538,6 +576,7 @@ async fn inbox(h: &Harness, admin: &str) -> Vec<String> {
         INBOX_STRANGER.to_owned(),
         INBOX_KEYS[0].to_owned(),
         INBOX_KEYS[1].to_owned(),
+        INBOX_KEYS[2].to_owned(),
     ]
 }
 
@@ -781,6 +820,89 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
         CONTACT_PHONE.to_owned(),
         CALLBACK_DATA.to_owned(),
         IDEMPOTENCY_KEY.to_owned(),
+    ]
+}
+
+/// An OTP recipient: in no log line.
+pub const OTP_PHONE: &str = "+16315554444";
+
+/// The OTP routes and authentication templates (roadmap M3c), each
+/// exercised: the tenant's settings set on its attached number, read, a
+/// code sent and checked, an authentication template created, the
+/// settings cleared; returns what must not be logged.
+async fn otp(h: &Harness, admin: &str) -> Vec<String> {
+    let saved = h
+        .call(
+            Call::new(Method::PUT, "/v1/admin/tenants/merchant-42/otp")
+                .key(admin)
+                .json(&json!({
+                    "phone_number_id": "1972385232742141",
+                    "template": {"name": "login_code", "language": "en_US"}
+                })),
+        )
+        .await;
+    assert_eq!(saved.status.as_u16(), 200, "{}", saved.text);
+    let read = h
+        .call(Call::get("/v1/admin/tenants/merchant-42/otp").key(admin))
+        .await;
+    assert_eq!(read.status.as_u16(), 200, "{}", read.text);
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["otp", "templates"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    h.graph.push_json(
+        200,
+        json!({
+            "messaging_product": "whatsapp",
+            "contacts": [{"input": OTP_PHONE, "wa_id": "16315554444"}],
+            "messages": [{"id": "wamid.HBgLMTYzMTU1NTQ0NDQVAgARGBI1RjQyNUE3NEYxMzAzMzQ5MkEA"}]
+        }),
+    );
+    let sent = h
+        .call(
+            Call::new(Method::POST, "/v1/otp/issue")
+                .key(&key)
+                .json(&json!({"phone": OTP_PHONE})),
+        )
+        .await;
+    assert_eq!(sent.json()["status"], "sent", "{}", sent.text);
+    let checked = h
+        .call(
+            Call::new(Method::POST, "/v1/otp/verify")
+                .key(&key)
+                .json(&json!({"phone": OTP_PHONE, "code": "not-the-code"})),
+        )
+        .await;
+    assert_eq!(checked.json()["result"], "invalid", "{}", checked.text);
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "954638012257287", "status": "APPROVED", "language": "en_US"}]}),
+    );
+    let created = h
+        .call(
+            Call::new(
+                Method::POST,
+                "/v1/wabas/102290129340398/templates/authentication",
+            )
+            .key(&key)
+            .json(&json!({"name": "login_code", "languages": ["en_US"], "otp_type": "copy_code"})),
+        )
+        .await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text);
+    let cleared = h
+        .call(Call::new(Method::DELETE, "/v1/admin/tenants/merchant-42/otp").key(admin))
+        .await;
+    assert_eq!(cleared.status.as_u16(), 204, "{}", cleared.text);
+    vec![
+        key,
+        OTP_PHONE.to_owned(),
+        "16315554444".to_owned(),
+        "6315554444".to_owned(),
     ]
 }
 

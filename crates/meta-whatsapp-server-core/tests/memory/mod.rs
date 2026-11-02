@@ -26,7 +26,8 @@ use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
     IdempotencyRecord, IdempotencyState, KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus,
-    NumberTombstone, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding, WabaTombstone,
+    NumberTombstone, OtpSettings, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
+    WabaTombstone,
 };
 use meta_whatsapp_server_core::notify::{EventNotifier, LocalNotifier};
 use meta_whatsapp_server_core::outbox::{
@@ -49,6 +50,8 @@ pub struct State {
     tombstones: BTreeMap<String, WabaTombstone>,
     /// Each number's last release (roadmap M2h: the inbox suite's moves).
     number_tombstones: BTreeMap<String, NumberTombstone>,
+    /// Each tenant's OTP settings, stored (roadmap M3c: the otp suite).
+    otp_settings: BTreeMap<String, serde_json::Value>,
 }
 
 /// Release the bound numbers of `waba_id` that `keep` does not list, each
@@ -124,11 +127,46 @@ impl RecordStore for Records {
     }
     async fn update_tenant(
         &self,
-        _: &TenantId,
-        _: Option<&str>,
-        _: Option<TenantStatus>,
+        id: &TenantId,
+        name: Option<&str>,
+        status: Option<TenantStatus>,
     ) -> StoreResult<Option<Tenant>> {
-        unimplemented!("not used by the suites this backend runs")
+        let mut state = self.state();
+        let Some(tenant) = state.tenants.get_mut(id.as_str()) else {
+            return Ok(None);
+        };
+        if let Some(name) = name {
+            name.clone_into(&mut tenant.name);
+        }
+        if let Some(status) = status {
+            tenant.status = status;
+        }
+        tenant.updated_at = OffsetDateTime::now_utc();
+        Ok(Some(tenant.clone()))
+    }
+    async fn otp_settings(&self, id: &TenantId) -> StoreResult<Option<OtpSettings>> {
+        Ok(self
+            .state()
+            .otp_settings
+            .get(id.as_str())
+            .map(|stored| OtpSettings::from_stored(stored).expect("stored by this backend")))
+    }
+    async fn set_otp_settings(
+        &self,
+        id: &TenantId,
+        settings: Option<&OtpSettings>,
+    ) -> StoreResult<bool> {
+        let mut state = self.state();
+        if !state.tenants.contains_key(id.as_str()) {
+            return Ok(false);
+        }
+        match settings {
+            Some(settings) => state
+                .otp_settings
+                .insert(id.as_str().to_owned(), settings.to_stored()),
+            None => state.otp_settings.remove(id.as_str()),
+        };
+        Ok(true)
     }
     async fn delete_tenant(&self, _: &TenantId) -> StoreResult<DeleteTenantOutcome> {
         unimplemented!("not used by the suites this backend runs")

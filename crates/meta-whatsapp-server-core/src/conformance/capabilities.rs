@@ -24,8 +24,8 @@ use crate::authz::{AdminCaller, Authorizer, Caller};
 use crate::backend::Backend;
 use crate::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
-    NewApiKey, NumberBinding, NumberStatus, PageRequest, Scope, Tenant, TenantId, TenantStatus,
-    WabaBinding,
+    NewApiKey, NumberBinding, NumberStatus, OtpSettings, PageRequest, Scope, Tenant, TenantId,
+    TenantStatus, WabaBinding,
 };
 use crate::store::{RecordStore, StoreResult};
 
@@ -476,6 +476,16 @@ impl RecordStore for MovesAfterRead {
         status: Option<TenantStatus>,
     ) -> StoreResult<Option<Tenant>> {
         self.inner.update_tenant(id, name, status).await
+    }
+    async fn otp_settings(&self, id: &TenantId) -> StoreResult<Option<OtpSettings>> {
+        self.inner.otp_settings(id).await
+    }
+    async fn set_otp_settings(
+        &self,
+        id: &TenantId,
+        settings: Option<&OtpSettings>,
+    ) -> StoreResult<bool> {
+        self.inner.set_otp_settings(id, settings).await
     }
     async fn delete_tenant(&self, id: &TenantId) -> StoreResult<DeleteTenantOutcome> {
         self.inner.delete_tenant(id).await

@@ -107,6 +107,7 @@ codes! {
     TENANT_EXISTS = ("tenant_exists", 409, "A tenant with this id exists."),
     IDEMPOTENCY_IN_PROGRESS = ("idempotency_in_progress", 409, "A request with this Idempotency-Key is still running."),
     OUTCOME_UNKNOWN = ("outcome_unknown", 409, "The outcome of the request with this Idempotency-Key is unknown: reconcile before retrying."),
+    OTP_NOT_CONFIGURED = ("otp_not_configured", 409, "No OTP sender is set up for this tenant, or its sending number is no longer the sender's own: the operator sets one."),
     // 403: not allowed, by Meta or the service.
     PERMISSION = ("permission", 403, "The token lacks a permission, or access to this asset."),
     ACCOUNT_RESTRICTED = ("account_restricted", 403, "The account is restricted for a policy violation."),
@@ -457,6 +458,19 @@ impl ServiceError {
     /// `details`, see [`Self::with_details`]). Logs the error (Meta's texts
     /// at `debug` only).
     pub fn from_library(error: &Error) -> Self {
+        Self::from_library_logged(error, MetaTexts::Debug)
+    }
+
+    /// [`Self::from_library`], with Meta's texts (message, user texts,
+    /// `details`) in no log at any level: for the OTP routes, whose Graph
+    /// errors may quote a template parameter, the code (docs/design/server.md,
+    /// section 4.7: the code is in no response, log or error). Meta's code
+    /// and trace id are still logged at `warn`.
+    pub fn from_library_withholding_texts(error: &Error) -> Self {
+        Self::from_library_logged(error, MetaTexts::Withheld)
+    }
+
+    fn from_library_logged(error: &Error, texts: MetaTexts) -> Self {
         let mut api = Self::classify(error);
         api.0.retryable = error.is_retryable();
         api.0.may_have_been_sent = error.may_have_been_sent();
@@ -468,7 +482,7 @@ impl ServiceError {
                 details: None,
             });
         }
-        log(error, &api);
+        log(error, &api, texts);
         api
     }
 
@@ -520,9 +534,19 @@ impl ServiceError {
     }
 }
 
+/// Whether a library error's log carries Meta's texts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetaTexts {
+    /// At `debug`.
+    Debug,
+    /// Never.
+    Withheld,
+}
+
 /// Log a library error: its kind, Meta's code and trace id at `warn`, and
-/// Meta's message at `debug` only (docs/design/server.md, section 6).
-fn log(error: &Error, api: &ServiceError) {
+/// Meta's message at `debug` only (docs/design/server.md, section 6), or
+/// never ([`MetaTexts::Withheld`]).
+fn log(error: &Error, api: &ServiceError, texts: MetaTexts) {
     let graph: Option<&GraphApiError> = error.graph();
     tracing::warn!(
         code = api.0.code.as_str(),
@@ -533,7 +557,7 @@ fn log(error: &Error, api: &ServiceError) {
         may_have_been_sent = api.0.may_have_been_sent,
         "request failed"
     );
-    if let Some(graph) = graph {
+    if let (Some(graph), MetaTexts::Debug) = (graph, texts) {
         tracing::debug!(
             graph_message = %graph.summary(),
             graph_details = graph.details(),

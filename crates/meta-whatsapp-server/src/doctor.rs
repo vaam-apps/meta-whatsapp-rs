@@ -11,6 +11,7 @@
 //! | `config.<VARIABLE>` | the environment, as `serve` reads it ([`Config::from_env`]) | a variable `serve` refuses: **every** one, not only the first |
 //! | `config`, `config.WA_APP_SECRET`, `config.WA_VERIFY_TOKEN`, `config.binds`, `config.WA_GRAPH_ENDPOINT`, `config.WA_VAULT_KEY`, `config.WA_APP_ID`, `config.WA_ONBOARDING_MODE` | the configuration read | never: what was read (no value of a secret), and warnings (a throwaway vault key, a Graph endpoint that is not Meta's, no `WA_APP_ID`) |
 //! | `database` | the backend `serve` would open, connected through the [`BackendFactory`], not migrated | the build lacks the backend's feature, or the database does not answer |
+//! | `otp.default_tenant` | with `WA_SERVER_OTP_DEFAULT_TENANT` set, on a shared backend: the tenant it names, its OTP settings and their sending number's binding | never: it warns when the tenant is missing or suspended, has no OTP settings, or its settings name a number it no longer holds (tenants without settings of their own then get `409 otp_not_configured`; roadmap M3c) |
 //! | `database.migrations` | on Postgres, the migration histories (`wa_server_sqlx_migrations`, `wa_sqlx_migrations`), by `SELECT` only | a service migration is pending with `WA_SERVER_MIGRATE=skip` (a warning with `auto`: `serve` applies it), a recorded one differs from this binary's, or one was left half-applied |
 //! | `webhooks.subscription`, `webhooks.fields` | `GET /{app-id}/subscriptions` with the app token | the app has no active `whatsapp_business_account` subscription, or lacks a field the service needs ([`REQUIRED_FIELDS`]; the others of [`RECOMMENDED_FIELDS`] warn) |
 //! | `token.partner` | `GET /debug_token` on `WA_PARTNER_SYSTEM_TOKEN` (Solution Partner mode) | Meta says it is invalid, expired, or another app's |
@@ -56,7 +57,7 @@ use crate::config::{
     self, Config, ConfigError, DatabaseUrl, Env, Environment, MigrateMode, NotUnicode,
     OnboardingMode, Storage,
 };
-use crate::model::{MAX_PAGE_SIZE, PageRequest};
+use crate::model::{MAX_PAGE_SIZE, PageRequest, TenantStatus};
 use crate::serve::{self, BackendFactory};
 use crate::store::{Backend, BackendKind};
 
@@ -271,6 +272,7 @@ impl<'a> Doctor<'a> {
         let backend = self
             .database(&config.storage, config.migrate, &mut report)
             .await;
+        otp_default_tenant(&config, backend.as_ref(), &mut report).await;
         self.graph(config, backend.as_ref(), &mut report).await;
         if let Some(backend) = backend {
             backend.close().await;
@@ -386,6 +388,89 @@ impl<'a> Doctor<'a> {
             }
         }
         Some(backend)
+    }
+}
+
+// ─── OTP ───────────────────────────────────────────────────────────────
+
+/// `otp.default_tenant`, when `WA_SERVER_OTP_DEFAULT_TENANT` is set: the
+/// tenant whose OTP settings the tenants without their own borrow
+/// (decision D8's default, D45) exists, is active, has settings, and
+/// still holds their sending number; else a warning, since `serve` starts
+/// anyway and only those tenants' OTP requests fail (`409
+/// otp_not_configured`). Names the tenant and the number's id, nothing
+/// else.
+async fn otp_default_tenant(
+    config: &Config,
+    backend: Option<&Arc<dyn Backend>>,
+    report: &mut Report,
+) {
+    const NAME: &str = "otp.default_tenant";
+    let Some(id) = &config.otp_default_tenant else {
+        return;
+    };
+    let Some(backend) = backend else {
+        report.push(Check::skip(NAME, "the database is not reachable"));
+        return;
+    };
+    if backend.kind().is_process_local() {
+        report.push(Check::skip(
+            NAME,
+            "memory storage is per process: this command cannot see the running service's tenants",
+        ));
+        return;
+    }
+    let records = backend.records();
+    let unreadable = |report: &mut Report, what: &str| {
+        report.push(Check::warn(
+            NAME,
+            format!("WA_SERVER_OTP_DEFAULT_TENANT: {what} cannot be read"),
+        ));
+    };
+    let borrowers = "tenants without OTP settings of their own get 409 otp_not_configured";
+    let Ok(tenant) = records.tenant(id).await else {
+        return unreadable(report, "the tenant");
+    };
+    match tenant {
+        None => {
+            return report.push(Check::warn(
+                NAME,
+                format!(
+                    "WA_SERVER_OTP_DEFAULT_TENANT names {id}, which does not exist: {borrowers}"
+                ),
+            ));
+        }
+        Some(tenant) if tenant.status != TenantStatus::Active => {
+            return report.push(Check::warn(
+                NAME,
+                format!("the default OTP tenant {id} is suspended: {borrowers}"),
+            ));
+        }
+        Some(_) => {}
+    }
+    let settings = match records.otp_settings(id).await {
+        Ok(Some(settings)) => settings,
+        Ok(None) => {
+            return report.push(Check::warn(
+                NAME,
+                format!("the default OTP tenant {id} has no OTP settings: {borrowers}"),
+            ));
+        }
+        Err(_) => return unreadable(report, "the default OTP tenant's settings"),
+    };
+    let pn = &settings.phone_number_id;
+    match records.number(pn).await {
+        Ok(Some(binding)) if &binding.tenant_id == id => report.push(Check::ok(
+            NAME,
+            format!("{id}, sending from {pn}"),
+        )),
+        Ok(_) => report.push(Check::warn(
+            NAME,
+            format!(
+                "the default OTP tenant {id}'s settings name {pn}, which it no longer holds: {borrowers}"
+            ),
+        )),
+        Err(_) => unreadable(report, "the sending number's binding"),
     }
 }
 

@@ -37,8 +37,8 @@ use crate::error::{ErrorCode, ServiceError};
 use crate::keys::MintedKey;
 use crate::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
-    MAX_NAME_CHARS, MAX_PAGE_SIZE, NewApiKey, NumberBinding, PageRequest, Scope, Tenant, TenantId,
-    TenantStatus, WabaBinding,
+    MAX_NAME_CHARS, MAX_PAGE_SIZE, NewApiKey, NumberBinding, OtpSettings, PageRequest, Scope,
+    Tenant, TenantId, TenantStatus, WabaBinding,
 };
 use crate::observe::Observer;
 use crate::store::RecordStore;
@@ -362,6 +362,83 @@ impl<'a> Admin<'a> {
             .tenant(&id)
             .await?
             .ok_or_else(ServiceError::not_found)
+    }
+
+    /// The OTP settings of the tenant `id` (roadmap M3c, decision D8).
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found`: no such tenant, or it has no settings of its own
+    /// (it borrows the default OTP tenant's, if the deployment names one).
+    pub async fn otp_settings(&self, id: &str) -> Result<OtpSettings, ServiceError> {
+        let id = named_tenant(id)?;
+        self.records()
+            .otp_settings(&id)
+            .await?
+            .ok_or_else(ServiceError::not_found)
+    }
+
+    /// Set the OTP settings of the tenant `id` (roadmap M3c, decision D8):
+    /// the number its codes are sent from, which must be one of the
+    /// tenant's own numbers, the approved authentication template and its
+    /// language, and the library's limits (unset ones are the library's
+    /// defaults). Replaces the tenant's settings whole; audited
+    /// (`otp_settings_set`). Codes in flight sent from another number stop
+    /// verifying: a code is bound to its sending number.
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found` (no such tenant), before the body's fields. `422
+    /// invalid_request` on `phone_number_id` (not an id, or not one of the
+    /// tenant's numbers), `template.name`, `template.language`,
+    /// `code_length`, `ttl_seconds`, `max_attempts`,
+    /// `resend_cooldown_seconds` or `issue_limit`; the store's failure.
+    pub async fn set_otp_settings(
+        &self,
+        id: &str,
+        input: OtpSettingsInput,
+    ) -> Result<OtpSettings, ServiceError> {
+        let id = named_tenant(id)?;
+        if self.records().tenant(&id).await?.is_none() {
+            return Err(ServiceError::not_found());
+        }
+        let settings = input.settings()?;
+        // Decision D8: a tenant's codes go out from one of its own numbers
+        // (or, with no settings, from the default OTP tenant's own).
+        let held = self
+            .records()
+            .number(&settings.phone_number_id)
+            .await?
+            .is_some_and(|number| number.tenant_id == id);
+        if !held {
+            return Err(ServiceError::invalid("phone_number_id"));
+        }
+        if !self
+            .records()
+            .set_otp_settings(&id, Some(&settings))
+            .await?
+        {
+            return Err(ServiceError::not_found());
+        }
+        self.audit("otp_settings_set", tenant_subject(&id));
+        Ok(settings)
+    }
+
+    /// Clear the OTP settings of the tenant `id`: from now on it borrows the
+    /// default OTP tenant's, if the deployment names one, else its OTP
+    /// requests are `409 otp_not_configured`. Audited
+    /// (`otp_settings_cleared`).
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found`: no such tenant. The store's failure.
+    pub async fn clear_otp_settings(&self, id: &str) -> Result<(), ServiceError> {
+        let id = named_tenant(id)?;
+        if !self.records().set_otp_settings(&id, None).await? {
+            return Err(ServiceError::not_found());
+        }
+        self.audit("otp_settings_cleared", tenant_subject(&id));
+        Ok(())
     }
 
     /// Rename (`name`), suspend or reactivate (`status`) the tenant `id`.
@@ -886,6 +963,62 @@ impl<'a> Admin<'a> {
         let report = self.authz.rotate_vault(self.caller).await?;
         self.audit("vault_rotated", Subject::default());
         Ok(report)
+    }
+}
+
+/// A tenant's OTP settings as the request carried them (roadmap M3c):
+/// every field named as the API names it; an unset limit is the library's
+/// default ([`OtpSettings::new`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OtpSettingsInput {
+    /// The sending number's id: one of the tenant's own.
+    pub phone_number_id: String,
+    /// The approved authentication template's name.
+    pub template_name: String,
+    /// Its language.
+    pub template_language: String,
+    /// Digits per code, 4 to 8.
+    pub code_length: Option<u32>,
+    /// How long a code is valid, 1 to 5400 seconds.
+    pub ttl_seconds: Option<u32>,
+    /// Wrong guesses allowed per code.
+    pub max_attempts: Option<u32>,
+    /// Seconds between two codes for one recipient and purpose.
+    pub resend_cooldown_seconds: Option<u32>,
+    /// Codes allowed per recipient and purpose in the window.
+    pub max_issues: Option<u32>,
+    /// That window, in seconds.
+    pub issue_window_seconds: Option<u32>,
+}
+
+impl OtpSettingsInput {
+    /// The settings, checked ([`crate::otp::check`]).
+    fn settings(self) -> Result<OtpSettings, ServiceError> {
+        let phone_number_id: PhoneNumberId =
+            crate::request::typed_graph_id("phone_number_id", &self.phone_number_id)?;
+        let mut settings =
+            OtpSettings::new(phone_number_id, self.template_name, self.template_language);
+        if let Some(length) = self.code_length {
+            settings.code_length =
+                u8::try_from(length).map_err(|_| ServiceError::invalid("code_length"))?;
+        }
+        if let Some(ttl) = self.ttl_seconds {
+            settings.ttl_seconds = ttl;
+        }
+        if let Some(attempts) = self.max_attempts {
+            settings.max_attempts = attempts;
+        }
+        if let Some(cooldown) = self.resend_cooldown_seconds {
+            settings.resend_cooldown_seconds = cooldown;
+        }
+        if let Some(issues) = self.max_issues {
+            settings.max_issues = issues;
+        }
+        if let Some(window) = self.issue_window_seconds {
+            settings.issue_window_seconds = window;
+        }
+        crate::otp::check(&settings)?;
+        Ok(settings)
     }
 }
 
