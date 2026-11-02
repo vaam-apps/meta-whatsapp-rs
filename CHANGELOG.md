@@ -254,8 +254,11 @@ stored data, the owner's).
     `expected_total()`, `with_expected_total()`.
   - **The data endpoint's link**: `PaymentConfigurations::link_data_endpoint`
     (`POST /{WABA_ID}/payment_configuration/{CONFIGURATION_NAME}`,
-    `data_endpoint_url`, an absolute `https` URL, replayed: it sets a
-    value; the answer is undocumented, so only `"success": false` fails).
+    `data_endpoint_url`, an absolute URL spelt `https://` then a host,
+    without user info (an empty `@` included), fragment or backslash,
+    sent as given, any host accepted (a private address too: only the
+    deployment knows); replayed: it sets a value; the answer is
+    undocumented, so only `"success": false` fails).
   - **Third party validation** (alpha): `PaymentSetting::third_party_validation`
     (`ThirdPartyValidation`, `TpvGateway::Razorpay` or `Payu`), its
     `EncryptedPaymentGatewayData` never shown by `Debug`; INR only. The

@@ -434,3 +434,101 @@ fn what_does_not_decrypt_or_parse_is_one_error() {
         json!({"data": {"status": "active"}})
     );
 }
+
+/// Past each sub-action's own rules: an answer names no way to pay, keeps
+/// India's checks of a send, and is whole (each guard here survived its
+/// deletion before this test).
+#[test]
+fn a_checkout_answer_names_no_way_to_pay_and_is_whole() {
+    let refused = |f: &dyn Fn(&mut CheckoutResponse)| {
+        let mut r = applied();
+        f(&mut r);
+        r.validate().unwrap_err().field
+    };
+    // The older configuration is a way to pay too, and so is Brazil's
+    // payment type.
+    assert_eq!(
+        refused(&|r| order_of(r).payment_configuration = Some(CONFIG.to_owned())),
+        "data.order_details.payment_configuration"
+    );
+    assert_eq!(
+        refused(&|r| order_of(r).payment_type = Some(PaymentType::Br)),
+        "data.order_details.payment_type"
+    );
+    // India's beneficiaries, checked as in a send.
+    assert_eq!(
+        refused(&|r| {
+            order_of(r).beneficiaries = vec![Beneficiary::new(
+                "",
+                "One BKC",
+                "Mumbai",
+                "Maharashtra",
+                "400051",
+            )];
+        }),
+        "data.order_details.beneficiaries[0].name"
+    );
+    // The coupon has a code, the shipping info its country, the answer
+    // the request's version.
+    assert_eq!(
+        refused(&|r| {
+            if let Some(c) = order_of(r).coupon.as_mut() {
+                c.code.clear();
+            }
+        }),
+        "data.order_details.coupon.code"
+    );
+    assert_eq!(
+        refused(&|r| {
+            if let Some(s) = order_of(r).shipping_info.as_mut() {
+                s.country.clear();
+            }
+        }),
+        "data.order_details.shipping_info.country"
+    );
+    assert_eq!(refused(&|r| r.version.clear()), "version");
+    assert_eq!(
+        CheckoutResponse::coupons("", [])
+            .validate()
+            .unwrap_err()
+            .field,
+        "version"
+    );
+}
+
+/// The total a coupon leaves: `None` for a coupon worth more than the
+/// order (never a free order, which `total_amount` above zero refuses
+/// anyway), and a total of zero refused.
+#[test]
+fn a_coupon_never_takes_the_total_below_zero() {
+    let mut order = order_of(&mut applied()).clone();
+    // 150000 + 20000 + 10000 - 15000 = 165000 before the coupon.
+    assert_eq!(order.expected_total(), Some(148_500));
+    order.coupon = Some(AppliedCoupon::new("ALL", Amount::inr(165_001)));
+    assert_eq!(order.expected_total(), None);
+    assert_eq!(order.clone().with_expected_total().total_amount.value, 0);
+    order.coupon = Some(AppliedCoupon::new("ALL", Amount::inr(165_000)));
+    assert_eq!(order.expected_total(), Some(0));
+    let free = CheckoutResponse::order(
+        "1.0",
+        CheckoutSubAction::ApplyCoupon,
+        order.with_expected_total(),
+    );
+    assert_eq!(
+        free.validate().unwrap_err().field,
+        "data.order_details.total_amount.value"
+    );
+    // At `u64::MAX` the sum does not wrap.
+    let mut huge = order_of(&mut applied()).clone();
+    if let Some(o) = huge.order.as_mut() {
+        o.subtotal = Amount::inr(u64::MAX);
+    }
+    huge.coupon = None;
+    assert_eq!(huge.expected_total(), None);
+    huge.total_amount = Amount::inr(u64::MAX);
+    let r = CheckoutResponse::order("1.0", CheckoutSubAction::ApplyShipping, huge);
+    assert_eq!(
+        r.validate().unwrap_err().field,
+        "data.order_details.total_amount.value"
+    );
+}

@@ -896,16 +896,9 @@ fn order_details_button(t: &str, ctx: &Ctx<'_>, field: &str) -> Check {
     }
     if t == Button::CHECKOUT_LABEL {
         // A checkout button: its template's rules are `checkout_template`'s
-        // (a single product) and `card_components`' (a carousel card).
-        if !ctx
-            .category
-            .is_none_or(|c| *c == TemplateCategory::Marketing)
-        {
-            return Err(err(
-                field,
-                "a checkout button (`Buy now`) requires a MARKETING template",
-            ));
-        }
+        // (a single product: MARKETING, the header, the other buttons) and
+        // `card_components`' (a carousel card, whose template the carousel
+        // rule already holds to MARKETING), both checked before this.
         return Ok(());
     }
     if ctx

@@ -984,11 +984,36 @@ struct NameBody<'a> {
 
 /// An absolute `https` URI without user info or a fragment, with no
 /// whitespace or control character anywhere: sent exactly as given.
+///
+/// Spelt out: `https://` (in any case) then a host. The WHATWG parser
+/// behind `url` also reads `https:host`, `https:/host`, `https:///host`
+/// and backslashes as `https://host/`, and an empty `@` as no user info;
+/// Meta's parser need not, and the string is sent as given, so those
+/// are refused rather than repaired. Hosts are not judged: an IP literal,
+/// a private address, a port or an IDN passes (only the deployment knows
+/// where its endpoint lives).
 fn check_https_url(field: &str, value: &str) -> Result<()> {
     let invalid =
         |reason: &'static str| -> Result<()> { Err(ValidationError::new(field, reason).into()) };
     if value.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return invalid("must not contain whitespace or control characters");
+    }
+    if value.contains('\\') {
+        return invalid("must not contain a backslash");
+    }
+    let Some(rest) = value
+        .get(..8)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        .and_then(|_| value.get(8..))
+    else {
+        return invalid("must be an absolute URI starting `https://`");
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() {
+        return invalid("must name a host after `https://`");
+    }
+    if authority.contains('@') {
+        return invalid("must not carry user info");
     }
     let Ok(url) = url::Url::parse(value) else {
         return invalid("must be an absolute URI");
@@ -1121,9 +1146,14 @@ impl PaymentConfigurations {
     /// `payments::checkout` (feature `flows-endpoint`).
     ///
     /// `data_endpoint_url` must be an absolute `https` URI ("use `HTTPS`
-    /// and have a valid TLS/SSL certificate") without user info or a
-    /// fragment, and without whitespace or control characters: a
-    /// [`ValidationError`] naming it otherwise, before any request. The
+    /// and have a valid TLS/SSL certificate"), spelt `https://` then a
+    /// host, without user info (not even an empty `@`), a fragment, a
+    /// backslash, whitespace or control characters: a
+    /// [`ValidationError`] naming it otherwise, before any request. It is
+    /// sent as given. The host is not judged: an IP literal, a private
+    /// address, a port or an internationalized name passes, since only
+    /// your deployment knows where its endpoint lives (WhatsApp's clients
+    /// call it, not this library). The
     /// name is one path segment. The page's table spells the field
     /// `data-endpoint-url`, its example `data_endpoint_url`: the example's
     /// is sent.

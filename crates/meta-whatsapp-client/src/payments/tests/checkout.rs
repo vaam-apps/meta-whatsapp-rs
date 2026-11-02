@@ -199,6 +199,25 @@ fn a_checkout_template_is_marketing_with_an_image_or_video_header() {
     review.components[0] = TemplateComponent::header_video("4::anBlZw==");
     review.components[3] = TemplateComponent::buttons([Button::order_details("Review and Pay")]);
     assert!(refused(&review).reason.contains("TEXT, IMAGE or DOCUMENT"));
+    // Only the exact label marks a checkout button: another case or
+    // spacing is an order details button (decided 2026-11-02, 1).
+    for near in ["buy now", "Buy Now", "Buy now ", " Buy now", "Buy  now"] {
+        let mut d = review.clone();
+        d.components[3] = TemplateComponent::buttons([Button::order_details(near)]);
+        assert!(
+            refused(&d).reason.contains("TEXT, IMAGE or DOCUMENT"),
+            "{near:?}: {:?}",
+            refused(&d)
+        );
+        // Nor is it held to a checkout button's rules: beside a URL button,
+        // under an IMAGE header, it is P1c's order details button.
+        let mut d = creation_definition();
+        d.components[3] = TemplateComponent::buttons([
+            Button::order_details(near),
+            Button::url("Shop", "https://x.test"),
+        ]);
+        d.validate().unwrap_or_else(|e| panic!("{near:?}: {e:?}"));
+    }
 }
 
 /// "Multiple products": a media card carousel whose cards each start with
@@ -230,12 +249,24 @@ fn a_carousel_card_starts_with_its_checkout_button() {
     assert_eq!(e.field, "components[1].cards[0].components[2].buttons[1]");
     assert!(e.reason.contains("first button"), "{e:?}");
 
-    // A card takes a checkout button, not another order details button.
-    let review = carousel_definition(|| vec![Button::order_details("Review and Pay")]);
-    assert_eq!(
-        review.validate().unwrap_err().field,
-        "components[1].cards[0].components[2].buttons[0]"
-    );
+    // "Checkout button templates are marketing templates", carousels too
+    // (as every carousel).
+    let mut utility = carousel_definition(|| vec![Button::checkout()]);
+    utility.category = TemplateCategory::Utility;
+    let e = utility.validate().unwrap_err();
+    assert_eq!(e.field, "components");
+    assert!(e.reason.contains("MARKETING"), "{e:?}");
+
+    // A card takes a checkout button, not another order details button,
+    // nor one labelled almost as one.
+    for label in ["Review and Pay", "buy now", "Buy now "] {
+        let review = carousel_definition(|| vec![Button::order_details(label)]);
+        assert_eq!(
+            review.validate().unwrap_err().field,
+            "components[1].cards[0].components[2].buttons[0]",
+            "{label:?}"
+        );
+    }
     // Every card has the same buttons (one with a checkout button and one
     // without differ).
     let mut mixed = carousel_definition(|| vec![Button::checkout()]);
@@ -584,6 +615,29 @@ fn shipping_info_is_a_template_buttons_and_physical_goods_only() {
         template(couponed).validate().unwrap_err().field,
         format!("{at}.coupon")
     );
+    // India's only: a BRL order of physical goods that passes without it
+    // is refused with it.
+    let brl = OrderDetailsParameters::brl_simplified(
+        "pedido-1",
+        GoodsType::Physical,
+        PaymentSetting::payment_link("https://my-payment-link-url"),
+        Amount::brl(50_000),
+    );
+    template(brl.clone()).validate().unwrap();
+    assert_eq!(
+        template(brl.shipping_info(ShippingInfo::india([address()])))
+            .validate()
+            .unwrap_err()
+            .field,
+        format!("{at}.shipping_info")
+    );
+    // It names its country.
+    let mut no_country = send_parameters();
+    no_country.shipping_info = Some(ShippingInfo::new("", [address()]));
+    assert_eq!(
+        template(no_country).validate().unwrap_err().field,
+        format!("{at}.shipping_info.country")
+    );
 }
 
 #[test]
@@ -751,10 +805,32 @@ fn third_party_validation_data_is_a_secret_in_inr_only() {
         OrderDetailsParameters::inr("abc.123_xyz-1", GoodsType::Digital, setting.clone(), order),
     );
     message.validate().unwrap();
-    for shown in [format!("{setting:?}"), format!("{message:?}")] {
+    // In a template's order details button too, and in the error a send
+    // refused for its order reports.
+    let mut button_order = message.parameters.clone();
+    button_order.goods_type = GoodsType::Physical;
+    button_order.shipping_info = Some(ShippingInfo::india([]));
+    let template = TemplateMessage::new("t", "en_US").order_details_button(0, button_order.clone());
+    template.validate().unwrap();
+    button_order.total_amount = Amount::inr(1);
+    let refused = TemplateMessage::new("t", "en_US")
+        .order_details_button(0, button_order)
+        .validate()
+        .unwrap_err();
+    for shown in [
+        format!("{setting:?}"),
+        format!("{message:?}"),
+        format!("{template:?}"),
+    ] {
         assert!(!shown.contains(secret), "{shown}");
         assert!(shown.contains("[REDACTED]"), "{shown}");
     }
+    assert_eq!(
+        refused.field,
+        "template.components[0].parameters[0].action.order_details.total_amount.value"
+    );
+    let shown = format!("{refused:?} {refused}");
+    assert!(!shown.contains(secret), "{shown}");
     // Serialized, it is what the send carries.
     assert_eq!(
         serde_json::to_value(&setting).unwrap()["payu"]["encrypted_payment_gateway_data"],
@@ -851,6 +927,23 @@ async fn link_data_endpoint_checks_first_and_reads_a_refusal() {
         ("c", "https://shop.example/checkout#x"),
         ("c", "https://shop.example/check out"),
         ("c", " https://shop.example/checkout"),
+        // What the WHATWG parser repairs into `https://shop.example/…`,
+        // but the string sent would still say: refused, not repaired.
+        ("c", "https:shop.example/checkout"),
+        ("c", "https:/shop.example/checkout"),
+        ("c", "https:///shop.example/checkout"),
+        ("c", "https:\\\\shop.example\\checkout"),
+        ("c", "https://shop.example\\checkout"),
+        // User info, even empty or percent-encoded.
+        ("c", "https://@shop.example/checkout"),
+        ("c", "https://:@shop.example/checkout"),
+        ("c", "https://user%40x@shop.example/checkout"),
+        ("c", "https://shop.example@evil.example/checkout"),
+        // No host.
+        ("c", "https://"),
+        ("c", "https://?x=1"),
+        ("c", "https://:8443/checkout"),
+        ("c", "httpsx://shop.example/checkout"),
     ] {
         let err = configurations(&t)
             .link_data_endpoint(name, url)
@@ -870,6 +963,36 @@ async fn link_data_endpoint_checks_first_and_reads_a_refusal() {
         t.last_request().unwrap().path(),
         format!("/v25.0/{WABA}/payment_configuration/a%2Fb")
     );
+}
+
+/// The host is the deployment's to judge: an upper case scheme, an IP
+/// literal (a private one too), a port, an IDN, an `@` past the host,
+/// all pass and are sent exactly as given.
+#[tokio::test]
+async fn link_data_endpoint_takes_any_https_host_as_given() {
+    for url in [
+        "HTTPS://shop.example/checkout",
+        "Https://shop.example:8443/checkout",
+        "https://203.0.113.7/checkout",
+        "https://10.0.0.5:8443/checkout",
+        "https://[2001:db8::1]/checkout",
+        "https://bücher.example/checkout",
+        "https://xn--bcher-kva.example/checkout",
+        "https://shop.example/a@b?next=@c",
+        "https://shop.example",
+    ] {
+        let t = ScriptedTransport::new();
+        t.push_json(200, json!({"success": true}));
+        configurations(&t)
+            .link_data_endpoint("c", url)
+            .await
+            .unwrap_or_else(|e| panic!("{url}: {e}"));
+        assert_eq!(
+            t.last_request().unwrap().json(),
+            Some(json!({"data_endpoint_url": url}))
+        );
+        assert_eq!(t.remaining(), 0);
+    }
 }
 
 /// Setting a URL is replayed after a timeout: a replay sets it again.
