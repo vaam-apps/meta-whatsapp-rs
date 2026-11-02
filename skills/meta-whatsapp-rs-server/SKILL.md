@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs 468fd8c6e2cb282fdd2c038a3ece55569773684e (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 0b037d946d4f1b4b520b1420a7f783885370101d (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
