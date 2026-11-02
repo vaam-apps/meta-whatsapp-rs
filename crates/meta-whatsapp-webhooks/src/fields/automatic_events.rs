@@ -5,11 +5,11 @@
 //! `embedded-signup/automatic-events-api`.
 
 use meta_whatsapp_core::ids::MessageId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::common::Metadata;
-use crate::open_enum::open_enum;
 
 /// `value` of an `automatic_events` change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -116,6 +116,7 @@ use futures::Stream;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{BusinessId, VerificationSubmissionId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::transport::Multipart;
 use serde::de::Deserializer;
@@ -125,7 +126,6 @@ use serde::{Deserialize, Serialize};
 pub use crate::waba::{BusinessInfo, BusinessVerificationStatus};
 
 use crate::request::{paginate_or_error, reject_cursors, send_checked};
-use crate::templates::macros::string_enum;
 use crate::{Client, GraphRequest};
 
 /// At most this many documents per submission.
@@ -368,7 +368,8 @@ impl SubmissionReceipt {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A submission's `verification_status`. The named values are those
     /// `account_update` documents for the same submission's `status`
     /// (`meta_whatsapp_webhooks::fields::CertificationStatus` there; see the
@@ -388,108 +389,61 @@ string_enum! {
     }
 }
 
-/// Why a submission was rejected, from a `rejection_reasons` string of a
-/// [`VerificationSubmission`] or of the `account_update` webhook's
-/// `partner_client_certification_info` ([`RejectionReason::parse`]).
-///
-/// The named values and their meaning are `account_update`'s.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum RejectionReason {
-    /// The country of the submitted address is not the one on the
-    /// customer's business profile.
-    AddressNotMatching,
-    /// Not eligible for verification from partner-provided information:
-    /// the customer can still verify with Meta directly.
-    BusinessNotEligible,
-    /// The legal name does not match the business profile's legal or
-    /// business name.
-    LegalNameNotMatching,
-    /// The legal name was not found in the documents (not mentioned, or
-    /// unreadable).
-    LegalNameNotFoundInDocuments,
-    /// The documents could not be processed (corrupted, password
-    /// protected, unsupported format).
-    MalformedDocuments,
-    /// Not rejected (`NONE`, sent with every outcome).
-    None,
-    /// The website domain does not match the business profile's.
-    WebsiteNotMatching,
-    /// Any other value, verbatim.
-    Other(String),
+open_enum! {
+    #![normalize = rejection_spelling]
+    #![case_insensitive]
+    /// Why a submission was rejected, from a `rejection_reasons` string of a
+    /// [`VerificationSubmission`] or of the `account_update` webhook's
+    /// `partner_client_certification_info` ([`RejectionReason::parse`]).
+    ///
+    /// The named values and their meaning are `account_update`'s. A value
+    /// reads spelled with spaces (`LEGAL NAME NOT MATCHING`,
+    /// `account_update`) or underscores (`LEGAL_NAME_NOT_FOUND_IN_DOCUMENTS`,
+    /// the partner-led page), in any case, whitespace around it ignored;
+    /// any other value is kept verbatim in [`RejectionReason::Other`].
+    /// [`RejectionReason::as_str`] is `account_update`'s spelling (with
+    /// spaces).
+    pub enum RejectionReason {
+        /// The country of the submitted address is not the one on the
+        /// customer's business profile.
+        AddressNotMatching => "ADDRESS NOT MATCHING",
+        /// Not eligible for verification from partner-provided information:
+        /// the customer can still verify with Meta directly.
+        BusinessNotEligible => "BUSINESS NOT ELIGIBLE",
+        /// The legal name does not match the business profile's legal or
+        /// business name.
+        LegalNameNotMatching => "LEGAL NAME NOT MATCHING",
+        /// The legal name was not found in the documents (not mentioned, or
+        /// unreadable).
+        LegalNameNotFoundInDocuments => "LEGAL NAME NOT FOUND IN DOCUMENTS",
+        /// The documents could not be processed (corrupted, password
+        /// protected, unsupported format).
+        MalformedDocuments => "MALFORMED DOCUMENTS",
+        /// Not rejected (`NONE`, sent with every outcome).
+        None => "NONE",
+        /// The website domain does not match the business profile's.
+        WebsiteNotMatching => "WEBSITE NOT MATCHING",
+    }
+}
+
+/// What [`RejectionReason`] compares: trimmed, underscores read as spaces.
+fn rejection_spelling(reason: &str) -> String {
+    reason.trim().replace('_', " ")
 }
 
 impl RejectionReason {
-    /// Read one of Meta's `rejection_reasons` values, spelled with spaces
-    /// (`LEGAL NAME NOT MATCHING`, `account_update`) or underscores
-    /// (`LEGAL_NAME_NOT_FOUND_IN_DOCUMENTS`, the partner-led page), in any
-    /// case; any other value is kept verbatim in [`Self::Other`]. The same
-    /// as `reason.parse::<RejectionReason>()`.
+    /// Read one of Meta's `rejection_reasons` values (see the
+    /// [type](RejectionReason)); any other value is kept verbatim in
+    /// [`Self::Other`]. The same as `RejectionReason::from(reason)` and
+    /// `reason.parse::<RejectionReason>()`.
     pub fn parse(reason: &str) -> Self {
-        match reason
-            .trim()
-            .replace('_', " ")
-            .to_ascii_uppercase()
-            .as_str()
-        {
-            "ADDRESS NOT MATCHING" => Self::AddressNotMatching,
-            "BUSINESS NOT ELIGIBLE" => Self::BusinessNotEligible,
-            "LEGAL NAME NOT MATCHING" => Self::LegalNameNotMatching,
-            "LEGAL NAME NOT FOUND IN DOCUMENTS" => Self::LegalNameNotFoundInDocuments,
-            "MALFORMED DOCUMENTS" => Self::MalformedDocuments,
-            "NONE" => Self::None,
-            "WEBSITE NOT MATCHING" => Self::WebsiteNotMatching,
-            _ => Self::Other(reason.to_owned()),
-        }
-    }
-
-    /// The value in `account_update`'s spelling (with spaces), or the
-    /// [`Self::Other`] value verbatim.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::AddressNotMatching => "ADDRESS NOT MATCHING",
-            Self::BusinessNotEligible => "BUSINESS NOT ELIGIBLE",
-            Self::LegalNameNotMatching => "LEGAL NAME NOT MATCHING",
-            Self::LegalNameNotFoundInDocuments => "LEGAL NAME NOT FOUND IN DOCUMENTS",
-            Self::MalformedDocuments => "MALFORMED DOCUMENTS",
-            Self::None => "NONE",
-            Self::WebsiteNotMatching => "WEBSITE NOT MATCHING",
-            Self::Other(s) => s,
-        }
+        Self::from(reason)
     }
 
     /// Whether the customer can only verify on their own
     /// ([`Self::BusinessNotEligible`]).
     pub fn is_ineligible(&self) -> bool {
         matches!(self, Self::BusinessNotEligible)
-    }
-}
-
-impl std::str::FromStr for RejectionReason {
-    type Err = std::convert::Infallible;
-
-    /// [`RejectionReason::parse`].
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self::parse(s))
-    }
-}
-
-impl fmt::Display for RejectionReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl Serialize for RejectionReason {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for RejectionReason {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(d)?;
-        Ok(Self::parse(&s))
     }
 }
 

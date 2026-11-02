@@ -22,6 +22,7 @@
 
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{BusinessId, PhoneNumberId, WabaId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::{Error, Result};
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
@@ -166,50 +167,23 @@ pub struct CancelInfo {
     pub error: Option<ReportedError>,
 }
 
-/// The screen a customer abandoned (`embedded-signup/errors`).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum CurrentStep {
-    /// Business portfolio screen.
-    BusinessAccountSelection,
-    /// WABA selection screen.
-    WabaPhoneProfilePicker,
-    /// WABA creation screen.
-    WhatsappBusinessProfileSetup,
-    /// Phone number addition screen.
-    PhoneNumberSetup,
-    /// Phone number verification screen.
-    PhoneNumberVerification,
-    /// Permissions review screen.
-    Permissions,
-    /// A screen this crate does not know (v4 added several).
-    Other(String),
-}
-
-impl CurrentStep {
-    fn from_str_lossless(s: &str) -> Self {
-        match s {
-            "BUSINESS_ACCOUNT_SELECTION" => Self::BusinessAccountSelection,
-            "WABA_PHONE_PROFILE_PICKER" => Self::WabaPhoneProfilePicker,
-            "WHATSAPP_BUSINESS_PROFILE_SETUP" => Self::WhatsappBusinessProfileSetup,
-            "PHONE_NUMBER_SETUP" => Self::PhoneNumberSetup,
-            "PHONE_NUMBER_VERIFICATION" => Self::PhoneNumberVerification,
-            "PERMISSIONS" => Self::Permissions,
-            other => Self::Other(other.to_owned()),
-        }
-    }
-
-    /// The string Meta sends.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::BusinessAccountSelection => "BUSINESS_ACCOUNT_SELECTION",
-            Self::WabaPhoneProfilePicker => "WABA_PHONE_PROFILE_PICKER",
-            Self::WhatsappBusinessProfileSetup => "WHATSAPP_BUSINESS_PROFILE_SETUP",
-            Self::PhoneNumberSetup => "PHONE_NUMBER_SETUP",
-            Self::PhoneNumberVerification => "PHONE_NUMBER_VERIFICATION",
-            Self::Permissions => "PERMISSIONS",
-            Self::Other(s) => s,
-        }
+open_enum! {
+    /// The screen a customer abandoned (`embedded-signup/errors`). A screen
+    /// this crate does not know (v4 added several) is kept in
+    /// [`CurrentStep::Other`].
+    pub enum CurrentStep {
+        /// Business portfolio screen.
+        BusinessAccountSelection => "BUSINESS_ACCOUNT_SELECTION",
+        /// WABA selection screen.
+        WabaPhoneProfilePicker => "WABA_PHONE_PROFILE_PICKER",
+        /// WABA creation screen.
+        WhatsappBusinessProfileSetup => "WHATSAPP_BUSINESS_PROFILE_SETUP",
+        /// Phone number addition screen.
+        PhoneNumberSetup => "PHONE_NUMBER_SETUP",
+        /// Phone number verification screen.
+        PhoneNumberVerification => "PHONE_NUMBER_VERIFICATION",
+        /// Permissions review screen.
+        Permissions => "PERMISSIONS",
     }
 }
 
@@ -300,10 +274,7 @@ impl EmbeddedSignupEvent {
                 let error: ReportedError =
                     serde_json::from_value(data).map_err(decode_err("CANCEL"))?;
                 Ok(Self::Cancel(CancelInfo {
-                    current_step: step
-                        .current_step
-                        .as_deref()
-                        .map(CurrentStep::from_str_lossless),
+                    current_step: step.current_step.as_deref().map(CurrentStep::from),
                     error: (!error.is_empty()).then_some(error),
                 }))
             }

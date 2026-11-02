@@ -19,12 +19,12 @@
 
 use meta_whatsapp_core::GraphApiError;
 use meta_whatsapp_core::ids::{CallId, UserId};
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::common::{Contact, Metadata};
 use super::messages::MediaContent;
-use crate::open_enum::open_enum;
 
 /// `value` of a `calls` change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

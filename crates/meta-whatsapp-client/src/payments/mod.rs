@@ -233,10 +233,11 @@ use std::fmt;
 
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::secret::RedactedPath;
 use meta_whatsapp_core::{Error, Result};
 use serde::ser::{SerializeMap, Serializer};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 pub use crate::common::SecretUrl;
@@ -255,7 +256,6 @@ pub use crate::templates::{
 use crate::Client;
 use crate::messages::payments::CONFIGURATION_NAME_MAX;
 use crate::messages::validate;
-use crate::templates::macros::string_enum;
 
 #[cfg(test)]
 mod tests;
@@ -313,7 +313,8 @@ impl Client {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A payment's status ([`Payment::status`]).
     pub enum PaymentStatus {
         /// Not captured: no attempt yet (no transactions), or only failed
@@ -324,7 +325,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A transaction's or a refund's status.
     pub enum TransactionStatus {
         /// `pending`.
@@ -338,7 +340,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// The gateway of a transaction (`transaction.type`).
     pub enum GatewayType {
         /// `BillDesk`.
@@ -352,7 +355,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// How the buyer paid (`method.type`).
     pub enum PaymentMethodType {
         /// `upi`.
@@ -366,7 +370,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// How fast a refund goes (`speed`, `speed_processed`). The gateway
     /// decides: the speed processed may differ from the one asked.
     pub enum RefundSpeed {
@@ -659,68 +664,32 @@ pub struct PaymentConfigurations {
     waba_id: WabaId,
 }
 
-/// A payment configuration's status. The reference tables write
-/// `Needs_Connecting` and `Needs_Testing`, the webhook example `Needs
-/// Testing`: both spellings parse, in any case, and serialize as the
-/// tables'.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum PaymentConfigurationStatus {
-    /// Tested and usable.
-    Active,
-    /// To link to the gateway (see
-    /// [`PaymentConfigurations::regenerate_oauth_link`]).
-    NeedsConnecting,
-    /// Linked, not yet tested.
-    NeedsTesting,
-    /// A value this version does not know, kept verbatim.
-    Other(String),
-}
-
-impl PaymentConfigurationStatus {
-    /// The value as the reference tables write it.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Active => "Active",
-            Self::NeedsConnecting => "Needs_Connecting",
-            Self::NeedsTesting => "Needs_Testing",
-            Self::Other(s) => s,
-        }
-    }
-
-    fn parse(raw: String) -> Self {
-        let normal = raw.replace(' ', "_");
-        if normal.eq_ignore_ascii_case("active") {
-            Self::Active
-        } else if normal.eq_ignore_ascii_case("needs_connecting") {
-            Self::NeedsConnecting
-        } else if normal.eq_ignore_ascii_case("needs_testing") {
-            Self::NeedsTesting
-        } else {
-            Self::Other(raw)
-        }
+open_enum! {
+    #![normalize = status_spelling]
+    #![case_insensitive]
+    /// A payment configuration's status. The reference tables write
+    /// `Needs_Connecting` and `Needs_Testing`, the webhook example `Needs
+    /// Testing`: both spellings parse, in any case, and serialize as the
+    /// tables'.
+    pub enum PaymentConfigurationStatus {
+        /// Tested and usable.
+        Active => "Active",
+        /// To link to the gateway (see
+        /// [`PaymentConfigurations::regenerate_oauth_link`]).
+        NeedsConnecting => "Needs_Connecting",
+        /// Linked, not yet tested.
+        NeedsTesting => "Needs_Testing",
     }
 }
 
-impl fmt::Display for PaymentConfigurationStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
+/// What [`PaymentConfigurationStatus`] compares: spaces read as
+/// underscores.
+fn status_spelling(status: &str) -> String {
+    status.replace(' ', "_")
 }
 
-impl Serialize for PaymentConfigurationStatus {
-    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for PaymentConfigurationStatus {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        String::deserialize(deserializer).map(Self::parse)
-    }
-}
-
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A payment configuration's provider (`provider_name`). Parsed in
     /// any case: Meta's example answers `RazorPay`.
     pub enum PaymentProvider {

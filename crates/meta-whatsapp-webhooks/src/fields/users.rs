@@ -6,11 +6,11 @@
 //! `business-scoped-user-ids`.
 
 use meta_whatsapp_core::ids::{UserId, WaId};
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::common::{Contact, Metadata};
-use crate::open_enum::open_enum;
 
 /// `value` of a `user_preferences` change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

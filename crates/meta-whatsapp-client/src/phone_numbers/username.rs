@@ -20,18 +20,19 @@
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::UserId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 
 use super::PhoneNumber;
 use crate::request::decode_json;
-use crate::templates::macros::string_enum;
 
 /// Shortest business username, in characters.
 pub const MIN_USERNAME_CHARS: usize = 3;
 /// Longest business username, in characters.
 pub const MAX_USERNAME_CHARS: usize = 35;
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// Status of a business username, as the username calls return it
     /// (`status`). The `business_username_updates` webhook reports the
     /// same status with its own type,
@@ -49,7 +50,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// What happens when the requested username is in use on another
     /// number of the same business portfolio (`transfer_action`).
     pub enum TransferAction {

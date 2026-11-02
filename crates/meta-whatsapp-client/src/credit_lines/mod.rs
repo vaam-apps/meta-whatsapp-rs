@@ -98,9 +98,9 @@ use futures::Stream;
 pub use meta_whatsapp_core::error::CreditRevocation;
 use meta_whatsapp_core::error::{RevocationIncomplete, ValidationError};
 use meta_whatsapp_core::ids::{AllocationConfigId, BusinessId, CreditLineId, FundingId, WabaId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::{Error, Result};
-use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 
 use crate::phone_numbers::fields_param;
@@ -284,40 +284,13 @@ pub struct ReceivingCredential {
     pub id: Option<FundingId>,
 }
 
-/// `request_status` of an allocation configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum AllocationRequestStatus {
-    /// Revoked.
-    Deleted,
-    /// Any other value, verbatim (the page documents only `DELETED`).
-    Other(String),
-}
-
-impl AllocationRequestStatus {
-    /// The value as Meta sends it.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Deleted => "DELETED",
-            Self::Other(s) => s,
-        }
-    }
-}
-
-impl Serialize for AllocationRequestStatus {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for AllocationRequestStatus {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(d)?;
-        Ok(if s == "DELETED" {
-            Self::Deleted
-        } else {
-            Self::Other(s)
-        })
+open_enum! {
+    /// `request_status` of an allocation configuration. The page documents
+    /// only `DELETED`; any other value is kept in
+    /// [`AllocationRequestStatus::Other`].
+    pub enum AllocationRequestStatus {
+        /// Revoked.
+        Deleted => "DELETED",
     }
 }
 

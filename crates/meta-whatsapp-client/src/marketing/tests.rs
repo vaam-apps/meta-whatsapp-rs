@@ -392,7 +392,7 @@ async fn waba_onboarding_status_parses_the_documented_example() {
     );
     assert_eq!(
         account.onboarding_status().await.unwrap(),
-        Some(OnboardingStatus::Unknown("PENDING_REVIEW".into()))
+        Some(OnboardingStatus::Other("PENDING_REVIEW".into()))
     );
     assert_eq!(account.onboarding_status().await.unwrap(), None);
     assert_eq!(t.remaining(), 0);

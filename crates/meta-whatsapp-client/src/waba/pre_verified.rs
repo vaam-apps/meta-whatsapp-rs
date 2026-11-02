@@ -243,7 +243,7 @@ fn check_phone_number(phone_number: &str) -> Result<()> {
 
 /// The filter's wire value: the three values the reference lists, any
 /// other refused before a request.
-fn status_param(status: CodeVerificationStatus) -> Result<&'static str> {
+fn status_param(status: &CodeVerificationStatus) -> Result<&'static str> {
     match status {
         CodeVerificationStatus::Verified => Ok("VERIFIED"),
         CodeVerificationStatus::NotVerified => Ok("NOT_VERIFIED"),
@@ -284,6 +284,7 @@ impl Business {
         }
         let status = query
             .code_verification_status
+            .as_ref()
             .map(status_param)
             .transpose()?;
         Ok(self
@@ -715,7 +716,7 @@ mod tests {
         // A state Meta adds later parses.
         assert_eq!(
             page.data[1].code_verification_status,
-            Some(CodeVerificationStatus::Unknown)
+            Some(CodeVerificationStatus::Other("SOMETHING_NEW".into()))
         );
     }
 
@@ -769,8 +770,9 @@ mod tests {
                 "code_verification_status",
             ),
             (
-                ListPreVerifiedNumbers::new()
-                    .code_verification_status(CodeVerificationStatus::Unknown),
+                ListPreVerifiedNumbers::new().code_verification_status(
+                    CodeVerificationStatus::Other("SOMETHING_NEW".into()),
+                ),
                 "code_verification_status",
             ),
             (ListPreVerifiedNumbers::new().limit(0), "limit"),

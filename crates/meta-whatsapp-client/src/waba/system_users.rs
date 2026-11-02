@@ -8,6 +8,7 @@ use futures::Stream;
 use hmac::{Hmac, Mac};
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::SystemUserId;
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::secret::{AccessToken, AppSecret};
 use meta_whatsapp_core::{Error, Result};
@@ -17,10 +18,10 @@ use sha2::Sha256;
 use super::types::WabaInfo;
 use super::{Business, check_limit, fields_query};
 use crate::request::{paginate_or_error, reject_cursors};
-use crate::templates::macros::string_enum;
 use crate::{Client, GraphRequest};
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A system user's `role`. The Marketing API's
     /// `reference/business/system_users` says the list carries base roles
     /// only, "Admin and Employee" (`ADMIN` and `EMPLOYEE` among the roles it

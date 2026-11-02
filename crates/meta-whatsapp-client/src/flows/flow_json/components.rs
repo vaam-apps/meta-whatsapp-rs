@@ -13,13 +13,13 @@
 
 use std::collections::BTreeMap;
 
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 
 use super::actions::Action;
 use super::dynamic::{Dynamic, TextContent};
 use super::tagged::tagged_union;
-use crate::flows::types::wire_enum;
 
 /// A struct of Flow JSON properties: required ones, optional ones (each with
 /// a setter), and `extra` for the rest.
@@ -140,106 +140,114 @@ tagged_union! {
     }
 }
 
-wire_enum! {
+open_enum! {
+    #![string_only]
     /// `font-weight` of `TextBody` and `TextCaption`.
     pub enum FontWeight {
         /// `bold`.
-        Bold = "bold",
+        Bold => "bold",
         /// `italic`.
-        Italic = "italic",
+        Italic => "italic",
         /// `bold_italic`.
-        BoldItalic = "bold_italic",
+        BoldItalic => "bold_italic",
         /// `normal`.
-        Normal = "normal",
+        Normal => "normal",
     }
 }
 
-wire_enum! {
+open_enum! {
+    #![string_only]
     /// `input-type` of `TextInput`.
     pub enum InputType {
         /// `text`.
-        Text = "text",
+        Text => "text",
         /// `number`.
-        Number = "number",
+        Number => "number",
         /// `email`.
-        Email = "email",
+        Email => "email",
         /// `password`.
-        Password = "password",
+        Password => "password",
         /// `passcode`.
-        Passcode = "passcode",
+        Passcode => "passcode",
         /// `phone`.
-        Phone = "phone",
+        Phone => "phone",
     }
 }
 
-wire_enum! {
+open_enum! {
+    #![string_only]
     /// `label-variant` of `TextInput` and `TextArea` (Flow JSON 7.0+, named
     /// in the changelog).
     pub enum LabelVariant {
         /// `large`: the label above the field, up to four lines.
-        Large = "large",
+        Large => "large",
     }
 }
 
-wire_enum! {
+open_enum! {
+    #![string_only]
     /// `media-size` of the selection components and `NavigationList`.
     pub enum MediaSize {
         /// `regular`.
-        Regular = "regular",
+        Regular => "regular",
         /// `large`.
-        Large = "large",
+        Large => "large",
     }
 }
 
-wire_enum! {
+open_enum! {
+    #![string_only]
     /// `mode` of `CalendarPicker`.
     pub enum CalendarMode {
         /// `single`: one date.
-        Single = "single",
+        Single => "single",
         /// `range`: a start and an end date.
-        Range = "range",
+        Range => "range",
     }
 }
 
-wire_enum! {
+open_enum! {
+    #![string_only]
     /// A day of `CalendarPicker`'s `include-days`.
     pub enum Weekday {
         /// `Mon`.
-        Mon = "Mon",
+        Mon => "Mon",
         /// `Tue`.
-        Tue = "Tue",
+        Tue => "Tue",
         /// `Wed`.
-        Wed = "Wed",
+        Wed => "Wed",
         /// `Thu`.
-        Thu = "Thu",
+        Thu => "Thu",
         /// `Fri`.
-        Fri = "Fri",
+        Fri => "Fri",
         /// `Sat`.
-        Sat = "Sat",
+        Sat => "Sat",
         /// `Sun`.
-        Sun = "Sun",
+        Sun => "Sun",
     }
 }
 
-wire_enum! {
+open_enum! {
+    #![string_only]
     /// `scale-type` of `Image` and `ImageCarousel`.
     pub enum ScaleType {
         /// `cover`: clipped to fill the container.
-        Cover = "cover",
+        Cover => "cover",
         /// `contain`: fitted inside it.
-        Contain = "contain",
+        Contain => "contain",
     }
 }
 
-wire_enum! {
+open_enum! {
+    #![string_only]
     /// `photo-source` of `PhotoPicker`.
     pub enum PhotoSource {
         /// `camera_gallery`: either (the default).
-        CameraGallery = "camera_gallery",
+        CameraGallery => "camera_gallery",
         /// `camera`: take a photo only.
-        Camera = "camera",
+        Camera => "camera",
         /// `gallery`: pick from the gallery only.
-        Gallery = "gallery",
+        Gallery => "gallery",
     }
 }
 

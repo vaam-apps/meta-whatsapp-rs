@@ -1627,7 +1627,7 @@ mod tests {
             200,
             json!({
               "payload_encryption": {"status": "enabled", "cloud_encryption_key": secret},
-              "storage_configuration": {"status": 7, "data_localization_region": secret}
+              "storage_configuration": {"data_localization_region": secret}
             }),
         );
         t.push_json(

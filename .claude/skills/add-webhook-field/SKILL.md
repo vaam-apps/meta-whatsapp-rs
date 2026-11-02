@@ -19,7 +19,11 @@ metadata:
    printed through `meta_whatsapp_core::secret::RedactedUrl`
    (`fields::MediaContent`, `fields::Referral`), or `RedactedPath` when
    the credential is in the path (`fields::GroupUpdate::invite_link`); add
-   its key to `tests/redacted_debug.rs` so a fixture proves it.
+   its key to `tests/redacted_debug.rs` so a fixture proves it. A string
+   property with a documented set of values is a
+   `meta_whatsapp_core::open_enum!` (`Other(String)` keeps a value Meta
+   adds; never a unit `#[serde(other)] Unknown`), listed in
+   `crates/meta-whatsapp-rs/tests/open_enums.rs`.
 3. Map it in the normalizer to a `WebhookEvent` variant carrying `waba_id`,
    `phone_number_id` (if the field has one) and user identity.
 4. Keep the `Unknown { field, raw }` path: an unknown field or type must

@@ -67,7 +67,6 @@
 mod definition;
 mod groups;
 mod info;
-pub(crate) mod macros;
 mod payments;
 mod send;
 mod types;

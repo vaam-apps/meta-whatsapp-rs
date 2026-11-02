@@ -1,20 +1,18 @@
 //! Response types for business phone numbers.
 //!
-//! Every enum here has a catch-all: Meta adds values (messaging limit tiers
-//! are being reworked, v4 Embedded Signup added statuses), and a new value
-//! must never fail a whole `GET`. For the older enums defined here it is a
-//! unit `Unknown`; [`QualityRating`] (shared, from `crate::common`) and the
-//! enums added since ([`SearchVisibility`], and those of the username,
-//! Official Business Account and compliance calls) keep the value in
-//! `Other(String)`, and `QualityRating::Unknown` is Meta's documented
-//! `UNKNOWN` (`OPEN_QUESTIONS.md` #27).
+//! Every enum here is open (`meta_whatsapp_core::open_enum!`): Meta adds
+//! values (messaging limit tiers are being reworked, v4 Embedded Signup
+//! added statuses), and a new value must never fail a whole `GET`, so it
+//! is kept verbatim in the enum's `Other(String)` and serializes back
+//! unchanged. `QualityRating::Unknown` is Meta's documented `UNKNOWN`, a
+//! value like any other (roadmap L20a).
 
 use meta_whatsapp_core::ids::PhoneNumberId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 
 use super::official::OfficialBusinessAccount;
 use crate::common::HealthStatus;
-use crate::templates::macros::string_enum;
 
 /// A WhatsApp Business phone number, as returned by `GET /{PHONE_NUMBER_ID}`
 /// and by the WABA's `phone_numbers` edge.
@@ -108,129 +106,100 @@ pub struct PhoneNumberInfo {
 /// kept in `QualityRating::Other`.
 pub use crate::common::QualityRating;
 
-/// Whether the number's ownership was verified with a code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
-pub enum CodeVerificationStatus {
-    /// Verified.
-    Verified,
-    /// `NOT_VERIFIED` (the phone-number-management reference).
-    NotVerified,
-    /// `UNVERIFIED` (the phone number reference).
-    Unverified,
-    /// The verification expired (pre-verified numbers revert after 90 days).
-    Expired,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
+open_enum! {
+    /// Whether the number's ownership was verified with a code.
+    pub enum CodeVerificationStatus {
+        /// Verified.
+        Verified => "VERIFIED",
+        /// `NOT_VERIFIED` (the phone-number-management reference).
+        NotVerified => "NOT_VERIFIED",
+        /// `UNVERIFIED` (the phone number reference).
+        Unverified => "UNVERIFIED",
+        /// The verification expired (pre-verified numbers revert after 90 days).
+        Expired => "EXPIRED",
+    }
 }
 
-/// Display name review status (`name_status`, `new_name_status`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
-pub enum NameStatus {
-    /// Approved.
-    Approved,
-    /// Usable without review.
-    AvailableWithoutReview,
-    /// Rejected.
-    Declined,
-    /// Certificate expired; cannot be used to register.
-    Expired,
-    /// Under review.
-    PendingReview,
-    /// No certificate; cannot be used to register.
-    None,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
+open_enum! {
+    /// Display name review status (`name_status`, `new_name_status`).
+    pub enum NameStatus {
+        /// Approved.
+        Approved => "APPROVED",
+        /// Usable without review.
+        AvailableWithoutReview => "AVAILABLE_WITHOUT_REVIEW",
+        /// Rejected.
+        Declined => "DECLINED",
+        /// Certificate expired; cannot be used to register.
+        Expired => "EXPIRED",
+        /// Under review.
+        PendingReview => "PENDING_REVIEW",
+        /// No certificate; cannot be used to register.
+        None => "NONE",
+    }
 }
 
-/// Connection status of a business phone number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
-pub enum PhoneNumberStatus {
-    /// Banned.
-    Banned,
-    /// Connected: can send and receive.
-    Connected,
-    /// Deleted.
-    Deleted,
-    /// Disconnected.
-    Disconnected,
-    /// Flagged for low quality.
-    Flagged,
-    /// Migrated.
-    Migrated,
-    /// Pending.
-    Pending,
-    /// Rate limited.
-    RateLimited,
-    /// Restricted.
-    Restricted,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
+open_enum! {
+    /// Connection status of a business phone number.
+    pub enum PhoneNumberStatus {
+        /// Banned.
+        Banned => "BANNED",
+        /// Connected: can send and receive.
+        Connected => "CONNECTED",
+        /// Deleted.
+        Deleted => "DELETED",
+        /// Disconnected.
+        Disconnected => "DISCONNECTED",
+        /// Flagged for low quality.
+        Flagged => "FLAGGED",
+        /// Migrated.
+        Migrated => "MIGRATED",
+        /// Pending.
+        Pending => "PENDING",
+        /// Rate limited.
+        RateLimited => "RATE_LIMITED",
+        /// Restricted.
+        Restricted => "RESTRICTED",
+    }
 }
 
-/// Hosting platform (`platform_type`, `host_platform`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
-pub enum PlatformType {
-    /// Registered for Cloud API.
-    CloudApi,
-    /// On-Premises API (retired).
-    OnPremise,
-    /// Not registered.
-    NotApplicable,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
+open_enum! {
+    /// Hosting platform (`platform_type`, `host_platform`).
+    pub enum PlatformType {
+        /// Registered for Cloud API.
+        CloudApi => "CLOUD_API",
+        /// On-Premises API (retired).
+        OnPremise => "ON_PREMISE",
+        /// Not registered.
+        NotApplicable => "NOT_APPLICABLE",
+    }
 }
 
-/// Messaging limit tier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[non_exhaustive]
-pub enum MessagingLimitTier {
-    /// 50 users per 24h.
-    #[serde(rename = "TIER_50")]
-    Tier50,
-    /// 250 users per 24h.
-    #[serde(rename = "TIER_250")]
-    Tier250,
-    /// 1,000 users per 24h.
-    #[serde(rename = "TIER_1K")]
-    Tier1K,
-    /// 10,000 users per 24h.
-    #[serde(rename = "TIER_10K")]
-    Tier10K,
-    /// 100,000 users per 24h.
-    #[serde(rename = "TIER_100K")]
-    Tier100K,
-    /// Unlimited.
-    #[serde(rename = "TIER_UNLIMITED")]
-    TierUnlimited,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
+open_enum! {
+    /// Messaging limit tier.
+    pub enum MessagingLimitTier {
+        /// 50 users per 24h.
+        Tier50 => "TIER_50",
+        /// 250 users per 24h.
+        Tier250 => "TIER_250",
+        /// 1,000 users per 24h.
+        Tier1K => "TIER_1K",
+        /// 10,000 users per 24h.
+        Tier10K => "TIER_10K",
+        /// 100,000 users per 24h.
+        Tier100K => "TIER_100K",
+        /// Unlimited.
+        TierUnlimited => "TIER_UNLIMITED",
+    }
 }
 
-/// Account mode of a number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-#[non_exhaustive]
-pub enum AccountMode {
-    /// Unverified trial experience.
-    Sandbox,
-    /// Live.
-    Live,
-    /// A value this crate does not know yet.
-    #[serde(other)]
-    Unknown,
+open_enum! {
+    /// Account mode of a number.
+    pub enum AccountMode {
+        /// Unverified trial experience.
+        Sandbox => "SANDBOX",
+        /// Live.
+        Live => "LIVE",
+    }
 }
 
 /// `throughput` object.
@@ -258,7 +227,8 @@ pub struct WebhookConfiguration {
     pub application: Option<String>,
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// Whether the number shows up when WhatsApp users search for businesses
     /// (`search_visibility` of `POST /{Phone-Number-ID}`,
     /// `WAAPIBusinessGlobalSearchStateStatus`).
@@ -270,7 +240,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// `connection_status` of `POST /{Phone-Number-ID}`
     /// (`WhatsAppBusinessAccountToNumberStatus`, "Connection status between
     /// WhatsApp Business Account and phone number"). The reference lists
@@ -365,10 +336,13 @@ mod tests {
         let p: PhoneNumberInfo = serde_json::from_str(v).unwrap();
         assert_eq!(
             p.code_verification_status,
-            Some(CodeVerificationStatus::Unknown)
+            Some(CodeVerificationStatus::Other("SOMETHING_NEW".into()))
         );
         assert_eq!(p.quality_rating, Some(QualityRating::Unknown));
-        assert_eq!(p.messaging_limit_tier, Some(MessagingLimitTier::Unknown));
+        assert_eq!(
+            p.messaging_limit_tier,
+            Some(MessagingLimitTier::Other("TIER_2K".into()))
+        );
         assert_eq!(p.status, Some(PhoneNumberStatus::Connected));
         assert_eq!(p.name_status, Some(NameStatus::AvailableWithoutReview));
         assert_eq!(

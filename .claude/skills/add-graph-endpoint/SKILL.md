@@ -33,14 +33,19 @@ metadata:
    A response link that is its own credential (a token in its query, a
    signed CDN link) is a `common::SecretUrl` (re-export it from the
    family's module), never a `String`: the derived `Debug` would print it.
-   - **Enums Meta may extend** need a catch-all variant so a new value
-     never fails parsing. Which name and shape every enum should share
-     (today there are five, see `OPEN_QUESTIONS.md` #27) and the
-     `#[non_exhaustive]` policy (#28) are undecided: follow the module you
-     are in, and **do not add a unit `#[serde(other)] Unknown`**. It drops
-     Meta's value, and if the enum also derives `Serialize` it writes its
-     own name back instead. The value-keeping macros are `open_enum!`
-     (meta-whatsapp-webhooks), `string_enum!` (templates) and `wire_enum!` (flows).
+   - **Enums Meta may extend** are written with
+     `meta_whatsapp_core::open_enum!` (`use meta_whatsapp_core::open_enum;`,
+     `Variant => "WIRE" | "ALIAS"`, options `#![case_insensitive]`,
+     `#![normalize = fn]`, `#![string_only]`; its module docs say when
+     each applies): any value the docs do not list lands in
+     `Other(String)`, verbatim, and serializes back unchanged
+     (roadmap L20a). Never hand-write one, and
+     **never a unit `#[serde(other)] Unknown`**: it drops Meta's value and
+     writes its own name back. A documented `UNKNOWN` is an ordinary
+     variant; a documented `OTHER` is named after what it is
+     (`FlowCategory::OtherCategory`). Add the new enum to the list in
+     `crates/meta-whatsapp-rs/tests/open_enums.rs`, which fails until you
+     do.
 4. **Method** on the module's API struct. Paths containing an id are built
    **only** with the segment API `self.client.get_at/post_at/delete_at(&[..])`
    — never `client.post(&format!("{}/…", id))`: `GraphEndpoint::url` splits

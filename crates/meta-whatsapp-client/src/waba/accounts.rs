@@ -4,12 +4,13 @@
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{FundingId, WabaId};
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 
 use super::Business;
-use crate::templates::macros::string_enum;
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// The type of a WhatsApp Business Account (`WhatsAppBusinessType` in
     /// `reference/business/whatsapp-business-accounts-api`). Any other value
     /// is kept verbatim.

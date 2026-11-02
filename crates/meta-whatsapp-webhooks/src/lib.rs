@@ -98,7 +98,6 @@ pub mod dedup;
 pub mod event;
 pub mod fields;
 pub mod handler;
-pub(crate) mod open_enum;
 pub mod payload;
 pub(crate) mod redact;
 pub(crate) mod serde_ext;

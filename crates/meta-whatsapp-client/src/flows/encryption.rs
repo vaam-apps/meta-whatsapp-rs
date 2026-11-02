@@ -15,9 +15,9 @@
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::PhoneNumberId;
+use meta_whatsapp_core::open_enum;
 use serde::Deserialize;
 
-use super::types::wire_enum;
 use crate::Client;
 
 /// Business public key of one phone number. See [`Client::business_encryption`].
@@ -42,13 +42,13 @@ impl Client {
     }
 }
 
-wire_enum! {
+open_enum! {
     /// Whether Meta's signature over the stored public key checks out.
     pub enum PublicKeySignatureStatus {
         /// The stored key is signed and the signature verifies.
-        Valid = "VALID",
+        Valid => "VALID",
         /// The signature does not match the key; upload the key again.
-        Mismatch = "MISMATCH",
+        Mismatch => "MISMATCH",
     }
 }
 
