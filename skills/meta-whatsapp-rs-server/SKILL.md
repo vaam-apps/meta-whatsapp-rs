@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs a8af9415a0771c8e6266c5b52f359898f79fdabf (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 6212e52b3510e55f2a927bb99dcea2642fe03be3 (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -15,13 +15,13 @@ Your app is not Rust and reaches WhatsApp through meta-whatsapp-server:
 you deploy it, hold its keys, call its /v1 API and handle its errors.
 Rust code uses the library directly (`meta-whatsapp-rs`).
 
-## What the service does today (milestones M1a to M1c, M2a and M3c)
+## What the service does today (milestones M1a to M1c, M2a, M2b and M3c)
 
-Live events (SSE), webhooks to your backend and Embedded Signup do not
-exist yet: write no code against them. The rest does, by skill: sends,
-media, templates, the inbox (`meta-whatsapp-rs-server-send`), Meta's
-webhooks and polling (`meta-whatsapp-rs-server-events`), login codes
-(`meta-whatsapp-rs-server-otp`).
+Webhooks to your backend and Embedded Signup do not exist yet: write no
+code against them. The rest does, by skill: sends, media, templates, the
+inbox (`meta-whatsapp-rs-server-send`), Meta's webhooks, polling, one
+event by id and live events (`meta-whatsapp-rs-server-events`), login
+codes (`meta-whatsapp-rs-server-otp`).
 
 | Route | Needs | Does |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ webhooks and polling (`meta-whatsapp-rs-server-events`), login codes
 | `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `websites`, `vertical`) |
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
 | `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, `GET /v1/numbers/{pn}/conversations`, … | scopes `send`, `media`, `templates`, `inbox` | sends, media, templates, the inbox: `meta-whatsapp-rs-server-send` |
-| `GET /v1/events` | scope `events` | Meta's webhook events for the tenant, after a cursor: `meta-whatsapp-rs-server-events` |
+| `GET /v1/events`, `GET /v1/events/{id}`, `GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream` | scope `events` | Meta's webhook events for the tenant, after a cursor, by id or live (Server-Sent Events): `meta-whatsapp-rs-server-events` |
 | `POST /v1/otp/issue`, `POST /v1/otp/verify` | scope `otp` | login codes over WhatsApp: `meta-whatsapp-rs-server-otp` |
 | `POST /v1/admin/tenants`, `POST /v1/admin/tenants/{id}/keys`, `POST /v1/admin/platform-keys` | admin key | tenants and keys |
 | `POST /v1/admin/tenants/{id}/wabas`, `GET /v1/admin/wabas/{waba_id}`, `DELETE /v1/admin/wabas/{waba_id}/binding` | admin key | attach the platform's own WABA (numbers listed by Meta, app subscribed); who holds one; unbind it (token deleted too) |
