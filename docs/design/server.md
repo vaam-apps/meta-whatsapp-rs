@@ -817,7 +817,7 @@ records them for tenants too).
   HMAC-SHA256, under HMAC-SHA256(`WA_OTP_PEPPER`,
   `meta-whatsapp-server/otp-shared-limit/v1`), of the number's id and
   the recipient's digits: no phone number in a key; both names are
-  stored names pending the owner's confirmation (D50). The design's verify
+  stored names pending the owner's confirmation (D59). The design's verify
   takes the phone number and purpose (the library's `verify` is keyed
   so), not the challenge id, so another tenant's code answers `200
   not_found`, the namespace's answer.
@@ -1993,8 +1993,7 @@ delegation (D30–D35, with the changes to D10 that day, came out of the
 reviews of roadmap L5), as are the changes to D15 (widened), D16 (the
 gate) and D18 (revised) that day. D38 is the coordinator's of 2026-11-01
 (roadmap L8). D45–D49 are the coordinator's of 2026-11-01 (roadmap
-M3c); D50 is proposed by M3c's review and waits for the coordinator's
-decision. D20's (a), a licence, is the owner's: roadmap S10
+M3c), D59 the coordinator's of 2026-11-01 on M3c's review. D20's (a), a licence, is the owner's: roadmap S10
 asks for it. D5 is settled as "support both modes, chosen per
 deployment"; which mode a production deployment runs follows the
 platform's agreements with Meta (partner status, who pays), so that
@@ -2045,7 +2044,7 @@ choice stays the owner's.
 | D47 | An OTP issue's idempotency fingerprint, whose body names a phone number | SHA-256 of the canonical input, as every other operation (D27) / keyed with the OTP pepper | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: keyed with the pepper**, an HMAC-SHA256 under HMAC-SHA256(`WA_OTP_PEPPER`, `meta-whatsapp-server/otp-fingerprint/v1`) of the canonical input's SHA-256, since section 6 keeps numbers only as keyed hashes. The label is a stored name, pending the owner's confirmation (architecture.md § Stable identifiers). Rotating the pepper makes a repeat within the TTL `422 idempotency_key_reused`, never a second code. To swap, the fingerprint the API adapter hands the core (`idempotency::Fingerprint::issue_otp`; another adapter passes its own) | M3 |
 | D48 | Where the admin sets a tenant's OTP settings | `PATCH /v1/admin/tenants/{id}` (section 4.2) / a resource of their own | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: a resource of their own**, `GET`, `PUT`, `DELETE /v1/admin/tenants/{id}/otp`, replaced whole after their checks, so a tenant's read stays one row and `PATCH` keeps its fields. To swap, the routes, the API adapter's (the core's `admin::Admin::set_otp_settings` and `clear_otp_settings` stay); adding `otp` to `PATCH` later would be additive | M3 |
 | D49 | The purpose of an OTP request that names none | required / a default | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable: `login`.** A purpose is hashed into the code's store key, so changing the default strands the codes in flight (10 minutes by default), nothing else. To swap, the constant `otp::DEFAULT_PURPOSE` (a caller can always name its own) | M3 |
-| D50 | How many codes one recipient gets from the default OTP tenant's number, which every tenant without settings sends from (M3c's review: the library's issue limit is per namespace, so N tenants, or N purposes, could send one recipient N times it, on the platform's bill) | per tenant and purpose only (as M3c built it) / one limit per (sending number, recipient), shared by every tenant and purpose sending from the default tenant's number | **Proposed by M3c's review, the coordinator's to decide**: shared, the default tenant's own `issue_limit` per recipient, reserved before the library's call and given back when nothing was sent ([§4.7](#47-otp)); the cost, documented: one tenant's codes count against every borrower's, which a tenant with its own number avoids. Pending the owner's confirmation, as stored names: the key/value namespace `wa_server.otp.shared_rate` and the HMAC label `meta-whatsapp-server/otp-shared-limit/v1`. No setting swaps it yet: a setting for its limit, apart from the default tenant's `issue_limit`, would be its swap | M3 |
+| D59 | How many codes one recipient gets from the default OTP tenant's number, which every tenant without settings sends from (M3c's review: the library's issue limit is per namespace, so N tenants, or N purposes, could send one recipient N times it, on the platform's bill) | per tenant and purpose only (as M3c built it) / one limit per (sending number, recipient), shared by every tenant and purpose sending from the default tenant's number | **Coordinator's decision 2026-11-01 under the owner's delegation, swappable (the setting roadmap M3g adds), as M3c's review proposed**: shared, the default tenant's own `issue_limit` per recipient, reserved before the library's call and given back when nothing was sent ([§4.7](#47-otp)); the cost, documented: one tenant's codes count against every borrower's, which a tenant with its own number avoids. Pending the owner's confirmation, as stored names: the key/value namespace `wa_server.otp.shared_rate` and the HMAC label `meta-whatsapp-server/otp-shared-limit/v1`. No setting swaps it yet: a setting for its limit, apart from the default tenant's `issue_limit`, would be its swap | M3 |
 
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** The
 questions the service inherits were decided on 2026-09-26 under the same

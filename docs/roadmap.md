@@ -4392,7 +4392,7 @@ design's (§9).
     (`otp::SharedLimit` on the bundle's `KvStore`, namespace
     `wa_server.otp.shared_rate`, the key an HMAC of the number and the
     recipient under a key derived from the pepper; reserved before the
-    library's call, given back when nothing was sent; design D50,
+    library's call, given back when nothing was sent; design D59,
     proposed). A failed OTP send logged Meta's texts at `debug`, as
     every route does, and they can quote the template's parameter, the
     code: withheld at every level on the OTP route
@@ -4419,7 +4419,11 @@ design's (§9).
   accepts Meta's zero-tap terms (`zero_tap_terms_accepted`, a terms
   acknowledgement: a legal act, § Owner touchpoints), and `GET
   /v1/wabas/{waba_id}/templates/authentication/previews` over the
-  library's `Authentication::previews`.
+  library's `Authentication::previews`; a setting that swaps D59's
+  shared issue limit on the default OTP tenant's number for the
+  library's per-namespace one; and a borrowed send's delivery statuses
+  (which carry the recipient's number) routed to the borrowing tenant
+  rather than the default tenant.
   - **After:** M3c.
   - **Decisive:** with the deployment's setting off, a zero-tap creation
     makes no request to Meta; on, one request and one audit event; a

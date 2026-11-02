@@ -543,7 +543,7 @@ stored data, the owner's).
   holder's, is the new `409 otp_not_configured`. On the default tenant's
   number, its issue limit per recipient is shared by every tenant and
   purpose sending from it (`wa_server.otp.shared_rate`, keyed by an HMAC
-  of the number and the recipient under `WA_OTP_PEPPER`; design D50,
+  of the number and the recipient under `WA_OTP_PEPPER`; design D59,
   proposed), so N tenants cannot send one recipient N times the limit;
   `doctor` warns (`otp.default_tenant`) when `WA_SERVER_OTP_DEFAULT_TENANT`
   names a tenant missing, suspended, without settings or no longer
