@@ -2982,6 +2982,7 @@ name = "meta-whatsapp-server-api-cratestack"
 version = "0.1.0"
 dependencies = [
  "cratestack-api",
+ "futures",
  "meta-whatsapp-rs",
  "meta-whatsapp-server-http",
  "pretty_assertions",

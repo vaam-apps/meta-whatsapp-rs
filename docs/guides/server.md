@@ -68,8 +68,10 @@ providers in, `ring` through CrateStack's HTTP client, and rustls cannot
 choose between them by itself. An integrator who runs the service from
 their own binary without `cli::run_with` calls
 `tls::install_default_provider()` first, or installs the provider they
-prefer before it. Postgres TLS is unaffected: sqlx names its provider
-itself (aws-lc-rs).
+prefer before it; the rustdoc of `serve::serve` and its siblings says so
+too. Postgres TLS needs it as well in that build: sqlx names its
+provider itself (aws-lc-rs), but with `sslmode=verify-ca` it builds the
+certificate verifier from the process default, and panics without one.
 
 A production binary without memory storage, or a development one
 without sqlx in its build:

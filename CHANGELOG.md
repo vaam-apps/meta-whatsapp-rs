@@ -232,7 +232,10 @@ stored data, the owner's).
   - `deny.toml`: BlueOak-1.0.0 allowed for `minicbor` and
     `minicbor-serde` only, as two `[[licenses.exceptions]]` entries, not
     in `allow` (D20 (a), the owner's yes of 2026-11-02). `just deny`
-    passes, and fails on those two crates when the entries are removed.
+    passes, and fails on those two crates when the entries are removed;
+    the adapter's `tests/licence_scope.rs` fails when the licence is
+    widened (into `allow`, to a third crate, or beside another licence),
+    which `just deny` would pass.
   - The workspace manifest: `cratestack-api` 0.17 (`~0.17.2`, under the
     key `cratestack`, no default features but `codec-json`), CrateStack's
     facade for `db = None` schemas, which brings no sqlx.
@@ -251,7 +254,14 @@ stored data, the owner's).
     (`ring` through CrateStack's HTTP client), and `ClientConfig::builder()`
     would panic. `tests/tls.rs` proves the panic before start-up and the
     build after it, and Postgres with `sslmode=require` in the same
-    binary (live).
+    binary (live). sqlx builds its `sslmode=verify-ca` verifier from the
+    process default, so without the install that mode panics in such a
+    build: `tests/tls_verify_ca.rs` (live) proves the panic and the
+    verified, encrypted connection after the install. The `serve::serve*`
+    functions and `serve::connect` say in their rustdoc to call the
+    install first when the command line does not.
+  - The deploy image's build context leaves out `.test-tls/`, the
+    test-only TLS material (`deploy/compose/Dockerfile.dockerignore`).
   - The test Postgres (`compose.test.yaml`, the devcontainer) speaks
     TLS on the test-only certificate of `tools/test-tls/generate.sh`.
   - Pending the owner's confirmation before the first release: the

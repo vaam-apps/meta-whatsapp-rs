@@ -31,7 +31,9 @@ test:
 # The MongoDB URL (roadmap S8) is a single-node replica set's, with
 # `directConnection=true`: the set's member address is the container's own.
 # The Postgres must speak TLS (roadmap S10: the service's tests/tls.rs
-# connects with `sslmode=require`); compose.test.yaml's and the
+# connects with `sslmode=require`, and tests/tls_verify_ca.rs with
+# `sslmode=verify-ca` against META_WHATSAPP_RS_TEST_REDISS_CA, the test CA
+# that signs its certificate too); compose.test.yaml's and the
 # devcontainer's do. META_WHATSAPP_RS_REQUIRE_LIVE=1 turns a missing service into a failure
 # instead of a skip.
 test-live:

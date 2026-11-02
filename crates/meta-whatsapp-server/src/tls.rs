@@ -12,11 +12,19 @@
 //! constructed, installs `ring` as the default if nothing did first (which
 //! the Graph client's reqwest would then use).
 //!
+//! sqlx names its provider itself (aws-lc-rs here; `ring` in a build with
+//! CrateStack's sqlx crate, until upstream U2), except in one place: with
+//! `sslmode=verify-ca` (the server's certificate checked against the CA,
+//! not its host name) it builds the certificate verifier from the process
+//! default, so in a build with both providers and none installed, every
+//! connection to the database panics, the migrations' included.
+//!
 //! So the command line installs aws-lc-rs as the process default before
 //! anything else ([`crate::cli::run_with`], for every command), and every
 //! crate that takes the default gets the provider the rest of the tree
-//! uses. sqlx is unaffected: it names its provider itself (aws-lc-rs here;
-//! `ring` in a build with CrateStack's sqlx crate, until upstream U2).
+//! uses. An integrator who starts the service without the command line
+//! ([`crate::serve::serve`] and its siblings, or `serve::connect`)
+//! calls [`install_default_provider`] first.
 //!
 //! To swap the provider, install another one before the command line runs:
 //! [`install_default_provider`] keeps a default that is already installed.

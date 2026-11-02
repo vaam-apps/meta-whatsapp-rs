@@ -29,6 +29,7 @@ meta-whatsapp-server-http.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+futures.workspace = true
 pretty_assertions.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }

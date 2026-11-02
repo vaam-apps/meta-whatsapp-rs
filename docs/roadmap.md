@@ -33,11 +33,14 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
   § Decisions. What stays the owner's is listed in
   [§ Owner touchpoints](#owner-touchpoints).
 - **Routes.** Every new route calls a core service, so both API adapters
-  stay thin, and lands in both adapters in the same PR once
-  `meta-whatsapp-server-api-cratestack` exists (S10). A route that lands
-  before S10 goes into `meta-whatsapp-server-api-axum`, and S13 carries it
-  over: its groups cover every route that adapter has when S13 starts.
-  `api-axum` is permanent, the swap target (design D26).
+  stay thin, and lands in both adapters in the same PR from S13 on
+  (**Coordinator's decision 2026-11-02 under the owner's delegation,
+  swappable**: S10 made `meta-whatsapp-server-api-cratestack` with one
+  procedure, served by nothing, so the rule starts when S13 serves it;
+  to swap, start it at another item). A route that lands before S13
+  goes into `meta-whatsapp-server-api-axum`, and S13 carries it over: its
+  groups cover every route that adapter has when S13 starts. `api-axum`
+  is permanent, the swap target (design D26).
 
 ## Order
 
@@ -1478,13 +1481,89 @@ the defaults stay `api-axum` and `store-postgres`.
     devcontainer speaks TLS, on the test-only server certificate of
     `tools/test-tls/generate.sh` (copied to a 0600 key in the container
     first), and still accepts plain connections. `just features` checks
-    the new crate alone and the binary with `api-cratestack`.
-  - **Proposed** (for the coordinator to decide, AGENTS.md § Decisions;
-    each swappable): the procedure (`version`, mirroring an existing
-    no-key route); the adapter's `router(ApiVersion)` signature (S13
-    moves it to the state and its grant); the install in `cli::run_with`,
-    keeping a provider already installed; the 1 KiB body bound; the
-    re-export rather than serving the router before S13.
+    the new crate alone and the binary with `api-cratestack`. *From the
+    sabotage review (2026-11-02)*: sqlx does read the process default in
+    one place, `sslmode=verify-ca`, whose certificate verifier
+    (`WebPkiServerVerifier::builder`) takes it, so in a build with both
+    providers and none installed every database connection panics, the
+    migrations' included; `tests/tls_verify_ca.rs`
+    (`live_postgres_sslmode_verify_ca_needs_the_process_default`, its own
+    binary) shows that panic, then connects, encrypted and verified
+    against the test CA, after `install_default_provider` (removing the
+    install fails it; `sslmode=require` in its place fails it too). The
+    `serve::serve*` functions and `serve::connect` say in their rustdoc
+    to call the install first. `tests/licence_scope.rs` in the new crate
+    reads `deny.toml` and fails when BlueOak-1.0.0 is widened: moved into
+    `allow`, excepted for a third crate, or excepted with another
+    licence (`just deny` passes all three). The adapter's tests pin the
+    body bound to the byte (1024 read, 1025 refused) and on a streamed
+    body with no `content-length`, and the `CODEC_ERROR` body exactly
+    (no parser text). The deploy image's build context leaves out
+    `.test-tls/` (`deploy/compose/Dockerfile.dockerignore`).
+  - **Decided** (AGENTS.md § Decisions; each swappable):
+    - The procedure. **Coordinator's decision 2026-11-02 under the
+      owner's delegation, swappable**: `version`, mirroring
+      `GET /v1/version`'s fields and its no-key access (`@allow(true)`),
+      so it exposes nothing that route does not. To swap, edit
+      `schema/api.cstack`; the wire name and fields stay pending the
+      owner (below).
+    - The router. **Coordinator's decision 2026-11-02 under the owner's
+      delegation, swappable**: `router(ApiVersion)`. To swap, S13 moves
+      it to the state and its grant.
+    - The provider install. **Coordinator's decision 2026-11-02 under
+      the owner's delegation, swappable**: at the top of
+      `cli::run_with` only, keeping a provider already installed, which
+      is the swap (install another before the command line runs). A
+      direct `serve::serve*` caller calls
+      `tls::install_default_provider()` first, as the guide and the
+      `serve` functions' rustdoc say.
+    - The body bound. **Coordinator's decision 2026-11-02 under the
+      owner's delegation, swappable**: 1 KiB. To swap, change
+      `BODY_LIMIT_BYTES` (one constant, the router's only bound).
+    - Serving. **Coordinator's decision 2026-11-02 under the owner's
+      delegation, swappable**: re-exported as
+      `meta_whatsapp_server::api_cratestack`, not served; serving it,
+      and the setting that picks an adapter, come in S13.
+    - The pin. **Coordinator's decision 2026-11-02 under the owner's
+      delegation, swappable**: `~0.17.2`, one minor (S12 adds the test
+      that keeps every `cratestack*` requirement to one minor). To swap,
+      an upgrade PR moves the requirement.
+    - The test Postgres. **Coordinator's decision 2026-11-02 under the
+      owner's delegation, swappable**: `compose.test.yaml`'s and the
+      devcontainer's always speak TLS (plain connections still
+      accepted). To swap, drop the `entrypoint` and the TLS volume from
+      both; the `sslmode` tests then fail, as they should.
+    - The two-adapter rule. **Coordinator's decision 2026-11-02 under
+      the owner's delegation, swappable**: every new route lands in both
+      adapters from S13 on, not from S10 (the adapter serves nothing
+      before S13); a route landing before S13 goes into `api-axum`, and
+      S13 carries it over (§ Routes above).
+  - **Left, and why:** CrateStack's HTTP client,
+    `cratestack-client-rust`, is a non-optional dependency of
+    `cratestack-api` 0.17.2 (no feature of the facade drops it), so a
+    server-side build links its reqwest, rustls with `ring`, and
+    `minicbor-serde`, though the service never constructs a client;
+    dropping it needs an upstream change (a feature on `cratestack-api`
+    making the client optional), not yet filed. `cratestack-api` also
+    links its schema parser (`cratestack-parser`, on `chumsky`), which
+    brings the only duplicate versions S10 adds (`hashbrown` 0.15 and
+    `foldhash` 0.1, warnings under `just deny`'s bans). The supply chain
+    as reviewed: every `cratestack*` crate is published by its one
+    crates.io owner, the repository owner of
+    [cratestack/cratestack](https://github.com/cratestack/cratestack),
+    the one design §8 names, under MIT, checksums as `Cargo.lock`
+    records; none has a build script; the proc-macro
+    (`cratestack-macros`) reads the schema file (and a contract lock,
+    unused here) under the crate's manifest directory and nothing else,
+    no network and no process. The new build scripts elsewhere probe
+    `rustc --version` (`erased-serde`, `typeid`) or build for Haiku
+    only (`iana-time-zone-haiku`, not compiled on Linux). The refusals
+    the generated router answers come in three shapes, none of ours:
+    CrateStack's `{code, message, details}` for `400` and `415` (whose
+    message lists `application/cbor` as accepted, though a CBOR body is
+    refused), and axum's plain text for `406` and `413`; an argument
+    the procedure does not declare is ignored, not refused. All of this
+    changes with S13 and U1.
   - **Pending the owner** (names before the first release): the
     feature `api-cratestack`, the crate name
     `meta-whatsapp-server-api-cratestack`, and the procedure's wire name
@@ -1501,8 +1580,8 @@ the defaults stay `api-axum` and `store-postgres`.
     the first.
 - [ ] **S12. A CrateStack upgrade cadence** (the workspace manifest, a
   scheduled CI job): the `cratestack*` crates pinned to one minor
-  (`~0.13` when this was written; S10 pinned `cratestack-api` to
-  `~0.17.2`) and to one version between them; a weekly job that opens an
+  (`~0.17`: S10 pinned `cratestack-api` to `~0.17.2`) and to one
+  version between them; a weekly job that opens an
   issue when CrateStack releases a new minor; one upgrade PR per
   release, through the review pipeline.
   - **After:** S10.
@@ -1511,7 +1590,7 @@ the defaults stay `api-axum` and `store-postgres`.
     CrateStack crates are pinned to different versions.
 - [ ] **S13. `meta-whatsapp-server-api-cratestack` parity** (one PR per
   resource group: numbers, messages and media, templates, events,
-  admin, and each group added before S10): `api.cstack` with
+  admin, and each group added before S13): `api.cstack` with
   `db = None`, REST (D19), procedures calling the core's services.
   - **After:** S10.
   - **Decisive:** the authorization (M1.3), error (M1.5) and idempotency
@@ -4465,7 +4544,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
 Re-scoped on the modular architecture (design §8, §9). Each item's
 routes are `meta-whatsapp-server-core` services exposed through both API
 adapters (`meta-whatsapp-server-api-axum`, and
-`meta-whatsapp-server-api-cratestack` once S10 exists; streaming routes
+`meta-whatsapp-server-api-cratestack` from S13 on, § Routes; streaming routes
 through `meta-whatsapp-server-http`), and run against every backend the
 conformance suite covers. The acceptance tests M2.1–M5.3 are the
 design's (§9).

@@ -131,8 +131,11 @@ async fn a_bad_or_oversized_body_is_refused() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    let error: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(error["code"], "CODEC_ERROR");
+    // CrateStack's shape, and nothing of the parser's own message.
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).unwrap(),
+        json!({ "code": "CODEC_ERROR", "message": "invalid request payload", "details": null })
+    );
 
     let padding = "x".repeat(BODY_LIMIT_BYTES);
     let oversized = serde_json::to_vec(&json!({ "args": {}, "padding": padding })).unwrap();
@@ -192,4 +195,54 @@ fn the_exported_schema_declares_version_alone() {
     let procedures: Vec<&str> = schema.procedures.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(procedures, ["version"]);
     assert!(schema.models.is_empty());
+}
+
+/// A JSON object of exactly `len` bytes: `{`, spaces, `}`.
+fn body_of(len: usize) -> Vec<u8> {
+    let mut body = vec![b' '; len];
+    body[0] = b'{';
+    body[len - 1] = b'}';
+    body
+}
+
+/// The bound is [`BODY_LIMIT_BYTES`], to the byte: a body of exactly that
+/// length is read, one byte more is refused before the procedure runs.
+#[tokio::test]
+async fn the_body_bound_is_exact() {
+    assert_eq!(BODY_LIMIT_BYTES, 1024);
+    let (status, _, bytes) = call(
+        Method::POST,
+        "/$procs/version",
+        "application/json",
+        body_of(BODY_LIMIT_BYTES),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&bytes)
+    );
+    let (status, _, _) = call(
+        Method::POST,
+        "/$procs/version",
+        "application/json",
+        body_of(BODY_LIMIT_BYTES + 1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// A body with no `content-length` (chunked) is bounded while it streams,
+/// not trusted by its declared size.
+#[tokio::test]
+async fn a_streamed_body_past_the_bound_is_refused() {
+    let chunks = (0..=BODY_LIMIT_BYTES / 64).map(|_| Ok::<_, std::io::Error>(vec![b' '; 64]));
+    let request = Request::post("/$procs/version")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from_stream(futures::stream::iter(chunks)))
+        .unwrap();
+    assert!(request.headers().get(header::CONTENT_LENGTH).is_none());
+    let response = router(ApiVersion::DEFAULT).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }

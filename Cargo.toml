@@ -151,7 +151,7 @@ redis = { version = "1", default-features = false }
 # provider, never the process default. The versions reqwest resolves. The
 # service's binary (roadmap S10) uses rustls only to install aws-lc-rs as
 # that process default at start, for the crates that build from it.
-rustls ={ version = "0.23", default-features = false }
+rustls = { version = "0.23", default-features = false }
 tokio-rustls = { version = "0.26", default-features = false }
 rustls-platform-verifier = "0.7"
 # Test-only: the certificates of the in-process TLS servers in

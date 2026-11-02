@@ -82,8 +82,9 @@ impl Env for Vars {
 /// Decisive (S10): Postgres with `sslmode=require` in this build, through
 /// the service's own configuration and pool (`config::database`,
 /// `serve::connect`). sqlx names its provider itself (aws-lc-rs in this
-/// tree: CrateStack's `db = None` facade brings no sqlx), so its TLS does
-/// not depend on the process default, installed or not.
+/// tree: CrateStack's `db = None` facade brings no sqlx), so its TLS in
+/// this mode does not depend on the process default, installed or not;
+/// `sslmode=verify-ca` does (tests/tls_verify_ca.rs).
 #[tokio::test]
 async fn live_postgres_sslmode_require_with_both_providers_linked() {
     let Some(url) = common::postgres_url() else {
