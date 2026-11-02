@@ -18,6 +18,7 @@
 //! | [`inbox`] | the inbox operations as services: a number's conversations and one conversation's history, from its binding's start on (decision D10: a moved number's history hidden from its new tenant, never purged), and a reply through the library's inbox, checked against the 24-hour window and the thread's owner first ([`inbox::ReplyChecksByNumber`]: the checks per number) |
 //! | [`templates`] | the template operations as services: the list (cached per WABA, [`templates::TemplateCache`]), the lookup of an id in a WABA, creation (the definition checked first), authentication templates in one or more languages, deletion |
 //! | [`otp`] | one-time passcodes as services, through the library's `OtpService`: a code sent from the tenant's sending number (its own, or the deployment's default OTP tenant's: decision D8), under the tenant's namespace, and a typed code checked |
+//! | [`signup`] | Embedded Signup as services, over the library's `EmbeddedSignup`: an attempt bound to the tenant, its completion (decision D4 on the claimed WABA, then in the library's approval, before anything is stored, subscribed or shared), the kept attempts and their resumption, in both partner modes; offboarding (a tenant's disconnection and `account_update` webhooks, the credit line revoked first), and the operator's explicit re-funding of a revoked business |
 //! | [`request`] | what the requests share: a Meta object read into the library's type, no key dropped; a Meta object id checked before it reaches a Graph path |
 //! | [`keys`] | the API key format, digests, constant-time comparison |
 //! | [`error`] | the error model as data: codes, statuses as numbers, `retryable`, `may_have_been_sent`, Meta's `details` |
@@ -84,6 +85,7 @@ pub mod otp;
 pub mod outbox;
 pub mod ratelimit;
 pub mod request;
+pub mod signup;
 pub mod store;
 pub mod templates;
 

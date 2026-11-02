@@ -25,9 +25,9 @@ use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
-    IdempotencyRecord, IdempotencyState, KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus,
-    NumberTombstone, OtpSettings, PageRequest, Tenant, TenantId, TenantStatus, WabaBinding,
-    WabaTombstone,
+    IdempotencyRecord, IdempotencyState, KeyScope, Listing, NewApiKey, NewSignupAttempt,
+    NumberBinding, NumberStatus, NumberTombstone, OtpSettings, PageRequest, SignupAttempt, Tenant,
+    TenantId, TenantStatus, VaultEntry, WabaBinding, WabaTombstone,
 };
 use meta_whatsapp_server_core::notify::{EventNotifier, LocalNotifier};
 use meta_whatsapp_server_core::outbox::{
@@ -52,6 +52,11 @@ pub struct State {
     number_tombstones: BTreeMap<String, NumberTombstone>,
     /// Each tenant's OTP settings, stored (roadmap M3c: the otp suite).
     otp_settings: BTreeMap<String, serde_json::Value>,
+    /// Signup attempts by WABA, gone with their binding (roadmap M3a: the
+    /// signup suite).
+    signup_attempts: BTreeMap<String, SignupAttempt>,
+    /// The vault's records kept past a binding, by key (roadmap M3a).
+    vault_entries: BTreeMap<String, VaultEntry>,
 }
 
 /// Release the bound numbers of `waba_id` that `keep` does not list, each
@@ -79,6 +84,7 @@ fn unbind(state: &mut State, waba_id: &WabaId) -> bool {
         return false;
     };
     release(state, waba_id, &[], OffsetDateTime::now_utc());
+    state.signup_attempts.remove(waba_id.as_str());
     state.tombstones.insert(
         waba_id.as_str().to_owned(),
         WabaTombstone::of(&binding, OffsetDateTime::now_utc()),
@@ -387,6 +393,121 @@ impl RecordStore for Records {
             }
         }
         Ok(true)
+    }
+    async fn set_credit_allocation_if(
+        &self,
+        epoch: &BindingEpoch,
+        allocation_config_id: &str,
+    ) -> StoreResult<bool> {
+        let mut state = self.state();
+        match state.wabas.get_mut(epoch.waba_id.as_str()) {
+            Some(binding) if binding.epoch() == *epoch => {
+                binding.credit_allocation_id = Some(allocation_config_id.to_owned());
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+    async fn save_signup_attempt(&self, attempt: &NewSignupAttempt) -> StoreResult<bool> {
+        let mut state = self.state();
+        let bound = state
+            .wabas
+            .get(attempt.waba_id.as_str())
+            .is_some_and(|w| w.tenant_id == attempt.tenant_id);
+        if !bound {
+            return Ok(false);
+        }
+        let now = OffsetDateTime::now_utc();
+        let created_at = state
+            .signup_attempts
+            .get(attempt.waba_id.as_str())
+            .filter(|kept| kept.tenant_id == attempt.tenant_id)
+            .map_or(now, |kept| kept.created_at);
+        state.signup_attempts.insert(
+            attempt.waba_id.as_str().to_owned(),
+            SignupAttempt {
+                tenant_id: attempt.tenant_id.clone(),
+                waba_id: attempt.waba_id.clone(),
+                failed_step: attempt.failed_step.clone(),
+                session: attempt.session.clone(),
+                finish_kind: attempt.finish_kind.clone(),
+                created_at,
+                updated_at: now,
+            },
+        );
+        Ok(true)
+    }
+    async fn signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<Option<SignupAttempt>> {
+        Ok(self
+            .state()
+            .signup_attempts
+            .get(waba_id.as_str())
+            .filter(|a| &a.tenant_id == tenant)
+            .cloned())
+    }
+    async fn signup_attempts(
+        &self,
+        tenant: &TenantId,
+        page: &PageRequest,
+    ) -> StoreResult<Listing<SignupAttempt>> {
+        let items: Vec<SignupAttempt> = self
+            .state()
+            .signup_attempts
+            .iter()
+            .filter(|(id, a)| {
+                &a.tenant_id == tenant
+                    && page
+                        .after
+                        .as_deref()
+                        .is_none_or(|after| id.as_str() > after)
+            })
+            .take(page.limit + 1)
+            .map(|(_, a)| a.clone())
+            .collect();
+        Ok(listing(items, page.limit, |a| {
+            a.waba_id.as_str().to_owned()
+        }))
+    }
+    async fn delete_signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<bool> {
+        let mut state = self.state();
+        let theirs = state
+            .signup_attempts
+            .get(waba_id.as_str())
+            .is_some_and(|a| &a.tenant_id == tenant);
+        if theirs {
+            state.signup_attempts.remove(waba_id.as_str());
+        }
+        Ok(theirs)
+    }
+    async fn record_vault_entry(&self, entry: &VaultEntry) -> StoreResult<()> {
+        self.state()
+            .vault_entries
+            .entry(entry.key())
+            .or_insert_with(|| entry.clone());
+        Ok(())
+    }
+    async fn vault_entries(&self, page: &PageRequest) -> StoreResult<Listing<VaultEntry>> {
+        let items: Vec<VaultEntry> = self
+            .state()
+            .vault_entries
+            .iter()
+            .filter(|(key, _)| {
+                page.after
+                    .as_deref()
+                    .is_none_or(|after| key.as_str() > after)
+            })
+            .take(page.limit + 1)
+            .map(|(_, e)| e.clone())
+            .collect();
+        Ok(listing(items, page.limit, VaultEntry::key))
     }
 }
 

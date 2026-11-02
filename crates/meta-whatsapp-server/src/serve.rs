@@ -34,12 +34,16 @@ use meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool;
 use meta_whatsapp_rs::adapters::store::postgres::sqlx::postgres::{
     PgConnectOptions, PgPoolOptions,
 };
-use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
+use meta_whatsapp_rs::client::AppCredentials;
+use meta_whatsapp_rs::client::embedded_signup::{SolutionPartner, TokenVault, VaultKeys};
+use meta_whatsapp_rs::core::ids::AppId;
+use meta_whatsapp_rs::core::secret::AppSecret;
 use meta_whatsapp_rs::core::store::{KvStore, Retention};
 use meta_whatsapp_server_api_axum::api::internal_router;
 use meta_whatsapp_server_core::admin::mint;
 use meta_whatsapp_server_core::housekeeping;
 use meta_whatsapp_server_core::otp::{OtpDeployment, OtpKeys};
+use meta_whatsapp_server_core::signup::{AccountUpdateConfirmation, SignupDeployment};
 use meta_whatsapp_server_http::api::public_router;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -47,7 +51,7 @@ use tokio::task::JoinHandle;
 
 #[cfg(feature = "store-postgres")]
 use crate::config::DatabaseUrl;
-use crate::config::{Config, MigrateMode, Storage};
+use crate::config::{Config, MigrateMode, OnboardingMode, Storage};
 use crate::events::{HOUSEKEEPING_INTERVAL, Inbound};
 use crate::listen;
 use crate::metrics::Metrics;
@@ -288,6 +292,42 @@ fn otp_deployment(
     Ok(OtpDeployment::new(keys, default_tenant))
 }
 
+/// Embedded Signup's settings (roadmap M3a): the Meta app (`WA_APP_ID` and
+/// the active `WA_APP_SECRET`), its configuration (`WA_ES_CONFIG_ID`) and
+/// the mode (`WA_ONBOARDING_MODE`: a Solution Partner's credit line, with
+/// its system token, system user, line and default currency). Without the
+/// app's id or the configuration, `None`: the signup routes answer `409
+/// signup_not_configured`, and no account update is acted on.
+pub fn signup_deployment(
+    app_id: Option<AppId>,
+    app_secret: Option<&AppSecret>,
+    config_id: Option<String>,
+    onboarding: OnboardingMode,
+    confirmation: AccountUpdateConfirmation,
+) -> Option<SignupDeployment> {
+    let (Some(app_id), Some(app_secret), Some(config_id)) = (app_id, app_secret, config_id) else {
+        tracing::info!(
+            "Embedded Signup is not set up (WA_APP_ID and WA_ES_CONFIG_ID): its routes answer \
+             signup_not_configured"
+        );
+        return None;
+    };
+    let deployment =
+        SignupDeployment::new(AppCredentials::new(app_id, app_secret.clone()), config_id)
+            .confirm_account_updates(confirmation);
+    Some(match onboarding {
+        OnboardingMode::TechProvider => deployment,
+        OnboardingMode::SolutionPartner(partner) => deployment.solution_partner(
+            SolutionPartner::new(
+                partner.system_token,
+                partner.system_user_id,
+                partner.credit_line_id,
+            )
+            .default_currency(partner.currency),
+        ),
+    })
+}
+
 /// [`serve_until`] once the configuration's warnings are out, stopping on
 /// the future `signal` makes: made before the listeners are bound, so
 /// that [`shutdown_signal`]'s handlers are in place once they answer.
@@ -328,9 +368,20 @@ async fn run<S: Future<Output = ()>>(
         move_rules,
         otp_pepper,
         otp_default_tenant,
+        app_id,
+        es_config_id,
+        onboarding,
+        account_update_confirmation,
         ..
     } = config;
     settings.otp = Some(otp_deployment(otp_pepper, otp_default_tenant)?);
+    settings.signup = signup_deployment(
+        app_id,
+        app_secrets.first(),
+        es_config_id,
+        onboarding,
+        account_update_confirmation,
+    );
     let inbound = Inbound::new(app_secrets, verify_token)?.with_move_rules(move_rules);
     // The state and its grant: the internal listener's API adapter is
     // served with the grant, which no one else is given.

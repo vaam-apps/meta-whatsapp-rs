@@ -36,6 +36,7 @@
 //! | `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | 2, 2 | the same, for template management |
 //! | `WA_SERVER_RATE_OTP_ISSUE`, `WA_SERVER_RATE_OTP_ISSUE_BURST` | 5, 5 | the same, for sending OTP codes (roadmap M3c; per recipient, the library's cooldown and issue limit apply too) |
 //! | `WA_SERVER_RATE_OTP_VERIFY`, `WA_SERVER_RATE_OTP_VERIFY_BURST` | 20, 20 | the same, for checking OTP codes (the service's default: the design names no limit) |
+//! | `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` | `graph` | whether an `account_update` webhook that offboards a merchant (`PARTNER_APP_UNINSTALLED` of this app, `ACCOUNT_DELETED`) or revokes their credit line (`PARTNER_REMOVED`) is confirmed with Graph first (`graph`: `debug_token` on the WABA's stored token, which must no longer be valid or no longer granted the WABA) or acted on by its signature alone (`signature`) (roadmap M3a) |
 //! | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number, decision D8's default (roadmap M3c); unset, such a tenant's OTP requests are `409 otp_not_configured` |
 //! | `WA_SERVER_INBOX_REPLY_CHECKS` | none listed: every check on every number | the local checks an inbox reply makes, per number: `<phone_number_id>:<checks>` entries, comma-separated, `<checks>` being `all`, `none` or the checks left on joined by `+` (`window`, `trust_handover`, `thread_owner`; `trust_handover` only with `window`): `106540352242922:window+trust_handover` turns the ownership check off on that number (the core's `inbox::ReplyChecksByNumber`; roadmap M2a) |
 //!
@@ -74,6 +75,7 @@ use meta_whatsapp_server_core::inbox::{InvalidReplyChecks, ReplyChecksByNumber};
 use meta_whatsapp_server_core::live::LiveSettings;
 use meta_whatsapp_server_core::model::TenantId;
 use meta_whatsapp_server_core::otp::OtpKeys;
+use meta_whatsapp_server_core::signup::AccountUpdateConfirmation;
 
 use crate::events::{
     DEFAULT_MOVE_SKEW_MARGIN, DEFAULT_UNDATED_AFTER_MOVE_WINDOW, MoveRules, UndatedAfterMove,
@@ -271,6 +273,11 @@ pub struct Config {
     pub otp_default_tenant: Option<TenantId>,
     /// `WA_ONBOARDING_MODE` and its settings.
     pub onboarding: OnboardingMode,
+    /// `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` (roadmap M3a, proposed
+    /// decision D72): whether an `account_update` that offboards a merchant
+    /// or revokes their credit line is confirmed with Graph first (`graph`,
+    /// the default) or acted on by its signature alone (`signature`).
+    pub account_update_confirmation: AccountUpdateConfirmation,
     /// `WA_GRAPH_API_VERSION` and `WA_GRAPH_ENDPOINT`.
     pub graph_endpoint: GraphEndpoint,
     /// `WA_SERVER_MIGRATE`.
@@ -481,6 +488,17 @@ impl Config {
             })?),
         };
         let onboarding = onboarding(&r)?;
+        let account_update_confirmation =
+            match r.plain("WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION")?.as_deref() {
+                None | Some("graph") => AccountUpdateConfirmation::Graph,
+                Some("signature") => AccountUpdateConfirmation::Signature,
+                Some(_) => {
+                    return Err(ConfigError::Invalid {
+                        name: "WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION",
+                        reason: "expected graph or signature",
+                    });
+                }
+            };
         let graph_endpoint = graph_endpoint(&r, environment)?;
         let runtime = runtime(&r)?;
         let settings = settings(&r)?;
@@ -499,6 +517,7 @@ impl Config {
             otp_pepper,
             otp_default_tenant,
             onboarding,
+            account_update_confirmation,
             graph_endpoint,
             migrate: runtime.migrate,
             shutdown_grace: runtime.shutdown_grace,

@@ -9,6 +9,7 @@ pub mod meta;
 pub mod moving;
 pub mod otp;
 pub mod scenarios;
+pub mod signup;
 pub mod sse;
 
 use std::sync::atomic::{AtomicUsize, Ordering};

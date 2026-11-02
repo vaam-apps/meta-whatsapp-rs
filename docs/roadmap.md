@@ -4649,7 +4649,7 @@ design's (§9).
 
 ### M3. Embedded Signup, OTP, coexistence
 
-- [ ] **M3a. Embedded Signup routes** (rows 120, 142): both partner
+- [x] **M3a. Embedded Signup routes** (rows 120, 142): both partner
   modes, persisted attempts, resume, disconnection, credit lines in
   Solution Partner mode, and vault rotation over the records partner
   mode keeps past a binding. Companion: `docs/guides/production.md`
@@ -4658,6 +4658,99 @@ design's (§9).
   reports no failure).
   - **After:** S7, L4.
   - **Decisive:** M3.1–M3.4.
+  - **Landed:** rows 120 and 142 done on the service's side. Four
+    routes on a new tag, `signup` (scope `signup`): `POST
+    /v1/signup/sessions` (`start_signup`, rate class `send`), `POST
+    /v1/signup/complete` (`complete_signup`, `send`; bodies of the group
+    at most 16 KiB), `GET /v1/signup/attempts` (`list_signup_attempts`,
+    `read`), `POST /v1/signup/resume` (`resume_signup`, `send`), and one
+    admin route, `POST /v1/admin/wabas/{waba_id}/credit-line/reshare`
+    (the operator's re-funding of a revoked business, audited
+    `credit_line_reshared`). Each is the core's `signup` module
+    (`Signups`, built by `AppState::from_backend` on the bundle's
+    `KvStore` and the service's clock with the deployment's
+    `SignupDeployment`, set by `serve` when `WA_APP_ID` and
+    `WA_ES_CONFIG_ID` are; `Signups::open` admits the `Caller`) over the
+    library's `EmbeddedSignup`, which makes every Meta call: the attempt
+    is the library's `SignupSessions` (`wa.es.session`, unchanged); a
+    completion checks every input before the redemption, refuses a
+    claimed WABA another tenant holds before it (D4, `409`, the attempt
+    kept), redeems for the caller's tenant (`403 stale_attempt`, another
+    tenant's never burnt), then runs `onboard_with_approval`, whose
+    approval binds the verified WABA and all its numbers (D4 again,
+    atomically, before anything is stored, subscribed or shared; in
+    Solution Partner mode also remembering the ledger for a rotation); a
+    step after `store_token` that fails keeps the attempt (`502
+    onboarding_failed`, `resumable: true`), resumed from the stored token
+    by `resume_with_approval` (its approval re-checking the binding before
+    any credit call; another tenant's resume `404 nothing_to_resume`,
+    nothing read). The vault is the `Authorizer`'s
+    (`Authorizer::vault_for_signup`, crate-private, a UI case). In
+    Solution Partner mode the credit line is shared with the partner's
+    system token only and the allocation recorded on the binding; a
+    revoked business stops a resume and a new signup at
+    `share_credit_line`, and only the admin route funds it again. The
+    tenant's `DELETE /v1/wabas/{waba_id}` revokes before it deletes in
+    Solution Partner mode (`numbers::Waba::offboarded_by`,
+    `Signups::offboard`); the webhook pipeline gains an `AccountActions`
+    hook (`Pipeline::with_account_actions`, run once an event is
+    recorded; a retryable failure fails the delivery, any other is logged
+    for the operator), which `signup::AccountUpdates` implements:
+    `PARTNER_APP_UNINSTALLED` of the deployment's app and
+    `ACCOUNT_DELETED` offboard (revoke, token, bindings), `PARTNER_REMOVED`
+    revokes (D14), each confirmed with Graph first (`debug_token` on the
+    stored token; `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION`, `graph` or
+    `signature`). The vault's rotation walks the records kept past a
+    binding after the bindings (`rotate_vault`, the answer gaining
+    `records` and `failed_records`). A `RecordStore` port change (seven
+    methods: the attempts, the allocation, the vault entries; both
+    backends; Postgres migration 6, `signup`, adding
+    `wa_server_signup_attempts` and `wa_server_vault_records`,
+    expand-only, its names pending the owner), held by the new
+    conformance suite `signup`. A new error code, `409
+    signup_not_configured`. The OpenAPI document is additive only (844
+    lines added, one changed by a trailing comma: four paths and the admin
+    one, the tag `signup`, eight schemas, the code, `VaultRotation`'s two
+    fields). The production guide gains the vault key cadence (§ 2, "Vault
+    key cadence"); the guide a section, Embedded Signup; a new skill,
+    `meta-whatsapp-rs-server-onboarding`. Decisive tests: `tests/signup.rs`
+    (`m3_1_the_happy_path_binds_the_verified_waba_and_all_its_numbers`,
+    `m3_2_another_tenants_state_is_stale_and_the_rightful_tenant_still_completes`,
+    `m3_3_a_133005_at_registration_resumes_in_a_new_process` and its
+    `live_postgres_m3_3_…` twin on two pools of one database, which also
+    sweeps every table for the token, the PINs and the code,
+    `m3_4_the_credit_line_request_carries_the_partners_system_token`,
+    `m3_4_missing_partner_settings_refuse_the_start`,
+    `m3_4_d4_is_enforced_before_any_credit_call`,
+    `m3_4_a_revoked_business_is_refunded_only_by_the_operator`,
+    `m3_4_a_cms_disconnect_revokes_first_and_deletes_second`,
+    `m3_4_uninstall_then_removal_end_revoked_then_deleted`,
+    `m3_4_removal_then_uninstall_end_revoked_then_deleted`), with
+    `an_unconfirmed_or_foreign_account_update_changes_nothing`,
+    `a_removal_naming_only_the_owner_revokes_by_business`,
+    `a_tech_providers_offboarding_revokes_nothing`,
+    `a_completion_over_16_kib_is_too_large`,
+    `a_coexistence_signup_syncs_and_never_registers`,
+    `a_cancelled_flow_redeems_nothing`,
+    `a_resume_whose_waba_moves_meanwhile_acts_on_nothing`,
+    `the_signup_routes_need_the_signup_scope`; `tests/signup_logs.rs`
+    (a partner's whole signup at `TRACE`: no token, system token, PIN,
+    code, state or Meta text); the core's `conformance::signup` (the
+    records' contract, M3.4's D4 case and a rotation reaching an
+    offboarded WABA's ledger and marker, on the core's memory backend,
+    the memory crate's and live on Postgres); M1.3's table, M1.5's
+    sentinel and M1.7's capture over the new routes. Left, and why: no
+    `number_disconnected` event (the service's number events are
+    M2c–M2e's); no per-signup currency, no two-call credit method, no
+    route clearing a lost credit share (`clear_pending_share`); a
+    Multi-Partner Solution's `PARTNER_REMOVED` is not acted on (no
+    setting names the deployment's partner business); the admin unbind
+    and a tenant's deletion revoke nothing (D75); a partner disconnection
+    deletes the token through the library's `offboard`, unconditioned on
+    the capability's token version, so a WABA moved within the
+    revocation's own calls loses its new token (the window the unsubscribe
+    call already has); hosted signup, several WABAs and pre-verified
+    numbers wait for M3f. Proposed, pending the coordinator: D70–D76.
 - [ ] **M3b. Coexistence** (rows 69, 124): onboarding, the automatic
   sync (D7), the synced contacts stored and readable by their tenant:
   M3b turns the inbox's contacts recording on
@@ -5274,6 +5367,9 @@ everything else goes into the parity-completion report.
   confirmation; M3c's review's shared issue log, the namespace
   `wa_server.otp.shared_rate`, its key's derivation and record, and the
   label `meta-whatsapp-server/otp-shared-limit/v1`, added and awaiting
+  confirmation; M3a's migration 6, `signup`, its tables
+  `wa_server_signup_attempts` and `wa_server_vault_records`, their
+  columns and the kinds `waba` and `business`, added and awaiting
   confirmation), for the same reason as L5's.
 - **Zero-tap authentication templates** (M3c, M3g): creating one sets
   Meta's `zero_tap_terms_accepted`, an acknowledgement of the WhatsApp

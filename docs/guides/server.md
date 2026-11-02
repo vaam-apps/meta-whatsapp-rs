@@ -8,7 +8,7 @@ its reasons and the owner's decisions, is
 [docs/design/server.md](../design/server.md); the rules it keeps are in
 [architecture.md](../architecture.md#service-meta-whatsapp-server).
 
-> **What exists today (milestones M1a, M1b and M1c, M2a, M2b and M3c).** Tenants, API
+> **What exists today (milestones M1a, M1b and M1c, M2a, M2b, M3a and M3c).** Tenants, API
 > keys, the admin API, attaching the platform's own WhatsApp Business
 > Accounts (WABAs), the numbers and business profile routes, vault key
 > rotation, sending messages (with idempotency keys), read receipts,
@@ -17,10 +17,12 @@ its reasons and the owner's decisions, is
 > and the event outbox, polling events (`GET /v1/events`), one event by
 > id and live events as Server-Sent Events (M2b), the inbox's
 > conversations, history and replies (M2a), OTP codes with per-tenant
-> settings and authentication templates (M3c), health, metrics and the
-> OpenAPI document. **Not yet**: webhooks to your backend (M2), Embedded
-> Signup (M3), zero-tap templates and template previews (M3g), the
-> Docker image and the TypeScript client (M4).
+> settings and authentication templates (M3c), Embedded Signup in both
+> partner modes, its attempts and their resumption, and offboarding
+> (M3a), health, metrics and the OpenAPI document. **Not yet**: webhooks
+> to your backend (M2), hosted Embedded Signup, several WABAs in one
+> signup and pre-verified numbers (M3f), zero-tap templates and template
+> previews (M3g), the Docker image and the TypeScript client (M4).
 > [coverage.md](../coverage.md) tracks it.
 
 ## The shape of it
@@ -100,13 +102,14 @@ read yet: set, it stops the start.
 | `WA_SERVER_PUBLIC_BIND`, `WA_SERVER_INTERNAL_BIND` | `127.0.0.1:8080`, `127.0.0.1:8081` | must differ |
 | `WA_APP_SECRET` | required | the Meta app's secret (`WA_APP_SECRET_PREVIOUS` too while rotating) |
 | `WA_VERIFY_TOKEN` | required | the token you enter in the App Dashboard for the webhook |
-| `WA_APP_ID`, `WA_ES_CONFIG_ID` | — | read now, used from M3 (Embedded Signup) |
+| `WA_APP_ID`, `WA_ES_CONFIG_ID` | — | the Meta app's id and the Facebook Login for Business configuration: Embedded Signup needs both ([below](#embedded-signup)); without them its routes answer `409 signup_not_configured` |
 | `WA_VAULT_KEY` | required with Postgres | base64 of 32 random bytes (`openssl rand -base64 32`): encrypts the business tokens |
 | `WA_VAULT_KEY_ID` | `k1` | the key's id, recorded with each token |
 | `WA_VAULT_PREVIOUS_KEYS` | — | older keys still read, `<id>:<base64>` comma-separated; every id once, the active one's included |
 | `WA_OTP_PEPPER` | required with Postgres | at least 32 bytes, kept out of the database: it keys every OTP code's and store key's hash, and an OTP issue's idempotency fingerprint; rotating it kills the codes in flight (memory storage in development: a throwaway one) |
 | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number and template (decision D8's default). Unset, a tenant without settings answers `409 otp_not_configured` |
-| `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` also needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` (AUD, EUR, GBP, IDR, INR or USD) |
+| `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` also needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` (AUD, EUR, GBP, IDR, INR or USD): your credit line funds every merchant onboarded ([Solution Partner mode](#solution-partner-mode)) |
+| `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` | `graph` | whether an `account_update` webhook that offboards a merchant or revokes their credit line is confirmed with Graph first (`graph`: `debug_token` on the WABA's stored token, which must no longer be valid or granted the WABA) or acted on by its signature alone (`signature`) ([Offboarding](#offboarding)) |
 | `WA_GRAPH_API_VERSION`, `WA_GRAPH_ENDPOINT` | `v25.0`, Graph | a proxy or a test stub: every token travels to it, so `https` outside development, and `serve` warns with its host |
 | `WA_SERVER_MIGRATE` | `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
 | `WA_SERVER_SHUTDOWN_GRACE` | `25s` | how long open requests get after `SIGTERM` |
@@ -298,19 +301,26 @@ attach a token that reaches that tenant's WABAs only.
 new `WA_VAULT_KEY_ID`) and the old one in `WA_VAULT_PREVIOUS_KEYS`,
 deploy, then call `POST /v1/admin/vault/rotate` (or run
 `meta-whatsapp-server vault rotate`): it re-encrypts every bound WABA's
-token under the new key and answers `{wabas, rotated, failed}`. Drop the
-old key once `failed` is empty. The route is a request like any other,
-cut at 55 s: a walk too large to finish in time answers `504 timeout`
-with part of the tokens rotated. Repeating it is safe (tokens already
-under the new key are only read), and the command has no deadline.
+token under the new key, then every record the vault keeps past a
+binding, and answers `{wabas, rotated, failed, records,
+failed_records}`. Drop the old key once both `failed` and
+`failed_records` are empty. The route is a request like any other, cut
+at 55 s: a walk too large to finish in time answers `504 timeout` with
+part of the tokens rotated. Repeating it is safe (tokens already under
+the new key are only read), and the command has no deadline. Rotate at
+least yearly, and at once on a suspected exposure
+([production guide](production.md#vault-key-cadence)).
 
-This advice holds because, in M1a, every record in the vault belongs to
-a bound WABA, which is what the rotation walks. From M3, Solution
-Partner onboarding keeps records past a WABA's binding (its credit
-ledger outlives the token, and a business's revocation marker outlives
-both); until the rotation walks those too, `failed` being empty will
-not mean that nothing still needs the old key. M3's notes will say when
-it does.
+Solution Partner onboarding keeps records past a WABA's binding: its
+credit ledger outlives the token, and a business's revocation marker
+outlives both. Since roadmap M3a the service remembers each such record
+when it may be written (`wa_server_vault_records`: the WABA at its
+onboarding's approval and its offboarding, the owner business with it),
+and the rotation walks them besides the bindings (`records`; one that
+fails is `failed_records`, as `waba/<id>` or `business/<id>`), so empty
+lists again mean that nothing still needs the old key (the service
+onboarded no Solution Partner merchant before M3a, so no earlier record
+escapes the walk).
 
 ## A first call
 
@@ -698,12 +708,144 @@ default; the issue limit cannot be turned off); `422` on
 message never promises a lifetime the code does not have. Each change is
 an `audit` event.
 
+## Embedded Signup
+
+A merchant connects their own WhatsApp number from your page, and the
+service ends up holding their business token, encrypted in its vault
+(roadmap M3a; scope `signup`). The library's onboarding does every step
+with Meta (the code exchange, the token's check, the WABA, its owner and
+its numbers verified, the token stored, the app subscribed, a Solution
+Partner's credit line, the registration); the service binds the
+verified WABA and all its numbers to the calling tenant, and keeps an
+attempt that stopped after its token was stored, for your tenant to
+resume. Set `WA_APP_ID` and `WA_ES_CONFIG_ID` (Facebook Login for
+Business → Configurations), and serve the page over HTTPS from a domain
+your app allows.
+
+```text
+merchant's browser       your CMS backend                 meta-whatsapp-server               Meta
+"Connect" ────────────► POST /connect ─────────────────► POST /v1/signup/sessions (WA-Tenant: m42)
+          ◄─ launch data ◄────────────────────────────── {state, app_id, config_id, launch_options}
+FB.login(…) ─────────────────────────────────────────────────────────────────────────────► popup
+          ◄─ code (30 s, single use) + WA_EMBEDDED_SIGNUP event ◄────────────────────────────┘
+POST /connect/callback ► POST /v1/signup/complete ─────► redeemed for m42, onboarded ───────► exchange, verify, store,
+  {state, code, event, pin}                              WABA + numbers bound to m42           subscribe, [credit line], register
+```
+
+| Route | Does |
+| --- | --- |
+| `POST /v1/signup/sessions` | `{coexistence?}`: an attempt bound to your tenant for 15 minutes, and what the page needs: `{state, expires_at, app_id, config_id, graph_api_version, launch_options}` (`launch_options` is `FB.login`'s options, as they are). Asks Meta nothing |
+| `POST /v1/signup/complete` | `{state, code, event, pin?}`, as the page collected them: the attempt redeemed for your tenant, then the onboarding. `200` with `{"status": "connected", "waba_id", "phone_number_ids", "steps_completed", "needs_coexistence_sync", "credit_allocation_id"?}`, or `{"status": "cancelled", "current_step"}` for a `CANCEL` event (nothing redeemed: the attempt may still complete) |
+| `GET /v1/signup/attempts` | your attempts that stopped after their token was stored: `{data: [{waba_id, failed_step, updated_at, created_at}], next_cursor}` |
+| `POST /v1/signup/resume` | `{waba_id, pin?}`: an attempt's steps after the stored token, again (a corrected PIN): answers as a completion, `steps_completed` starting with `load_token` |
+
+```bash
+curl -sS -X POST "$WA_SERVER/v1/signup/sessions" -H "Authorization: Bearer $KEY" \
+  -H "WA-Tenant: merchant-42" -H "Content-Type: application/json" -d '{}'
+curl -sS -X POST "$WA_SERVER/v1/signup/complete" -H "Authorization: Bearer $KEY" \
+  -H "WA-Tenant: merchant-42" -H "Content-Type: application/json" \
+  -d '{"state": "…", "code": "…", "pin": "581063",
+       "event": {"type": "WA_EMBEDDED_SIGNUP", "event": "FINISH",
+                 "data": {"phone_number_id": "106540352242922", "waba_id": "524126980791429"}}}'
+```
+
+- **The tenant is the credential's**, never the body's. An attempt
+  another tenant started is `403 stale_attempt`, as an expired or used
+  one is, and is not burnt: its own tenant still completes it. The
+  state travels in bodies only (URLs reach access logs).
+- **Everything is checked first**: the state, the code, the PIN (6
+  digits) and the event, each `422 invalid_request` on its field, before
+  the attempt is redeemed, so a malformed post keeps the attempt. A body
+  over 16 KiB is `413`. A body of the wrong shape is `422` on `body`,
+  never quoting what it carried.
+- **The PIN is the merchant's own** (decision D6): it becomes a new
+  number's two-step verification PIN, or must match the one it has.
+  Typed per attempt, never stored or logged; without it the number is
+  left unregistered. A coexistence number is registered already: its PIN
+  is ignored.
+- **One WABA, one tenant** (decision D4). A WABA another tenant holds is
+  `409 waba_owned_by_another_tenant`: the one the page claims, before
+  the attempt is redeemed, and the one Meta verifies, before anything is
+  stored, subscribed or shared (the library's approval); the holder's
+  binding and token stay as they were. Moving a WABA is the operator's
+  unbind.
+- **A step that stops** is `502 onboarding_failed` with its `step`,
+  `resumable`, and Meta's code and trace id in `graph` (never Meta's
+  text or `details`). `resumable: true`: the token was stored and the
+  attempt is kept (`GET /v1/signup/attempts`); fix the cause and `POST
+  /v1/signup/resume` (a new PIN after `register_phone`'s `133005`), from
+  any replica or after a restart. `resumable: false`: start again (the
+  code is spent). Another tenant's resume is `404 nothing_to_resume`, as
+  a finished one is.
+- **Coexistence** (the WhatsApp Business app's number): start with
+  `{"coexistence": true}`; the contacts and history syncs run as the
+  onboarding's last steps, once each (decision D7).
+- **No answer, log, error, audit event or kept attempt holds the
+  merchant's token**, the PIN, the code or the state. A completion and a
+  resumption are `audit` events (`signup_completed`, `signup_resumed`,
+  with the tenant, the WABA and the key's id).
+
+### Solution Partner mode
+
+With `WA_ONBOARDING_MODE=solution_partner`, your credit line funds every
+merchant: the onboarding adds your system user to the merchant's WABA,
+checks the line does not fund it already and was not revoked, and shares
+it (`whatsapp_credit_sharing_and_attach`), with **your system token,
+never the merchant's**, between `subscribe_app` and `register_phone`,
+in `WA_WABA_CURRENCY`. The allocation is in the answer
+(`credit_allocation_id`) and on the WABA's binding. A line cannot be
+taken back once attached, which is why the WABA is bound to your tenant
+before anything is shared.
+
+- **A business whose line was revoked stays revoked.** A resume or a new
+  signup stops at `share_credit_line` (`502 onboarding_failed`), posting
+  no share. Funding it again is your operator's explicit decision:
+  `POST /v1/admin/wabas/{waba_id}/credit-line/reshare` (admin key)
+  resumes the WABA's steps from its stored token, sharing the line again,
+  and is an `audit` event (`credit_line_reshared`).
+- A share whose answer was lost is reconciled by the library (it checks
+  Meta's records before it posts again); one Meta never lists stays
+  pending until an operator clears it with the library's
+  `EmbeddedSignup::clear_pending_share`, which the service has no route
+  for yet.
+
+### Offboarding
+
+- **Your tenant disconnects** (`DELETE /v1/wabas/{waba_id}`, scope
+  `numbers`): the app is unsubscribed with the merchant's token, then, in
+  Solution Partner mode, the line is revoked, then the token and the
+  bindings are deleted. A revocation that fails deletes nothing (its
+  error carries `step: revoke_credit_line`): repeat the call.
+- **Meta's webhooks** (`account_update`): `PARTNER_APP_UNINSTALLED` of
+  your app (`partner_app_id` is `WA_APP_ID`) and `ACCOUNT_DELETED`
+  offboard the merchant the same way (the line revoked first, from the
+  owner the vault recorded, else the webhook's `owner_business_id`);
+  `PARTNER_REMOVED` revokes the line at once (decision D14) and leaves
+  the token, whose next call answers `reconnect_required`. Either order of
+  the two ends with the line revoked and the token and bindings gone.
+  Each is confirmed with Graph first (`debug_token` on the stored token:
+  one Meta still reports valid and granted the WABA contradicts the
+  webhook, which is recorded and not acted on), unless
+  `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION=signature`. The event is
+  recorded first, so it reaches its tenant before the offboarding
+  unbinds the WABA. A failure Meta or the database may recover from
+  answers Meta `500`, and its redelivery (the event found recorded) runs
+  it again; any other is logged at `warn` (target
+  `meta_whatsapp_server::events`) for you to act on. A removal from a
+  Multi-Partner Solution (`solution_partner_business_ids` listed) is not
+  acted on: nothing tells whether your business is the partner removed;
+  the event still reaches its tenant.
+- **The operator's unbind and a tenant's deletion revoke nothing**: they
+  move or free a WABA, not end a merchant's funding. Revoke by hand
+  (the library's `EmbeddedSignup::revoke_credit_line`) when that is what
+  you mean.
+
 ## Rate limits
 
 Each tenant has a budget per class of route, per replica (a deployment
 of N replicas allows N times as much): writes (sends, read receipts,
 media, profile changes) 20 a second with bursts of 40, reads 50 a second,
-template management 2 a second, OTP issues 5 a second and OTP checks 20. A platform key acting for a tenant draws
+template management 2 a second, OTP issues 5 a second and OTP checks 20; Embedded Signup's routes count as writes (its attempts list as a read). A platform key acting for a tenant draws
 from that tenant's budget. Past it: `429 too_many_requests`, `retryable:
 true`, with `Retry-After` in seconds, before anything is read or sent.
 Change them with `WA_SERVER_RATE_*` (the same for every tenant: per-tenant
@@ -1070,8 +1212,10 @@ SKIP token.wabas: the configuration is refused
 ## Not yet
 
 The inbox's window and read routes and a message by id (M2g),
-webhooks-out and the service's own number events (M2); Embedded Signup,
-disconnection by Meta's webhooks and coexistence sync (M3); zero-tap
+webhooks-out and the service's own number events (M2); hosted Embedded
+Signup, several WABAs in one signup and pre-verified numbers (M3f),
+clearing a lost credit share, registration routes (M3d) and the
+coexistence routes (M3b); zero-tap
 authentication templates and template previews (M3g); the
 Docker image, a Compose file, the documents route and the TypeScript
 client (M4). The tenants' OTP settings have their own route

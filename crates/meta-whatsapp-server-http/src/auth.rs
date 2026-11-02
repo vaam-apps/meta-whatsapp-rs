@@ -77,6 +77,14 @@ pub struct VaultRotation {
     /// a key no longer configured, say): rotate again, or reconnect them,
     /// before dropping the old key.
     pub failed: Vec<String>,
+    /// Records the vault keeps past a binding walked besides: Solution
+    /// Partner mode's credit ledgers and revocation markers, which no
+    /// binding names once their WABA left (roadmap M3a).
+    pub records: usize,
+    /// Those that could not be read or rewritten, as `waba/<id>` (a
+    /// credit ledger) or `business/<id>` (a revocation marker). Drop the
+    /// old key only once both this and `failed` are empty.
+    pub failed_records: Vec<String>,
 }
 
 impl From<core_authz::VaultRotation> for VaultRotation {
@@ -85,20 +93,26 @@ impl From<core_authz::VaultRotation> for VaultRotation {
             wabas,
             rotated,
             failed,
+            records,
+            failed_records,
         } = report;
         Self {
             wabas,
             rotated,
             failed,
+            records,
+            failed_records,
         }
     }
 }
 
 /// Walk every bound WABA (`wa_server_wabas`: the vault cannot list its
 /// records) and re-encrypt its token and credit ledger under the active
-/// key with `TokenVault::rotate`. A record that fails is reported and the
-/// walk goes on; only the service's own storage failing stops it. The
-/// core's [`core_authz::rotate_vault`].
+/// key with `TokenVault::rotate`, then every record kept past a binding
+/// (`wa_server_vault_records`: credit ledgers, revocation markers; roadmap
+/// M3a). A record that fails is reported and the walk goes on; only the
+/// service's own storage failing stops it. The core's
+/// [`core_authz::rotate_vault`].
 pub async fn rotate_vault(
     store: &dyn RecordStore,
     vault: &TokenVault,

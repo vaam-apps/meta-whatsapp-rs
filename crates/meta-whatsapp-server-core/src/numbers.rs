@@ -299,6 +299,9 @@ pub struct Waba<'a> {
     authz: &'a Authorizer,
     owned: &'a OwnedWaba,
     observer: &'a dyn Observer,
+    /// The deployment's signup, whose Solution Partner mode offboards a
+    /// disconnected WABA (roadmap M3a).
+    signups: Option<&'a crate::signup::Signups>,
 }
 
 impl std::fmt::Debug for Waba<'_> {
@@ -324,7 +327,17 @@ impl<'a> Waba<'a> {
             authz,
             owned: waba,
             observer: &(),
+            signups: None,
         })
+    }
+
+    /// Disconnect as `signups`' deployment does (roadmap M3a): in Solution
+    /// Partner mode the credit line is revoked before the token and the
+    /// bindings are deleted ([`crate::signup::Signups::offboard`]).
+    #[must_use]
+    pub fn offboarded_by(mut self, signups: &'a crate::signup::Signups) -> Self {
+        self.signups = Some(signups);
+        self
     }
 
     /// Report failed Graph calls to `observer` (the adapter's metrics).
@@ -337,7 +350,10 @@ impl<'a> Waba<'a> {
     /// Disconnect the WABA: unsubscribe the app from it with its token;
     /// only then delete the token and the bindings, the WABA's and its
     /// numbers' ([`OwnedWaba::forget_or_busy`]). When Meta refuses or
-    /// fails, nothing is deleted.
+    /// fails, nothing is deleted. In Solution Partner mode
+    /// ([`Self::offboarded_by`]), the credit line is revoked between the
+    /// two, and a revocation that fails deletes nothing either (roadmap
+    /// M3a, design acceptance test M3.4).
     ///
     /// # Errors
     ///
@@ -363,6 +379,13 @@ impl<'a> Waba<'a> {
                 self.observer.graph_error(api.code());
             }
             return Err(api.with_details(&error));
+        }
+        if let Some(signups) = self.signups
+            && signups
+                .offboard(self.authz, self.owned, self.observer)
+                .await?
+        {
+            return Ok(());
         }
         self.owned.clone().forget_or_busy(self.authz).await
     }

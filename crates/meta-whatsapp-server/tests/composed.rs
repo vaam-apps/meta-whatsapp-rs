@@ -416,7 +416,7 @@ async fn the_api_is_served_over_a_backend_defined_outside_the_server_crate() {
     let report: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(
         report,
-        serde_json::json!({"wabas": 1, "rotated": 1, "failed": []}),
+        serde_json::json!({"wabas": 1, "rotated": 1, "failed": [], "records": 0, "failed_records": []}),
         "the vault is another store's"
     );
     let token = TokenVault::new(backend.kv(), VaultKeys::new(key("k1", ACTIVE_VAULT_KEY)))

@@ -105,7 +105,7 @@ use crate::error::{ErrorCode, ServiceError};
 use crate::keys::PresentedKey;
 use crate::model::{
     ApiKeyRecord, BindingEpoch, KeyOwner, MAX_PAGE_SIZE, NumberBinding, NumberStatus, PageRequest,
-    Scope, TenantId, TenantStatus, WabaBinding,
+    Scope, TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
 use crate::store::RecordStore;
 
@@ -202,7 +202,8 @@ impl Tokens {
     }
 }
 
-/// What a vault rotation did.
+/// What a vault rotation did. The old key can go only once both `failed`
+/// and `failed_records` are empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VaultRotation {
     /// WABAs walked.
@@ -213,12 +214,24 @@ pub struct VaultRotation {
     /// a key no longer configured, say): rotate again, or reconnect them,
     /// before dropping the old key.
     pub failed: Vec<String>,
+    /// The records kept past a binding walked besides (roadmap M3a:
+    /// [`VaultEntry`], the credit ledgers and revocation markers of
+    /// Solution Partner mode, which no binding names once their WABA left).
+    pub records: usize,
+    /// Those that could not be read or rewritten, by
+    /// [`VaultEntry::key`] (`waba/<id>`, `business/<id>`).
+    pub failed_records: Vec<String>,
 }
 
-/// Walk every bound WABA (the bindings: the vault cannot list its
-/// records) and re-encrypt its token and credit ledger under the active
-/// key with `TokenVault::rotate`. A record that fails is reported and the
-/// walk goes on; only the service's own storage failing stops it.
+/// Re-encrypt the vault under the active key, walking what can name its
+/// records (the vault cannot list them): every bound WABA (the bindings),
+/// with `TokenVault::rotate` (its token, its credit ledger and the
+/// revocation marker of the business that ledger names), then every
+/// record kept past a binding ([`RecordStore::vault_entries`], roadmap
+/// M3a): a WABA's with `TokenVault::rotate` again (its ledger outlives its
+/// token), a business's marker with `TokenVault::rotate_business`. A
+/// record that fails is reported and the walk goes on; only the service's
+/// own storage failing stops it.
 pub async fn rotate_vault(
     store: &dyn RecordStore,
     vault: &TokenVault,
@@ -242,6 +255,36 @@ pub async fn rotate_vault(
                         "a vault record could not be rotated"
                     );
                     report.failed.push(binding.waba_id.as_str().to_owned());
+                }
+            }
+        }
+        let Some(after) = listing.next_after else {
+            break;
+        };
+        page.after = Some(after);
+    }
+    let mut page = PageRequest {
+        after: None,
+        limit: MAX_PAGE_SIZE,
+    };
+    loop {
+        let listing = store.vault_entries(&page).await?;
+        for entry in &listing.items {
+            report.records += 1;
+            let rotated = match entry {
+                VaultEntry::Waba(waba_id) => vault.rotate(waba_id).await,
+                VaultEntry::Business(business_id) => vault.rotate_business(business_id).await,
+            };
+            match rotated {
+                Ok(true) => report.rotated += 1,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        kind = error.kind().as_str(),
+                        record = entry.key(),
+                        "a vault record kept past a binding could not be rotated"
+                    );
+                    report.failed_records.push(entry.key());
                 }
             }
         }
@@ -465,6 +508,19 @@ impl Authorizer {
     /// records only through the services.
     pub(crate) fn records(&self) -> &dyn RecordStore {
         self.records.as_ref()
+    }
+
+    /// The vault, for the core's Embedded Signup services
+    /// ([`crate::signup`], roadmap M3a), which hand it to the library's
+    /// onboarding (`EmbeddedSignup::onboard_with_approval`, `resume`,
+    /// `offboard`, the credit line's revocation): those store, read and
+    /// delete a WABA's token themselves, in the port rule's order (the
+    /// signup services bind the WABA in the approval, before the library
+    /// stores its token; they delete it before its binding). Crate-private,
+    /// and only the signup services call it (a UI case pins that it does
+    /// not compile outside the core).
+    pub(crate) fn vault_for_signup(&self) -> &TokenVault {
+        &self.tokens.vault
     }
 
     /// Step 1: the key in `authorization` (the `Authorization` header's
@@ -1195,6 +1251,13 @@ impl OwnedWaba {
     /// capability's fields are its maker's word.
     pub(crate) fn tenant(&self) -> &TenantId {
         &self.epoch.tenant_id
+    }
+
+    /// The binding this was made from: what the signup services' partner
+    /// disconnection unbinds, and nothing made since (roadmap M3a).
+    /// Crate-private.
+    pub(crate) fn epoch(&self) -> &BindingEpoch {
+        &self.epoch
     }
 
     /// See [`OwnedNumber::failed`].

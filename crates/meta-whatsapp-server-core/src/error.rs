@@ -108,6 +108,7 @@ codes! {
     IDEMPOTENCY_IN_PROGRESS = ("idempotency_in_progress", 409, "A request with this Idempotency-Key is still running."),
     OUTCOME_UNKNOWN = ("outcome_unknown", 409, "The outcome of the request with this Idempotency-Key is unknown: reconcile before retrying."),
     OTP_NOT_CONFIGURED = ("otp_not_configured", 409, "No OTP sender is set up for this tenant, or its sending number is no longer the sender's own: the operator sets one."),
+    SIGNUP_NOT_CONFIGURED = ("signup_not_configured", 409, "Embedded Signup is not set up for this deployment: the operator sets WA_APP_ID and WA_ES_CONFIG_ID (and, for a Solution Partner, its credit line)."),
     // 403: not allowed, by Meta or the service.
     PERMISSION = ("permission", 403, "The token lacks a permission, or access to this asset."),
     ACCOUNT_RESTRICTED = ("account_restricted", 403, "The account is restricted for a policy violation."),
@@ -486,6 +487,21 @@ impl ServiceError {
         api
     }
 
+    /// The same error, answered as `502 onboarding_failed` (an Embedded
+    /// Signup onboarding stopped at [`Self::step`]; roadmap M3a), with
+    /// `resumable`: `step`, `graph` (without `details`: the signup routes
+    /// never keep Meta's text), `retryable` and `may_have_been_sent` stay.
+    #[must_use]
+    pub fn as_onboarding_failed(mut self, resumable: bool) -> Self {
+        self.0.code = ErrorCode::ONBOARDING_FAILED;
+        self.0.field = None;
+        self.0.resumable = Some(resumable);
+        if let Some(graph) = self.0.graph.as_mut() {
+            graph.details = None;
+        }
+        self
+    }
+
     /// Add Meta's `error_data.details` (or a string `error_data`) to
     /// `graph`, for a route whose design keeps it (section 5.1: every route
     /// but OTP and signup), stripped of control and format characters and
@@ -527,8 +543,15 @@ impl ServiceError {
                 inner.0.step = Some(step);
                 inner
             }
-            // Configuration, an undecryptable vault record, a sink, a
-            // credit line step (routes of later milestones), anything else.
+            // A Solution Partner credit line step that stopped without Meta
+            // refusing it (roadmap M3a): the library's kind for it (a busy
+            // lease `service_unavailable`, a share to reconcile `unknown`,
+            // a revocation part-way its cause's).
+            Error::Credit(credit) => {
+                Self::new(ErrorCode::of(kind_code(credit.kind())).unwrap_or(ErrorCode::INTERNAL))
+            }
+            // Configuration, an undecryptable vault record, a sink,
+            // anything else.
             _ => Self::internal(),
         }
     }

@@ -79,11 +79,23 @@ pub enum Operation {
     /// `verify_otp`: a typed code checked, which always counts as an
     /// attempt (roadmap M3c).
     VerifyOtp,
+    /// `start_signup`: an Embedded Signup attempt bound to the tenant, and
+    /// what the page's `FB.login` needs (roadmap M3a).
+    StartSignup,
+    /// `complete_signup`: the attempt redeemed for the tenant, then the
+    /// business onboarded (roadmap M3a).
+    CompleteSignup,
+    /// `list_signup_attempts`: the tenant's resumable attempts (roadmap
+    /// M3a).
+    ListSignupAttempts,
+    /// `resume_signup`: an attempt's steps after the stored token run
+    /// again (roadmap M3a).
+    ResumeSignup,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 29] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -109,6 +121,10 @@ impl Operation {
         Self::CreateAuthenticationTemplate,
         Self::IssueOtp,
         Self::VerifyOtp,
+        Self::StartSignup,
+        Self::CompleteSignup,
+        Self::ListSignupAttempts,
+        Self::ResumeSignup,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -139,6 +155,10 @@ impl Operation {
             Self::CreateAuthenticationTemplate => "create_authentication_template",
             Self::IssueOtp => "issue_otp",
             Self::VerifyOtp => "verify_otp",
+            Self::StartSignup => "start_signup",
+            Self::CompleteSignup => "complete_signup",
+            Self::ListSignupAttempts => "list_signup_attempts",
+            Self::ResumeSignup => "resume_signup",
         }
     }
 
@@ -170,6 +190,10 @@ impl Operation {
             | Self::ListConversationMessages
             | Self::ReplyToConversation => Scope::Inbox,
             Self::IssueOtp | Self::VerifyOtp => Scope::Otp,
+            Self::StartSignup
+            | Self::CompleteSignup
+            | Self::ListSignupAttempts
+            | Self::ResumeSignup => Scope::Signup,
         }
     }
 }
