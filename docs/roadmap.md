@@ -47,7 +47,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
 | 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
-| 4 | S10 (waits on the owner's answer to D20 (a)), S11, S12; M2a–M2h |
+| 4 | S10 (D20 (a): the owner's yes of 2026-11-02), S11, S12; M2a–M2h |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3g; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
@@ -1193,7 +1193,7 @@ and `store-postgres`.
     server is run, never linked or shipped, as the test service for the
     database the owner named (design §10); the owner may still rule on
     it, and the final report lists it.
-- [ ] **S9. An `Outbox` spike on MongoDB**
+- [x] **S9. An `Outbox` spike on MongoDB**
   (`meta-whatsapp-server-store-mongodb`, the `Outbox` only, not composed
   into the binary), before the port shapes freeze: per-tenant commit
   order, the routing re-check, the stream purge, against a replica set.
@@ -1203,6 +1203,165 @@ and `store-postgres`.
     set. If a case cannot pass, the port changes first (memory and
     Postgres with it, through S3's suite), and the spike passes after
     that change.
+  - **Landed:** the crate (`publish = false`, a workspace member but not
+    a default one, composed into no binary), whose `MongoOutbox`
+    implements `Outbox` with the `mongodb` driver 3.9 (no default
+    features; `compat-3-3-0`, `bson-3`, `rustls-tls-aws-lc`: `cargo tree`
+    shows no `ring` from it). Every write is a multi-document transaction
+    (snapshot reads, majority writes), tried again from the start on a
+    write conflict. An insert reads the dedup key, then the guarded
+    binding's document *and writes it* (`insert_checks` incremented: the
+    port's own prescription for a database whose snapshot transactions
+    see write-write conflicts only), decides with the core's
+    `RouteGuard::admits`, then draws its sequence by incrementing its
+    stream's document and stores the event, `created_at` the server's
+    `$currentDate`. Two transactions writing one document cannot both
+    commit, so a stream's sequence `n + 1` is drawn only once `n`
+    committed (per-tenant commit order, gap-free), and an unbinding waits
+    for an insert that checked its binding, or makes it start over. A
+    page reads in one snapshot transaction, sizes first, then only the
+    kept rows' data. Retention (`purge`) cuts each stream's prefix up to
+    its newest event older than the cutoff (the server's `localTime`), in
+    transactions of at most 1,000 events that delete and move
+    `purged_through` (`$max`) together, with no lock of its own: two
+    purges write the same stream document, so one starts over and counts
+    only what it deleted. A deleted tenant's stream is purged by
+    `MongoOutbox::forget_tenant`, in one transaction that writes the
+    stream's document (creating it for a tenant with no event yet), so a
+    first insert in flight conflicts with it too. Contention past 2
+    seconds (`BUSY_AFTER`, `with_busy_after`) is `StorageError::Busy`.
+    **How the cross-port invariants get their binding:** the records
+    are S18's, so the outbox reads a projection, `wa_server_wabas` (a
+    WABA's tenant, `attached_at`, `previous_tenant_unbound_at`, its
+    numbers), which the records' owner writes with
+    `MongoOutbox::record_binding` and `forget_binding`; in the crate's
+    tests the bundle (`tests/support`, `SpikeBackend`) is the memory
+    backend's ports with this outbox, its records wrapped
+    (`MirroredRecords`) to write every binding they change, and to
+    purge a deleted tenant's stream, before they return, under one lock.
+    The decisive tests, live against the S8 replica set (MongoDB
+    7.0.45, in `tests/live_mongodb.rs`, which `just test-live` runs):
+    `live_mongodb_outbox_passes_the_outbox_cases`
+    (`conformance::outbox::run`, every case),
+    `live_mongodb_outbox_passes_the_cross_port_invariants`
+    (`conformance::invariants::run`, every case: the same data, a
+    deleted tenant's stream purged, the six route-guard cases of S2 and
+    S2b, commit order under eight writers),
+    `live_mongodb_an_insert_racing_a_move_never_reaches_the_new_holder`
+    (the race, 200 rounds, 167 to 196 of them overlapping in four runs) and
+    `live_mongodb_outbox_in_a_bundle_passes_the_conformance_suite`
+    (`conformance::run` whole, the webhook pipeline recording into it);
+    no case failed, so **no port changed**. MongoDB's own:
+    `live_mongodb_an_unbinding_waits_for_the_insert_in_flight` (feature
+    `test-hooks`: an insert held after its check; the unbinding returns
+    only once it committed),
+    `live_mongodb_write_conflicts_past_the_budget_are_busy`,
+    `live_mongodb_two_purges_at_once_count_each_event_once` (two clients,
+    1,400 events in two streams, one past a purge step) and
+    `live_mongodb_migrate_makes_the_named_collections_and_indexes_once`;
+    the stored names pinned by `schema::tests::the_stored_names_are_pinned`.
+    **Brought up to `main` on 2026-11-02** (PRs #92 to #109): the two
+    `Outbox` methods added since, implemented as Postgres does them.
+    `received_media` (M2e, required): an insert keeps the media id its
+    event records as received (`NewEvent::received_media`) in
+    `media_id`, beside `media_order`, an `ObjectId` the inserting process
+    draws (instants keep MongoDB's millisecond, so two rows of one
+    millisecond need it to come back newest first), and the lookup reads
+    the partial index `wa_server_events_media_idx` (`media_id`,
+    `created_at` descending, `media_order` descending; only the rows with
+    a string `media_id`) up to `RECEIVED_MEDIA_ROWS`, its filter
+    repeating the index's `$type` so that the planner may use it; the
+    rows go with their stream's purge and their tenant's. `get` (M2b,
+    which has a default that pages the stream): one lookup by `_id` in
+    the tenant's own stream. The bundle of the tests gained the ports'
+    new methods (the memory backend's notifier; the records' OTP
+    settings, credit allocation, signup attempts and vault entries,
+    delegated, as none changes a binding the outbox reads). Their tests:
+    `conformance::outbox::received_media` (in
+    `live_mongodb_outbox_passes_the_outbox_cases`), `conformance::live`'s
+    lookups by id and M2d's `conformance::number_events` (in the whole
+    suite), and
+    `live_mongodb_received_media_reads_its_index_in_order` (no field on
+    a row without media, the index's use counted by `$indexStats`, thirty
+    rows of three tenants read back newest first).
+    By mutation, live: the re-check dropped (the routed tenant kept), and
+    `RouteGuard::admits` dropped (the binding's tenant and numbers still
+    matched), each fail the invariants (`only the rows whose guard held`)
+    and the race (the new holder polls the old holder's event); the
+    sequence drawn outside the transaction fails the commit-order case (a
+    poll skipped and reordered events); no transaction at all fails the
+    commit-order case and the in-flight case (the race failed it in one
+    run of two); the binding's write dropped (a read only) fails the
+    in-flight case (the unbinding returned while the insert was held) and
+    passes the race, the invariants and the whole suite, so the in-flight
+    case is the fence's decisive test; before `forget_tenant` wrote the
+    stream's document it failed the race too (a tenant created again
+    polled an event whose first insert created the stream after the
+    deletion's purge), which is why that write was added: dropped alone it
+    fails nothing (the fence covers it), dropped with the fence it fails
+    the race; the deletion's mark dropped fails
+    `deleting_a_tenant_purges_its_stream`; a purge step's mark dropped
+    fails the outbox's purge case and the two purges; `Busy` mapped to a
+    backend error fails the budget case. Every one of these failures is
+    the case's own assertion.
+  - **Decided 2026-11-01** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable, the bundle and
+    the conformance suite being the seam; the licence below excepted):
+    the bindings the spike checks as a projection collection its records'
+    owner writes (`record_binding`, `forget_binding`), until S18's
+    `RecordStore` writes the same documents in its own transactions; the
+    fence as an increment of the WABA document's `insert_checks` (rather
+    than, say, a version the binding moves); the write-conflict budget of
+    2 seconds (Postgres' `lock_timeout`) with a random pause of 0.1 to 64
+    ms between attempts; purge steps of 1,000 events; the database's
+    clock (`$currentDate`, `hello`'s `localTime`); instants at MongoDB's
+    millisecond, a binding's start rounded down (its second kept) and a
+    dedup window's end rounded up (a key held longer, never shorter); an
+    event's `_id` its public id and a stream's its tenant's id (`""` for
+    the operator-only rows), the event's JSON a BSON string beside its
+    size; the hook behind a `test-hooks` feature, test code only; the
+    driver a direct dependency (the facade re-exports none until S17).
+    **Pending the owner** (stored names, before the first release): the
+    collections `wa_server_events`, `wa_server_event_streams` and
+    `wa_server_wabas`, their fields (since the merge of 2026-11-02,
+    `media_id` and `media_order` among them) and the index names
+    (`wa_server_events_media_idx` among them; docs/architecture.md §
+    Stable identifiers). **The licence, decided by the owner on
+    2026-11-02** ("Yes, upgrade deny"): CC0-1.0 is allowed, in
+    `deny.toml`'s `allow` list with the decision's date beside it, for
+    `tiny-keccak` through the driver (S9, S17), and `just deny` passes;
+    removing the entry fails it again. The same day the owner said yes
+    to D20 (a), BlueOak-1.0.0 for `minicbor` and `minicbor-serde` only,
+    which S10 adds as a scoped exception, not this item. What the
+    licence check met before: `cargo deny check` failed on this branch
+    (licenses only; advisories, bans and sources passed). The driver depends, through
+    `mongodb-internal-macros`, `macro_magic`, `const-random` and the
+    proc-macro `const-random-macro`, on `tiny-keccak` 2.0.2, under
+    CC0-1.0, which `deny.toml` does not allow. Since S8 that chain was a
+    dev-dependency's (meta-whatsapp-adapters' tests), whose licences
+    cargo-deny does not check; this crate makes the driver a normal
+    dependency, so it is checked now (S17's `mongodb` feature will meet the
+    same). Allowing CC0-1.0 was a licence choice: the owner's (§ Owner
+    touchpoints), made on 2026-11-02 as above.
+  - **Left, and why:** the bindings are the fixture's mirror, consistent
+    with the records only between two binding calls, and a deleted
+    tenant's stream is purged after the records' deletion, not in its
+    transaction (S18 does both in one); a stream's inserts serialize by
+    aborting and trying again, not by queueing on a lock as on Postgres,
+    so a hot stream (the operator-only one is shared by every WABA)
+    answers `Busy` sooner under load, and every admitted insert writes
+    its WABA's document too (measured: eight writers of one stream pass
+    the commit-order case; no load test); `forget_tenant` deletes a
+    stream in one transaction, unbounded; an instant written from a
+    clock finer than a millisecond (the fixture's memory records) is
+    floored, so the window after a move may admit an undated event less
+    than a millisecond early there (S18's records write the database's
+    milliseconds, which the routing reads too); `migrate` is not a
+    `SchemaMigrator` under a lock (idempotent, and safe on two replicas
+    at once); a commit whose result stays unknown past the budget is a
+    backend error, not `Busy` (it may have committed; Meta's redelivery
+    then meets the dedup key); one MongoDB version, one node, no sharded
+    cluster.
 - [ ] **U1. Domain errors in CrateStack** (D16; the owner's cratestack
   repository, a PR there with its own parity declaration): a domain
   error carrying our code, status and body, statuses 410, 413, 502 and
@@ -1237,8 +1396,10 @@ and `store-postgres`.
   start, a minimal `meta-whatsapp-server-api-cratestack` with one
   procedure, not the default. A refusal of D20 (a) means no CrateStack
   in the build: S10–S16 do not happen.
-  - **After:** S7, and the owner's yes to D20 (a) (the coordinator asks
-    at this step; S10 does not merge without the answer).
+  - **After:** S7. The owner's yes to D20 (a) came on 2026-11-02
+    (BlueOak-1.0.0 allowed for `minicbor` and `minicbor-serde` only):
+    this item adds that scoped exception to `deny.toml`, and nothing
+    before it does.
   - **Decisive:** `just deny` passes and fails again when the exception
     is removed; a live Postgres test with `sslmode=require` passes in a
     binary that links both providers (sqlx picks `ring` itself until
@@ -6037,11 +6198,10 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
 What waits for the owner before parity (AGENTS.md § Decisions);
 everything else goes into the parity-completion report.
 
-- **D20 (a)**, the BlueOak-1.0.0 licence of `minicbor`: asked at S10 as
-  one yes or no question. It blocks the CrateStack adoption (S10–S16)
-  and nothing else: after a refusal, `api-axum` and `store-postgres`
-  stay the defaults, and M4 publishes the client openapi-typescript
-  generates.
+- **D20 (a)**, the BlueOak-1.0.0 licence of `minicbor`: **decided by
+  the owner on 2026-11-02: yes**, for `minicbor` and `minicbor-serde`
+  only. S10 adds the scoped exception to `deny.toml` when CrateStack
+  enters the workspace; nothing waits on the owner for it any more.
 - **The merges of U1–U3** in the owner's cratestack repository. S16's
   default flip waits on U1.
 - **Publishing**: to crates.io (parity row 115) and to npm (D11, M4).
@@ -6115,8 +6275,18 @@ everything else goes into the parity-completion report.
   `partner_app_uninstalled` and `account_deleted`, and their outbox
   key's label `meta-whatsapp-server/number-event/v1` with its layout
   (design D80, D83, decided by the coordinator), added and awaiting
-  confirmation), for the
-  same reason as L5's.
+  confirmation; S9's MongoDB outbox
+  collections `wa_server_events`, `wa_server_event_streams` and
+  `wa_server_wabas`, their fields and their index names, added by a spike
+  composed into no binary and awaiting confirmation, which S18 may still
+  change before then), for the same reason as L5's.
+- **CC0-1.0 for the MongoDB driver** (S9, then S17 and S18): the
+  `mongodb` crate reaches `tiny-keccak` (CC0-1.0, a public-domain
+  dedication, compiled into a proc-macro that runs at build time)
+  through `macro_magic` and `const-random`. **Decided by the owner on
+  2026-11-02: yes**, CC0-1.0 allowed in `deny.toml`'s `allow` list (S9
+  adds it, with the decision's date beside it), so `just deny` passes
+  with the driver a normal dependency.
 - **A scope of its own for deregistering a number** (M3d, design D68):
   the coordinator decided the scope `numbers`, a confirmation in the body
   and an audit event; a separate scope would be a new stored name (keys
