@@ -1,4 +1,4 @@
-//! Roadmap M2a's decisive cases, in this crate alone: no HTTP layer and no
+//! Roadmap M2a's and M2g's decisive cases, in this crate alone: no HTTP layer and no
 //! server crate. The core's inbox services over a memory backend of the
 //! core's own tests (`tests/memory`: records that keep a WABA's moves, a
 //! vault on a memory key/value store, the library's memory inbox), the
@@ -67,4 +67,41 @@ async fn a_number_migrated_between_two_tenants_wabas_hides_its_history() {
 async fn a_capability_made_before_its_number_left_reads_nothing() {
     let backend = memory::Memory::default();
     conformance::inbox::a_capability_made_before_its_number_left_reads_nothing(&backend).await;
+}
+
+/// Roadmap M2g: the window is what a free-form reply would meet (the
+/// window, the thread's owner, the number's checks), and the list's
+/// window is the same.
+#[tokio::test]
+async fn the_window_is_what_a_reply_would_meet() {
+    let backend = memory::Memory::default();
+    conformance::inbox::the_window_is_what_a_reply_would_meet(&backend).await;
+}
+
+/// Decisive (roadmap M2g): after marking a conversation read, `unread` is
+/// 0, and Meta got one read receipt, for the latest inbound message only,
+/// and only with `notify_customer`.
+#[tokio::test]
+async fn marking_a_conversation_read_resets_unread_and_receipts_the_latest_inbound_message() {
+    let backend = memory::Memory::default();
+    conformance::inbox::marking_a_conversation_read_resets_unread_and_receipts_the_latest_inbound_message(&backend).await;
+}
+
+/// Roadmap M2g: a message by id on its own number only.
+#[tokio::test]
+async fn a_message_is_found_by_id_on_its_own_number() {
+    let backend = memory::Memory::default();
+    conformance::inbox::a_message_is_found_by_id_on_its_own_number(&backend).await;
+}
+
+/// Decisive (roadmap M2g): a message of the number's previous holder is
+/// `404` by id to the new holder; its window and its receipt never reach
+/// the new holder either.
+#[tokio::test]
+async fn the_previous_holders_message_window_and_receipt_never_reach_the_new_holder() {
+    let backend = memory::Memory::default();
+    conformance::inbox::the_previous_holders_message_window_and_receipt_never_reach_the_new_holder(
+        &backend,
+    )
+    .await;
 }

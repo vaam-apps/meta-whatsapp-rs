@@ -1,12 +1,15 @@
-//! The inbox (scope `inbox`; docs/design/server.md, section 4.2; roadmap
-//! M2a): a number's conversations, one conversation's history, and a reply
-//! to its contact.
+//! The inbox (scope `inbox`; docs/design/server.md, section 4.2; roadmaps
+//! M2a and M2g): a number's conversations, one conversation's history, its
+//! window, a reply to its contact, marking it read, and a message by id.
 //!
 //! | Route | Does |
 //! | --- | --- |
-//! | `GET /v1/numbers/{pn}/conversations` | the number's conversations, newest activity first, `?limit=&cursor=` |
+//! | `GET /v1/numbers/{pn}/conversations` | the number's conversations, newest activity first, each with its window, `?limit=&cursor=` |
 //! | `GET /v1/numbers/{pn}/conversations/{contact}/messages` | one conversation's history, newest first, `?limit=&cursor=` |
+//! | `GET /v1/numbers/{pn}/conversations/{contact}/window` | the conversation's 24-hour window, as a free-form reply would meet it now |
 //! | `POST /v1/numbers/{pn}/conversations/{contact}/messages` | a reply to the conversation's contact, with the tenant's WABA token: `POST /{pn}/messages` (`messages/send-messages`), after the window and the thread's owner are checked |
+//! | `POST /v1/numbers/{pn}/conversations/{contact}/read` | the conversation's unread count reset; with `notify_customer`, its latest inbound message marked read on Meta first, with the tenant's WABA token: `POST /{pn}/messages` (`messages/mark-message-as-read`) |
+//! | `GET /v1/numbers/{pn}/messages/{message_id}` | a message of the number's inbox, by id, with its conversation's contact |
 //!
 //! The rules are the core's ([`meta_whatsapp_server_core::inbox`]: the
 //! `Conversations` service on an owned number): what a page shows of a
@@ -15,14 +18,15 @@
 //! number (`WA_SERVER_INBOX_REPLY_CHECKS`). This module keeps the routes,
 //! the request and answer types with their OpenAPI schema, converts them
 //! to and from the core's (every field named on both sides), and renders
-//! the answers. A reply takes an `Idempotency-Key`, as a send does.
+//! the answers. A reply takes an `Idempotency-Key`, as a send does, and so
+//! does marking a conversation read (its receipt is a request to Meta).
 
 use meta_whatsapp_rs::core::store::{ConversationSummary, Direction, StoredMessage};
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
-use meta_whatsapp_server_core::inbox::Conversations;
+use meta_whatsapp_server_core::inbox::{Conversations, ListedConversation, ReplyWindow};
 use meta_whatsapp_server_core::messages::{self as domain};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -31,7 +35,8 @@ use utoipa::ToSchema;
 use super::common::{ApiJson, PageParams, PageQuery, encode_cursor, rfc3339};
 use super::messages::{
     AudioObject, ContactCard, DocumentObject, ImageObject, InteractiveObject, LocationObject,
-    MessageAccepted, MessageType, ReactionObject, StickerObject, TextObject, VideoObject, each,
+    MessageAccepted, MessageType, OptionalJson, ReactionObject, StickerObject, TextObject,
+    VideoObject, each,
 };
 use crate::auth::{Caller, OwnedNumber};
 use crate::error::{ApiError, ErrorBody};
@@ -62,10 +67,13 @@ pub struct ConversationView {
     pub last_text: Option<String>,
     /// The customer's messages since the conversation was last read.
     pub unread: u64,
+    /// Its 24-hour window, as `GET …/{contact}/window` answers it.
+    pub window: WindowView,
 }
 
-impl From<ConversationSummary> for ConversationView {
-    fn from(summary: ConversationSummary) -> Self {
+impl From<ListedConversation> for ConversationView {
+    fn from(listed: ListedConversation) -> Self {
+        let ListedConversation { summary, window } = listed;
         let ConversationSummary {
             key,
             last_message_at,
@@ -79,6 +87,38 @@ impl From<ConversationSummary> for ConversationView {
             last_inbound_at: last_inbound_at.map(rfc3339),
             last_text,
             unread,
+            window: window.into(),
+        }
+    }
+}
+
+/// A conversation's 24-hour window, as a free-form reply would meet it now.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = ConversationWindow)]
+pub struct WindowView {
+    /// Whether a free-form reply would be sent to Meta now: the checks a
+    /// reply makes (the window, which counts the customer's calls and their
+    /// messages seen in standby; the thread's owner under Conversation
+    /// Routing; on a number that moved to this tenant, a window opened
+    /// since), with nothing sent. `false`: send a template. Meta still
+    /// decides.
+    pub open: bool,
+    /// When the window the customer opened closes, or closed (RFC 3339),
+    /// as the inbox recorded it; `null` when they opened none since the
+    /// number's binding began (templates only). It may be past while
+    /// `open` is true (a handover to this app, or the window check turned
+    /// off for the number), or future while it is false (another app owns
+    /// the thread).
+    #[schema(required = true, format = DateTime)]
+    pub closes_at: Option<String>,
+}
+
+impl From<ReplyWindow> for WindowView {
+    fn from(window: ReplyWindow) -> Self {
+        let ReplyWindow { open, closes_at } = window;
+        Self {
+            open,
+            closes_at: closes_at.map(rfc3339),
         }
     }
 }
@@ -190,6 +230,26 @@ pub struct InboxMessageList {
     /// Pass as `cursor` for the next page; `null` on the last one.
     #[schema(required = true)]
     pub next_cursor: Option<String>,
+}
+
+/// A message of the number's inbox, found by id, with its conversation.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = NumberInboxMessage)]
+pub struct NumberMessageView {
+    /// Its conversation's `contact` (a BSUID, a `wa_id` or a group id):
+    /// where its history is.
+    pub contact: String,
+    /// The message, as the history answers it.
+    pub message: InboxMessageView,
+}
+
+impl From<StoredMessage> for NumberMessageView {
+    fn from(message: StoredMessage) -> Self {
+        Self {
+            contact: message.conversation.contact.clone(),
+            message: message.into(),
+        }
+    }
 }
 
 /// The schema of a message's `payload`: an open object, so a generated
@@ -305,6 +365,20 @@ impl From<ReplyMessage> for domain::ReplyMessage {
     }
 }
 
+/// `POST /v1/numbers/{pn}/conversations/{contact}/read`: an empty body, or
+/// this object.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = MarkConversationRead)]
+pub struct MarkConversationReadRequest {
+    /// Also mark the conversation's latest inbound message read on Meta
+    /// (the blue ticks the customer sees), with one request. None is sent
+    /// for a message older than 30 days (Meta's limit) or dated before the
+    /// number's binding began.
+    #[serde(default)]
+    pub notify_customer: bool,
+}
+
 /// The reply a request body asks for, in the core's order: a type the
 /// service does not send ([`domain::refuse_unsupported`]), then the body
 /// read into [`ReplyMessage`] (`422 invalid_request` on `body`, unknown
@@ -366,7 +440,9 @@ pub(crate) async fn list_conversations(
     owned: OwnedNumber,
     PageQuery(page): PageQuery,
 ) -> Result<Json<ConversationList>, ApiError> {
-    let listing = conversations(&state, &owned)?.list(&page).await?;
+    let listing = conversations(&state, &owned)?
+        .list_with_windows(&page)
+        .await?;
     let next_cursor = next_cursor(&listing);
     Ok(Json(ConversationList {
         data: listing.items.into_iter().map(Into::into).collect(),
@@ -479,6 +555,149 @@ pub(crate) async fn reply_to_conversation(
             Box::pin(reply(&state, &owned, &contact, request)),
         )
         .await
+}
+
+/// `GET /v1/numbers/{pn}/conversations/{contact}/window`: the
+/// conversation's 24-hour window.
+#[utoipa::path(
+    get,
+    path = "/v1/numbers/{pn}/conversations/{contact}/window",
+    tag = "inbox",
+    security(("api_key" = [])),
+    params(
+        ("pn" = String, Path, description = "Phone number id"),
+        ("contact" = String, Path, description = "The conversation's `contact` (a BSUID, a `wa_id` or a group id), percent-encoded"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+    ),
+    responses(
+        (status = 200, description = "The window, as a free-form reply would meet it now (nothing is sent); of a number whose WABA moved from another tenant, only a window opened since its binding's start. A contact with no conversation has a closed one", body = WindowView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (`contact`)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody),
+        (status = 503, description = "`storage_unavailable`: retry", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_conversation_window(
+    State(state): State<Grant>,
+    owned: OwnedNumber,
+    Path((_, contact)): Path<(String, String)>,
+) -> Result<Json<WindowView>, ApiError> {
+    let window = conversations(&state, &owned)?.window(&contact).await?;
+    Ok(Json(window.into()))
+}
+
+/// Mark `contact`'s conversation read: `204`, or the error, with Meta's
+/// `details` (the core's [`Conversations::mark_read`]).
+async fn mark_read(
+    state: &Grant,
+    owned: &OwnedNumber,
+    contact: &str,
+    notify_customer: bool,
+) -> Result<Success, ApiError> {
+    conversations(state, owned)?
+        .mark_read(contact, notify_customer)
+        .await?;
+    Ok(Success::no_content())
+}
+
+/// `POST /v1/numbers/{pn}/conversations/{contact}/read`: the merchant read
+/// the conversation.
+#[utoipa::path(
+    post,
+    path = "/v1/numbers/{pn}/conversations/{contact}/read",
+    tag = "inbox",
+    security(("api_key" = [])),
+    params(
+        ("pn" = String, Path, description = "Phone number id"),
+        ("contact" = String, Path, description = "The conversation's `contact` (a BSUID, a `wa_id` or a group id), percent-encoded"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+        ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never send a second read receipt (a repeat gets the kept answer, with `Idempotent-Replayed: true`)"),
+    ),
+    request_body(content = Option<MarkConversationReadRequest>, description = "Optional; an empty body resets the unread count only"),
+    responses(
+        (status = 204, description = "The unread count is 0; with `notify_customer`, Meta marked the latest inbound message read first (none is sent for a message older than 30 days, or dated before the number's binding began)"),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (`contact`, `body`), `idempotency_key_reused`, or Meta's `invalid_parameter`: the unread count is unchanged", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed: the unread count is unchanged", body = ErrorBody),
+        (status = 503, description = "`storage_unavailable`: retry", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn mark_conversation_read(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedNumber,
+    KeyHeader(key): KeyHeader,
+    Path((_, contact)): Path<(String, String)>,
+    OptionalJson(body): OptionalJson<Value>,
+) -> Response {
+    // The operation and its input (the number and the contact, as the
+    // path named them decoded, and the body as it was sent, `null` when
+    // empty), never the path's spelling.
+    let fingerprint = Fingerprint::mark_conversation_read(owned.phone_number_id(), &contact, &body);
+    let request = match parse_mark_read(body) {
+        Ok(request) => request,
+        Err(error) => return error.into_response(),
+    };
+    // Boxed: the library's inbox reads around the receipt make the future
+    // large (clippy's `large_futures`), as a reply's.
+    state
+        .idempotent(
+            &caller,
+            key,
+            fingerprint,
+            Box::pin(mark_read(&state, &owned, &contact, request.notify_customer)),
+        )
+        .await
+}
+
+/// The request an optional body asks for: none (`null`) is the default,
+/// anything else must be [`MarkConversationReadRequest`] (`422
+/// invalid_request` on `body`, unknown fields included).
+fn parse_mark_read(body: Value) -> Result<MarkConversationReadRequest, ApiError> {
+    if body.is_null() {
+        return Ok(MarkConversationReadRequest::default());
+    }
+    serde_json::from_value(body).map_err(|_| ApiError::invalid("body"))
+}
+
+/// `GET /v1/numbers/{pn}/messages/{message_id}`: a message of the
+/// number's inbox.
+#[utoipa::path(
+    get,
+    path = "/v1/numbers/{pn}/messages/{message_id}",
+    tag = "inbox",
+    security(("api_key" = [])),
+    params(
+        ("pn" = String, Path, description = "Phone number id"),
+        ("message_id" = String, Path, description = "A message's id (`wamid.…`), sent or received on the number, percent-encoded"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+    ),
+    responses(
+        (status = 200, description = "The message, as the inbox recorded it, and its conversation's contact", body = NumberMessageView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant, or no such message of the number (of a number whose WABA moved from another tenant, none dated before its binding's start)", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (`message_id`)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody),
+        (status = 503, description = "`storage_unavailable`: retry", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_inbox_message(
+    State(state): State<Grant>,
+    owned: OwnedNumber,
+    Path((_, message_id)): Path<(String, String)>,
+) -> Result<Json<NumberMessageView>, ApiError> {
+    let message = conversations(&state, &owned)?.message(&message_id).await?;
+    Ok(Json(message.into()))
 }
 
 #[cfg(test)]

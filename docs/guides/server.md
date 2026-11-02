@@ -8,14 +8,15 @@ its reasons and the owner's decisions, is
 [docs/design/server.md](../design/server.md); the rules it keeps are in
 [architecture.md](../architecture.md#service-meta-whatsapp-server).
 
-> **What exists today (milestones M1a, M1b and M1c, and M2a).** Tenants, API
+> **What exists today (milestones M1a, M1b and M1c, and M2a and M2g).** Tenants, API
 > keys, the admin API, attaching the platform's own WhatsApp Business
 > Accounts (WABAs), the numbers and business profile routes, vault key
 > rotation, sending messages (with idempotency keys), read receipts,
 > media upload, verified download and delete, template listing, creation
 > and deletion, per-tenant rate limits, Meta's webhooks into the inbox
 > and the event outbox, polling events (`GET /v1/events`), the inbox's
-> conversations, history and replies (M2a), health, metrics and the
+> conversations, history and replies (M2a), its window, read route and
+> messages by id (M2g), health, metrics and the
 > OpenAPI document. **Not yet**: live
 > events (SSE) and webhooks to your backend (M2), Embedded Signup, OTP
 > and authentication templates (M3), the Docker image and the TypeScript
@@ -545,21 +546,27 @@ The lookup has limits to know about:
 ## The inbox
 
 What the service received for a tenant's number, read and answered over
-HTTP (scope `inbox`; roadmap M2a). The inbox is the one the webhook
+HTTP (scope `inbox`; roadmaps M2a and M2g). The inbox is the one the webhook
 pipeline records into: a customer's message is there once Meta's
 delivery is answered.
 
 | Route | Does |
 | --- | --- |
-| `GET /v1/numbers/{pn}/conversations` | the number's conversations, most recent activity first: `contact` (the customer's BSUID, else their `wa_id`, else a group's id), `last_message_at`, `last_inbound_at`, `last_text`, `unread` |
+| `GET /v1/numbers/{pn}/conversations` | the number's conversations, most recent activity first: `contact` (the customer's BSUID, else their `wa_id`, else a group's id), `last_message_at`, `last_inbound_at`, `last_text`, `unread`, `window` (as the window route answers it) |
 | `GET /v1/numbers/{pn}/conversations/{contact}/messages` | one conversation's history, newest first: `id`, `direction`, `kind`, `text`, `payload` (the message as Meta sent it, or as it was sent), `status`, `timestamp`, `status_at`, `error` |
+| `GET /v1/numbers/{pn}/conversations/{contact}/window` | the conversation's 24-hour window: `open` (whether a free-form reply would go to Meta now) and `closes_at` (when the window the customer opened closes or closed; `null`: templates only) |
 | `POST /v1/numbers/{pn}/conversations/{contact}/messages` | a reply to the conversation's contact: a message's content as `POST /v1/numbers/{pn}/messages` takes it, without `to`; `202` with `message_id`, recorded `accepted` until its status events move it on |
+| `POST /v1/numbers/{pn}/conversations/{contact}/read` | the merchant read the conversation: `unread` back to 0; with `{"notify_customer": true}`, the latest message the customer sent is marked read on Meta first (the blue ticks); `204` |
+| `GET /v1/numbers/{pn}/messages/{message_id}` | one message of the number's inbox, by id: `{contact, message}`, `message` as the history answers it; `404` for an id the number has none of |
 
 ```bash
 curl -sS "$WA_SERVER/v1/numbers/106540352242922/conversations?limit=20" -H "Authorization: Bearer $KEY"
 curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.13491208655302741918/messages" \
   -H "Authorization: Bearer $KEY" -H "Idempotency-Key: ticket-881:reply-1" \
   -H "Content-Type: application/json" -d '{"type": "text", "text": {"body": "It ships tomorrow."}}'
+curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.13491208655302741918/read" \
+  -H "Authorization: Bearer $KEY" -H "Idempotency-Key: ticket-881:read-1" \
+  -H "Content-Type: application/json" -d '{"notify_customer": true}'
 ```
 
 - Lists take `limit` (1 to 100, 50 by default) and `cursor`, and answer
@@ -575,6 +582,23 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.1349120
   `WA_SERVER_INBOX_REPLY_CHECKS` turns a check off per number; Meta then
   decides (`131047`, `131070`). A reply takes an `Idempotency-Key`, as a
   send does, and its rate class is the writes'.
+- **The window route runs those checks with nothing sent**: `open` is
+  `true` exactly when a free-form reply would go to Meta now, so a UI
+  choosing between the composer and a template picker never disagrees
+  with the reply's `409`. `closes_at` is the window as recorded; it can be
+  past while `open` is true (a handover to your app, or the window check
+  turned off for the number) and ahead while it is false (another app
+  owns the thread). The list carries the same `window` for each
+  conversation, at a few reads of the inbox each.
+- **The read route** resets `unread` and, with `notify_customer`, sends
+  Meta one read receipt with the number's token, for the latest message
+  the customer sent (Meta marks the earlier ones of a one-to-one
+  conversation with it; in a group it marks only that one). No receipt
+  goes for a message older than Meta's 30 days; the count is reset all the
+  same. A receipt Meta refuses answers its error and resets nothing. It
+  takes an `Idempotency-Key`: a repeat with the same key and body sends
+  no second receipt. Its rate class is the writes'; the window and a
+  message by id are reads.
 - **A number that moved to the tenant from another one shows nothing
   from before its binding** (design D10: hidden, never purged): no
   conversation whose latest message is older, no message dated before
@@ -591,7 +615,10 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.1349120
   needs a window the customer opened since the cut (a message, a call):
   one the previous holder's customer opened is
   `409 customer_service_window_closed`, nothing sent; send a template to
-  start the conversation.
+  start the conversation. On such a number the window route shows no
+  window the previous holder's customer opened (`open: false`,
+  `closes_at: null`), a message by id dated before the cut is `404` like a
+  missing one, and the read route sends no receipt for one.
 - Reads answer `409 reconnect_required` or `number_not_connected` for a
   number whose token does not work, as every number route does.
 
@@ -890,7 +917,6 @@ SKIP token.wabas: the configuration is refused
 
 ## Not yet
 
-The inbox's window and read routes and a message by id (M2g),
 `GET /v1/events/{id}`, SSE, webhooks-out
 and the service's own number events (M2); Embedded Signup,
 disconnection by Meta's webhooks, coexistence sync and OTP (M3); the

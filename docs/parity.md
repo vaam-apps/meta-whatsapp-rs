@@ -61,7 +61,8 @@ L11b), against its code and Meta's `embedded-signup/implementation` and
 `solution-providers/manage-accounts` pages of 2026-11-01; row 123 with pre-verified numbers (roadmap L11c),
 against its code and Meta's `embedded-signup/pre-verified-numbers` and
 pre-verified number reference pages of 2026-11-01; the service's cells of rows 91, 111 and 119
-again with the inbox routes (roadmap M2a, with M2h), against their code and tests; rows 38 and 141 with the payment templates and webhooks
+again with the inbox routes (roadmap M2a, with M2h), against their code and tests, and row 111's
+again with the inbox's other routes (roadmap M2g), against their code and tests; rows 38 and 141 with the payment templates and webhooks
 (roadmap P1c), against their code and tests and Meta's payments pages of
 2026-11-01. Every cell
 about us was
@@ -74,13 +75,13 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**43 of the 132 counted rows are done on both sides.** Parity is not
+**44 of the 132 counted rows are done on both sides.** Parity is not
 reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
 | Library | 127 | 4 | 0 | 1 |
-| Service | 43 | 23 | 65 | 1 |
+| Service | 44 | 22 | 65 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
   over WhatsApp Web ("n/a — unofficial protocol"). The counted rows'
@@ -88,9 +89,9 @@ reached.
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
 - Each of the library's 4 partial or gap rows is cited by a
-  [roadmap](roadmap.md) item. Each of the service's 88 names, in its
+  [roadmap](roadmap.md) item. Each of the service's 87 names, in its
   status, the roadmap items that bring it; by family (a row can name
-  two): M2 7, M3 11, M4 2, M5 70, P 2 (payments).
+  two): M2 6, M3 11, M4 2, M5 70, P 2 (payments).
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
@@ -404,7 +405,7 @@ The owner's definition (2026-09-26):
 | # | Area | Capability | Zaileys (Web) | Zaileys (Cloud) | Meta Cloud API | Library | Service | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 110 | Storage | Auth store | Yes (plain JSON in files, SQLite, Postgres, Redis, Convex) | No (a token only) | none (ours) | `client::embedded_signup::TokenVault` (AES-256-GCM, key rotation) on `core::store::KvStore`: `adapters::store::MemoryKvStore`, `PostgresKvStore`, `SqliteKvStore`, `RedisKvStore` | Postgres and the vault; `POST /v1/admin/vault/rotate` (`server_core::admin::Admin::rotate_vault`) | done / done |
-| 111 | Storage | Message store: backends, history, chat list, a single-message lookup | Yes (memory, SQLite, Postgres, Redis, Convex) | Yes | none (ours) | `core::store::ConversationStore`: `adapters::store::MemoryConversationStore`, `PostgresConversationStore`, `SqliteConversationStore`, `RedisConversationStore` (L8), each passing `adapters::store::conversation_conformance`; the lookup by message id, scoped to the business number (`core::store::ConversationStore::message`, L5); `inbox::Inbox::conversations`, `history`; no Convex adapter (a hosted database of Zaileys' JavaScript world; a `ConversationStore` of an integrator's runs the same suite) | the service records its tenants' inbox since M1c (`server_core::inbound::Pipeline`, the core's webhook pipeline since S5e), on memory and Postgres; its chat list and history over HTTP since M2a (`server_core::inbox::Conversations::list`, `history`), from the number's binding epoch on (`server_core::authz::history_from`: a WABA moved from another tenant shows nothing from before its binding, and since M2h a number another tenant released, its WABA not moving, nothing from before its own start, `server_core::model::NumberBinding::previous_tenant_released_at`, `server_core::model::NumberTombstone`); no single-message lookup over HTTP (M2g) | done / partial (M2g) |
+| 111 | Storage | Message store: backends, history, chat list, a single-message lookup | Yes (memory, SQLite, Postgres, Redis, Convex) | Yes | none (ours) | `core::store::ConversationStore`: `adapters::store::MemoryConversationStore`, `PostgresConversationStore`, `SqliteConversationStore`, `RedisConversationStore` (L8), each passing `adapters::store::conversation_conformance`; the lookup by message id, scoped to the business number (`core::store::ConversationStore::message`, L5); `inbox::Inbox::conversations`, `history`; no Convex adapter (a hosted database of Zaileys' JavaScript world; a `ConversationStore` of an integrator's runs the same suite) | the service records its tenants' inbox since M1c (`server_core::inbound::Pipeline`, the core's webhook pipeline since S5e), on memory and Postgres; its chat list and history over HTTP since M2a (`server_core::inbox::Conversations::list`, `history`), from the number's binding epoch on (`server_core::authz::history_from`: a WABA moved from another tenant shows nothing from before its binding, and since M2h a number another tenant released, its WABA not moving, nothing from before its own start, `server_core::model::NumberBinding::previous_tenant_released_at`, `server_core::model::NumberTombstone`); the single-message lookup over HTTP since M2g, `GET /v1/numbers/{pn}/messages/{message_id}` (`server_api_axum::api::inbox::get_inbox_message`, over `server_core::inbox::Conversations::message`: the store's lookup on the number, a message dated before the binding epoch `404` like a missing one), beside the conversation's window (`server_core::inbox::Conversations::window`, in the list too, `Conversations::list_with_windows`) and the read route (`server_core::inbox::Conversations::mark_read`: unread reset, one read receipt for the latest inbound message with `notify_customer`) | done / done |
 | 112 | Storage | Pluggable stores with conformance tests | Yes (custom interfaces) | Yes | none (ours) | ports in `meta-whatsapp-core`; executable suites `adapters::store::conformance`, `conversation_conformance` | the core's ports (`server_core::store::RecordStore`, `IdempotencyRecords`, `LeaderLock`, `Janitor`, `SchemaMigrator`; `server_core::outbox::Outbox`), bundled per database as `server_core::backend::Backend` with the library's `KvStore` and `ConversationStore`, implemented in memory and on Postgres (`server_store_memory::MemoryBackend`, `PgBackend`), with the contracts any backend must meet since S2 (the outbox's `server_core::outbox::RouteGuard` checked with each insert, `server_core::model::BindOutcome::NoSuchTenant`, leased turns, typed contention, byte order); and since S3 their executable suites in core, which both backends pass (`server_core::conformance::run`, feature `conformance`, over a factory of empty `Backend`s: `records`, `outbox`, the cross-port `invariants` with the `RouteGuard` cases, `capabilities`, `races`), so a backend of an integrator's runs the same suites; and since S4 the service is composed from the bundle alone (`server_http::state::AppState::from_backend`, `server::serve::serve_with`; housekeeping is `server_core::housekeeping::run` over it, and the command line opens it through a `server::serve::BackendFactory`), so a backend of an integrator's is served with no change to the server; and since S2b every backend records a WABA's last unbinding from another tenant (`server_core::model::WabaTombstone`, read into `server_core::model::WabaBinding`) and a bind generation in `server_core::model::BindingEpoch`, which the suites hold them to (`records`, `invariants`, `capabilities`, `webhooks`; the Postgres one by an additive migration) (design D26) | done / done |
 | 113 | Errors | Typed errors with retry guidance | Yes | Yes | `support/error-codes.md` | `core::Error`, `Error::in_step`; `core::ErrorKind`, `ErrorKind::ALL`, `is_retryable` | the §5 error model as data on `ErrorKind::as_str` (`server_core::error`, over HTTP `server_http::error`), each code a constant generated from the §5.2 table, so a misspelled one does not compile (`server_core::error::ErrorCode`, S6) | done / done |
 | 114 | Ops | Logging without secrets or personal data; metrics | Partial (a custom logger) | Partial | none (ours) | `tracing`; secrets kept out of `Debug`; webhook log redaction (`webhooks::redact`) | request logs with the key id, Prometheus `/metrics` (`server_http::api::ops::metrics`) | done / done |

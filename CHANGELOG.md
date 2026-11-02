@@ -218,6 +218,43 @@ stored data, the owner's).
 
 ### Added
 
+- **The inbox's other routes in the service** (roadmap M2g; parity row
+  111 now done on the service's side; design D60–D63, proposed). Scope
+  `inbox`, each from the number's binding epoch on, as M2a's routes:
+  - `GET /v1/numbers/{pn}/conversations/{contact}/window`
+    (`get_conversation_window`, read class): `{open, closes_at}`, `open`
+    what a free-form reply would meet now (the reply's own checks, the
+    library's `Inbox::check_reply` among them, run with nothing sent),
+    `closes_at` the recorded window; a window the previous holder's
+    customer opened shows neither. The conversation list's items gain
+    the same `window` (`Conversations::list_with_windows`).
+  - `POST /v1/numbers/{pn}/conversations/{contact}/read`
+    (`mark_conversation_read`, send class, an optional
+    `Idempotency-Key` over `Fingerprint::mark_conversation_read`):
+    `unread` reset; with `{"notify_customer": true}`, one read receipt
+    first (`messages/mark-message-as-read`, the number's token) for the
+    latest inbound message only, never for one dated before the epoch
+    or older than Meta's 30 days (`inbox::READ_RECEIPT_MAX_AGE`); a
+    receipt Meta refuses resets nothing. `204`, with no body and no
+    `Content-Type`, replayed alike (`Success::no_content`).
+  - `GET /v1/numbers/{pn}/messages/{message_id}` (`get_inbox_message`,
+    read class): `{contact, message}` through `ConversationStore::message`;
+    a message dated before the epoch is `404 not_found`, the answer for
+    an id the number never had.
+  - The OpenAPI document is additive only (513 lines added: three paths,
+    the schemas `ConversationWindow`, `MarkConversationRead` and
+    `NumberInboxMessage`, and the required `window` on `Conversation`;
+    the one line removed is the comma after `unread` in its `required`
+    list). Decisive tests: `conformance::inbox::
+    the_previous_holders_message_window_and_receipt_never_reach_the_new_holder`
+    and `marking_a_conversation_read_resets_unread_and_receipts_the_latest_inbound_message`
+    on the core's memory backend, the memory crate's and live on
+    Postgres; over HTTP the same two in `tests/inbox.rs` and
+    `live_postgres.rs`, with the window route, Meta's refusal of a
+    receipt, the scope, M1.3's table, M1.5's sentinel and M1.7's log
+    capture over the new routes.
+  - No new setting and no new stored name.
+
 - **The payment templates and the payment webhooks** (roadmap P1c,
   parity rows 38, now done in the library, and 141; from
   `payments/payments-in/orderdetailstemplate`, `orderstatustemplate`,

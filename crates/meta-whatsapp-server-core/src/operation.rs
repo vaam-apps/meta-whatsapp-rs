@@ -63,11 +63,21 @@ pub enum Operation {
     /// `reply_to_conversation`: a reply to a conversation's contact,
     /// checked against the window and the thread's owner first.
     ReplyToConversation,
+    /// `get_conversation_window`: a conversation's 24-hour window, as a
+    /// reply would meet it (roadmap M2g).
+    GetConversationWindow,
+    /// `mark_conversation_read`: a conversation's unread count reset, and
+    /// on request its latest inbound message marked read on Meta (roadmap
+    /// M2g).
+    MarkConversationRead,
+    /// `get_inbox_message`: a message of a number's inbox, by id (roadmap
+    /// M2g).
+    GetInboxMessage,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 22] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -87,6 +97,9 @@ impl Operation {
         Self::ListConversations,
         Self::ListConversationMessages,
         Self::ReplyToConversation,
+        Self::GetConversationWindow,
+        Self::MarkConversationRead,
+        Self::GetInboxMessage,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -111,6 +124,9 @@ impl Operation {
             Self::ListConversations => "list_conversations",
             Self::ListConversationMessages => "list_conversation_messages",
             Self::ReplyToConversation => "reply_to_conversation",
+            Self::GetConversationWindow => "get_conversation_window",
+            Self::MarkConversationRead => "mark_conversation_read",
+            Self::GetInboxMessage => "get_inbox_message",
         }
     }
 
@@ -137,7 +153,10 @@ impl Operation {
             Self::ListEvents => Scope::Events,
             Self::ListConversations
             | Self::ListConversationMessages
-            | Self::ReplyToConversation => Scope::Inbox,
+            | Self::ReplyToConversation
+            | Self::GetConversationWindow
+            | Self::MarkConversationRead
+            | Self::GetInboxMessage => Scope::Inbox,
         }
     }
 }

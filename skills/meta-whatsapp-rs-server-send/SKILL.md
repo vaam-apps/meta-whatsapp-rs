@@ -22,7 +22,7 @@ notifications, replies, files or templates (scopes `send`, `media`, `templates`,
 | `POST /v1/numbers/{pn}/media` | upload (a multipart form: `type`, then `file`); `201` with `media_id` |
 | `GET /v1/numbers/{pn}/media/{media_id}`, `DELETE /v1/numbers/{pn}/media/{media_id}` | download, verified; delete |
 | `GET /v1/wabas/{waba_id}/templates`, `GET /v1/wabas/{waba_id}/templates/{id}`, `POST /v1/wabas/{waba_id}/templates`, `DELETE /v1/wabas/{waba_id}/templates` | list (cached 60 s per WABA), one, create, delete by `name` (and `id`) |
-| `GET /v1/numbers/{pn}/conversations`, `GET` and `POST /v1/numbers/{pn}/conversations/{contact}/messages` | the inbox (scope `inbox`): conversations, a history, a reply checked against the 24-hour window and the thread's owner: [references/inbox.md](references/inbox.md) |
+| `GET /v1/numbers/{pn}/conversations`, `GET` and `POST /v1/numbers/{pn}/conversations/{contact}/messages`, `GET /v1/numbers/{pn}/conversations/{contact}/window`, `POST /v1/numbers/{pn}/conversations/{contact}/read`, `GET /v1/numbers/{pn}/messages/{message_id}` | the inbox (scope `inbox`): conversations, a history, a reply checked against the 24-hour window and the thread's owner, the window itself, marking read, a message by id: [references/inbox.md](references/inbox.md) |
 
 ## Send a message
 

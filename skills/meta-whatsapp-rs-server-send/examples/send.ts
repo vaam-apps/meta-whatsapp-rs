@@ -21,6 +21,8 @@ export type ReplyMessage = components["schemas"]["ReplyMessage"];
 export type ConversationsQuery = NonNullable<
   paths["/v1/numbers/{pn}/conversations"]["get"]["parameters"]["query"]
 >;
+export type ConversationWindow = components["schemas"]["ConversationWindow"];
+export type NumberInboxMessage = components["schemas"]["NumberInboxMessage"];
 
 // One client per key. A platform key also names the tenant it acts for.
 export function whatsapp(baseUrl: string, key: string, tenant?: string) {
@@ -133,6 +135,47 @@ export async function reply(api: WhatsApp, pn: string, contact: string, message:
     return outcome(error.error, response.headers.get("Retry-After"));
   }
   return { kind: "sent", messageId: data.message_id };
+}
+
+// The conversation's 24-hour window (scope inbox): `open` is what a
+// free-form reply would meet now, so the composer and the reply agree;
+// otherwise offer a template.
+export async function replyWindow(api: WhatsApp, pn: string, contact: string): Promise<ConversationWindow> {
+  const { data, error } = await api.GET("/v1/numbers/{pn}/conversations/{contact}/window", {
+    params: { path: { pn, contact } },
+  });
+  if (error) {
+    throw new WhatsAppError(error.error);
+  }
+  return data;
+}
+
+// The merchant opened the conversation (scope inbox): unread back to 0, and
+// with notifyCustomer the blue ticks on the customer's latest message.
+// The same reference never sends a second receipt.
+export async function markConversationRead(api: WhatsApp, pn: string, contact: string, notifyCustomer: boolean, reference: string) {
+  const { error } = await api.POST("/v1/numbers/{pn}/conversations/{contact}/read", {
+    params: { path: { pn, contact }, header: { "Idempotency-Key": reference } },
+    body: { notify_customer: notifyCustomer },
+  });
+  if (error) {
+    throw new WhatsAppError(error.error);
+  }
+}
+
+// A message of the number's inbox by id (a status event's), with the
+// conversation it belongs to; undefined when the inbox has none.
+export async function inboxMessage(api: WhatsApp, pn: string, messageId: string): Promise<NumberInboxMessage | undefined> {
+  const { data, error, response } = await api.GET("/v1/numbers/{pn}/messages/{message_id}", {
+    params: { path: { pn, message_id: messageId } },
+  });
+  if (response.status === 404) {
+    return undefined;
+  }
+  if (error) {
+    throw new WhatsAppError(error.error);
+  }
+  return data;
 }
 
 // Blue ticks on a received message; "typing…" only when a reply follows.

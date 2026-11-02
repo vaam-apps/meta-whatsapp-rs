@@ -136,6 +136,9 @@ fn inbox_routes() -> OpenApiRouter<Grant> {
             inbox::list_conversation_messages,
             inbox::reply_to_conversation
         ))
+        .routes(routes!(inbox::get_conversation_window))
+        .routes(routes!(inbox::mark_conversation_read))
+        .routes(routes!(inbox::get_inbox_message))
 }
 
 fn templates_routes() -> OpenApiRouter<Grant> {

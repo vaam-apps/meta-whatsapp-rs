@@ -10,6 +10,9 @@ number: a customer's message is there once Meta's delivery is answered.
 | `GET /v1/numbers/{pn}/conversations` | conversations, most recent activity first: `contact`, `last_message_at`, `last_inbound_at`, `last_text`, `unread` |
 | `GET /v1/numbers/{pn}/conversations/{contact}/messages` | one conversation's history, newest first: `id`, `direction`, `kind`, `text`, `payload`, `status`, `timestamp`, `status_at`, `error` |
 | `POST /v1/numbers/{pn}/conversations/{contact}/messages` | a reply to the conversation's contact; `202` with `message_id`, recorded in its history until its status events move it on |
+| `GET /v1/numbers/{pn}/conversations/{contact}/window` | the 24-hour window: `open`, `closes_at` (also on each conversation of the list, as `window`) |
+| `POST /v1/numbers/{pn}/conversations/{contact}/read` | `unread` back to 0; with `notify_customer`, a read receipt for the customer's latest message; `204` |
+| `GET /v1/numbers/{pn}/messages/{message_id}` | a message of the number's inbox by id: `contact`, `message` |
 
 A conversation's `contact` is the customer's BSUID, else their `wa_id`;
 percent-encode it in a path (openapi-fetch does). Lists page by `limit`
@@ -50,4 +53,37 @@ export async function reply(api: WhatsApp, pn: string, contact: string, message:
   `customer_service_window_closed`, nothing sent (send a template).
 - The inbox keeps everything unless the operator sets
   `WA_SERVER_INBOX_RETENTION`.
-- No window or read route, and no message by id, yet.
+
+Ask the window before showing a composer: `open` is exactly whether a
+free-form reply would go to Meta now (the service runs the reply's own
+checks, nothing sent), so the composer and the `409` never disagree.
+`closes_at` is the window as recorded (null when the customer never opened
+one); it may be past while `open` is true (a handover to you) or ahead
+while it is false (another app owns the thread):
+
+```ts
+export async function replyWindow(api: WhatsApp, pn: string, contact: string): Promise<ConversationWindow> {
+  const { data, error } = await api.GET("/v1/numbers/{pn}/conversations/{contact}/window", {
+    params: { path: { pn, contact } },
+  });
+```
+
+When the merchant opens a conversation, mark it read; `notify_customer`
+also sends Meta one read receipt for the customer's latest message (none
+for one older than 30 days). Under an `Idempotency-Key`, a repeat sends no
+second receipt; a receipt Meta refuses leaves `unread` as it was:
+
+```ts
+export async function markConversationRead(api: WhatsApp, pn: string, contact: string, notifyCustomer: boolean, reference: string) {
+  const { error } = await api.POST("/v1/numbers/{pn}/conversations/{contact}/read", {
+    params: { path: { pn, contact }, header: { "Idempotency-Key": reference } },
+    body: { notify_customer: notifyCustomer },
+  });
+```
+
+- A message by id (`GET /v1/numbers/{pn}/messages/{message_id}`, a
+  status event's message id) answers its conversation's `contact` beside it;
+  `404` when the inbox has none on that number.
+- On a number that moved to you, a window the previous holder's customer
+  opened shows `open: false` and `closes_at: null`, their message by id is
+  `404`, and no receipt goes for it.
