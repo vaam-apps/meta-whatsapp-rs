@@ -403,7 +403,9 @@ async fn every_rate_limited_operation_declares_its_429() {
 }
 
 /// Exactly the routes that honour `Idempotency-Key` declare it (sends,
-/// uploads, template creation: docs/design/server.md, section 5.4), and
+/// inbox replies, uploads, template creation, and since roadmap M3d a
+/// verification code's request, a registration and a deregistration:
+/// docs/design/server.md, section 5.4), and
 /// the upload is a multipart form.
 #[test]
 fn idempotent_operations_declare_their_key() {
@@ -424,8 +426,11 @@ fn idempotent_operations_declare_their_key() {
         declaring.into_iter().collect::<Vec<_>>(),
         [
             "POST /v1/numbers/{pn}/conversations/{contact}/messages",
+            "POST /v1/numbers/{pn}/deregister",
             "POST /v1/numbers/{pn}/media",
             "POST /v1/numbers/{pn}/messages",
+            "POST /v1/numbers/{pn}/register",
+            "POST /v1/numbers/{pn}/request-code",
             "POST /v1/wabas/{waba_id}/templates",
         ]
     );

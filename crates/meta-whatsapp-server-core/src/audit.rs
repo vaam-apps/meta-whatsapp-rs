@@ -4,8 +4,8 @@
 //! routes them by target alone; the services of [`crate::admin`] emit
 //! theirs, and an API adapter emits the tenant's.
 //!
-//! An event names ids only (a tenant, a key's public id, a WABA): never a
-//! secret or a phone number.
+//! An event names ids only (a tenant, a key's public id, a WABA, a phone
+//! number id): never a secret or a phone number.
 
 /// An operator's change, logged at `info` with the target `audit`:
 /// `action`, the admin key's public id, and the ids it touched (tenant,
@@ -18,13 +18,15 @@ pub fn audit(action: &'static str, admin_key_id: &str, subject: &Subject<'_>) {
         tenant = subject.tenant,
         key_id = subject.key_id,
         waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
         "admin change"
     );
 }
 
 /// A tenant's change that destroys something at Meta (a template
-/// deletion), logged like [`audit`] (target `audit`) with the public id of
-/// the tenant or platform key that made it.
+/// deletion, a number deregistered) or a number's security (its two-step
+/// verification PIN set), logged like [`audit`] (target `audit`) with the
+/// public id of the tenant or platform key that made it.
 pub fn tenant_audit(action: &'static str, key_id: &str, subject: &Subject<'_>) {
     tracing::info!(
         target: "audit",
@@ -32,6 +34,7 @@ pub fn tenant_audit(action: &'static str, key_id: &str, subject: &Subject<'_>) {
         key_id,
         tenant = subject.tenant,
         waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
         "tenant change"
     );
 }
@@ -45,4 +48,6 @@ pub struct Subject<'a> {
     pub key_id: Option<&'a str>,
     /// A WABA id.
     pub waba_id: Option<&'a str>,
+    /// A phone number id (Meta's id of the number, never the number).
+    pub phone_number_id: Option<&'a str>,
 }

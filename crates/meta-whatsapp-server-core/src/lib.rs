@@ -81,6 +81,7 @@ pub mod observe;
 pub mod operation;
 pub mod outbox;
 pub mod ratelimit;
+pub mod registration;
 pub mod request;
 pub mod store;
 pub mod templates;

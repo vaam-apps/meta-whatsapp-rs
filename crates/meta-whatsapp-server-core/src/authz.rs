@@ -898,6 +898,13 @@ impl Authorizer {
     /// marks the numbers of the binding the capability was made from, and
     /// nothing when the WABA was unbound (and attached again) since.
     async fn graph_failed_at(&self, epoch: &BindingEpoch, error: &Error) -> ServiceError {
+        self.mark_failed_at(epoch, error).await;
+        ServiceError::from_library(error)
+    }
+
+    /// What [`Self::graph_failed_at`] marks: a `190` (or `0`) marks the
+    /// numbers of `epoch`'s binding `reconnect_required`.
+    async fn mark_failed_at(&self, epoch: &BindingEpoch, error: &Error) {
         if error.kind() == ErrorKind::Authentication {
             match self
                 .records
@@ -913,7 +920,6 @@ impl Authorizer {
                 }
             }
         }
-        ServiceError::from_library(error)
     }
 }
 
@@ -1103,6 +1109,21 @@ impl OwnedNumber {
             return refused;
         }
         authz.graph_failed_at(&self.epoch, error).await
+    }
+
+    /// [`Self::failed`], with Meta's texts in no log
+    /// ([`ServiceError::from_library_withholding_texts`]): for a send whose
+    /// Graph error may quote a secret parameter (an OTP code).
+    pub async fn failed_withholding_texts(
+        &self,
+        authz: &Authorizer,
+        error: &Error,
+    ) -> ServiceError {
+        if let Err(refused) = authz.check(&self.issuer, "OwnedNumber::failed") {
+            return refused;
+        }
+        authz.mark_failed_at(&self.epoch, error).await;
+        ServiceError::from_library_withholding_texts(error)
     }
 }
 

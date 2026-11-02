@@ -1322,3 +1322,59 @@ async fn live_postgres_a_webhook_into_one_replica_reaches_a_stream_on_another() 
         "a stream on tenant b's number saw tenant a's events"
     );
 }
+
+/// Roadmap M3d's decisive test on Postgres (decision D6): after a
+/// registration's whole flow (`common::registration::flow`), no row of any
+/// table of the service's schema (the records, the idempotency records
+/// and their kept answers, the outbox, the inbox, the library's `wa_kv`:
+/// the vault and the attempt counters) holds the PIN, the wrong PIN or the
+/// code, as text or as the hex Postgres prints a `bytea` in; while the
+/// sweep does find the number's id where it is stored (the control).
+/// Storing the PIN in any table fails it.
+#[tokio::test]
+async fn live_postgres_a_registration_leaves_its_pin_in_no_table() {
+    use common::registration::{self as flow, PN, SECRETS};
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let h = harness(&db).await;
+    let key = flow::connected(&h).await;
+    flow::flow(&h, &key).await;
+    flow::meta_got_the_secrets(&h);
+    let pool = db.pool(2).await;
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT table_name::text FROM information_schema.tables \
+         WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        tables.iter().any(|t| t == "wa_kv") && tables.iter().any(|t| t == "wa_server_idempotency"),
+        "{tables:?}"
+    );
+    let mut rows = 0;
+    let mut found_number = false;
+    for table in &tables {
+        let texts: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT t::text FROM \"{table}\" t"
+        )))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        for text in texts {
+            rows += 1;
+            found_number |= text.contains(PN);
+            for secret in SECRETS {
+                assert!(!text.contains(secret), "{table} holds {secret}: {text}");
+                let hex = hex::encode(secret);
+                assert!(
+                    !text.contains(&hex),
+                    "{table} holds {secret} as bytes: {text}"
+                );
+            }
+        }
+    }
+    assert!(rows > 5, "{rows} rows swept");
+    assert!(found_number, "the sweep reads the stored rows");
+}

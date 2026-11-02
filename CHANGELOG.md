@@ -225,6 +225,30 @@ stored data, the owner's).
 
 ### Added
 
+- **A number's registration and its two-step PIN in the service**
+  (roadmap M3d; design §4.2, D6, and D65–D69 proposed, not decided;
+  parity rows 108 and 128, categories 20 and 35, coverage row 33).
+  Routes, additive in `openapi/v1.json` (tag `registration`, scope
+  `numbers`): `POST /v1/numbers/{pn}/request-code`, `…/verify-code`,
+  `…/register`, `…/deregister` and `…/two-step-pin`, each over the
+  core's `registration::Registration` with the number's own token,
+  answering `200 {phone_number_id, status}`. The PIN is typed per attempt
+  and stored nowhere: not in an answer, a log at any level, an error, an
+  audit event, an idempotency record (a registration's key covers its
+  number and region, never its PIN), an event or a metric; a body that
+  does not parse is refused without quoting it; Meta's texts are dropped
+  from the answers and the logs of these routes. Attempts are counted per
+  number for every replica on the bundle's `KvStore`
+  (`wa.server.registration`, pending the owner's confirmation), after
+  ownership: registering and deregistering 5 in 72 hours, a code's
+  request and check 10 an hour, `429` past them; new settings
+  `WA_SERVER_REGISTRATION_ATTEMPTS`, `WA_SERVER_REGISTRATION_WINDOW`,
+  `WA_SERVER_VERIFICATION_ATTEMPTS`, `WA_SERVER_VERIFICATION_WINDOW`. A
+  deregistration names the number again in its body (`confirm`) and,
+  like a PIN change, is a tenant audit event (`number_deregistered`,
+  `two_step_pin_set`), which now names the number's id
+  (`audit::Subject::phone_number_id`). `Idempotency-Key` on
+  `request-code`, `register` and `deregister`.
 - **Live updates in the service** (roadmap M2b; design §4.5, D39–D43
   decided by the coordinator on 2026-11-01;
   parity row 10, categories 19 and 39, coverage row 33).

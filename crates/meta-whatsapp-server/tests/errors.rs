@@ -351,6 +351,13 @@ const CALLS_META: &[&str] = &[
     "DELETE /v1/wabas/{waba_id}/templates",
     "GET /v1/wabas/{waba_id}/templates/{id}",
     "POST /v1/numbers/{pn}/conversations/{contact}/messages",
+    // Roadmap M3d: none of them in `DETAILS_KEPT` (Meta's texts could
+    // quote the PIN or the code).
+    "POST /v1/numbers/{pn}/request-code",
+    "POST /v1/numbers/{pn}/verify-code",
+    "POST /v1/numbers/{pn}/register",
+    "POST /v1/numbers/{pn}/deregister",
+    "POST /v1/numbers/{pn}/two-step-pin",
 ];
 
 /// Operations whose call to Meta is best effort: whatever Meta answers,

@@ -7,6 +7,7 @@ pub mod capture;
 pub mod inbox;
 pub mod meta;
 pub mod moving;
+pub mod registration;
 pub mod scenarios;
 pub mod sse;
 
@@ -58,11 +59,13 @@ pub const PREVIOUS_APP_SECRET: &str = "previous-app-secret-for-tests";
 /// [`PREVIOUS_APP_SECRET`].
 pub const DEFAULT_APP_SECRETS: &[&str] = &[APP_SECRET, PREVIOUS_APP_SECRET];
 
-/// A `KvStore` that counts reads of the token vault's namespace.
+/// A `KvStore` that counts reads of the token vault's namespace, and
+/// keeps every key and value written (roadmap M3d's sweep for a PIN).
 #[derive(Debug)]
 pub struct CountingKv {
     inner: Arc<dyn KvStore>,
     vault_reads: AtomicUsize,
+    writes: Mutex<Vec<(StoreKey, Vec<u8>)>>,
 }
 
 impl CountingKv {
@@ -71,7 +74,20 @@ impl CountingKv {
         Self {
             inner,
             vault_reads: AtomicUsize::new(0),
+            writes: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Every key and value written so far, in order (deletions aside).
+    pub fn writes(&self) -> Vec<(StoreKey, Vec<u8>)> {
+        self.writes.lock().unwrap().clone()
+    }
+
+    fn wrote(&self, key: &StoreKey, value: &[u8]) {
+        self.writes
+            .lock()
+            .unwrap()
+            .push((key.clone(), value.to_vec()));
     }
 
     /// Reads of the vault's namespace so far.
@@ -94,6 +110,7 @@ impl KvStore for CountingKv {
         value: Vec<u8>,
         expiry: Expiry,
     ) -> Result<u64, StorageError> {
+        self.wrote(key, &value);
         self.inner.put(key, value, expiry).await
     }
     async fn put_if_absent(
@@ -102,6 +119,7 @@ impl KvStore for CountingKv {
         value: Vec<u8>,
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
+        self.wrote(key, &value);
         self.inner.put_if_absent(key, value, expiry).await
     }
     async fn compare_and_swap(
@@ -111,6 +129,9 @@ impl KvStore for CountingKv {
         new: Option<Vec<u8>>,
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
+        if let Some(value) = &new {
+            self.wrote(key, value);
+        }
         self.inner
             .compare_and_swap(key, expected, new, expiry)
             .await
@@ -948,10 +969,23 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             serde_json::json!({"waba_id": "555000111", "token": "SYSTEM-TOKEN-FOR-SAMPLES"})
         }
         ("PATCH", "/v1/numbers/{pn}/profile") => serde_json::json!({"about": "Open 9 to 5"}),
+        // business-phone-numbers/registration's and the request-code
+        // reference's examples (roadmap M3d).
+        ("POST", "/v1/numbers/{pn}/request-code") => {
+            serde_json::json!({"code_method": "SMS", "language": "en_US"})
+        }
+        ("POST", "/v1/numbers/{pn}/verify-code") => serde_json::json!({"code": "123830"}),
+        ("POST", "/v1/numbers/{pn}/register" | "/v1/numbers/{pn}/two-step-pin") => {
+            serde_json::json!({"pin": SAMPLE_PIN})
+        }
         ("POST" | "PATCH" | "PUT", _) => serde_json::json!({}),
         _ => return None,
     })
 }
+
+/// The PIN every sample registration sends
+/// (`business-phone-numbers/registration`'s example).
+pub const SAMPLE_PIN: &str = "212834";
 
 /// The file every sample upload sends: a PNG signature.
 pub const SAMPLE_PNG: &[u8] = b"\x89PNG\r\n\x1a\n-sample-image";
@@ -973,6 +1007,12 @@ pub fn sample_call(operation: &Operation, sample: &Sample, key: Option<&str>) ->
             ("type", None, b"image/png"),
             ("file", Some("voucher.png"), SAMPLE_PNG),
         ]);
+    }
+    // A deregistration confirms the path's number (roadmap M3d).
+    if (operation.method.as_str(), operation.template.as_str())
+        == ("POST", "/v1/numbers/{pn}/deregister")
+    {
+        return call.json(&serde_json::json!({"confirm": sample.pn}));
     }
     if let Some(body) = sample_body(&operation.method, &operation.template) {
         call = call.json(&body);

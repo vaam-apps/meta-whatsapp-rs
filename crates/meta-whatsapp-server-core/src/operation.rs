@@ -70,11 +70,24 @@ pub enum Operation {
     /// `reply_to_conversation`: a reply to a conversation's contact,
     /// checked against the window and the thread's owner first.
     ReplyToConversation,
+    /// `request_verification_code`: a verification code sent to a number
+    /// by SMS or voice call (roadmap M3d).
+    RequestVerificationCode,
+    /// `verify_code`: a number's verification code checked (roadmap M3d).
+    VerifyCode,
+    /// `register_number`: a number registered with its two-step
+    /// verification PIN (roadmap M3d).
+    RegisterNumber,
+    /// `deregister_number`: a number deregistered (roadmap M3d).
+    DeregisterNumber,
+    /// `set_two_step_pin`: a number's two-step verification PIN set
+    /// (roadmap M3d).
+    SetTwoStepPin,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 27] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -97,6 +110,11 @@ impl Operation {
         Self::ListConversations,
         Self::ListConversationMessages,
         Self::ReplyToConversation,
+        Self::RequestVerificationCode,
+        Self::VerifyCode,
+        Self::RegisterNumber,
+        Self::DeregisterNumber,
+        Self::SetTwoStepPin,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -124,6 +142,11 @@ impl Operation {
             Self::ListConversations => "list_conversations",
             Self::ListConversationMessages => "list_conversation_messages",
             Self::ReplyToConversation => "reply_to_conversation",
+            Self::RequestVerificationCode => "request_verification_code",
+            Self::VerifyCode => "verify_code",
+            Self::RegisterNumber => "register_number",
+            Self::DeregisterNumber => "deregister_number",
+            Self::SetTwoStepPin => "set_two_step_pin",
         }
     }
 
@@ -140,7 +163,12 @@ impl Operation {
             | Self::GetNumber
             | Self::GetProfile
             | Self::UpdateProfile
-            | Self::DisconnectWaba => Scope::Numbers,
+            | Self::DisconnectWaba
+            | Self::RequestVerificationCode
+            | Self::VerifyCode
+            | Self::RegisterNumber
+            | Self::DeregisterNumber
+            | Self::SetTwoStepPin => Scope::Numbers,
             Self::SendMessage | Self::MarkRead => Scope::Send,
             Self::UploadMedia | Self::DownloadMedia | Self::DeleteMedia => Scope::Media,
             Self::ListTemplates

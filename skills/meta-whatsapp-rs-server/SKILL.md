@@ -17,11 +17,10 @@ Rust code uses the library directly (`meta-whatsapp-rs`).
 
 ## What the service does today (milestones M1a to M1c, and M2a)
 
-Live events (SSE), webhooks to your backend, Embedded Signup and OTP do
-not exist yet: write no code against them. Sends, media, templates and
-the inbox (conversations, replies) do (load `meta-whatsapp-rs-server-send`),
-and so do Meta's webhooks and polling events (load
-`meta-whatsapp-rs-server-events`).
+Webhooks to your backend, Embedded Signup and OTP do not exist yet. Sends,
+media, templates and the inbox do (`meta-whatsapp-rs-server-send`), so do
+Meta's webhooks, polled or live (`meta-whatsapp-rs-server-events`), and a
+number's registration and PIN (`meta-whatsapp-rs-server-registration`).
 
 | Route | Needs | Does |
 | --- | --- | --- |
@@ -30,6 +29,7 @@ and so do Meta's webhooks and polling events (load
 | `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `websites`, `vertical`) |
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
 | `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, `GET /v1/numbers/{pn}/conversations`, … | scopes `send`, `media`, `templates`, `inbox` | sends, media, templates, the inbox: `meta-whatsapp-rs-server-send` |
+| `POST /v1/numbers/{pn}/request-code`, `POST /v1/numbers/{pn}/register`, … | scope `numbers` | the number's verification code, registration, PIN, deregistration: `meta-whatsapp-rs-server-registration` |
 | `GET /v1/events` | scope `events` | Meta's webhook events for the tenant, after a cursor: `meta-whatsapp-rs-server-events` |
 | `POST /v1/admin/tenants`, `POST /v1/admin/tenants/{id}/keys`, `POST /v1/admin/platform-keys` | admin key | tenants and keys |
 | `POST /v1/admin/tenants/{id}/wabas`, `GET /v1/admin/wabas/{waba_id}`, `DELETE /v1/admin/wabas/{waba_id}/binding` | admin key | attach the platform's own WABA (numbers listed by Meta, app subscribed); who holds one; unbind it (token deleted too) |

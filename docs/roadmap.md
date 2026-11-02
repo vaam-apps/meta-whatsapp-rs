@@ -4673,12 +4673,59 @@ design's (§9).
   templates.
   - **After:** S7.
   - **Decisive:** M3.5.
-- [ ] **M3d. Registration and the PIN** (rows 108, 128): request and
+- [x] **M3d. Registration and the PIN** (rows 108, 128): request and
   verify a code, register, deregister; the PIN typed per attempt and
   never stored (D6).
   - **After:** S7.
   - **Decisive:** a sentinel PIN is found in no stored row and no log
     capture after a registration (storing it anywhere fails the test).
+  - **Landed:** five routes in `meta-whatsapp-server-api-axum`
+    (`api::registration`, tag `registration`, scope `numbers`, the send
+    class), each over the core's `registration::Registration`, opened on
+    an `OwnedNumber` and a `Caller` its `Authorizer` admits (key, tenant,
+    scope, ownership, the vault, then the body): `POST
+    /v1/numbers/{pn}/request-code` (`request_verification_code`),
+    `…/verify-code` (`verify_code`), `…/register` (`register_number`),
+    `…/deregister` (`deregister_number`) and `…/two-step-pin`
+    (`set_two_step_pin`, the PIN row 128 counts), each `200
+    {phone_number_id, status}` and Meta's documented request with the
+    number's own token. The PIN and the code are read into the library's
+    `TwoStepPin` and `VerificationCode` before anything else
+    (`registration::pin`, `registration::verification_code`; the bodies
+    that hold them have no `Debug`, and `ApiJson` never quotes a body);
+    a failed call keeps Meta's code, subcode and trace id and none of its
+    texts, in the answer or any log (`OwnedNumber::failed_withholding_texts`
+    and `ServiceError::from_library_withholding_texts`, carried over
+    byte for byte from M3c's pull request). Attempts are counted per
+    number on the bundle's `KvStore`, shared by every replica, after
+    ownership and the local checks and before Meta
+    (`registration::RegistrationAttempts`, under
+    `wa.server.registration`, a stable identifier pending the owner):
+    register and deregister 5 in 72 hours, the code's request and check
+    10 an hour (`WA_SERVER_REGISTRATION_*`, `WA_SERVER_VERIFICATION_*`;
+    design D66, proposed). `Idempotency-Key` on the request of a code, a
+    registration and a deregistration, a registration's fingerprint
+    never over the PIN (`Fingerprint::register_number`, D67, proposed). A
+    deregistration takes the number's id again (`confirm`,
+    `registration::confirmed`, D68, proposed) and is audited
+    (`number_deregistered`), as the PIN change is (`two_step_pin_set`;
+    the audit `Subject` gained `phone_number_id`). The OpenAPI document
+    is additive only (912 lines added, none removed: five paths, the tag
+    `registration`, eight schemas). Decisive tests:
+    `a_registrations_pin_and_code_are_in_no_store_and_no_answer` (memory:
+    every answer, every value written to the `KvStore`, the idempotency
+    records and their fingerprints, the outbox),
+    `live_postgres_a_registration_leaves_its_pin_in_no_table` (every
+    table of the schema, as text and as `bytea` hex) and
+    `a_registration_logs_no_pin_no_code_and_none_of_metas_texts` (`TRACE`,
+    every target), with M1.7's capture over the new routes; the tenant's
+    isolation, the budgets across two replicas, the key's replay with
+    another PIN, the malformed bodies and the confirmation in
+    `tests/registration.rs`. By mutation: the PIN logged at `TRACE`, the
+    PIN in the kept answer, the fingerprint over the PIN, Meta's texts
+    logged, `details` answered, the budget's charge removed or moved
+    before the confirmation, the confirmation removed, axum's own JSON
+    extractor, the deregistration's audit removed: each fails a test.
 - [ ] **M3e. The token-expiry event** (row 6; OPEN_QUESTIONS #8): an
   event and a metric ahead of a stored token's lapse.
   - **After:** M3a, L11e.
@@ -5127,7 +5174,10 @@ everything else goes into the parity-completion report.
   Redis conversation layout, added and awaiting confirmation; and L21a's
   `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
   keys' derivations and their records' shapes, added and awaiting
-  confirmation before the first release; M2b's Postgres channel
+  confirmation before the first release; M3d's `wa.server.registration`
+  namespace, its keys `<budget>:<phone_number_id>` and its record
+  `{"v":1,"since","count"}`, ephemeral, added and awaiting confirmation;
+  M2b's Postgres channel
   `wa_server_events` and its payload `<sequence> <tenant>`, not stored
   but what replicas of two releases must agree on, added and, the
   coordinator having decided them as built (D40), awaiting confirmation
