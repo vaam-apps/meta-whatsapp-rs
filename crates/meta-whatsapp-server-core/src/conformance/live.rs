@@ -963,7 +963,18 @@ pub async fn a_stream_behind_a_purge_ends_lagged(backend: &dyn Backend) {
     let authz = authorizer(backend);
     let caller = caller(backend, &authz, T).await;
     let streams = Streams::new(backend.outbox(), backend.notifier(), woken_only());
+    // `first`'s wake-up may reach the hub after `record` returned (on
+    // Postgres the `LISTEN` connection delivers it), and so wake the
+    // stream opened below: woken between the two inserts and the purge,
+    // it would send the events this case needs unsent. A probe made
+    // before the notification takes it first: a subscription made after
+    // the hub applied it never sees it.
+    let mut probe = backend.notifier().subscribe(&tenant(T)).await.unwrap();
     let first = record(backend, &row(Some(T), "message_received", PN, None)).await;
+    tokio::time::timeout(WITHIN, async { while probe.woken().await < first {} })
+        .await
+        .expect("the probe was not woken for the first event");
+    drop(probe);
     let mut behind = streams
         .open_stream(
             &authz,
