@@ -46,7 +46,7 @@
 //! data is read.
 //!
 //! **A row keeps the media id it records as received** (roadmap M2e,
-//! migration 6): `media_id`, set at insert from the core's
+//! migration 7): `media_id`, set at insert from the core's
 //! `NewEvent::received_media`, and found by the partial index
 //! `wa_server_events_media_idx` on `(media_id, created_at)`
 //! ([`Outbox::received_media`]: read in order, up to its limit, whatever

@@ -1427,7 +1427,8 @@ async fn the_rotation_route_reports_the_walk() {
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
     assert_eq!(
         reply.json(),
-        json!({"wabas": 1, "rotated": 0, "failed": []})
+        // Roadmap M3a added the records kept past a binding (none here).
+        json!({"wabas": 1, "rotated": 0, "failed": [], "records": 0, "failed_records": []})
     );
     assert!(h.graph.requests().is_empty());
 }

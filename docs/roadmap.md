@@ -4607,7 +4607,7 @@ design's (§9).
     a `message_received` event's image, video, audio, document or
     sticker `{type}.id`, or an edit's, digits only) is kept beside the
     row at insert, on Postgres in `wa_server_events.media_id` with the
-    partial index `wa_server_events_media_idx` (migration 6, expand-only,
+    partial index `wa_server_events_media_idx` (migration 7, expand-only,
     no table rewrite; a previous release's rows record none), in memory
     beside the row; `Outbox::received_media` (a port change, required:
     D79) answers the rows of an id, every stream, the operator-only one
@@ -4642,7 +4642,7 @@ design's (§9).
     `live_postgres.rs`); `metas_media_messages_record_their_media_id_and_nothing_else_does`
     over every fixture of the library; the log capture
     `a_received_media_refusal_logs_no_url_id_or_token`; and on Postgres
-    `live_postgres_migration_6_rewrites_no_table_and_records_from_its_release_on`.
+    `live_postgres_migration_7_rewrites_no_table_and_records_from_its_release_on`.
     By mutation, each failing a test: the lookup removed (any recorded
     row exempting), its tenant, its number or its cut left out; an id
     received elsewhere sent to Meta's check instead, for a download or a
@@ -4651,7 +4651,7 @@ design's (§9).
     type not matched, the id not checked; the library's host allow-list
     and its request time limit removed. The security review (2026-11-02)
     found the lookup walking the whole outbox on Postgres while
-    `media_id` had no statistics (from migration 6 until the next
+    `media_id` had no statistics (from migration 7 until the next
     analyze; a million rows read per request) and made the partial index
     `(media_id, created_at)`, pinned by its plan in the migration's live
     test; it pinned the cut's instant and the "one row here is enough"
@@ -4659,7 +4659,7 @@ design's (§9).
     type's own object, and the `RECEIVED_MEDIA_ROWS` bound in the outbox
     suite; it documented the refusal's timing (D78). D77–D79 are the
     coordinator's decisions (2026-11-02, under the owner's delegation,
-    swappable). Migration 6's names are stable identifiers pending the
+    swappable). Migration 7's names are stable identifiers pending the
     owner (§ Owner touchpoints).
   - **Left, and why:** the live check (no real account here: run by the
     owner or the coordinator, OPEN_QUESTIONS #43); media of a coexistence
@@ -4800,7 +4800,7 @@ design's (§9).
 
 ### M3. Embedded Signup, OTP, coexistence
 
-- [ ] **M3a. Embedded Signup routes** (rows 120, 142): both partner
+- [x] **M3a. Embedded Signup routes** (rows 120, 142): both partner
   modes, persisted attempts, resume, disconnection, credit lines in
   Solution Partner mode, and vault rotation over the records partner
   mode keeps past a binding. Companion: `docs/guides/production.md`
@@ -4809,6 +4809,104 @@ design's (§9).
   reports no failure).
   - **After:** S7, L4.
   - **Decisive:** M3.1–M3.4.
+  - **Landed:** rows 120 and 142 done on the service's side. Four
+    routes on a new tag, `signup` (scope `signup`): `POST
+    /v1/signup/sessions` (`start_signup`, rate class `send`), `POST
+    /v1/signup/complete` (`complete_signup`, `send`; bodies of the group
+    at most 16 KiB), `GET /v1/signup/attempts` (`list_signup_attempts`,
+    `read`), `POST /v1/signup/resume` (`resume_signup`, `send`), and one
+    admin route, `POST /v1/admin/wabas/{waba_id}/credit-line/reshare`
+    (the operator's re-funding of a revoked business, audited
+    `credit_line_reshared`). Each is the core's `signup` module
+    (`Signups`, built by `AppState::from_backend` on the bundle's
+    `KvStore` and the service's clock with the deployment's
+    `SignupDeployment`, set by `serve` when `WA_APP_ID` and
+    `WA_ES_CONFIG_ID` are; `Signups::open` admits the `Caller`) over the
+    library's `EmbeddedSignup`, which makes every Meta call: the attempt
+    is the library's `SignupSessions` (`wa.es.session`, unchanged); a
+    completion checks every input before the redemption, refuses a
+    claimed WABA another tenant holds before it (D4, `409`, the attempt
+    kept), redeems for the caller's tenant (`403 stale_attempt`, another
+    tenant's never burnt), then runs `onboard_with_approval`, whose
+    approval binds the verified WABA and all its numbers (D4 again,
+    atomically, before anything is stored, subscribed or shared; in
+    Solution Partner mode also remembering the ledger for a rotation); a
+    step after `store_token` that fails keeps the attempt (`502
+    onboarding_failed`, `resumable: true`), resumed from the stored token
+    by `resume_with_approval` (its approval re-checking the binding before
+    any credit call; another tenant's resume `404 nothing_to_resume`,
+    nothing read). The vault is the `Authorizer`'s
+    (`Authorizer::vault_for_signup`, crate-private, a UI case). In
+    Solution Partner mode the credit line is shared with the partner's
+    system token only and the allocation recorded on the binding; a
+    revoked business stops a resume and a new signup at
+    `share_credit_line`, and only the admin route funds it again. The
+    tenant's `DELETE /v1/wabas/{waba_id}` revokes before it deletes in
+    Solution Partner mode (`numbers::Waba::offboarded_by`,
+    `Signups::offboard`); the webhook pipeline gains an `AccountActions`
+    hook (`Pipeline::with_account_actions`, run once an event is
+    recorded; a retryable failure fails the delivery, any other is logged
+    for the operator), which `signup::AccountUpdates` implements:
+    `PARTNER_APP_UNINSTALLED` of the deployment's app and
+    `ACCOUNT_DELETED` offboard (revoke, token, bindings), `PARTNER_REMOVED`
+    revokes (D14), each confirmed with Graph first (`debug_token` on the
+    stored token; `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION`, `graph` or
+    `signature`). The vault's rotation walks the records kept past a
+    binding after the bindings (`rotate_vault`, the answer gaining
+    `records` and `failed_records`). A `RecordStore` port change (seven
+    methods: the attempts, the allocation, the vault entries; both
+    backends; Postgres migration 6, `signup`, adding
+    `wa_server_signup_attempts` and `wa_server_vault_records`,
+    expand-only, its names pending the owner), held by the new
+    conformance suite `signup`. A new error code, `409
+    signup_not_configured`. The OpenAPI document is additive only (852
+    lines added, one changed by a trailing comma: four paths and the admin
+    one, the tag `signup`, eight schemas, the code, `VaultRotation`'s two
+    fields). The production guide gains the vault key cadence (§ 2, "Vault
+    key cadence"); the guide a section, Embedded Signup; a new skill,
+    `meta-whatsapp-rs-server-onboarding`. Decisive tests: `tests/signup.rs`
+    (`m3_1_the_happy_path_binds_the_verified_waba_and_all_its_numbers`,
+    `m3_2_another_tenants_state_is_stale_and_the_rightful_tenant_still_completes`,
+    `m3_3_a_133005_at_registration_resumes_in_a_new_process` and its
+    `live_postgres_m3_3_…` twin on two pools of one database, which also
+    sweeps every table for the token, the PINs and the code,
+    `m3_4_the_credit_line_request_carries_the_partners_system_token`,
+    `m3_4_missing_partner_settings_refuse_the_start`,
+    `m3_4_d4_is_enforced_before_any_credit_call`,
+    `m3_4_a_revoked_business_is_refunded_only_by_the_operator`,
+    `m3_4_a_cms_disconnect_revokes_first_and_deletes_second`,
+    `m3_4_uninstall_then_removal_end_revoked_then_deleted`,
+    `m3_4_removal_then_uninstall_end_revoked_then_deleted`), with
+    `an_unconfirmed_or_foreign_account_update_changes_nothing`,
+    `a_removal_naming_only_the_owner_revokes_by_business`,
+    `a_tech_providers_offboarding_revokes_nothing`,
+    `a_completion_over_16_kib_is_too_large`,
+    `a_coexistence_signup_syncs_and_never_registers`,
+    `a_cancelled_flow_redeems_nothing`,
+    `a_resume_whose_waba_moves_meanwhile_acts_on_nothing`,
+    `the_signup_routes_need_the_signup_scope`; `tests/signup_logs.rs`
+    (a partner's whole signup at `TRACE`: no token, system token, PIN,
+    code, state or Meta text); the core's `conformance::signup` (the
+    records' contract, M3.4's D4 case and a rotation reaching an
+    offboarded WABA's ledger and marker, on the core's memory backend,
+    the memory crate's and live on Postgres); M1.3's table, M1.5's
+    sentinel and M1.7's capture over the new routes. Left, and why: no
+    `number_disconnected` event (the service's number events are
+    M2c–M2e's); no per-signup currency, no two-call credit method, no
+    route clearing a lost credit share (`clear_pending_share`); a
+    Multi-Partner Solution's `PARTNER_REMOVED` is not acted on (no
+    setting names the deployment's partner business); the admin unbind
+    revokes nothing (D75: the operator revokes explicitly); hosted
+    signup, several WABAs and pre-verified numbers wait for M3f. The
+    review (2026-11-02) made a partner disconnection delete only the
+    token and the binding it started from (the library's
+    `EmbeddedSignup::offboard_if_unchanged`;
+    `an_uninstall_whose_waba_moves_mid_revocation_leaves_the_new_holder`,
+    `a_disconnect_whose_waba_moves_mid_revocation_leaves_the_new_holder`)
+    and a Solution Partner's tenant deletion revoke first
+    (`deleting_a_partners_tenant_revokes_its_wabas_lines_first`). D70–D76
+    decided by the coordinator on 2026-11-02; migration 6's stored names
+    stay pending the owner.
 - [ ] **M3b. Coexistence** (rows 69, 124): onboarding, the automatic
   sync (D7), the synced contacts stored and readable by their tenant:
   M3b turns the inbox's contacts recording on
@@ -5773,7 +5871,7 @@ everything else goes into the parity-completion report.
   Redis conversation layout, added and awaiting confirmation; and L21a's
   `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
   keys' derivations and their records' shapes, added and awaiting
-  confirmation before the first release; M2e's Postgres migration 6,
+  confirmation before the first release; M2e's Postgres migration 7,
   "received media": the column `wa_server_events.media_id` (no default:
   `NULL` for the rows before it, and for those a previous release's
   replica inserts) and its partial index `wa_server_events_media_idx`,
@@ -5791,6 +5889,9 @@ everything else goes into the parity-completion report.
   confirmation; M3c's review's shared issue log, the namespace
   `wa_server.otp.shared_rate`, its key's derivation and record, and the
   label `meta-whatsapp-server/otp-shared-limit/v1`, added and awaiting
+  confirmation; M3a's migration 6, `signup`, its tables
+  `wa_server_signup_attempts` and `wa_server_vault_records`, their
+  columns and the kinds `waba` and `business`, added and awaiting
   confirmation), for the same reason as L5's.
 - **A scope of its own for deregistering a number** (M3d, design D68):
   the coordinator decided the scope `numbers`, a confirmation in the body

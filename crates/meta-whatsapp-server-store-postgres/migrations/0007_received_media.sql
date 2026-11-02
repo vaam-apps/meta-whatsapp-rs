@@ -1,4 +1,4 @@
--- meta-whatsapp-server, migration 6: the media ids the outbox recorded as
+-- meta-whatsapp-server, migration 7: the media ids the outbox recorded as
 -- received (roadmap M2e, OPEN_QUESTIONS.md #43). Expand-only, like every
 -- migration of the service (docs/design/server.md, section 2.4), and with
 -- no table rewrite: the column is added without a default, and the

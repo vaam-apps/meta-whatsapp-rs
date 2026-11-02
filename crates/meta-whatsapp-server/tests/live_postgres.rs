@@ -94,7 +94,7 @@ async fn live_postgres_m2_1_an_inbound_message_is_listed_read_and_answered() {
 }
 
 /// Roadmap M2e's decisive case on Postgres: the media id received by
-/// another tenant's number (`wa_server_events.media_id`, migration 6) is
+/// another tenant's number (`wa_server_events.media_id`, migration 7) is
 /// `404` with zero requests; the receiving tenant downloads it without
 /// `phone_number_id` (`common::media`).
 #[tokio::test]

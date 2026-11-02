@@ -594,7 +594,7 @@
         "tags": [
           "admin"
         ],
-        "summary": "Delete a tenant: disconnect every WABA it has (as\n`DELETE /v1/wabas/{waba_id}` does), then delete it and its keys. Stops\nat the first WABA that cannot be disconnected; the tenant stays. Its\nevents go with it, and every platform key listing it stops allowing\nit, for good: no route edits a key's tenants, so a tenant created\nlater with the same id polls none of its events and needs a new\nplatform key (a `*` key allows it at once).",
+        "summary": "Delete a tenant: disconnect every WABA it has (as\n`DELETE /v1/wabas/{waba_id}` does: in Solution Partner mode its credit\nline revoked before its token and bindings go, decision D75), then\ndelete it and its keys. Stops\nat the first WABA that cannot be disconnected; the tenant stays. Its\nevents go with it, and every platform key listing it stops allowing\nit, for good: no route edits a key's tenants, so a tenant created\nlater with the same id polls none of its events and needs a new\nplatform key (a `*` key allows it at once).",
         "operationId": "delete_tenant",
         "parameters": [
           {
@@ -652,7 +652,17 @@
             }
           },
           "502": {
-            "description": "Unsubscribing a WABA failed",
+            "description": "Unsubscribing a WABA failed, or, in Solution Partner mode, revoking its credit line (`step: revoke_credit_line`): nothing of that WABA deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`: a WABA's token changed while it was being disconnected (retryable)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1613,6 +1623,103 @@
           },
           "404": {
             "description": "`not_found`: not bound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/wabas/{waba_id}/credit-line/reshare": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`POST /v1/admin/wabas/{waba_id}/credit-line/reshare`: fund again the\nbusiness of a WABA whose credit line was revoked (Solution Partner).\nThe operator's explicit, audited decision: no resume and no new signup\nre-funds a revoked business (decision D14).",
+        "operationId": "reshare_credit_line",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id: one a tenant holds",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Funded again: the WABA's steps after its stored token ran, sharing the credit line again (`credit_allocation_id`); audited `credit_line_reshared`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no tenant holds the WABA (or not an id)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`: not a Solution Partner deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`onboarding_failed`: stopped at `step` (`resumable`: repeat it)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5867,6 +5974,508 @@
         ]
       }
     },
+    "/v1/signup/attempts": {
+      "get": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "`GET /v1/signup/attempts`: the calling tenant's attempts that stopped\nafter their token was stored.",
+        "operationId": "list_signup_attempts",
+        "parameters": [
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's attempts, in byte order of their WABA ids",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupAttemptPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`limit`, `cursor`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/signup/complete": {
+      "post": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "`POST /v1/signup/complete`: redeem the attempt for the calling tenant,\nthen onboard.",
+        "operationId": "complete_signup",
+        "parameters": [
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as: the attempt must be its own",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteSignup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "`connected` (the WABA and its numbers bound to the tenant, the token stored in the vault, never answered) or `cancelled` (a `CANCEL` event: nothing redeemed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`stale_attempt`: the attempt expired, was used, or is another tenant's (not burnt by another tenant); `forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`waba_owned_by_another_tenant` (decision D4: the claimed WABA before the attempt is redeemed, the verified one before anything is stored, subscribed or shared), `signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: over 16 KiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`state`, `code`, `pin`: 6 digits, `event`, `body`), before the attempt is redeemed: it survives",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`onboarding_failed`: stopped at `step`; `resumable: true` when the token was stored and the attempt kept (`POST /v1/signup/resume`), `false` when it was not (start again). Meta's code and trace id in `graph`, never its text",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable` (the WABA moved while it was onboarded: its token taken back)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/signup/resume": {
+      "post": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "`POST /v1/signup/resume`: rerun an attempt's steps after its stored\ntoken.",
+        "operationId": "resume_signup",
+        "parameters": [
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as: the attempt must be its own",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeSignup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "`connected`, as a completion answers it (`steps_completed` starts with `load_token`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`nothing_to_resume`: no attempt of this tenant's for that WABA (another tenant's included), the WABA no longer its own, or its token gone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`waba_id`, `pin`: 6 digits, `body`), before anything is read: the attempt survives",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`onboarding_failed`: stopped at `step` again; `resumable` as on a completion, the attempt kept at its new step",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/signup/sessions": {
+      "post": {
+        "tags": [
+          "signup"
+        ],
+        "summary": "`POST /v1/signup/sessions`: start an attempt for the calling tenant.",
+        "operationId": "start_signup",
+        "parameters": [
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as: the attempt is bound to it",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartSignup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The attempt (`state`, 15 minutes, single use) and what `FB.init` and `FB.login` need. Asks Meta nothing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`: no `WA_APP_ID` or `WA_ES_CONFIG_ID`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`body`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/version": {
       "get": {
         "tags": [
@@ -6016,6 +6625,7 @@
           "numbers"
         ],
         "summary": "`DELETE /v1/wabas/{waba_id}`: disconnect. Unsubscribes the app from the\nWABA with its token; only then deletes the token and the bindings. When\nMeta refuses or fails, nothing is deleted.",
+        "description": "In Solution Partner mode the partner's credit line is revoked between\nthe two (roadmap M3a), with the partner's system token: a revocation\nthat fails deletes nothing (its error carries `step:\nrevoke_credit_line`), and the call can be repeated.",
         "operationId": "disconnect_waba",
         "parameters": [
           {
@@ -6095,7 +6705,17 @@
             }
           },
           "502": {
-            "description": "Unsubscribing failed: nothing deleted",
+            "description": "Unsubscribing failed, or, in Solution Partner mode, revoking the credit line (`step: revoke_credit_line`): nothing deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable`: the WABA's token or binding changed meanwhile (moved to another tenant: theirs left alone); retryable",
             "content": {
               "application/json": {
                 "schema": {
@@ -7944,6 +8564,41 @@
         },
         "additionalProperties": false
       },
+      "CompleteSignup": {
+        "type": "object",
+        "description": "`POST /v1/signup/complete`: what the page collected, relayed by the\nintegrator's backend. No `Debug`: it holds the code and the PIN.",
+        "required": [
+          "state",
+          "code",
+          "event"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The code `FB.login`'s callback received (`authResponse.code`): 30\nseconds, single use."
+          },
+          "event": {
+            "type": "object",
+            "description": "The `WA_EMBEDDED_SIGNUP` message event the page received, as it\narrived (`FINISH`, `FINISH_ONLY_WABA`,\n`FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`, or `CANCEL`).",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The number's two-step verification PIN, 6 digits, typed by the\nmerchant: it becomes a new number's PIN, or must match the one it\nhas. Never stored. Without it, the number is left unregistered\n(a coexistence number is registered already: ignored)."
+          },
+          "state": {
+            "type": "string",
+            "description": "The attempt's state, from `POST /v1/signup/sessions`."
+          }
+        },
+        "additionalProperties": false
+      },
       "ContactAddress": {
         "type": "object",
         "description": "A contact card's address.",
@@ -9222,6 +9877,7 @@
           "idempotency_in_progress",
           "outcome_unknown",
           "otp_not_configured",
+          "signup_not_configured",
           "permission",
           "account_restricted",
           "country_restricted",
@@ -10884,6 +11540,27 @@
         },
         "additionalProperties": false
       },
+      "ResumeSignup": {
+        "type": "object",
+        "description": "`POST /v1/signup/resume`. No `Debug`: it holds the PIN.",
+        "required": [
+          "waba_id"
+        ],
+        "properties": {
+          "pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A corrected PIN, when the registration stopped it\n(`register_phone`): 6 digits, never stored."
+          },
+          "waba_id": {
+            "type": "string",
+            "description": "The attempt's WABA (`GET /v1/signup/attempts`)."
+          }
+        },
+        "additionalProperties": false
+      },
       "Scope": {
         "type": "string",
         "description": "A scope of a tenant or platform key.",
@@ -11049,6 +11726,182 @@
                 "type": "null"
               }
             ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "SignupAttempt": {
+        "type": "object",
+        "description": "An attempt that stopped after its token was stored.",
+        "required": [
+          "waba_id",
+          "failed_step",
+          "updated_at",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it first stopped (RFC 3339)."
+          },
+          "failed_step": {
+            "type": "string",
+            "description": "The step it stopped at (`subscribe_app`, `assign_system_user`,\n`share_credit_line`, `register_phone`, `sync_contacts`,\n`sync_history`)."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it last stopped (RFC 3339)."
+          },
+          "waba_id": {
+            "type": "string",
+            "description": "The attempt's WABA: resume it with this id."
+          }
+        }
+      },
+      "SignupAttemptPage": {
+        "type": "object",
+        "description": "A page of the tenant's attempts.",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignupAttempt"
+            },
+            "description": "The attempts, in byte order of their WABA ids."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The next page's cursor, when there is one."
+          }
+        }
+      },
+      "SignupResult": {
+        "type": "object",
+        "description": "A completion's or a resumption's outcome. Never the token.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "credit_allocation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`connected`, Solution Partner: the credit allocation funding the\nWABA."
+          },
+          "current_step": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`cancelled`: the screen the merchant left, as Meta names it."
+          },
+          "needs_coexistence_sync": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`connected`: whether it was a coexistence onboarding (the contacts\nand history syncs ran as its last steps, once each)."
+          },
+          "phone_number_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "`connected`: every number of the WABA, now the tenant's."
+          },
+          "status": {
+            "$ref": "#/components/schemas/SignupStatus",
+            "description": "`connected` or `cancelled`."
+          },
+          "steps_completed": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "`connected`: the steps that ran, in order (`exchange_code`,\n`debug_token`, `verify_assets`, `approve`, `store_token`,\n`subscribe_app`, `assign_system_user`, `share_credit_line`,\n`register_phone`, `sync_contacts`, `sync_history`; a resumption\nstarts with `load_token`)."
+          },
+          "waba_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`connected`: the verified WABA, now the tenant's."
+          }
+        }
+      },
+      "SignupSession": {
+        "type": "object",
+        "description": "What `FB.init` and `FB.login` need, and the attempt's state. Never a\nsecret.",
+        "required": [
+          "state",
+          "expires_at",
+          "app_id",
+          "config_id",
+          "graph_api_version",
+          "launch_options"
+        ],
+        "properties": {
+          "app_id": {
+            "type": "string",
+            "description": "The Meta app's id, `FB.init`'s `appId`."
+          },
+          "config_id": {
+            "type": "string",
+            "description": "The Facebook Login for Business configuration, `FB.login`'s\n`config_id` (also in `launch_options`)."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the attempt lapses (RFC 3339): 15 minutes."
+          },
+          "graph_api_version": {
+            "type": "string",
+            "description": "`FB.init`'s `version`, e.g. `v25.0`."
+          },
+          "launch_options": {
+            "type": "object",
+            "description": "`FB.login`'s options, as they are: Embedded Signup v4.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "state": {
+            "type": "string",
+            "description": "The attempt, bound to the calling tenant: post it back with the\ncompletion, in the body. Single use."
+          }
+        }
+      },
+      "SignupStatus": {
+        "type": "string",
+        "description": "How a completion or a resumption ended.",
+        "enum": [
+          "connected",
+          "cancelled"
+        ]
+      },
+      "StartSignup": {
+        "type": "object",
+        "description": "`POST /v1/signup/sessions`.",
+        "properties": {
+          "coexistence": {
+            "type": "boolean",
+            "description": "Launch the onboarding of a WhatsApp Business app number\n(coexistence: `featureType: whatsapp_business_app_onboarding`).\nDefault `false`: the Cloud API flow."
           }
         },
         "additionalProperties": false
@@ -11383,7 +12236,9 @@
         "required": [
           "wabas",
           "rotated",
-          "failed"
+          "failed",
+          "records",
+          "failed_records"
         ],
         "properties": {
           "failed": {
@@ -11392,6 +12247,18 @@
               "type": "string"
             },
             "description": "WABAs whose records could not be read or rewritten (a record under\na key no longer configured, say): rotate again, or reconnect them,\nbefore dropping the old key."
+          },
+          "failed_records": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Those that could not be read or rewritten, as `waba/<id>` (a\ncredit ledger) or `business/<id>` (a revocation marker). Drop the\nold key only once both this and `failed` are empty."
+          },
+          "records": {
+            "type": "integer",
+            "description": "Records the vault keeps past a binding walked besides: Solution\nPartner mode's credit ledgers and revocation markers, which no\nbinding names once their WABA left (roadmap M3a).",
+            "minimum": 0
           },
           "rotated": {
             "type": "integer",
@@ -11612,6 +12479,10 @@
     {
       "name": "otp",
       "description": "One-time passcodes sent with the tenant's authentication template, and checked (scope `otp`)"
+    },
+    {
+      "name": "signup",
+      "description": "Embedded Signup: an attempt bound to the tenant, its completion (the business onboarded, the WABA and its numbers bound to the tenant), and the attempts to resume (scope `signup`)"
     },
     {
       "name": "operations",

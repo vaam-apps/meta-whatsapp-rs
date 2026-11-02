@@ -150,7 +150,7 @@ async fn live_postgres_migration_5_rewrites_no_table() {
     assert_eq!(moved.previous_tenant_released_at, Some(UNRECORDED_MOVE));
 }
 
-/// Roadmap M2e: migration 6 adds `wa_server_events.media_id` and its
+/// Roadmap M2e: migration 7 adds `wa_server_events.media_id` and its
 /// partial index without rewriting the outbox (the column has no default),
 /// so a deployment with a large outbox migrates without holding it for a
 /// copy. A row written before it records no media id, whatever its data
@@ -163,7 +163,7 @@ async fn live_postgres_migration_5_rewrites_no_table() {
 /// (they would record theirs), an index whose predicate or collation the
 /// lookup cannot use.
 #[tokio::test]
-async fn live_postgres_migration_6_rewrites_no_table_and_records_from_its_release_on() {
+async fn live_postgres_migration_7_rewrites_no_table_and_records_from_its_release_on() {
     use meta_whatsapp_rs::adapters::store::postgres::sqlx::migrate::Migrator;
     use meta_whatsapp_rs::core::ids::MediaId;
     use meta_whatsapp_server_store_postgres::migrations;
@@ -174,9 +174,9 @@ async fn live_postgres_migration_6_rewrites_no_table_and_records_from_its_releas
     meta_whatsapp_rs::adapters::store::postgres::migrate(&pool)
         .await
         .unwrap();
-    let before_6: Vec<_> = migrations().into_iter().filter(|m| m.version < 6).collect();
-    assert_eq!(before_6.len(), 5);
-    let mut migrator = Migrator::with_migrations(before_6);
+    let before_7: Vec<_> = migrations().into_iter().filter(|m| m.version < 7).collect();
+    assert_eq!(before_7.len(), 6);
+    let mut migrator = Migrator::with_migrations(before_7);
     migrator.dangerous_set_table_name(MIGRATIONS_TABLE);
     migrator.run(&pool).await.unwrap();
     // A row of the previous release: an image received, operator-only (its
@@ -206,7 +206,7 @@ async fn live_postgres_migration_6_rewrites_no_table_and_records_from_its_releas
     };
     let before = file().await;
     migrate(&pool).await.unwrap();
-    assert_eq!(file().await, before, "migration 6 rewrote wa_server_events");
+    assert_eq!(file().await, before, "migration 7 rewrote wa_server_events");
     let events = PgEventStore::new(pool.clone());
     let media = |id: &str| MediaId::new(id).unwrap();
     assert!(
@@ -215,7 +215,7 @@ async fn live_postgres_migration_6_rewrites_no_table_and_records_from_its_releas
             .await
             .unwrap()
             .is_empty(),
-        "a row from before migration 6 records a media id"
+        "a row from before migration 7 records a media id"
     );
     // The previous release's insert, after the migration.
     sqlx::query(sqlx::AssertSqlSafe(image("1003383421387262", 1002)))
@@ -249,6 +249,12 @@ async fn live_postgres_migration_6_rewrites_no_table_and_records_from_its_releas
             .map(meta_whatsapp_rs::core::ids::PhoneNumberId::as_str),
         Some("6101")
     );
+    the_media_lookup_probes_its_index(&pool).await;
+}
+
+/// Migration 7's index, as `PgEventStore::received_media` reads it: its
+/// definition, and a plan of the lookup that probes it.
+async fn the_media_lookup_probes_its_index(pool: &sqlx::PgPool) {
     // The lookup is an index probe, never a walk of the outbox: the
     // partial index covers only the rows that record a media id, and its
     // predicate, collation and order fit `PgEventStore::received_media`'s
@@ -259,7 +265,7 @@ async fn live_postgres_migration_6_rewrites_no_table_and_records_from_its_releas
     // statistics: every row read and filtered.)
     let definition: String =
         sqlx::query_scalar("SELECT pg_get_indexdef('wa_server_events_media_idx'::regclass)")
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
             .unwrap();
     assert!(
@@ -482,7 +488,7 @@ async fn live_postgres_parallel_migrations_succeed() {
     .fetch_all(&first)
     .await
     .unwrap();
-    assert_eq!(service, [1, 2, 3, 4, 5, 6]);
+    assert_eq!(service, [1, 2, 3, 4, 5, 6, 7]);
     let library: Vec<i64> =
         sqlx::query_scalar("SELECT version FROM wa_sqlx_migrations WHERE success ORDER BY version")
             .fetch_all(&first)

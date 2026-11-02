@@ -122,10 +122,44 @@ runs it against real Postgres and Redis.
 | system user token | your own number (OTP, order messages) | secret manager | generate a new one in Business Settings, deploy, revoke the old |
 | app secret | webhook signatures, the code exchange, the app token for `debug_token` | secret manager | list old and new in `SignatureVerifier::new` while rolling out, then drop the old |
 | verify token | webhook `GET` verification | secret manager | change it in the dashboard and in your config together |
-| vault key(s) | encrypting merchants' tokens, and a Solution Partner's credit ledger | secret manager, **not** the vault's database | `VaultKeys::new(new).with_previous(old)`, `vault.rotate(&waba_id)` for every WABA ever onboarded (offboarded ones too: the credit ledger outlives the token), `vault.rotate_business(&business_id)` for each business revoked by business id alone, then drop the old key |
+| vault key(s) | encrypting merchants' tokens, and a Solution Partner's credit ledger | secret manager, **not** the vault's database | at least yearly, at once on a suspected exposure ([below](#vault-key-cadence)): `VaultKeys::new(new).with_previous(old)`, `vault.rotate(&waba_id)` for every WABA ever onboarded (offboarded ones too: the credit ledger outlives the token), `vault.rotate_business(&business_id)` for each business revoked by business id alone, then drop the old key once none failed |
 | OTP pepper | keyed hashes of codes and numbers | secret manager, not the OTP database | invalidates outstanding codes and resets limits |
 | merchants' business tokens | acting as a merchant | the vault only | merchant reconnects (no refresh) |
 | two-step PINs | registering numbers | not stored by meta-whatsapp-rs; the examples ask the merchant per attempt | asked per attempt, never stored ([decided](../../OPEN_QUESTIONS.md#embedded-signup-onboarding-merchants) 4) |
+
+### Vault key cadence
+
+The vault key is yours to keep and to rotate (`OPEN_QUESTIONS.md` #9,
+decided: custody stays the integrator's, rotation on demand, the schedule
+the operator's). The cadence to keep:
+
+- **At least once a year**, on a date you put in your operations
+  calendar.
+- **At once on a suspected exposure**: a leaked environment, a secret
+  manager whose access you cannot account for, a departing operator who
+  held it, a backup of the key found where it should not be. Rotate
+  first, investigate second: a database dump together with the key opens
+  every merchant's token, so a stolen key is worth rotating even before
+  you know whether the database went too.
+- **Drop the old key only when a rotation reports no failure.** A record
+  sealed under a key you dropped never opens again: the merchant
+  reconnects, and a Solution Partner's credit ledger or revocation marker
+  is lost with it (an offboarded merchant's line can then no longer be
+  revoked from it). With the library: rotate every WABA ever onboarded
+  (`vault.rotate(&waba_id)`, offboarded ones too) and every business
+  revoked by business id alone (`vault.rotate_business(&business_id)`),
+  and keep the previous key until none of those calls fails. With the
+  service (`meta-whatsapp-server`): `POST /v1/admin/vault/rotate` or
+  `meta-whatsapp-server vault rotate` walks every bound WABA and, since
+  roadmap M3a, every record kept past a binding (the credit ledgers and
+  revocation markers of Solution Partner mode, which no binding names once
+  their WABA left); drop the old key only once both `failed` and
+  `failed_records` are empty (the command exits non-zero until they are).
+
+A rotation is safe to repeat: a record already under the active key is
+read, not rewritten. Keep the previous key in `WA_VAULT_PREVIOUS_KEYS`
+(or `VaultKeys::with_previous`) from the deploy that introduces the new
+one until the clean rotation.
 
 `AccessToken`, `AppSecret`, `VerifyToken`, `SecretBytes`, `SignupCode`,
 `TwoStepPin`, `OtpPepper` and `VaultKey` print `[REDACTED]` (or only an id)

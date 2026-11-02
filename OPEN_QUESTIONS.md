@@ -680,7 +680,7 @@ model evolution (46).
     **Built 2026-11-02 (roadmap M2e; its choices D77–D79 decided by the
     coordinator under the owner's delegation, swappable):** the outbox
     keeps beside each `message_received` row the media id its customer
-    sent (`wa_server_events.media_id`, migration 6). A media id recorded
+    sent (`wa_server_events.media_id`, migration 7). A media id recorded
     on the caller's own number, routed
     to its tenant, from the number's binding epoch on, is downloaded with
     `GET /{media_id}` and no `phone_number_id` (the binding read again

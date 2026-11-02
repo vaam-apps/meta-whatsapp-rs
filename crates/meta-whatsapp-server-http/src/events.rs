@@ -46,7 +46,7 @@ pub use meta_whatsapp_server_core::events::{
     UndatedAfterMove, event_data, event_number, meta_time, outbox_key, outbox_row, owner, poll,
     purge_outbox, route, tenant_visible,
 };
-use meta_whatsapp_server_core::inbound::{Delivered, Pipeline, Refused};
+use meta_whatsapp_server_core::inbound::{AccountActions, Delivered, Pipeline, Refused};
 pub use meta_whatsapp_server_core::inbound::{
     Inbound, MAX_DELIVERIES_RECORDING, MAX_WEBHOOK_BODY_BYTES, RECORDING_WAIT,
 };
@@ -144,10 +144,22 @@ impl RejectionLog {
 
 impl Events {
     /// The pipeline `inbound` describes, on `backend`'s stores alone
-    /// (the core's [`Pipeline::new`]), counted by `metrics`.
-    pub(crate) fn new(inbound: Inbound, backend: &dyn Backend, metrics: Metrics) -> Self {
+    /// (the core's [`Pipeline::new`]), counted by `metrics`, handing its
+    /// account updates to `actions` (roadmap M3a: the Embedded Signup's
+    /// offboarding), when there are any.
+    pub(crate) fn new(
+        inbound: Inbound,
+        backend: &dyn Backend,
+        metrics: Metrics,
+        actions: Option<Arc<dyn AccountActions>>,
+    ) -> Self {
+        let pipeline = Pipeline::new(inbound, backend, Arc::new(metrics));
+        let pipeline = match actions {
+            Some(actions) => pipeline.with_account_actions(actions),
+            None => pipeline,
+        };
         Self {
-            pipeline: Pipeline::new(inbound, backend, Arc::new(metrics)),
+            pipeline,
             in_flight: Arc::new(Semaphore::new(MAX_DELIVERIES_IN_FLIGHT)),
             rejections: RejectionLog::new(),
         }

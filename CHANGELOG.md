@@ -226,6 +226,14 @@ stored data, the owner's).
 
 ### Added
 
+- **`EmbeddedSignup::offboard_if_unchanged`** (roadmap M3a's review):
+  `offboard`'s revocation, then the token deleted only if its vault
+  record is still the one read (`TokenVault::get_versioned`, then
+  `delete_if_unchanged`), so a token stored while the revocation's calls
+  ran is kept (`Offboarded::token_deleted` is `false`). For a caller whose
+  records may move the WABA to another holder meanwhile: the service's
+  partner disconnections use it. `offboard` is unchanged.
+
 - **India's checkout button templates and the third party validation**
   (roadmap P1d, parity row 141, now done in the library; category 15,
   coverage row 32; from `payments/payments-in/checkout-button-templates`,
@@ -286,7 +294,7 @@ stored data, the owner's).
   `DELETE /v1/numbers/{pn}/media/{media_id}`, with nothing asked of Meta.
   Every other id, and every deletion, keeps Meta's check. No route or
   schema changed (the OpenAPI document is unchanged). Postgres migration
-  6, `received media`: the column `wa_server_events.media_id` (no
+  7, `received media`: the column `wa_server_events.media_id` (no
   default, no table rewrite) and its partial index
   `wa_server_events_media_idx`, stable identifiers pending the owner's
   confirmation; rows from before it record none. In the core,
@@ -780,6 +788,63 @@ stored data, the owner's).
   `live_postgres_trims_racing_appends_keep_every_new_message`,
   `live_postgres_a_trim_and_a_history_chunk_never_deadlock`, and the
   trims added to `live_postgres_the_locks_are_the_documented_ones`.
+
+- **Embedded Signup in the service** (roadmap M3a; parity rows 120 and
+  142 done on the service's side; design D70–D76, the coordinator's of
+  2026-11-02). Scope
+  `signup`: `POST /v1/signup/sessions` (`start_signup`) binds an attempt
+  to the calling tenant for 15 minutes (the library's `SignupSessions`,
+  `wa.es.session` unchanged) and answers what the page's `FB.init` and
+  `FB.login` need; `POST /v1/signup/complete` (`complete_signup`) checks
+  every input (`422` on `state`, `code`, `pin`, `event`, `body`; 16 KiB),
+  refuses a claimed WABA another tenant holds (`409
+  waba_owned_by_another_tenant`, decision D4) before the attempt is
+  redeemed for the caller's tenant (`403 stale_attempt` otherwise), then
+  onboards with the library's `onboard_with_approval`, whose approval
+  binds the verified WABA and all its numbers (D4 again, atomically)
+  before anything is stored, subscribed or shared; `GET
+  /v1/signup/attempts` (`list_signup_attempts`) lists the tenant's
+  attempts that stopped after their token was stored; `POST
+  /v1/signup/resume` (`resume_signup`) resumes one from the stored token,
+  no code, with a corrected PIN, from any process (another tenant's is
+  `404 nothing_to_resume`). A stopped step is `502 onboarding_failed`
+  with `step`, `resumable` and Meta's code and trace id, never its text
+  or `details`. Both partner modes (`WA_ONBOARDING_MODE`): in Solution
+  Partner mode the partner's system user is added and the credit line
+  shared with the partner's system token only, the allocation recorded on
+  the WABA's binding; a revoked business is funded again only by the
+  operator, `POST /v1/admin/wabas/{waba_id}/credit-line/reshare`
+  (audited `credit_line_reshared`). Offboarding: the tenant's `DELETE
+  /v1/wabas/{waba_id}` revokes the line before it deletes the token and
+  the bindings in Solution Partner mode, and so does an admin's deletion
+  of a tenant, for each of its WABAs (decision D75; a failed revocation
+  deletes nothing and is the answer; the admin unbind revokes nothing),
+  each revocation audited `credit_line_revoked`; only the token and the
+  binding the offboarding read before the revocation's calls are deleted
+  (a WABA moved to another tenant meanwhile keeps its new holder's: the
+  route answers `503`, the webhook is acknowledged and logged); the
+  webhook pipeline acts on
+  `account_update` (`PARTNER_APP_UNINSTALLED` of the deployment's app and
+  `ACCOUNT_DELETED` offboard, `PARTNER_REMOVED` revokes at once, decision
+  D14), each confirmed with Graph first (`debug_token` on the stored
+  token; `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION`, `graph` by default, or
+  `signature`). The vault's rotation (`POST /v1/admin/vault/rotate`,
+  `meta-whatsapp-server vault rotate`) walks the records partner mode
+  keeps past a binding too (credit ledgers, revocation markers:
+  `wa_server_vault_records`), its answer gaining `records` and
+  `failed_records`. Postgres migration 6 (`signup`) adds
+  `wa_server_signup_attempts` and `wa_server_vault_records` (expand-only;
+  their names pending the owner's confirmation). A new error code, `409
+  signup_not_configured` (no `WA_APP_ID` or `WA_ES_CONFIG_ID`). The token,
+  the PIN, the code and the state are in no answer, log, error, audit
+  event or row. The OpenAPI document is additive only (852 lines added,
+  one changed: a trailing comma). Decisive tests: acceptance tests M3.1
+  to M3.4 in `tests/signup.rs` (M3.3 live on Postgres too), the log
+  capture `tests/signup_logs.rs`, and the core's `conformance::signup`
+  (memory, and live on Postgres). The production guide gains the vault
+  key cadence (`OPEN_QUESTIONS.md` #9: at least yearly, at once on a
+  suspected exposure, the old key dropped only when a rotation reports no
+  failure).
 
 - **OTP and authentication templates in the service** (roadmap M3c;
   parity row 98 partial on the service's side, zero-tap and previews left
@@ -2728,6 +2793,19 @@ stored data, the owner's).
   `conversation_conformance::run` again. The in-tree memory and Postgres
   stores implement it; nothing else changes for their users.
 
+- **Breaking for a custom `RecordStore`** (roadmap M3a): seven required
+  methods, `save_signup_attempt`, `signup_attempt`, `signup_attempts`,
+  `delete_signup_attempt` (Embedded Signup's kept attempts, one per WABA,
+  gone with its binding), `set_credit_allocation_if` (a Solution
+  Partner's allocation on the binding it was made for) and
+  `record_vault_entry`, `vault_entries` (the vault's records kept past a
+  binding, for a key rotation); run `conformance::run` again (its `signup`
+  suite checks them). The core's `VaultRotation` gains `records` and
+  `failed_records`; the HTTP crate's `Settings` gains `signup` (`None`:
+  every signup route is `409 signup_not_configured`; `serve` sets it when
+  `WA_APP_ID` and `WA_ES_CONFIG_ID` are); `Config` gains
+  `account_update_confirmation`; `inbound::Pipeline` gains
+  `with_account_actions`. `Operation::ALL` has four more operations.
 - **Breaking for a custom `RecordStore`** (roadmap M3c): two required
   methods, `otp_settings` and `set_otp_settings` (a tenant's OTP
   settings, in `OtpSettings::to_stored`'s layout, gone with the tenant);
