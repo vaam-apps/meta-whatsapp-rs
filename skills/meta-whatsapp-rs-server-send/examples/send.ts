@@ -152,7 +152,8 @@ export async function replyWindow(api: WhatsApp, pn: string, contact: string): P
 
 // The merchant opened the conversation (scope inbox): unread back to 0, and
 // with notifyCustomer the blue ticks on the customer's latest message.
-// The same reference never sends a second receipt.
+// The same reference sends no second receipt once answered (a 503, the
+// reset failing after the receipt, releases it).
 export async function markConversationRead(api: WhatsApp, pn: string, contact: string, notifyCustomer: boolean, reference: string) {
   const { error } = await api.POST("/v1/numbers/{pn}/conversations/{contact}/read", {
     params: { path: { pn, contact }, header: { "Idempotency-Key": reference } },

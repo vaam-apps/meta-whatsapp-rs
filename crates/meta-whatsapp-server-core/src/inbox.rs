@@ -767,7 +767,9 @@ impl<'a> Conversations<'a> {
     ///
     /// `422 invalid_request` on `contact`; Meta's refusal or failure of the
     /// receipt, with its `details`; `503 storage_unavailable` as for
-    /// [`Self::window`] (checked before the receipt).
+    /// [`Self::window`] (checked before the receipt, and again after it,
+    /// before the reset: a number that moved while Meta answered resets
+    /// nothing).
     pub async fn mark_read(
         &self,
         contact: &str,
@@ -790,6 +792,10 @@ impl<'a> Conversations<'a> {
             if let Err(error) = marked {
                 return Err(self.failed(&error).await);
             }
+            // The receipt took a round trip to Meta: the number may have
+            // moved meanwhile, and its conversation of `contact` be the
+            // next holder's to reset, not this one's.
+            self.number.still_held(self.authz).await?;
         }
         self.inbox.mark_read(&key).await?;
         Ok(())

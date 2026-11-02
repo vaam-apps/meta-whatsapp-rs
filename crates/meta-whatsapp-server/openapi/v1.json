@@ -2552,7 +2552,7 @@
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never send a second read receipt (a repeat gets the kept answer, with `Idempotent-Replayed: true`)",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body send no second read receipt once answered (a repeat gets the kept answer, with `Idempotent-Replayed: true`; a `503` releases the key)",
             "required": false,
             "schema": {
               "type": [
@@ -2654,7 +2654,7 @@
             }
           },
           "503": {
-            "description": "`storage_unavailable`: retry",
+            "description": "`storage_unavailable`: retry (also when the number moved while Meta answered the receipt: the unread count is unchanged)",
             "content": {
               "application/json": {
                 "schema": {

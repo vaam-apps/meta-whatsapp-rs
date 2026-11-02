@@ -31,8 +31,11 @@
 //! - Roadmap M2g: the window is what a free-form reply would meet (and the
 //!   list's is the same); marking a conversation read resets `unread`
 //!   and, only with `notify_customer`, sends one read receipt for the
-//!   latest inbound message (none past Meta's 30 days; a refused one
-//!   resets nothing); a message is found by id on its own number only;
+//!   latest inbound message (none past Meta's 30 days, the bound
+//!   included; a refused one resets nothing; a revoke's tombstone skipped,
+//!   and the message found past the history's first page; a number that
+//!   moves while Meta answers it resets nothing); a message is
+//!   found by id on its own number only;
 //!   after a move, the previous holder's message is `404` by id to the new
 //!   holder, its window is not shown, and no receipt goes for it.
 //! - Housekeeping applies the inbox store's retention
@@ -49,6 +52,7 @@ use meta_whatsapp_rs::client::embedded_signup::{
 };
 use meta_whatsapp_rs::core::clock::Clock as _;
 use meta_whatsapp_rs::core::clock::ManualClock;
+use meta_whatsapp_rs::core::error::TransportError;
 use meta_whatsapp_rs::core::ids::{MessageId, PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, VerifyToken};
 use meta_whatsapp_rs::core::store::{
@@ -56,6 +60,7 @@ use meta_whatsapp_rs::core::store::{
     ThreadOwnership,
 };
 use meta_whatsapp_rs::core::testing::ScriptedTransport;
+use meta_whatsapp_rs::core::transport::{HttpRequest, HttpResponse, HttpTransport};
 use meta_whatsapp_rs::inbox::ReplyChecks;
 use meta_whatsapp_rs::webhooks::sign;
 use serde_json::{Value, json};
@@ -67,9 +72,10 @@ use crate::authz::{Authorizer, Caller, OwnedNumber};
 use crate::backend::Backend;
 use crate::housekeeping;
 use crate::inbound::{Inbound, Pipeline};
-use crate::inbox::{Conversations, ReplyWindow};
+use crate::inbox::{Conversations, READ_RECEIPT_MAX_AGE, ReplyWindow};
 use crate::messages::{MessageType, ReplyMessage, TextObject};
 use crate::model::{BindOutcome, KeyOwner, PageRequest, Scope, TenantId};
+use crate::store::RecordStore;
 
 /// The Meta app's secret, which signs the deliveries.
 const APP_SECRET: &str = "app-secret-of-the-inbox-suite";
@@ -105,6 +111,11 @@ pub async fn run(backend: &dyn Backend) {
     Box::pin(
         marking_a_conversation_read_resets_unread_and_receipts_the_latest_inbound_message(backend),
     )
+    .await;
+    Box::pin(a_read_receipt_skips_a_tombstone_and_reads_past_the_first_page(backend)).await;
+    Box::pin(a_number_that_moves_during_the_receipt_resets_nothing(
+        backend,
+    ))
     .await;
     Box::pin(a_message_is_found_by_id_on_its_own_number(backend)).await;
     Box::pin(the_previous_holders_message_window_and_receipt_never_reach_the_new_holder(backend))
@@ -154,6 +165,18 @@ impl Merchant {
 /// it, and the number's token in the vault; the caller the order admits
 /// for that key, and the number it owns.
 async fn merchant(backend: &dyn Backend, tenant: &str, waba: &str, pn: &str) -> Merchant {
+    merchant_over(backend, tenant, waba, pn, |script| Arc::new(script)).await
+}
+
+/// [`merchant`], its client sending through what `transport` makes of
+/// Meta's script.
+async fn merchant_over(
+    backend: &dyn Backend,
+    tenant: &str,
+    waba: &str,
+    pn: &str,
+    transport: impl FnOnce(ScriptedTransport) -> Arc<dyn HttpTransport>,
+) -> Merchant {
     let records = backend.records();
     let tenant = TenantId::parse(tenant).unwrap();
     if records.tenant(&tenant).await.unwrap().is_none() {
@@ -187,7 +210,10 @@ async fn merchant(backend: &dyn Backend, tenant: &str, waba: &str, pn: &str) -> 
         .await
         .unwrap();
     let script = ScriptedTransport::new();
-    let client = Client::builder().transport(script.clone()).build().unwrap();
+    let client = Client::builder()
+        .shared_transport(transport(script.clone()))
+        .build()
+        .unwrap();
     let authz = Authorizer::new(records, vault.clone(), client).unwrap();
     let caller = authz
         .tenant_caller(
@@ -1259,6 +1285,156 @@ pub async fn marking_a_conversation_read_resets_unread_and_receipts_the_latest_i
         .unwrap();
     assert_eq!(unread().await, 0);
     assert_eq!(m.script.requests().len(), 3, "no receipt past 30 days");
+    assert_eq!(m.script.remaining(), 0);
+}
+
+/// Roadmap M2g's review: the read receipt names the customer's latest
+/// received message, wherever it is among the conversation's latest
+/// `UNREAD_SCAN` messages, and while Meta still takes it.
+///
+/// 1. A revoke's tombstone newer than the customer's text (a revoke that
+///    came before its message: never received) is skipped, and 150 sent
+///    messages newer still put the text on the history's second page: the
+///    receipt names the text, read 30 days to the second after it was sent
+///    (Meta's "within 30 days of receipt", the bound included).
+/// 2. One second later: no receipt, the count reset all the same.
+pub async fn a_read_receipt_skips_a_tombstone_and_reads_past_the_first_page(backend: &dyn Backend) {
+    let (waba, pn) = ("102290129340319", "106540352242833");
+    let m = merchant(backend, "inbox-read-scan", waba, pn).await;
+    let pipeline = pipeline(backend);
+    let at = now();
+    deliver(
+        &pipeline,
+        &text(waba, pn, CONTACT, "wamid.SCAN-TEXT", "Are you open?", at),
+    )
+    .await;
+    let store = backend.conversations();
+    let key = ConversationKey::new(PhoneNumberId::new(pn).unwrap(), CONTACT);
+    let sent_at = OffsetDateTime::from_unix_timestamp(at).unwrap();
+    assert!(
+        store
+            .revoke(
+                &key,
+                &MessageId::new("wamid.SCAN-NEVER-RECEIVED"),
+                Direction::Inbound,
+                sent_at + time::Duration::seconds(1),
+            )
+            .await
+            .unwrap(),
+        "a tombstone"
+    );
+    for i in 0..150_i64 {
+        let stored = store
+            .append(StoredMessage {
+                id: MessageId::new(format!("wamid.SCAN-SENT-{i}")),
+                conversation: key.clone(),
+                direction: Direction::Outbound,
+                kind: "text".to_owned(),
+                text: Some("We are".to_owned()),
+                payload: json!({"type": "text", "text": {"body": "We are"}}),
+                status: DeliveryStatus::Accepted,
+                timestamp: sent_at + time::Duration::seconds(2 + i),
+                status_at: None,
+                error: None,
+            })
+            .await
+            .unwrap();
+        assert!(stored);
+    }
+
+    // 1. Past the tombstone and the first page, at the 30 days' bound.
+    let bound = ManualClock::new(sent_at + READ_RECEIPT_MAX_AGE);
+    let reader = m.inbox(backend, ReplyChecks::ALL, &bound);
+    m.script.push_json(200, marked());
+    reader.mark_read(CONTACT, true).await.unwrap();
+    let [receipt] = m.script.requests().try_into().unwrap();
+    assert_eq!(receipt.path(), format!("/v25.0/{pn}/messages"));
+    assert_eq!(receipt.bearer(), Some(TOKEN));
+    assert_eq!(
+        receipt.json().unwrap(),
+        json!({
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": "wamid.SCAN-TEXT"
+        }),
+        "the customer's latest received message, not the tombstone"
+    );
+
+    // 2. A second past the bound: none.
+    let past = ManualClock::new(sent_at + READ_RECEIPT_MAX_AGE + time::Duration::seconds(1));
+    m.inbox(backend, ReplyChecks::ALL, &past)
+        .mark_read(CONTACT, true)
+        .await
+        .unwrap();
+    assert_eq!(m.script.requests().len(), 1, "no receipt past 30 days");
+    assert_eq!(m.script.remaining(), 0);
+}
+
+/// Meta's script behind a WABA that leaves its tenant (unbound) while
+/// the first request is on its way: a move during a read receipt.
+struct UnbindingOnSend {
+    script: ScriptedTransport,
+    records: Arc<dyn RecordStore>,
+    waba: WabaId,
+    unbound: std::sync::atomic::AtomicBool,
+}
+
+impl std::fmt::Debug for UnbindingOnSend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnbindingOnSend").finish_non_exhaustive()
+    }
+}
+
+#[async_trait::async_trait]
+impl HttpTransport for UnbindingOnSend {
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+        if !self.unbound.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            assert!(self.records.unbind_waba(&self.waba).await.unwrap());
+        }
+        self.script.send(request).await
+    }
+}
+
+/// Roadmap M2g's review: a number that leaves its tenant while Meta
+/// answers the read receipt resets nothing (`503 storage_unavailable`):
+/// the conversation's count is no longer this tenant's to reset.
+pub async fn a_number_that_moves_during_the_receipt_resets_nothing(backend: &dyn Backend) {
+    let (waba, pn) = ("102290129340320", "106540352242834");
+    let records = backend.records();
+    let m = merchant_over(backend, "inbox-read-moving", waba, pn, |script| {
+        Arc::new(UnbindingOnSend {
+            script,
+            records: Arc::clone(&records),
+            waba: WabaId::new(waba).unwrap(),
+            unbound: std::sync::atomic::AtomicBool::new(false),
+        })
+    })
+    .await;
+    deliver(
+        &pipeline(backend),
+        &text(waba, pn, CONTACT, "wamid.MOVING-1", "Hello?", now()),
+    )
+    .await;
+    let unread = async || {
+        backend
+            .conversations()
+            .conversations(&PhoneNumberId::new(pn).unwrap(), None, 10)
+            .await
+            .unwrap()[0]
+            .unread
+    };
+    assert_eq!(unread().await, 1);
+    let clock = ManualClock::new(OffsetDateTime::now_utc());
+    m.script.push_json(200, marked());
+    let moved = m
+        .inbox(backend, ReplyChecks::ALL, &clock)
+        .mark_read(CONTACT, true)
+        .await
+        .unwrap_err();
+    assert_eq!((moved.status(), moved.code()), (503, "storage_unavailable"));
+    let [receipt] = m.script.requests().try_into().unwrap();
+    assert_eq!(receipt.json().unwrap()["message_id"], "wamid.MOVING-1");
+    assert_eq!(unread().await, 1, "reset after the number moved");
     assert_eq!(m.script.remaining(), 0);
 }
 

@@ -4695,6 +4695,21 @@ design's (§9).
     one by one); the window names no refusal reason (D62); the list reads a
     few rows per conversation for its windows (D63). D60–D63 are the
     coordinator's decisions of 2026-11-02, each swappable.
+  - **Review** (sabotage, security lens): the binding is read again after
+    the receipt, before the reset, so a number that moved while Meta
+    answered resets nothing (`503`; the next holder's count was the stale
+    request's to zero); three guards no test held are pinned, the receipt's
+    tombstone skip (without it the receipt named a message never
+    received), its scan past the history's first page and the 30 days'
+    bound, to the second
+    (`conformance::inbox::a_read_receipt_skips_a_tombstone_and_reads_past_the_first_page`,
+    `a_number_that_moves_during_the_receipt_resets_nothing`, in `run`);
+    the idempotency claim corrected: a `503` after the receipt went
+    releases its key, and its repeat sends the receipt again. Left: a
+    receipt for a message its customer revoked after it arrived (status
+    `deleted`) is still sent, and Meta documents neither its answer nor a
+    repeat's; the read reset and the window emit no live event (M2b's
+    stream carries Meta's events only).
 - [x] **M2h. A number's own move record** (row 111; added by M2a, and
   folded into it by the coordinator: the inbox never ships with the leak):
   the binding epoch for a number Meta migrated from

@@ -69,6 +69,24 @@ async fn a_capability_made_before_its_number_left_reads_nothing() {
     conformance::inbox::a_capability_made_before_its_number_left_reads_nothing(&backend).await;
 }
 
+/// Roadmap M2g's review: the receipt skips a revoke's tombstone, finds
+/// the customer's message past the history's first page, and goes up to
+/// 30 days to the second, not after.
+#[tokio::test]
+async fn a_read_receipt_skips_a_tombstone_and_reads_past_the_first_page() {
+    let backend = memory::Memory::default();
+    conformance::inbox::a_read_receipt_skips_a_tombstone_and_reads_past_the_first_page(&backend)
+        .await;
+}
+
+/// Roadmap M2g's review: a number that leaves its tenant while Meta
+/// answers the read receipt resets nothing.
+#[tokio::test]
+async fn a_number_that_moves_during_the_receipt_resets_nothing() {
+    let backend = memory::Memory::default();
+    conformance::inbox::a_number_that_moves_during_the_receipt_resets_nothing(&backend).await;
+}
+
 /// Roadmap M2g: the window is what a free-form reply would meet (the
 /// window, the thread's owner, the number's checks), and the list's
 /// window is the same.

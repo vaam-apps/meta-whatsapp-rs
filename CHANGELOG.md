@@ -243,8 +243,10 @@ stored data, the owner's).
     first (`messages/mark-message-as-read`, the number's token) for the
     latest inbound message only, never for one dated before the epoch
     or older than Meta's 30 days (`inbox::READ_RECEIPT_MAX_AGE`); a
-    receipt Meta refuses resets nothing. `204`, with no body and no
-    `Content-Type`, replayed alike (`Success::no_content`).
+    receipt Meta refuses resets nothing, nor does one answered after the
+    number moved (the binding is read again before the reset: `503`).
+    `204`, with no body and no `Content-Type`, replayed alike
+    (`Success::no_content`).
   - `GET /v1/numbers/{pn}/messages/{message_id}` (`get_inbox_message`,
     read class): `{contact, message}` through `ConversationStore::message`;
     a message dated before the epoch is `404 not_found`, the answer for

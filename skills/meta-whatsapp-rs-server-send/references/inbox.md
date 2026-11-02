@@ -70,8 +70,10 @@ export async function replyWindow(api: WhatsApp, pn: string, contact: string): P
 
 When the merchant opens a conversation, mark it read; `notify_customer`
 also sends Meta one read receipt for the customer's latest message (none
-for one older than 30 days). Under an `Idempotency-Key`, a repeat sends no
-second receipt; a receipt Meta refuses leaves `unread` as it was:
+for one older than 30 days). Under an `Idempotency-Key`, a repeat of an
+answered request sends no second receipt (a `503` releases the key, and
+its repeat sends the receipt again); a receipt Meta refuses leaves
+`unread` as it was:
 
 ```ts
 export async function markConversationRead(api: WhatsApp, pn: string, contact: string, notifyCustomer: boolean, reference: string) {

@@ -614,7 +614,7 @@ async fn mark_read(
         ("pn" = String, Path, description = "Phone number id"),
         ("contact" = String, Path, description = "The conversation's `contact` (a BSUID, a `wa_id` or a group id), percent-encoded"),
         ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
-        ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never send a second read receipt (a repeat gets the kept answer, with `Idempotent-Replayed: true`)"),
+        ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body send no second read receipt once answered (a repeat gets the kept answer, with `Idempotent-Replayed: true`; a `503` releases the key)"),
     ),
     request_body(content = Option<MarkConversationReadRequest>, description = "Optional; an empty body resets the unread count only"),
     responses(
@@ -626,7 +626,7 @@ async fn mark_read(
         (status = 422, description = "`invalid_request` (`contact`, `body`), `idempotency_key_reused`, or Meta's `invalid_parameter`: the unread count is unchanged", body = ErrorBody),
         (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed: the unread count is unchanged", body = ErrorBody),
-        (status = 503, description = "`storage_unavailable`: retry", body = ErrorBody),
+        (status = 503, description = "`storage_unavailable`: retry (also when the number moved while Meta answered the receipt: the unread count is unchanged)", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]

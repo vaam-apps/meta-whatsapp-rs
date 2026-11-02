@@ -597,10 +597,15 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.1349120
   the customer sent (Meta marks the earlier ones of a one-to-one
   conversation with it; in a group it marks only that one). No receipt
   goes for a message older than Meta's 30 days; the count is reset all the
-  same. A receipt Meta refuses answers its error and resets nothing. It
-  takes an `Idempotency-Key`: a repeat with the same key and body sends
-  no second receipt. Its rate class is the writes'; the window and a
-  message by id are reads.
+  same. A receipt Meta refuses answers its error and resets nothing, and
+  so does one Meta answers after the number moved (`503`). It
+  takes an `Idempotency-Key`: a repeat with the same key and body gets
+  the kept answer and sends no second receipt, unless the first was
+  answered `503 storage_unavailable` (the receipt went, the reset
+  failed), whose key is released, so its repeat sends the receipt again.
+  A `504 timeout` is kept: the count is unchanged, and a new key resets
+  it (and sends the receipt again). Its rate class is the writes'; the
+  window and a message by id are reads.
 - **A number that moved to the tenant from another one shows nothing
   from before its binding** (design D10: hidden, never purged): no
   conversation whose latest message is older, no message dated before
