@@ -550,7 +550,7 @@ enum Admitted {
     Yes,
     No,
     /// It could not be told (storage): read nothing this time.
-    Unknown,
+    Undetermined,
 }
 
 /// What a waiting producer woke for.
@@ -604,7 +604,7 @@ impl Producer {
                         self.end(REVOKED);
                         return;
                     }
-                    Admitted::Unknown => read = false,
+                    Admitted::Undetermined => read = false,
                 }
             }
             if read {
@@ -714,7 +714,7 @@ impl Producer {
                     code = error.code(),
                     "an event stream could not check its key: it reads nothing until it can"
                 );
-                Admitted::Unknown
+                Admitted::Undetermined
             }
         }
     }

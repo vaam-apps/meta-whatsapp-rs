@@ -503,7 +503,7 @@ fn parses_the_documented_request_payloads() {
     // An action Meta adds later still parses.
     let future: FlowRequest =
         serde_json::from_value(json!({"version": "4.0", "action": "navigate"})).unwrap();
-    assert_eq!(future.action, EndpointAction::Unknown("navigate".into()));
+    assert_eq!(future.action, EndpointAction::Other("navigate".into()));
 }
 
 #[test]

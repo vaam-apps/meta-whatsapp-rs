@@ -49,8 +49,8 @@
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{BusinessId, PreVerifiedPhoneNumberId, WabaId, is_numeric_id};
+use meta_whatsapp_core::open_enum;
 use serde::Serialize;
-use serde::ser::Serializer;
 
 /// Maximum characters of the business portfolio name (`pre-filled-data`).
 pub const MAX_BUSINESS_NAME_CHARS: usize = 100;
@@ -261,124 +261,63 @@ pub struct WabaPrefill {
     pub ids: Vec<WabaId>,
 }
 
-/// `extras.featureType`: which custom flow to run.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum FeatureType {
-    /// Coexistence: onboard a number already used with the WhatsApp
-    /// Business app (all versions up to v4).
-    WhatsappBusinessAppOnboarding,
-    /// Skip the phone number screens (v2 only; `FINISH_ONLY_WABA`).
-    OnlyWabaSharing,
-    /// Marketing Messages API onboarding (v2 only; v3+ uses `features`).
-    MarketingMessagesLite,
-    /// Any other documented value.
-    Other(String),
-}
-
-impl FeatureType {
-    /// The string Meta expects.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::WhatsappBusinessAppOnboarding => "whatsapp_business_app_onboarding",
-            Self::OnlyWabaSharing => "only_waba_sharing",
-            Self::MarketingMessagesLite => "marketing_messages_lite",
-            Self::Other(s) => s,
-        }
+open_enum! {
+    /// `extras.featureType`: which custom flow to run.
+    pub enum FeatureType {
+        /// Coexistence: onboard a number already used with the WhatsApp
+        /// Business app (all versions up to v4).
+        WhatsappBusinessAppOnboarding => "whatsapp_business_app_onboarding",
+        /// Skip the phone number screens (v2 only; `FINISH_ONLY_WABA`).
+        OnlyWabaSharing => "only_waba_sharing",
+        /// Marketing Messages API onboarding (v2 only; v3+ uses `features`).
+        MarketingMessagesLite => "marketing_messages_lite",
     }
 }
 
-impl Serialize for FeatureType {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
-    }
-}
-
-/// `extras.features[].name` (v3 and the previews).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum FeatureName {
-    /// Only business tokens can access the onboarded assets
-    /// (`FINISH_GRANT_ONLY_API_ACCESS`). Not combinable with coexistence.
-    AppOnlyInstall,
-    /// Marketing Messages API onboarding.
-    MarketingMessagesLite,
-    /// Any other documented value.
-    Other(String),
-}
-
-impl FeatureName {
-    /// The string Meta expects.
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::AppOnlyInstall => "app_only_install",
-            Self::MarketingMessagesLite => "marketing_messages_lite",
-            Self::Other(s) => s,
-        }
+open_enum! {
+    /// `extras.features[].name` (v3 and the previews).
+    pub enum FeatureName {
+        /// Only business tokens can access the onboarded assets
+        /// (`FINISH_GRANT_ONLY_API_ACCESS`). Not combinable with coexistence.
+        AppOnlyInstall => "app_only_install",
+        /// Marketing Messages API onboarding.
+        MarketingMessagesLite => "marketing_messages_lite",
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct Feature {
-    #[serde(serialize_with = "ser_feature_name")]
     name: FeatureName,
 }
 
-fn ser_feature_name<S: Serializer>(name: &FeatureName, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(name.as_str())
-}
-
-/// `extras.version`. Plain v4 has no value: the login configuration selects
-/// it.
-///
-/// Meta deprecates Embedded Signup v2 and v3, **including their public
-/// previews**, on 2026-10-15
-/// (`embedded-signup/onboarding-customers-as-a-solution-partner`, updated
-/// 2026-08-05; the other pages still name only v2). Those four variants are
-/// `#[deprecated]`: migrate to v4, which needs no `version` at all.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum EsVersion {
-    /// `v4-public-preview` (phone-number-first flow).
-    V4PublicPreview,
-    /// `v3-public-preview`.
-    #[deprecated(
-        note = "Embedded Signup v3 and its public preview are deprecated on 2026-10-15: use v4 (no `version`)"
-    )]
-    V3PublicPreview,
-    /// `v2-public-preview`.
-    #[deprecated(
-        note = "Embedded Signup v2 and its public preview are deprecated on 2026-10-15: use v4 (no `version`)"
-    )]
-    V2PublicPreview,
-    /// `v3`.
-    #[deprecated(note = "Embedded Signup v3 is deprecated on 2026-10-15: use v4 (no `version`)")]
-    V3,
-    /// `v2`.
-    #[deprecated(note = "Embedded Signup v2 is deprecated on 2026-10-15: use v4 (no `version`)")]
-    V2,
-    /// Any other value.
-    Other(String),
-}
-
-impl EsVersion {
-    /// The string Meta expects.
-    #[allow(deprecated)] // it still has to spell them
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::V4PublicPreview => "v4-public-preview",
-            Self::V3PublicPreview => "v3-public-preview",
-            Self::V2PublicPreview => "v2-public-preview",
-            Self::V3 => "v3",
-            Self::V2 => "v2",
-            Self::Other(s) => s,
-        }
-    }
-}
-
-impl Serialize for EsVersion {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(self.as_str())
+open_enum! {
+    /// `extras.version`. Plain v4 has no value: the login configuration selects
+    /// it.
+    ///
+    /// Meta deprecates Embedded Signup v2 and v3, **including their public
+    /// previews**, on 2026-10-15
+    /// (`embedded-signup/onboarding-customers-as-a-solution-partner`, updated
+    /// 2026-08-05; the other pages still name only v2). Those four variants are
+    /// `#[deprecated]`: migrate to v4, which needs no `version` at all.
+    pub enum EsVersion {
+        /// `v4-public-preview` (phone-number-first flow).
+        V4PublicPreview => "v4-public-preview",
+        /// `v3-public-preview`.
+        #[deprecated(
+            note = "Embedded Signup v3 and its public preview are deprecated on 2026-10-15: use v4 (no `version`)"
+        )]
+        V3PublicPreview => "v3-public-preview",
+        /// `v2-public-preview`.
+        #[deprecated(
+            note = "Embedded Signup v2 and its public preview are deprecated on 2026-10-15: use v4 (no `version`)"
+        )]
+        V2PublicPreview => "v2-public-preview",
+        /// `v3`.
+        #[deprecated(note = "Embedded Signup v3 is deprecated on 2026-10-15: use v4 (no `version`)")]
+        V3 => "v3",
+        /// `v2`.
+        #[deprecated(note = "Embedded Signup v2 is deprecated on 2026-10-15: use v4 (no `version`)")]
+        V2 => "v2",
     }
 }
 

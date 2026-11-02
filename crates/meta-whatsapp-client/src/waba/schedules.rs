@@ -5,14 +5,15 @@ use futures::Stream;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::TemplateId;
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::paging::Page;
 use serde::{Deserialize, Serialize};
 
 use super::Waba;
 use super::activity::ListWabaRecords;
-use crate::templates::macros::string_enum;
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A campaign schedule's `status` (`WhatsAppBusinessCampaignScheduleStatus`).
     pub enum ScheduleStatus {
         /// Sent.

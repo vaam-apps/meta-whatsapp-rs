@@ -9,9 +9,8 @@
 //! endpoint availability example but not in the value table; it is modelled.
 
 use meta_whatsapp_core::ids::FlowId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
-
-use crate::open_enum::open_enum;
 
 open_enum! {
     /// `flows.event`.

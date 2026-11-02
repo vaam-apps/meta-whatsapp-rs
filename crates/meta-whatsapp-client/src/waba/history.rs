@@ -4,16 +4,17 @@
 use futures::Stream;
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::paging::Page;
 use serde::{Deserialize, Serialize};
 
 use super::activity::ApplicationRef;
 use super::{check_limit, fields_query};
 use crate::request::{paginate_or_error, reject_cursors};
-use crate::templates::macros::string_enum;
 use crate::{Client, GraphRequest};
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A message's delivery status (`WhatsAppMessageDeliveryStatus`).
     pub enum DeliveryStatus {
         /// Accepted.
@@ -29,7 +30,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// Whether the webhook for a delivery event went through
     /// (`webhook_update_state`).
     pub enum WebhookUpdateState {

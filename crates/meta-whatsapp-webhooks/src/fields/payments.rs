@@ -50,10 +50,9 @@
 
 use std::collections::BTreeMap;
 
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-
-use crate::open_enum::open_enum;
 
 /// An amount of money: `value` is the amount multiplied by `offset`
 /// (₹210.00 is `value` 21000, `offset` 100).

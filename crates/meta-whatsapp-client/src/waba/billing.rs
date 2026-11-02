@@ -6,13 +6,13 @@
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::CreditLineId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 
 use super::Waba;
 use super::accounts::check_currency;
 use super::types::WabaInfo;
 use crate::Client;
-use crate::templates::macros::string_enum;
 
 /// Body of `POST /{WABA_ID}/set_payment_method_migration_intent`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -64,7 +64,8 @@ impl PaymentMethodMigrationIntent {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// Where a migration stands (the page's § Migration status values).
     pub enum PaymentMigrationStatus {
         /// Initiated: the source WABA is being validated.

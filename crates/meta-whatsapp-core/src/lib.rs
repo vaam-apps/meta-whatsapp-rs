@@ -21,6 +21,7 @@ pub mod config;
 pub mod error;
 pub mod ids;
 pub mod media;
+pub mod open_enum;
 pub mod paging;
 pub mod recipient;
 pub mod secret;
@@ -33,3 +34,9 @@ pub mod transport;
 pub mod testing;
 
 pub use error::{Error, ErrorKind, GraphApiError, Result};
+
+/// What [`open_enum!`] expands to refers to; not part of the API.
+#[doc(hidden)]
+pub mod __private {
+    pub use serde;
+}

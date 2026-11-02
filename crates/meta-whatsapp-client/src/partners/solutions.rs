@@ -86,6 +86,7 @@
 use futures::Stream;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::{AppId, BusinessId, SolutionId};
+use meta_whatsapp_core::open_enum;
 use meta_whatsapp_core::paging::Page;
 use meta_whatsapp_core::secret::AccessToken;
 use meta_whatsapp_core::{Error, Result};
@@ -93,7 +94,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::phone_numbers::fields_param;
 use crate::request::{paginate_or_error, reject_cursors, send_checked};
-use crate::templates::macros::string_enum;
 use crate::waba::WabaTask;
 use crate::{Client, GraphRequest};
 
@@ -114,7 +114,8 @@ impl Client {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A solution's `status` (`WhatsAppBusinessSolutionStatus` in the
     /// references). The App Dashboard names `INITIATED` "Pending" and
     /// `REJECTED` "Inactive".
@@ -132,7 +133,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A solution's `status_for_pending_request`
     /// (`WhatsAppBusinessSolutionPendingStatus`): the transition waiting
     /// for the other partner.
@@ -146,7 +148,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// A partner's `status` in a solution (`GET /{SOLUTION_ID}/partners`).
     /// The guide's examples show `ACCEPTED`; the accept reference names
     /// `NOTIFICATION_SENT` as the state accepting leaves.
@@ -158,7 +161,8 @@ string_enum! {
     }
 }
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// The app's relationship to a solution, the `role` filter of
     /// [`PartnerSolutions::app_solutions`].
     pub enum SolutionRole {

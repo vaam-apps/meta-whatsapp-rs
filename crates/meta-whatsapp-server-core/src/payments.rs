@@ -386,7 +386,7 @@ impl<'a> PaymentConfigurations<'a> {
     async fn change_failed(&self, action: &'static str, name: &str, error: &Error) -> ServiceError {
         let failed = self.failed(error).await;
         if failed.may_have_been_sent() {
-            self.audit(action, name, Outcome::Unknown);
+            self.audit(action, name, Outcome::Unanswered);
         }
         failed
     }
@@ -724,7 +724,7 @@ impl<'a> Payments<'a> {
             Err(error) => {
                 let failed = self.failed(&error).await;
                 if failed.may_have_been_sent() {
-                    self.audit_refund(refund, None, Outcome::Unknown);
+                    self.audit_refund(refund, None, Outcome::Unanswered);
                 }
                 Err(failed)
             }

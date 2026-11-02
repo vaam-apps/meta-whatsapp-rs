@@ -17,10 +17,10 @@
 use meta_whatsapp_core::Result;
 use meta_whatsapp_core::error::ValidationError;
 use meta_whatsapp_core::ids::WabaId;
+use meta_whatsapp_core::open_enum;
 use serde::{Deserialize, Serialize};
 
 use super::{PhoneNumber, fields_param};
-use crate::templates::macros::string_enum;
 
 /// Shortest `entity_name`, in characters.
 pub const MIN_ENTITY_NAME_CHARS: usize = 2;
@@ -29,7 +29,8 @@ pub const MAX_ENTITY_NAME_CHARS: usize = 128;
 /// An email must be "under 128 characters" (the update's validation rules).
 const EMAIL_CHARS_UNDER: usize = 128;
 
-string_enum! {
+open_enum! {
+    #![case_insensitive]
     /// The legal form of the business (`entity_type` of an update).
     pub enum BusinessEntityType {
         /// A limited liability partnership.

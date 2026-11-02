@@ -75,8 +75,8 @@ pub enum Outcome {
     /// Meta answered it.
     Answered,
     /// It may have gone through unanswered (a timeout, a failure that
-    /// `may_have_been_sent`): look it up.
-    Unknown,
+    /// `may_have_been_sent`): look it up. Written `unknown`.
+    Unanswered,
 }
 
 impl Outcome {
@@ -84,7 +84,7 @@ impl Outcome {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Answered => "answered",
-            Self::Unknown => "unknown",
+            Self::Unanswered => "unknown",
         }
     }
 }

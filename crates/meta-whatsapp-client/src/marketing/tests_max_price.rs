@@ -123,7 +123,7 @@ async fn agreement_status_reads_the_documented_examples() {
     assert_eq!(none.signer_email, None);
     assert_eq!(
         b.max_price_agreement().await.unwrap().status,
-        AgreementStatus::Unknown("revoked".into())
+        AgreementStatus::Other("revoked".into())
     );
     for req in t.requests() {
         assert_eq!(req.method, Method::GET);
@@ -177,7 +177,7 @@ async fn an_unreadable_agreement_response_never_quotes_the_signer() {
     t.push_bytes(
         200,
         "application/json",
-        r#"{"status": 7, "signer_email": "jane.doe@bsp.example"}"#,
+        r#"{"status": "SIGNED", "signer_email": "jane.doe@bsp.example", "signer_name": 7}"#,
     );
     let err = business(&client(&t))
         .max_price_agreement()
