@@ -762,8 +762,9 @@ review):
 - **Bounded buffering** (D42): a stream holds at most 1 MiB of event data
   (one event larger alone) and 64 frames its client has not taken; a
   client that takes nothing for 30 s while its buffer is full is
-  dropped: its stream ends with `event: lagged` and `data: {"after":
-  <the last sequence its client took>}`, and what it held is dropped. A
+  dropped: its stream ends with `event: lagged` and a `data:` of
+  `{"after": n}`, `n` the last sequence its client took, and what it
+  held is dropped. A
   stream whose cursor fell below what housekeeping purged ends the same
   way (its client lost events). Nothing is lost from the outbox by a
   drop: the client resumes from `after`. **A stream gives its place
