@@ -113,6 +113,9 @@ type Received = {
 type Delivery = {
   status?: { id?: string; status?: string; biz_opaque_callback_data?: string | null };
 };
+// The service's own number events name the number and its WABA (the
+// envelope's phone_number_id and waba_id); a disconnection says why.
+type Disconnected = { reason?: string };
 
 export async function handle(event: Event): Promise<void> {
   switch (event.type as KnownEventType) {
@@ -132,6 +135,20 @@ export async function handle(event: Event): Promise<void> {
     }
     case "template_status_updated":
       return;
+    // Conversation Routing: another app owns the thread. Show a standby
+    // copy, never answer it (the inbox reply is 409 thread_owned_elsewhere).
+    case "standby_observed":
+    case "thread_control_changed":
+      return;
+    case "number_disconnected": {
+      // tenant_disconnected, operator_unbound, account_deleted, … (more may come).
+      const data = event.data as Disconnected;
+      console.log(event.phone_number_id, data.reason);
+      return;
+    }
+    case "number_connected":
+    case "number_reconnect_required":
+      return; // mark the number usable, or ask its merchant to reconnect
     default:
       return; // a type you do not handle, or one added later
   }

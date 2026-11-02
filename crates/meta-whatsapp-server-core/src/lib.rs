@@ -26,6 +26,7 @@
 //! | [`authz`] | the authorization order: key, tenant, scope, ownership, vault |
 //! | [`audit`], [`observe`] | the audit events (target `audit`); what an operation reports to the adapter's metrics |
 //! | [`events`] | routing Meta's webhook events to tenants, their outbox keys and ids, polling, one event by id |
+//! | [`number_events`] | the service's own events about a tenant's numbers (roadmap M2d): `number_connected`, `number_disconnected`, `number_reconnect_required`, recorded in the outbox for the number's tenant |
 //! | [`live`] | live event streams (SSE in the HTTP adapter): a tenant's events after a cursor, read from the outbox when its notifier wakes them or a re-poll is due, bounded per tenant and replica, a slow client dropped |
 //! | [`inbound`] | the webhook pipeline: a signed body verified before anything is stored, parsed, each event under its dedup lease, routed by the records and recorded (inbox, then outbox), and what to answer Meta |
 //! | [`idempotency`] | `Idempotency-Key`: claim, settle, replay, over a fingerprint of the operation and its canonical input; running an operation under a key (`run`: a status, a body, and whether it replayed) |
@@ -79,6 +80,7 @@ pub mod media;
 pub mod messages;
 pub mod model;
 pub mod notify;
+pub mod number_events;
 pub mod numbers;
 pub mod observe;
 pub mod operation;

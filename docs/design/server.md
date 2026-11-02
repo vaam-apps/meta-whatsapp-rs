@@ -164,9 +164,12 @@ messages (window events), thread ownership from handovers and standby
 copies, and identity links (an inbound message's phone number to its
 BSUID, a number change, `user_id_update`). Every event the service owns
 reaches `InboxSink`, the `standby_observed` and `thread_control_changed`
-types included, which stay operator-only in the outbox until M2d
-([D25](#10-decisions)): the store holds what the tenant's events do not
-show yet. A handover costs up to 16 `identity_links` reads, then, when no
+types included, which are tenant events in the outbox since roadmap M2d
+([D25](#10-decisions)): the tenant polls the events the inbox recorded
+from, and M2a's routes answer what the inbox made of them (a standby copy
+opens the window without an unread message; a `control_taken` refuses a
+free-form reply `409 thread_owned_elsewhere`, unless the number's
+`ReplyChecks` turn the check off). A handover costs up to 16 `identity_links` reads, then, when no
 link leads anywhere, one `identities` read and one `contact` read per
 identity, all inside the webhook request. No
 test of the service depends on these records today: the M1 send route
@@ -227,9 +230,32 @@ library's `KvStore` namespaces (`wa.token`, `wa.otp`, `wa.webhook.dedup`,
   redelivered (OQ #30 applies unchanged).
 - The service adds `number_connected`, `number_disconnected` and
   `number_reconnect_required` (after a 190 on a merchant's call) events.
+  *As built in M2d* (`meta_whatsapp_server_core::number_events`; D80–D85,
+  decided by the coordinator): `number_connected` for each number an
+  admin attach or an Embedded Signup (completed or resumed) bound, once
+  its token is stored (a first attach, or one again: a reconnection);
+  `number_disconnected` for each number of a WABA the tenant disconnects
+  (`reason: tenant_disconnected`, once Meta unsubscribed the app) or the
+  operator unbinds (`operator_unbound`), or Meta's `account_update`
+  offboards (`partner_app_uninstalled`, `account_deleted`: M3a's
+  `signup::AccountUpdates`), recorded before the binding goes;
+  `number_reconnect_required` for each number a `190` marks anew. Their
+  `data` is `{event, phone_number_id, waba_id}`, and `reason` on
+  `number_disconnected` (more reasons may come within v1); the business's
+  ids only. Each is its number's tenant's only, by the outbox's own check
+  (the number bound to that tenant under that WABA, its binding begun by
+  the second after the binding the event is about began: dated by its
+  binding, not by a clock, so the window after a move does not apply),
+  and is recorded once per binding generation (the outbox key is its type,
+  the number and the binding's epoch). Not built: an event for the
+  coexistence offboarding ([§3.4](#34-how-numbers-get-bound), M3b), and
+  for a number a refresh drops from its WABA (its binding is gone when
+  the refresh lands).
 - `data` is the library's `WebhookEvent` JSON, pinned by snapshot tests
   over Meta's documented examples: a library change that alters it fails
-  the server's tests and forces an API-version decision.
+  the server's tests and forces an API-version decision. A number event's
+  is the service's own (above), pinned by the core's
+  `number_events::tests::each_number_events_data_is_pinned`.
 
 How M1c settled what the list above leaves open. Four of these choices
 are coordinator's decisions of 2026-09-25, which M1c ships and which
@@ -243,15 +269,21 @@ rest follows from the list above and decides nothing for the owner:
 
 - **Types are an allow-list too.** A tenant receives only the event types
   the service reviewed and pinned (`TENANT_EVENT_TYPES` in
-  `crates/meta-whatsapp-server-core/src/events.rs`); `unknown`, `unparsed`, `partner_solution_updated`, the
-  types the library's webhook conformance sweep typed (PR #17:
-  Conversation Routing's `standby_observed` and `thread_control_changed`,
-  the Marketing Messages API's `user_action_reported`), which are not yet
-  reviewed for tenants (M2 makes them tenant-visible: D25), and any type
-  a later library adds are
+  `crates/meta-whatsapp-server-core/src/events.rs`); `unknown`, `unparsed`, `partner_solution_updated`
+  and any type a later library adds are
   operator-only rows until the service lists them in `TENANT_EVENT_TYPES`
   (a test reads the library's `WebhookEvent::kind` and fails on an
   unclassified one; promoting a type is additive, the reverse is not).
+  The types the library's webhook conformance sweep typed (PR #17:
+  Conversation Routing's `standby_observed` and `thread_control_changed`,
+  the Marketing Messages API's `user_action_reported`) were operator-only
+  until roadmap M2d made them tenant-visible (D25, acceptance test M2.6),
+  routed as every event naming a number is, the binding epoch and D36's
+  rules included. `user_action_reported` names neither the user nor the
+  message (`marketing-messages/track-click-events`: the action, its time,
+  the clicked component, and Meta's `click_id`, `tracking_token` and
+  `product_id`); its `data` is served whole, as every type's, and no log
+  line holds it (M1.7's capture covers the three types).
 - **Ownership is by the bindings, number first, since before the
   event.** An event naming a number (an untyped change: the number its
   raw `metadata` names, which the inbox reads a `history` change by) goes
@@ -493,6 +525,11 @@ only with the `Authorizer` that made it
   does the same and emits `number_disconnected`. A tenant whose token no
   longer works (`409 number_not_connected` or `reconnect_required`)
   cannot disconnect: the operator's path is the admin unbind. *As built
+  in M2d*: the disconnect records `number_disconnected` (`reason:
+  tenant_disconnected`) for each of the WABA's numbers once Meta
+  unsubscribed the app, before it deletes anything (an outbox that fails
+  is `503`, nothing deleted; a repeat records each event once), and in
+  Solution Partner mode before the revocation too. *As built
   in M3a*: in Solution Partner mode the disconnection revokes the credit
   line between the unsubscription and the deletion (the library's
   `EmbeddedSignup::offboard`, then the binding the capability was made
@@ -505,9 +542,12 @@ only with the `Authorizer` that made it
   recorded, else the webhook's `owner_business_id`; then the token; then
   the bindings), `PARTNER_REMOVED` revokes at once in Solution Partner
   mode (D14) and leaves the token and the bindings; each is confirmed
-  with Graph first ([§6](#6-security), D72). No `number_disconnected`
-  event is emitted yet (the service's number events are M2c–M2e's): the
-  `account_updated` event reaches the tenant. A partner disconnection
+  with Graph first ([§6](#6-security), D72). Since M2d the offboarding
+  records `number_disconnected` for each of the WABA's numbers once
+  Graph confirmed, before anything is revoked or deleted (`reason`:
+  `partner_app_uninstalled` or `account_deleted`; an outbox that fails
+  leaves the merchant whole, and its `Busy` is redelivered), and the
+  `account_updated` event reaches the tenant too. A partner disconnection
   deletes only the token and the binding it read before the
   revocation's calls (a WABA moved meanwhile keeps its new holder's). In
   Solution Partner mode a tenant's deletion revokes each of its WABAs'
@@ -516,7 +556,12 @@ only with the `Authorizer` that made it
   the stored token, if usable, unsubscribe the app, at best (Meta refusing
   does not stop it); then delete the vault entry, then the bindings. A
   token no tenant can reach serves nothing and widens what a database and
-  vault key compromise exposes.
+  vault key compromise exposes. *As built in M2d*: `number_disconnected`
+  (`reason: operator_unbound`) for each of the WABA's numbers, for the
+  tenant that held it, before the token and the bindings go (with a token
+  or without one); and the admin attach records `number_connected` for
+  each number it bound once the token is stored, before it subscribes the
+  app.
 
 **Decision (D3): browser access.** (a) Never browser-facing: the
 CMS relays signup calls and live events (an SSE relay per open inbox, or
@@ -696,6 +741,20 @@ route yet (roadmap P2b).
 
 `tenants` (a list or `"*"`) is for platform keys; a tenant key's endpoint
 receives its own tenant's events.
+
+**The event types** (`KnownEventType`, the core's `TENANT_EVENT_TYPES`;
+*as built in M2d*, 34 types): the library's reviewed `WebhookEvent`
+kinds, Conversation Routing's `standby_observed` (a copy of a thread the
+business observes without owning it: an inbound message, the owner's
+send, a status; never to be answered) and `thread_control_changed`
+(`control_passed`, `control_taken`) and the Marketing Messages API's
+`user_action_reported` (a click on a marketing message) among them since
+M2d ([D25](#10-decisions)), each on the polls, the streams and
+`GET /v1/events/{id}` of its number's tenant only; and the service's own
+`number_connected`, `number_disconnected` and `number_reconnect_required`
+([§2.3](#23-the-event-pipeline)). Types only grow within v1
+(`EventType` is `anyOf[KnownEventType, string]`): a client defaults on an
+unknown one.
 
 **Embedded Signup and OTP** (scopes `signup`, `otp`)
 
@@ -2187,7 +2246,7 @@ test fail.
 | M2.3 | No `unknown` event reaches any stream, poll or endpoint. Decisive: the routing allow-list |
 | M2.4 | Webhooks-out: Standard Webhooks test vectors; retry schedule under a fake clock; redirects not followed; a destination outside the allow-list refused at creation and at delivery (a resolver stub that turns private on the second lookup); two signatures during rotation; over 256 KiB delivered truncated and fetchable only by its tenant |
 | M2.5 | 200 open streams at 100 events/s with bounded memory |
-| M2.6 | D25: Meta's examples of `standby_observed`, `thread_control_changed` and `user_action_reported` reach their number's tenant (poll and stream) and no other; `KnownEventType` gains them and the v1 document stays additive. Decisive: taking one out of `TENANT_EVENT_TYPES` |
+| M2.6 | D25: Meta's examples of `standby_observed`, `thread_control_changed` and `user_action_reported` reach their number's tenant (poll and stream) and no other; `KnownEventType` gains them and the v1 document stays additive. Decisive: taking one out of `TENANT_EVENT_TYPES`. *As built in M2d*: `conformance::webhooks::the_reviewed_types_reach_their_numbers_tenant_and_no_other` and `conformance::live::the_reviewed_types_reach_their_numbers_tenants_streams_only` (every backend, Postgres live), over HTTP `tests/reviewed_events.rs` (poll, by id, both streams, `types`; the document's `KnownEventType`) |
 | M3.1 | The happy path over HTTP with Meta's documented responses binds the verified WABA and all its numbers; no response contains the token |
 | M3.2 | Another tenant's state is `403 stale_attempt` and the rightful tenant still completes; a malformed PIN is `422` and the state survives |
 | M3.3 | A scripted 133005 at registration is `502 onboarding_failed` (`register_phone`, resumable); a new process on the same database resumes with a corrected PIN; another tenant's resume is `404` |
@@ -2265,7 +2324,12 @@ M3c's review, D60–D63 of 2026-11-02 (roadmap M2g) and D65–D69 of
 2026-11-02 (roadmap M3d), each under the delegation; the namespace
 `wa.server.registration` and its record layout (D66) wait for the
 owner's confirmation, and a scope of deregistration's own (D68) stays
-the owner's (roadmap § Owner touchpoints). D20's (a), a licence, is the
+the owner's (roadmap § Owner touchpoints). D80–D85 are the coordinator's of
+2026-11-02 (roadmap M2d, D81's signup and offboarding order amended on
+its review), under the delegation; the number events' type names, their
+`reason` values and their outbox key's label (D80, D83) are new stored
+names, which wait for the owner's confirmation (roadmap § Owner
+touchpoints). D20's (a), a licence, is the
 owner's: roadmap S10
 asks for it. D5 is settled as "support both modes, chosen per
 deployment"; which mode a production deployment runs follows the
@@ -2298,7 +2362,7 @@ choice stays the owner's.
 | D22 | A deleted tenant's outbox events (related to D10) | delete them with the tenant / keep them, hidden from a tenant created again under the id | **Coordinator's decision 2026-09-25, standing under the owner's delegation of 2026-09-26: delete them** (the outbox's foreign key cascades; the tenant's stream records them purged, so an old cursor is `410`). Reversing it keeps the events of tenants deleted afterwards only: events the cascade already deleted are not recoverable, an irreversible deletion, so the owner confirms it before the first release | M1 |
 | D23 | Dedup window of keyless events (`error_reported`, `unparsed`, [§2.3](#23-the-event-pipeline)) | 1 h / Meta's whole 7-day retry period / none | **Coordinator's decision 2026-09-25, standing under the owner's delegation of 2026-09-26: 1 h** (`KEYLESS_DEDUP_WINDOW`). Failure mode: Meta documents a retry at once, then with decreasing frequency over 7 days, and that receivers must deduplicate; it does not say a redelivery carries the same bytes, which the key assumes. An outage longer than an hour (the database answering `500`, say) records the batch's keyless events twice, as new ids. 7 days would record a recurring identical error once for that long; none would record every redelivery | M1 |
 | D24 | A deleted tenant on platform keys | scrubbed from every key's allowed tenants, a tenant created again needing a new key / kept | **Coordinator's decision 2026-09-25, standing under the owner's delegation of 2026-09-26: scrubbed** (a tenant created again under a recycled id must not inherit access). No route or command edits a key's allowed tenants, so a tenant created again under the id needs a new platform key; a `*` key allows it at once. Reversing it keeps the allowances of tenants deleted afterwards only: the lists already scrubbed are not restored. The owner confirms it before the first release | M1 |
-| D25 | The event types the webhook conformance sweep typed (PR #17: `standby_observed`, `thread_control_changed`, `user_action_reported`, formerly `unknown`) | operator-only / tenant-visible | **Decided 2026-09-26: tenant-visible, in M2** (with the inbox's answer to `OPEN_QUESTIONS.md` #44); M1c ships them operator-only, the rule for a type not yet reviewed | M2 |
+| D25 | The event types the webhook conformance sweep typed (PR #17: `standby_observed`, `thread_control_changed`, `user_action_reported`, formerly `unknown`) | operator-only / tenant-visible | **Decided 2026-09-26: tenant-visible, in M2** (with the inbox's answer to `OPEN_QUESTIONS.md` #44); M1c ships them operator-only, the rule for a type not yet reviewed. **Built in roadmap M2d**: in `TENANT_EVENT_TYPES` and `KnownEventType` (additive), routed by their number as every event naming one (acceptance test M2.6) | M2 |
 | D26 | The service's architecture | one crate / a framework-free core with ports, API adapters and backend bundles | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the modular service ([§8](#8-modular-architecture-and-client-sdks)).** Defaults: `api-cratestack` and `store-cratestack` (the hybrid), once the owner accepts D20's licence (a). Kept built and conformance-tested: `api-axum` (today's v1 and its OpenAPI document), permanent: the swap target, where every new route lands too, through core services that keep both adapters thin; and `store-postgres` (sqlx); `store-memory` for development; later `store-mongodb`, after the library's MongoDB adapters, with an `Outbox` spike first. Swapping the API adapter swaps the wire contract and the client: procedures with CrateStack's generated client, resource URLs with openapi-typescript. To swap, Cargo features choose which adapters are compiled in and configuration picks one of each; a new backend implements the core ports and passes `meta_whatsapp_server_core::conformance` | [roadmap.md](../roadmap.md) S1–S18 |
 | D27 | The idempotency fingerprint ([§5.4](#54-idempotency-keys)) | method, route and body (as built until S6) / operation id and canonical input | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: the operation id plus the canonical input**, so one key means the same through every API adapter. **Built in S6**: `idempotency::Fingerprint`'s constructors, one per idempotent operation (the path parameter as a decoded id, the canonical JSON body or the upload's type, file name and digest). **Decided 2026-10-31 (coordinator, under the owner's delegation):** "canonical input" is the request's JSON as it came, canonicalized (object keys sorted, whitespace ignored), not the parsed request type re-serialized; a request's rate class is its operation's, charged with `RateLimiter::charge(&TenantId, Operation)` (a bare tenant id, not an admitted `Caller`: a forged one could only spend a tenant's per-replica budget); the vault's admin writes, `graph_failed_for_admin` among them, are crate-private behind `Admin`, and `authz::rotate_vault` stays public for the command line. **The window (decided the same day):** a deployment exists, and a duplicate customer message is real harm, so for one `WA_SERVER_IDEMPOTENCY_TTL` (24 h by default) after the upgrade a repeat also matches a record stored under the fingerprint of before (the request's method, its path as sent and its canonical body, or the upload's parts: `Fingerprint::legacy_v1_json`, `legacy_v1_upload`, pinned to main's known answers, added by the HTTP adapter with `Fingerprint::or_legacy`); a claim always stores the new fingerprint. A repeat of an old key under another spelling of its path, and an upgraded replica's key repeated on an old one during a rolling deploy, are `422 idempotency_key_reused`, never a second send. The legacy fingerprint goes after the first release (roadmap M2a, which carries the line since S7 landed before the release). To swap, change those constructors, the one place every adapter's fingerprint comes from | S6 |
 | D28 | The bot framework and its plugins | in the facade / a new library crate / in the service; plugins loaded at run time / registered at compile time | **Coordinator's decision 2026-09-26 under the owner's delegation, swappable: a new library crate, `meta-whatsapp-bot`, with plugins registered at compile time.** No hot reload: loading Rust code at run time is neither idiomatic nor safe (no stable ABI, and `unsafe` loading, which the workspace forbids), and parity row 87 says so. To swap, a `Bot` is an `EventSink`, so an integrator can put their own dispatcher in its place; the service exposes the bot over HTTP in M5 | B1 |
@@ -2351,6 +2415,12 @@ choice stays the owner's.
 | D77 | Where "recorded as received on the tenant's number" is read (roadmap M2e, OQ #43) | the inbox (`ConversationStore`, keyed by number: a lookup by media id is a library port change) / the outbox's rows (`wa_server_events`, each routed to its tenant by the binding it arrived under), the id kept beside the row at insert / a table of its own | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the outbox, with its retention**: an expand-only `wa_server_events.media_id` column with a partial index on `(media_id, created_at)` (migration 7; on `media_id` alone, before the column has statistics, the planner walks the whole outbox for each lookup, the M2e review measured), filled at insert from `NewEvent::received_media`. The column, its index and the migration's description stay pending the owner's confirmation, as stable identifiers (below). The outbox already holds the tenant the routing gave each event (`RouteGuard`, operator-only after a move's window), which the inbox's rows do not; the column is filled from the event the library typed (the five media types' `{type}.id`, an edit's), and found by one index lookup. Its retention is the outbox's (`WA_SERVER_OUTBOX_RETENTION`, 7 days by default), which is how long Meta keeps a webhook's media id (the library's `media` module, "Lifetimes"); a deployment keeping the outbox shorter falls back, past it, to Meta's check. Rows from before migration 7, and those a previous release's replica inserts, record none (Meta's check). The index is built by a plain `CREATE INDEX` in the migration's transaction: it reads the outbox once and holds its inserts meanwhile (about half a second for a million rows, 900 MB, cached, on Postgres 16; a cold outbox as long as reading it), so webhook deliveries wait, or Meta retries them; `CONCURRENTLY` would need a migration outside a transaction, which the service's migrations are not. To swap, a backend answers `Outbox::received_media` from where it likes (a table of its own, the inbox once its port can find a media id) | M2e |
 | D78 | What a media id recorded as received elsewhere answers (roadmap M2e) | Meta's `phone_number_id` check, as for any id / `404` with nothing asked, for a download and a deletion; and whether a deletion of one received here is unscoped | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: `404` with nothing asked, for downloads and deletions alike; a deletion is never unscoped**, an id received here included. Meta documents the check for media uploaded on the number; if it lets a received id through whatever number is named, the check would not stop one tenant reading or deleting another's customer's file when one token reaches both, so the service does not ask (the roadmap's decisive test: zero requests). Unscoping only downloads widens the route to the tenant's own customers' files and nothing else; Meta's `DELETE` keeps its check, as no product needs to delete a received file. The cost, documented: a refusal answers without a round trip to Meta, so its time tells a caller that an id it already holds was received elsewhere in the deployment within the outbox's retention (an id never recorded answers `404` after Meta's check). It tells nothing of the file, its number or its tenant; media ids are not enumerable at the media routes' slots; and the cheap mitigations (asking Meta anyway, a delay) would either break the zero requests this row exists for or not hide a round trip's variance. Accepted, not mitigated. To swap, `Media::download_api` and the one line in `Media::delete` (`Received::Elsewhere`), or answer `Received::Never` from `Media::received` for M1b's rule | M2e |
 | D79 | The exemption's cut, and its ports (roadmap M2e) | from the binding epoch on (the inbox's `history_from`) / any row of the tenant on the number; the row's time (`created_at`, the service's receipt) / Meta's timestamp; the binding read again or not; `Outbox::received_media` and `Media::new`'s outbox required / with defaults | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the inbox's cut, on the row's `created_at`, and the binding read again before the unscoped call** (`503 storage_unavailable` otherwise). The cut is the inbox's own test (`inbox::visible`: received at or after the cut), and one row of the tenant on the number within it is enough, whatever other rows name the id (`media::Received::among`). The ports' shape, both required (`Outbox::received_media` with no default, `Media::new` taking the outbox), is as built, decided by the coordinator on 2026-11-02 too (a backend built outside this repository must add the method: CHANGELOG, breaking for it; to swap, a default that answers nothing recorded). A row of the tenant on the number from before a move away and back (the same tenant, another binding) is the previous binding's history, hidden as the inbox hides it; a row routed under the current binding was inserted while it held, after it began, so the receipt time is never before the cut for it. Reading the binding again is the inbox's rule (`OwnedNumber::still_held`): a capability made before its number moved asks Meta nothing. A required method breaks an out-of-tree backend at compile time (CHANGELOG), where a default (no row: M1b's rule) would leave it silently without the refusal; the conformance suites hold either. To swap, the filter in `Received::among`, and a default on `Outbox::received_media` | M2e |
+| D80 | The service's number events' `data` (roadmap M2d) | `{event, phone_number_id, waba_id}`, and a `reason` on `number_disconnected` / the binding's times, the status, the numbers' display numbers too / one event per WABA | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: one event per number, its `data` `{event, phone_number_id, waba_id}`, and on `number_disconnected` a `reason` from an open set.** The reasons as built: `tenant_disconnected`, `operator_unbound`, and, since the merge with M3a, `partner_app_uninstalled` and `account_deleted`; open: more may come within v1 (a number a refresh drops, the coexistence offboarding: roadmap M2d's "Left"), and a client defaults on one it does not know. Per number, so the number's stream (`GET /v1/numbers/{pn}/events/stream`) and the `phone_number_id` filter carry them; nothing a client could not read from `GET /v1/numbers` (no display number, no token, no Meta text). Why: a tenant switches on the type and the number, and the business's own ids are all it needs to act. The three type names and the four `reason` values are stored (`wa_server_events.event_type`, `data`): **pending the owner's confirmation before the first release** (architecture § Stable identifiers; roadmap § Owner touchpoints). Swap: `number_events::NumberEvent::data` and `number_events::DisconnectReason` | M2d |
+| D81 | When each number event is recorded (roadmap M2d) | after the change / before it / best effort or failing the request | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: at each change of a binding, as built: the attach, the disconnections and the signup fail with `503` when the outbox does; the `190`'s is best effort.** `number_connected` once the admin attach stored the token, before it subscribes the app (its repeat is a new generation, so a retried attach records them again: at least once), and once an Embedded Signup completed or resumed, before a kept attempt is dropped (M2d's review: so that an outbox failing is `503` with the attempt kept and its resume records them, once; a first completion that kept no attempt has nothing to resume, and loses them with its `503`). `number_disconnected` before the token and the bindings go, while the binding still holds the rows for the tenant: the tenant's disconnect once Meta unsubscribed the app (before Solution Partner's revocation), the operator's unbind after its unsubscription at best, and Meta's `account_update` offboarding once Graph confirmed it, before anything is revoked or deleted (M2d's review: an outbox failing then leaves the merchant whole, its `Busy` redelivered by Meta, any other failure the operator's; recorded after the token's deletion, it left the token deleted and the binding kept). `number_reconnect_required` once a `190` marked the numbers, only for those not marked already; best effort, as the mark is: a failure is logged, the call's own answer is unchanged, and the event is lost (a marked number is refused before Meta is asked again; the tenant reads `GET /v1/numbers`). The cost, documented: an event recorded before a change that then fails (`503`, the WABA moved or refreshed meanwhile, a revocation that fails) stays for a binding that stays, and its repeat of the same generation records none again; a number a refresh drops gets none. Why: after the change no binding would hold the row for the tenant, and the outbox is the record a client reconciles against `GET /v1/numbers`, not a ledger of the binding's state. Swap: the calls of `authz::Authorizer::record_number_event` (`admin::Admin::attach_waba`, `Admin::unbind`, `numbers::Waba::disconnect`, the signup's completion and resume, `signup::AccountUpdates`' offboarding) and `Authorizer::with_number_events` (without it none is recorded) | M2d |
+| D82 | A number event's audience and date (roadmap M2d) | the outbox's route guard on the number, dated by the clock / dated by its binding / a guard of its own (a port change) | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the outbox's existing `RouteGuard` on the number under the epoch's WABA, dated the second after the binding the event is about began, with no window after a move and no skew margin.** No backend change: the row keeps its tenant only while the number is that tenant's under that WABA and the WABA's binding began by that date, so a binding that moved, or one made again in a later second under a tenant created again with the same id, gets nothing; the binding's own event reaches it at once, after a move too. Dated by the clock, a recreated tenant bound before the event would get its namesake's; D36's window is for Meta's undated redeliveries, not the service's own events. The cost, weighed in M2d's review and accepted: a tenant deleted, created again under its id and bound again within the second its namesake's binding began, with that binding's event recorded only after all of it (a `190`'s, between its conditional mark and its insert, or a concurrent request's), gets it; and the guard compares no generation, so an event of a binding's previous generation recorded after its tenant refreshed it reaches that tenant. Either names only the number and the WABA the receiving tenant holds then; closing them is a guard on the whole epoch, a port change of both backends, not proportionate. Swap: `number_events::NumberEvents::row` | M2d |
+| D83 | A number event's outbox key (roadmap M2d) | SHA-256 over a label of its own, the type, the number and the binding's epoch / the library outbox key's tags / per occurrence | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: SHA-256 over the label `meta-whatsapp-server/number-event/v1`, then the type, the number, the WABA, the tenant, the binding's start in Unix nanoseconds and its generation, each NUL-separated; its id derived with the event id key as Meta's events' are.** Once per binding generation: a refusal repeated on the same token is one event, both disconnection paths of one binding are one event, an attach again (a new generation) is another, and a resume (no new generation) is none. Why: a key per occurrence would record a repeat's event twice, and a key without the binding's epoch would drop a reconnection's. Stored (`wa_server_events.dedup_key`) and derived into ids, pinned by a known answer: the label and the layout are **pending the owner's confirmation before the first release** (architecture § Stable identifiers). Swap: `number_events::NumberEvent::outbox_key` | M2d |
+| D84 | Where the number event types are listed (roadmap M2d) | in `TENANT_EVENT_TYPES` (and so `KnownEventType` and the `types` filter) / a list of their own beside it | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: in `TENANT_EVENT_TYPES`, its last three, and in `number_events::NUMBER_EVENT_TYPES`.** One list says what a tenant receives; the document's `KnownEventType` is generated from it (six values appended in M2d, additive), and the library's classification test leaves the three out (no webhook carries them; the library naming one fails it). Why: a second list would be a second place for a client's generated types and the `types` filter to disagree with. Swap: the list's last three (and `NUMBER_EVENT_TYPES`, which a unit test keeps equal to them) | M2d |
+| D85 | `user_action_reported`'s `data` (roadmap M2d) | the library's JSON whole / without Meta's `click_id` and `tracking_token` | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: whole, as every type's.** Meta's page (`marketing-messages/track-click-events`, read again in M2d's review on 2026-11-02) carries the business number's metadata and, per click, `action_type`, `timestamp` and `marketing_messages_link_click_data` (`click_component`, `product_id`, `click_id`, `tracking_token`): no `wa_id`, `user_id`, contact or message id. `click_id` is appended to the URL the user visits, so it ties the click to a visit of the business's own landing page, which the business sees anyway; `tracking_token` is Meta's opaque token; `product_id` is the business's catalogue's. That is less about a person than `message_received` already serves the same tenant (the customer's number, name and text), so serving it whole is proportionate. No log line holds them (M1.7's capture checks the three reviewed types with sentinels). Swap: `events::event_data` for the type (a filter dropping `click_id` and `tracking_token` there) | M2d |
 
 **Decided with roadmap M2e (D77–D79)**, by the coordinator on
 2026-11-02 under the owner's delegation, as its implementer proposed

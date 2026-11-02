@@ -7,7 +7,7 @@
 //! | [`Numbers::details`] | `GET /{pn}?fields=display_phone_number,verified_name,quality_rating,name_status,throughput` ([`NUMBER_FIELDS`]) |
 //! | [`Numbers::profile`] | `GET /{pn}/whatsapp_business_profile?fields=about,address,description,email,websites,vertical` ([`PROFILE_FIELDS`]) |
 //! | [`Numbers::update_profile`] | `POST /{pn}/whatsapp_business_profile` (none for an empty change), then the `GET` above |
-//! | [`Waba::disconnect`] | `DELETE /{waba_id}/subscribed_apps`; then the token and bindings are deleted |
+//! | [`Waba::disconnect`] | `DELETE /{waba_id}/subscribed_apps`; then `number_disconnected` for each of its numbers ([`crate::number_events`]), then the token and bindings are deleted |
 //!
 //! Pages: `business-profiles`, `solution-providers/manage-phone-numbers`,
 //! `reference/whatsapp-business-account/subscribed-apps-api`.
@@ -32,6 +32,7 @@ use crate::audit::{Subject, tenant_audit};
 use crate::authz::{Authorizer, Caller, OwnedNumber, OwnedWaba};
 use crate::error::ServiceError;
 use crate::model::NumberStatus;
+use crate::number_events::{DisconnectReason, NumberEvent};
 use crate::observe::Observer;
 use crate::request::wire;
 
@@ -355,12 +356,15 @@ impl<'a> Waba<'a> {
     }
 
     /// Disconnect the WABA: unsubscribe the app from it with its token;
-    /// only then delete the token and the bindings, the WABA's and its
-    /// numbers' ([`OwnedWaba::forget_or_busy`]). When Meta refuses or
-    /// fails, nothing is deleted. In Solution Partner mode
-    /// ([`Self::offboarded_by`]), the credit line is revoked between the
-    /// two, and a revocation that fails deletes nothing either (roadmap
-    /// M3a, design acceptance test M3.4).
+    /// then record `number_disconnected` (`reason`: `tenant_disconnected`)
+    /// for each of its numbers, while the binding still holds them for the
+    /// tenant (roadmap M2d: after it, the outbox would keep the rows
+    /// operator-only); only then delete the token and the bindings, the
+    /// WABA's and its numbers' ([`OwnedWaba::forget_or_busy`]). When Meta
+    /// refuses or fails, nothing is recorded or deleted. In Solution
+    /// Partner mode ([`Self::offboarded_by`]), the credit line is revoked
+    /// between the events and the deletion, and a revocation that fails
+    /// deletes nothing either (roadmap M3a, design acceptance test M3.4).
     ///
     /// # Errors
     ///
@@ -369,7 +373,10 @@ impl<'a> Waba<'a> {
     /// app), or its token or binding moved while it was being forgotten:
     /// `503 storage_unavailable`, retryable (the repeat finds what the
     /// tenant holds now). Meta's refusal or failure, with its `details`
-    /// (a timeout `may_have_been_sent`), and nothing deleted.
+    /// (a timeout `may_have_been_sent`), and nothing deleted. The events
+    /// not recorded (the outbox failing): `503 storage_unavailable`, with
+    /// nothing deleted; a repeat unsubscribes again and records each event
+    /// once.
     pub async fn disconnect(&self) -> Result<(), ServiceError> {
         if !self.owned.still_bound(self.authz).await? {
             return Err(ServiceError::from(StorageError::Busy));
@@ -387,6 +394,12 @@ impl<'a> Waba<'a> {
             }
             return Err(api.with_details(&error));
         }
+        self.authz
+            .record_number_event(
+                self.owned.epoch(),
+                NumberEvent::Disconnected(DisconnectReason::TenantDisconnected),
+            )
+            .await?;
         if let Some((signups, caller)) = self.signups {
             // The caller the revocation is audited for: the capability's.
             self.authz.admit(caller)?;

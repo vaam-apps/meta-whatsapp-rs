@@ -89,6 +89,7 @@ use tokio::sync::Semaphore;
 use crate::backend::Backend;
 use crate::events::{EventIdKey, EventKey, MoveRules, Routing, outbox_row, route};
 use crate::notify::{EventNotifier, Wakeup};
+use crate::number_events::NumberEvents;
 use crate::observe::Observer;
 use crate::outbox::Outbox;
 use crate::store::RecordStore;
@@ -196,6 +197,16 @@ impl Inbound {
     /// The rules after a move it routes by.
     pub fn move_rules(&self) -> MoveRules {
         self.moves
+    }
+
+    /// What records the service's own number events
+    /// ([`crate::number_events`], roadmap M2d) in `backend`'s outbox, the
+    /// one this pipeline records Meta's events in, waking its notifier,
+    /// with this pipeline's event id key: the server's `AppState` hands it
+    /// to the core's `Authorizer`
+    /// ([`crate::authz::Authorizer::with_number_events`]).
+    pub fn number_events(&self, backend: &dyn Backend) -> NumberEvents {
+        NumberEvents::new(backend.outbox(), backend.notifier(), self.ids.clone())
     }
 }
 
