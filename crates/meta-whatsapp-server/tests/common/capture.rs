@@ -757,6 +757,8 @@ pub const CONTACT_NAME: &str = "Barbara J. Johnson";
 pub const CONTACT_PHONE: &str = "+1 (940) 555-1234";
 pub const CALLBACK_DATA: &str = "order:1234:shipped";
 pub const IDEMPOTENCY_KEY: &str = "order-1234-shipped-notice";
+/// A Flow's token (roadmap M5a, design D93): in no log line.
+pub const FLOW_TOKEN: &str = "CAPTURE-FLOW-TOKEN-AQAAAAACS5FpgQ";
 
 /// The registration routes (roadmap M3d), each with a PIN or a code in
 /// its body, and a refusal whose texts quote the PIN: the PIN and the code
@@ -869,6 +871,37 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
         )
         .await;
     assert_eq!(card.status.as_u16(), 202, "{}", card.text);
+    // A Flow by id with its token (roadmap M5a): its check and send, a
+    // local refusal (a misspelt parameter), Meta's refusal of the send.
+    let flow = |parameters: serde_json::Value| {
+        Call::new(Method::POST, format!("/v1/numbers/{pn}/messages"))
+            .key(&key)
+            .json(&json!({"to": {"phone": RECIPIENT}, "type": "interactive",
+                          "interactive": {"type": "flow", "body": {"text": MESSAGE_TEXT},
+                                          "action": {"name": "flow", "parameters": parameters}}}))
+    };
+    let parameters = json!({"flow_message_version": "3", "flow_token": FLOW_TOKEN,
+                            "flow_id": "1234567890123456", "flow_cta": "Book!"});
+    let flow_of_the_waba = json!({"id": "1234567890123456",
+                                  "whatsapp_business_account": {"id": "102290129340398"}});
+    h.graph.push_json(200, flow_of_the_waba.clone());
+    h.graph
+        .push_json(200, sent_response(RECIPIENT, "wa_id", RECIPIENT_DIGITS));
+    let flowed = h.call(flow(parameters.clone())).await;
+    assert_eq!(flowed.status.as_u16(), 202, "{}", flowed.text);
+    let mut misspelt = parameters.clone();
+    misspelt["flow_tokn"] = json!(FLOW_TOKEN);
+    let misspelt = h.call(flow(misspelt)).await;
+    assert_eq!(misspelt.status.as_u16(), 422, "{}", misspelt.text);
+    h.graph.push_json(200, flow_of_the_waba);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": "(#131009) Parameter value is not valid", "type": "OAuthException",
+                         "code": 131009, "error_data": {"details": "Flow token is invalid"},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let failed = h.call(flow(parameters)).await;
+    assert_eq!(failed.status.as_u16(), 422, "{}", failed.text);
     // Refusals: a number without its `+` (before any request), and Meta's
     // closed window.
     let local = h
@@ -1047,6 +1080,7 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
         CONTACT_PHONE.to_owned(),
         CALLBACK_DATA.to_owned(),
         IDEMPOTENCY_KEY.to_owned(),
+        FLOW_TOKEN.to_owned(),
     ]
 }
 

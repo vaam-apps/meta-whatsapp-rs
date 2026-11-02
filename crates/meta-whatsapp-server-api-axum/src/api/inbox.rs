@@ -34,9 +34,9 @@ use utoipa::ToSchema;
 
 use super::common::{ApiJson, PageParams, PageQuery, encode_cursor, rfc3339};
 use super::messages::{
-    AudioObject, ContactCard, DocumentObject, ImageObject, InteractiveObject, LocationObject,
-    MessageAccepted, MessageType, OptionalJson, ReactionObject, StickerObject, TextObject,
-    VideoObject, each,
+    AudioObject, ContactCard, DirectSendCategory, DirectSendConfig, DocumentObject, ImageObject,
+    InteractiveObject, LocationObject, MessageAccepted, MessageType, OptionalJson, PinObject,
+    ReactionObject, StickerObject, TextObject, VideoObject, each,
 };
 use crate::auth::{Caller, OwnedNumber};
 use crate::error::{ApiError, ErrorBody};
@@ -320,12 +320,22 @@ pub struct ReplyMessage {
     pub template: Option<Value>,
     /// For `interactive`.
     pub interactive: Option<InteractiveObject>,
+    /// For `pin`, in a group's conversation.
+    pub pin: Option<PinObject>,
     /// Reply to this message of the conversation (`wamid.…`); not with
     /// `reaction`.
     pub reply_to: Option<String>,
     /// Echoed in this message's status events: set it to your own
     /// reference (the `Idempotency-Key`, say) to reconcile.
     pub callback_data: Option<String>,
+    /// Direct Send (`direct-send`, for eligible accounts): `utility` and
+    /// `authentication` are sent as templates Meta generates, so the
+    /// 24-hour window does not hold them; `service` is a free-form reply.
+    pub category: Option<DirectSendCategory>,
+    /// Direct Send's time-to-live in seconds.
+    pub ttl_seconds: Option<u32>,
+    /// Direct Send's business-named template (`utility` only).
+    pub direct_send_config: Option<DirectSendConfig>,
 }
 
 impl From<ReplyMessage> for domain::ReplyMessage {
@@ -343,8 +353,12 @@ impl From<ReplyMessage> for domain::ReplyMessage {
             reaction,
             template,
             interactive,
+            pin,
             reply_to,
             callback_data,
+            category,
+            ttl_seconds,
+            direct_send_config,
         } = value;
         Self {
             kind: kind.into(),
@@ -359,8 +373,12 @@ impl From<ReplyMessage> for domain::ReplyMessage {
             reaction: reaction.map(Into::into),
             template,
             interactive: interactive.map(Into::into),
+            pin: pin.map(Into::into),
             reply_to,
             callback_data,
+            category: category.map(Into::into),
+            ttl_seconds,
+            direct_send_config: direct_send_config.map(Into::into),
         }
     }
 }
@@ -735,8 +753,31 @@ mod tests {
         }))
         .unwrap_err();
         assert_eq!(to.field(), Some("body"));
-        let direct_send = parse_reply(json!({"type": "text", "category": "utility"})).unwrap_err();
-        assert_eq!(direct_send.code(), "unsupported_message_type");
+        // Direct Send rides on a reply (roadmap M5a), with Meta's three
+        // categories only.
+        let direct_send = parse_reply(json!({
+            "type": "text", "text": {"body": "Your order shipped"},
+            "category": "utility", "ttl_seconds": 600,
+            "direct_send_config": {"template_name": "order_shipped"}
+        }))
+        .unwrap();
+        assert_eq!(
+            direct_send.category,
+            Some(domain::DirectSendCategoryObject::Utility)
+        );
+        assert_eq!(direct_send.ttl_seconds, Some(600));
+        assert_eq!(
+            direct_send.direct_send_config,
+            Some(domain::DirectSendConfigObject {
+                template_name: "order_shipped".to_owned()
+            })
+        );
+        let marketing = parse_reply(json!({"type": "text", "text": {"body": "x"},
+                                           "category": "marketing"}))
+        .unwrap_err();
+        assert_eq!(marketing.field(), Some("body"));
+        let unsupported = parse_reply(json!({"type": "order_details"})).unwrap_err();
+        assert_eq!(unsupported.code(), "unsupported_message_type");
     }
 
     /// Every field of a stored message is answered, its status by the

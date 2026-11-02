@@ -86,12 +86,14 @@ where
 }
 
 /// The path of the first key of `request` that `sent` lacks (see
-/// [`meta_object`]). A key that is not a plain name is reported as its
-/// parent's path: the answer never echoes arbitrary input. A list that
-/// comes back shorter or longer is reported as a whole (an element could
-/// have held the key), except a flat list of values written back as the
-/// only element of a list, which is compared with that element.
-fn dropped_key(
+/// [`meta_object`]; the send union's other types, roadmap M5a, compare
+/// the request's object with what the library would send). A key that is
+/// not a plain name is reported as its parent's path: the answer never
+/// echoes arbitrary input. A list that comes back shorter or longer is
+/// reported as a whole (an element could have held the key), except a
+/// flat list of values written back as the only element of a list, which
+/// is compared with that element.
+pub(crate) fn dropped_key(
     request: &serde_json::Value,
     sent: &serde_json::Value,
     path: &str,

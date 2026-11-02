@@ -8340,6 +8340,55 @@
           }
         }
       },
+      "AddressParameters": {
+        "type": "object",
+        "description": "An address message's `action.parameters` (`messages/address-messages`).\nSchema only: the request carries Meta's object.",
+        "required": [
+          "country"
+        ],
+        "properties": {
+          "country": {
+            "type": "string",
+            "description": "`IN`: India only. Required."
+          },
+          "saved_addresses": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SavedAddress"
+            },
+            "description": "Addresses the user may pick instead."
+          },
+          "validation_errors": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Errors per field, shown until the user fixes them.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "values": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Values filled in for the user (`name`, `phone_number`,\n`in_pin_code`, …).",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "AttachWaba": {
         "type": "object",
         "description": "`POST /v1/admin/tenants/{id}/wabas`: the platform's own WABA and a\nsystem user token with access to it.",
@@ -8518,6 +8567,124 @@
               "$ref": "#/components/schemas/AuthenticationTemplateCreated"
             },
             "description": "One per language, as Meta answered."
+          }
+        }
+      },
+      "CarouselCard": {
+        "type": "object",
+        "description": "A carousel card, as Meta writes it.",
+        "required": [
+          "card_index",
+          "type",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/CarouselCardAction",
+            "description": "Its button(s), or its product."
+          },
+          "body": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InteractiveText",
+                "description": "A media card's body, at most 160 characters and 2 line breaks."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "card_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its position, from `0`: the card's place in the list.",
+            "minimum": 0
+          },
+          "header": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InteractiveHeader",
+                "description": "A media card's image or video, by `https://` `link`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "$ref": "#/components/schemas/CarouselCardType",
+            "description": "Media (`cta_url`) or `product`; the same on every card."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CarouselCardAction": {
+        "type": "object",
+        "description": "A carousel card's `action`: a media card's URL button (`name`\n`cta_url` and `parameters`) or its quick-reply `buttons`; a product\ncard's `product_retailer_id` and `catalog_id`.",
+        "properties": {
+          "buttons": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/QuickReplyButton"
+            },
+            "description": "Quick-reply buttons."
+          },
+          "catalog_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A product card's catalog, the same on every card: one of the\nnumber's WABA's, else `404 not_found`, nothing sent."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`cta_url`, for a URL button."
+          },
+          "parameters": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CtaUrlParameters",
+                "description": "The URL button."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "product_retailer_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A product card's product."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CarouselCardType": {
+        "type": "string",
+        "description": "A carousel card's kind (Meta's card `type`).",
+        "enum": [
+          "cta_url",
+          "product"
+        ]
+      },
+      "CatalogParameters": {
+        "type": "object",
+        "description": "A catalog message's `action.parameters` (`catalogs/catalog-messages`).\nSchema only: the request carries Meta's object.",
+        "properties": {
+          "thumbnail_product_retailer_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The product whose image is the thumbnail (Meta's default: the\ncatalog's first)."
           }
         }
       },
@@ -9071,6 +9238,29 @@
         },
         "additionalProperties": false
       },
+      "DirectSendCategory": {
+        "type": "string",
+        "description": "Direct Send's `category` (`direct-send/send-utility-and-authentication-messages`).",
+        "enum": [
+          "utility",
+          "authentication",
+          "service"
+        ]
+      },
+      "DirectSendConfig": {
+        "type": "object",
+        "description": "Direct Send's `direct_send_config` (`direct-send/business-named-templates`).",
+        "required": [
+          "template_name"
+        ],
+        "properties": {
+          "template_name": {
+            "type": "string",
+            "description": "The template Meta creates or reuses under exactly this name:\n`utility` only; lowercase letters, digits and `_`, at most 512."
+          }
+        },
+        "additionalProperties": false
+      },
       "DocumentContent": {
         "type": "object",
         "description": "`document` (`messages/document-messages`).",
@@ -9302,6 +9492,88 @@
         ],
         "description": "An event type: a KnownEventType today. Types only grow within v1: ignore an unknown one."
       },
+      "FlowActionPayload": {
+        "type": "object",
+        "description": "A Flow's first screen (`flow_action_payload`).",
+        "required": [
+          "screen"
+        ],
+        "properties": {
+          "data": {
+            "description": "Its input data: a non-empty object, or one serialized as a string\n(Meta's example)."
+          },
+          "screen": {
+            "type": "string",
+            "description": "The first screen's id."
+          }
+        }
+      },
+      "FlowParameters": {
+        "type": "object",
+        "description": "A Flow message's `action.parameters` (`flows/guides/sendingaflow`,\n\"Interactive message parameters\"): read into the library's\n`FlowParameters`, a key it would drop refused on its path. Schema\nonly: the request carries Meta's object.",
+        "required": [
+          "flow_cta"
+        ],
+        "properties": {
+          "flow_action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`navigate` (Meta's default) or `data_exchange`."
+          },
+          "flow_action_payload": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FlowActionPayload",
+                "description": "The first screen, for `navigate`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flow_cta": {
+            "type": "string",
+            "description": "The button's text."
+          },
+          "flow_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Flow, by id (digits): it must be one of the number's WABA's,\nelse `404 not_found`, nothing sent. Not with `flow_name`."
+          },
+          "flow_message_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`3`, the only version Meta takes (the library writes it when\nabsent)."
+          },
+          "flow_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Flow, by name, which Meta finds in the number's WABA. Not with\n`flow_id`."
+          },
+          "flow_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Your identifier for this Flow's session (Meta's default:\n`unused`); kept out of every log."
+          },
+          "mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`draft` or `published` (Meta's default)."
+          }
+        }
+      },
       "GraphErrorInfo": {
         "type": "object",
         "description": "Meta's error, as the body carries it: the code and trace id, and, on\nthe routes that opt in, `error_data.details`. Never Meta's `message` or\ntitles.",
@@ -9520,7 +9792,7 @@
       },
       "InteractiveAction": {
         "type": "object",
-        "description": "An interactive message's `action`: `buttons` for `button`; `button` and\n`sections` for `list`; `name` (`cta_url`) and `parameters` for\n`cta_url`; `name` (`review_and_pay`, `review_order`) and `parameters`\nfor `order_details` and `order_status`.",
+        "description": "An interactive message's `action`: `buttons` for `button`; `button` and\n`sections` for `list`; `name` (`cta_url`) and `parameters` for\n`cta_url`; `name` (`review_and_pay`, `review_order`) and `parameters`\nfor `order_details` and `order_status`; `name` (the type's own:\n`flow`, `voice_call`, `address_message`, `catalog_message`) and\n`parameters`, or `name` alone (`send_location`, `request_contact_info`,\n`call_permission_request`); `cards` for `carousel`; `catalog_id` with\n`product_retailer_id` for `product`, with `sections` for\n`product_list`.",
         "properties": {
           "button": {
             "type": [
@@ -9539,12 +9811,29 @@
             },
             "description": "Reply buttons, 1 to 3."
           },
+          "cards": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CarouselCard"
+            },
+            "description": "A carousel's cards, 2 to 10."
+          },
+          "catalog_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A `product` or `product_list` message's catalog: one of the\nnumber's WABA's, else `404 not_found`, nothing sent."
+          },
           "name": {
             "type": [
               "string",
               "null"
             ],
-            "description": "`cta_url`; `review_and_pay` for `order_details`, `review_order`\nfor `order_status`."
+            "description": "`cta_url`; `review_and_pay` for `order_details`, `review_order`\nfor `order_status`; the type's own for the others that have one."
           },
           "parameters": {
             "anyOf": [
@@ -9557,9 +9846,32 @@
                 "description": "An `order_details` or `order_status` message's parameters."
               },
               {
+                "$ref": "#/components/schemas/FlowParameters",
+                "description": "A `flow` message's parameters."
+              },
+              {
+                "$ref": "#/components/schemas/VoiceCallParameters",
+                "description": "A `voice_call` message's parameters."
+              },
+              {
+                "$ref": "#/components/schemas/AddressParameters",
+                "description": "An `address_message`'s parameters."
+              },
+              {
+                "$ref": "#/components/schemas/CatalogParameters",
+                "description": "A `catalog_message`'s parameters."
+              },
+              {
                 "type": "null"
               }
             ]
+          },
+          "product_retailer_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A `product` message's product."
           },
           "sections": {
             "type": [
@@ -9567,29 +9879,42 @@
               "null"
             ],
             "items": {
-              "$ref": "#/components/schemas/ListSection"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ListSection"
+                },
+                {
+                  "$ref": "#/components/schemas/ProductSection"
+                }
+              ]
             },
-            "description": "The list's sections."
+            "description": "The list's sections, or the product list's."
           }
         },
         "additionalProperties": false
       },
       "InteractiveContent": {
         "type": "object",
-        "description": "`interactive`, as Meta writes it: `button`, `list`, `cta_url`,\n`order_details` or `order_status`.",
+        "description": "`interactive`, as Meta writes it: `button`, `list`, `cta_url`,\n`order_details`, `order_status`, `location_request_message`,\n`request_contact_info`, `call_permission_request`, `voice_call`,\n`flow`, `address_message`, `carousel`, `product`, `product_list` or\n`catalog_message`.",
         "required": [
           "type",
-          "body",
           "action"
         ],
         "properties": {
           "action": {
             "$ref": "#/components/schemas/InteractiveAction",
-            "description": "Buttons, list or URL button."
+            "description": "Buttons, list, URL button, cards, products, or another type's\naction."
           },
           "body": {
-            "$ref": "#/components/schemas/InteractiveText",
-            "description": "Body."
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/InteractiveText",
+                "description": "Body: required by every type but `call_permission_request` and\n`product`."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "footer": {
             "oneOf": [
@@ -9696,7 +10021,17 @@
           "list",
           "cta_url",
           "order_details",
-          "order_status"
+          "order_status",
+          "location_request_message",
+          "request_contact_info",
+          "call_permission_request",
+          "voice_call",
+          "flow",
+          "address_message",
+          "carousel",
+          "product",
+          "product_list",
+          "catalog_message"
         ]
       },
       "IssueOtp": {
@@ -10160,7 +10495,8 @@
           "contacts",
           "reaction",
           "template",
-          "interactive"
+          "interactive",
+          "pin"
         ]
       },
       "MintPlatformKey": {
@@ -11112,6 +11448,80 @@
           }
         }
       },
+      "PinContent": {
+        "type": "object",
+        "description": "`pin` (`groups/groups-messaging`): pin or unpin a group's message, sent\nto the group (`to.group_id`); only the group's admin may, and three\nmessages at most are pinned.",
+        "required": [
+          "type",
+          "message_id"
+        ],
+        "properties": {
+          "expiration_days": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For `pin` (required), 1 to 30 days; never for `unpin`.",
+            "minimum": 0
+          },
+          "message_id": {
+            "type": "string",
+            "description": "The group message's id (`wamid.…`)."
+          },
+          "type": {
+            "$ref": "#/components/schemas/PinType",
+            "description": "`pin` or `unpin`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PinType": {
+        "type": "string",
+        "description": "`pin`'s operation.",
+        "enum": [
+          "pin",
+          "unpin"
+        ]
+      },
+      "ProductItem": {
+        "type": "object",
+        "description": "A product of a `product_list` section.",
+        "required": [
+          "product_retailer_id"
+        ],
+        "properties": {
+          "product_retailer_id": {
+            "type": "string",
+            "description": "The product's retailer id (its SKU) in the catalog."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProductSection": {
+        "type": "object",
+        "description": "A `product_list` section (`catalogs/multi-product-messages`).",
+        "required": [
+          "product_items"
+        ],
+        "properties": {
+          "product_items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProductItem"
+            },
+            "description": "Its products, 30 at most in all sections."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Title, at most 24 characters; required once there are several\nsections."
+          }
+        },
+        "additionalProperties": false
+      },
       "Profile": {
         "type": "object",
         "description": "A business profile.",
@@ -11216,6 +11626,44 @@
               "type": "string"
             },
             "description": "Websites."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuickReply": {
+        "type": "object",
+        "description": "A quick-reply button's `quick_reply`.",
+        "required": [
+          "id",
+          "title"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Returned in the reply's webhook, at most 256 characters."
+          },
+          "title": {
+            "type": "string",
+            "description": "Label, at most 20 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuickReplyButton": {
+        "type": "object",
+        "description": "A media card's quick-reply button: `{\"type\": \"quick_reply\",\n\"quick_reply\": {…}}`.",
+        "required": [
+          "type",
+          "quick_reply"
+        ],
+        "properties": {
+          "quick_reply": {
+            "$ref": "#/components/schemas/QuickReply",
+            "description": "The button."
+          },
+          "type": {
+            "type": "string",
+            "description": "`quick_reply`."
           }
         },
         "additionalProperties": false
@@ -11417,6 +11865,17 @@
             ],
             "description": "Echoed in this message's status events: set it to your own\nreference (the `Idempotency-Key`, say) to reconcile."
           },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectSendCategory",
+                "description": "Direct Send (`direct-send`, for eligible accounts): `utility` and\n`authentication` are sent as templates Meta generates, so the\n24-hour window does not hold them; `service` is a free-form reply."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "contacts": {
             "type": [
               "array",
@@ -11426,6 +11885,17 @@
               "$ref": "#/components/schemas/ContactCard"
             },
             "description": "For `contacts`: 1 to 257 cards."
+          },
+          "direct_send_config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectSendConfig",
+                "description": "Direct Send's business-named template (`utility` only)."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "document": {
             "oneOf": [
@@ -11465,6 +11935,17 @@
               {
                 "$ref": "#/components/schemas/LocationContent",
                 "description": "For `location`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pin": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PinContent",
+                "description": "For `pin`, in a group's conversation."
               },
               {
                 "type": "null"
@@ -11522,6 +12003,15 @@
               }
             ]
           },
+          "ttl_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Direct Send's time-to-live in seconds.",
+            "minimum": 0
+          },
           "type": {
             "$ref": "#/components/schemas/MessageType",
             "description": "Which content object follows."
@@ -11560,6 +12050,30 @@
           }
         },
         "additionalProperties": false
+      },
+      "SavedAddress": {
+        "type": "object",
+        "description": "An address offered to the user.",
+        "required": [
+          "id",
+          "value"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Returned as `saved_address_id` in the reply."
+          },
+          "value": {
+            "type": "object",
+            "description": "Its fields.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
       },
       "Scope": {
         "type": "string",
@@ -11603,6 +12117,17 @@
             ],
             "description": "Echoed in this message's status events: set it to your own\nreference (the `Idempotency-Key`, say) to reconcile."
           },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectSendCategory",
+                "description": "Direct Send (`direct-send`, for eligible accounts): `utility` or\n`authentication` sends the message as a template Meta generates."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "contacts": {
             "type": [
               "array",
@@ -11612,6 +12137,17 @@
               "$ref": "#/components/schemas/ContactCard"
             },
             "description": "For `contacts`: 1 to 257 cards."
+          },
+          "direct_send_config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DirectSendConfig",
+                "description": "Direct Send's business-named template (`utility` only)."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "document": {
             "oneOf": [
@@ -11651,6 +12187,17 @@
               {
                 "$ref": "#/components/schemas/LocationContent",
                 "description": "For `location`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pin": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PinContent",
+                "description": "For `pin`, to a group."
               },
               {
                 "type": "null"
@@ -11711,6 +12258,15 @@
           "to": {
             "$ref": "#/components/schemas/MessageRecipient",
             "description": "Who receives it."
+          },
+          "ttl_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Direct Send's time-to-live in seconds: `utility` 30 to 43,200,\n`authentication` 30 to 900; not without one of them.",
+            "minimum": 0
           },
           "type": {
             "$ref": "#/components/schemas/MessageType",
@@ -12353,6 +12909,35 @@
           }
         },
         "additionalProperties": false
+      },
+      "VoiceCallParameters": {
+        "type": "object",
+        "description": "A call button's `action.parameters`\n(`calling/call-button-messages-deep-links`). Schema only: the request\ncarries Meta's object.",
+        "properties": {
+          "display_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The button's label, at most 20 characters (Meta's default: `Call\nNow`)."
+          },
+          "payload": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Returned as `cta_payload` in the call's events, at most 512\ncharacters."
+          },
+          "ttl_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long the button works, 1 to 43,200 minutes (Meta's default:\n10,080, seven days).",
+            "minimum": 0
+          }
+        }
       },
       "Waba": {
         "type": "object",

@@ -14,9 +14,17 @@
 //! object); `interactive` `button`, `list` and `cta_url`, and the payment
 //! messages `order_details` and `order_status` (roadmap P2: their
 //! `parameters` Meta's object, checked by the library's payment rules).
-//! Any other type, Direct Send included, is `422 unsupported_message_type`. Meta enforces
-//! the 24-hour window: outside it a free-form message is `409
-//! customer_service_window_closed`.
+//! Since roadmap M5a also `pin`, the `interactive` types
+//! `location_request_message`, `request_contact_info`,
+//! `call_permission_request`, `voice_call`, `flow`, `address_message`,
+//! `carousel`, `product`, `product_list` and `catalog_message` (a key the
+//! library would drop refused on its path; a Flow's `flow_id` or a
+//! product's `catalog_id` checked to be the number's WABA's, else `404`),
+//! and Direct Send (`category`, `ttl_seconds`, `direct_send_config`) on
+//! any type. Any other type is `422 unsupported_message_type`. Meta
+//! enforces the 24-hour window: outside it a free-form message is `409
+//! customer_service_window_closed` (a template and a Direct Send
+//! `utility` or `authentication` message are not free-form).
 //!
 //! Recipients: `{"phone"}` (E.164 **with** `+`: a digits-only number is
 //! refused before any request, since Meta would read it as local to the
@@ -33,6 +41,8 @@
 //! request (field by field: a field on one side only fails to compile),
 //! calls the service, and renders its answer (`202` with the accepted
 //! message, `204` once marked read).
+
+use std::collections::HashMap;
 
 use meta_whatsapp_rs::client::messages::OutboundMessage;
 use meta_whatsapp_rs::core::ids::{UserId, WaId};
@@ -94,9 +104,10 @@ pub enum MessageType {
     Reaction,
     /// `template`.
     Template,
-    /// `interactive` (`button`, `list`, `cta_url`, `order_details`,
-    /// `order_status`).
+    /// `interactive` (every `InteractiveType`).
     Interactive,
+    /// `pin`: pin or unpin a group's message (`groups/groups-messaging`).
+    Pin,
 }
 
 /// `text` (`messages/text-messages`).
@@ -346,6 +357,32 @@ pub enum InteractiveType {
     /// An order's new status (`payments/payments-in/pg`,
     /// `payments/payments-br/orders`).
     OrderStatus,
+    /// A "send location" button (`messages/location-request-messages`).
+    #[serde(rename = "location_request_message")]
+    LocationRequest,
+    /// Ask a user who writes by username for their phone number
+    /// (`business-scoped-user-ids`).
+    RequestContactInfo,
+    /// Ask for permission to call (`calling/user-call-permissions`): only
+    /// the body can be set.
+    CallPermissionRequest,
+    /// A WhatsApp call button (`calling/call-button-messages-deep-links`).
+    VoiceCall,
+    /// A button opening a WhatsApp Flow (`flows/guides/sendingaflow`).
+    Flow,
+    /// Ask for a shipping address, India only (`messages/address-messages`).
+    #[serde(rename = "address_message")]
+    Address,
+    /// Media cards (`messages/interactive-media-carousel-messages`) or
+    /// product cards (`catalogs/interactive-product-carousel-messages`).
+    Carousel,
+    /// One product (`catalogs/single-product-messages`).
+    Product,
+    /// Several products (`catalogs/multi-product-messages`).
+    ProductList,
+    /// The catalog's "View catalog" button (`catalogs/catalog-messages`).
+    #[serde(rename = "catalog_message")]
+    Catalog,
 }
 
 /// `{"text": …}`: an interactive message's body or footer.
@@ -467,39 +504,295 @@ pub struct CtaUrlParameters {
 #[schema(as = OrderParameters, value_type = HashMap<String, Value>)]
 pub struct OrderParameters(pub serde_json::Map<String, Value>);
 
-/// An interactive message's `action.parameters`: a URL button's, or a
-/// payment message's (Meta's object).
-#[derive(Debug, Deserialize)]
+/// A Flow message's `action.parameters` (`flows/guides/sendingaflow`,
+/// "Interactive message parameters"): read into the library's
+/// `FlowParameters`, a key it would drop refused on its path. Schema
+/// only: the request carries Meta's object.
+#[derive(ToSchema)]
+#[allow(dead_code)] // read as Meta's object; the type documents it
+pub struct FlowParameters {
+    /// `3`, the only version Meta takes (the library writes it when
+    /// absent).
+    pub flow_message_version: Option<String>,
+    /// Your identifier for this Flow's session (Meta's default:
+    /// `unused`); kept out of every log.
+    pub flow_token: Option<String>,
+    /// The Flow, by id (digits): it must be one of the number's WABA's,
+    /// else `404 not_found`, nothing sent. Not with `flow_name`.
+    pub flow_id: Option<String>,
+    /// The Flow, by name, which Meta finds in the number's WABA. Not with
+    /// `flow_id`.
+    pub flow_name: Option<String>,
+    /// The button's text.
+    pub flow_cta: String,
+    /// `draft` or `published` (Meta's default).
+    pub mode: Option<String>,
+    /// `navigate` (Meta's default) or `data_exchange`.
+    pub flow_action: Option<String>,
+    /// The first screen, for `navigate`.
+    pub flow_action_payload: Option<FlowActionPayload>,
+}
+
+/// A Flow's first screen (`flow_action_payload`).
+#[derive(ToSchema)]
+#[allow(dead_code)] // schema only
+pub struct FlowActionPayload {
+    /// The first screen's id.
+    pub screen: String,
+    /// Its input data: a non-empty object, or one serialized as a string
+    /// (Meta's example).
+    #[schema(value_type = Option<Value>)]
+    pub data: Option<Value>,
+}
+
+/// A call button's `action.parameters`
+/// (`calling/call-button-messages-deep-links`). Schema only: the request
+/// carries Meta's object.
+#[derive(ToSchema)]
+#[allow(dead_code)] // schema only
+pub struct VoiceCallParameters {
+    /// The button's label, at most 20 characters (Meta's default: `Call
+    /// Now`).
+    pub display_text: Option<String>,
+    /// How long the button works, 1 to 43,200 minutes (Meta's default:
+    /// 10,080, seven days).
+    pub ttl_minutes: Option<u32>,
+    /// Returned as `cta_payload` in the call's events, at most 512
+    /// characters.
+    pub payload: Option<String>,
+}
+
+/// An address message's `action.parameters` (`messages/address-messages`).
+/// Schema only: the request carries Meta's object.
+#[derive(ToSchema)]
+#[allow(dead_code)] // schema only
+pub struct AddressParameters {
+    /// `IN`: India only. Required.
+    pub country: String,
+    /// Values filled in for the user (`name`, `phone_number`,
+    /// `in_pin_code`, …).
+    pub values: Option<HashMap<String, String>>,
+    /// Addresses the user may pick instead.
+    pub saved_addresses: Option<Vec<SavedAddress>>,
+    /// Errors per field, shown until the user fixes them.
+    pub validation_errors: Option<HashMap<String, String>>,
+}
+
+/// An address offered to the user.
+#[derive(ToSchema)]
+#[allow(dead_code)] // schema only
+pub struct SavedAddress {
+    /// Returned as `saved_address_id` in the reply.
+    pub id: String,
+    /// Its fields.
+    pub value: HashMap<String, String>,
+}
+
+/// A catalog message's `action.parameters` (`catalogs/catalog-messages`).
+/// Schema only: the request carries Meta's object.
+#[derive(ToSchema)]
+#[allow(dead_code)] // schema only
+pub struct CatalogParameters {
+    /// The product whose image is the thumbnail (Meta's default: the
+    /// catalog's first).
+    pub thumbnail_product_retailer_id: Option<String>,
+}
+
+/// An interactive message's `action.parameters`: a URL button's, or
+/// another type's object in Meta's JSON (a payment message's, a Flow's, a
+/// call button's, an address message's, a catalog message's). Its
+/// `Debug` shows an object's keys, never its values (a Flow's
+/// `flow_token` reaches no log).
+#[derive(Deserialize)]
 #[serde(untagged)]
 pub enum InteractiveParameters {
     /// `cta_url`'s.
     CtaUrl(CtaUrlParameters),
-    /// `order_details`' or `order_status`'.
+    /// Any other type's (the name dates from roadmap P2).
     Order(serde_json::Map<String, Value>),
 }
 
-/// The schema of `action.parameters`: a URL button's, a payment
-/// message's, or none.
+impl std::fmt::Debug for InteractiveParameters {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CtaUrl(parameters) => f.debug_tuple("CtaUrl").field(parameters).finish(),
+            Self::Order(object) => f
+                .debug_struct("Order")
+                .field("keys", &object.keys().collect::<Vec<_>>())
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+/// A `$ref` to the schema `name`, described.
+fn described_ref(name: &str, description: &str) -> utoipa::openapi::Ref {
+    let mut reference = utoipa::openapi::Ref::from_schema_name(name);
+    description.clone_into(&mut reference.description);
+    reference
+}
+
+/// The schema of `action.parameters`: a URL button's, another type's, or
+/// none.
 fn interactive_parameters_schema() -> utoipa::openapi::schema::Schema {
-    use utoipa::openapi::Ref;
     use utoipa::openapi::schema::{AnyOfBuilder, ObjectBuilder, Schema, Type};
-    let mut cta_url = Ref::from_schema_name("CtaUrlParameters");
-    "The URL button.".clone_into(&mut cta_url.description);
-    let mut order = Ref::from_schema_name("OrderParameters");
-    "An `order_details` or `order_status` message's parameters.".clone_into(&mut order.description);
     Schema::AnyOf(
         AnyOfBuilder::new()
-            .item(cta_url)
-            .item(order)
+            .item(described_ref("CtaUrlParameters", "The URL button."))
+            .item(described_ref(
+                "OrderParameters",
+                "An `order_details` or `order_status` message's parameters.",
+            ))
+            .item(described_ref(
+                "FlowParameters",
+                "A `flow` message's parameters.",
+            ))
+            .item(described_ref(
+                "VoiceCallParameters",
+                "A `voice_call` message's parameters.",
+            ))
+            .item(described_ref(
+                "AddressParameters",
+                "An `address_message`'s parameters.",
+            ))
+            .item(described_ref(
+                "CatalogParameters",
+                "A `catalog_message`'s parameters.",
+            ))
             .item(ObjectBuilder::new().schema_type(Type::Null))
             .build(),
     )
 }
 
+/// A product of a `product_list` section.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = ProductItem)]
+pub struct ProductItemObject {
+    /// The product's retailer id (its SKU) in the catalog.
+    pub product_retailer_id: String,
+}
+
+/// A `product_list` section (`catalogs/multi-product-messages`).
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = ProductSection)]
+pub struct ProductSectionObject {
+    /// Title, at most 24 characters; required once there are several
+    /// sections.
+    pub title: Option<String>,
+    /// Its products, 30 at most in all sections.
+    pub product_items: Vec<ProductItemObject>,
+}
+
+/// A section of `action.sections`: a `list`'s rows, or a `product_list`'s
+/// products.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum SectionObject {
+    /// A `list` section.
+    List(ListSectionObject),
+    /// A `product_list` section.
+    Product(ProductSectionObject),
+}
+
+/// The schema of `action.sections`: a list's or a product list's, or none.
+fn sections_schema() -> utoipa::openapi::schema::Array {
+    use utoipa::openapi::Ref;
+    use utoipa::openapi::schema::{AnyOfBuilder, ArrayBuilder, SchemaType, Type};
+    ArrayBuilder::new()
+        .schema_type(SchemaType::from_iter([Type::Array, Type::Null]))
+        .items(
+            AnyOfBuilder::new()
+                .item(Ref::from_schema_name("ListSection"))
+                .item(Ref::from_schema_name("ProductSection")),
+        )
+        .description(Some("The list's sections, or the product list's."))
+        .build()
+}
+
+/// A carousel card's kind (Meta's card `type`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CarouselCardType {
+    /// A media card (Meta's examples name both of its kinds `cta_url`):
+    /// an image or video header, a body, and a URL button or quick-reply
+    /// buttons.
+    CtaUrl,
+    /// A product card.
+    Product,
+}
+
+/// A quick-reply button's `quick_reply`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = QuickReply)]
+pub struct QuickReplyObject {
+    /// Returned in the reply's webhook, at most 256 characters.
+    pub id: String,
+    /// Label, at most 20 characters.
+    pub title: String,
+}
+
+/// A media card's quick-reply button: `{"type": "quick_reply",
+/// "quick_reply": {…}}`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = QuickReplyButton)]
+pub struct QuickReplyButtonObject {
+    /// `quick_reply`.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The button.
+    pub quick_reply: QuickReplyObject,
+}
+
+/// A carousel card's `action`: a media card's URL button (`name`
+/// `cta_url` and `parameters`) or its quick-reply `buttons`; a product
+/// card's `product_retailer_id` and `catalog_id`.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = CarouselCardAction)]
+pub struct CardActionObject {
+    /// `cta_url`, for a URL button.
+    pub name: Option<String>,
+    /// The URL button.
+    pub parameters: Option<CtaUrlParameters>,
+    /// Quick-reply buttons.
+    pub buttons: Option<Vec<QuickReplyButtonObject>>,
+    /// A product card's product.
+    pub product_retailer_id: Option<String>,
+    /// A product card's catalog, the same on every card: one of the
+    /// number's WABA's, else `404 not_found`, nothing sent.
+    pub catalog_id: Option<String>,
+}
+
+/// A carousel card, as Meta writes it.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = CarouselCard)]
+pub struct CarouselCardObject {
+    /// Its position, from `0`: the card's place in the list.
+    pub card_index: u32,
+    /// Media (`cta_url`) or `product`; the same on every card.
+    #[serde(rename = "type")]
+    pub kind: CarouselCardType,
+    /// A media card's image or video, by `https://` `link`.
+    pub header: Option<InteractiveHeader>,
+    /// A media card's body, at most 160 characters and 2 line breaks.
+    pub body: Option<InteractiveText>,
+    /// Its button(s), or its product.
+    pub action: CardActionObject,
+}
+
 /// An interactive message's `action`: `buttons` for `button`; `button` and
 /// `sections` for `list`; `name` (`cta_url`) and `parameters` for
 /// `cta_url`; `name` (`review_and_pay`, `review_order`) and `parameters`
-/// for `order_details` and `order_status`.
+/// for `order_details` and `order_status`; `name` (the type's own:
+/// `flow`, `voice_call`, `address_message`, `catalog_message`) and
+/// `parameters`, or `name` alone (`send_location`, `request_contact_info`,
+/// `call_permission_request`); `cards` for `carousel`; `catalog_id` with
+/// `product_retailer_id` for `product`, with `sections` for
+/// `product_list`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InteractiveAction {
@@ -507,18 +800,29 @@ pub struct InteractiveAction {
     pub buttons: Option<Vec<ReplyButtonObject>>,
     /// The list's button label.
     pub button: Option<String>,
-    /// The list's sections.
-    pub sections: Option<Vec<ListSectionObject>>,
+    /// The list's or the product list's sections.
+    #[schema(schema_with = sections_schema)]
+    pub sections: Option<Vec<SectionObject>>,
     /// `cta_url`; `review_and_pay` for `order_details`, `review_order`
-    /// for `order_status`.
+    /// for `order_status`; the type's own for the others that have one.
     pub name: Option<String>,
-    /// The URL button, or a payment message's parameters.
+    /// The URL button, or another type's parameters.
     #[schema(schema_with = interactive_parameters_schema)]
     pub parameters: Option<InteractiveParameters>,
+    /// A carousel's cards, 2 to 10.
+    pub cards: Option<Vec<CarouselCardObject>>,
+    /// A `product` or `product_list` message's catalog: one of the
+    /// number's WABA's, else `404 not_found`, nothing sent.
+    pub catalog_id: Option<String>,
+    /// A `product` message's product.
+    pub product_retailer_id: Option<String>,
 }
 
 /// `interactive`, as Meta writes it: `button`, `list`, `cta_url`,
-/// `order_details` or `order_status`.
+/// `order_details`, `order_status`, `location_request_message`,
+/// `request_contact_info`, `call_permission_request`, `voice_call`,
+/// `flow`, `address_message`, `carousel`, `product`, `product_list` or
+/// `catalog_message`.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(as = InteractiveContent)]
@@ -528,12 +832,64 @@ pub struct InteractiveObject {
     pub kind: InteractiveType,
     /// Header.
     pub header: Option<InteractiveHeader>,
-    /// Body.
-    pub body: InteractiveText,
+    /// Body: required by every type but `call_permission_request` and
+    /// `product`.
+    pub body: Option<InteractiveText>,
     /// Footer.
     pub footer: Option<InteractiveText>,
-    /// Buttons, list or URL button.
+    /// Buttons, list, URL button, cards, products, or another type's
+    /// action.
     pub action: InteractiveAction,
+}
+
+/// `pin`'s operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PinType {
+    /// Pin the message.
+    Pin,
+    /// Unpin it.
+    Unpin,
+}
+
+/// `pin` (`groups/groups-messaging`): pin or unpin a group's message, sent
+/// to the group (`to.group_id`); only the group's admin may, and three
+/// messages at most are pinned.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = PinContent)]
+pub struct PinObject {
+    /// `pin` or `unpin`.
+    #[serde(rename = "type")]
+    pub kind: PinType,
+    /// The group message's id (`wamid.…`).
+    pub message_id: String,
+    /// For `pin` (required), 1 to 30 days; never for `unpin`.
+    pub expiration_days: Option<u32>,
+}
+
+/// Direct Send's `category` (`direct-send/send-utility-and-authentication-messages`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DirectSendCategory {
+    /// Sent as a template Meta generates, outside the 24-hour window too,
+    /// at utility rates.
+    Utility,
+    /// As `utility`, at authentication rates (access restricted by Meta);
+    /// never to a BSUID alone.
+    Authentication,
+    /// A normal service message (the same as none): within the 24-hour
+    /// window only.
+    Service,
+}
+
+/// Direct Send's `direct_send_config` (`direct-send/business-named-templates`).
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DirectSendConfig {
+    /// The template Meta creates or reuses under exactly this name:
+    /// `utility` only; lowercase letters, digits and `_`, at most 512.
+    pub template_name: String,
 }
 
 /// A message to send: `type` names the one content object present.
@@ -569,11 +925,21 @@ pub struct SendMessage {
     pub template: Option<Value>,
     /// For `interactive`.
     pub interactive: Option<InteractiveObject>,
+    /// For `pin`, to a group.
+    pub pin: Option<PinObject>,
     /// Reply to this received message (`wamid.…`); not with `reaction`.
     pub reply_to: Option<String>,
     /// Echoed in this message's status events: set it to your own
     /// reference (the `Idempotency-Key`, say) to reconcile.
     pub callback_data: Option<String>,
+    /// Direct Send (`direct-send`, for eligible accounts): `utility` or
+    /// `authentication` sends the message as a template Meta generates.
+    pub category: Option<DirectSendCategory>,
+    /// Direct Send's time-to-live in seconds: `utility` 30 to 43,200,
+    /// `authentication` 30 to 900; not without one of them.
+    pub ttl_seconds: Option<u32>,
+    /// Direct Send's business-named template (`utility` only).
+    pub direct_send_config: Option<DirectSendConfig>,
 }
 
 // ─── The answer ──────────────────────────────────────────────────────────
@@ -648,6 +1014,128 @@ same_fields! {
     ReplyObject { id, title }
     ListRowObject { id, title, description }
     CtaUrlParameters { display_text, url }
+    ProductItemObject { product_retailer_id }
+    QuickReplyObject { id, title }
+}
+
+impl From<ProductSectionObject> for domain::ProductSectionObject {
+    fn from(value: ProductSectionObject) -> Self {
+        let ProductSectionObject {
+            title,
+            product_items,
+        } = value;
+        Self {
+            title,
+            product_items: each(product_items),
+        }
+    }
+}
+
+impl From<SectionObject> for domain::SectionObject {
+    fn from(value: SectionObject) -> Self {
+        match value {
+            SectionObject::List(section) => Self::List(section.into()),
+            SectionObject::Product(section) => Self::Product(section.into()),
+        }
+    }
+}
+
+impl From<CarouselCardType> for domain::CarouselCardType {
+    fn from(kind: CarouselCardType) -> Self {
+        match kind {
+            CarouselCardType::CtaUrl => Self::CtaUrl,
+            CarouselCardType::Product => Self::Product,
+        }
+    }
+}
+
+impl From<QuickReplyButtonObject> for domain::QuickReplyButtonObject {
+    fn from(value: QuickReplyButtonObject) -> Self {
+        let QuickReplyButtonObject { kind, quick_reply } = value;
+        Self {
+            kind,
+            quick_reply: quick_reply.into(),
+        }
+    }
+}
+
+impl From<CardActionObject> for domain::CardActionObject {
+    fn from(value: CardActionObject) -> Self {
+        let CardActionObject {
+            name,
+            parameters,
+            buttons,
+            product_retailer_id,
+            catalog_id,
+        } = value;
+        Self {
+            name,
+            parameters: parameters.map(Into::into),
+            buttons: buttons.map(each),
+            product_retailer_id,
+            catalog_id,
+        }
+    }
+}
+
+impl From<CarouselCardObject> for domain::CarouselCardObject {
+    fn from(value: CarouselCardObject) -> Self {
+        let CarouselCardObject {
+            card_index,
+            kind,
+            header,
+            body,
+            action,
+        } = value;
+        Self {
+            card_index,
+            kind: kind.into(),
+            header: header.map(Into::into),
+            body: body.map(Into::into),
+            action: action.into(),
+        }
+    }
+}
+
+impl From<PinType> for domain::PinType {
+    fn from(kind: PinType) -> Self {
+        match kind {
+            PinType::Pin => Self::Pin,
+            PinType::Unpin => Self::Unpin,
+        }
+    }
+}
+
+impl From<PinObject> for domain::PinObject {
+    fn from(value: PinObject) -> Self {
+        let PinObject {
+            kind,
+            message_id,
+            expiration_days,
+        } = value;
+        Self {
+            kind: kind.into(),
+            message_id,
+            expiration_days,
+        }
+    }
+}
+
+impl From<DirectSendCategory> for domain::DirectSendCategoryObject {
+    fn from(category: DirectSendCategory) -> Self {
+        match category {
+            DirectSendCategory::Utility => Self::Utility,
+            DirectSendCategory::Authentication => Self::Authentication,
+            DirectSendCategory::Service => Self::Service,
+        }
+    }
+}
+
+impl From<DirectSendConfig> for domain::DirectSendConfigObject {
+    fn from(value: DirectSendConfig) -> Self {
+        let DirectSendConfig { template_name } = value;
+        Self { template_name }
+    }
 }
 
 impl From<InteractiveParameters> for domain::ActionParameters {
@@ -678,6 +1166,7 @@ impl From<MessageType> for domain::MessageType {
             MessageType::Reaction => Self::Reaction,
             MessageType::Template => Self::Template,
             MessageType::Interactive => Self::Interactive,
+            MessageType::Pin => Self::Pin,
         }
     }
 }
@@ -739,6 +1228,16 @@ impl From<InteractiveType> for domain::InteractiveType {
             InteractiveType::CtaUrl => Self::CtaUrl,
             InteractiveType::OrderDetails => Self::OrderDetails,
             InteractiveType::OrderStatus => Self::OrderStatus,
+            InteractiveType::LocationRequest => Self::LocationRequest,
+            InteractiveType::RequestContactInfo => Self::RequestContactInfo,
+            InteractiveType::CallPermissionRequest => Self::CallPermissionRequest,
+            InteractiveType::VoiceCall => Self::VoiceCall,
+            InteractiveType::Flow => Self::Flow,
+            InteractiveType::Address => Self::Address,
+            InteractiveType::Carousel => Self::Carousel,
+            InteractiveType::Product => Self::Product,
+            InteractiveType::ProductList => Self::ProductList,
+            InteractiveType::Catalog => Self::Catalog,
         }
     }
 }
@@ -801,6 +1300,9 @@ impl From<InteractiveAction> for domain::InteractiveAction {
             sections,
             name,
             parameters,
+            cards,
+            catalog_id,
+            product_retailer_id,
         } = value;
         Self {
             buttons: buttons.map(each),
@@ -808,6 +1310,9 @@ impl From<InteractiveAction> for domain::InteractiveAction {
             sections: sections.map(each),
             name,
             parameters: parameters.map(Into::into),
+            cards: cards.map(each),
+            catalog_id,
+            product_retailer_id,
         }
     }
 }
@@ -824,7 +1329,7 @@ impl From<InteractiveObject> for domain::InteractiveObject {
         Self {
             kind: kind.into(),
             header: header.map(Into::into),
-            body: body.into(),
+            body: body.map(Into::into),
             footer: footer.map(Into::into),
             action: action.into(),
         }
@@ -847,8 +1352,12 @@ impl From<SendMessage> for domain::SendMessage {
             reaction,
             template,
             interactive,
+            pin,
             reply_to,
             callback_data,
+            category,
+            ttl_seconds,
+            direct_send_config,
         } = value;
         Self {
             to: to.into(),
@@ -864,8 +1373,12 @@ impl From<SendMessage> for domain::SendMessage {
             reaction: reaction.map(Into::into),
             template,
             interactive: interactive.map(Into::into),
+            pin: pin.map(Into::into),
             reply_to,
             callback_data,
+            category: category.map(Into::into),
+            ttl_seconds,
+            direct_send_config: direct_send_config.map(Into::into),
         }
     }
 }
@@ -1067,8 +1580,8 @@ mod tests {
             let read: InteractiveType = serde_json::from_value(json!(name)).unwrap();
             assert_eq!(domain::InteractiveType::from(read), kind, "{name}");
         }
-        assert!(serde_json::from_value::<MessageType>(json!("pin")).is_err());
-        assert!(serde_json::from_value::<InteractiveType>(json!("flow")).is_err());
+        assert!(serde_json::from_value::<MessageType>(json!("order_details")).is_err());
+        assert!(serde_json::from_value::<InteractiveType>(json!("nfm_reply")).is_err());
     }
 
     /// E.164 with its `+`, strictly. Decisive: the `+` check.
@@ -1131,14 +1644,34 @@ mod tests {
         }
     }
 
+    /// A Flow's token never reaches a log (design D93): the request's
+    /// `Debug` shows a parameters object's keys, never its values.
+    /// Decisive: `InteractiveParameters`' `Debug`.
     #[test]
-    fn unsupported_types_and_direct_send_are_refused() {
+    fn a_flow_token_never_reaches_the_requests_debug() {
+        let token = "SECRET-FLOW-TOKEN-2";
+        let request: SendMessage = serde_json::from_value(json!({
+            "to": {"phone": "+16505551234"}, "type": "interactive",
+            "interactive": {"type": "flow", "body": {"text": "Book"},
+                "action": {"name": "flow", "parameters": {"flow_message_version": "3",
+                    "flow_token": token, "flow_name": "appointment_booking_v1",
+                    "flow_cta": "Book!"}}}
+        }))
+        .unwrap();
+        let shown = format!("{request:?}");
+        assert!(!shown.contains(token), "{shown}");
+        assert!(shown.contains("flow_token"), "{shown}");
+    }
+
+    /// A type the service does not send is `unsupported_message_type`;
+    /// Direct Send's keys are read since roadmap M5a.
+    #[test]
+    fn unsupported_types_are_refused() {
         let to = json!({"phone": "+16505551234"});
         for body in [
-            json!({"to": to, "type": "pin", "pin": {}}),
             json!({"to": to, "type": "order_details"}),
-            json!({"to": to, "type": "interactive", "interactive": {"type": "flow"}}),
-            json!({"to": to, "type": "text", "text": {"body": "x"}, "category": "utility"}),
+            json!({"to": to, "type": "interactive", "interactive": {"type": "nfm_reply"}}),
+            json!({"to": to, "type": "system", "system": {}}),
         ] {
             assert_eq!(
                 built(body.clone()).unwrap_err(),

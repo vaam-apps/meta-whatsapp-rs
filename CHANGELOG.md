@@ -226,6 +226,41 @@ stored data, the owner's).
 
 ### Added
 
+- **The send union's other types in the service** (roadmap M5a, parity
+  rows 22, 29, 37, 51, 53, 56, 57, 59, 60 and 104, now done in the
+  service too; categories 2, 4, 10, 11, 14 and 24, coverage row 33;
+  choices D90–D94 proposed for the coordinator; from Meta's Direct Send,
+  media and product carousel, catalog, calling, Flows, groups, location
+  request, address and business-scoped user id pages, read on
+  2026-11-02). `POST /v1/numbers/{pn}/messages` and the inbox reply
+  (`POST /v1/numbers/{pn}/conversations/{contact}/messages`) take `pin`
+  (to a group), the `interactive` types `location_request_message`,
+  `request_contact_info`, `call_permission_request`, `voice_call`,
+  `flow`, `address_message`, `carousel` (media cards or product cards),
+  `product`, `product_list` and `catalog_message`, and Direct Send's
+  `category` (`utility`, `authentication`, `service`), `ttl_seconds` and
+  `direct_send_config` on any type. Each is read into the library's own
+  type and checked by its rules before any request; what the request
+  carries is compared with what the library would send, so a key it
+  would drop (a footer on a carousel, a misspelt Flow parameter, a
+  card's media by `id`) is `422 invalid_request` on its path, nothing
+  sent. A Flow named by `flow_id` and a product message's `catalog_id`
+  are checked to be the number's WABA's with the number's token (`GET
+  /{flow_id}`, `GET /{waba_id}/product_catalogs`): another WABA's, or an
+  id Meta refuses, is `404 not_found` and nothing is sent. A Flow's
+  `flow_token` reaches no log. On the inbox reply every new type is
+  free-form (refused outside the 24-hour window with nothing asked of
+  Meta, the Flow's and the catalog's checks included), but a Direct Send
+  `utility` or `authentication` reply, which Meta sends as a template,
+  is not. The OpenAPI document is additive only: `type` gains `pin`,
+  `interactive.type` ten values, `action.parameters` four `anyOf`
+  alternatives and `action.sections` a product section, `action` gains
+  `cards`, `catalog_id` and `product_retailer_id`, the send and reply
+  bodies `pin`, `category`, `ttl_seconds` and `direct_send_config`, and
+  `interactive.body` is no longer required (a call permission request
+  and a single product may have none; every other type still requires
+  it). No new route, error code, setting or stored name.
+
 - **`EmbeddedSignup::offboard_if_unchanged`** (roadmap M3a's review):
   `offboard`'s revocation, then the token deleted only if its vault
   record is still the one read (`TokenVault::get_versioned`, then
@@ -2673,6 +2708,19 @@ stored data, the owner's).
   Use v4, which needs no `version`.
 
 ### Changed
+
+- **The service's core** (roadmap M5a): `messages::MessageType` gains
+  `Pin`, `messages::InteractiveType` ten variants;
+  `messages::SendMessage` and `ReplyMessage` gain `pin`, `category`,
+  `ttl_seconds` and `direct_send_config`; `messages::InteractiveObject::body`
+  is an `Option`; `messages::InteractiveAction` gains `cards`,
+  `catalog_id` and `product_retailer_id`, and its `sections` are
+  `messages::SectionObject`s (a list's or a product list's);
+  `messages::ActionParameters::Order` carries any type's parameters
+  object, and its `Debug` shows the object's keys only. Code that
+  matches on these enums exhaustively, or builds these structs with a
+  literal, must follow. `messages::refuse_unsupported` no longer
+  refuses Direct Send's keys.
 
 - **The service's core** (roadmap M2e): `outbox::Outbox` gains a
   required `received_media` (a backend of your own must answer it: the

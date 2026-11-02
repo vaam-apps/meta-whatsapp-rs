@@ -594,16 +594,20 @@ impl<'a> Conversations<'a> {
     /// any request when the number's [`ReplyChecks`] say so (a free-form
     /// reply outside the 24-hour window, which counts the calls and
     /// standby messages that reopen it; a service message while another
-    /// app owns the thread; templates exempt), else sent and recorded
-    /// `accepted`. Never sends twice (the client's `RetryPolicy` never
-    /// replays a send that timed out).
+    /// app owns the thread; templates exempt, and the Direct Send
+    /// categories Meta sends as templates), else sent and recorded
+    /// `accepted`. A Flow or a catalog the reply names by id is checked
+    /// to be the number's WABA's once those checks pass (roadmap M5a),
+    /// so a reply they refuse asks Meta nothing. Never sends twice (the
+    /// client's `RetryPolicy` never replays a send that timed out).
     ///
     /// # Errors
     ///
     /// `422 invalid_request` on `contact` or on the request's field at
     /// fault ([`messages::reply_message`]); `409 thread_owned_elsewhere` or
     /// `409 customer_service_window_closed` (also, on a number with a cut,
-    /// for a window not opened since it), nothing sent; Meta's refusal
+    /// for a window not opened since it), nothing sent; `404 not_found`
+    /// for a named Flow or catalog of another WABA, nothing sent; Meta's refusal
     /// or failure, with its `details` (`504 timeout`, `may_have_been_sent`,
     /// …); `502 upstream` when Meta accepted without a message id.
     pub async fn reply(
@@ -620,6 +624,17 @@ impl<'a> Conversations<'a> {
             if self.cut_refuses_free_form(&key, cut, opened).await? {
                 return Err(ServiceError::new(ErrorCode::CUSTOMER_SERVICE_WINDOW_CLOSED));
             }
+        }
+        // A Flow or a catalog named by id is the number's WABA's (roadmap
+        // M5a, the design's M5.2), asked of Meta once the reply's local
+        // checks pass: a reply they refuse asks Meta nothing.
+        if messages::names_an_object(&message) {
+            if !sent_as_template(&message)
+                && let Err(error) = self.inbox.check_reply(&key).await
+            {
+                return Err(self.failed(&error).await);
+            }
+            messages::admit_named_object(self.authz, self.number, self.observer, &message).await?;
         }
         match self.inbox.send(&key, message).await {
             Ok(response) => Accepted::from_response(response),

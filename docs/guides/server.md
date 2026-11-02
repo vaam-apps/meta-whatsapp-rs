@@ -393,13 +393,43 @@ concluding the message never went out.
   does); `location`, `contacts`, `reaction`; `template` (Meta's object:
   `name`, `language`, `components`); `interactive` of type `button`,
   `list` or `cta_url`, or the payment messages `order_details` and
-  `order_status` ([Payments](#payments)). Each is written as Meta's page
-  for it writes it.
-  Anything else (Direct Send included) is `422 unsupported_message_type`.
-  Every limit Meta documents is checked before the request (`422
-  invalid_request` with `field`).
+  `order_status` ([Payments](#payments)); since roadmap M5a also `pin`
+  (to a group: `pin` with `expiration_days`, 1 to 30, or `unpin`), and
+  the `interactive` types `location_request_message`,
+  `request_contact_info`, `call_permission_request` (its body only),
+  `voice_call`, `flow`, `address_message` (India), `carousel` (2 to 10
+  media cards, an image or video `link` each, or product cards),
+  `product`, `product_list` and `catalog_message`. Each is written as
+  Meta's page for it writes it, `card_index` and every `action.name`
+  included. Anything else is `422 unsupported_message_type`. Every limit
+  Meta documents is checked before the request (`422 invalid_request`
+  with `field`), and so is every key: one the service would not pass on
+  to Meta (a footer on a carousel, a misspelt Flow parameter, a card's
+  media by `id`) is `422` on its path, never dropped.
+- **Direct Send** (`direct-send`, for the accounts Meta made eligible):
+  `category` (`utility`, `authentication` or `service`; any other is
+  `422` on `body`), `ttl_seconds` and `direct_send_config:
+  {template_name}` ride on any type, checked by the library's rules
+  before the request: a TTL only with `utility` (30 to 43,200 seconds)
+  or `authentication` (30 to 900), a business-named template with
+  `utility` only (lowercase letters, digits and `_`), no
+  `authentication` message to a `user_id` alone (`422` on `to`), and
+  the tighter limits (1,024 characters of text, 60 of a header). Which
+  formats Direct Send takes is Meta's to answer (its supported features
+  page), as is an account's eligibility (`100`).
+- **Objects named by id**: a Flow's `flow_id` and a product message's
+  `catalog_id` are checked first to be the number's WABA's, with the
+  number's token (`GET /{flow_id}`, `GET /{waba_id}/product_catalogs`);
+  another WABA's, or an id Meta refuses, is `404 not_found` and nothing
+  is sent (a failed check: `may_have_been_sent: false`). A Flow's
+  `flow_name` is Meta's to find in the number's WABA. The `flow_token`
+  is never logged.
 - Meta enforces the 24-hour window: a free-form message outside it is
-  `409 customer_service_window_closed` (send a template).
+  `409 customer_service_window_closed` (send a template). Every type
+  above is free-form but `template` and a Direct Send `utility` or
+  `authentication` message, which Meta sends as a template; a call
+  permission request, a call button, a Flow or a catalog outside the
+  window goes as a template with that button instead.
 - `POST /v1/numbers/{pn}/messages/{message_id}/read` shows the blue ticks
   on a received message; `{"typing_indicator": true}` shows "typing…" too,
   only when you are about to reply.
@@ -717,7 +747,13 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.1349120
   customer's calls and their messages seen in standby) is
   `customer_service_window_closed`; a service message while another app
   owns the thread under Conversation Routing (a `control_taken` the inbox
-  recorded) is `thread_owned_elsewhere`. A template is exempt from both.
+  recorded) is `thread_owned_elsewhere`. A template is exempt from both,
+  and so is a Direct Send `utility` or `authentication` reply (Meta
+  sends it as a template); a `service` one is free-form. Every type a
+  send takes, a reply takes ([Send messages](#send-messages)), a `pin`
+  in a group's conversation only (another is `422` on `contact`); a
+  Flow or a catalog named by id is checked after the window, so a reply
+  the window refuses asks Meta nothing.
   `WA_SERVER_INBOX_REPLY_CHECKS` turns a check off per number; Meta then
   decides (`131047`, `131070`). A reply takes an `Idempotency-Key`, as a
   send does, and its rate class is the writes'.
