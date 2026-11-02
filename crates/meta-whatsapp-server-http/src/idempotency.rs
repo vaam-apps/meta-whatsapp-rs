@@ -6,9 +6,9 @@
 //! service's records, lease, expiry, error body and metrics, and renders
 //! what it answers.
 //!
-//! Sends, media uploads and template creation take an optional
-//! `Idempotency-Key` header (inbox replies and OTP issue will, with their
-//! routes). The key is **scoped to the tenant**. A request carrying one
+//! Sends, media uploads, template creation, inbox replies and marking a
+//! conversation read take an optional `Idempotency-Key` header (OTP issue
+//! will, with its route). The key is **scoped to the tenant**. A request carrying one
 //! claims it with the SHA-256 of its operation and its canonical input
 //! ([`Fingerprint`]: the number or WABA the path names, decoded, and the
 //! body; never the path's spelling, since roadmap S6), a lease of twice
@@ -74,7 +74,7 @@ impl<S: Send + Sync> FromRequestParts<S> for KeyHeader {
 }
 
 /// A successful answer of an idempotent route, as it is sent and kept: a
-/// status and a JSON body. Its `Debug` prints the body's length
+/// status and a JSON body, or none ([`Self::no_content`]). Its `Debug` prints the body's length
 /// (`body_len`), never its bytes: a kept answer names the tenant's
 /// customers.
 #[derive(Clone)]
@@ -125,6 +125,16 @@ impl Success {
         })
     }
 
+    /// `204 No Content`: no body, so no `Content-Type` either (roadmap M2g's
+    /// read route), also when it is replayed.
+    pub fn no_content() -> Self {
+        Self {
+            status: StatusCode::NO_CONTENT,
+            body: Vec::new(),
+            kept: None,
+        }
+    }
+
     /// The core's answer, for its `run`.
     fn into_answer(self) -> Answer {
         let answer = Answer::new(self.status.as_u16(), self.body);
@@ -141,7 +151,12 @@ impl IntoResponse for Success {
     }
 }
 
+/// `status` with `body` as JSON; an empty body (a `204`) is sent without
+/// a `Content-Type`.
 fn json_response(status: StatusCode, body: Vec<u8>) -> Response {
+    if body.is_empty() {
+        return status.into_response();
+    }
     (
         status,
         [(

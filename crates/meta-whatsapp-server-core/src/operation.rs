@@ -70,6 +70,25 @@ pub enum Operation {
     /// `reply_to_conversation`: a reply to a conversation's contact,
     /// checked against the window and the thread's owner first.
     ReplyToConversation,
+    /// `get_conversation_window`: a conversation's 24-hour window, as a
+    /// reply would meet it (roadmap M2g).
+    GetConversationWindow,
+    /// `mark_conversation_read`: a conversation's unread count reset, and
+    /// on request its latest inbound message marked read on Meta (roadmap
+    /// M2g).
+    MarkConversationRead,
+    /// `get_inbox_message`: a message of a number's inbox, by id (roadmap
+    /// M2g).
+    GetInboxMessage,
+    /// `create_authentication_template`: an authentication template
+    /// created or updated in one or more languages (roadmap M3c).
+    CreateAuthenticationTemplate,
+    /// `issue_otp`: a one-time passcode sent with the tenant's
+    /// authentication template (roadmap M3c).
+    IssueOtp,
+    /// `verify_otp`: a typed code checked, which always counts as an
+    /// attempt (roadmap M3c).
+    VerifyOtp,
     /// `list_payment_configurations`: a WABA's payment configurations
     /// (roadmap P2).
     ListPaymentConfigurations,
@@ -94,7 +113,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 35] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -117,6 +136,12 @@ impl Operation {
         Self::ListConversations,
         Self::ListConversationMessages,
         Self::ReplyToConversation,
+        Self::GetConversationWindow,
+        Self::MarkConversationRead,
+        Self::GetInboxMessage,
+        Self::CreateAuthenticationTemplate,
+        Self::IssueOtp,
+        Self::VerifyOtp,
         Self::ListPaymentConfigurations,
         Self::CreatePaymentConfiguration,
         Self::GetPaymentConfiguration,
@@ -151,6 +176,12 @@ impl Operation {
             Self::ListConversations => "list_conversations",
             Self::ListConversationMessages => "list_conversation_messages",
             Self::ReplyToConversation => "reply_to_conversation",
+            Self::GetConversationWindow => "get_conversation_window",
+            Self::MarkConversationRead => "mark_conversation_read",
+            Self::GetInboxMessage => "get_inbox_message",
+            Self::CreateAuthenticationTemplate => "create_authentication_template",
+            Self::IssueOtp => "issue_otp",
+            Self::VerifyOtp => "verify_otp",
             Self::ListPaymentConfigurations => "list_payment_configurations",
             Self::CreatePaymentConfiguration => "create_payment_configuration",
             Self::GetPaymentConfiguration => "get_payment_configuration",
@@ -180,13 +211,18 @@ impl Operation {
             Self::ListTemplates
             | Self::CreateTemplate
             | Self::DeleteTemplates
-            | Self::GetTemplate => Scope::Templates,
+            | Self::GetTemplate
+            | Self::CreateAuthenticationTemplate => Scope::Templates,
             Self::ListEvents | Self::GetEvent | Self::StreamEvents | Self::StreamNumberEvents => {
                 Scope::Events
             }
             Self::ListConversations
             | Self::ListConversationMessages
-            | Self::ReplyToConversation => Scope::Inbox,
+            | Self::ReplyToConversation
+            | Self::GetConversationWindow
+            | Self::MarkConversationRead
+            | Self::GetInboxMessage => Scope::Inbox,
+            Self::IssueOtp | Self::VerifyOtp => Scope::Otp,
             Self::ListPaymentConfigurations
             | Self::CreatePaymentConfiguration
             | Self::GetPaymentConfiguration

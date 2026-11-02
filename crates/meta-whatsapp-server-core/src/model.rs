@@ -720,3 +720,176 @@ impl fmt::Debug for IdempotencyState {
         }
     }
 }
+
+/// A tenant's OTP settings (docs/design/server.md, section 4.7; roadmap
+/// M3c, decision D8): the number its codes are sent from, which must be
+/// one of the tenant's own numbers, the approved authentication template
+/// and its language, and the library's `OtpConfig` but for the namespace,
+/// which is always the issuing tenant's id, never a setting. A tenant
+/// without settings borrows those of the deployment's default OTP tenant
+/// (`WA_SERVER_OTP_DEFAULT_TENANT`: the platform's number, D8's default),
+/// if one is set.
+///
+/// Stored in the tenant's record (Postgres: `wa_server_tenants.settings`,
+/// under the key `otp`), in the layout [`Self::to_stored`] writes and
+/// [`Self::from_stored`] reads (version 1, its field names pinned by
+/// `the_stored_otp_settings_are_pinned`): a stored name, pending the
+/// owner's confirmation (docs/architecture.md, § Stable identifiers).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OtpSettings {
+    /// The number codes are sent from: one of the tenant's own.
+    pub phone_number_id: PhoneNumberId,
+    /// The approved authentication template's name.
+    pub template_name: String,
+    /// The language it was approved in.
+    pub template_language: String,
+    /// Digits per code, 4 to 8 (the library's `OtpConfig::code_length`).
+    pub code_length: u8,
+    /// How long a code is valid, 1 second to 90 minutes: keep it equal to
+    /// the template's `code_expiration_minutes` (`OtpConfig::ttl`).
+    pub ttl_seconds: u32,
+    /// Wrong guesses allowed per code, at least 1
+    /// (`OtpConfig::max_attempts`).
+    pub max_attempts: u32,
+    /// Seconds between two codes for one phone number and purpose
+    /// (`OtpConfig::resend_cooldown`).
+    pub resend_cooldown_seconds: u32,
+    /// Codes allowed per phone number and purpose in any rolling window, at
+    /// least 1 (`IssueLimit::max_issues`). The service never turns the
+    /// library's issue limit off: it is what bounds an online brute force.
+    pub max_issues: u32,
+    /// That window, in seconds, at least 1 (`IssueLimit::window`).
+    pub issue_window_seconds: u32,
+}
+
+/// The stored layout of [`OtpSettings`], version 1.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredOtpSettings {
+    v: u8,
+    phone_number_id: String,
+    template: StoredOtpTemplate,
+    code_length: u8,
+    ttl_seconds: u32,
+    max_attempts: u32,
+    resend_cooldown_seconds: u32,
+    issue_limit: StoredIssueLimit,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredOtpTemplate {
+    name: String,
+    language: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredIssueLimit {
+    max_issues: u32,
+    window_seconds: u32,
+}
+
+impl OtpSettings {
+    /// The library's defaults (`OtpConfig::new`: 6 digits, 10 minutes, 5
+    /// attempts, a 30-second cooldown, 5 codes per rolling hour) for
+    /// `template_name` in `template_language`, sent from `phone_number_id`.
+    pub fn new(
+        phone_number_id: PhoneNumberId,
+        template_name: impl Into<String>,
+        template_language: impl Into<String>,
+    ) -> Self {
+        Self {
+            phone_number_id,
+            template_name: template_name.into(),
+            template_language: template_language.into(),
+            code_length: 6,
+            ttl_seconds: 600,
+            max_attempts: 5,
+            resend_cooldown_seconds: 30,
+            max_issues: 5,
+            issue_window_seconds: 3600,
+        }
+    }
+
+    /// The stored form: a JSON object, version 1.
+    pub fn to_stored(&self) -> serde_json::Value {
+        let stored = StoredOtpSettings {
+            v: 1,
+            phone_number_id: self.phone_number_id.as_str().to_owned(),
+            template: StoredOtpTemplate {
+                name: self.template_name.clone(),
+                language: self.template_language.clone(),
+            },
+            code_length: self.code_length,
+            ttl_seconds: self.ttl_seconds,
+            max_attempts: self.max_attempts,
+            resend_cooldown_seconds: self.resend_cooldown_seconds,
+            issue_limit: StoredIssueLimit {
+                max_issues: self.max_issues,
+                window_seconds: self.issue_window_seconds,
+            },
+        };
+        serde_json::to_value(stored).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Read the stored form back; `None` for anything [`Self::to_stored`]
+    /// did not write (another version, a field missing, an id that is not
+    /// one): a backend answers that as a storage failure, never as no
+    /// settings.
+    pub fn from_stored(value: &serde_json::Value) -> Option<Self> {
+        let stored: StoredOtpSettings = serde::Deserialize::deserialize(value).ok()?;
+        if stored.v != 1 {
+            return None;
+        }
+        Some(Self {
+            phone_number_id: PhoneNumberId::new(stored.phone_number_id).ok()?,
+            template_name: stored.template.name,
+            template_language: stored.template.language,
+            code_length: stored.code_length,
+            ttl_seconds: stored.ttl_seconds,
+            max_attempts: stored.max_attempts,
+            resend_cooldown_seconds: stored.resend_cooldown_seconds,
+            max_issues: stored.issue_limit.max_issues,
+            issue_window_seconds: stored.issue_limit.window_seconds,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stored layout of a tenant's OTP settings (roadmap M3c): its
+    /// version and field names are a stored name, pending the owner's
+    /// confirmation (docs/architecture.md, § Stable identifiers). Renamed,
+    /// every tenant's settings stop reading (a storage failure), so the
+    /// literal is spelled out here, not derived.
+    #[test]
+    fn the_stored_otp_settings_are_pinned() {
+        let settings = OtpSettings::new(
+            PhoneNumberId::new("106540352242922").unwrap(),
+            "login_code",
+            "en_US",
+        );
+        let stored = settings.to_stored();
+        assert_eq!(
+            stored,
+            serde_json::json!({
+                "v": 1,
+                "phone_number_id": "106540352242922",
+                "template": {"name": "login_code", "language": "en_US"},
+                "code_length": 6,
+                "ttl_seconds": 600,
+                "max_attempts": 5,
+                "resend_cooldown_seconds": 30,
+                "issue_limit": {"max_issues": 5, "window_seconds": 3600}
+            })
+        );
+        assert_eq!(OtpSettings::from_stored(&stored), Some(settings));
+        let mut other = stored.clone();
+        other["v"] = 2.into();
+        assert_eq!(OtpSettings::from_stored(&other), None, "another version");
+        let mut bad = stored;
+        bad["phone_number_id"] = "../1".into();
+        assert_eq!(OtpSettings::from_stored(&bad), None, "not an id");
+        assert_eq!(OtpSettings::from_stored(&serde_json::json!({})), None);
+    }
+}

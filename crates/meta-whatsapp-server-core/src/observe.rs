@@ -32,6 +32,16 @@ pub trait Observer: Send + Sync {
     /// the outbox reported contention, `StorageError::Busy`); Meta
     /// redelivers it.
     fn webhook_failure(&self, stage: &'static str);
+
+    /// An OTP operation ([`crate::otp`], roadmap M3c) answered `outcome`:
+    /// `operation` is `issue` or `verify`, `outcome` an issue's `sent`,
+    /// `cooling_down`, `rate_limited` or `failed`, or a check's
+    /// `verified`, `invalid`, `expired`, `too_many_attempts`, `not_found`
+    /// or `failed` (a fixed set: never a phone number or a code). Observes
+    /// nothing by default, so an observer written before it still builds.
+    fn otp(&self, operation: &'static str, outcome: &'static str) {
+        let _ = (operation, outcome);
+    }
 }
 
 /// Observes nothing.
