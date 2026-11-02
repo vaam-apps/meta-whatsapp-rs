@@ -155,6 +155,7 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     // OTP and authentication templates (roadmap M3c): the recipient's
     // number is not logged (the code's own case is `tests/otp_logs.rs`).
     secrets.extend(otp(h, &admin).await);
+    secrets.extend(registration(h, &tenant_key).await);
     // Payments (roadmap P2): the OAuth links are credentials.
     secrets.extend(payments(h, &admin).await);
     // Embedded Signup (roadmap M3a): neither the merchant's token, nor the
@@ -757,6 +758,66 @@ pub const CONTACT_PHONE: &str = "+1 (940) 555-1234";
 pub const CALLBACK_DATA: &str = "order:1234:shipped";
 pub const IDEMPOTENCY_KEY: &str = "order-1234-shipped-notice";
 
+/// The registration routes (roadmap M3d), each with a PIN or a code in
+/// its body, and a refusal whose texts quote the PIN: the PIN and the code
+/// are secrets, looked for as a leaked string, JSON value or Meta text
+/// would print them (`tests/registration_logs.rs` looks for them as any
+/// run of digits). The PIN change and the deregistration are audited.
+async fn registration(h: &Harness, tenant_key: &str) -> Vec<String> {
+    const PN: &str = "1972385232742141";
+    const PIN: &str = "581063";
+    const CODE: &str = "774216";
+    let post = |path: &str, body: serde_json::Value| {
+        Call::new(Method::POST, format!("/v1/numbers/{PN}/{path}"))
+            .key(tenant_key)
+            .json(&body)
+    };
+    let ok = || json!({"success": true});
+    h.graph.push_json(200, ok());
+    let requested = h
+        .call(
+            post(
+                "request-code",
+                json!({"code_method": "SMS", "language": "en_US"}),
+            )
+            .header("idempotency-key", "register:1972385232742141:code"),
+        )
+        .await;
+    assert_eq!(requested.status.as_u16(), 200, "{}", requested.text);
+    h.graph.push_json(200, ok());
+    let verified = h.call(post("verify-code", json!({"code": CODE}))).await;
+    assert_eq!(verified.status.as_u16(), 200, "{}", verified.text);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#133005) PIN {PIN} is not this number's"),
+            "type": "OAuthException", "code": 133005, "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn",
+            "error_data": {"messaging_product": "whatsapp", "details": format!("pin {PIN}")}}}),
+    );
+    let refused = h.call(post("register", json!({"pin": PIN}))).await;
+    assert_eq!(refused.code(), "two_step_verification", "{}", refused.text);
+    h.graph.push_json(200, ok());
+    let registered = h
+        .call(post("register", json!({"pin": PIN})).header("idempotency-key", "register:1"))
+        .await;
+    assert_eq!(registered.status.as_u16(), 200, "{}", registered.text);
+    h.graph.push_json(200, ok());
+    let set = h.call(post("two-step-pin", json!({"pin": PIN}))).await;
+    assert_eq!(set.status.as_u16(), 200, "{}", set.text);
+    h.graph.push_json(200, ok());
+    let deregistered = h.call(post("deregister", json!({"confirm": PN}))).await;
+    assert_eq!(deregistered.status.as_u16(), 200, "{}", deregistered.text);
+    let mut secrets = Vec::new();
+    for secret in [PIN, CODE] {
+        // Quoted, JSON-escaped inside a log line, and as Meta's texts
+        // quote it.
+        secrets.push(format!("\"{secret}\""));
+        secrets.push(format!("{secret}\\\""));
+        secrets.push(format!("PIN {secret}"));
+        secrets.push(format!("pin {secret}"));
+    }
+    secrets
+}
+
 /// The M1b routes, each exercised, with the tokens, text, recipients and
 /// contacts M1.7 forbids in the logs; returns the key it minted and what
 /// must not be logged.
@@ -1264,6 +1325,8 @@ fn check_audit(logs: &str) {
         [
             "templates_deleted",
             "template_deleted",
+            "two_step_pin_set",
+            "number_deregistered",
             "payment_configuration_created",
             "payment_configuration_created",
             "payment_oauth_link_regenerated",
@@ -1271,12 +1334,26 @@ fn check_audit(logs: &str) {
             "payment_refunded",
             "payment_refunded"
         ],
-        "the template deletions' and the payment changes' audit events"
+        "the template deletions', the PIN change's, the deregistration's and the payment changes' audit events"
     );
     for fields in &deletions {
         assert!(fields["key_id"].is_string(), "{fields}");
         assert_eq!(fields["tenant"], "merchant-42", "{fields}");
         assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
+    }
+    // The number's own events name it by id (roadmap M3d).
+    let number_changes: Vec<&&serde_json::Value> = deletions
+        .iter()
+        .filter(|fields| {
+            matches!(
+                fields["action"].as_str(),
+                Some("two_step_pin_set" | "number_deregistered")
+            )
+        })
+        .collect();
+    assert_eq!(number_changes.len(), 2, "{number_changes:?}");
+    for fields in number_changes {
+        assert_eq!(fields["phone_number_id"], "1972385232742141", "{fields}");
     }
     check_payment_audit(&deletions);
 }

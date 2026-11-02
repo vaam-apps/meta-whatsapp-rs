@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`), `/v1/events` (scope `events`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`), `/v1/events` (scope `events`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -25,6 +25,7 @@ pub mod messages;
 pub mod numbers;
 pub mod otp;
 pub mod payments;
+pub mod registration;
 pub mod signup;
 pub mod templates;
 
@@ -86,6 +87,7 @@ impl Modify for Security {
     tags(
         (name = "admin", description = "Tenants, keys, WABA bindings and the vault key (admin key)"),
         (name = "numbers", description = "WABAs, numbers and business profiles (scope `numbers`)"),
+        (name = "registration", description = "A number's verification code, registration, deregistration and two-step PIN, the PIN typed per attempt and never stored (scope `numbers`)"),
         (name = "messages", description = "Sending messages and read receipts (scope `send`)"),
         (name = "media", description = "Uploading, downloading and deleting media (scope `media`)"),
         (name = "templates", description = "Listing, creating and deleting message templates (scope `templates`)"),
@@ -130,6 +132,15 @@ fn numbers_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(numbers::get_number))
         .routes(routes!(numbers::get_profile, numbers::update_profile))
         .routes(routes!(numbers::disconnect_waba))
+}
+
+fn registration_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(registration::request_verification_code))
+        .routes(routes!(registration::verify_code))
+        .routes(routes!(registration::register_number))
+        .routes(routes!(registration::deregister_number))
+        .routes(routes!(registration::set_two_step_pin))
 }
 
 fn events_routes() -> OpenApiRouter<Grant> {
@@ -237,6 +248,7 @@ fn api_routes(
     OpenApiRouter::with_openapi(ApiDoc::openapi())
         .merge(admin(admin_routes()))
         .merge(tenant(numbers_routes(), Scope::Numbers))
+        .merge(tenant(registration_routes(), Scope::Numbers))
         .merge(tenant(messages_routes(), Scope::Send))
         .merge(tenant(media::routes(), Scope::Media))
         .merge(tenant(templates_routes(), Scope::Templates))
@@ -398,6 +410,7 @@ mod tests {
             ("mod.rs", include_str!("mod.rs")),
             ("admin.rs", include_str!("admin.rs")),
             ("numbers.rs", include_str!("numbers.rs")),
+            ("registration.rs", include_str!("registration.rs")),
             ("events.rs", include_str!("events.rs")),
             ("inbox.rs", include_str!("inbox.rs")),
             ("messages.rs", include_str!("messages.rs")),

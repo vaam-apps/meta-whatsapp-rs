@@ -17,7 +17,7 @@
 //!
 //! | Class | Operations | Default (per tenant and replica) |
 //! | --- | --- | --- |
-//! | `send` | every write that is not template management: `send_message`, `mark_read`, `upload_media`, `delete_media`, `update_profile`, `disconnect_waba`, `reply_to_conversation`, `mark_conversation_read`, `create_payment_configuration`, `delete_payment_configuration`, `regenerate_payment_oauth_link`, `refund_payment`, and Embedded Signup's `start_signup`, `complete_signup`, `resume_signup` (roadmap M3a: the design names no class for them) | 20/s, burst 40 (the design's "sends") |
+//! | `send` | every write that is not template management: `send_message`, `mark_read`, `upload_media`, `delete_media`, `update_profile`, `disconnect_waba`, `reply_to_conversation`, `mark_conversation_read`, `request_verification_code`, `verify_code`, `register_number`, `deregister_number`, `set_two_step_pin`, `create_payment_configuration`, `delete_payment_configuration`, `regenerate_payment_oauth_link`, `refund_payment`, and Embedded Signup's `start_signup`, `complete_signup`, `resume_signup` (roadmap M3a: the design names no class for them) | 20/s, burst 40 (the design's "sends") |
 //! | `read` | every read but templates': `list_wabas`, `list_numbers`, `get_number`, `get_profile`, `download_media`, `list_events`, `get_event`, `stream_events`, `stream_number_events`, `list_conversations`, `list_conversation_messages`, `get_conversation_window`, `get_inbox_message`, `list_payment_configurations`, `get_payment_configuration`, `get_payment`, `list_signup_attempts` (a stream is charged once, when it opens; how many stay open is bounded apart, `crate::live`) | 50/s, burst 50 (the design's "reads"; it states no burst) |
 //! | `templates` | every template operation: `list_templates`, `get_template`, `create_template`, `delete_templates`, `create_authentication_template` | 2/s, burst 2 (the design's "template management"; it states no burst) |
 //! | `otp_issue` | `issue_otp` (roadmap M3c) | 5/s, burst 5 (the design's "OTP issue"; it states no burst) |
@@ -34,6 +34,11 @@
 //! is `WA_SERVER_RATE_<CLASS>` and `…_BURST` (see the service's
 //! `meta_whatsapp_server::config`), the same for every tenant. Per-tenant
 //! overrides by the admin API are not implemented.
+//!
+//! These budgets are the tenant's. A number's registration and
+//! verification attempts are also counted **per number**, shared by every
+//! replica, after ownership (roadmap M3d:
+//! [`crate::registration::RegistrationAttempts`]).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -98,6 +103,11 @@ impl RouteClass {
             | Operation::UploadMedia
             | Operation::DeleteMedia
             | Operation::ReplyToConversation
+            | Operation::RequestVerificationCode
+            | Operation::VerifyCode
+            | Operation::RegisterNumber
+            | Operation::DeregisterNumber
+            | Operation::SetTwoStepPin
             | Operation::MarkConversationRead
             | Operation::CreatePaymentConfiguration
             | Operation::DeletePaymentConfiguration
@@ -456,6 +466,11 @@ mod tests {
             ("create_authentication_template", RouteClass::Templates),
             ("issue_otp", RouteClass::OtpIssue),
             ("verify_otp", RouteClass::OtpVerify),
+            ("request_verification_code", RouteClass::Send),
+            ("verify_code", RouteClass::Send),
+            ("register_number", RouteClass::Send),
+            ("deregister_number", RouteClass::Send),
+            ("set_two_step_pin", RouteClass::Send),
             ("list_payment_configurations", RouteClass::Read),
             ("create_payment_configuration", RouteClass::Send),
             ("get_payment_configuration", RouteClass::Read),

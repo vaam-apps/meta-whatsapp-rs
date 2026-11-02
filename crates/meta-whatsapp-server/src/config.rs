@@ -38,6 +38,8 @@
 //! | `WA_SERVER_RATE_OTP_VERIFY`, `WA_SERVER_RATE_OTP_VERIFY_BURST` | 20, 20 | the same, for checking OTP codes (the service's default: the design names no limit) |
 //! | `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` | `graph` | whether an `account_update` webhook that offboards a merchant (`PARTNER_APP_UNINSTALLED` of this app, `ACCOUNT_DELETED`) or revokes their credit line (`PARTNER_REMOVED`) is confirmed with Graph first (`graph`: `debug_token` on the WABA's stored token, which must no longer be valid or no longer granted the WABA) or acted on by its signature alone (`signature`) (roadmap M3a) |
 //! | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number, decision D8's default (roadmap M3c); unset, such a tenant's OTP requests are `409 otp_not_configured` |
+//! | `WA_SERVER_REGISTRATION_ATTEMPTS`, `WA_SERVER_REGISTRATION_WINDOW` | 5, `72h` | a number's registrations and deregistrations, per number and fixed window, shared by every replica (roadmap M3d; Meta allows 10 of each in a moving 72 hours and locks the number on the 11th) |
+//! | `WA_SERVER_VERIFICATION_ATTEMPTS`, `WA_SERVER_VERIFICATION_WINDOW` | 10, `1h` | a number's verification codes requested and checked, the same way |
 //! | `WA_SERVER_INBOX_REPLY_CHECKS` | none listed: every check on every number | the local checks an inbox reply makes, per number: `<phone_number_id>:<checks>` entries, comma-separated, `<checks>` being `all`, `none` or the checks left on joined by `+` (`window`, `trust_handover`, `thread_owner`; `trust_handover` only with `window`): `106540352242922:window+trust_handover` turns the ownership check off on that number (the core's `inbox::ReplyChecksByNumber`; roadmap M2a) |
 //!
 //! And the inbox's retention, the store's own setting, which housekeeping
@@ -75,6 +77,7 @@ use meta_whatsapp_server_core::inbox::{InvalidReplyChecks, ReplyChecksByNumber};
 use meta_whatsapp_server_core::live::LiveSettings;
 use meta_whatsapp_server_core::model::TenantId;
 use meta_whatsapp_server_core::otp::OtpKeys;
+use meta_whatsapp_server_core::registration::{AttemptLimit, AttemptLimits};
 use meta_whatsapp_server_core::signup::AccountUpdateConfirmation;
 
 use crate::events::{
@@ -622,10 +625,65 @@ fn rate(
     Ok(Rate { per_second, burst })
 }
 
+/// A number's attempt budget: `attempts` (a positive whole number, at most
+/// 4294967295) and `window` (a positive duration), each `default`'s when
+/// unset.
+fn attempt_limit(
+    r: &Reader<'_>,
+    attempts: &'static str,
+    window: &'static str,
+    default: AttemptLimit,
+) -> Result<AttemptLimit, ConfigError> {
+    let count = match positive(r, attempts)? {
+        None => default.attempts,
+        Some(n) => u32::try_from(n).map_err(|_| ConfigError::Invalid {
+            name: attempts,
+            reason: "expected at most 4294967295",
+        })?,
+    };
+    let window = match r.plain(window)? {
+        None => default.window,
+        Some(value) => match duration(window, &value)? {
+            positive if !positive.is_zero() => positive,
+            _ => {
+                return Err(ConfigError::Invalid {
+                    name: window,
+                    reason: "expected a positive duration",
+                });
+            }
+        },
+    };
+    Ok(AttemptLimit {
+        attempts: count,
+        window,
+    })
+}
+
+/// `WA_SERVER_REGISTRATION_*` and `WA_SERVER_VERIFICATION_*` (roadmap
+/// M3d).
+fn attempt_limits(r: &Reader<'_>) -> Result<AttemptLimits, ConfigError> {
+    let defaults = AttemptLimits::default();
+    Ok(AttemptLimits {
+        registration: attempt_limit(
+            r,
+            "WA_SERVER_REGISTRATION_ATTEMPTS",
+            "WA_SERVER_REGISTRATION_WINDOW",
+            defaults.registration,
+        )?,
+        verification: attempt_limit(
+            r,
+            "WA_SERVER_VERIFICATION_ATTEMPTS",
+            "WA_SERVER_VERIFICATION_WINDOW",
+            defaults.verification,
+        )?,
+    })
+}
+
 /// `WA_SERVER_IDEMPOTENCY_TTL`, `WA_SERVER_MEDIA_MAX_BYTES`,
 /// `WA_SERVER_MEDIA_CONCURRENCY`, `WA_SERVER_MEDIA_STREAMS`, the live
 /// event streams' bounds (`WA_SERVER_STREAMS_PER_TENANT`,
-/// `WA_SERVER_STREAMS_PER_REPLICA`), the rate limits and
+/// `WA_SERVER_STREAMS_PER_REPLICA`), the rate limits, the attempt budgets
+/// ([`attempt_limits`]) and
 /// `WA_SERVER_INBOX_REPLY_CHECKS` (the core's
 /// `inbox::ReplyChecksByNumber::parse`).
 fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
@@ -713,6 +771,7 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
         media_concurrency,
         media_streams,
         live,
+        registration_attempts: attempt_limits(r)?,
         inbox_reply_checks: match r.plain("WA_SERVER_INBOX_REPLY_CHECKS")? {
             None => ReplyChecksByNumber::new(),
             Some(value) => {

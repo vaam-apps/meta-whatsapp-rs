@@ -21,6 +21,7 @@ use meta_whatsapp_rs::{Client, Error};
 use meta_whatsapp_server_core::inbox::ReplyChecksByNumber;
 use meta_whatsapp_server_core::live::{LiveSettings, Streams};
 use meta_whatsapp_server_core::otp::{OtpCodes, OtpDeployment};
+use meta_whatsapp_server_core::registration::{AttemptLimits, RegistrationAttempts};
 use meta_whatsapp_server_core::signup::{SignupDeployment, Signups};
 use meta_whatsapp_server_core::templates::TemplateCache;
 
@@ -92,6 +93,10 @@ pub struct Settings {
     /// default, for tests; `serve` sets it when `WA_APP_ID` and
     /// `WA_ES_CONFIG_ID` are). `Debug` shows no secret.
     pub signup: Option<SignupDeployment>,
+    /// `WA_SERVER_REGISTRATION_*` and `WA_SERVER_VERIFICATION_*`: a
+    /// number's registration and verification attempts, per number,
+    /// shared by every replica (roadmap M3d).
+    pub registration_attempts: AttemptLimits,
 }
 
 impl Default for Settings {
@@ -108,6 +113,7 @@ impl Default for Settings {
             inbox_reply_checks: ReplyChecksByNumber::new(),
             otp: None,
             signup: None,
+            registration_attempts: AttemptLimits::default(),
         }
     }
 }
@@ -140,6 +146,7 @@ struct Inner {
     otp: OtpCodes,
     signups: Signups,
     streams: Streams,
+    registration_attempts: RegistrationAttempts,
 }
 
 impl std::fmt::Debug for AppState {
@@ -151,7 +158,8 @@ impl std::fmt::Debug for AppState {
 impl AppState {
     /// The service on `backend`, and on nothing else: its records and
     /// idempotency records, the token vault on its `KvStore` under
-    /// `vault_keys`, and the webhook pipeline `inbound` describes, built
+    /// `vault_keys` (and, on that store, the numbers' registration
+    /// attempts), and the webhook pipeline `inbound` describes, built
     /// here on its `KvStore` (dedup leases), `ConversationStore` (the
     /// inbox), `Outbox` and records (routing). Graph is called with
     /// `client` (built without a default token: each call runs with the
@@ -205,6 +213,8 @@ impl AppState {
         // The live streams read the outbox the pipeline writes, woken by the
         // same backend's notifier, which the pipeline notifies.
         let streams = Streams::new(backend.outbox(), backend.notifier(), settings.live);
+        let registration_attempts =
+            RegistrationAttempts::new(backend.kv(), settings.registration_attempts, clock.clone());
         let state = Self {
             inner: Arc::new(Inner {
                 idempotency: backend.idempotency(),
@@ -222,6 +232,7 @@ impl AppState {
                 otp,
                 signups,
                 streams,
+                registration_attempts,
                 settings,
             }),
         };
@@ -418,6 +429,14 @@ impl Grant {
     /// (`meta_whatsapp_server_core::signup::Signups::open`).
     pub fn signups(&self) -> &Signups {
         &self.0.inner.signups
+    }
+
+    /// A number's registration and verification attempts, counted on the
+    /// bundle's `KvStore` (roadmap M3d), for the core's registration
+    /// services (`meta_whatsapp_server_core::registration::Registration`),
+    /// which open only on a number the authorization order made.
+    pub fn registration_attempts(&self) -> &RegistrationAttempts {
+        &self.0.inner.registration_attempts
     }
 
     /// The inbox (the backend's conversation store), for the core's inbox

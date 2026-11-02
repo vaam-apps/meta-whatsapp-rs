@@ -86,6 +86,7 @@ pub mod otp;
 pub mod outbox;
 pub mod payments;
 pub mod ratelimit;
+pub mod registration;
 pub mod request;
 pub mod signup;
 pub mod store;

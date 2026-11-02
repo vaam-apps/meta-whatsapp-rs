@@ -407,9 +407,10 @@ async fn every_rate_limited_operation_declares_its_429() {
 /// Exactly the routes that honour `Idempotency-Key` declare it (sends,
 /// inbox replies, uploads, template creation: docs/design/server.md,
 /// section 5.4; marking a conversation read, whose receipt is a request
-/// to Meta: roadmap M2g; and since roadmap P2 a payment configuration's
-/// creation, a new OAuth link and a refund), and the upload is a
-/// multipart form.
+/// to Meta: roadmap M2g; since roadmap M3d a verification code's request,
+/// a registration and a deregistration; and since roadmap P2 a payment
+/// configuration's creation, a new OAuth link and a refund), and the
+/// upload is a multipart form.
 #[test]
 fn idempotent_operations_declare_their_key() {
     let spec: Value = serde_json::from_str(COMMITTED).unwrap();
@@ -430,9 +431,12 @@ fn idempotent_operations_declare_their_key() {
         [
             "POST /v1/numbers/{pn}/conversations/{contact}/messages",
             "POST /v1/numbers/{pn}/conversations/{contact}/read",
+            "POST /v1/numbers/{pn}/deregister",
             "POST /v1/numbers/{pn}/media",
             "POST /v1/numbers/{pn}/messages",
             "POST /v1/numbers/{pn}/payments/refunds",
+            "POST /v1/numbers/{pn}/register",
+            "POST /v1/numbers/{pn}/request-code",
             "POST /v1/otp/issue",
             "POST /v1/wabas/{waba_id}/payment-configurations",
             "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",

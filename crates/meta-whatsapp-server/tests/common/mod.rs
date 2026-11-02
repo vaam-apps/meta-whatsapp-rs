@@ -8,6 +8,7 @@ pub mod inbox;
 pub mod meta;
 pub mod moving;
 pub mod otp;
+pub mod registration;
 pub mod scenarios;
 pub mod signup;
 pub mod sse;
@@ -61,12 +62,13 @@ pub const PREVIOUS_APP_SECRET: &str = "previous-app-secret-for-tests";
 pub const DEFAULT_APP_SECRETS: &[&str] = &[APP_SECRET, PREVIOUS_APP_SECRET];
 
 /// A `KvStore` that counts reads of the token vault's namespace, and
-/// keeps the keys written.
+/// keeps every key written, and every value but a compare and swap's
+/// deletion (roadmap M3d's sweep for a PIN).
 #[derive(Debug)]
 pub struct CountingKv {
     inner: Arc<dyn KvStore>,
     vault_reads: AtomicUsize,
-    written: std::sync::Mutex<Vec<StoreKey>>,
+    writes: Mutex<Vec<(StoreKey, Option<Vec<u8>>)>>,
 }
 
 impl CountingKv {
@@ -75,18 +77,37 @@ impl CountingKv {
         Self {
             inner,
             vault_reads: AtomicUsize::new(0),
-            written: std::sync::Mutex::default(),
+            writes: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Every key and value written so far (put, put if absent, compare and
+    /// swap), in order; a compare and swap that deletes wrote no value.
+    pub fn writes(&self) -> Vec<(StoreKey, Vec<u8>)> {
+        self.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(key, value)| Some((key.clone(), value.clone()?)))
+            .collect()
     }
 
     /// Every key written so far (put, put if absent, compare and swap), in
     /// order.
     pub fn written(&self) -> Vec<StoreKey> {
-        self.written.lock().unwrap().clone()
+        self.writes
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(key, _)| key.clone())
+            .collect()
     }
 
-    fn wrote(&self, key: &StoreKey) {
-        self.written.lock().unwrap().push(key.clone());
+    fn wrote(&self, key: &StoreKey, value: Option<&[u8]>) {
+        self.writes
+            .lock()
+            .unwrap()
+            .push((key.clone(), value.map(<[u8]>::to_vec)));
     }
 
     /// Reads of the vault's namespace so far.
@@ -109,7 +130,7 @@ impl KvStore for CountingKv {
         value: Vec<u8>,
         expiry: Expiry,
     ) -> Result<u64, StorageError> {
-        self.wrote(key);
+        self.wrote(key, Some(&value));
         self.inner.put(key, value, expiry).await
     }
     async fn put_if_absent(
@@ -118,7 +139,7 @@ impl KvStore for CountingKv {
         value: Vec<u8>,
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
-        self.wrote(key);
+        self.wrote(key, Some(&value));
         self.inner.put_if_absent(key, value, expiry).await
     }
     async fn compare_and_swap(
@@ -128,7 +149,7 @@ impl KvStore for CountingKv {
         new: Option<Vec<u8>>,
         expiry: Expiry,
     ) -> Result<Option<u64>, StorageError> {
-        self.wrote(key);
+        self.wrote(key, new.as_deref());
         self.inner
             .compare_and_swap(key, expected, new, expiry)
             .await
@@ -1011,6 +1032,15 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "add_security_recommendation": true,
             "code_expiration_minutes": 10
         }),
+        // business-phone-numbers/registration's and the request-code
+        // reference's examples (roadmap M3d).
+        ("POST", "/v1/numbers/{pn}/request-code") => {
+            serde_json::json!({"code_method": "SMS", "language": "en_US"})
+        }
+        ("POST", "/v1/numbers/{pn}/verify-code") => serde_json::json!({"code": "123830"}),
+        ("POST", "/v1/numbers/{pn}/register" | "/v1/numbers/{pn}/two-step-pin") => {
+            serde_json::json!({"pin": SAMPLE_PIN})
+        }
         // payments-in/onboarding-apis, "Create a payment configuration".
         ("POST", "/v1/wabas/{waba_id}/payment-configurations") => serde_json::json!({
             "configuration_name": SAMPLE_PAYMENT_CONFIGURATION,
@@ -1030,6 +1060,10 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
         _ => return None,
     })
 }
+
+/// The PIN every sample registration sends
+/// (`business-phone-numbers/registration`'s example).
+pub const SAMPLE_PIN: &str = "212834";
 
 /// The file every sample upload sends: a PNG signature.
 pub const SAMPLE_PNG: &[u8] = b"\x89PNG\r\n\x1a\n-sample-image";
@@ -1051,6 +1085,12 @@ pub fn sample_call(operation: &Operation, sample: &Sample, key: Option<&str>) ->
             ("type", None, b"image/png"),
             ("file", Some("voucher.png"), SAMPLE_PNG),
         ]);
+    }
+    // A deregistration confirms the path's number (roadmap M3d).
+    if (operation.method.as_str(), operation.template.as_str())
+        == ("POST", "/v1/numbers/{pn}/deregister")
+    {
+        return call.json(&serde_json::json!({"confirm": sample.pn}));
     }
     if let Some(body) = sample_body(&operation.method, &operation.template) {
         call = call.json(&body);
