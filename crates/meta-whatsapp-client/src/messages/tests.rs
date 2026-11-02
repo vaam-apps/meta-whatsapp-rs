@@ -892,6 +892,42 @@ fn cta_url_and_location_request_match_the_docs() {
     );
 }
 
+/// A Flow's `flow_token` identifies its session to the business's data
+/// endpoint: `Debug` hides it (AGENTS.md, "Secrets"), on the parameters
+/// and on every message holding them, while the wire still carries it.
+/// Decisive: `FlowParameters`' own `Debug` (a derived one prints the
+/// token).
+#[test]
+fn a_flow_token_is_redacted_from_debug() {
+    const TOKEN: &str = "AQAAAAACS5FpgQ_cAAAAAD0QI3s.";
+    let params = FlowParameters::new(FlowRef::Name("appointment_booking_v1".into()), "Book!")
+        .token(TOKEN)
+        .navigate("<SCREEN_NAME>", Some(json!({"product_name": "name"})));
+    let shown = format!("{params:?}");
+    assert!(!shown.contains(TOKEN), "{shown}");
+    assert!(
+        shown.contains(r#"flow_token: Some("[REDACTED]")"#),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("appointment_booking_v1") && shown.contains("Book!"),
+        "{shown}"
+    );
+    let msg = OutboundMessage::new(
+        Recipient::phone("whatsapp-id"),
+        FlowMessage::new("Flow message body", params),
+    );
+    for shown in [format!("{msg:?}"), format!("{msg:#?}")] {
+        assert!(!shown.contains(TOKEN), "{shown}");
+    }
+    assert_eq!(
+        serde_json::to_value(&msg).unwrap()["interactive"]["action"]["parameters"]["flow_token"],
+        TOKEN
+    );
+    let none = FlowParameters::new(FlowRef::Name("n".into()), "Go");
+    assert!(format!("{none:?}").contains("flow_token: None"));
+}
+
 #[test]
 fn flow_matches_the_docs() {
     // flows/guides/sendingaflow, "Cloud API Sample Request (with all

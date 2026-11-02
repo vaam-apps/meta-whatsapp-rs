@@ -539,12 +539,12 @@ async fn reply(
         (status = 202, description = "Accepted by Meta and recorded `accepted` in the conversation; delivery arrives as status events", body = MessageAccepted),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
-        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant, or a Flow (`flow_id`) or catalog (`catalog_id`) the reply names that is not the number's WABA's; nothing was sent", body = ErrorBody),
         (status = 409, description = "`customer_service_window_closed` (a free-form reply outside the 24-hour window: send a template) or `thread_owned_elsewhere` (another app owns the thread), both refused before any request; `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, …", body = ErrorBody),
         (status = 422, description = "`invalid_request` (`contact`, `body`, a field of the content), `unsupported_message_type`, `idempotency_key_reused`, Meta's `template_*`, …: nothing was sent", body = ErrorBody),
         (status = 429, description = "`too_many_requests` (the service's limits, `Retry-After`) or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed: see `may_have_been_sent`", body = ErrorBody),
-        (status = 504, description = "`timeout`: the reply may have been sent (`may_have_been_sent: true`)", body = ErrorBody),
+        (status = 504, description = "`timeout`: the reply may have been sent (`may_have_been_sent: true`), unless the Flow or catalog check before it timed out (`may_have_been_sent: false`)", body = ErrorBody),
     )
 )]
 pub(crate) async fn reply_to_conversation(

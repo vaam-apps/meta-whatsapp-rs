@@ -747,7 +747,11 @@ pub struct FlowActionPayload {
 }
 
 /// `action.parameters` of a Flow message.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// `Debug` hides `flow_token`, as the data endpoint's `FlowRequest` does:
+/// the token identifies the Flow's session to your data endpoint, so a
+/// logged message must not carry it. `Serialize` is not redacted.
+#[derive(Clone, PartialEq)]
 pub struct FlowParameters {
     /// The Flow.
     pub flow: FlowRef,
@@ -761,6 +765,22 @@ pub struct FlowParameters {
     pub flow_action: Option<FlowAction>,
     /// First screen and its data (for `navigate`).
     pub flow_action_payload: Option<FlowActionPayload>,
+}
+
+impl std::fmt::Debug for FlowParameters {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FlowParameters")
+            .field("flow", &self.flow)
+            .field("flow_cta", &self.flow_cta)
+            .field(
+                "flow_token",
+                &self.flow_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("mode", &self.mode)
+            .field("flow_action", &self.flow_action)
+            .field("flow_action_payload", &self.flow_action_payload)
+            .finish()
+    }
 }
 
 impl FlowParameters {

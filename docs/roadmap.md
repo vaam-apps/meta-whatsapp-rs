@@ -5258,18 +5258,29 @@ or WABA fails the family's own cross-tenant test).
     removed from the send or from the reply, the WABA comparison of a
     Flow or a catalog, the reply's window check before the named
     object's, the failed check marked sent, and the redacted `Debug`.
-  - **Proposed** (for the coordinator, design §10, D90 to D94): the
-    comparison with the library's message (D90), Direct Send by the
-    library's rules with Meta's three categories (D91), the `flow_id`
-    and `catalog_id` checks before each send, no cache (D92), the
-    `flow_token` out of every log (D93), Meta's per-user limits left to
-    Meta (D94). No stored name; no legal act (no type accepts terms).
+    M5a's review added `each_value_the_library_writes_is_checked_and_a_carousels_catalogs_are_one`
+    (each type's action `name`, a URL card's `name`, a quick-reply
+    button's `type`, a product carousel's second catalog) and
+    `an_inbox_replys_cut_exempts_only_what_meta_sends_as_a_template`
+    (Direct Send under a migrated number's cut; the cut's exemption
+    survived mutation before it), a Flow answered under another id, a
+    `utility` Flow outside the window still checked, and the library's
+    `a_flow_token_is_redacted_from_debug`.
+  - **Decided 2026-11-02** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable, design §10, D100
+    to D104): the comparison with the library's message, on M5a's types
+    only (D100); Direct Send by the library's rules with Meta's three
+    categories (D101); the `flow_id` and `catalog_id` checks before each
+    send, no cache (D102); the `flow_token` out of every log, the
+    library's `FlowParameters` `Debug` redacted with it (D103); Meta's
+    per-user limits left to Meta (D104). No stored name; no legal act
+    (no type accepts terms).
   - **Not done here:** Direct Send's interactive authentication message
     (a copy-code OTP button) and mixed URL and reply buttons, which the
     library does not model (its `MessageContent::Raw`, which the service
     refuses); the catalog a template's product cards name (M5b's); a
     group id checked against the number's groups (M5f's); the comparison
-    on the types before M5a (D90).
+    on the types before M5a (D100).
   - **Also, after the first release** (from S7, carried by M2a, P2 and
     now M5a, which landed before it): drop the legacy fingerprint (S6's
     window: `Fingerprint::legacy_v1_json`, `legacy_v1_upload`,

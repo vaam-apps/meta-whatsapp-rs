@@ -2781,7 +2781,7 @@
             }
           },
           "404": {
-            "description": "`not_found`: no such number for this tenant",
+            "description": "`not_found`: no such number for this tenant, or a Flow (`flow_id`) or catalog (`catalog_id`) the reply names that is not the number's WABA's; nothing was sent",
             "content": {
               "application/json": {
                 "schema": {
@@ -2831,7 +2831,7 @@
             }
           },
           "504": {
-            "description": "`timeout`: the reply may have been sent (`may_have_been_sent: true`)",
+            "description": "`timeout`: the reply may have been sent (`may_have_been_sent: true`), unless the Flow or catalog check before it timed out (`may_have_been_sent: false`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4087,7 +4087,7 @@
             }
           },
           "404": {
-            "description": "`not_found`: no such number for this tenant",
+            "description": "`not_found`: no such number for this tenant, or a Flow (`flow_id`) or catalog (`catalog_id`) the message names that is not the number's WABA's; nothing was sent",
             "content": {
               "application/json": {
                 "schema": {
@@ -4137,7 +4137,7 @@
             }
           },
           "504": {
-            "description": "`timeout`: the message may have been sent (`may_have_been_sent: true`)",
+            "description": "`timeout`: the message may have been sent (`may_have_been_sent: true`), unless the Flow or catalog check before it timed out (`may_have_been_sent: false`)",
             "content": {
               "application/json": {
                 "schema": {

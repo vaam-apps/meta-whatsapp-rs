@@ -229,7 +229,8 @@ stored data, the owner's).
 - **The send union's other types in the service** (roadmap M5a, parity
   rows 22, 29, 37, 51, 53, 56, 57, 59, 60 and 104, now done in the
   service too; categories 2, 4, 10, 11, 14 and 24, coverage row 33;
-  choices D90–D94 proposed for the coordinator; from Meta's Direct Send,
+  choices D100–D104, decided by the coordinator under the owner's
+  delegation; from Meta's Direct Send,
   media and product carousel, catalog, calling, Flows, groups, location
   request, address and business-scoped user id pages, read on
   2026-11-02). `POST /v1/numbers/{pn}/messages` and the inbox reply
@@ -4198,6 +4199,19 @@ are marked `internal`, so `npx skills add vaam-apps/wa-rs` no longer offers
 them.
 
 ### Security
+
+**A Flow message's `Debug` printed its `flow_token`** (since the
+library's first Flow message, closed by M5a's review before any
+release). The library's
+`meta_whatsapp_client::messages::FlowParameters` derived `Debug`, so an
+`OutboundMessage` carrying a Flow showed the token, the business's
+identifier of the Flow session that its data endpoint trusts, to any log
+that formatted the message. Its `Debug` now shows `[REDACTED]`, as the
+data endpoint's `FlowRequest` does; `Serialize`, what Meta receives, is
+unchanged. The service never formatted one (design D103), and its own
+request types already showed a parameters object's keys only. A Flow
+template button's token (`templates::ParameterAction`) is still shown,
+the template routes' to close (roadmap M5b).
 
 **The service's generic template route accepted Meta's zero-tap terms
 for a tenant** (since roadmap M1b, closed by M3c's review before any

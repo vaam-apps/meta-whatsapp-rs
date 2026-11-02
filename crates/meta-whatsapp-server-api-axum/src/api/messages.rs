@@ -1452,12 +1452,12 @@ pub(crate) async fn send(
         (status = 202, description = "Accepted by Meta; delivery arrives as status events", body = MessageAccepted),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`permission`, `marketing_not_allowed`, …)", body = ErrorBody),
-        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant, or a Flow (`flow_id`) or catalog (`catalog_id`) the message names that is not the number's WABA's; nothing was sent", body = ErrorBody),
         (status = 409, description = "`customer_service_window_closed`, `marketing_opted_out`, `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, …", body = ErrorBody),
         (status = 422, description = "`invalid_request` (with `field`: `to.phone` without `+`, a `template` key the service would not send to Meta, …), `unsupported_message_type`, `idempotency_key_reused`, Meta's `template_*`, …: nothing was sent", body = ErrorBody),
         (status = 429, description = "`too_many_requests` (the service's limits, `Retry-After`) or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed: see `may_have_been_sent`", body = ErrorBody),
-        (status = 504, description = "`timeout`: the message may have been sent (`may_have_been_sent: true`)", body = ErrorBody),
+        (status = 504, description = "`timeout`: the message may have been sent (`may_have_been_sent: true`), unless the Flow or catalog check before it timed out (`may_have_been_sent: false`)", body = ErrorBody),
     )
 )]
 pub(crate) async fn send_message(
@@ -1644,7 +1644,7 @@ mod tests {
         }
     }
 
-    /// A Flow's token never reaches a log (design D93): the request's
+    /// A Flow's token never reaches a log (design D103): the request's
     /// `Debug` shows a parameters object's keys, never its values.
     /// Decisive: `InteractiveParameters`' `Debug`.
     #[test]

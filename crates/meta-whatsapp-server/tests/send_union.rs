@@ -710,6 +710,70 @@ async fn a_key_the_library_would_drop_is_refused_on_its_path_before_any_request(
     assert!(h.graph.requests().is_empty(), "nothing reached Meta");
 }
 
+/// Each value the library writes itself must be the one it writes, on
+/// every type that has one: the action's `name` of each named type, a URL
+/// card's `name`, a quick-reply button's `type`. And a product carousel's
+/// cards share one catalog, which the M5.2 check reads from the first
+/// card: a second card naming another catalog is refused before any
+/// request, so no card's catalog escapes the check. Decisive: each
+/// `action_named` call, `media_card`'s name and button type checks, and
+/// the library's shared-catalog rule (`ProductCarousel::validate`) that
+/// `named_object` relies on.
+#[tokio::test]
+async fn each_value_the_library_writes_is_checked_and_a_carousels_catalogs_are_one() {
+    let (h, key) = connected().await;
+    let interactive =
+        |object: Value| json!({"to": {"phone": TO}, "type": "interactive", "interactive": object});
+    let renamed = |mut object: Value| {
+        object["action"]["name"] = json!("cta_url");
+        interactive(object)
+    };
+    let mut cases: Vec<(Value, String)> = examples()
+        .into_iter()
+        .filter(|e| e.kind == "interactive" && e.object["action"]["name"].is_string())
+        .map(|e| (renamed(e.object), "interactive.action.name".to_owned()))
+        .collect();
+    assert_eq!(cases.len(), 9, "every named type's example");
+    let mut url = url_carousel();
+    url["action"]["cards"][1]["action"]["name"] = json!("url");
+    cases.push((
+        interactive(url),
+        "interactive.action.cards[1].action.name".to_owned(),
+    ));
+    let mut quick = quick_reply_carousel();
+    quick["action"]["cards"][2]["action"]["buttons"][1]["type"] = json!("reply");
+    cases.push((
+        interactive(quick),
+        "interactive.action.cards[2].action.buttons[1].type".to_owned(),
+    ));
+    cases.push((
+        interactive(
+            json!({"type": "carousel", "body": {"text": "Check out our featured products!"},
+            "action": {"cards": [
+                {"card_index": 0, "type": "product",
+                 "action": {"product_retailer_id": "abc123xyz", "catalog_id": CATALOG}},
+                {"card_index": 1, "type": "product",
+                 "action": {"product_retailer_id": "def456uvw", "catalog_id": "987654321"}}
+            ]}}),
+        ),
+        "interactive.action.cards[1].action.catalog_id".to_owned(),
+    ));
+    for (body, field) in cases {
+        let reply = h.call(send(PN, &key, &body)).await;
+        assert_eq!(
+            refused(&reply),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_request".to_owned(),
+                Some(field)
+            ),
+            "{body}: {}",
+            reply.text
+        );
+    }
+    assert!(h.graph.requests().is_empty(), "nothing reached Meta");
+}
+
 /// Direct Send follows the library's rules, checked before any request: a
 /// TTL or a business-named template only where Meta takes them, the
 /// documented ranges, the name's alphabet, no `authentication` message to
@@ -833,6 +897,10 @@ async fn a_flow_or_a_catalog_of_another_waba_is_not_found_and_nothing_is_sent() 
     h.graph.push_json(200, flow_of(OPERATOR_WABA));
     h.graph.push_json(200, json!({"data": []}));
     h.graph.push_json(200, catalogs_with("987654321"));
+    // Meta answering another Flow than the one asked, of the number's WABA.
+    let mut other = flow_of(WABA);
+    other["id"] = json!("6543210987654321");
+    h.graph.push_json(200, other);
     // Meta refusing the Flow's id for this token.
     h.graph.push_json(
         400,
@@ -840,7 +908,7 @@ async fn a_flow_or_a_catalog_of_another_waba_is_not_found_and_nothing_is_sent() 
                          "type": "GraphMethodException", "code": 100, "error_subcode": 33,
                          "fbtrace_id": "AbCdEf"}}),
     );
-    for body in [&flow, &product, &product, &flow] {
+    for body in [&flow, &product, &product, &flow, &flow] {
         let reply = h.call(send(PN, &key, body)).await;
         assert_eq!(
             refused(&reply),
@@ -851,7 +919,7 @@ async fn a_flow_or_a_catalog_of_another_waba_is_not_found_and_nothing_is_sent() 
         assert!(reply.json()["error"]["graph"].is_null(), "{}", reply.text);
     }
     let requests = h.graph.requests();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     assert!(
         requests.iter().all(|r| r.method == Method::GET),
         "nothing sent"
@@ -867,7 +935,7 @@ async fn a_flow_or_a_catalog_of_another_waba_is_not_found_and_nothing_is_sent() 
     h.graph.push_json(200, accepted());
     let sent = h.call(keyed()).await;
     assert_eq!(sent.status, StatusCode::ACCEPTED, "{}", sent.text);
-    assert_eq!(h.graph.requests().len(), 7);
+    assert_eq!(h.graph.requests().len(), 8);
     assert_eq!(h.graph.remaining(), 0);
 }
 
@@ -1049,5 +1117,121 @@ async fn an_inbox_reply_meets_each_types_window_rule() {
         }
         assert_eq!(h.graph.last_request().unwrap().json().unwrap(), expected);
     }
+    // And nothing more: a Direct Send `utility` Flow named by id, outside
+    // the window, still has its Flow checked first (another WABA's is not
+    // found, nothing sent), and the number's own goes; the same Flow as
+    // `service` is closed, with nothing asked.
+    let mut utility_flow = flow.clone();
+    utility_flow["category"] = json!("utility");
+    let before = h.graph.requests().len();
+    h.graph.push_json(
+        200,
+        json!({"id": FLOW, "whatsapp_business_account": {"id": OPERATOR_WABA}}),
+    );
+    let elsewhere = h.call(reply(&utility_flow)).await;
+    assert_eq!(
+        refused(&elsewhere),
+        (StatusCode::NOT_FOUND, "not_found".to_owned(), None),
+        "{}",
+        elsewhere.text
+    );
+    assert_eq!(h.graph.requests().len(), before + 1);
+    h.graph.push_json(
+        200,
+        json!({"id": FLOW, "whatsapp_business_account": {"id": EXAMPLE_WABA}}),
+    );
+    h.graph.push_json(200, replied("wamid.UTILITY-FLOW"));
+    let sent = h.call(reply(&utility_flow)).await;
+    assert_eq!(sent.status, StatusCode::ACCEPTED, "{}", sent.text);
+    let requests = h.graph.requests();
+    assert_eq!(requests.len(), before + 3);
+    assert_eq!(requests[before + 1].path(), format!("/v25.0/{FLOW}"));
+    assert_eq!(requests[before + 2].json().unwrap()["category"], "utility");
+    let mut service_flow = flow.clone();
+    service_flow["category"] = json!("service");
+    let closed = h.call(reply(&service_flow)).await;
+    assert_eq!(
+        (closed.status, closed.code().as_str()),
+        (StatusCode::CONFLICT, "customer_service_window_closed"),
+        "{}",
+        closed.text
+    );
+    assert_eq!(
+        h.graph.requests().len(),
+        before + 3,
+        "closed, nothing asked"
+    );
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// The inbox reply's cut (a number migrated from another tenant's WABA,
+/// roadmap M2h) holds a Direct Send message as the window does: the window
+/// the previous holder's customer opened minutes ago is not the new
+/// holder's to continue in free form, a `service` message included
+/// (`409`, zero requests), while a `utility` or `authentication` one,
+/// which Meta sends as a template, goes as a template would. Decisive:
+/// `Conversations::reply`'s cut check skipping only what
+/// `inbox::sent_as_template` names.
+#[tokio::test]
+async fn an_inbox_replys_cut_exempts_only_what_meta_sends_as_a_template() {
+    use common::inbox::accepted as replied;
+    use common::meta::{EXAMPLE_PN, EXAMPLE_WA_ID, EXAMPLE_WABA, bytes, dated, now, text};
+    use meta_whatsapp_rs::core::ids::WabaId;
+    const WABA_B: &str = "102290129340399";
+    let h = Harness::new();
+    h.tenant("merchant-a").await;
+    h.tenant("merchant-b").await;
+    h.connect("merchant-b", WABA_B, &[], "TOKEN-OF-B").await;
+    h.connect("merchant-a", EXAMPLE_WABA, &[EXAMPLE_PN], "TOKEN-OF-A")
+        .await;
+    let before = dated(text(EXAMPLE_WABA, EXAMPLE_PN, "wamid.CUT-A"), now());
+    assert_eq!(h.webhook(&bytes(&before)).await.status, StatusCode::OK);
+    let a = meta_whatsapp_server::model::TenantId::parse("merchant-a").unwrap();
+    h.store
+        .bind_waba(&a, &WabaId::new(EXAMPLE_WABA).unwrap(), &[])
+        .await
+        .unwrap();
+    h.connect("merchant-b", WABA_B, &[EXAMPLE_PN], "TOKEN-OF-B")
+        .await;
+    let key = h.tenant_key("merchant-b", &[Scope::Inbox]).await;
+    let reply = |body: &Value| {
+        Call::new(
+            Method::POST,
+            format!("/v1/numbers/{EXAMPLE_PN}/conversations/{EXAMPLE_WA_ID}/messages"),
+        )
+        .key(&key)
+        .json(body)
+    };
+    let text_as = |category: Option<&str>| {
+        let mut body = json!({"type": "text", "text": {"body": "<BODY_TEXT>"}});
+        if let Some(category) = category {
+            body["category"] = json!(category);
+        }
+        body
+    };
+    for body in [text_as(None), text_as(Some("service"))] {
+        let closed = h.call(reply(&body)).await;
+        assert_eq!(
+            (closed.status, closed.code().as_str()),
+            (StatusCode::CONFLICT, "customer_service_window_closed"),
+            "{body}: {}",
+            closed.text
+        );
+    }
+    assert!(h.graph.requests().is_empty(), "refused with zero requests");
+    for category in ["utility", "authentication"] {
+        h.graph.push_json(200, replied("wamid.CUT-DIRECT-SEND"));
+        let sent = h.call(reply(&text_as(Some(category)))).await;
+        assert_eq!(
+            sent.status,
+            StatusCode::ACCEPTED,
+            "{category}: {}",
+            sent.text
+        );
+        let request = h.graph.last_request().unwrap();
+        assert_eq!(request.bearer(), Some("TOKEN-OF-B"));
+        assert_eq!(request.json().unwrap()["category"], category);
+    }
+    assert_eq!(h.graph.requests().len(), 2);
     assert_eq!(h.graph.remaining(), 0);
 }

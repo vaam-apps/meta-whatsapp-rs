@@ -757,7 +757,7 @@ pub const CONTACT_NAME: &str = "Barbara J. Johnson";
 pub const CONTACT_PHONE: &str = "+1 (940) 555-1234";
 pub const CALLBACK_DATA: &str = "order:1234:shipped";
 pub const IDEMPOTENCY_KEY: &str = "order-1234-shipped-notice";
-/// A Flow's token (roadmap M5a, design D93): in no log line.
+/// A Flow's token (roadmap M5a, design D103): in no log line.
 pub const FLOW_TOKEN: &str = "CAPTURE-FLOW-TOKEN-AQAAAAACS5FpgQ";
 
 /// The registration routes (roadmap M3d), each with a PIN or a code in

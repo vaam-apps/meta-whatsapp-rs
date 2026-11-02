@@ -2596,9 +2596,11 @@ mod tests {
         }
     }
 
-    /// A Flow's token never reaches a log (design D93): a parameters
+    /// A Flow's token never reaches a log (design D103): a parameters
     /// object's `Debug` shows its keys, never its values, through every
-    /// request type that holds one. Decisive: `ActionParameters`' `Debug`.
+    /// request type that holds one, and the library's message built from
+    /// it hides the token too. Decisive: `ActionParameters`' `Debug`, and
+    /// the library's `FlowParameters`' `Debug`.
     #[test]
     fn a_flow_token_never_reaches_debug() {
         use serde_json::json;
@@ -2625,8 +2627,11 @@ mod tests {
         let shown = format!("{request:?}");
         assert!(!shown.contains(token), "{shown}");
         assert!(shown.contains("flow_token"), "the keys are shown: {shown}");
-        // And the token reaches Meta, as given.
+        // And the token reaches Meta, as given, while the library's
+        // message hides it too (its `FlowParameters`' `Debug`).
         let built = message(request).unwrap();
+        let shown = format!("{built:?}");
+        assert!(!shown.contains(token), "{shown}");
         assert_eq!(
             serde_json::to_value(&built).unwrap()["interactive"]["action"]["parameters"]["flow_token"],
             token
