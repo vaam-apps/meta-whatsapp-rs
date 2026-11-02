@@ -5,7 +5,7 @@ description: "WhatsApp one-time passcodes (login codes, password resets) through
 
 # meta-whatsapp-rs-server-otp
 
-> **Verified against meta-whatsapp-rs ef70c19d7ab4905b78eb9b108fa98dad2a43b4c3 (2026-11-01).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs a8af9415a0771c8e6266c5b52f359898f79fdabf (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/otp.ts](examples/otp.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -49,8 +49,10 @@ export async function requestCode(
 
 - **Outcomes are `200`** (`OtpIssued`): `sent` with `challenge_id` and
   `expires_at`; `cooling_down` (a code went to that number for that
-  purpose less than 30 seconds ago) or `rate_limited` (5 an hour used),
-  each with `retry_after_seconds`, and nothing sent. Show the wait.
+  purpose less than 30 seconds ago) or `rate_limited` (5 an hour used;
+  on the platform's number, the 5 are shared with every tenant and
+  purpose sending to that person from it), each with
+  `retry_after_seconds`, and nothing sent. Show the wait.
 - **Errors** (`ErrorBody`) are for what you fix: `invalid_request` on
   `phone` (no `+`, separators, a BSUID: Meta cannot send an
   authentication template to one), on `purpose` or `body`;
@@ -90,7 +92,12 @@ on the same sending number, gets `not_found` and costs you no attempt.
 Each tenant's codes go out from the number its OTP settings name, one of
 the tenant's own, with its approved template; a tenant without settings
 uses the default OTP tenant's (`WA_SERVER_OTP_DEFAULT_TENANT`, the
-platform's number and name). None of either: `otp_not_configured`.
+platform's number and name), while that tenant is active. None of
+either, or a default tenant suspended or deleted: `otp_not_configured`.
+On the platform's number, one person gets at most the default tenant's
+issue limit across every tenant using it; a tenant with its own number
+and settings has only its own limits. `meta-whatsapp-server doctor`
+warns (`otp.default_tenant`) when the default tenant cannot lend.
 
 ```ts
   const { error } = await admin.PUT("/v1/admin/tenants/{id}/otp", {
@@ -122,7 +129,9 @@ The template, once per WABA (`AuthenticationTemplateRequest`: `name`,
 - No throttling per IP or device: the service sees your backend only.
   Limit requests per visitor yourself.
 - No zero-tap templates (accepting Meta's zero-tap terms is not the
-  service's to do for you) and no template previews yet.
+  service's to do for you: `422` on `otp_type` here, and on the terms'
+  key of a zero-tap button through `POST /v1/wabas/{waba_id}/templates`)
+  and no template previews yet.
 - No resend on its own: a code whose send may have gone out is kept, not
   sent again.
 

@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs ef70c19d7ab4905b78eb9b108fa98dad2a43b4c3 (2026-11-01).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs a8af9415a0771c8e6266c5b52f359898f79fdabf (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -56,7 +56,7 @@ meta-whatsapp-server serve
 It **refuses to start** on an unsafe setting (a blank `WA_APP_SECRET` or
 `WA_VERIFY_TOKEN`, no `WA_VAULT_KEY` or a short `WA_OTP_PEPPER` with
 Postgres, no `DATABASE_URL` outside `WA_SERVER_ENV=development`), naming
-the variable. `meta-whatsapp-server doctor` names every one at once, then the database, the app's missing webhook fields (messages, account_update) and each WABA token's reach, read-only, exiting non-zero on a `FAIL` line.
+the variable. `meta-whatsapp-server doctor` names every one at once, then the database, the app's missing webhook fields (messages, account_update), each WABA token's reach and (a warning) a `WA_SERVER_OTP_DEFAULT_TENANT` that cannot lend its OTP settings, read-only, exiting non-zero on a `FAIL` line.
 Every secret may come from a file (`WA_APP_SECRET_FILE`); back `WA_VAULT_KEY` up apart from the database.
 
 ## Credentials
