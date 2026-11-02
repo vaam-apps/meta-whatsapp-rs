@@ -258,6 +258,42 @@ stored data, the owner's).
     feature `api-cratestack`, the crate's name, and the procedure's wire
     name and fields.
 
+- **The send union's other types in the service** (roadmap M5a, parity
+  rows 22, 29, 37, 51, 53, 56, 57, 59, 60 and 104, now done in the
+  service too; categories 2, 4, 10, 11, 14 and 24, coverage row 33;
+  choices D100–D104, decided by the coordinator under the owner's
+  delegation; from Meta's Direct Send,
+  media and product carousel, catalog, calling, Flows, groups, location
+  request, address and business-scoped user id pages, read on
+  2026-11-02). `POST /v1/numbers/{pn}/messages` and the inbox reply
+  (`POST /v1/numbers/{pn}/conversations/{contact}/messages`) take `pin`
+  (to a group), the `interactive` types `location_request_message`,
+  `request_contact_info`, `call_permission_request`, `voice_call`,
+  `flow`, `address_message`, `carousel` (media cards or product cards),
+  `product`, `product_list` and `catalog_message`, and Direct Send's
+  `category` (`utility`, `authentication`, `service`), `ttl_seconds` and
+  `direct_send_config` on any type. Each is read into the library's own
+  type and checked by its rules before any request; what the request
+  carries is compared with what the library would send, so a key it
+  would drop (a footer on a carousel, a misspelt Flow parameter, a
+  card's media by `id`) is `422 invalid_request` on its path, nothing
+  sent. A Flow named by `flow_id` and a product message's `catalog_id`
+  are checked to be the number's WABA's with the number's token (`GET
+  /{flow_id}`, `GET /{waba_id}/product_catalogs`): another WABA's, or an
+  id Meta refuses, is `404 not_found` and nothing is sent. A Flow's
+  `flow_token` reaches no log. On the inbox reply every new type is
+  free-form (refused outside the 24-hour window with nothing asked of
+  Meta, the Flow's and the catalog's checks included), but a Direct Send
+  `utility` or `authentication` reply, which Meta sends as a template,
+  is not. The OpenAPI document is additive only: `type` gains `pin`,
+  `interactive.type` ten values, `action.parameters` four `anyOf`
+  alternatives and `action.sections` a product section, `action` gains
+  `cards`, `catalog_id` and `product_retailer_id`, the send and reply
+  bodies `pin`, `category`, `ttl_seconds` and `direct_send_config`, and
+  `interactive.body` is no longer required (a call permission request
+  and a single product may have none; every other type still requires
+  it). No new route, error code, setting or stored name.
+
 - **The reviewed event types and the service's number events** (roadmap
   M2d, design D25, acceptance test M2.6; parity row 84 now done in the
   service, rows 137 and 139 waiting only for M5h and M5l; categories 16,
@@ -2802,6 +2838,19 @@ stored data, the owner's).
 
 ### Changed
 
+- **The service's core** (roadmap M5a): `messages::MessageType` gains
+  `Pin`, `messages::InteractiveType` ten variants;
+  `messages::SendMessage` and `ReplyMessage` gain `pin`, `category`,
+  `ttl_seconds` and `direct_send_config`; `messages::InteractiveObject::body`
+  is an `Option`; `messages::InteractiveAction` gains `cards`,
+  `catalog_id` and `product_retailer_id`, and its `sections` are
+  `messages::SectionObject`s (a list's or a product list's);
+  `messages::ActionParameters::Order` carries any type's parameters
+  object, and its `Debug` shows the object's keys only. Code that
+  matches on these enums exhaustively, or builds these structs with a
+  literal, must follow. `messages::refuse_unsupported` no longer
+  refuses Direct Send's keys.
+
 - **Breaking for code naming the arrays' lengths** (roadmap M2d):
   `meta_whatsapp_server_core::events::TENANT_EVENT_TYPES` is a
   `[&str; 34]` (was 28) and `OPERATOR_EVENT_TYPES` a `[&str; 3]` (was
@@ -4285,6 +4334,19 @@ are marked `internal`, so `npx skills add vaam-apps/wa-rs` no longer offers
 them.
 
 ### Security
+
+**A Flow message's `Debug` printed its `flow_token`** (since the
+library's first Flow message, closed by M5a's review before any
+release). The library's
+`meta_whatsapp_client::messages::FlowParameters` derived `Debug`, so an
+`OutboundMessage` carrying a Flow showed the token, the business's
+identifier of the Flow session that its data endpoint trusts, to any log
+that formatted the message. Its `Debug` now shows `[REDACTED]`, as the
+data endpoint's `FlowRequest` does; `Serialize`, what Meta receives, is
+unchanged. The service never formatted one (design D103), and its own
+request types already showed a parameters object's keys only. A Flow
+template button's token (`templates::ParameterAction`) is still shown,
+the template routes' to close (roadmap M5b).
 
 **The service's generic template route accepted Meta's zero-tap terms
 for a tenant** (since roadmap M1b, closed by M3c's review before any
