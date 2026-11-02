@@ -84,64 +84,66 @@ pub async fn run<F>(fresh: F) -> races::Report
 where
     F: AsyncFn() -> Arc<dyn Backend>,
 {
+    // Each suite boxed: their futures are large, and this one would hold
+    // the largest of them (clippy's `large_futures` in the backends' crates).
     let backend = fresh().await;
-    records::run(backend.as_ref()).await;
+    Box::pin(records::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    outbox::run(backend.as_ref()).await;
+    Box::pin(outbox::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    invariants::run(backend.as_ref()).await;
+    Box::pin(invariants::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    capabilities::run(backend.as_ref()).await;
+    Box::pin(capabilities::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    let report = races::run(backend.as_ref()).await;
+    let report = Box::pin(races::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    admin::run(backend.as_ref()).await;
+    Box::pin(admin::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    messages::run(backend.as_ref()).await;
+    Box::pin(messages::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    templates::run(backend.as_ref()).await;
+    Box::pin(templates::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    numbers::run(backend.as_ref()).await;
+    Box::pin(numbers::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    media::run(backend.as_ref()).await;
+    Box::pin(media::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    webhooks::run(backend.as_ref()).await;
+    Box::pin(webhooks::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    live::run(backend.as_ref()).await;
+    Box::pin(live::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    inbox::run(backend.as_ref()).await;
+    Box::pin(inbox::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    otp::run(backend.as_ref()).await;
+    Box::pin(otp::run(backend.as_ref())).await;
     backend.close().await;
 
     let backend = fresh().await;
-    signup::run(backend.as_ref()).await;
+    Box::pin(signup::run(backend.as_ref())).await;
     backend.close().await;
     report
 }

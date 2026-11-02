@@ -74,9 +74,11 @@ const ALLOCATION: &str = "58501441721238";
 
 /// Every case, on one backend.
 pub async fn run(backend: &dyn Backend) {
-    the_records_keep_attempts_and_vault_entries(backend).await;
-    m3_4_d4_is_enforced_before_any_credit_call(backend).await;
-    a_rotation_reaches_the_records_kept_past_a_binding(backend).await;
+    // Boxed: the scenarios' futures are large, and `conformance::run`
+    // holds them all (clippy's `large_futures` in the backends' crates).
+    Box::pin(the_records_keep_attempts_and_vault_entries(backend)).await;
+    Box::pin(m3_4_d4_is_enforced_before_any_credit_call(backend)).await;
+    Box::pin(a_rotation_reaches_the_records_kept_past_a_binding(backend)).await;
 }
 
 fn tenant(id: &str) -> TenantId {
@@ -193,7 +195,7 @@ pub async fn the_records_keep_attempts_and_vault_entries(backend: &dyn Backend) 
             .iter()
             .map(|x| x.waba_id.clone())
             .collect::<Vec<_>>(),
-        [first.clone()]
+        std::slice::from_ref(&first)
     );
     let rest = store
         .signup_attempts(&a, &page(one.next_after.as_deref(), 10))
@@ -204,7 +206,7 @@ pub async fn the_records_keep_attempts_and_vault_entries(backend: &dyn Backend) 
             .iter()
             .map(|x| x.waba_id.clone())
             .collect::<Vec<_>>(),
-        [second.clone()]
+        std::slice::from_ref(&second)
     );
     assert_eq!(rest.next_after, None);
     assert!(
@@ -400,7 +402,7 @@ fn merchant() -> Merchant {
 }
 
 /// The page's completion: `data` the session info, `event` the finish.
-fn finished(state: &str, event: &str, data: Value) -> Completion {
+fn finished(state: &str, event: &str, data: &Value) -> Completion {
     Completion {
         state: state.to_owned(),
         code: "AQBhlXsctMxJYbwbrpybxlo9tLPGy".to_owned(),
@@ -454,7 +456,7 @@ async fn onboard(backend: &dyn Backend, rig: &Rig, tenant: &TenantId, m: &Mercha
         .complete(finished(
             launch.state.as_str(),
             "FINISH_ONLY_WABA",
-            json!({"waba_id": m.waba, "business_id": m.business}),
+            &json!({"waba_id": m.waba, "business_id": m.business}),
         ))
         .await
         .unwrap();
@@ -501,7 +503,7 @@ pub async fn m3_4_d4_is_enforced_before_any_credit_call(backend: &dyn Backend) {
         .complete(finished(
             launch.state.as_str(),
             "FINISH_ONLY_WABA",
-            json!({"waba_id": m.waba}),
+            &json!({"waba_id": m.waba}),
         ))
         .await
         .unwrap_err();
@@ -517,7 +519,7 @@ pub async fn m3_4_d4_is_enforced_before_any_credit_call(backend: &dyn Backend) {
         .complete(finished(
             launch.state.as_str(),
             "FINISH_ONLY_WABA",
-            json!({"business_id": m.business}),
+            &json!({"business_id": m.business}),
         ))
         .await
         .unwrap_err();

@@ -328,14 +328,10 @@ pub fn signup_deployment(
     })
 }
 
-/// [`serve_until`] once the configuration's warnings are out, stopping on
-/// the future `signal` makes: made before the listeners are bound, so
-/// that [`shutdown_signal`]'s handlers are in place once they answer.
-async fn run<S: Future<Output = ()>>(
-    config: Config,
-    backend: Arc<dyn Backend>,
-    signal: impl FnOnce() -> S,
-) -> anyhow::Result<()> {
+/// What [`run`] checks of `backend` before it builds anything: memory
+/// storage warned about, the inbox retention the configuration names, and
+/// the migrations when `WA_SERVER_MIGRATE` is `auto`.
+async fn prepare(config: &Config, backend: &dyn Backend) -> anyhow::Result<()> {
     if backend.kind().is_process_local() {
         tracing::warn!("memory storage: everything is lost on restart (development only)");
     }
@@ -355,6 +351,18 @@ async fn run<S: Future<Output = ()>>(
             .await
             .context("migrations failed")?;
     }
+    Ok(())
+}
+
+/// [`serve_until`] once the configuration's warnings are out, stopping on
+/// the future `signal` makes: made before the listeners are bound, so
+/// that [`shutdown_signal`]'s handlers are in place once they answer.
+async fn run<S: Future<Output = ()>>(
+    config: Config,
+    backend: Arc<dyn Backend>,
+    signal: impl FnOnce() -> S,
+) -> anyhow::Result<()> {
+    prepare(&config, backend.as_ref()).await?;
     let client = graph_client(&config)?;
     let Config {
         vault_keys,

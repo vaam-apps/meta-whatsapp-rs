@@ -52,7 +52,7 @@ use meta_whatsapp_rs::core::error::TransportError;
 use meta_whatsapp_rs::core::ids::{BusinessId, PhoneNumberId, WabaId};
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::config::{Config, ConfigError, Env, NotUnicode, OnboardingMode};
-use meta_whatsapp_server::model::{AllowedTenants, Scope, TenantId};
+use meta_whatsapp_server::model::{AllowedTenants, Scope, TenantId, VaultEntry};
 use meta_whatsapp_server::store::MemoryStore;
 use meta_whatsapp_server_core::signup::AccountUpdateConfirmation;
 use pretty_assertions::assert_eq;
@@ -116,6 +116,7 @@ async fn onboard_partner(h: &Harness, key: &str) -> Value {
 /// requests exactly. Decisive: the approval's binding (removing it binds
 /// nothing) and the answers' types (no token field).
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 async fn m3_1_the_happy_path_binds_the_verified_waba_and_all_its_numbers() {
     let h = harness(tech_provider());
     let (a, _) = tenants(&h).await;
@@ -585,6 +586,7 @@ async fn m3_3_a_133005_at_registration_resumes_in_a_new_process() {
 /// database.
 #[tokio::test]
 async fn live_postgres_m3_3_a_133005_at_registration_resumes_in_a_new_process() {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx;
     let Some(db) = TestDb::new().await else {
         return;
     };
@@ -602,7 +604,6 @@ async fn live_postgres_m3_3_a_133005_at_registration_resumes_in_a_new_process() 
     m3_3(&first, &second).await;
     // No stored row of any table holds the code, either PIN or the token
     // in clear (the vault's records are sealed).
-    use meta_whatsapp_rs::adapters::store::postgres::sqlx;
     let tables: Vec<String> = sqlx::query_scalar(
         "SELECT table_name::text FROM information_schema.tables \
          WHERE table_schema = $1 AND table_type = 'BASE TABLE'",
@@ -771,7 +772,7 @@ async fn m3_4_the_credit_line_request_carries_the_partners_system_token() {
         })
         .await
         .unwrap();
-    let keys: Vec<String> = entries.items.iter().map(|e| e.key()).collect();
+    let keys: Vec<String> = entries.items.iter().map(VaultEntry::key).collect();
     assert_eq!(
         keys,
         [format!("business/{BUSINESS}"), format!("waba/{WABA}")]
@@ -997,6 +998,7 @@ async fn m3_4_d4_is_enforced_before_any_credit_call() {
 /// audited, and finishes the attempt. Decisive: the tenant routes never set
 /// `reshare_after_revocation`.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 async fn m3_4_a_revoked_business_is_refunded_only_by_the_operator() {
     let h = harness(solution_partner());
     let (a, _) = tenants(&h).await;
@@ -1165,8 +1167,8 @@ async fn m3_4_a_cms_disconnect_revokes_first_and_deletes_second() {
     assert_eq!(h.graph.remaining(), 0);
     let revoked = h.graph.requests()[failed_at..]
         .iter()
-        .cloned()
         .filter(|r| r.method == Method::DELETE && r.path() == format!("/v25.0/{ALLOCATION}"))
+        .cloned()
         .collect::<Vec<_>>();
     assert_eq!(revoked.len(), 1, "the allocation revoked");
     assert_eq!(revoked[0].bearer(), Some(SYSTEM_TOKEN));
