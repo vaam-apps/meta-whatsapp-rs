@@ -610,7 +610,10 @@ impl<'a> Payments<'a> {
     /// # Errors
     ///
     /// `404 not_found`, without Meta's code or text: none of that name in
-    /// the WABA. Meta's failure otherwise, with its `details`.
+    /// the WABA. Meta's failure otherwise, with its `details`, and never
+    /// `may_have_been_sent`: what the caller asked for (a lookup, a
+    /// refund) was not sent, so an `Idempotency-Key` is released, not kept
+    /// as a refund that may have been made.
     async fn configuration_of_the_waba(&self, name: &str) -> Result<(), ServiceError> {
         let found = self
             .number
@@ -627,7 +630,10 @@ impl<'a> Payments<'a> {
                 tracing::info!("a payment configuration named is not the number's WABA's");
                 Err(ServiceError::not_found())
             }
-            Err(error) => Err(object_failed(self.counted(&error).await, &error)),
+            Err(error) => {
+                Err(object_failed(self.counted(&error).await, &error)
+                    .with_may_have_been_sent(false))
+            }
         }
     }
 

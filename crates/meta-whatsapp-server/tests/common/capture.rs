@@ -581,6 +581,20 @@ async fn payments(h: &Harness, admin: &str) -> Vec<String> {
     let again = h.call(create()).await;
     assert_eq!(again.status.as_u16(), 201, "{}", again.text);
     assert!(!again.text.contains("CAPTURE-OAUTH-LINK"), "{}", again.text);
+    // A creation cut by a timeout may have gone through: audited, its
+    // outcome unknown (design D58).
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let cut = h
+        .call(
+            Call::new(Method::POST, &base)
+                .key(&key)
+                .header("idempotency-key", "payment-configuration-2")
+                .json(&json!({"configuration_name": "test-payment-configuration",
+                              "provider_name": "payu"})),
+        )
+        .await;
+    assert_eq!(cut.status.as_u16(), 504, "{}", cut.text);
     h.graph
         .push_json(200, json!({"data": [configuration.clone()]}));
     let one = h
@@ -1002,6 +1016,7 @@ fn check_audit(logs: &str) {
             "templates_deleted",
             "template_deleted",
             "payment_configuration_created",
+            "payment_configuration_created",
             "payment_oauth_link_regenerated",
             "payment_configuration_deleted",
             "payment_refunded",
@@ -1033,6 +1048,27 @@ fn check_audit(logs: &str) {
         );
         assert!(fields.get("oauth_url").is_none(), "{fields}");
     }
+    let outcomes: Vec<(&str, &str)> = payments
+        .iter()
+        .map(|fields| {
+            (
+                fields["action"].as_str().unwrap_or_default(),
+                fields["outcome"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            ("payment_configuration_created", "answered"),
+            ("payment_configuration_created", "unknown"),
+            ("payment_oauth_link_regenerated", "answered"),
+            ("payment_configuration_deleted", "answered"),
+            ("payment_refunded", "answered"),
+            ("payment_refunded", "unknown"),
+        ],
+        "each payment change's outcome"
+    );
     let refunds: Vec<serde_json::Value> = payments
         .iter()
         .filter(|fields| fields["action"] == "payment_refunded")

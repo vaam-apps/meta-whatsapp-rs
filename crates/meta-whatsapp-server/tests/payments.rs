@@ -1295,3 +1295,51 @@ async fn an_inbox_reply_carries_a_payment_message_checked_and_within_its_window(
     assert_eq!(h.graph.requests().len(), 1, "refused with zero requests");
     assert_eq!(h.graph.remaining(), 0);
 }
+
+/// Review of P2: a refund whose configuration check failed (Meta timed
+/// out or failed on that read) was never sent: it is answered with
+/// `may_have_been_sent: false` and its `Idempotency-Key` is released, not
+/// kept as a refund that may have been made, so the same key refunds once
+/// Meta answers. Decisive: the check's error marked not sent
+/// (`Payments::configuration_of_the_waba`).
+#[tokio::test]
+async fn a_refund_whose_check_failed_was_not_sent_and_frees_its_key() {
+    let (h, key) = connected(&[Scope::Payments]).await;
+    let keyed = || refund(&key, &refund_body()).header("idempotency-key", "refund:checked-first");
+    h.graph.push_error(|| TransportError::Timeout);
+    let cut = h.call(keyed()).await;
+    assert_eq!(cut.status, StatusCode::GATEWAY_TIMEOUT, "{}", cut.text);
+    assert_eq!(error(&cut)["may_have_been_sent"], false, "{}", cut.text);
+    h.graph.push_json(
+        500,
+        json!({"error": {"message": "An unexpected error has occurred. Please retry your request later.",
+                         "type": "OAuthException", "code": 2, "is_transient": true}}),
+    );
+    let failed = h.call(keyed()).await;
+    assert!(failed.status.is_server_error(), "{}", failed.text);
+    assert_eq!(
+        error(&failed)["may_have_been_sent"],
+        false,
+        "{}",
+        failed.text
+    );
+    assert!(failed.headers.get("idempotent-replayed").is_none());
+    let requests = h.graph.requests();
+    assert_eq!(requests.len(), 2, "the checks only");
+    assert!(requests.iter().all(|r| r.method == Method::GET));
+    // The key was released each time: it refunds now, once.
+    h.graph.push_json(200, json!({"data": [configuration()]}));
+    h.graph.push_json(
+        200,
+        json!({"id": "refund-id", "status": "pending", "speed_processed": "normal"}),
+    );
+    let made = h.call(keyed()).await;
+    assert_eq!(made.status, StatusCode::CREATED, "{}", made.text);
+    assert!(made.headers.get("idempotent-replayed").is_none());
+    assert_eq!(
+        h.graph.last_request().unwrap().path(),
+        format!("/v25.0/{PN}/payments_refund")
+    );
+    assert_eq!(h.graph.requests().len(), 4);
+    assert_eq!(h.graph.remaining(), 0);
+}
