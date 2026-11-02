@@ -1,10 +1,15 @@
-//! The inbox (docs/design/server.md, section 4.2, "Inbox"; roadmap M2a), as
-//! services an API adapter calls, on a number the caller's tenant owns:
-//! its conversations, newest activity first ([`Conversations::list`]); one
-//! conversation's history, newest first ([`Conversations::history`]); and
-//! a reply to the conversation's contact ([`Conversations::reply`])
-//! through the library's inbox (`meta_whatsapp_rs::inbox::Inbox::send`,
-//! which `Inbox::reply` is: the same checks before any request).
+//! The inbox (docs/design/server.md, section 4.2, "Inbox"; roadmaps M2a and
+//! M2g), as services an API adapter calls, on a number the caller's tenant
+//! owns: its conversations, newest activity first ([`Conversations::list`],
+//! and with each one's window, [`Conversations::list_with_windows`]); one
+//! conversation's history, newest first ([`Conversations::history`]); its
+//! 24-hour window as a reply would meet it ([`Conversations::window`]); a
+//! message of the number by id ([`Conversations::message`]); marking a
+//! conversation read, and on request its latest inbound message read on
+//! Meta ([`Conversations::mark_read`]); and a reply to the conversation's
+//! contact ([`Conversations::reply`]) through the library's inbox
+//! (`meta_whatsapp_rs::inbox::Inbox::send`, which `Inbox::reply` is: the
+//! same checks before any request).
 //!
 //! The inbox is the bundle's `ConversationStore`, the one the webhook
 //! pipeline records into ([`crate::inbound`]): a message is there once its
@@ -24,7 +29,11 @@
 //! conversation's `unread` counts only the customer's messages dated from
 //! the cut on (at most [`UNREAD_SCAN`] of its latest messages are read to
 //! count them, only on a number with a cut). A reply follows the same cut
-//! (see "The reply's checks" below). A page is answered only if the
+//! (see "The reply's checks" below), and so do the window (a window the
+//! customer opened before the cut shows no `closes_at`), a message by id
+//! (one dated before the cut is `404 not_found`, as a missing one) and the
+//! read receipt (never for a message dated before the cut). A page, a
+//! window, a message or a read receipt is answered (or sent) only if the
 //! number's binding did not move while it was read
 //! ([`crate::authz::OwnedNumber`]'s epoch and binding: `503
 //! storage_unavailable`, retryable, otherwise).
@@ -49,8 +58,20 @@
 //! answering it would tell the new holder that the customer wrote to the
 //! previous one. Otherwise `409 customer_service_window_closed`, before
 //! the library's checks and any request; a template goes (a new
-//! conversation, the number's to start). To swap: drop
-//! [`Conversations::reply`]'s `refuse_across_the_cut`.
+//! conversation, the number's to start). To swap: drop the calls of
+//! `cut_refuses_free_form`, [`Conversations::reply`]'s and the window's
+//! (both, so that they keep agreeing). The window ([`ReplyWindow::open`])
+//! is those checks run with nothing sent, in the same order, so it never
+//! disagrees with a free-form reply's refusal.
+//!
+//! **The read receipt** ([`Conversations::mark_read`] with
+//! `notify_customer`) goes for the conversation's latest inbound message
+//! only (Meta marks the earlier ones of a one-to-one conversation read with
+//! it, `messages/mark-message-as-read`), with the number's token, before
+//! the unread count is reset: a receipt Meta refuses resets nothing. None
+//! goes when that message is dated before the cut, is older than Meta's
+//! 30 days ([`READ_RECEIPT_MAX_AGE`]), or is not among the conversation's
+//! latest [`UNREAD_SCAN`] messages.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -60,7 +81,8 @@ use meta_whatsapp_rs::client::messages::{DirectSendCategory, MessageContent, Out
 use meta_whatsapp_rs::core::clock::Clock;
 use meta_whatsapp_rs::core::ids::{MessageId, PhoneNumberId};
 use meta_whatsapp_rs::core::store::{
-    ConversationKey, ConversationStore, ConversationSummary, Direction, StoredMessage, ThreadOwner,
+    ConversationKey, ConversationStore, ConversationSummary, CustomerServiceWindow, Direction,
+    StoredMessage, ThreadOwner,
 };
 use meta_whatsapp_rs::inbox::{Inbox, ReplyChecks};
 use time::OffsetDateTime;
@@ -81,6 +103,15 @@ pub const MAX_CONTACT_BYTES: usize = 256;
 /// previous holder's).
 pub const UNREAD_SCAN: usize = 1000;
 
+/// Longest message id accepted, in bytes: a `wamid.…` is far shorter.
+pub const MAX_MESSAGE_ID_BYTES: usize = 256;
+
+/// How old a received message may be for a read receipt: Meta's "within
+/// 30 days of receipt" (`messages/mark-message-as-read`). An older latest
+/// message gets none ([`Conversations::mark_read`]), rather than Meta's
+/// refusal.
+pub const READ_RECEIPT_MAX_AGE: time::Duration = time::Duration::days(30);
+
 /// The conversation of `contact` on `number`: `contact` as the request
 /// named it (a BSUID, a `wa_id`, a group id), 1 to [`MAX_CONTACT_BYTES`]
 /// bytes, not blank and without a control character.
@@ -100,6 +131,56 @@ pub fn conversation_key(
     } else {
         Err(ServiceError::invalid("contact"))
     }
+}
+
+/// A message id as a request named it (`wamid.…`): 1 to
+/// [`MAX_MESSAGE_ID_BYTES`] bytes, not blank and without a control
+/// character.
+///
+/// # Errors
+///
+/// `422 invalid_request` on `message_id`, never quoting it.
+pub fn message_id(id: &str) -> Result<MessageId, ServiceError> {
+    let valid = !id.trim().is_empty()
+        && id.len() <= MAX_MESSAGE_ID_BYTES
+        && !id.chars().any(char::is_control);
+    if valid {
+        Ok(MessageId::new(id))
+    } else {
+        Err(ServiceError::invalid("message_id"))
+    }
+}
+
+/// A conversation's 24-hour window as its holder reads it
+/// ([`Conversations::window`]): whether a free-form reply would go to Meta
+/// now, beside the window the customer opened, as recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplyWindow {
+    /// Whether a free-form reply would be sent to Meta now: the checks
+    /// [`Conversations::reply`] makes (the cut's, then the library's
+    /// `Inbox::check_reply`: the thread's owner, then the window, a
+    /// trusted handover letting Meta decide), with the number's
+    /// [`ReplyChecks`] and the service's clock. `false`: send a template.
+    /// Meta still decides what it is sent.
+    pub open: bool,
+    /// When the window the customer opened closes, or closed, as the inbox
+    /// recorded it (24 hours after the latest of their last message, a
+    /// call that reopens it and a message of theirs seen in standby), from
+    /// the binding's start on; `None` when they opened none since. It may
+    /// be past while [`Self::open`] is true (a handover the checks trust,
+    /// or the window check off), and future while it is false (another
+    /// app owns the thread).
+    pub closes_at: Option<OffsetDateTime>,
+}
+
+/// A conversation of a page of [`Conversations::list_with_windows`]: its
+/// summary, as [`Conversations::list`] shows it, and its window.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListedConversation {
+    /// The conversation, under the cut.
+    pub summary: ConversationSummary,
+    /// Its window ([`Conversations::window`]'s answer).
+    pub window: ReplyWindow,
 }
 
 /// A page position: a time and an id, written `<Unix nanoseconds>:<id>`.
@@ -273,6 +354,8 @@ pub struct Conversations<'a> {
     inbox: Inbox,
     /// The inbox's store, read for what the library's inbox does not cut.
     store: Arc<dyn ConversationStore>,
+    /// The service's clock, the inbox's own: a read receipt's age.
+    clock: Arc<dyn Clock>,
     observer: &'a dyn Observer,
 }
 
@@ -311,13 +394,14 @@ impl<'a> Conversations<'a> {
             number.phone_number_id().clone(),
             Arc::clone(&store),
         )
-        .with_clock(clock)
+        .with_clock(Arc::clone(&clock))
         .with_reply_checks(checks);
         Ok(Self {
             authz,
             number,
             inbox,
             store,
+            clock,
             observer: &(),
         })
     }
@@ -354,6 +438,43 @@ impl<'a> Conversations<'a> {
         &self,
         page: &PageRequest,
     ) -> Result<Listing<ConversationSummary>, ServiceError> {
+        let listing = self.summaries(page).await?;
+        // Answered only if the binding held throughout the reads.
+        self.number.still_held(self.authz).await?;
+        Ok(listing)
+    }
+
+    /// [`Self::list`], each conversation with its window
+    /// ([`Self::window`]'s answer, read for each: a few reads of the store
+    /// per conversation), so that a list and the window route never
+    /// disagree (roadmap M2g).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::list`].
+    pub async fn list_with_windows(
+        &self,
+        page: &PageRequest,
+    ) -> Result<Listing<ListedConversation>, ServiceError> {
+        let Listing { items, next_after } = self.summaries(page).await?;
+        let mut listed = Vec::with_capacity(items.len());
+        for summary in items {
+            let window = self.reply_window(&summary.key).await?;
+            listed.push(ListedConversation { summary, window });
+        }
+        // Answered only if the binding held throughout the reads.
+        self.number.still_held(self.authz).await?;
+        Ok(Listing {
+            items: listed,
+            next_after,
+        })
+    }
+
+    /// The page [`Self::list`] answers, before the binding is read again.
+    async fn summaries(
+        &self,
+        page: &PageRequest,
+    ) -> Result<Listing<ConversationSummary>, ServiceError> {
         let limit = limit(page)?;
         let before = page.after.as_deref().map(read_position).transpose()?;
         let rows = self
@@ -381,8 +502,6 @@ impl<'a> Conversations<'a> {
             }
             shown.push(summary);
         }
-        // Answered only if the binding held throughout the reads.
-        self.number.still_held(self.authz).await?;
         Ok(Listing {
             items: shown,
             next_after,
@@ -492,44 +611,28 @@ impl<'a> Conversations<'a> {
     ) -> Result<Accepted, ServiceError> {
         let key = conversation_key(self.number.phone_number_id(), contact)?;
         let message = messages::reply_message(request, self.inbox.recipient(&key))?;
-        self.refuse_across_the_cut(&key, &message).await?;
+        if !sent_as_template(&message)
+            && let Some(cut) = self.window_cut()
+        {
+            let opened = self.window_opened_at(&key).await?;
+            if self.cut_refuses_free_form(&key, cut, opened).await? {
+                return Err(ServiceError::new(ErrorCode::CUSTOMER_SERVICE_WINDOW_CLOSED));
+            }
+        }
         match self.inbox.send(&key, message).await {
             Ok(response) => Accepted::from_response(response),
             Err(error) => Err(self.failed(&error).await),
         }
     }
 
-    /// On a number with a cut ([`crate::authz::history_from`]), a free-form
-    /// `message` to `key` (what the library's window check covers: not a
-    /// template, nor a Direct Send category Meta sends as one) whose window
-    /// was not opened from the cut on: `409 customer_service_window_closed`
-    /// (the [module](self)'s "The reply's checks"). Opened from the cut on:
-    /// the customer's last message ([`ConversationStore::last_inbound_at`])
-    /// or the latest window event (a call, a standby message) dated from
-    /// it, or, when the number trusts a handover, a handover to this app
-    /// recorded since (the library's checks then decide). Nothing is read
-    /// on a number without a cut or with the window check off.
-    async fn refuse_across_the_cut(
+    /// When the customer last opened `key`'s window, as recorded: the
+    /// latest of their last message ([`ConversationStore::last_inbound_at`])
+    /// and the conversation's latest window event (a call, a standby
+    /// message), as the library's `Inbox::window` reads them.
+    async fn window_opened_at(
         &self,
         key: &ConversationKey,
-        message: &OutboundMessage,
-    ) -> Result<(), ServiceError> {
-        let Some(cut) = self.number.history_from() else {
-            return Ok(());
-        };
-        let checks = self.inbox.reply_checks();
-        let as_template = matches!(message.content, MessageContent::Template(_))
-            || matches!(
-                message.category,
-                Some(
-                    DirectSendCategory::Utility
-                        | DirectSendCategory::Authentication
-                        | DirectSendCategory::Other(_)
-                )
-            );
-        if !checks.checks_window() || as_template {
-            return Ok(());
-        }
+    ) -> Result<Option<OffsetDateTime>, ServiceError> {
         let last = self.store.last_inbound_at(key).await?;
         let event = self
             .store
@@ -538,17 +641,200 @@ impl<'a> Conversations<'a> {
             .into_iter()
             .next()
             .map(|event| event.at);
-        if last.max(event).is_some_and(|at| visible(Some(cut), at)) {
-            return Ok(());
+        Ok(last.max(event))
+    }
+
+    /// The cut a free-form message must meet a window opened since: the
+    /// number's ([`crate::authz::history_from`]), when it has one and its
+    /// window is checked; `None` otherwise, and nothing is read.
+    fn window_cut(&self) -> Option<OffsetDateTime> {
+        self.number
+            .history_from()
+            .filter(|_| self.inbox.reply_checks().checks_window())
+    }
+
+    /// Whether, under the cut `cut` ([`Self::window_cut`]), a free-form
+    /// message to `key` (what the library's window check covers: not a
+    /// template, nor a Direct Send category Meta sends as one) meets a
+    /// window not opened from the cut on, and is refused `409
+    /// customer_service_window_closed` (the [module](self)'s "The reply's
+    /// checks"). Opened from the cut on: `opened` (the latest of the
+    /// customer's last message and the latest window event,
+    /// [`Self::window_opened_at`]) dated from it, or, when the number
+    /// trusts a handover, a handover to this app recorded since (the
+    /// library's checks then decide).
+    async fn cut_refuses_free_form(
+        &self,
+        key: &ConversationKey,
+        cut: OffsetDateTime,
+        opened: Option<OffsetDateTime>,
+    ) -> Result<bool, ServiceError> {
+        if opened.is_some_and(|at| visible(Some(cut), at)) {
+            return Ok(false);
         }
-        if checks.trusts_handover()
+        if self.inbox.reply_checks().trusts_handover()
             && self.store.thread_owner(key).await?.is_some_and(|owner| {
                 owner.owner == ThreadOwner::ThisApp && visible(Some(cut), owner.since)
             })
         {
-            return Ok(());
+            return Ok(false);
         }
-        Err(ServiceError::new(ErrorCode::CUSTOMER_SERVICE_WINDOW_CLOSED))
+        Ok(true)
+    }
+
+    /// The 24-hour window of `contact`'s conversation as a free-form reply
+    /// would meet it now ([`ReplyWindow`]): `open` when [`Self::reply`]
+    /// would send one to Meta (the same checks, in the same order, nothing
+    /// sent), and the window the customer opened from the binding's start
+    /// on. Asks Meta nothing.
+    ///
+    /// # Errors
+    ///
+    /// `422 invalid_request` on `contact`; the store failing, or the
+    /// binding moving while it was read: `503 storage_unavailable`.
+    pub async fn window(&self, contact: &str) -> Result<ReplyWindow, ServiceError> {
+        let key = conversation_key(self.number.phone_number_id(), contact)?;
+        let window = self.reply_window(&key).await?;
+        self.number.still_held(self.authz).await?;
+        Ok(window)
+    }
+
+    /// [`Self::window`] of `key`, before the binding is read again.
+    async fn reply_window(&self, key: &ConversationKey) -> Result<ReplyWindow, ServiceError> {
+        let from = self.number.history_from();
+        let opened = self.window_opened_at(key).await?;
+        // A window opened before the cut is the previous holder's: not
+        // even its time is shown.
+        let closes_at =
+            CustomerServiceWindow::from_last_inbound(opened.filter(|at| visible(from, *at)))
+                .closes_at();
+        if let Some(cut) = self.window_cut()
+            && self.cut_refuses_free_form(key, cut, opened).await?
+        {
+            return Ok(ReplyWindow {
+                open: false,
+                closes_at,
+            });
+        }
+        let open = match self.inbox.check_reply(key).await {
+            Ok(()) => true,
+            Err(Error::Validation(refusal))
+                if refusal.is_customer_service_window_closed()
+                    || refusal.is_thread_owned_elsewhere() =>
+            {
+                false
+            }
+            Err(error) => return Err(error.into()),
+        };
+        Ok(ReplyWindow { open, closes_at })
+    }
+
+    /// Message `message_id` of the number, as the inbox recorded it (the
+    /// store's lookup by id on the business number,
+    /// [`ConversationStore::message`]: never another number's), if it is
+    /// dated from the binding's start on. Asks Meta nothing.
+    ///
+    /// # Errors
+    ///
+    /// `422 invalid_request` on `message_id` ([`message_id`]); `404
+    /// not_found` for an id the number has no message of, or one dated
+    /// before the cut (a previous holder's message looks like a missing
+    /// one); `503 storage_unavailable` as for [`Self::window`].
+    pub async fn message(&self, message_id: &str) -> Result<StoredMessage, ServiceError> {
+        let id = self::message_id(message_id)?;
+        let found = self
+            .store
+            .message(self.number.phone_number_id(), &id)
+            .await?;
+        self.number.still_held(self.authz).await?;
+        let from = self.number.history_from();
+        found
+            .filter(|message| visible(from, message.timestamp))
+            .ok_or_else(ServiceError::not_found)
+    }
+
+    /// The merchant read `contact`'s conversation: its unread count reset
+    /// ([`ConversationStore::mark_read`]) and, with `notify_customer`, its
+    /// latest inbound message marked read on Meta first, with the number's
+    /// token (`messages/mark-message-as-read`: one request; the blue ticks
+    /// the customer sees). No receipt goes without `notify_customer`, nor
+    /// when the latest inbound message is dated before the cut, older than
+    /// [`READ_RECEIPT_MAX_AGE`] or not among the conversation's latest
+    /// [`UNREAD_SCAN`] messages; the count is reset all the same. A receipt
+    /// Meta refuses resets nothing. Replaying it sets the same state again.
+    ///
+    /// # Errors
+    ///
+    /// `422 invalid_request` on `contact`; Meta's refusal or failure of the
+    /// receipt, with its `details`; `503 storage_unavailable` as for
+    /// [`Self::window`] (checked before the receipt, and again after it,
+    /// before the reset: a number that moved while Meta answered resets
+    /// nothing).
+    pub async fn mark_read(
+        &self,
+        contact: &str,
+        notify_customer: bool,
+    ) -> Result<(), ServiceError> {
+        let key = conversation_key(self.number.phone_number_id(), contact)?;
+        let latest = if notify_customer {
+            self.latest_inbound(&key).await?
+        } else {
+            None
+        };
+        self.number.still_held(self.authz).await?;
+        if let Some(id) = latest {
+            let marked = self
+                .number
+                .client()
+                .messages(self.number.phone_number_id().clone())
+                .mark_read(&id)
+                .await;
+            if let Err(error) = marked {
+                return Err(self.failed(&error).await);
+            }
+            // The receipt took a round trip to Meta: the number may have
+            // moved meanwhile, and its conversation of `contact` be the
+            // next holder's to reset, not this one's.
+            self.number.still_held(self.authz).await?;
+        }
+        self.inbox.mark_read(&key).await?;
+        Ok(())
+    }
+
+    /// The id of `key`'s latest inbound message a read receipt may name:
+    /// the customer's newest among the conversation's latest
+    /// [`UNREAD_SCAN`] messages (a revoke's tombstone skipped), if it is
+    /// dated from the cut on and at most [`READ_RECEIPT_MAX_AGE`] old by
+    /// the service's clock.
+    async fn latest_inbound(
+        &self,
+        key: &ConversationKey,
+    ) -> Result<Option<MessageId>, ServiceError> {
+        let from = self.number.history_from();
+        let oldest = self.clock.now().saturating_sub(READ_RECEIPT_MAX_AGE);
+        let mut read = 0_usize;
+        let mut before = None;
+        while read < UNREAD_SCAN {
+            let want = MAX_PAGE_SIZE.min(UNREAD_SCAN - read);
+            let page = self.inbox.history(key, before.take(), want).await?;
+            read = read.saturating_add(page.len());
+            for message in &page {
+                if !visible(from, message.timestamp) || message.timestamp < oldest {
+                    return Ok(None);
+                }
+                if message.direction == Direction::Inbound && message.kind != StoredMessage::REVOKED
+                {
+                    return Ok(Some(message.id.clone()));
+                }
+            }
+            match page.last() {
+                Some(last) if page.len() == want => {
+                    before = Some((last.timestamp, last.id.clone()));
+                }
+                _ => break,
+            }
+        }
+        Ok(None)
     }
 
     /// The error of a failed reply: the number's `failed` (a `190` marks
@@ -561,6 +847,21 @@ impl<'a> Conversations<'a> {
         }
         api.with_details(error)
     }
+}
+
+/// Whether `message` is exempt from the window: a template, or a Direct
+/// Send category Meta sends as one (what the library's window check
+/// exempts).
+fn sent_as_template(message: &OutboundMessage) -> bool {
+    matches!(message.content, MessageContent::Template(_))
+        || matches!(
+            message.category,
+            Some(
+                DirectSendCategory::Utility
+                    | DirectSendCategory::Authentication
+                    | DirectSendCategory::Other(_)
+            )
+        )
 }
 
 /// `page.limit`, 1 to [`MAX_PAGE_SIZE`].

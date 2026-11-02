@@ -70,6 +70,16 @@ pub enum Operation {
     /// `reply_to_conversation`: a reply to a conversation's contact,
     /// checked against the window and the thread's owner first.
     ReplyToConversation,
+    /// `get_conversation_window`: a conversation's 24-hour window, as a
+    /// reply would meet it (roadmap M2g).
+    GetConversationWindow,
+    /// `mark_conversation_read`: a conversation's unread count reset, and
+    /// on request its latest inbound message marked read on Meta (roadmap
+    /// M2g).
+    MarkConversationRead,
+    /// `get_inbox_message`: a message of a number's inbox, by id (roadmap
+    /// M2g).
+    GetInboxMessage,
     /// `create_authentication_template`: an authentication template
     /// created or updated in one or more languages (roadmap M3c).
     CreateAuthenticationTemplate,
@@ -92,11 +102,31 @@ pub enum Operation {
     /// `set_two_step_pin`: a number's two-step verification PIN set
     /// (roadmap M3d).
     SetTwoStepPin,
+    /// `list_payment_configurations`: a WABA's payment configurations
+    /// (roadmap P2).
+    ListPaymentConfigurations,
+    /// `create_payment_configuration`: a payment configuration created in
+    /// a WABA.
+    CreatePaymentConfiguration,
+    /// `get_payment_configuration`: one payment configuration of a WABA,
+    /// by name.
+    GetPaymentConfiguration,
+    /// `delete_payment_configuration`: a payment configuration removed.
+    DeletePaymentConfiguration,
+    /// `regenerate_payment_oauth_link`: a new OAuth link for a payment
+    /// gateway configuration.
+    RegeneratePaymentOauthLink,
+    /// `get_payment`: the payment of an order, looked up by its
+    /// configuration and reference id.
+    GetPayment,
+    /// `refund_payment`: a refund of an order paid through a payment
+    /// gateway.
+    RefundPayment,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 40] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -119,6 +149,9 @@ impl Operation {
         Self::ListConversations,
         Self::ListConversationMessages,
         Self::ReplyToConversation,
+        Self::GetConversationWindow,
+        Self::MarkConversationRead,
+        Self::GetInboxMessage,
         Self::CreateAuthenticationTemplate,
         Self::IssueOtp,
         Self::VerifyOtp,
@@ -127,6 +160,13 @@ impl Operation {
         Self::RegisterNumber,
         Self::DeregisterNumber,
         Self::SetTwoStepPin,
+        Self::ListPaymentConfigurations,
+        Self::CreatePaymentConfiguration,
+        Self::GetPaymentConfiguration,
+        Self::DeletePaymentConfiguration,
+        Self::RegeneratePaymentOauthLink,
+        Self::GetPayment,
+        Self::RefundPayment,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -154,6 +194,9 @@ impl Operation {
             Self::ListConversations => "list_conversations",
             Self::ListConversationMessages => "list_conversation_messages",
             Self::ReplyToConversation => "reply_to_conversation",
+            Self::GetConversationWindow => "get_conversation_window",
+            Self::MarkConversationRead => "mark_conversation_read",
+            Self::GetInboxMessage => "get_inbox_message",
             Self::CreateAuthenticationTemplate => "create_authentication_template",
             Self::IssueOtp => "issue_otp",
             Self::VerifyOtp => "verify_otp",
@@ -162,6 +205,13 @@ impl Operation {
             Self::RegisterNumber => "register_number",
             Self::DeregisterNumber => "deregister_number",
             Self::SetTwoStepPin => "set_two_step_pin",
+            Self::ListPaymentConfigurations => "list_payment_configurations",
+            Self::CreatePaymentConfiguration => "create_payment_configuration",
+            Self::GetPaymentConfiguration => "get_payment_configuration",
+            Self::DeletePaymentConfiguration => "delete_payment_configuration",
+            Self::RegeneratePaymentOauthLink => "regenerate_payment_oauth_link",
+            Self::GetPayment => "get_payment",
+            Self::RefundPayment => "refund_payment",
         }
     }
 
@@ -196,8 +246,18 @@ impl Operation {
             }
             Self::ListConversations
             | Self::ListConversationMessages
-            | Self::ReplyToConversation => Scope::Inbox,
+            | Self::ReplyToConversation
+            | Self::GetConversationWindow
+            | Self::MarkConversationRead
+            | Self::GetInboxMessage => Scope::Inbox,
             Self::IssueOtp | Self::VerifyOtp => Scope::Otp,
+            Self::ListPaymentConfigurations
+            | Self::CreatePaymentConfiguration
+            | Self::GetPaymentConfiguration
+            | Self::DeletePaymentConfiguration
+            | Self::RegeneratePaymentOauthLink
+            | Self::GetPayment
+            | Self::RefundPayment => Scope::Payments,
         }
     }
 }

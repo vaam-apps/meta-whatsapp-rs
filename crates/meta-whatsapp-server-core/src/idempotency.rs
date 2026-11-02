@@ -70,6 +70,7 @@ use crate::store::IdempotencyRecords;
 /// | `upload_media` ([`Self::upload_media`]) | the number's id; the checked [`Upload`]'s MIME type, the file name sent to Meta, and the file's SHA-256 |
 /// | `create_template` ([`Self::create_template`]) | the WABA's id, as a [`WabaId`]; the JSON body, canonical as above |
 /// | `reply_to_conversation` ([`Self::reply_to_conversation`]) | the number's id; the conversation's contact, as the path named it decoded; the JSON body, canonical as above |
+/// | `mark_conversation_read` ([`Self::mark_conversation_read`]) | the number's id; the conversation's contact, as the path named it decoded; the JSON body, canonical as above (`null` for an empty one) |
 /// | `create_authentication_template` ([`Self::create_authentication_template`]) | the WABA's id; the JSON body, canonical as above |
 /// | `issue_otp` ([`Self::issue_otp`]) | the JSON body, canonical as above; the digest then keyed with the OTP pepper's fingerprint key (an HMAC-SHA256): the body names a phone number |
 /// | `request_verification_code` ([`Self::request_verification_code`]) | the number's id; the delivery method and the language, as a JSON object, canonical as above |
@@ -148,6 +149,23 @@ impl Fingerprint {
         )
     }
 
+    /// `mark_conversation_read` on `number`, of the conversation of
+    /// `contact` (as the path named it, decoded), with the JSON body the
+    /// request carried, `null` when it had none (roadmap M2g). A release
+    /// before it had no such operation, so there is no legacy fingerprint
+    /// to match.
+    pub fn mark_conversation_read(
+        number: &PhoneNumberId,
+        contact: &str,
+        body: &serde_json::Value,
+    ) -> Self {
+        Self::json(
+            Operation::MarkConversationRead,
+            &[("pn", number.as_str()), ("contact", contact)],
+            body,
+        )
+    }
+
     /// `create_authentication_template` in `waba`, with the JSON body the
     /// request carried (roadmap M3c). No release before it had the
     /// operation: no legacy fingerprint.
@@ -204,6 +222,40 @@ impl Fingerprint {
             &[("pn", number.as_str())],
             &serde_json::json!({}),
         )
+    }
+
+    /// `create_payment_configuration` in `waba`, with the JSON body the
+    /// request carried (roadmap P2; no legacy fingerprint).
+    pub fn create_payment_configuration(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreatePaymentConfiguration,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `regenerate_payment_oauth_link` of the configuration
+    /// `configuration_name` (as the path named it, decoded) in `waba`, with
+    /// the JSON body the request carried, `null` for none (roadmap P2).
+    pub fn regenerate_payment_oauth_link(
+        waba: &WabaId,
+        configuration_name: &str,
+        body: &serde_json::Value,
+    ) -> Self {
+        Self::json(
+            Operation::RegeneratePaymentOauthLink,
+            &[
+                ("waba_id", waba.as_str()),
+                ("configuration_name", configuration_name),
+            ],
+            body,
+        )
+    }
+
+    /// `refund_payment` on `number`, with the JSON body the request carried
+    /// (roadmap P2).
+    pub fn refund_payment(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::RefundPayment, &[("pn", number.as_str())], body)
     }
 
     /// `operation` with its named parameters `params` (in any order: they
@@ -650,6 +702,9 @@ impl Drop for Claim {
 pub struct Answer {
     status: u16,
     body: Vec<u8>,
+    /// What a key keeps for a repeat, when it is not `body`
+    /// ([`Self::keeping`]).
+    kept: Option<Vec<u8>>,
     replayed: bool,
 }
 
@@ -658,6 +713,7 @@ impl std::fmt::Debug for Answer {
         f.debug_struct("Answer")
             .field("status", &self.status)
             .field("body_len", &self.body.len())
+            .field("kept_len", &self.kept.as_ref().map(Vec::len))
             .field("replayed", &self.replayed)
             .finish()
     }
@@ -669,8 +725,19 @@ impl Answer {
         Self {
             status,
             body,
+            kept: None,
             replayed: false,
         }
+    }
+
+    /// Keep `kept` for a repeat instead of the body answered now: for an
+    /// answer holding a credential the records must not store (a payment
+    /// configuration's OAuth link, roadmap P2), the same answer without it.
+    /// A repeat then gets `kept`, never the body.
+    #[must_use]
+    pub fn keeping(mut self, kept: Vec<u8>) -> Self {
+        self.kept = Some(kept);
+        self
     }
 
     /// The status.
@@ -808,6 +875,7 @@ where
             Ok(Answer {
                 status,
                 body,
+                kept: None,
                 replayed: true,
             })
         }
@@ -816,10 +884,11 @@ where
                 claim
                     .settle(Outcome::Answered {
                         status: answer.status,
-                        body: &answer.body,
+                        body: answer.kept.as_deref().unwrap_or(&answer.body),
                     })
                     .await;
                 Ok(Answer {
+                    kept: None,
                     replayed: false,
                     ..answer
                 })
@@ -1323,6 +1392,21 @@ mod tests {
         assert_ne!(
             Fingerprint::json(Operation::SendMessage, &[("pn", "1")], &a),
             Fingerprint::json(Operation::CreateTemplate, &[("pn", "1")], &a)
+        );
+        // A conversation's read and a reply to it, on one contact and body
+        // (roadmap M2g); another contact is another read.
+        let read = serde_json::json!({"notify_customer": true});
+        assert_ne!(
+            Fingerprint::mark_conversation_read(&one, "US.1", &read),
+            Fingerprint::reply_to_conversation(&one, "US.1", &read)
+        );
+        assert_ne!(
+            Fingerprint::mark_conversation_read(&one, "US.1", &read),
+            Fingerprint::mark_conversation_read(&one, "US.2", &read)
+        );
+        assert_ne!(
+            Fingerprint::mark_conversation_read(&one, "US.1", &read),
+            Fingerprint::mark_conversation_read(&one, "US.1", &serde_json::Value::Null)
         );
         // The parameters, by name, in any order.
         assert_eq!(

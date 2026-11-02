@@ -8,7 +8,7 @@ its reasons and the owner's decisions, is
 [docs/design/server.md](../design/server.md); the rules it keeps are in
 [architecture.md](../architecture.md#service-meta-whatsapp-server).
 
-> **What exists today (milestones M1a, M1b and M1c, M2a, M2b and M3c).** Tenants, API
+> **What exists today (milestones M1a, M1b and M1c, M2a, M2b, M2g and M3c).** Tenants, API
 > keys, the admin API, attaching the platform's own WhatsApp Business
 > Accounts (WABAs), the numbers and business profile routes, vault key
 > rotation, sending messages (with idempotency keys), read receipts,
@@ -16,11 +16,12 @@ its reasons and the owner's decisions, is
 > and deletion, per-tenant rate limits, Meta's webhooks into the inbox
 > and the event outbox, polling events (`GET /v1/events`), one event by
 > id and live events as Server-Sent Events (M2b), the inbox's
-> conversations, history and replies (M2a), OTP codes with per-tenant
-> settings and authentication templates (M3c), health, metrics and the
-> OpenAPI document. **Not yet**: webhooks to your backend (M2), Embedded
-> Signup (M3), zero-tap templates and template previews (M3g), the
-> Docker image and the TypeScript client (M4).
+> conversations, history and replies (M2a), its window, read route and
+> messages by id (M2g), OTP codes with per-tenant settings and
+> authentication templates (M3c), health, metrics and the OpenAPI
+> document. **Not yet**: webhooks to your backend (M2), Embedded Signup
+> (M3), zero-tap templates and template previews (M3g), the Docker image
+> and the TypeScript client (M4).
 > [coverage.md](../coverage.md) tracks it.
 
 ## The shape of it
@@ -215,8 +216,10 @@ immutable. Three kinds of API key, all `wak_<key id>_<secret>`, sent as
 | admin key | nobody: `/v1/admin` only | operators |
 
 Tenant and platform keys carry scopes (`numbers`, `send`, `media`,
-`templates`, `inbox`, `events` and `otp` today; `webhooks` and `signup`
-for the routes to come). The service keeps only each key's id and the SHA-256 of its
+`templates`, `inbox`, `events`, `otp` and `payments` today; `webhooks`
+and `signup` for the routes to come). `payments` (roadmap P2) is new: a
+key minted before it does not carry it, so mint one that does for the
+payment routes. The service keeps only each key's id and the SHA-256 of its
 secret, and shows the key once. Rotate by minting a new one, deploying
 it, then revoking the old one: revocation and suspension take effect on
 the next request, on every replica.
@@ -369,7 +372,9 @@ concluding the message never went out.
   uploaded `id` or `https://` `link` (Meta fetches it, the service never
   does); `location`, `contacts`, `reaction`; `template` (Meta's object:
   `name`, `language`, `components`); `interactive` of type `button`,
-  `list` or `cta_url`. Each is written as Meta's page for it writes it.
+  `list` or `cta_url`, or the payment messages `order_details` and
+  `order_status` ([Payments](#payments)). Each is written as Meta's page
+  for it writes it.
   Anything else (Direct Send included) is `422 unsupported_message_type`.
   Every limit Meta documents is checked before the request (`422
   invalid_request` with `field`).
@@ -560,24 +565,102 @@ The lookup has limits to know about:
   deletion by id reads 1 to 5 pages, then deletes. Lists answered from
   the cache cost nothing, lookups are never cached.
 
+## Payments
+
+India's WhatsApp Payments and Brazil's payment messages (roadmap P2;
+Meta's `payments/payments-in/*` and `payments/payments-br/*` pages).
+
+- **The messages** are sends, scope `send`: `interactive` of type
+  `order_details` (an order to review and pay, `action.name`
+  `review_and_pay`) or `order_status` (its new status, `review_order`),
+  with `action.parameters` exactly as Meta's pages write them (a UPI
+  intent link, a payment link, a payment gateway's configuration in
+  India; a Pix code, a payment link, a Boleto or a one-click card in
+  Brazil). The library reads them, nothing dropped (a key it does not
+  know is `422` on its path), and checks every rule of the order's
+  currency, `INR` India's and `BRL` Brazil's (the total equation, the
+  offsets, the `reference_id`'s alphabet and length, …), before the
+  request. An `order_status` names no currency on the wire, so it is
+  checked by Brazil's rules, the wider: an India order's `pending`
+  status or `payment` update is Meta's to refuse. The header of an
+  `order_details` is an image (`id` or `https://` `link`); the image's
+  `provider` some examples print is in no table and refused. The order
+  templates and Brazil's payment request button go through `type`
+  `template`, as before.
+- **The routes**, scope `payments`, India's alone (Brazil documents no
+  configuration and no lookup: its payments are your bank's or PSP's):
+
+| Route | Does |
+| --- | --- |
+| `GET /v1/wabas/{waba_id}/payment-configurations` | the WABA's payment configurations |
+| `POST /v1/wabas/{waba_id}/payment-configurations` | create one (Meta's body: `configuration_name`, `provider_name` among `upi_vpa`, `razorpay`, `payu`, `zaakpay`, `merchant_category_code`, `purpose_code`, `merchant_vpa`, `redirect_url`); `201` with the gateway's OAuth link |
+| `GET`, `DELETE /v1/wabas/{waba_id}/payment-configurations/{configuration_name}` | one; remove it (send no order naming it first) |
+| `POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link` | a new OAuth link (`{"redirect_url": …}`, optional) |
+| `GET /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}` | an order's payment, its attempts and refunds |
+| `POST /v1/numbers/{pn}/payments/refunds` | refund an order (Meta's body: `reference_id`, `speed`, `payment_config_id`, `amount` with `currency` `INR`, `value` and `offset`, as strings or numbers) |
+
+- **Times** are RFC 3339 strings under Meta's names
+  (`created_timestamp`, `expiration`), as every time of the service.
+- **The OAuth link is a credential**: it links whatever gateway account
+  opens it. Give it to the merchant only; its answers carry
+  `Cache-Control: no-store`. A creation and a new link take
+  an `Idempotency-Key`, and the answer the service keeps for a repeat has
+  no `oauth_url` (`null`): the records never store the link; ask for a
+  new one.
+- **A refund is never made twice**: it requires an `Idempotency-Key`
+  (without one, `428 idempotency_key_required`, nothing asked of Meta:
+  design D56), the library never replays it after a timeout, and a `504` says
+  `may_have_been_sent: true`. Look the payment up (its `refunds`) or
+  repeat with the same key; never refund again under a new key. The
+  amount is not compared with what was paid. A refund, a creation, a
+  removal and a new link are audit events naming the key and the
+  configuration; a refund's also names the number, the order's
+  `reference_id`, the amount and Meta's refund id, and one cut by a
+  timeout is audited with the `outcome` `unknown` (design D58).
+- **The configuration a lookup or a refund names is looked for in the
+  number's own WABA first** (one request more): a name it has none of is
+  `404 not_found`, and the payment is neither read nor refunded (as is
+  an answer naming another configuration; when Meta fails on that
+  check, the answer says `may_have_been_sent: false`, and a refund's key
+  is free to repeat). A configuration's name is
+  one path segment: one holding `/` or `\` is `422 invalid_request`
+  before any request (design D51). Meta asks you to read the payment
+  here rather than trust the webhook alone.
+- **Webhooks**: `payment_configuration_updated` events (a configuration's
+  status), India's payment status in `status_updated` events
+  (`data.status.type` `payment`, with `data.status.payment`), Brazil's
+  `payment_method` reply in `message_received` events.
+- **Meta's terms**: until the WABA accepted the WhatsApp Payments terms
+  of service, Meta refuses (`403 permission`, `131005`; a send
+  `403 payment`, `134011`), and `error.graph.details` carries Meta's
+  link, which the merchant opens. No route of the service accepts them.
+- Not yet (roadmap P1d): India's checkout button templates, the data
+  endpoint of a configuration, the alpha third-party validation.
+
 ## The inbox
 
 What the service received for a tenant's number, read and answered over
-HTTP (scope `inbox`; roadmap M2a). The inbox is the one the webhook
+HTTP (scope `inbox`; roadmaps M2a and M2g). The inbox is the one the webhook
 pipeline records into: a customer's message is there once Meta's
 delivery is answered.
 
 | Route | Does |
 | --- | --- |
-| `GET /v1/numbers/{pn}/conversations` | the number's conversations, most recent activity first: `contact` (the customer's BSUID, else their `wa_id`, else a group's id), `last_message_at`, `last_inbound_at`, `last_text`, `unread` |
+| `GET /v1/numbers/{pn}/conversations` | the number's conversations, most recent activity first: `contact` (the customer's BSUID, else their `wa_id`, else a group's id), `last_message_at`, `last_inbound_at`, `last_text`, `unread`, `window` (as the window route answers it) |
 | `GET /v1/numbers/{pn}/conversations/{contact}/messages` | one conversation's history, newest first: `id`, `direction`, `kind`, `text`, `payload` (the message as Meta sent it, or as it was sent), `status`, `timestamp`, `status_at`, `error` |
+| `GET /v1/numbers/{pn}/conversations/{contact}/window` | the conversation's 24-hour window: `open` (whether a free-form reply would go to Meta now) and `closes_at` (when the window the customer opened closes or closed; `null`: templates only) |
 | `POST /v1/numbers/{pn}/conversations/{contact}/messages` | a reply to the conversation's contact: a message's content as `POST /v1/numbers/{pn}/messages` takes it, without `to`; `202` with `message_id`, recorded `accepted` until its status events move it on |
+| `POST /v1/numbers/{pn}/conversations/{contact}/read` | the merchant read the conversation: `unread` back to 0; with `{"notify_customer": true}`, the latest message the customer sent is marked read on Meta first (the blue ticks); `204` |
+| `GET /v1/numbers/{pn}/messages/{message_id}` | one message of the number's inbox, by id: `{contact, message}`, `message` as the history answers it; `404` for an id the number has none of |
 
 ```bash
 curl -sS "$WA_SERVER/v1/numbers/106540352242922/conversations?limit=20" -H "Authorization: Bearer $KEY"
 curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.13491208655302741918/messages" \
   -H "Authorization: Bearer $KEY" -H "Idempotency-Key: ticket-881:reply-1" \
   -H "Content-Type: application/json" -d '{"type": "text", "text": {"body": "It ships tomorrow."}}'
+curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.13491208655302741918/read" \
+  -H "Authorization: Bearer $KEY" -H "Idempotency-Key: ticket-881:read-1" \
+  -H "Content-Type: application/json" -d '{"notify_customer": true}'
 ```
 
 - Lists take `limit` (1 to 100, 50 by default) and `cursor`, and answer
@@ -593,6 +676,28 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.1349120
   `WA_SERVER_INBOX_REPLY_CHECKS` turns a check off per number; Meta then
   decides (`131047`, `131070`). A reply takes an `Idempotency-Key`, as a
   send does, and its rate class is the writes'.
+- **The window route runs those checks with nothing sent**: `open` is
+  `true` exactly when a free-form reply would go to Meta now, so a UI
+  choosing between the composer and a template picker never disagrees
+  with the reply's `409`. `closes_at` is the window as recorded; it can be
+  past while `open` is true (a handover to your app, or the window check
+  turned off for the number) and ahead while it is false (another app
+  owns the thread). The list carries the same `window` for each
+  conversation, at a few reads of the inbox each.
+- **The read route** resets `unread` and, with `notify_customer`, sends
+  Meta one read receipt with the number's token, for the latest message
+  the customer sent (Meta marks the earlier ones of a one-to-one
+  conversation with it; in a group it marks only that one). No receipt
+  goes for a message older than Meta's 30 days; the count is reset all the
+  same. A receipt Meta refuses answers its error and resets nothing, and
+  so does one Meta answers after the number moved (`503`). It
+  takes an `Idempotency-Key`: a repeat with the same key and body gets
+  the kept answer and sends no second receipt, unless the first was
+  answered `503 storage_unavailable` (the receipt went, the reset
+  failed), whose key is released, so its repeat sends the receipt again.
+  A `504 timeout` is kept: the count is unchanged, and a new key resets
+  it (and sends the receipt again). Its rate class is the writes'; the
+  window and a message by id are reads.
 - **A number that moved to the tenant from another one shows nothing
   from before its binding** (design D10: hidden, never purged): no
   conversation whose latest message is older, no message dated before
@@ -609,7 +714,10 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.1349120
   needs a window the customer opened since the cut (a message, a call):
   one the previous holder's customer opened is
   `409 customer_service_window_closed`, nothing sent; send a template to
-  start the conversation.
+  start the conversation. On such a number the window route shows no
+  window the previous holder's customer opened (`open: false`,
+  `closes_at: null`), a message by id dated before the cut is `404` like a
+  missing one, and the read route sends no receipt for one.
 - Reads answer `409 reconnect_required` or `number_not_connected` for a
   number whose token does not work, as every number route does.
 
@@ -1126,8 +1234,7 @@ SKIP token.wabas: the configuration is refused
 
 ## Not yet
 
-The inbox's window and read routes and a message by id (M2g),
-webhooks-out and the service's own number events (M2); Embedded Signup,
+Webhooks-out and the service's own number events (M2); Embedded Signup,
 disconnection by Meta's webhooks and coexistence sync (M3); zero-tap
 authentication templates and template previews (M3g); the
 Docker image, a Compose file, the documents route and the TypeScript
