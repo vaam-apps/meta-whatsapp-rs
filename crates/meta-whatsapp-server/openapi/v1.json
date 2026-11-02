@@ -4192,6 +4192,331 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/payments/refunds": {
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/payments/refunds`: refund an order paid through a\npayment gateway, in full or in part.",
+        "operationId": "refund_payment",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "The phone number id that sent the `order_details` message",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Required: 1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never refund twice (repeat a refund under the same key, never a new one)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PaymentRefundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Asked of the gateway; its status may be `pending`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefundCreated"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or `payment_config_id` names no configuration of its WABA (nothing refunded)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (with `field`: `reference_id`, `amount.value`, `amount.offset`, …), Meta's `invalid_parameter`, `idempotency_key_reused`: nothing refunded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`idempotency_key_required`: no `Idempotency-Key`, nothing refunded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the refund may have been made (`may_have_been_sent: true`): look the payment up, or repeat with the same key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/payments/{configuration_name}/{reference_id}": {
+      "get": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}`:\nthe payment of an order sent through a payment gateway.",
+        "operationId": "get_payment",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "The phone number id that sent the `order_details` message",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "configuration_name",
+            "in": "path",
+            "description": "The order's payment configuration, percent-encoded: one of the number's WABA's",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "reference_id",
+            "in": "path",
+            "description": "The order's `reference_id`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The order's payment, its attempts and refunds: read it here rather than trust the webhook alone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no configuration of that name in its WABA (the payment is not asked for)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `configuration_name` or `reference_id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed (its lookup errors are not Graph errors: `upstream`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/profile": {
       "get": {
         "tags": [
@@ -5000,6 +5325,758 @@
           },
           "504": {
             "description": "`timeout`: nothing deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/payment-configurations": {
+      "get": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/payment-configurations`: the WABA's payment\nconfigurations.",
+        "operationId": "list_payment_configurations",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every payment configuration of the WABA",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentConfigurationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`permission`: the WhatsApp Payments terms of service not accepted yet, their link in `details`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/payment-configurations`: create a payment\nconfiguration, checked first.",
+        "operationId": "create_payment_configuration",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never create twice (a repeat's answer has no `oauth_url`)",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePaymentConfiguration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created: a gateway's carries the OAuth link the merchant opens to link their account (a credential: to the merchant only); `upi_vpa`'s has none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentOauthLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`permission`: the terms of service, their link in `details`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (with `field`: `configuration_name`, `provider_name`, …), Meta's `invalid_parameter`, `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the configuration may have been created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/payment-configurations/{configuration_name}": {
+      "get": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/payment-configurations/{configuration_name}`:\none configuration.",
+        "operationId": "get_payment_configuration",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "configuration_name",
+            "in": "path",
+            "description": "The configuration's name, percent-encoded: one path segment (no `/` or `\\`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentConfiguration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no configuration of that name in it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `configuration_name`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "`DELETE /v1/wabas/{waba_id}/payment-configurations/{configuration_name}`:\nremove a configuration.",
+        "operationId": "delete_payment_configuration",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "configuration_name",
+            "in": "path",
+            "description": "The configuration's name, percent-encoded: one path segment (no `/` or `\\`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed: send no more orders naming it (their buyers could not pay)"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `configuration_name`, or Meta's `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link": {
+      "post": {
+        "tags": [
+          "payments"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link`:\na new OAuth link for a gateway configuration.",
+        "operationId": "regenerate_payment_oauth_link",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "configuration_name",
+            "in": "path",
+            "description": "The configuration's name, percent-encoded: one path segment (no `/` or `\\`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never ask twice (a repeat's answer has no `oauth_url`)",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional; `redirect_url` is where the merchant lands once linked",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/PaymentOauthLinkRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A new link (a credential: to the merchant only)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentOauthLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`configuration_name`, `redirect_url`, `body`), Meta's `invalid_parameter`, `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: a link may have been issued",
             "content": {
               "application/json": {
                 "schema": {
@@ -6414,6 +7491,53 @@
         ],
         "description": "A coordinate in decimal degrees: Meta's pages write it as a string\n(`\"37.44216251868683\"`); a JSON number is accepted too."
       },
+      "CreatePaymentConfiguration": {
+        "type": "object",
+        "description": "A payment configuration to create, as Meta's page writes it\n(`payments/payments-in/onboarding-apis`, \"Create a payment\nconfiguration\").",
+        "required": [
+          "configuration_name",
+          "provider_name"
+        ],
+        "properties": {
+          "configuration_name": {
+            "type": "string",
+            "description": "Its name, what orders name it by: 1 to 60 characters, one path\nsegment (no `/` or `\\`)."
+          },
+          "merchant_category_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Merchant category code (`0000`)."
+          },
+          "merchant_vpa": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The merchant's UPI handle (`upi_vpa`)."
+          },
+          "provider_name": {
+            "type": "string",
+            "description": "`upi_vpa`, `razorpay`, `payu` or `zaakpay`."
+          },
+          "purpose_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Purpose code (`00`)."
+          },
+          "redirect_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the merchant lands once the gateway is linked."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateTenant": {
         "type": "object",
         "description": "`POST /v1/admin/tenants`.",
@@ -6903,7 +8027,7 @@
       },
       "InteractiveAction": {
         "type": "object",
-        "description": "An interactive message's `action`: `buttons` for `button`; `button` and\n`sections` for `list`; `name` (`cta_url`) and `parameters` for\n`cta_url`.",
+        "description": "An interactive message's `action`: `buttons` for `button`; `button` and\n`sections` for `list`; `name` (`cta_url`) and `parameters` for\n`cta_url`; `name` (`review_and_pay`, `review_order`) and `parameters`\nfor `order_details` and `order_status`.",
         "properties": {
           "button": {
             "type": [
@@ -6927,13 +8051,17 @@
               "string",
               "null"
             ],
-            "description": "`cta_url`."
+            "description": "`cta_url`; `review_and_pay` for `order_details`, `review_order`\nfor `order_status`."
           },
           "parameters": {
-            "oneOf": [
+            "anyOf": [
               {
                 "$ref": "#/components/schemas/CtaUrlParameters",
                 "description": "The URL button."
+              },
+              {
+                "$ref": "#/components/schemas/OrderParameters",
+                "description": "An `order_details` or `order_status` message's parameters."
               },
               {
                 "type": "null"
@@ -6955,7 +8083,7 @@
       },
       "InteractiveContent": {
         "type": "object",
-        "description": "`interactive`, as Meta writes it: `button`, `list` or `cta_url`.",
+        "description": "`interactive`, as Meta writes it: `button`, `list`, `cta_url`,\n`order_details` or `order_status`.",
         "required": [
           "type",
           "body",
@@ -7073,7 +8201,9 @@
         "enum": [
           "button",
           "list",
-          "cta_url"
+          "cta_url",
+          "order_details",
+          "order_status"
         ]
       },
       "IssueOtp": {
@@ -7270,6 +8400,7 @@
           "classification_limit_reached",
           "too_many_requests",
           "too_many_streams",
+          "idempotency_key_required",
           "not_found",
           "nothing_to_resume",
           "cursor_expired",
@@ -7772,6 +8903,14 @@
           "disconnected"
         ]
       },
+      "OrderParameters": {
+        "type": "object",
+        "description": "A payment message's `action.parameters` (`order_details`,\n`order_status`), in Meta's JSON as the payments pages write it\n(`payments/payments-in/pg`, `upi-intent`, `payment-links`,\n`payments/payments-br/orders` and its pages): read into the library's\npayment types with no key dropped, and checked by the order's\ncurrency's rules (`INR` India's, `BRL` Brazil's) before any request.",
+        "additionalProperties": {},
+        "propertyNames": {
+          "type": "string"
+        }
+      },
       "OtpIssueLimit": {
         "type": "object",
         "description": "An issue limit: at most `max_issues` codes per recipient and purpose in\nany rolling `window_seconds`.",
@@ -8018,6 +9157,467 @@
           "not_found"
         ]
       },
+      "Payment": {
+        "type": "object",
+        "description": "The payment of an order (`payments/payments-in/pg`, \"Step 5\"), with\nthe gateway fields the `order_details` message carried, as it carried\nthem (only those it set).",
+        "required": [
+          "reference_id",
+          "status",
+          "currency",
+          "amount",
+          "transactions"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/PaymentAmount",
+            "description": "The amount to pay."
+          },
+          "currency": {
+            "type": "string",
+            "description": "`INR`."
+          },
+          "notes": {
+            "type": "object",
+            "description": "Razorpay's `notes`.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "receipt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Razorpay's `receipt`."
+          },
+          "reference_id": {
+            "type": "string",
+            "description": "The order's `reference_id`."
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending` (no attempt yet, or only failed ones) or `captured`."
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentTransaction"
+            },
+            "description": "The attempts; empty before the first."
+          }
+        },
+        "additionalProperties": {
+          "type": "string",
+          "description": "`BillDesk`'s `additional_info1` to `additional_info7`, `PayU`'s\n`udf1` to `udf4`, Zaakpay's `extra1` and `extra2`, by name."
+        }
+      },
+      "PaymentAmount": {
+        "type": "object",
+        "description": "An amount: `value` is the amount times `offset` (₹12.34 is `value`\n1234, `offset` 100).",
+        "required": [
+          "value",
+          "offset"
+        ],
+        "properties": {
+          "offset": {
+            "type": "integer",
+            "format": "int32",
+            "description": "`100` for INR.",
+            "minimum": 0
+          },
+          "value": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The amount times `offset`.",
+            "minimum": 0
+          }
+        }
+      },
+      "PaymentCode": {
+        "type": "object",
+        "description": "A code with its description (a merchant category or purpose code).",
+        "required": [
+          "code",
+          "description"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The code (`0000`)."
+          },
+          "description": {
+            "type": "string",
+            "description": "What it means."
+          }
+        }
+      },
+      "PaymentConfiguration": {
+        "type": "object",
+        "description": "A payment configuration of a WABA (`payments/payments-in/onboarding-apis`).",
+        "required": [
+          "configuration_name",
+          "merchant_category_code",
+          "purpose_code",
+          "status",
+          "provider_mid",
+          "provider_name",
+          "merchant_vpa",
+          "created_timestamp",
+          "updated_timestamp"
+        ],
+        "properties": {
+          "configuration_name": {
+            "type": "string",
+            "description": "Its name: what an `order_details` message's\n`payment_configuration` names."
+          },
+          "created_timestamp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Created at (RFC 3339)."
+          },
+          "merchant_category_code": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentCode",
+                "description": "Merchant category code."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "merchant_vpa": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The merchant's UPI handle."
+          },
+          "provider_mid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The gateway's merchant id."
+          },
+          "provider_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provider (`upi_vpa`, `razorpay`, `payu`, `zaakpay`), lower\ncase; another value as Meta wrote it."
+          },
+          "purpose_code": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentCode",
+                "description": "Purpose code."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "`Active`, `Needs_Connecting` (link the gateway: a new OAuth link)\nor `Needs_Testing`, as Meta's tables write them; another value as\nMeta wrote it."
+          },
+          "updated_timestamp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Last updated at (RFC 3339)."
+          }
+        }
+      },
+      "PaymentConfigurationList": {
+        "type": "object",
+        "description": "A WABA's payment configurations (Meta documents no pages).",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentConfiguration"
+            },
+            "description": "The configurations."
+          }
+        }
+      },
+      "PaymentList": {
+        "type": "object",
+        "description": "A payment lookup's answer: Meta's `payments`.",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Payment"
+            },
+            "description": "The payments of the order (one, as Meta's example shows)."
+          }
+        }
+      },
+      "PaymentMethod": {
+        "type": "object",
+        "description": "How the buyer paid.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "`upi`, `card`, `wallet` or `netbanking`."
+          }
+        }
+      },
+      "PaymentOauthLink": {
+        "type": "object",
+        "description": "The OAuth link that links a payment configuration to the merchant's\ngateway account. A credential: give it to the merchant only.",
+        "required": [
+          "oauth_url",
+          "expiration"
+        ],
+        "properties": {
+          "expiration": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the link expires (RFC 3339)."
+          },
+          "oauth_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The link (`null` for a `upi_vpa` configuration, and in an answer\nreplayed for an `Idempotency-Key`: the service does not keep it)."
+          }
+        }
+      },
+      "PaymentOauthLinkRequest": {
+        "type": "object",
+        "description": "A new OAuth link's request: optional.",
+        "properties": {
+          "redirect_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the merchant lands once the gateway is linked."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PaymentRefund": {
+        "type": "object",
+        "description": "A refund of a transaction.",
+        "required": [
+          "id",
+          "amount",
+          "speed_processed",
+          "status",
+          "created_timestamp",
+          "updated_timestamp"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/PaymentAmount",
+            "description": "How much."
+          },
+          "created_timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Created at (RFC 3339)."
+          },
+          "id": {
+            "type": "string",
+            "description": "The refund's id."
+          },
+          "speed_processed": {
+            "type": "string",
+            "description": "`instant` or `normal`."
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending`, `success` or `failed`."
+          },
+          "updated_timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last updated at (RFC 3339)."
+          }
+        }
+      },
+      "PaymentRefundRequest": {
+        "type": "object",
+        "description": "A refund to ask for, as Meta's page writes it\n(`payments/payments-in/pg`, \"Step 8: Refunds\").",
+        "required": [
+          "reference_id",
+          "payment_config_id",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/RefundAmount",
+            "description": "How much to refund."
+          },
+          "payment_config_id": {
+            "type": "string",
+            "description": "The configuration the order was paid through, by name (it must be\none of the number's WABA's)."
+          },
+          "reference_id": {
+            "type": "string",
+            "description": "The order's `reference_id`."
+          },
+          "speed": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`instant` or `normal`; the gateway decides."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PaymentTransaction": {
+        "type": "object",
+        "description": "One payment attempt.",
+        "required": [
+          "id",
+          "pg_transaction_id",
+          "type",
+          "status",
+          "created_timestamp",
+          "updated_timestamp",
+          "amount",
+          "order_amount",
+          "currency",
+          "method",
+          "error",
+          "refunds"
+        ],
+        "properties": {
+          "amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentAmount",
+                "description": "The amount paid, when Meta gives it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Created at (RFC 3339)."
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The currency, when Meta gives it."
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentTransactionError",
+                "description": "Why it failed; not always given."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "description": "The gateway's order id."
+          },
+          "method": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentMethod",
+                "description": "How the buyer paid; may be absent for a failed attempt."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "order_amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentAmount",
+                "description": "The order's amount, when Meta gives it."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pg_transaction_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The gateway's payment id."
+          },
+          "refunds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentRefund"
+            },
+            "description": "Its refunds."
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending`, `success` or `failed`."
+          },
+          "type": {
+            "type": "string",
+            "description": "The gateway: `billdesk`, `razorpay`, `payu` or `zaakpay`."
+          },
+          "updated_timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Last updated at (RFC 3339)."
+          }
+        }
+      },
+      "PaymentTransactionError": {
+        "type": "object",
+        "description": "Why an attempt failed, as the gateway says.",
+        "required": [
+          "code",
+          "reason"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The gateway's code."
+          },
+          "reason": {
+            "type": "string",
+            "description": "The gateway's reason."
+          }
+        }
+      },
       "Profile": {
         "type": "object",
         "description": "A business profile.",
@@ -8144,6 +9744,68 @@
           }
         },
         "additionalProperties": false
+      },
+      "RefundAmount": {
+        "type": "object",
+        "description": "A refund's amount.",
+        "required": [
+          "currency",
+          "value",
+          "offset"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string",
+            "description": "`INR`."
+          },
+          "offset": {
+            "$ref": "#/components/schemas/RefundAmountPart",
+            "description": "`100` for INR."
+          },
+          "value": {
+            "$ref": "#/components/schemas/RefundAmountPart",
+            "description": "A positive integer: the amount times `offset`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RefundAmountPart": {
+        "oneOf": [
+          {
+            "type": "integer",
+            "format": "int64",
+            "description": "A JSON number.",
+            "minimum": 0
+          },
+          {
+            "type": "string",
+            "description": "A string of digits, as Meta's page writes it."
+          }
+        ],
+        "description": "An amount's `value` or `offset`: a string of digits, as the refund's\npage writes it (`\"100\"`), or a JSON number."
+      },
+      "RefundCreated": {
+        "type": "object",
+        "description": "A refund asked for (`payments/payments-in/pg`, \"Step 8\").",
+        "required": [
+          "id",
+          "status",
+          "speed_processed"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The refund's id."
+          },
+          "speed_processed": {
+            "type": "string",
+            "description": "`instant` or `normal`: the gateway decides."
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending`, `failed` or `completed`."
+          }
+        }
       },
       "Reply": {
         "type": "object",
@@ -8343,7 +10005,8 @@
           "webhooks",
           "signup",
           "otp",
-          "numbers"
+          "numbers",
+          "payments"
         ]
       },
       "SendMessage": {
@@ -9021,6 +10684,10 @@
     {
       "name": "templates",
       "description": "Listing, creating and deleting message templates (scope `templates`)"
+    },
+    {
+      "name": "payments",
+      "description": "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"
     },
     {
       "name": "inbox",

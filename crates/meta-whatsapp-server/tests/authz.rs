@@ -72,6 +72,7 @@ fn call(operation: &common::Operation, key: &str, tenant: Option<&str>) -> Call 
 /// M1.3. Decisive: step 4 (ownership) of the authorization order. Without
 /// it, B's call reads A's token from the vault.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // the routes it must find, then every call
 async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read() {
     let h = two_tenants().await;
     let b_key = h.tenant_key(B, &ALL_SCOPES).await;
@@ -114,6 +115,27 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::POST, "/v1/wabas/{waba_id}/templates"),
         (Method::DELETE, "/v1/wabas/{waba_id}/templates"),
         (Method::GET, "/v1/wabas/{waba_id}/templates/{id}"),
+        // Roadmap P2: a payment configuration is its WABA's; a payment and
+        // a refund their number's.
+        (Method::GET, "/v1/wabas/{waba_id}/payment-configurations"),
+        (Method::POST, "/v1/wabas/{waba_id}/payment-configurations"),
+        (
+            Method::GET,
+            "/v1/wabas/{waba_id}/payment-configurations/{configuration_name}",
+        ),
+        (
+            Method::DELETE,
+            "/v1/wabas/{waba_id}/payment-configurations/{configuration_name}",
+        ),
+        (
+            Method::POST,
+            "/v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
+        ),
+        (
+            Method::GET,
+            "/v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
+        ),
+        (Method::POST, "/v1/numbers/{pn}/payments/refunds"),
     ] {
         assert!(
             routes
@@ -149,7 +171,7 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
             checked += 1;
         }
     }
-    assert!(checked >= 28, "only {checked} calls");
+    assert!(checked >= 42, "only {checked} calls");
     assert!(h.graph.requests().is_empty(), "no call reached Meta");
     assert_eq!(h.graph.remaining(), 0);
     // Nothing of A's changed.

@@ -74,6 +74,20 @@ const PAGED: Tenant = Tenant {
     pn: "106540352242926",
     token: "EAAG-the-paged-tenants-token",
 };
+/// The tenants of the payment services' case (roadmap P2): the
+/// capabilities' holder, and the tenant whose caller is handed them.
+const PAYER: Tenant = Tenant {
+    id: "pay-holder",
+    waba: "102290129349980",
+    pn: "106540352249980",
+    token: "EAAG-the-payers-token",
+};
+const PAYERS_RIVAL: Tenant = Tenant {
+    id: "pay-rival",
+    waba: "102290129349981",
+    pn: "106540352249981",
+    token: "EAAG-the-payers-rivals-token",
+};
 /// templates/template-management, "Get all templates": its first
 /// template's id and name.
 const TEMPLATE_ID: &str = "1304694804498707";
@@ -85,6 +99,41 @@ pub async fn run(backend: &dyn Backend) {
     the_template_services_send_metas_documented_requests(backend).await;
     a_refused_creation_or_deletion_drops_the_wabas_cached_pages(backend).await;
     a_template_id_past_the_lookups_five_pages_is_not_found(backend).await;
+    the_payment_services_open_for_their_own_tenant_only(backend).await;
+}
+
+/// Roadmap P2, beside the template services' own (they share this
+/// module's tenants and vault): the payment services open only for a
+/// caller of the capability's own tenant. B's caller handed A's WABA or
+/// number (a capability `Authorizer` made for A) gets `404 not_found`,
+/// with no request sent, and A's own caller opens them. Decisive: the
+/// tenant's check of `PaymentConfigurations::new` and of `Payments::new`.
+pub async fn the_payment_services_open_for_their_own_tenant_only(backend: &dyn Backend) {
+    use crate::payments::{PaymentConfigurations, Payments};
+    let service = service(backend);
+    let holder = tenant(backend, &service, PAYER).await;
+    let other = tenant(backend, &service, PAYERS_RIVAL).await;
+    let holders_waba = service
+        .authz
+        .owned_waba(&holder, WabaId::new(PAYER.waba).unwrap())
+        .await
+        .unwrap();
+    let holders_number = service
+        .authz
+        .owned_number(&holder, PhoneNumberId::new(PAYER.pn).unwrap())
+        .await
+        .unwrap();
+    assert!(PaymentConfigurations::new(&service.authz, &holder, &holders_waba).is_ok());
+    assert!(Payments::new(&service.authz, &holder, &holders_number).is_ok());
+    let refused = PaymentConfigurations::new(&service.authz, &other, &holders_waba)
+        .map(drop)
+        .unwrap_err();
+    assert_eq!((refused.status(), refused.code()), (404, "not_found"));
+    let refused = Payments::new(&service.authz, &other, &holders_number)
+        .map(drop)
+        .unwrap_err();
+    assert_eq!((refused.status(), refused.code()), (404, "not_found"));
+    assert!(service.script.requests().is_empty(), "a request was sent");
 }
 
 /// A tenant of a case: its id, its WABA and number, and its token.

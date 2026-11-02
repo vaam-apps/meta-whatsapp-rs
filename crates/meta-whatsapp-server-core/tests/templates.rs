@@ -56,3 +56,10 @@ async fn a_template_id_past_the_lookups_five_pages_is_not_found() {
     let backend = memory::Memory::default();
     conformance::templates::a_template_id_past_the_lookups_five_pages_is_not_found(&backend).await;
 }
+
+/// Roadmap P2: the payment services open for their own tenant only.
+#[tokio::test]
+async fn the_payment_services_open_for_their_own_tenant_only() {
+    let backend = memory::Memory::default();
+    conformance::templates::the_payment_services_open_for_their_own_tenant_only(&backend).await;
+}
