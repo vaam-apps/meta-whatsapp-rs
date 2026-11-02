@@ -61,15 +61,12 @@ pub fn linked(waba: &str, pn: &str, wamid: &str) -> Value {
     payload
 }
 
-/// Meta's standby example (`webhooks/reference/standby`) on `pn` of
-/// `waba`: the customer's message while another app owns the thread, an
-/// operator-only row of the outbox (`standby_observed`) naming them.
-pub fn standby(waba: &str, pn: &str) -> Value {
-    with_ids(
-        fixture("pages/webhooks.reference.standby__inbound_message.json"),
-        waba,
-        pn,
-    )
+/// Meta's text example on `pn` of `waba`, from the customer, dated an
+/// hour before the number's binding began: an event of the number that
+/// goes to nobody (design S2, D36), so an operator-only row of the outbox
+/// naming them, and nothing in the inbox.
+pub fn before_the_binding(waba: &str, pn: &str) -> Value {
+    dated(text(waba, pn, "wamid.ERASE-EARLY"), now() - 3600)
 }
 
 /// `POST /v1/numbers/{pn}/erasures` with `key`, confirming `confirm`.
@@ -165,8 +162,9 @@ pub fn erased(reply: &Reply, pn: &str) -> String {
 }
 
 /// The decisive scenario (roadmap M2f): the customer writes under their
-/// phone number and their BSUID (and once in standby, an operator-only
-/// row of the outbox); the merchant erases them by their BSUID alone.
+/// phone number and their BSUID (and once dated before the binding, an
+/// operator-only row of the outbox); the merchant erases them by their
+/// BSUID alone.
 /// Afterwards the inbox lists only the other customer, none of the
 /// tenant's events names them, Meta was asked nothing; a repeat answers
 /// the same. `live_postgres.rs` then sweeps every table: no row a tenant
@@ -175,7 +173,7 @@ pub fn erased(reply: &Reply, pn: &str) -> String {
 pub async fn an_erasure_by_bsuid_leaves_nothing_of_the_customer(h: &Harness) {
     let (reader, eraser) = merchant(h).await;
     the_customer_writes(h).await;
-    deliver(h, &standby(EXAMPLE_WABA, EXAMPLE_PN)).await;
+    deliver(h, &before_the_binding(EXAMPLE_WABA, EXAMPLE_PN)).await;
     let pn = EXAMPLE_PN;
     assert_eq!(
         conversations_of(h, &reader, pn).await,

@@ -181,12 +181,12 @@ async fn operator_rows_mentioning(pool: &sqlx::PgPool, needles: &[&str]) -> i64 
 /// see of any table mentions them (their phone number, BSUID, parent
 /// BSUID, username or name), the inbox's tables and `wa_server_events`
 /// included; before it, both did. The number's operator-only row naming
-/// them (a standby message) stays: the operator's (design D89, narrow by
+/// them (a message Meta dated before the binding) stays: the operator's (design D89, narrow by
 /// default). Decisive: the outbox's erasure (`wa_server_events` keeps
 /// their rows without it), the closure over `identities` (the
 /// phone-keyed thread stays), the inbox's erasure, and the tenant clause
-/// of `ERASE_SQL` (an erasure reaching operator-only rows deletes the
-/// standby one).
+/// of `ERASE_SQL` (an erasure reaching operator-only rows deletes that
+/// one).
 #[tokio::test]
 async fn live_postgres_after_an_erasure_no_row_of_any_table_mentions_the_customer() {
     let Some(db) = TestDb::new().await else {
@@ -219,7 +219,7 @@ async fn live_postgres_after_an_erasure_no_row_of_any_table_mentions_the_custome
     assert_eq!(
         operator_rows_mentioning(&pool2, &[common::meta::EXAMPLE_WA_ID]).await,
         1,
-        "the operator-only standby row was erased"
+        "the operator-only row was erased"
     );
     // The other customer's rows stay.
     let other = rows_mentioning(&db2, &pool2, &[common::erasure::OTHER]).await;

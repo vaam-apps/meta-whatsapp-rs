@@ -126,8 +126,10 @@ async fn whole_suite_failure<F>(fresh: F) -> Option<String>
 where
     F: AsyncFn() -> Arc<dyn Backend>,
 {
+    // Boxed: the whole suite's future is past clippy's `large_futures`
+    // bound since roadmap M2d grew it.
     failure(async {
-        conformance::run(fresh).await;
+        Box::pin(conformance::run(fresh)).await;
     })
     .await
 }

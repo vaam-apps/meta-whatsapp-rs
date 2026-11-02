@@ -24,11 +24,12 @@
 //! with [`UndatedAfterMove::CurrentHolder`], it goes to whoever holds the
 //! binding when it arrives. Roadmap S2b.
 //! The outbox row carries that tenant only for the types in
-//! [`TENANT_EVENT_TYPES`]; `unknown`, `unparsed`, `partner_solution_updated`,
-//! the types not yet reviewed for tenants ([`OPERATOR_EVENT_TYPES`]), any
-//! type a later library adds, and every event of a number or WABA no
-//! tenant holds (or held then) are operator-only rows (no tenant: never
-//! polled), and the inbox records only an owned event.
+//! [`TENANT_EVENT_TYPES`]; `unknown`, `unparsed`, `partner_solution_updated`
+//! ([`OPERATOR_EVENT_TYPES`]), any type a later library adds, and every
+//! event of a number or WABA no tenant holds (or held then) are
+//! operator-only rows (no tenant: never polled), and the inbox records only
+//! an owned event. The service's own events about its numbers are
+//! [`crate::number_events`].
 //!
 //! **An event is recorded once.** The outbox inserts on the event's key
 //! ([`outbox_key`]) at most once, so Meta's redeliveries are safe. The
@@ -183,11 +184,16 @@ pub const MAX_PAGE_DATA_BYTES: usize = 8 * 1024 * 1024;
 
 /// The event types a tenant receives: the library's `WebhookEvent::kind`s
 /// the service has reviewed and pinned (the service's
-/// `tests/event_data.rs`). Every other type, today's `unknown`,
-/// `unparsed`, `partner_solution_updated` and the types not yet reviewed
-/// for tenants, and any a later library adds, is operator-only
-/// ([`OPERATOR_EVENT_TYPES`] lists today's).
-pub const TENANT_EVENT_TYPES: [&str; 28] = [
+/// `tests/event_data.rs`), and the service's own number events
+/// ([`crate::number_events::NUMBER_EVENT_TYPES`], the last three), which
+/// no webhook carries. Every other type, today's `unknown`, `unparsed` and
+/// `partner_solution_updated`, and any a later library adds, is
+/// operator-only ([`OPERATOR_EVENT_TYPES`] lists today's). Roadmap M2d
+/// (design decision D25) added Conversation Routing's standby copies and
+/// handovers (`standby_observed`, `thread_control_changed`) and the
+/// Marketing Messages API's clicks (`user_action_reported`), operator-only
+/// before it, and the number events.
+pub const TENANT_EVENT_TYPES: [&str; 34] = [
     "message_received",
     "status_updated",
     "error_reported",
@@ -216,28 +222,28 @@ pub const TENANT_EVENT_TYPES: [&str; 28] = [
     "template_status_updated",
     "template_category_updated",
     "template_category_misuse_detected",
+    // Reviewed in roadmap M2d (design D25): a number's tenant receives
+    // them, routed as every event naming a number is.
+    "standby_observed",
+    "thread_control_changed",
+    "user_action_reported",
+    // The service's own (`crate::number_events`).
+    "number_connected",
+    "number_disconnected",
+    "number_reconnect_required",
 ];
 
 /// The library's event types that are operator-only whoever owns the
 /// number: a field the library does not type (`unknown`: a raw body of any
-/// shape), a signed body that is not a webhook (`unparsed`), a business
+/// shape), a signed body that is not a webhook (`unparsed`), and a business
 /// portfolio's partner solution (`partner_solution_updated`: no WABA to
-/// route it by), and, until the service reviews them for tenants, the
-/// types the library's webhook conformance sweep (PR #17) added, which
-/// were `unknown` before it: Conversation Routing's standby copies and
-/// handovers (`standby_observed`, `thread_control_changed`) and the
-/// Marketing Messages API's clicks (`user_action_reported`). Moving one to
-/// [`TENANT_EVENT_TYPES`] later is additive; the reverse is not. The owner
-/// decided on 2026-09-26 that M2 makes these three tenant-visible (design
-/// decision D25).
-pub const OPERATOR_EVENT_TYPES: [&str; 6] = [
-    "unknown",
-    "unparsed",
-    "partner_solution_updated",
-    "standby_observed",
-    "thread_control_changed",
-    "user_action_reported",
-];
+/// route it by). Moving one to [`TENANT_EVENT_TYPES`] later is additive;
+/// the reverse is not. Until roadmap M2d, the types the library's webhook
+/// conformance sweep (PR #17) added were here too (`standby_observed`,
+/// `thread_control_changed`, `user_action_reported`): the owner decided on
+/// 2026-09-26 that M2 makes them tenant-visible (design decision D25), and
+/// M2d moved them.
+pub const OPERATOR_EVENT_TYPES: [&str; 3] = ["unknown", "unparsed", "partner_solution_updated"];
 
 /// Whether events of `kind` may reach a tenant.
 pub fn tenant_visible(kind: &str) -> bool {

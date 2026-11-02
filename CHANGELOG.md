@@ -226,6 +226,61 @@ stored data, the owner's).
 
 ### Added
 
+- **The reviewed event types and the service's number events** (roadmap
+  M2d, design D25, acceptance test M2.6; parity row 84 now done in the
+  service, rows 137 and 139 waiting only for M5h and M5l; categories 16,
+  18 and 19; coverage rows 29 and 33).
+  - **Tenant-visible** (`meta_whatsapp_server_core::events`):
+    `standby_observed`, `thread_control_changed` and
+    `user_action_reported` move from `OPERATOR_EVENT_TYPES` (3 types
+    left: `unknown`, `unparsed`, `partner_solution_updated`) to
+    `TENANT_EVENT_TYPES` (34), so `GET /v1/events`, `GET /v1/events/{id}`,
+    both streams and the `types` filter carry them, for their number's
+    tenant only, routed as every event naming a number (the binding
+    epoch and D36's rules unchanged). The OpenAPI document is additive
+    only: six values appended to `KnownEventType` (the one line removed
+    is a comma). No event data snapshot changed and none was added (every
+    fixture of the three types was pinned already).
+  - **The service's number events** (`meta_whatsapp_server_core::number_events`,
+    new): `number_connected` (an admin attach, once the token is stored,
+    or an Embedded Signup completed or resumed), `number_disconnected`
+    (`reason`: `tenant_disconnected`, `operator_unbound`, or, for Meta's
+    `account_update` offboarding, `partner_app_uninstalled` and
+    `account_deleted`; recorded before the binding goes, and for
+    `account_update` before anything is revoked or deleted) and
+    `number_reconnect_required` (a `190` marking a number anew), one per
+    number, `data` `{event, phone_number_id, waba_id[, reason]}`, keyed by
+    the binding's epoch (once per binding generation), guarded by the
+    outbox's own `RouteGuard` (the number under the epoch's WABA, dated
+    the second after that binding began), and waking the tenant's
+    streams. `NumberEvents`, `NumberEvent`, `DisconnectReason`,
+    `NUMBER_EVENT_TYPES`; `Inbound::number_events`;
+    `Authorizer::with_number_events` (the server's `AppState` sets it;
+    without it none is recorded). The attach, the tenant's disconnect and
+    the admin unbind answer `503` when the outbox fails to record them.
+  - **Conformance**: `conformance::webhooks::REVIEWED_EXAMPLES` (Meta's 11
+    examples of the three types, the library's fixtures), `example_on`,
+    `the_reviewed_types_reach_their_numbers_tenant_and_no_other`,
+    `the_reviewed_types_of_a_previous_holder_reach_no_tenant`;
+    `conformance::live::the_reviewed_types_reach_their_numbers_tenants_streams_only`;
+    the new suite `conformance::number_events` (in `conformance::run`).
+  - **Decided by the coordinator on 2026-11-02, under the owner's
+    delegation, swappable** (design §10): D80 (the number events'
+    `data`), D81 (when each is recorded), D82 (their guard and date),
+    D83 (their outbox key, label `meta-whatsapp-server/number-event/v1`),
+    D84 (listed in `TENANT_EVENT_TYPES`), D85 (`user_action_reported`'s
+    `data` served whole). The three type names, the four `reason` values
+    and the label are new stored names, pending the owner's confirmation
+    before the first release.
+  - **Review fixes**: an Embedded Signup's completion or resume records
+    `number_connected` before it drops a kept attempt (an outbox failure
+    is `503` with the attempt kept, and the resume records them; before,
+    the resume found nothing to resume), and Meta's `account_update`
+    offboarding records `number_disconnected` once Graph confirmed,
+    before anything is revoked or deleted (before, an outbox failure
+    left the token deleted and the binding kept). `ACCOUNT_DELETED`'s
+    offboarding is tested over HTTP for the first time.
+
 - **`EmbeddedSignup::offboard_if_unchanged`** (roadmap M3a's review):
   `offboard`'s revocation, then the token deleted only if its vault
   record is still the one read (`TokenVault::get_versioned`, then
@@ -2715,6 +2770,12 @@ stored data, the owner's).
   `operation::Operation` gain a variant each (`Erasure`,
   `EraseCustomer`): a `match` over either outside this repository must
   follow.
+- **Breaking for code naming the arrays' lengths** (roadmap M2d):
+  `meta_whatsapp_server_core::events::TENANT_EVENT_TYPES` is a
+  `[&str; 34]` (was 28) and `OPERATOR_EVENT_TYPES` a `[&str; 3]` (was
+  6). Over HTTP the change is additive (`KnownEventType` grows; a client
+  defaulting on an unknown type sees nothing break); a client that
+  ignored the three types because no tenant received them now gets them.
 - **The service's core** (roadmap M2e): `outbox::Outbox` gains a
   required `received_media` (a backend of your own must answer it: the
   rows that recorded a media id, kept at insert from
