@@ -111,6 +111,8 @@ codes! {
     SIGNUP_NOT_CONFIGURED = ("signup_not_configured", 409, "Embedded Signup is not set up for this deployment: the operator sets WA_APP_ID and WA_ES_CONFIG_ID (and, for a Solution Partner, its credit line)."),
     ERASURE_NOT_CONFIGURED = ("erasure_not_configured", 409, "Erasure is not set up for this deployment: the operator sets WA_SERVER_ERASURE_KEY."),
     ERASURE_CROSSES_BINDING = ("erasure_crosses_binding", 409, "This number holds records from before it came under the tenant, which an erasure on it would reach: the service refuses it, and the operator erases on it instead."),
+    WEBHOOKS_NOT_CONFIGURED = ("webhooks_not_configured", 409, "Webhooks out are not set up for this deployment: the operator sets WA_SERVER_DATA_KEY."),
+    WEBHOOK_ENDPOINT_LIMIT_REACHED = ("webhook_endpoint_limit_reached", 409, "The tenant has as many webhook endpoints as allowed: delete one first."),
     // 403: not allowed, by Meta or the service.
     PERMISSION = ("permission", 403, "The token lacks a permission, or access to this asset."),
     ACCOUNT_RESTRICTED = ("account_restricted", 403, "The account is restricted for a policy violation."),

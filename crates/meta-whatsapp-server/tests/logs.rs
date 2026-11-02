@@ -15,8 +15,12 @@ use common::{Harness, signup};
 async fn every_route_logs_no_secret_key_message_text_phone_number_or_contact() {
     let captured = Captured::default();
     let _guard = tracing::subscriber::set_default(subscriber(&captured));
-    // Embedded Signup set up (roadmap M3a), so that its routes run through.
-    let h = Harness::with_settings(signup::settings(signup::tech_provider()));
+    // Embedded Signup set up (roadmap M3a), and webhooks out (roadmap M2c),
+    // so that their routes run through.
+    let h = Harness::with_settings(meta_whatsapp_server::state::Settings {
+        webhooks_out: Some(common::capture::webhooks_out()),
+        ..signup::settings(signup::tech_provider())
+    });
     let secrets = exercise(&h).await;
     check(&captured.text(), &secrets);
 }

@@ -35,6 +35,7 @@ use meta_whatsapp_server_core::store::{
 
 use crate::events::{PgEventStore, busy_or_backend};
 use crate::notify::PgNotifier;
+use crate::webhooks::PgWebhookStore;
 use meta_whatsapp_server_core::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
@@ -42,6 +43,7 @@ use meta_whatsapp_server_core::model::{
     Tenant, TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
 use meta_whatsapp_server_core::notify::EventNotifier;
+use meta_whatsapp_server_core::webhooks_out::store::WebhookStore;
 
 /// The service's migration history table, apart from the library's
 /// (`wa_sqlx_migrations`) and from any of the application's own.
@@ -85,6 +87,12 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
         include_str!("../migrations/0007_received_media.sql"),
     ),
     (8, "erasure", include_str!("../migrations/0008_erasure.sql")),
+    // Roadmap M2c, numbered after roadmap M2f's 8.
+    (
+        9,
+        "webhooks out",
+        include_str!("../migrations/0009_webhooks_out.sql"),
+    ),
 ];
 
 /// The advisory lock a housekeeping round runs under: the key of the
@@ -1335,6 +1343,7 @@ pub struct PgBackend {
     pool: PgPool,
     store: Arc<PgStore>,
     outbox: Arc<PgEventStore>,
+    webhooks: Arc<PgWebhookStore>,
     notifier: Arc<PgNotifier>,
     kv: Arc<PostgresKvStore>,
     conversations: Arc<PostgresConversationStore>,
@@ -1354,6 +1363,7 @@ impl PgBackend {
         Self {
             store: Arc::new(PgStore::new(pool.clone())),
             outbox: Arc::new(PgEventStore::new(pool.clone())),
+            webhooks: Arc::new(PgWebhookStore::new(pool.clone())),
             notifier: Arc::new(PgNotifier::new(pool.clone())),
             kv: Arc::new(PostgresKvStore::new(pool.clone())),
             conversations: Arc::new(PostgresConversationStore::new(pool.clone())),
@@ -1395,6 +1405,10 @@ impl Backend for PgBackend {
         self.notifier.clone()
     }
 
+    fn webhooks(&self) -> Arc<dyn WebhookStore> {
+        self.webhooks.clone()
+    }
+
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         Arc::new(PgLeaderLock::new(self.pool.clone()))
     }
@@ -1432,7 +1446,7 @@ mod tests {
     /// `(version, SHA-384 hex)` of every service migration, as sqlx records
     /// it. A new migration adds a line; an existing line never changes (an
     /// edited migration makes `migrate` refuse every database it ran on).
-    const PINNED_CHECKSUMS: [(i64, &str); 8] = [
+    const PINNED_CHECKSUMS: [(i64, &str); 9] = [
         (
             1,
             "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
@@ -1464,6 +1478,10 @@ mod tests {
         (
             8,
             "d748a179ba921d88a958978e4c476c78014d815694d145bc3d293213c6a40de2d6b0669c4b5daf356af7cc56213dd8aa",
+        ),
+        (
+            9,
+            "0d605fa295b385137f0d6fab20501615e8621c011abadb6dfc8a16608938232351950318861db7ad5fa7ee9094650a89",
         ),
     ];
 
@@ -1498,7 +1516,8 @@ mod tests {
                 "number moves",
                 "signup",
                 "received media",
-                "erasure"
+                "erasure",
+                "webhooks out"
             ]
         );
         // `\x77` is `w`: spelled so that a search-and-replace of the table

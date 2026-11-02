@@ -100,7 +100,7 @@ read yet: set, it stops the start.
 | Variable | Default | What |
 | --- | --- | --- |
 | `DATABASE_URL` | required outside development | Postgres (a secret: it holds a password) |
-| `WA_SERVER_ENV` | `production` | `development` allows memory storage, a throwaway vault key and a plain-`http` `WA_GRAPH_ENDPOINT` |
+| `WA_SERVER_ENV` | `production` | `development` allows memory storage, a throwaway vault key and a plain-`http` `WA_GRAPH_ENDPOINT` and webhook destination |
 | `WA_SERVER_PUBLIC_BIND`, `WA_SERVER_INTERNAL_BIND` | `127.0.0.1:8080`, `127.0.0.1:8081` | must differ |
 | `WA_APP_SECRET` | required | the Meta app's secret (`WA_APP_SECRET_PREVIOUS` too while rotating) |
 | `WA_VERIFY_TOKEN` | required | the token you enter in the App Dashboard for the webhook |
@@ -135,6 +135,12 @@ read yet: set, it stops the start.
 | `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` | `169h` (7 days and an hour) | that window, from when the previous tenant's binding was removed; a positive duration, with `operator_only` only (set with `current_holder`, the start is refused) |
 | `WA_SERVER_MOVE_SKEW_MARGIN` | `0s` | after a move only: how far past the second the new binding began an event Meta dated must be to reach the new holder (widen it if Meta's clock may run ahead of the database's) |
 | `WA_SERVER_STREAMS_PER_TENANT` | `20` | live event streams one tenant holds open at once on a replica, its number streams included (the next is `429 too_many_streams`) |
+| `WA_SERVER_DATA_KEY` | unset | base64 of 32 random bytes: seals the webhook endpoints' signing secrets ([Webhooks out](#webhooks-out)); unset, a throwaway key on memory storage, and on Postgres webhooks out are off (`409 webhooks_not_configured`) |
+| `WA_SERVER_DATA_KEY_ID`, `WA_SERVER_DATA_PREVIOUS_KEYS` | `k1`, — | the data key's id (1 to 32 of `A-Z a-z 0-9 - _`) and older keys still read, `<id>:<base64>` comma-separated, every id once |
+| `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` | none: every destination refused | where webhook endpoints may point: host names (`hooks.example.com`), `*.`-prefixed ones (`*.example.com`) and CIDRs (`10.0.0.0/8`, never `/0`), comma-separated |
+| `WA_SERVER_WEBHOOK_RETRY_WINDOW` | `72h` | how long a delivery is retried before it is `failed` |
+| `WA_SERVER_WEBHOOK_IN_FLIGHT`, `WA_SERVER_WEBHOOK_IN_FLIGHT_PER_TENANT`, `WA_SERVER_WEBHOOK_IN_FLIGHT_PER_ENDPOINT` | `32`, `8`, `4` | webhook deliveries attempted at once on a replica: in all, of one tenant, to one endpoint |
+| `WA_SERVER_WEBHOOK_LEASE` | `60s` | how long a replica holds a delivery it claimed before another may attempt it; at least `30s`; keep the replicas' clocks within it of each other |
 | `WA_SERVER_STREAMS_PER_REPLICA` | `1000` | live event streams open at once on a replica, every tenant's (keep it under the internal listener's 4,096 connections) |
 
 **The service refuses to start** rather than run unsafely: on a missing
@@ -1460,6 +1466,77 @@ No route or command edits a platform key's allowed tenants, so mint a new
 platform key for a tenant created again (a key allowing every tenant,
 `*`, allows it at once).
 
+## Webhooks out
+
+For a backend that would rather receive than poll or hold a stream (a
+Medusa store), the service pushes each tenant's events to URLs of its
+own, signed the [Standard Webhooks](https://www.standardwebhooks.com/)
+way (design §4.4; roadmap M2c). The operator sets two things:
+
+- `WA_SERVER_DATA_KEY` (`openssl rand -base64 32`, kept out of the
+  database like the vault key): the endpoints' signing secrets are sealed
+  under it. Without it on Postgres, every webhook endpoint route answers
+  `409 webhooks_not_configured` and nothing is delivered.
+- `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS`: where endpoints may point.
+  A URL is `https` (plain `http` only with `WA_SERVER_ENV=development`),
+  carries no user name or password, and its host is listed by name, or
+  every address it resolves to is inside a listed CIDR. Private,
+  loopback and link-local addresses pass only inside a listed CIDR (list
+  `10.0.0.0/8`, say, for a Medusa in the same cluster); unspecified,
+  multicast and the clouds' metadata addresses never do. The host is
+  looked up when the endpoint is made and again at every attempt, and the
+  attempt connects to the address it checked: a host that later resolves
+  to a private address is refused then (`destination_refused`), nothing
+  sent. Allow egress to those destinations. A listed CIDR lets every
+  tenant reach every host and port inside it (each seeing the status its
+  attempt got): list the receivers' own addresses, not a whole cluster's.
+
+A tenant (scope `webhooks`) makes an endpoint:
+
+```bash
+curl -s -X POST http://127.0.0.1:8081/v1/webhook-endpoints \
+  -H "Authorization: Bearer $TENANT_KEY" -H 'Content-Type: application/json' \
+  -d '{"url": "https://shop.example.com/hooks/whatsapp", "types": ["message_received", "status_updated"]}'
+```
+
+The answer (`201`) carries its `id` and its `secret` (`whsec_…`), shown
+this once: store it. The endpoint receives the tenant's events of those
+types recorded from then on (10 endpoints a tenant,
+`409 webhook_endpoint_limit_reached` past it).
+
+- **Each delivery** is a `POST` of the envelope `GET /v1/events/{id}`
+  answers, with `webhook-id` (the event's `id`: deduplicate on it),
+  `webhook-timestamp` and `webhook-signature` (`v1,<base64 HMAC-SHA256>`
+  over `id.timestamp.body`, the body's exact bytes). Verify it with any
+  Standard Webhooks library, or as the events skill's example does, and
+  refuse a timestamp over 5 minutes off. An event whose `data` is over
+  256 KiB arrives with `data: null` and `truncated: true`: fetch it whole
+  with `GET /v1/events/{id}`.
+- **Answer 2xx within 10 s.** Anything else (a redirect included: it is
+  never followed) is a failure, retried after 10 s, doubling to an hour a
+  step, for 72 h (`WA_SERVER_WEBHOOK_RETRY_WINDOW`); then the delivery is
+  `failed`, and an endpoint that failed the whole window is turned off
+  (`enabled: false`, `disabled_reason: failing`): `PATCH` it
+  `{"enabled": true}` once fixed, and it resumes from where it stopped,
+  within the outbox's retention. At most 1 KiB of your answer is read.
+  Deliveries come at least once and in no order: order on `sequence`.
+- **Rotate** with `POST /v1/webhook-endpoints/{id}/rotate-secret`: the new
+  secret is shown once, and for 24 hours every delivery carries two
+  signatures, the new one first; accept either until
+  `previous_secret_expires_at`.
+- **Check** with `POST …/{id}/test`: a `ping` (`{"type": "ping", …}`),
+  attempted once; `GET …/{id}/deliveries` lists the attempts, newest
+  first (status, attempts, the last one's status, error and duration, the
+  next one's time; no bodies), and `POST …/deliveries/{delivery_id}/retry`
+  sends one again.
+
+Every replica dispatches: a delivery is claimed by one of them under a
+lease, so a replica that stops mid-attempt leaves it to another after a
+minute (`WA_SERVER_WEBHOOK_LEASE`; the replicas' clocks must agree
+within it). One slow receiver holds at most 4 attempts a replica; a
+tenant, 8; a replica, 32 (`WA_SERVER_WEBHOOK_IN_FLIGHT…`). A platform key's endpoint is the tenant's it acts as
+(`WA-Tenant`): make one per tenant.
+
 ## Errors
 
 Every error answers one body:
@@ -1587,7 +1664,9 @@ SKIP token.wabas: the configuration is refused
 
 ## Not yet
 
-Webhooks-out (M2); disconnection by Meta's webhooks (and its
+Re-sealing the webhook endpoints under a new data key (a previous key
+keeps opening them), and an endpoint for several tenants (M2c's gaps);
+disconnection by Meta's webhooks (and its
 `number_disconnected`); hosted Embedded
 Signup, several WABAs in one signup and pre-verified numbers (M3f),
 clearing a lost credit share and the coexistence routes (M3b); zero-tap
