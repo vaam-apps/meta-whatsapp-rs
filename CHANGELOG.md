@@ -218,8 +218,8 @@ stored data, the owner's).
 
 ### Added
 
-- **Live updates in the service** (roadmap M2b; design §4.5, D39–D42
-  decided by the coordinator on 2026-11-01, D43 proposed by its review;
+- **Live updates in the service** (roadmap M2b; design §4.5, D39–D43
+  decided by the coordinator on 2026-11-01;
   parity row 10, categories 19 and 39, coverage row 33).
   Routes, additive in `openapi/v1.json`: `GET /v1/events/stream` and
   `GET /v1/numbers/{pn}/events/stream` (scope `events`,

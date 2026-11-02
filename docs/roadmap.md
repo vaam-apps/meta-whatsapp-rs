@@ -4250,8 +4250,8 @@ design's (§9).
     5. `Backend::notifier()` is required, with no default: a backend
        built outside this repository must add one (CHANGELOG, breaking
        for it).
-  - **Proposed** by the review, for the coordinator: D43 (the re-check
-    before a read, the frames dropped on a lag, `Retry-After: 5`, the
+  - **Confirmed 2026-11-01** (the coordinator, under the owner's
+    delegation): D43, as the review proposed it (the re-check before a read, the frames dropped on a lag, `Retry-After: 5`, the
     one-minute write timeout).
   - **Left, and why:** a delete and re-create of a tenant within the
     re-check's second could let a stream read one event of the new
