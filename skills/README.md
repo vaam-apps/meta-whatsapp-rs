@@ -102,6 +102,7 @@ those names any more. Remove them (`npx skills list` shows them;
 | [`meta-whatsapp-rs-server-events`](meta-whatsapp-rs-server-events/) | receiving WhatsApp events through meta-whatsapp-server: Meta's callback URL, routing, polling `GET /v1/events` |
 | [`meta-whatsapp-rs-server-send`](meta-whatsapp-rs-server-send/) | sending messages, media and templates through the service: bodies, recipients, `Idempotency-Key`, verified downloads, rate limits |
 | [`meta-whatsapp-rs-server-otp`](meta-whatsapp-rs-server-otp/) | WhatsApp login codes through the service: issue and verify, their outcomes, the per-tenant sender, authentication templates |
+| [`meta-whatsapp-rs-server-registration`](meta-whatsapp-rs-server-registration/) | registering a number through the service: the verification code, the two-step PIN typed per attempt and stored nowhere, deregistration, the per-number attempt budgets |
 
 ## Versioning: a skill is true of one meta-whatsapp-rs commit
 

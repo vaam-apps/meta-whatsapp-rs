@@ -89,6 +89,19 @@ pub enum Operation {
     /// `verify_otp`: a typed code checked, which always counts as an
     /// attempt (roadmap M3c).
     VerifyOtp,
+    /// `request_verification_code`: a verification code sent to a number
+    /// by SMS or voice call (roadmap M3d).
+    RequestVerificationCode,
+    /// `verify_code`: a number's verification code checked (roadmap M3d).
+    VerifyCode,
+    /// `register_number`: a number registered with its two-step
+    /// verification PIN (roadmap M3d).
+    RegisterNumber,
+    /// `deregister_number`: a number deregistered (roadmap M3d).
+    DeregisterNumber,
+    /// `set_two_step_pin`: a number's two-step verification PIN set
+    /// (roadmap M3d).
+    SetTwoStepPin,
     /// `list_payment_configurations`: a WABA's payment configurations
     /// (roadmap P2).
     ListPaymentConfigurations,
@@ -113,7 +126,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 40] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -142,6 +155,11 @@ impl Operation {
         Self::CreateAuthenticationTemplate,
         Self::IssueOtp,
         Self::VerifyOtp,
+        Self::RequestVerificationCode,
+        Self::VerifyCode,
+        Self::RegisterNumber,
+        Self::DeregisterNumber,
+        Self::SetTwoStepPin,
         Self::ListPaymentConfigurations,
         Self::CreatePaymentConfiguration,
         Self::GetPaymentConfiguration,
@@ -182,6 +200,11 @@ impl Operation {
             Self::CreateAuthenticationTemplate => "create_authentication_template",
             Self::IssueOtp => "issue_otp",
             Self::VerifyOtp => "verify_otp",
+            Self::RequestVerificationCode => "request_verification_code",
+            Self::VerifyCode => "verify_code",
+            Self::RegisterNumber => "register_number",
+            Self::DeregisterNumber => "deregister_number",
+            Self::SetTwoStepPin => "set_two_step_pin",
             Self::ListPaymentConfigurations => "list_payment_configurations",
             Self::CreatePaymentConfiguration => "create_payment_configuration",
             Self::GetPaymentConfiguration => "get_payment_configuration",
@@ -205,7 +228,12 @@ impl Operation {
             | Self::GetNumber
             | Self::GetProfile
             | Self::UpdateProfile
-            | Self::DisconnectWaba => Scope::Numbers,
+            | Self::DisconnectWaba
+            | Self::RequestVerificationCode
+            | Self::VerifyCode
+            | Self::RegisterNumber
+            | Self::DeregisterNumber
+            | Self::SetTwoStepPin => Scope::Numbers,
             Self::SendMessage | Self::MarkRead => Scope::Send,
             Self::UploadMedia | Self::DownloadMedia | Self::DeleteMedia => Scope::Media,
             Self::ListTemplates

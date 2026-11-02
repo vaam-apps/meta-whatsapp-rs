@@ -4891,12 +4891,95 @@ design's (§9).
   - **Decisive:** with the deployment's setting off, a zero-tap creation
     makes no request to Meta; on, one request and one audit event; a
     preview answers Meta's documented example.
-- [ ] **M3d. Registration and the PIN** (rows 108, 128): request and
+- [x] **M3d. Registration and the PIN** (rows 108, 128): request and
   verify a code, register, deregister; the PIN typed per attempt and
   never stored (D6).
   - **After:** S7.
   - **Decisive:** a sentinel PIN is found in no stored row and no log
     capture after a registration (storing it anywhere fails the test).
+  - **Landed:** five routes in `meta-whatsapp-server-api-axum`
+    (`api::registration`, tag `registration`, scope `numbers`, the send
+    class), each over the core's `registration::Registration`, opened on
+    an `OwnedNumber` and a `Caller` its `Authorizer` admits (key, tenant,
+    scope, ownership, the vault, then the body): `POST
+    /v1/numbers/{pn}/request-code` (`request_verification_code`),
+    `…/verify-code` (`verify_code`), `…/register` (`register_number`),
+    `…/deregister` (`deregister_number`) and `…/two-step-pin`
+    (`set_two_step_pin`, the PIN row 128 counts), each `200
+    {phone_number_id, status}` and Meta's documented request with the
+    number's own token. The PIN and the code are read into the library's
+    `TwoStepPin` and `VerificationCode` before anything else
+    (`registration::pin`, `registration::verification_code`; the bodies
+    that hold them have no `Debug`, and `ApiJson` never quotes a body);
+    a failed call keeps Meta's code, subcode and trace id and none of its
+    texts, in the answer or any log (`OwnedNumber::failed_withholding_texts`
+    and `ServiceError::from_library_withholding_texts`, carried over
+    byte for byte from M3c's pull request). Attempts are counted per
+    number on the bundle's `KvStore`, shared by every replica, after
+    ownership and the local checks and before Meta
+    (`registration::RegistrationAttempts`, under
+    `wa.server.registration`, a stable identifier pending the owner):
+    register and deregister 5 in 72 hours, the code's request and check
+    10 an hour (`WA_SERVER_REGISTRATION_*`, `WA_SERVER_VERIFICATION_*`;
+    design D66). `Idempotency-Key` on the request of a code, a
+    registration and a deregistration, a registration's fingerprint
+    never over the PIN (`Fingerprint::register_number`, D67). A
+    deregistration takes the number's id again (`confirm`,
+    `registration::confirmed`, D68) and is audited
+    (`number_deregistered`), as the PIN change is (`two_step_pin_set`;
+    the audit `Subject` gained `phone_number_id`). The OpenAPI document
+    is additive only (912 lines added, none removed: five paths, the tag
+    `registration`, eight schemas). Decisive tests:
+    `a_registrations_pin_and_code_are_in_no_store_and_no_answer` (memory:
+    every answer, every value written to the `KvStore`, the idempotency
+    records and their fingerprints, the outbox),
+    `live_postgres_a_registration_leaves_its_pin_in_no_table` (every
+    table of the schema, as text and as `bytea` hex) and
+    `a_registration_logs_no_pin_no_code_and_none_of_metas_texts` (`TRACE`,
+    every target), with M1.7's capture over the new routes; the tenant's
+    isolation, the budgets across two replicas, the key's replay with
+    another PIN, the malformed bodies and the confirmation in
+    `tests/registration.rs`. By mutation: the PIN logged at `TRACE`, the
+    PIN in the kept answer, the fingerprint over the PIN, Meta's texts
+    logged, `details` answered, the budget's charge removed or moved
+    before the confirmation, the confirmation removed, axum's own JSON
+    extractor, the deregistration's audit removed: each fails a test.
+  - **Decided:** D65–D69, the coordinator's of 2026-11-02 under the
+    owner's delegation, each swappable (design §10); the namespace
+    `wa.server.registration` and its record wait for the owner, and so
+    does a scope of deregistration's own (§ Owner touchpoints).
+  - **Review (security lens), in the same PR:** one fix and the tests a
+    guard lacked. A counter record of another `v` whose fields parsed
+    was read as version 1: now refused (`503`, fail closed;
+    `a_record_that_does_not_read_refuses_the_attempt`). Pinned by new
+    tests, each by mutation: concurrent charges on one record pass the
+    limit exactly (`concurrent_charges_never_pass_the_limit`; a plain
+    write, or a plain first write, lets all through), and so on Postgres
+    across two replicas
+    (`live_postgres_a_numbers_budget_holds_across_racing_replicas`); a
+    store whose reads or writes fail refuses
+    (`a_store_that_fails_refuses_the_attempt`); a moving 72 hours never
+    holds more than 10 accepted attempts
+    (`two_back_to_back_windows_hold_at_most_ten`); `Registration::new`'s
+    tenant check, which HTTP never reached (the extractor refuses
+    first), in `conformance::numbers`
+    (`the_registration_services_open_on_the_callers_own_number_only`); the
+    region in the fingerprint; an encoded path's confirmation
+    (`deregistering_an_encoded_path_takes_the_decoded_id`); a timeout's
+    kept key, replayed with another PIN and no attempt spent; Meta's
+    refusal of a coexistence number (`502 unknown`, the key freed, no
+    texts; `metas_refusal_to_deregister_maps_cleanly`); callers without a
+    valid key. The shared flow now carries the PIN in malformed shapes
+    (a number, too long, signed, padded, other digits, a body that is not
+    JSON) through the store sweep, the `TRACE` capture and the live
+    sweep, keys and replays its deregistration (audited once), and the
+    metrics hold no secret. Docs: Meta limits registering and
+    deregistering to 10 each per moving 72 hours, not 10 shared; the
+    library's `PhoneNumber::deregister` said it turned local storage off,
+    which Meta's page says it does not. Left: the windows are measured on
+    each replica's clock, so a skew between replicas shortens one by the
+    skew; the settings accept budgets past Meta's limit without a
+    warning; a verification code has no length bound but the body's.
 - [ ] **M3e. The token-expiry event** (row 6; OPEN_QUESTIONS #8): an
   event and a metric ahead of a stored token's lapse.
   - **After:** M3a, L11e.
@@ -5621,7 +5704,10 @@ everything else goes into the parity-completion report.
   Redis conversation layout, added and awaiting confirmation; and L21a's
   `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
   keys' derivations and their records' shapes, added and awaiting
-  confirmation before the first release; M2b's Postgres channel
+  confirmation before the first release; M3d's `wa.server.registration`
+  namespace, its keys `<budget>:<phone_number_id>` and its record
+  `{"v":1,"since","count"}`, ephemeral, added and awaiting confirmation;
+  M2b's Postgres channel
   `wa_server_events` and its payload `<sequence> <tenant>`, not stored
   but what replicas of two releases must agree on, added and, the
   coordinator having decided them as built (D40), awaiting confirmation
@@ -5633,6 +5719,10 @@ everything else goes into the parity-completion report.
   `wa_server.otp.shared_rate`, its key's derivation and record, and the
   label `meta-whatsapp-server/otp-shared-limit/v1`, added and awaiting
   confirmation), for the same reason as L5's.
+- **A scope of its own for deregistering a number** (M3d, design D68):
+  the coordinator decided the scope `numbers`, a confirmation in the body
+  and an audit event; a separate scope would be a new stored name (keys
+  keep their scopes), so whether to add one is the owner's.
 - **Zero-tap authentication templates** (M3c, M3g): creating one sets
   Meta's `zero_tap_terms_accepted`, an acknowledgement of the WhatsApp
   Business terms for zero-tap and of the customers' expectation of an

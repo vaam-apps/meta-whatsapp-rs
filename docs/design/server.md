@@ -582,6 +582,28 @@ Rules the service implements:
 | `GET`, `PATCH /v1/numbers/{pn}/profile` | business profile: about, address, description, email, websites, vertical | partial profile → profile |
 | `DELETE /v1/wabas/{waba_id}` | disconnect ([§3.4](#34-how-numbers-get-bound)); if unsubscribing fails, nothing is deleted and the answer is Meta's error's code and status ([§5.2](#52-codes-and-statuses): `502` when Meta fails, `403` or `409` when it refuses, `504` on a timeout); a tenant whose token no longer works asks the operator for the admin unbind | → 204 |
 
+**Registration and the two-step PIN** (scope `numbers`; roadmap M3d,
+decision D6: the PIN is typed per attempt and never stored)
+
+| Method and path | Does | Request → response | Notable errors |
+| --- | --- | --- | --- |
+| `POST /v1/numbers/{pn}/request-code` | Meta sends the number a verification code; `Idempotency-Key` | `{code_method: SMS \| VOICE, language}` → `200 {phone_number_id, status: code_requested}` | 409 `registration` (verified already); 429 the number's verification attempts |
+| `POST /v1/numbers/{pn}/verify-code` | submit the code (hyphens dropped) | `{code}` → `200 {…, status: code_verified}` | 422 `code`; 429 |
+| `POST /v1/numbers/{pn}/register` | register for the Cloud API with the PIN (the current one, or the one to set); `Idempotency-Key`, never over the PIN (D67) | `{pin, data_localization_region?}` → `200 {…, status: registered}` | 422 `pin`; 409 `two_step_verification` (wrong PIN), `registration` (Meta's 72-hour limit, not verified); 429 the number's registration attempts |
+| `POST /v1/numbers/{pn}/deregister` | deregister: the number stops sending and receiving until registered again; Meta keeps its history; refused for a coexistence number; audited (`number_deregistered`); `Idempotency-Key` | `{confirm: <pn>}` → `200 {…, status: deregistered}` | 422 `confirm` (D68); 409 `registration`; 429 |
+| `POST /v1/numbers/{pn}/two-step-pin` | set the PIN (no call turns it off); audited (`two_step_pin_set`) | `{pin}` → `200 {…, status: pin_set}` | 422 `pin` |
+
+Every one acts with the binding's own token ([§3.3](#33-authorization-order)),
+answers Meta's code and trace id but never its texts (no `details`, and
+none of them in any log: D69), and reads its body only once ownership
+holds, so another tenant's number is `404` with nothing read, counted or
+asked. A body that does not parse is `422` on `body`, never quoting it;
+the bodies holding a PIN or a code have no `Debug`. Register and
+deregister share a per-number budget, the code's request and check
+another (D66; [§6](#6-security)). None changes the binding: a
+deregistered number stays bound and connected, and its sends fail at
+Meta (`409 registration`).
+
 **Messages and media** (scopes `send`, `media`)
 
 | Method and path | Does | Request → response | Notable errors |
@@ -1004,12 +1026,14 @@ which never sends twice. The service adds no send retries of its own.
 ### 5.4 Idempotency keys
 
 - `Idempotency-Key` on sends, inbox replies, OTP issue, uploads,
-  template creation, (since M2g) marking a conversation read and, since
-  roadmap P2, a payment configuration's creation, a new OAuth link and a
-  refund (whose kept answer has no OAuth link: the link is a credential
-  the records do not store; a refund **requires** one, `428
-  idempotency_key_required` without it: D56), scoped to the tenant;
-  stored with a hash of the
+  template creation, (since M2g) marking a conversation read, since
+  roadmap M3d a verification code's request, a registration and a
+  deregistration (D67: a registration's canonical input is its number
+  and region, never its PIN) and, since roadmap P2, a payment
+  configuration's creation, a new OAuth link and a refund (whose kept
+  answer has no OAuth link: the link is a credential the records do not
+  store; a refund **requires** one, `428 idempotency_key_required`
+  without it: D56), scoped to the tenant; stored with a hash of the
   operation and its canonical input (the number or WABA the path names,
   decoded, and the body: D27, built in roadmap S6; never the method or
   the path's spelling, so a key means the same through every API
@@ -1073,6 +1097,15 @@ state (reads, template management) are one second's worth; read
 receipts, media and profile writes count as sends; the operator sets
 them per deployment (`WA_SERVER_RATE_*`, [§7.2](#72-environment)), and
 per-tenant overrides wait for the tenant settings (M3).
+*As built in M3d* (D66): a number's registration attempts are also
+counted **per number**, shared by every replica (on the bundle's
+`KvStore`, `wa.server.registration`), after ownership and the local
+checks and before Meta: registering and deregistering 5 in a fixed
+window of 72 hours, counted together (Meta allows 10 of each in a
+moving 72 hours, locks the number for 72 hours on the 11th, `133016`, and locks it after too many
+wrong PINs, `133008`), a verification code's request and check 10 an
+hour; past it `429 too_many_requests` with `Retry-After` the rest of the
+window (`WA_SERVER_REGISTRATION_*`, `WA_SERVER_VERIFICATION_*`).
 
 **CORS**: none (D3). **TLS** terminates at the ingress: valid certificate,
 body limit of at least 3 MiB, no body rewriting or decompression, a timeout
@@ -1132,6 +1165,8 @@ third-party licences of what it contains (M4); it contains no `ffmpeg`
 | `WA_SERVER_UNDATED_AFTER_MOVE` (S2b) | `operator_only` | D36's `undated_after_move`: an undated event (an error, a history chunk, an undated group update) of a WABA that moved from another tenant is operator-only within the window after the move; `current_holder` gives it to the holder, the behaviour before S2b. A WABA no other tenant held is never concerned |
 | `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` (S2b) | `169h` (7 days and an hour) | the window, from the WABA's last unbinding from another tenant; a positive duration, with `operator_only` only (refused with `current_holder`) |
 | `WA_SERVER_MOVE_SKEW_MARGIN` (S2b) | `0s` | after a move only: an event Meta dated must be this much past the second its binding began in, and more, to reach the holder (Meta's clock ahead of the database's) |
+| `WA_SERVER_REGISTRATION_ATTEMPTS`, `…_WINDOW` (M3d) | 5, `72h` | D66: a number's registrations and deregistrations per fixed window, shared by every replica |
+| `WA_SERVER_VERIFICATION_ATTEMPTS`, `…_WINDOW` (M3d) | 10, `1h` | D66: a number's verification codes requested and checked, the same way |
 | `WA_SERVER_STREAMS_PER_TENANT` (M2b) | 20 | live event streams one tenant holds open at once on a replica, its number streams included ([§4.5](#45-live-updates-sse)); the next is `429 too_many_streams` |
 | `WA_SERVER_STREAMS_PER_REPLICA` (M2b) | 1000 | live event streams open at once on a replica, every tenant's |
 | `RUST_LOG`, `WA_SERVER_LOG_FORMAT`, `OTEL_EXPORTER_OTLP_ENDPOINT` | `info`, `json`, unset | |
@@ -2139,14 +2174,17 @@ cannot be undone after it. D6, D8–D12, D19, D20's (b) and (c), and
 D26–D35 are the coordinator's decisions of 2026-09-26 under the
 delegation (D30–D35, with the changes to D10 that day, came out of the
 reviews of roadmap L5), as are the changes to D15 (widened), D16 (the
-gate) and D18 (revised) that day. D36 is the coordinator's of
-2026-09-27 (amended with roadmap S2b's build on 2026-11-01), D37 of
-2026-10-26, D38 of 2026-11-01 (roadmap L8), D39–D43 of 2026-11-01
-(roadmap M2b, D43 on its review; see below), D45–D49 of 2026-11-01
-(roadmap M3c), D50–D58 of 2026-11-01 (roadmap P2, D56 amended on
-2026-11-02), D59 of 2026-11-01 on M3c's review and D60–D63 of
-2026-11-02 (roadmap M2g), each under the delegation. D20's (a), a
-licence, is the owner's: roadmap S10
+gate) and D18 (revised) that day. D36 is the coordinator's of 2026-09-27
+(amended with roadmap S2b's build on 2026-11-01), D37 of 2026-10-26, D38
+of 2026-11-01 (roadmap L8), D39–D43 of 2026-11-01 (roadmap M2b, D43 on
+its review; see below), D45–D49 of 2026-11-01 (roadmap M3c), D50–D58 of
+2026-11-01 (roadmap P2, D56 amended on 2026-11-02), D59 of 2026-11-01 on
+M3c's review, D60–D63 of 2026-11-02 (roadmap M2g) and D65–D69 of
+2026-11-02 (roadmap M3d), each under the delegation; the namespace
+`wa.server.registration` and its record layout (D66) wait for the
+owner's confirmation, and a scope of deregistration's own (D68) stays
+the owner's (roadmap § Owner touchpoints). D20's (a), a licence, is the
+owner's: roadmap S10
 asks for it. D5 is settled as "support both modes, chosen per
 deployment"; which mode a production deployment runs follows the
 platform's agreements with Meta (partner status, who pays), so that
@@ -2216,6 +2254,11 @@ choice stays the owner's.
 | D61 | The read route's receipt (roadmap M2g) | the latest inbound message / each unread one; before or after the unread reset; past Meta's 30 days sent anyway / skipped; an `Idempotency-Key` or none | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: one receipt, for the latest inbound message, sent before the reset; none past 30 days or before the cut; an optional `Idempotency-Key`, as built.** Meta marks the earlier messages of a one-to-one conversation read with the latest (`messages/mark-message-as-read`; a group's are marked one by one, a gap the roadmap item records); sending it first means a receipt Meta refuses resets nothing, and the binding is read again between the two, so a number that moved while Meta answered resets nothing either (`503`). A latest inbound message older than Meta's 30 days (`inbox::READ_RECEIPT_MAX_AGE`) or dated before the binding epoch gets none, and the count is reset all the same, so no receipt names a message the holder did not receive. The key is optional, as on the design's other POSTs, and the rate class is the writes' (`send`): a repeated receipt names the same message again on the tenant's own number (Meta documents no effect for a repeat), at most the `send` budget's 20 a second. To swap, `Conversations::mark_read` and the constant | M2g |
 | D62 | What the window route's `open` means (roadmap M2g) | the recorded window open now / what a free-form reply would meet now; a refusal's reason in the answer or not | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: what a free-form reply would meet now, with no reason field, as built.** `open` runs the reply's own checks with nothing sent (the cut's, then the library's `Inbox::check_reply`), so the route and the reply's `409` never disagree; `closes_at` is the recorded window from the epoch on. The design names only `{open, closes_at}`; a reason (`customer_service_window_closed` or `thread_owned_elsewhere`) can be added later without a break, as an optional field. To swap, `Conversations::window` | M2g |
 | D63 | The conversation list's `window` (roadmap M2g) | the window route's answer for each conversation / the recorded window only | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the window route's full answer for each listed conversation, as built.** A list and the route never disagree; the cost is a few reads of the store per listed conversation (at most 100 a page, under the page's one `read` charge and the request deadline). To swap, `Conversations::list_with_windows`, beside `Conversations::list`, which reads no window (the adapter's `list_conversations` calls one or the other) | M2g |
+| D65 | The registration routes ([§4.2](#42-resources)) | `request-code`, `verify-code`, `register`, `deregister`, `two-step-pin` under `/v1/numbers/{pn}`, scope `numbers`, each `200 {phone_number_id, status}` / a scope of their own / the PIN change left out | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the five routes, each answering `200` with a body.** One route per Meta call, Meta's names hyphenated; the PIN change included, as row 128 counts it; a `200` with a body (not `204`) so that a kept answer replays as JSON. D6 applies: the PIN is a field of the request, checked as the library's `TwoStepPin` and dropped with it. Swap: the routes are thin adapters over the core's `registration::Registration`; another adapter names them its own way | M3d |
+| D66 | A number's registration attempts | per tenant only (the `send` budget) / per number, per replica / per number, shared on the bundle's `KvStore`, fixed windows: registering and deregistering 5 in 72 hours, a code's request and check 10 an hour | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the shared per-number budgets, as built:** fixed windows, each starting at its first attempt, counted by compare-and-swap on the bundle's `KvStore` (every replica books from the same count), charged after ownership (another tenant, or a caller without a key, is refused before: it cannot spend a number's budget) and after the local checks (a malformed PIN costs nothing), and failing closed (a store that fails, or a record that does not read, refuses the attempt, `503`, before Meta is asked). Meta limits registering and deregistering to 10 requests each per number in a moving 72 hours (`133016` on the 11th, and the number locked for 72 hours); the service counts both in one budget of 5 per window, and a moving 72 hours meets at most two of its windows, so it holds at most 10 of either call, whatever a caller's loop does (`registration::tests::two_back_to_back_windows_hold_at_most_ten`). On one clock: replicas whose clocks disagree shorten a window by their skew. Meta's pages name no limit for the code's request and check: 10 an hour is the service's default. The namespace and the record (`wa.server.registration`, `<budget>:<phone_number_id>`, `{"v":1,"since","count"}`) are stable identifiers **pending the owner's confirmation** (ephemeral: renamed, each count starts again; roadmap § Owner touchpoints). Swap: the four settings (`WA_SERVER_REGISTRATION_ATTEMPTS`, `WA_SERVER_REGISTRATION_WINDOW`, `WA_SERVER_VERIFICATION_ATTEMPTS`, `WA_SERVER_VERIFICATION_WINDOW`, [§7.2](#72-environment)), or another `KvStore` | M3d |
+| D67 | Idempotency on the registration routes | none (the design listed them nowhere) / on the request of a code, a registration and a deregistration, the PIN no input of the fingerprint / the same, an HMAC of the PIN in it | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the fingerprint without the PIN, and a wrong PIN releases the key.** A 6-digit PIN's digest is the PIN (a million guesses), and even keyed it is a stored derivative of it: the fingerprint is the number and the region only. The cost: a repeat under a kept key with another PIN replays the first answer; a wrong PIN (`133005`, nothing registered) releases the key, so the corrected PIN reuses it. A replay never sends the repeat's PIN, so its answer says nothing of it. Verifying a code and setting the PIN take no key (a check, and a value set). Swap: `Fingerprint::register_number` | M3d |
+| D68 | Deregistration, destructive at Meta | the scope `numbers` alone / the number's id again in the body (`confirm`), audited / an operator-only route or a scope of its own | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the scope `numbers`, the number's id again in the body (`confirm`), and an audit event (`number_deregistered`).** Meta's page: the number stops working with the Cloud API until registered again (with its PIN), its history is kept and its local storage stays on, a coexistence number cannot be deregistered, and deregistering is limited to 10 requests per number in a moving 72 hours (D66's budget counts it with registering). Under an `Idempotency-Key` a replay never asks Meta again. The merchant owns the number, so the operator is not in the way; the confirmation stops a call aimed at the wrong path, and the audit event names the key. A scope of its own would be a new stored name (keys keep their scopes), so it stays the owner's (roadmap § Owner touchpoints). Swap: `registration::confirmed`; an operator-only deployment withholds the route by scope until then | M3d |
+| D69 | Meta's texts on the registration routes | `details` and debug logs as other routes / none at all | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: none.** Meta's texts could quote the request (the PIN, the code); the answer keeps Meta's code, subcode and trace id (`OwnedNumber::failed_withholding_texts`, M3c's). The cost: `133008`'s wait, which Meta gives in `details`, is not passed on; a caller waits for the attempt budget's `Retry-After` instead. Swap: `registration::Registration`'s `failed`, which calls `OwnedNumber::failed_withholding_texts`; `OwnedNumber::failed` (texts at `debug`) and `ServiceError::with_details` (`details` answered) are the other routes' | M3d |
 
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** The
 questions the service inherits were decided on 2026-09-26 under the same

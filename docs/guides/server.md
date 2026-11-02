@@ -124,6 +124,8 @@ read yet: set, it stops the start.
 | `WA_SERVER_RATE_TEMPLATES`, `WA_SERVER_RATE_TEMPLATES_BURST` | `2`, `2` | the same for template management |
 | `WA_SERVER_RATE_OTP_ISSUE`, `WA_SERVER_RATE_OTP_ISSUE_BURST` | `5`, `5` | the same for sending OTP codes (per recipient, the codes' own cooldown and issue limit apply too) |
 | `WA_SERVER_RATE_OTP_VERIFY`, `WA_SERVER_RATE_OTP_VERIFY_BURST` | `20`, `20` | the same for checking OTP codes |
+| `WA_SERVER_REGISTRATION_ATTEMPTS`, `WA_SERVER_REGISTRATION_WINDOW` | `5`, `72h` | registrations and deregistrations of one number per window, counted for every replica together (Meta allows 10 of each in 72 hours and locks the number on the 11th) |
+| `WA_SERVER_VERIFICATION_ATTEMPTS`, `WA_SERVER_VERIFICATION_WINDOW` | `10`, `1h` | verification codes requested and checked for one number per window, the same way |
 | `WA_SERVER_UNDATED_AFTER_MOVE` | `operator_only` | after a WABA moved to its tenant from another one, who gets its undated events (errors, history chunks, group updates without a date), which may be the previous tenant's that Meta redelivers: nobody within the window (`operator_only`, the operator still sees them), or the new holder (`current_holder`, the behaviour before this setting). A WABA no other tenant held is never concerned (design D36) |
 | `WA_SERVER_UNDATED_AFTER_MOVE_WINDOW` | `169h` (7 days and an hour) | that window, from when the previous tenant's binding was removed; a positive duration, with `operator_only` only (set with `current_holder`, the start is refused) |
 | `WA_SERVER_MOVE_SKEW_MARGIN` | `0s` | after a move only: how far past the second the new binding began an event Meta dated must be to reach the new holder (widen it if Meta's clock may run ahead of the database's) |
@@ -809,6 +811,60 @@ default; the issue limit cannot be turned off); `422` on
 message never promises a lifetime the code does not have. Each change is
 an `audit` event.
 
+## Registration and the two-step PIN
+
+A number added in WhatsApp Manager, or by Embedded Signup, is registered
+for the Cloud API before it sends (scope `numbers`; roadmap M3d). The
+PIN is the merchant's: have them type it for each attempt and pass it
+through; the service stores it nowhere (design D6).
+
+| Route | Body | Does |
+| --- | --- | --- |
+| `POST /v1/numbers/{pn}/request-code` | `{"code_method": "SMS", "language": "en_US"}` (or `VOICE`) | Meta sends the number a code |
+| `POST /v1/numbers/{pn}/verify-code` | `{"code": "123-830"}` (hyphens dropped) | submits it |
+| `POST /v1/numbers/{pn}/register` | `{"pin": "212834"}`, optionally `"data_localization_region": "CH"` | registers the number with its PIN: the current one, or the one it gets when it has none |
+| `POST /v1/numbers/{pn}/two-step-pin` | `{"pin": "212834"}` | sets a new PIN (there is no call to turn it off) |
+| `POST /v1/numbers/{pn}/deregister` | `{"confirm": "106540352242922"}`, the path's number again | the number stops sending and receiving through the Cloud API until registered again |
+
+Each answers `200` with `phone_number_id` and a `status`
+(`code_requested`, `code_verified`, `registered`, `pin_set`,
+`deregistered`).
+
+```bash
+curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/register" \
+  -H "Authorization: Bearer $KEY" -H "Idempotency-Key: number-106540352242922:register-1" \
+  -H "Content-Type: application/json" -d '{"pin": "212834"}'
+```
+
+- **The PIN and the code go to Meta and nowhere else**: not into an
+  answer, a log line at any level, an error, an audit event, an
+  idempotency record, an event or a metric. A body that does not parse
+  is `422` on `body`, without quoting it; a PIN that is not six digits is
+  `422` on `pin`, and Meta is never asked.
+- **Meta's error texts are dropped** on these routes, `details`
+  included (they could quote the request): the answer keeps Meta's
+  code and trace id. A wrong PIN is `409 two_step_verification`, Meta's
+  72-hour lock or an unverified number `409 registration`.
+- **Attempts are counted per number** for every replica together, after
+  the number is found to be yours: 5 registrations and deregistrations
+  in 72 hours (Meta allows 10 of each and then locks the number for 72 hours;
+  two of the service's windows back to back stay within it), 10 codes
+  requested and checked an hour. Past it, `429 too_many_requests` with
+  `Retry-After` the rest of the window, and nothing is asked of Meta. A
+  malformed body spends no attempt.
+- **`Idempotency-Key`** on `request-code`, `register` and `deregister`.
+  A registration's key covers the number and the region, never the PIN:
+  a repeat under a kept key with another PIN gets the first answer back.
+  A wrong PIN frees the key (nothing was registered), so retry the
+  corrected PIN under it.
+- **Deregistering is destructive**: the body names the number again, and
+  each deregistration, like each PIN change, is an audit event with the
+  key's public id. Meta keeps the number's history and its local storage
+  setting, and refuses to deregister a number also on the WhatsApp
+  Business app (with a code its pages do not list: `502 unknown`,
+  `may_have_been_sent: false`, the key freed). The number stays bound to your tenant; its sends fail
+  with `409 registration` until it is registered again.
+
 ## Rate limits
 
 Each tenant has a budget per class of route, per replica (a deployment
@@ -818,7 +874,8 @@ template management 2 a second, OTP issues 5 a second and OTP checks 20. A platf
 from that tenant's budget. Past it: `429 too_many_requests`, `retryable:
 true`, with `Retry-After` in seconds, before anything is read or sent.
 Change them with `WA_SERVER_RATE_*` (the same for every tenant: per-tenant
-limits are not settable yet). Meta's own limits (80 messages a second per
+limits are not settable yet). A number's registration attempts have
+budgets of their own, per number ([above](#registration-and-the-two-step-pin)). Meta's own limits (80 messages a second per
 number, pair and portfolio limits) still apply and answer their own codes
 (`rate_limited`, `pair_rate_limited`, …); pacing campaigns is yours.
 

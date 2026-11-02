@@ -3069,6 +3069,167 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/deregister": {
+      "post": {
+        "tags": [
+          "registration"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/deregister`: deregister the number. It can no\nlonger send or receive through the Cloud API until registered again\n(with its PIN); Meta keeps its history and its local storage setting,\nand refuses a number also on the WhatsApp Business app. The number\nstays bound to the tenant. Audited (`number_deregistered`).",
+        "operationId": "deregister_number",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key never deregisters twice (a repeat gets the kept answer, with `Idempotent-Replayed: true`)",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeregistrationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Deregistered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationAnswer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Meta's `registration` (Meta's 72-hour limit), `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `confirm` (not the path's number) or `body`, `idempotency_key_reused`, or Meta's `invalid_parameter`: nothing was asked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget, or the number's registration attempts (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the number may have been deregistered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/events/stream": {
       "get": {
         "tags": [
@@ -4747,6 +4908,626 @@
           },
           "429": {
             "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/register": {
+      "post": {
+        "tags": [
+          "registration"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/register`: register the (verified) number for\nthe Cloud API with its two-step verification PIN.",
+        "operationId": "register_number",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key never registers twice (a repeat gets the kept answer, with `Idempotent-Replayed: true`). It covers the number and `data_localization_region`, never the PIN: a repeat with another PIN is the same request, and a wrong PIN Meta refused frees the key",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationAnswer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Meta's `two_step_verification` (a wrong PIN, or too many), `registration` (not verified, or Meta's 72-hour limit), `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `pin` (six digits), `data_localization_region` or `body` (never quoting it), `idempotency_key_reused`, or Meta's `invalid_parameter`: nothing was asked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget, or the number's registration attempts (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the number may have been registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/request-code": {
+      "post": {
+        "tags": [
+          "registration"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/request-code`: have Meta send the number a\nverification code, by SMS or voice call.",
+        "operationId": "request_verification_code",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never ask for a code twice (a repeat gets the kept answer, with `Idempotent-Replayed: true`)",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodeRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Meta is sending the code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationAnswer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, or Meta's `registration` (the number is verified already)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `language` (blank) or `body`, `idempotency_key_reused`, or Meta's `invalid_parameter`: nothing was asked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget, or the number's verification attempts (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: a code may have been sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/two-step-pin": {
+      "post": {
+        "tags": [
+          "registration"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/two-step-pin`: set the number's two-step\nverification PIN (there is no call to turn it off). Audited\n(`two_step_pin_set`).",
+        "operationId": "set_two_step_pin",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TwoStepPinBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The PIN is set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationAnswer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's `registration`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `pin` (six digits) or `body` (never quoting it), or Meta's `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/verify-code": {
+      "post": {
+        "tags": [
+          "registration"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/verify-code`: submit the code the number\nreceived.",
+        "operationId": "verify_code",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodeCheckBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Meta accepted the code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationAnswer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's `registration`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `code` (digits and hyphens) or `body` (never quoting it), or Meta's `invalid_parameter` (a wrong code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget, or the number's verification attempts (`Retry-After`), or Meta's throttling",
             "content": {
               "application/json": {
                 "schema": {
@@ -7120,6 +7901,49 @@
           }
         }
       },
+      "CodeCheckBody": {
+        "type": "object",
+        "description": "`POST /v1/numbers/{pn}/verify-code`. No `Debug`: it holds the code.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "format": "password",
+            "description": "The code the number received (`123-830` or `123830`: hyphens are\ndropped). Never answered, stored or logged.",
+            "writeOnly": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "CodeMethod": {
+        "type": "string",
+        "description": "How a verification code is delivered (Meta's `code_method`).",
+        "enum": [
+          "SMS",
+          "VOICE"
+        ]
+      },
+      "CodeRequestBody": {
+        "type": "object",
+        "description": "`POST /v1/numbers/{pn}/request-code`.",
+        "required": [
+          "code_method",
+          "language"
+        ],
+        "properties": {
+          "code_method": {
+            "$ref": "#/components/schemas/CodeMethod",
+            "description": "`SMS` or `VOICE`."
+          },
+          "language": {
+            "type": "string",
+            "description": "The language of the code's message, e.g. `en_US` (not blank)."
+          }
+        },
+        "additionalProperties": false
+      },
       "ContactAddress": {
         "type": "object",
         "description": "A contact card's address.",
@@ -7574,6 +8398,20 @@
           "url": {
             "type": "string",
             "description": "The URL the button opens."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeregistrationBody": {
+        "type": "object",
+        "description": "`POST /v1/numbers/{pn}/deregister`.",
+        "required": [
+          "confirm"
+        ],
+        "properties": {
+          "confirm": {
+            "type": "string",
+            "description": "The path's phone number id, again: deregistering stops the number\nsending and receiving through the Cloud API until it is registered\nagain."
           }
         },
         "additionalProperties": false
@@ -9807,6 +10645,59 @@
           }
         }
       },
+      "RegistrationAnswer": {
+        "type": "object",
+        "description": "A registration route's answer: the number and what was done, nothing\nof the request.",
+        "required": [
+          "phone_number_id",
+          "status"
+        ],
+        "properties": {
+          "phone_number_id": {
+            "type": "string",
+            "description": "Phone number id."
+          },
+          "status": {
+            "$ref": "#/components/schemas/RegistrationStatus",
+            "description": "What was done."
+          }
+        }
+      },
+      "RegistrationBody": {
+        "type": "object",
+        "description": "`POST /v1/numbers/{pn}/register`. No `Debug`: it holds the PIN.",
+        "required": [
+          "pin"
+        ],
+        "properties": {
+          "data_localization_region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Turns local storage on, in this country (a two-letter ISO 3166\ncode Meta supports, e.g. `CH`). Changing it later takes a\nderegistration."
+          },
+          "pin": {
+            "type": "string",
+            "format": "password",
+            "description": "The number's two-step verification PIN, six digits, typed by the\nmerchant for this attempt: the current one, or the one to set when\nthe number has none. Never answered, stored or logged (decision D6).",
+            "writeOnly": true,
+            "pattern": "^[0-9]{6}$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RegistrationStatus": {
+        "type": "string",
+        "description": "What a registration route did.",
+        "enum": [
+          "code_requested",
+          "code_verified",
+          "registered",
+          "deregistered",
+          "pin_set"
+        ]
+      },
       "Reply": {
         "type": "object",
         "description": "A reply button's `reply`.",
@@ -10444,6 +11335,23 @@
           }
         }
       },
+      "TwoStepPinBody": {
+        "type": "object",
+        "description": "`POST /v1/numbers/{pn}/two-step-pin`. No `Debug`: it holds the PIN.",
+        "required": [
+          "pin"
+        ],
+        "properties": {
+          "pin": {
+            "type": "string",
+            "format": "password",
+            "description": "The new two-step verification PIN, six digits. Never answered,\nstored or logged (decision D6).",
+            "writeOnly": true,
+            "pattern": "^[0-9]{6}$"
+          }
+        },
+        "additionalProperties": false
+      },
       "UpdateTenant": {
         "type": "object",
         "description": "`PATCH /v1/admin/tenants/{id}`.",
@@ -10672,6 +11580,10 @@
     {
       "name": "numbers",
       "description": "WABAs, numbers and business profiles (scope `numbers`)"
+    },
+    {
+      "name": "registration",
+      "description": "A number's verification code, registration, deregistration and two-step PIN, the PIN typed per attempt and never stored (scope `numbers`)"
     },
     {
       "name": "messages",

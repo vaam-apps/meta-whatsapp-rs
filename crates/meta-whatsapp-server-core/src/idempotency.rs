@@ -73,6 +73,9 @@ use crate::store::IdempotencyRecords;
 /// | `mark_conversation_read` ([`Self::mark_conversation_read`]) | the number's id; the conversation's contact, as the path named it decoded; the JSON body, canonical as above (`null` for an empty one) |
 /// | `create_authentication_template` ([`Self::create_authentication_template`]) | the WABA's id; the JSON body, canonical as above |
 /// | `issue_otp` ([`Self::issue_otp`]) | the JSON body, canonical as above; the digest then keyed with the OTP pepper's fingerprint key (an HMAC-SHA256): the body names a phone number |
+/// | `request_verification_code` ([`Self::request_verification_code`]) | the number's id; the delivery method and the language, as a JSON object, canonical as above |
+/// | `register_number` ([`Self::register_number`]) | the number's id; the data localization region, or none: **never the PIN** (roadmap M3d, decisions D6 and D67), so no record holds anything derived from it |
+/// | `deregister_number` ([`Self::deregister_number`]) | the number's id (the body's confirmation is that id again) |
 ///
 /// The same request always has the same fingerprint; another operation,
 /// another number or WABA, or another body has another. Fingerprints are
@@ -184,6 +187,41 @@ impl Fingerprint {
     pub fn issue_otp(keys: &OtpKeys, body: &serde_json::Value) -> Self {
         let plain = Self::json(Operation::IssueOtp, &[], body);
         Self::of(keys.fingerprint(&plain.digest))
+    }
+
+    /// `request_verification_code` on `number`, by `method` (Meta's name,
+    /// `SMS` or `VOICE`) in `language` (roadmap M3d).
+    pub fn request_verification_code(number: &PhoneNumberId, method: &str, language: &str) -> Self {
+        Self::json(
+            Operation::RequestVerificationCode,
+            &[("pn", number.as_str())],
+            &serde_json::json!({"code_method": method, "language": language}),
+        )
+    }
+
+    /// `register_number` on `number`, with the data localization region
+    /// the request named, if any (roadmap M3d). The PIN is no input: a
+    /// 6-digit secret's digest is the secret (a million guesses), so the
+    /// stored fingerprint holds nothing of it. The cost: a repeat with the
+    /// same key and another PIN is the same request (it gets the kept
+    /// answer, or `409 idempotency_in_progress`); a wrong PIN Meta refused
+    /// releases the key (nothing was registered), so the corrected PIN
+    /// may reuse it.
+    pub fn register_number(number: &PhoneNumberId, region: Option<&str>) -> Self {
+        Self::json(
+            Operation::RegisterNumber,
+            &[("pn", number.as_str())],
+            &serde_json::json!({"data_localization_region": region}),
+        )
+    }
+
+    /// `deregister_number` on `number` (roadmap M3d).
+    pub fn deregister_number(number: &PhoneNumberId) -> Self {
+        Self::json(
+            Operation::DeregisterNumber,
+            &[("pn", number.as_str())],
+            &serde_json::json!({}),
+        )
     }
 
     /// `create_payment_configuration` in `waba`, with the JSON body the
@@ -1496,5 +1534,44 @@ mod tests {
             assert!(!debug.contains("7, 7, 7"), "the fingerprint: {debug}");
         }
         assert!(printed[3].starts_with("Replay"), "{}", printed[3]);
+    }
+
+    /// The registration operations' fingerprints (roadmap M3d): each its
+    /// operation's and its number's, the region and the code's delivery
+    /// counting, and the PIN no input at all (`register_number` takes none:
+    /// what the record keeps holds nothing derived from it). The HTTP
+    /// tests decide the rest (`tests/registration.rs`: a repeat under the
+    /// same key with another PIN replays).
+    #[test]
+    fn the_registration_fingerprints_are_their_operations_and_hold_no_pin() {
+        let one = pn("106540352242922");
+        let registered = Fingerprint::register_number(&one, None);
+        assert_eq!(
+            registered,
+            Fingerprint::json(
+                Operation::RegisterNumber,
+                &[("pn", one.as_str())],
+                &serde_json::json!({"data_localization_region": null}),
+            )
+        );
+        assert_ne!(registered, Fingerprint::register_number(&one, Some("CH")));
+        assert_ne!(
+            registered,
+            Fingerprint::register_number(&pn("106540352242923"), None)
+        );
+        assert_ne!(registered, Fingerprint::deregister_number(&one));
+        let sms = Fingerprint::request_verification_code(&one, "SMS", "en_US");
+        assert_ne!(
+            sms,
+            Fingerprint::request_verification_code(&one, "VOICE", "en_US")
+        );
+        assert_ne!(
+            sms,
+            Fingerprint::request_verification_code(&one, "SMS", "fr_FR")
+        );
+        assert_eq!(
+            sms,
+            Fingerprint::request_verification_code(&one, "SMS", "en_US")
+        );
     }
 }
