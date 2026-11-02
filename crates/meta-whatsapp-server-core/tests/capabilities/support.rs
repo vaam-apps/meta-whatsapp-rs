@@ -23,8 +23,8 @@ pub use meta_whatsapp_server_core::authz::{
 pub use meta_whatsapp_server_core::keys::MintedKey;
 pub use meta_whatsapp_server_core::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, KeyOwner, KeyScope, Listing,
-    NewApiKey, NumberBinding, NumberStatus, OtpSettings, PageRequest, Scope, Tenant, TenantId,
-    TenantStatus, WabaBinding,
+    NewApiKey, NewSignupAttempt, NumberBinding, NumberStatus, OtpSettings, PageRequest, Scope,
+    SignupAttempt, Tenant, TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
 pub use meta_whatsapp_server_core::store::{RecordStore, StoreResult};
 pub use time::OffsetDateTime;
@@ -322,6 +322,38 @@ impl RecordStore for Records {
     async fn set_waba_status_if(&self, _: &BindingEpoch, _: NumberStatus) -> StoreResult<bool> {
         self.call("set_waba_status_if");
         Ok(true)
+    }
+    async fn set_credit_allocation_if(&self, _: &BindingEpoch, _: &str) -> StoreResult<bool> {
+        self.call("set_credit_allocation_if");
+        Ok(false)
+    }
+    async fn save_signup_attempt(&self, _: &NewSignupAttempt) -> StoreResult<bool> {
+        self.call("save_signup_attempt");
+        Ok(false)
+    }
+    async fn signup_attempt(&self, _: &TenantId, _: &WabaId) -> StoreResult<Option<SignupAttempt>> {
+        self.call("signup_attempt");
+        Ok(None)
+    }
+    async fn signup_attempts(
+        &self,
+        _: &TenantId,
+        _: &PageRequest,
+    ) -> StoreResult<Listing<SignupAttempt>> {
+        self.call("signup_attempts");
+        Ok(empty())
+    }
+    async fn delete_signup_attempt(&self, _: &TenantId, _: &WabaId) -> StoreResult<bool> {
+        self.call("delete_signup_attempt");
+        Ok(false)
+    }
+    async fn record_vault_entry(&self, _: &VaultEntry) -> StoreResult<()> {
+        self.call("record_vault_entry");
+        Ok(())
+    }
+    async fn vault_entries(&self, _: &PageRequest) -> StoreResult<Listing<VaultEntry>> {
+        self.call("vault_entries");
+        Ok(empty())
     }
 }
 

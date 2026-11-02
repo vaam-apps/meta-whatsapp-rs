@@ -158,6 +158,9 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     secrets.extend(registration(h, &tenant_key).await);
     // Payments (roadmap P2): the OAuth links are credentials.
     secrets.extend(payments(h, &admin).await);
+    // Embedded Signup (roadmap M3a): neither the merchant's token, nor the
+    // PIN, the code or the state is logged.
+    secrets.extend(signup(h, &admin).await);
     // Failures log too: a refused key, and Meta refusing a token.
     let refused = h
         .call(Call::get("/v1/numbers").key(&format!("{tenant_key}x")))
@@ -1224,6 +1227,88 @@ async fn otp(h: &Harness, admin: &str) -> Vec<String> {
     ]
 }
 
+/// Embedded Signup's routes (roadmap M3a), each exercised as a Tech
+/// Provider (the capture harnesses' deployment, `logs.rs` and
+/// `live_logs.rs`): an attempt started, completed up to a registration
+/// Meta refuses (`133005`: the attempt kept), listed, resumed with a
+/// corrected PIN; the operator's re-funding, which a Tech Provider has
+/// none of (`409`). Returns what must not be logged: the merchant's
+/// token, both PINs, the code and the state.
+async fn signup(h: &Harness, admin: &str) -> Vec<String> {
+    use super::signup::{PHONE, TOKEN, WABA, script_until_verified, success};
+    const CODE: &str = "AQB-signup-code-SENTINEL-for-the-log-test";
+    const PIN: &str = "835164";
+    const NEW_PIN: &str = "472905";
+    h.tenant("merchant-77").await;
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-77/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["signup"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let started = h
+        .call(
+            Call::new(Method::POST, "/v1/signup/sessions")
+                .key(&key)
+                .json(&json!({})),
+        )
+        .await;
+    assert_eq!(started.status.as_u16(), 200, "{}", started.text);
+    let state = started.json()["state"].as_str().unwrap().to_owned();
+    script_until_verified(&h.graph);
+    h.graph.push_json(200, success()); // subscribed_apps
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": "(#133005) Two step verification PIN Mismatch",
+            "type": "OAuthException", "code": 133005, "fbtrace_id": "A"}}),
+    );
+    let stopped = h
+        .call(
+            Call::new(Method::POST, "/v1/signup/complete")
+                .key(&key)
+                .json(&json!({
+                    "state": state, "code": CODE, "pin": PIN,
+                    "event": {"type": "WA_EMBEDDED_SIGNUP", "event": "FINISH",
+                        "data": {"waba_id": WABA, "phone_number_id": PHONE}}
+                })),
+        )
+        .await;
+    assert_eq!(stopped.code(), "onboarding_failed", "{}", stopped.text);
+    let attempts = h.call(Call::get("/v1/signup/attempts").key(&key)).await;
+    assert_eq!(attempts.status.as_u16(), 200, "{}", attempts.text);
+    h.graph.push_json(200, success()); // subscribed_apps
+    h.graph.push_json(200, success()); // register
+    let resumed = h
+        .call(
+            Call::new(Method::POST, "/v1/signup/resume")
+                .key(&key)
+                .json(&json!({"waba_id": WABA, "pin": NEW_PIN})),
+        )
+        .await;
+    assert_eq!(resumed.status.as_u16(), 200, "{}", resumed.text);
+    let reshare = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("/v1/admin/wabas/{WABA}/credit-line/reshare"),
+            )
+            .key(admin),
+        )
+        .await;
+    assert_eq!(reshare.code(), "signup_not_configured", "{}", reshare.text);
+    vec![
+        key,
+        TOKEN.to_owned(),
+        CODE.to_owned(),
+        PIN.to_owned(),
+        NEW_PIN.to_owned(),
+        state,
+    ]
+}
+
 /// SHA-256 of `data`, hex.
 pub fn sha256_hex(data: &[u8]) -> String {
     use sha2::Digest as _;
@@ -1301,10 +1386,29 @@ fn check_audit(logs: &str) {
     // A tenant's template deletions are audited too, each under its own
     // action (every language of a name, then one id; the refused one is
     // not), with the tenant, the WABA and its key's id.
-    let deletions: Vec<&serde_json::Value> = events
+    let changes: Vec<&serde_json::Value> = events
         .iter()
         .filter(|e| e["target"] == "audit" && e["fields"]["message"] == "tenant change")
         .map(|e| &e["fields"])
+        .collect();
+    // A tenant's onboarding is audited too (roadmap M3a): the resumed
+    // signup of `signup`, with its tenant, its WABA and its key's id.
+    let onboarded: Vec<&&serde_json::Value> = changes
+        .iter()
+        .filter(|fields| fields["action"] == "signup_resumed")
+        .collect();
+    assert_eq!(onboarded.len(), 1, "the resumed signup's audit event");
+    assert_eq!(onboarded[0]["tenant"], "merchant-77", "{}", onboarded[0]);
+    assert_eq!(
+        onboarded[0]["waba_id"],
+        super::signup::WABA,
+        "{}",
+        onboarded[0]
+    );
+    assert!(onboarded[0]["key_id"].is_string(), "{}", onboarded[0]);
+    let deletions: Vec<&serde_json::Value> = changes
+        .into_iter()
+        .filter(|fields| fields["action"] != "signup_resumed")
         .collect();
     let actions: Vec<&str> = deletions
         .iter()

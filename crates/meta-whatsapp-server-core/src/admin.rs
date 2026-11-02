@@ -42,6 +42,7 @@ use crate::model::{
 };
 use crate::number_events::{DisconnectReason, NumberEvent};
 use crate::observe::Observer;
+use crate::signup::Signups;
 use crate::store::RecordStore;
 
 /// Most numbers an attach binds for one WABA (Meta allows far fewer): past
@@ -265,6 +266,9 @@ pub struct Admin<'a> {
     authz: &'a Authorizer,
     caller: &'a AdminCaller,
     observer: &'a dyn Observer,
+    /// The deployment's signup, whose Solution Partner mode revokes the
+    /// credit line of a deleted tenant's WABAs (decision D75).
+    signups: Option<&'a Signups>,
 }
 
 impl std::fmt::Debug for Admin<'_> {
@@ -290,6 +294,7 @@ impl<'a> Admin<'a> {
             authz,
             caller: admin,
             observer: &(),
+            signups: None,
         })
     }
 
@@ -297,6 +302,16 @@ impl<'a> Admin<'a> {
     #[must_use]
     pub fn observed_by(mut self, observer: &'a dyn Observer) -> Self {
         self.observer = observer;
+        self
+    }
+
+    /// Delete tenants as `signups`' deployment does (decision D75): in
+    /// Solution Partner mode each WABA's credit line is revoked before its
+    /// token and bindings are deleted ([`Signups::offboard`]). The unbind
+    /// revokes nothing ([`Self::unbind_waba`]).
+    #[must_use]
+    pub fn offboarded_by(mut self, signups: &'a Signups) -> Self {
+        self.signups = Some(signups);
         self
     }
 
@@ -472,7 +487,12 @@ impl<'a> Admin<'a> {
 
     /// Delete the tenant `id`: disconnect every WABA it has (unsubscribe
     /// the app with its token, then delete the token and the bindings, as
-    /// a tenant's own disconnection does), then delete it and its keys
+    /// a tenant's own disconnection does; in Solution Partner mode
+    /// ([`Self::offboarded_by`], decision D75), the WABA's credit line
+    /// revoked between the two, audited `credit_line_revoked`, and a
+    /// revocation that fails deletes nothing and is the answer, so a
+    /// deleted tenant's WABAs never stay funded by the partner), then
+    /// delete it and its keys
     /// (its events and idempotency records go with it, in the backend).
     /// Stops at the first WABA that cannot be disconnected; the tenant
     /// stays. A WABA attached while this runs is disconnected by the next
@@ -482,8 +502,9 @@ impl<'a> Admin<'a> {
     /// # Errors
     ///
     /// `404 not_found`; a WABA's failure (no usable token, Meta's refusal
-    /// or failure to unsubscribe, with Meta's `details`); `500 internal`,
-    /// retryable, when every round found WABAs; the store's failure.
+    /// or failure to unsubscribe, with Meta's `details`; a revocation's,
+    /// `step: revoke_credit_line`); `500 internal`, retryable, when every
+    /// round found WABAs; the store's failure.
     pub async fn delete_tenant(&self, id: &str) -> Result<(), ServiceError> {
         let id = named_tenant(id)?;
         for _ in 0..DELETE_ROUNDS {
@@ -522,19 +543,37 @@ impl<'a> Admin<'a> {
                     let api = owned.failed(self.authz, &error).await;
                     return Err(self.counted(api, &error).with_details(&error));
                 }
+                let subject = Subject {
+                    tenant: Some(id.as_str()),
+                    waba_id: Some(binding.waba_id.as_str()),
+                    ..Subject::default()
+                };
+                if let Some(signups) = self.signups {
+                    // Revoked, then the token and the bindings deleted
+                    // (decision D75); nothing deleted when it fails.
+                    match signups.offboard(self.authz, &owned, self.observer).await {
+                        Ok(true) => {
+                            self.audit("credit_line_revoked", subject);
+                            self.audit("waba_disconnected", subject);
+                            continue;
+                        }
+                        Ok(false) => {}
+                        // Moved meanwhile: the next round sees it as it is.
+                        Err(error)
+                            if error.error_code() == ErrorCode::STORAGE_UNAVAILABLE
+                                && !self.still_listed(binding).await? =>
+                        {
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
                 if !owned.forget(self.authz).await? {
                     // Attached again (or its token rotated) meanwhile: the
                     // next round sees it as it is now.
                     continue;
                 }
-                self.audit(
-                    "waba_disconnected",
-                    Subject {
-                        tenant: Some(id.as_str()),
-                        waba_id: Some(binding.waba_id.as_str()),
-                        ..Subject::default()
-                    },
-                );
+                self.audit("waba_disconnected", subject);
             }
             match self.records().delete_tenant(&id).await? {
                 DeleteTenantOutcome::Deleted => {
@@ -886,7 +925,11 @@ impl<'a> Admin<'a> {
     /// Unbind the WABA `waba_id` (decision D4's admin unbind, which lets
     /// another tenant attach it; also the way to free a WABA whose token
     /// no longer works): [`Self::unbind`] on its binding, audited
-    /// (`waba_unbound`).
+    /// (`waba_unbound`). It revokes no Solution Partner credit line, unlike
+    /// a tenant's deletion (decision D75): the operator may be moving the
+    /// WABA to another tenant. An operator who means to end its funding
+    /// revokes explicitly (the library's
+    /// `EmbeddedSignup::revoke_credit_line`).
     ///
     /// # Errors
     ///

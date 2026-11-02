@@ -28,7 +28,8 @@ use meta_whatsapp_rs::client::phone_numbers::PhoneNumberInfo;
 use meta_whatsapp_rs::core::error::StorageError;
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 
-use crate::authz::{Authorizer, OwnedNumber, OwnedWaba};
+use crate::audit::{Subject, tenant_audit};
+use crate::authz::{Authorizer, Caller, OwnedNumber, OwnedWaba};
 use crate::error::ServiceError;
 use crate::model::NumberStatus;
 use crate::number_events::{DisconnectReason, NumberEvent};
@@ -300,6 +301,10 @@ pub struct Waba<'a> {
     authz: &'a Authorizer,
     owned: &'a OwnedWaba,
     observer: &'a dyn Observer,
+    /// The deployment's signup, whose Solution Partner mode offboards a
+    /// disconnected WABA (roadmap M3a), and the caller it audits the
+    /// revocation for.
+    signups: Option<(&'a crate::signup::Signups, &'a Caller)>,
 }
 
 impl std::fmt::Debug for Waba<'_> {
@@ -325,7 +330,22 @@ impl<'a> Waba<'a> {
             authz,
             owned: waba,
             observer: &(),
+            signups: None,
         })
+    }
+
+    /// Disconnect as `signups`' deployment does (roadmap M3a): in Solution
+    /// Partner mode the credit line is revoked before the token and the
+    /// bindings are deleted ([`crate::signup::Signups::offboard`]), a
+    /// tenant audit event of `caller`'s (`credit_line_revoked`).
+    #[must_use]
+    pub fn offboarded_by(
+        mut self,
+        signups: &'a crate::signup::Signups,
+        caller: &'a Caller,
+    ) -> Self {
+        self.signups = Some((signups, caller));
+        self
     }
 
     /// Report failed Graph calls to `observer` (the adapter's metrics).
@@ -341,7 +361,10 @@ impl<'a> Waba<'a> {
     /// tenant (roadmap M2d: after it, the outbox would keep the rows
     /// operator-only); only then delete the token and the bindings, the
     /// WABA's and its numbers' ([`OwnedWaba::forget_or_busy`]). When Meta
-    /// refuses or fails, nothing is recorded or deleted.
+    /// refuses or fails, nothing is recorded or deleted. In Solution
+    /// Partner mode ([`Self::offboarded_by`]), the credit line is revoked
+    /// between the events and the deletion, and a revocation that fails
+    /// deletes nothing either (roadmap M3a, design acceptance test M3.4).
     ///
     /// # Errors
     ///
@@ -377,6 +400,28 @@ impl<'a> Waba<'a> {
                 NumberEvent::Disconnected(DisconnectReason::TenantDisconnected),
             )
             .await?;
+        if let Some((signups, caller)) = self.signups {
+            // The caller the revocation is audited for: the capability's.
+            self.authz.admit(caller)?;
+            if caller.tenant() != self.owned.tenant() {
+                return Err(ServiceError::forbidden());
+            }
+            if signups
+                .offboard(self.authz, self.owned, self.observer)
+                .await?
+            {
+                tenant_audit(
+                    "credit_line_revoked",
+                    caller.key_id(),
+                    &Subject {
+                        tenant: Some(caller.tenant().as_str()),
+                        waba_id: Some(self.owned.waba_id().as_str()),
+                        ..Subject::default()
+                    },
+                );
+                return Ok(());
+            }
+        }
         self.owned.clone().forget_or_busy(self.authz).await
     }
 }

@@ -97,8 +97,8 @@ use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 
 use crate::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
-    KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus, OtpSettings, PageRequest, Tenant,
-    TenantId, TenantStatus, WabaBinding,
+    KeyScope, Listing, NewApiKey, NewSignupAttempt, NumberBinding, NumberStatus, OtpSettings,
+    PageRequest, SignupAttempt, Tenant, TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
 
 /// Result of a store call. Every failure is the library's
@@ -289,6 +289,59 @@ pub trait RecordStore: Send + Sync + 'static {
         epoch: &BindingEpoch,
         status: NumberStatus,
     ) -> StoreResult<bool>;
+
+    /// Record the Solution Partner credit allocation that funds
+    /// `epoch.waba_id` ([`WabaBinding::credit_allocation_id`]; roadmap
+    /// M3a), only if the WABA is still `epoch`'s, checked atomically with
+    /// the write (as [`Self::set_waba_status_if`]). Whether it was.
+    async fn set_credit_allocation_if(
+        &self,
+        epoch: &BindingEpoch,
+        allocation_config_id: &str,
+    ) -> StoreResult<bool>;
+
+    /// Keep a signup attempt (roadmap M3a: an onboarding that stopped
+    /// after its token was stored), replacing the WABA's previous one,
+    /// only while the WABA is bound to `attempt.tenant_id`, checked
+    /// atomically with the write: `false`, and nothing written, otherwise.
+    /// An attempt goes with its binding: every unbind
+    /// ([`Self::unbind_waba`], [`Self::unbind_waba_if`]) deletes it in the
+    /// same step (Postgres: a foreign key, `ON DELETE CASCADE`), so a WABA
+    /// bound again, to any tenant, has none. The store sets `created_at`
+    /// (kept by a replacement of the same tenant's) and `updated_at`, on
+    /// its clock.
+    async fn save_signup_attempt(&self, attempt: &NewSignupAttempt) -> StoreResult<bool>;
+
+    /// `tenant`'s attempt for `waba_id`: `None` when it has none (another
+    /// tenant's attempt included: it does not exist for `tenant`).
+    async fn signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<Option<SignupAttempt>>;
+
+    /// `tenant`'s attempts, in byte order of their WABA ids.
+    async fn signup_attempts(
+        &self,
+        tenant: &TenantId,
+        page: &PageRequest,
+    ) -> StoreResult<Listing<SignupAttempt>>;
+
+    /// Delete `tenant`'s attempt for `waba_id` (resumed, or superseded by
+    /// a new onboarding); `false` when it had none.
+    async fn delete_signup_attempt(&self, tenant: &TenantId, waba_id: &WabaId)
+    -> StoreResult<bool>;
+
+    /// Remember a record the token vault may keep past a binding
+    /// ([`VaultEntry`]: a credit ledger, a revocation marker; roadmap M3a),
+    /// so that a key rotation reaches it. Idempotent; kept for good: a
+    /// tenant's deletion and every unbind leave it, as the vault's records
+    /// outlive both.
+    async fn record_vault_entry(&self, entry: &VaultEntry) -> StoreResult<()>;
+
+    /// The entries [`Self::record_vault_entry`] kept, in byte order of
+    /// their [`VaultEntry::key`] (the page's cursor).
+    async fn vault_entries(&self, page: &PageRequest) -> StoreResult<Listing<VaultEntry>>;
 }
 
 /// The records of `Idempotency-Key`s (docs/design/server.md, section

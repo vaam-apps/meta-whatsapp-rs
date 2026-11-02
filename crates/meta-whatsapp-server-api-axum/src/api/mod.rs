@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`), `/v1/events` (scope `events`), `/v1/otp/…` (scope `otp`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`), `/v1/events` (scope `events`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -26,6 +26,7 @@ pub mod numbers;
 pub mod otp;
 pub mod payments;
 pub mod registration;
+pub mod signup;
 pub mod templates;
 
 pub use meta_whatsapp_server_http::api::{
@@ -37,6 +38,7 @@ use std::sync::LazyLock;
 
 use meta_whatsapp_rs::webhooks::axum;
 use meta_whatsapp_rs::webhooks::axum::Router;
+use meta_whatsapp_rs::webhooks::axum::extract::DefaultBodyLimit;
 use meta_whatsapp_rs::webhooks::axum::http::{StatusCode, header};
 use meta_whatsapp_rs::webhooks::axum::middleware;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
@@ -93,6 +95,7 @@ impl Modify for Security {
         (name = "inbox", description = "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"),
         (name = "events", description = "Meta's webhook events, routed to their tenant (scope `events`)"),
         (name = "otp", description = "One-time passcodes sent with the tenant's authentication template, and checked (scope `otp`)"),
+        (name = "signup", description = "Embedded Signup: an attempt bound to the tenant, its completion (the business onboarded, the WABA and its numbers bound to the tenant), and the attempts to resume (scope `signup`)"),
         (name = "operations", description = "Health, metrics, this document, versions (no key)"),
     )
 )]
@@ -119,6 +122,7 @@ fn admin_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(admin::get_waba))
         .routes(routes!(admin::unbind_waba))
         .routes(routes!(admin::rotate_vault))
+        .routes(routes!(signup::reshare_credit_line))
 }
 
 fn numbers_routes() -> OpenApiRouter<Grant> {
@@ -198,6 +202,17 @@ fn otp_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(otp::verify_otp))
 }
 
+/// Embedded Signup's routes, their bodies at most 16 KiB (the design's
+/// limit for the completion, section 4.1; roadmap M3a).
+fn signup_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(signup::start_signup))
+        .routes(routes!(signup::complete_signup))
+        .routes(routes!(signup::list_signup_attempts))
+        .routes(routes!(signup::resume_signup))
+        .layer(DefaultBodyLimit::max(signup::MAX_SIGNUP_BODY_BYTES))
+}
+
 /// The HTTP crate's operations routes, and this document's own.
 fn ops_routes() -> OpenApiRouter<Grant> {
     ops::routes().routes(routes!(openapi_json))
@@ -241,6 +256,7 @@ fn api_routes(
         .merge(tenant(payments_routes(), Scope::Payments))
         .merge(tenant(events_routes(), Scope::Events))
         .merge(tenant(otp_routes(), Scope::Otp))
+        .merge(tenant(signup_routes(), Scope::Signup))
         .merge(ops_routes())
 }
 
@@ -401,6 +417,7 @@ mod tests {
             ("payments.rs", include_str!("payments.rs")),
             ("templates.rs", include_str!("templates.rs")),
             ("otp.rs", include_str!("otp.rs")),
+            ("signup.rs", include_str!("signup.rs")),
         ];
         let mut plain = Vec::new();
         for (file, source) in sources {

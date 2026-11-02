@@ -38,8 +38,8 @@ use crate::notify::PgNotifier;
 use meta_whatsapp_server_core::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
-    NumberBinding, NumberStatus, OtpSettings, PageRequest, Scope, Tenant, TenantId, TenantStatus,
-    WabaBinding,
+    NewSignupAttempt, NumberBinding, NumberStatus, OtpSettings, PageRequest, Scope, SignupAttempt,
+    Tenant, TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
 use meta_whatsapp_server_core::notify::EventNotifier;
 
@@ -78,6 +78,7 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
         "number moves",
         include_str!("../migrations/0005_number_moves.sql"),
     ),
+    (6, "signup", include_str!("../migrations/0006_signup.sql")),
 ];
 
 /// The advisory lock a housekeeping round runs under: the key of the
@@ -310,6 +311,30 @@ fn number_row(row: &PgRow) -> StoreResult<NumberBinding> {
         attached_at: get(row, "attached_at")?,
         previous_tenant_released_at: get(row, "previous_tenant_released_at")?,
     })
+}
+
+/// The columns of a signup attempt, as [`attempt_row`] reads them.
+const ATTEMPT_COLUMNS: &str =
+    "waba_id, tenant_id, failed_step, session, finish_kind, created_at, updated_at";
+
+fn attempt_row(row: &PgRow) -> StoreResult<SignupAttempt> {
+    Ok(SignupAttempt {
+        waba_id: WabaId::new_unchecked(get::<String>(row, "waba_id")?),
+        tenant_id: tenant_id(&get::<String>(row, "tenant_id")?, "tenant_id")?,
+        failed_step: get(row, "failed_step")?,
+        session: get(row, "session")?,
+        finish_kind: get(row, "finish_kind")?,
+        created_at: get(row, "created_at")?,
+        updated_at: get(row, "updated_at")?,
+    })
+}
+
+/// A vault entry's row (`wa_server_vault_records`): a kind or an id this
+/// release did not write is a storage failure.
+fn vault_entry_row(row: &PgRow) -> StoreResult<VaultEntry> {
+    let kind: String = get(row, "kind")?;
+    let id: String = get(row, "id")?;
+    VaultEntry::parse(&kind, &id).ok_or_else(|| corrupt("kind"))
 }
 
 /// `LIMIT` for a page: one more than asked, to know whether more follow.
@@ -898,6 +923,160 @@ impl RecordStore for PgStore {
         .map_err(busy_or_backend)?;
         Ok(held)
     }
+
+    async fn set_credit_allocation_if(
+        &self,
+        epoch: &BindingEpoch,
+        allocation_config_id: &str,
+    ) -> StoreResult<bool> {
+        // One statement: the row as `epoch` read it, or nothing.
+        let done = sqlx::query(
+            "UPDATE wa_server_wabas SET credit_allocation_id = $5 \
+             WHERE waba_id = $1 AND tenant_id = $2 AND attached_at = $3 AND generation = $4",
+        )
+        .bind(epoch.waba_id.as_str())
+        .bind(epoch.tenant_id.as_str())
+        .bind(epoch.attached_at)
+        .bind(epoch.generation)
+        .bind(allocation_config_id)
+        .execute(&self.pool)
+        .await
+        .map_err(busy_or_backend)?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    async fn save_signup_attempt(&self, attempt: &NewSignupAttempt) -> StoreResult<bool> {
+        // Written only from the binding's row, held by `attempt`'s tenant,
+        // locked `FOR KEY SHARE` (an unbind waits, and one committed first
+        // leaves nothing to write from); a replacement of the same tenant's
+        // attempt keeps when it began.
+        let saved: Option<i32> = sqlx::query_scalar(
+            "WITH held AS ( \
+               SELECT waba_id, tenant_id FROM wa_server_wabas \
+               WHERE waba_id = $1 AND tenant_id = $2 FOR KEY SHARE \
+             ) \
+             INSERT INTO wa_server_signup_attempts \
+               (waba_id, tenant_id, failed_step, session, finish_kind) \
+             SELECT waba_id, tenant_id, $3, $4, $5 FROM held \
+             ON CONFLICT (waba_id) DO UPDATE SET \
+               created_at = CASE WHEN wa_server_signup_attempts.tenant_id = EXCLUDED.tenant_id \
+                 THEN wa_server_signup_attempts.created_at ELSE now() END, \
+               tenant_id = EXCLUDED.tenant_id, failed_step = EXCLUDED.failed_step, \
+               session = EXCLUDED.session, finish_kind = EXCLUDED.finish_kind, \
+               updated_at = now() \
+             RETURNING 1",
+        )
+        .bind(attempt.waba_id.as_str())
+        .bind(attempt.tenant_id.as_str())
+        .bind(&attempt.failed_step)
+        .bind(&attempt.session)
+        .bind(attempt.finish_kind.as_deref())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(busy_or_backend)?;
+        Ok(saved.is_some())
+    }
+
+    async fn signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<Option<SignupAttempt>> {
+        let sql = format!(
+            "SELECT {ATTEMPT_COLUMNS} FROM wa_server_signup_attempts \
+             WHERE waba_id = $1 AND tenant_id = $2"
+        );
+        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(waba_id.as_str())
+            .bind(tenant.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        row.as_ref().map(attempt_row).transpose()
+    }
+
+    async fn signup_attempts(
+        &self,
+        tenant: &TenantId,
+        page: &PageRequest,
+    ) -> StoreResult<Listing<SignupAttempt>> {
+        let sql = format!(
+            "SELECT {ATTEMPT_COLUMNS} FROM wa_server_signup_attempts \
+             WHERE tenant_id = $1 AND ($2::text IS NULL OR waba_id > $2) \
+             ORDER BY waba_id LIMIT $3"
+        );
+        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .bind(tenant.as_str())
+            .bind(page.after.as_deref())
+            .bind(fetch_limit(page))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
+        let items = rows
+            .iter()
+            .map(attempt_row)
+            .collect::<StoreResult<Vec<_>>>()?;
+        Ok(listing(items, page.limit, |a| {
+            a.waba_id.as_str().to_owned()
+        }))
+    }
+
+    async fn delete_signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<bool> {
+        let done = sqlx::query(
+            "DELETE FROM wa_server_signup_attempts WHERE waba_id = $1 AND tenant_id = $2",
+        )
+        .bind(waba_id.as_str())
+        .bind(tenant.as_str())
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(done.rows_affected() == 1)
+    }
+
+    async fn record_vault_entry(&self, entry: &VaultEntry) -> StoreResult<()> {
+        sqlx::query(
+            "INSERT INTO wa_server_vault_records (kind, id) VALUES ($1, $2) \
+             ON CONFLICT (kind, id) DO NOTHING",
+        )
+        .bind(entry.kind())
+        .bind(entry.id())
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn vault_entries(&self, page: &PageRequest) -> StoreResult<Listing<VaultEntry>> {
+        // The cursor is a key, `<kind>/<id>`: its kind and id, compared as
+        // a pair (byte order of the key, as '/' sorts before every digit).
+        let (kind, id) = match page.after.as_deref() {
+            None => (None, None),
+            Some(after) => {
+                let (kind, id) = after.split_once('/').unwrap_or((after, ""));
+                (Some(kind), Some(id))
+            }
+        };
+        let rows = sqlx::query(
+            "SELECT kind, id FROM wa_server_vault_records \
+             WHERE $1::text IS NULL OR (kind, id) > ($1, $2) \
+             ORDER BY kind, id LIMIT $3",
+        )
+        .bind(kind)
+        .bind(id)
+        .bind(fetch_limit(page))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        let items = rows
+            .iter()
+            .map(vault_entry_row)
+            .collect::<StoreResult<Vec<_>>>()?;
+        Ok(listing(items, page.limit, VaultEntry::key))
+    }
 }
 
 #[async_trait]
@@ -1247,7 +1426,7 @@ mod tests {
     /// `(version, SHA-384 hex)` of every service migration, as sqlx records
     /// it. A new migration adds a line; an existing line never changes (an
     /// edited migration makes `migrate` refuse every database it ran on).
-    const PINNED_CHECKSUMS: [(i64, &str); 5] = [
+    const PINNED_CHECKSUMS: [(i64, &str); 6] = [
         (
             1,
             "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
@@ -1267,6 +1446,10 @@ mod tests {
         (
             5,
             "4757164b56bd779d41bfafaeb41aa393f921a93e269895d242ba4ec0b90e2f59b745c9407bc9f325a5885676ff137a6a",
+        ),
+        (
+            6,
+            "4d5988da61c5955cb42e9827a24ad4bf0ca4d6aaecba8bdde18ad9c49cc9c2308070ac8f8ca275bbe5b72a0c1606a8e5",
         ),
     ];
 
@@ -1298,7 +1481,8 @@ mod tests {
                 "idempotency",
                 "events",
                 "waba moves",
-                "number moves"
+                "number moves",
+                "signup"
             ]
         );
         // `\x77` is `w`: spelled so that a search-and-replace of the table

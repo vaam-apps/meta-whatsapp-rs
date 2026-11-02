@@ -234,7 +234,9 @@ pub(crate) async fn update_tenant(
 }
 
 /// Delete a tenant: disconnect every WABA it has (as
-/// `DELETE /v1/wabas/{waba_id}` does), then delete it and its keys. Stops
+/// `DELETE /v1/wabas/{waba_id}` does: in Solution Partner mode its credit
+/// line revoked before its token and bindings go, decision D75), then
+/// delete it and its keys. Stops
 /// at the first WABA that cannot be disconnected; the tenant stays. Its
 /// events go with it, and every platform key listing it stops allowing
 /// it, for good: no route edits a key's tenants, so a tenant created
@@ -252,7 +254,8 @@ pub(crate) async fn update_tenant(
         (status = 403, description = "Not an admin key, or Meta refused to unsubscribe a WABA", body = ErrorBody),
         (status = 404, description = "`not_found`", body = ErrorBody),
         (status = 409, description = "A WABA has no usable token (`number_not_connected`, `reconnect_required`): unbind it first", body = ErrorBody),
-        (status = 502, description = "Unsubscribing a WABA failed", body = ErrorBody),
+        (status = 502, description = "Unsubscribing a WABA failed, or, in Solution Partner mode, revoking its credit line (`step: revoke_credit_line`): nothing of that WABA deleted", body = ErrorBody),
+        (status = 503, description = "`storage_unavailable`: a WABA's token changed while it was being disconnected (retryable)", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
@@ -261,7 +264,12 @@ pub(crate) async fn delete_tenant(
     admin: AdminCaller,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    operations(&state, &admin)?.delete_tenant(&id).await?;
+    // In Solution Partner mode each WABA's credit line is revoked before
+    // its token and bindings go (decision D75).
+    operations(&state, &admin)?
+        .offboarded_by(state.signups())
+        .delete_tenant(&id)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

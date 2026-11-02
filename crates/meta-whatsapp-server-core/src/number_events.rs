@@ -7,8 +7,8 @@
 //!
 //! | Type | Recorded when | `data` |
 //! | --- | --- | --- |
-//! | `number_connected` | an admin attach bound the number to the tenant and stored its token (a first attach, or one again: a reconnection) | `{event, phone_number_id, waba_id}` |
-//! | `number_disconnected` | the number is about to leave its tenant: the tenant's disconnect, once Meta unsubscribed the app (`reason`: `tenant_disconnected`), or the operator's unbind (`operator_unbound`) | `{event, phone_number_id, waba_id, reason}` |
+//! | `number_connected` | an admin attach or an Embedded Signup (completed or resumed) bound the number to the tenant and stored its token (a first attach, or one again: a reconnection) | `{event, phone_number_id, waba_id}` |
+//! | `number_disconnected` | the number is about to leave its tenant: the tenant's disconnect, once Meta unsubscribed the app (`reason`: `tenant_disconnected`), the operator's unbind (`operator_unbound`), or Meta's `account_update` offboarding, confirmed with Graph (`partner_app_uninstalled`, `account_deleted`) | `{event, phone_number_id, waba_id, reason}` |
 //! | `number_reconnect_required` | Meta refused the number's stored token (`190`), and the service marked it `reconnect_required` | `{event, phone_number_id, waba_id}` |
 //!
 //! **Each reaches its number's tenant only**, by the outbox's own check
@@ -84,6 +84,13 @@ pub enum DisconnectReason {
     /// The operator unbound the WABA
     /// (`DELETE /v1/admin/wabas/{waba_id}/binding`): `operator_unbound`.
     OperatorUnbound,
+    /// Meta's `account_update` `PARTNER_APP_UNINSTALLED`, for this
+    /// deployment's app, confirmed with Graph (roadmap M3a's
+    /// `signup::AccountUpdates`): `partner_app_uninstalled`.
+    PartnerAppUninstalled,
+    /// Meta's `account_update` `ACCOUNT_DELETED`, confirmed with Graph:
+    /// `account_deleted`.
+    AccountDeleted,
 }
 
 impl DisconnectReason {
@@ -92,6 +99,8 @@ impl DisconnectReason {
         match self {
             Self::TenantDisconnected => "tenant_disconnected",
             Self::OperatorUnbound => "operator_unbound",
+            Self::PartnerAppUninstalled => "partner_app_uninstalled",
+            Self::AccountDeleted => "account_deleted",
         }
     }
 }
@@ -335,6 +344,15 @@ mod tests {
             data(NumberEvent::Disconnected(DisconnectReason::OperatorUnbound))["reason"],
             "operator_unbound"
         );
+        for (reason, name) in [
+            (
+                DisconnectReason::PartnerAppUninstalled,
+                "partner_app_uninstalled",
+            ),
+            (DisconnectReason::AccountDeleted, "account_deleted"),
+        ] {
+            assert_eq!(data(NumberEvent::Disconnected(reason))["reason"], name);
+        }
         assert_eq!(
             data(NumberEvent::ReconnectRequired),
             serde_json::json!({"event": "number_reconnect_required",
