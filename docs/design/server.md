@@ -126,7 +126,8 @@ covers them) but not default ones:
 
 Beside them, `crates/meta-whatsapp-server-store-mongodb`, a spike
 (roadmap S9): the `Outbox` port alone on a MongoDB replica set, through
-the `mongodb` driver (which the facade does not re-export before S17),
+the `mongodb` driver (which the facade re-exports since S17, as
+`adapters::store::mongodb::mongodb`, with the library's MongoDB stores),
 composed into no binary ([§8.2](#82-the-backend-bundle-is-the-unit-of-swapping)).
 
 They depend on the `meta-whatsapp-rs` facade and on each other, never on

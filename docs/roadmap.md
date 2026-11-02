@@ -1186,7 +1186,8 @@ and `store-postgres`.
     a replica set; back to 8.x once MongoDB ships a release that starts
     there; the driver a dev-dependency of the adapters only,
     with `rustls-tls-aws-lc` and `bson-3`, until S17 makes it an optional
-    dependency; the healthcheck's `start_interval` of 1 s and `interval`
+    dependency (S17 did: the adapters' feature `mongodb`, the
+    dev-dependency kept for the smoke test without it); the healthcheck's `start_interval` of 1 s and `interval`
     of 30 s (a check every 2 s cost half a core); `mongosh` 2.14.1 in the
     devcontainer image; `MongoCleanup` in `live_mongodb.rs`, so the other
     test binaries do not build the driver (S17 may move it). The SSPL
@@ -1496,12 +1497,72 @@ and `store-postgres`.
     fails if the CrateStack adapter answers an error in CrateStack's
     own shape; the binary built with `api-axum` still serves
     `openapi/v1.json` byte for byte.
-- [ ] **S17. MongoDB library adapters** (`meta-whatsapp-adapters`,
+- [x] **S17. MongoDB library adapters** (`meta-whatsapp-adapters`,
   feature `mongodb`): `KvStore` and `ConversationStore`.
   - **After:** S8, L5.
   - **Decisive:** both library conformance suites pass live against a
     replica set; removing the version check from compare-and-swap fails
     them.
+  - **Landed:** the feature `mongodb` of `meta-whatsapp-adapters` (and
+    of the facade, in `full`; `just features` checks it alone in both),
+    the driver now an optional dependency (`mongodb` 3.9, no default
+    features; `compat-3-3-0`, `bson-3`, `rustls-tls-aws-lc`), re-exported
+    as `adapters::store::mongodb::mongodb`. `store::mongodb::migrate`
+    creates the collections and indexes (`store::mongodb::schema`).
+    `MongoKvStore` makes every operation one document's atomic update:
+    an aggregation-pipeline upsert computes the version, value and expiry
+    from the document as it was, against the server's `$$NOW`;
+    `put_if_absent` filters on the record being dead (a live one makes
+    the upsert's insert collide, read back to tell it from a racer);
+    compare-and-swap filters on the expected version of a live record; a
+    delete unsets the value and keeps the version (a tombstone), and a TTL
+    index (`wa_kv_purge_idx` on `purge_after`) removes dead documents
+    ten minutes after they died or were last written. A version is the
+    larger of the stored one plus one and the server's milliseconds times
+    2^20, so a key written again after its document is gone goes on above
+    every version it had (unless the primary's clock went back by more
+    than the ten minutes). `MongoConversationStore` writes what touches
+    several documents (appends and their summaries, a fill and its
+    preview, the ownership and contact rules, an erasure) in one
+    multi-document transaction (snapshot reads, majority writes), tried
+    again after a write conflict for 10 seconds (`BUSY_AFTER`,
+    `with_busy_after`), then `StorageError::Busy`, as S9's outbox does;
+    every append writes its conversation's summary (its `appends`
+    counter), because MongoDB's snapshot transactions conflict on writes
+    only and an unchanged summary would be no write: that is what orders
+    an erasure against an append of its conversation. Statuses and
+    revokes are one conditional update each (the filter lists the
+    statuses core's `supersedes` says yes to); purges and trims are a
+    sequence of deletes. Content is BSON strings (U+0000 kept), payloads
+    and errors their JSON text. **Decisive tests**, live against the S8
+    replica set (`tests/live_mongodb.rs`, `mod adapters`, feature
+    `mongodb`, in `just test-live`'s adapters `live_` filter):
+    `live_mongodb_kv_passes_the_conformance_suite` (the real-time suite),
+    `live_mongodb_conversation_passes_the_conformance_suite` and
+    `…_deleting_with_a_retention`, `live_mongodb_a_second_append_of_one_id_on_another_number_is_refused`,
+    `live_mongodb_an_erasure_or_a_purge_leaves_no_trace` (every document
+    of every collection scanned), `live_mongodb_an_erasure_racing_appends_never_splits_a_conversation`,
+    `live_mongodb_kv_layout_tombstones_and_the_ttl_index`,
+    `live_mongodb_conversation_layout`, `live_mongodb_migrate_is_idempotent_and_creates_the_pinned_indexes`.
+    **Not run on this branch**: MongoDB could not run where it was
+    written (Docker Hub's rate limit; no `mongod`), so the live tests were
+    made correct by reading and compiled, and CI's `just test-live` is
+    their first run. Offline, every document's shape and every update's
+    pipeline is pinned (the version check of compare-and-swap among
+    them: `compare_and_swap_filters_on_the_expected_version_of_a_live_record`
+    fails without it; live, the suite's stale-version swaps would
+    succeed), and the stored names by `the_stored_names_are_pinned` and
+    `the_indexes_are_pinned`. **Pending the owner** (stored names,
+    before the first release): the collections, fields, index names and
+    the version's encoding (docs/architecture.md § Stable identifiers);
+    the KV namespaces stored under them are the library's, unchanged.
+  - **Proposed, not decided** (the coordinator's, each swappable by a
+    setting or a constant): one collection per Postgres table, under the
+    same names and no prefix setting (a database per deployment); a TTL
+    index rather than an explicit purge for dead KV records; the
+    clock-floored version rather than a counter document (which would
+    make every write of a namespace conflict); the 10-second
+    write-conflict budget; purges and trims without a transaction.
 - [ ] **S18. `meta-whatsapp-server-store-mongodb`**, the whole bundle.
   - **After:** S9, S17, M2a–M2h.
   - **Decisive:** the core conformance suite passes live; the service's
@@ -6418,7 +6479,12 @@ everything else goes into the parity-completion report.
   collections `wa_server_events`, `wa_server_event_streams` and
   `wa_server_wabas`, their fields and their index names, added by a spike
   composed into no binary and awaiting confirmation, which S18 may still
-  change before then), for the same reason as L5's.
+  change before then; S17's MongoDB library adapters' collections
+  `wa_kv`, `wa_messages`, `wa_conversations`, `wa_window_events`,
+  `wa_thread_owners`, `wa_synced_contacts` and `wa_identity_links`,
+  their fields (`appends` and `purge_after` among them), their index
+  names and the key/value version's encoding, added and awaiting
+  confirmation), for the same reason as L5's.
 - **How far an erasure reaches in the service** (M2f, design D89 and
   D90): the coordinator decided the narrow default, the calling tenant's
   own data only. Two wider reaches are irreversible deletions beyond the
