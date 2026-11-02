@@ -1,6 +1,6 @@
 # Payments
 
-> **Verified against meta-whatsapp-rs 9fed2ba3b670095cb7d1e5878b067b3174accedf (2026-11-02).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, tag `payments`), `docs/guides/server.md` section "Payments" and [examples/payments.ts](../examples/payments.ts).
+> **Verified against meta-whatsapp-rs 351285a9902a25316a76f8141b5681bbb24a570d (2026-11-02).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, tag `payments`), `docs/guides/server.md` section "Payments" and [examples/payments.ts](../examples/payments.ts).
 
 India's WhatsApp Payments and Brazil's payment messages. The messages
 are sends (scope `send`); the configurations, a payment's lookup and its
