@@ -125,6 +125,8 @@ codes! {
     CLASSIFICATION_LIMIT_REACHED = ("classification_limit_reached", 429, "The messaging limit was reached after template classification violations."),
     TOO_MANY_REQUESTS = ("too_many_requests", 429, "Too many requests: back off and retry."),
     TOO_MANY_STREAMS = ("too_many_streams", 429, "Too many open event streams."),
+    // 428
+    IDEMPOTENCY_KEY_REQUIRED = ("idempotency_key_required", 428, "This request moves money: send an Idempotency-Key, and repeat it with the same one."),
     // 404, 410, 413
     NOT_FOUND = ("not_found", 404, "Not found."),
     NOTHING_TO_RESUME = ("nothing_to_resume", 404, "There is no signup attempt to resume."),

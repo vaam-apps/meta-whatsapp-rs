@@ -1000,6 +1000,15 @@ pub fn sample_call(operation: &Operation, sample: &Sample, key: Option<&str>) ->
     if let Some(body) = sample_body(&operation.method, &operation.template) {
         call = call.json(&body);
     }
+    // A refund requires an `Idempotency-Key` (design D56): a fresh one per
+    // call, so that no call replays another's answer.
+    if (operation.method.as_str(), operation.template.as_str())
+        == ("POST", "/v1/numbers/{pn}/payments/refunds")
+    {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        call = call.header("idempotency-key", &format!("sample-refund-{n}"));
+    }
     call
 }
 

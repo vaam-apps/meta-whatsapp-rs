@@ -173,6 +173,7 @@ async fn live_postgres_another_tenants_number_is_not_found_before_the_vault() {
             "/v1/numbers/106540352242922/payments/refunds",
         )
         .key(&b)
+        .header("idempotency-key", "refund-b-1")
         .json(
             &json!({"reference_id": "BM345A-12", "payment_config_id": "test-payment-configuration",
                       "amount": {"currency": "INR", "value": "100", "offset": "100"}}),

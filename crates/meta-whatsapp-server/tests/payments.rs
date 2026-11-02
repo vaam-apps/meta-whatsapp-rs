@@ -11,6 +11,7 @@
 
 mod common;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use common::{Call, Harness, Reply};
@@ -697,7 +698,20 @@ fn refund_body() -> Value {
     })
 }
 
+/// A refund under a fresh `Idempotency-Key` (a refund requires one: D56).
 fn refund(key: &str, body: &Value) -> Call {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let fresh = format!("refund:fresh:{}", NEXT.fetch_add(1, Ordering::Relaxed));
+    refund_keyed(key, &fresh, body)
+}
+
+/// A refund under `idempotency_key`.
+fn refund_keyed(key: &str, idempotency_key: &str, body: &Value) -> Call {
+    keyless_refund(key, body).header("idempotency-key", idempotency_key)
+}
+
+/// A refund without an `Idempotency-Key`.
+fn keyless_refund(key: &str, body: &Value) -> Call {
     Call::new(Method::POST, format!("/v1/numbers/{PN}/payments/refunds"))
         .key(key)
         .json(body)
@@ -758,9 +772,7 @@ async fn a_refund_is_never_made_twice() {
         200,
         json!({"id": "refund-id", "status": "pending", "speed_processed": "normal"}),
     );
-    let made = h
-        .call(refund(&key, &refund_body()).header("idempotency-key", "refund:1"))
-        .await;
+    let made = h.call(refund_keyed(&key, "refund:1", &refund_body())).await;
     assert_eq!(made.status, StatusCode::CREATED, "{}", made.text);
     assert_eq!(
         made.json(),
@@ -773,30 +785,22 @@ async fn a_refund_is_never_made_twice() {
     );
     assert_eq!(request.bearer(), Some(TOKEN));
     assert_eq!(request.json().unwrap(), refund_body());
-    let again = h
-        .call(refund(&key, &refund_body()).header("idempotency-key", "refund:1"))
-        .await;
+    let again = h.call(refund_keyed(&key, "refund:1", &refund_body())).await;
     assert_eq!(again.status, StatusCode::CREATED);
     assert_eq!(again.headers["idempotent-replayed"], "true");
     assert_eq!(again.text, made.text);
     let mut other = refund_body();
     other["amount"]["value"] = json!("200");
-    let reused = h
-        .call(refund(&key, &other).header("idempotency-key", "refund:1"))
-        .await;
+    let reused = h.call(refund_keyed(&key, "refund:1", &other)).await;
     assert_eq!(error(&reused)["code"], "idempotency_key_reused");
     assert_eq!(h.graph.requests().len(), 2, "one check, one refund");
     // Timed out.
     h.graph.push_json(200, json!({"data": [configuration()]}));
     h.graph.push_error(|| TransportError::Timeout);
-    let cut = h
-        .call(refund(&key, &refund_body()).header("idempotency-key", "refund:2"))
-        .await;
+    let cut = h.call(refund_keyed(&key, "refund:2", &refund_body())).await;
     assert_eq!(cut.status, StatusCode::GATEWAY_TIMEOUT, "{}", cut.text);
     assert_eq!(error(&cut)["may_have_been_sent"], true);
-    let repeated = h
-        .call(refund(&key, &refund_body()).header("idempotency-key", "refund:2"))
-        .await;
+    let repeated = h.call(refund_keyed(&key, "refund:2", &refund_body())).await;
     assert_eq!(repeated.status, StatusCode::GATEWAY_TIMEOUT);
     assert_eq!(repeated.headers["idempotent-replayed"], "true");
     assert_eq!(h.graph.requests().len(), 4, "no second refund");
@@ -841,9 +845,11 @@ async fn a_created_configurations_oauth_link_is_answered_never_kept() {
     let created = h.call(create()).await;
     assert_eq!(created.status, StatusCode::CREATED, "{}", created.text);
     assert_eq!(created.json()["oauth_url"], secret_link);
+    assert_eq!(created.headers["cache-control"], "no-store", "a credential");
     let again = h.call(create()).await;
     assert_eq!(again.status, StatusCode::CREATED, "{}", again.text);
     assert_eq!(again.headers["idempotent-replayed"], "true");
+    assert_eq!(again.headers["cache-control"], "no-store");
     assert_eq!(
         again.json(),
         json!({"oauth_url": null, "expiration": "2024-07-22T22:28:07Z"})
@@ -885,6 +891,7 @@ async fn a_created_configurations_oauth_link_is_answered_never_kept() {
         )
         .await;
     assert_eq!(link.json()["oauth_url"], secret_link, "{}", link.text);
+    assert_eq!(link.headers["cache-control"], "no-store", "a credential");
     let repeat = h
         .call(
             Call::new(
@@ -1166,7 +1173,7 @@ async fn a_refunds_amount_is_checked_before_any_request() {
     let cases = refused_amounts();
     for (amount, field) in cases {
         let reply = h
-            .call(refund(&key, &with(amount.clone())).header("idempotency-key", "refund:checked"))
+            .call(refund_keyed(&key, "refund:checked", &with(amount.clone())))
             .await;
         assert_eq!(
             refused(&reply),
@@ -1199,13 +1206,11 @@ async fn a_refunds_amount_is_checked_before_any_request() {
         json!({"id": "refund-id", "status": "failed", "speed_processed": "normal"}),
     );
     let largest = h
-        .call(
-            refund(
-                &key,
-                &with(json!({"currency": "INR", "value": u64::MAX, "offset": 100})),
-            )
-            .header("idempotency-key", "refund:checked"),
-        )
+        .call(refund_keyed(
+            &key,
+            "refund:checked",
+            &with(json!({"currency": "INR", "value": u64::MAX, "offset": 100})),
+        ))
         .await;
     assert_eq!(largest.status, StatusCode::CREATED, "{}", largest.text);
     assert_eq!(
@@ -1311,7 +1316,7 @@ async fn an_inbox_reply_carries_a_payment_message_checked_and_within_its_window(
 #[tokio::test]
 async fn a_refund_whose_check_failed_was_not_sent_and_frees_its_key() {
     let (h, key) = connected(&[Scope::Payments]).await;
-    let keyed = || refund(&key, &refund_body()).header("idempotency-key", "refund:checked-first");
+    let keyed = || refund_keyed(&key, "refund:checked-first", &refund_body());
     h.graph.push_error(|| TransportError::Timeout);
     let cut = h.call(keyed()).await;
     assert_eq!(cut.status, StatusCode::GATEWAY_TIMEOUT, "{}", cut.text);
@@ -1347,5 +1352,27 @@ async fn a_refund_whose_check_failed_was_not_sent_and_frees_its_key() {
         format!("/v25.0/{PN}/payments_refund")
     );
     assert_eq!(h.graph.requests().len(), 4);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// D56, as amended on 2026-11-02 (the coordinator's decision): money moves
+/// only under an `Idempotency-Key`. A refund without one is `428
+/// idempotency_key_required`, `may_have_been_sent: false`, whatever its
+/// body, and nothing is asked of Meta, not even the configuration check.
+/// Decisive: `payments::refund_key` in the refund's handler.
+#[tokio::test]
+async fn a_refund_without_an_idempotency_key_sends_nothing() {
+    let (h, key) = connected(&[Scope::Payments]).await;
+    for body in [refund_body(), json!({"reference_id": "a/b"})] {
+        let reply = h.call(keyless_refund(&key, &body)).await;
+        assert_eq!(
+            (reply.status.as_u16(), error(&reply)["code"].clone()),
+            (428, json!("idempotency_key_required")),
+            "{}",
+            reply.text
+        );
+        assert_eq!(error(&reply)["may_have_been_sent"], false, "{}", reply.text);
+    }
+    assert!(h.graph.requests().is_empty(), "nothing asked of Meta");
     assert_eq!(h.graph.remaining(), 0);
 }

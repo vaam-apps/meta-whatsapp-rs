@@ -586,12 +586,14 @@ Meta's `payments/payments-in/*` and `payments/payments-br/*` pages).
 - **Times** are RFC 3339 strings under Meta's names
   (`created_timestamp`, `expiration`), as every time of the service.
 - **The OAuth link is a credential**: it links whatever gateway account
-  opens it. Give it to the merchant only. A creation and a new link take
+  opens it. Give it to the merchant only; its answers carry
+  `Cache-Control: no-store`. A creation and a new link take
   an `Idempotency-Key`, and the answer the service keeps for a repeat has
   no `oauth_url` (`null`): the records never store the link; ask for a
   new one.
-- **A refund is never made twice**: it takes an `Idempotency-Key`, the
-  library never replays it after a timeout, and a `504` says
+- **A refund is never made twice**: it requires an `Idempotency-Key`
+  (without one, `428 idempotency_key_required`, nothing asked of Meta:
+  design D56), the library never replays it after a timeout, and a `504` says
   `may_have_been_sent: true`. Look the payment up (its `refunds`) or
   repeat with the same key; never refund again under a new key. The
   amount is not compared with what was paid. A refund, a creation, a

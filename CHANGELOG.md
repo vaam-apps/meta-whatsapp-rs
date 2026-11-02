@@ -254,7 +254,10 @@ stored data, the owner's).
     link are tenant audit events (`audit::payment_audit`: the
     configuration, and a refund's number, order, amount and Meta's
     refund id; an `outcome`, `unknown` for a call cut by a timeout).
-    Decisions D50 to D58 (design §10). Keys minted before do not carry the
+    A refund requires an `Idempotency-Key` (`428
+    idempotency_key_required`, a new error code, without one), and the
+    OAuth link's answers carry `Cache-Control: no-store`. Decisions D50
+    to D58 (design §10; D56 amended on 2026-11-02). Keys minted before do not carry the
     new scope: mint one that does.
   - The OpenAPI document is additive: five paths, the tag `payments`,
     eighteen schemas, the values `order_details`, `order_status` of

@@ -3528,13 +3528,10 @@
           {
             "name": "Idempotency-Key",
             "in": "header",
-            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never refund twice",
-            "required": false,
+            "description": "Required: 1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never refund twice (repeat a refund under the same key, never a new one)",
+            "required": true,
             "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
+              "type": "string"
             }
           }
         ],
@@ -3601,6 +3598,16 @@
           },
           "422": {
             "description": "`invalid_request` (with `field`: `reference_id`, `amount.value`, `amount.offset`, …), Meta's `invalid_parameter`, `idempotency_key_reused`: nothing refunded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "`idempotency_key_required`: no `Idempotency-Key`, nothing refunded",
             "content": {
               "application/json": {
                 "schema": {
@@ -7119,6 +7126,7 @@
           "classification_limit_reached",
           "too_many_requests",
           "too_many_streams",
+          "idempotency_key_required",
           "not_found",
           "nothing_to_resume",
           "cursor_expired",

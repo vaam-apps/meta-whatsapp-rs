@@ -65,7 +65,8 @@ use meta_whatsapp_rs::client::payments::{
 
 use crate::audit::{Outcome, PaymentFacts, Subject, payment_audit};
 use crate::authz::{Authorizer, Caller, OwnedNumber, OwnedWaba, object_failed};
-use crate::error::ServiceError;
+use crate::error::{ErrorCode, ServiceError};
+use crate::model::IdempotencyKey;
 use crate::observe::Observer;
 
 /// Longest configuration name: 60 characters, the longest an order's
@@ -282,6 +283,19 @@ pub fn refund_request(request: RefundOrder) -> Result<RefundRequest, ServiceErro
         .validate()
         .map_err(|invalid| ServiceError::invalid(invalid.field))?;
     Ok(refund)
+}
+
+/// A refund's `Idempotency-Key`, which it requires (docs/design/server.md,
+/// D56 as amended on 2026-11-02): money moves only under a key, so that a
+/// caller repeating a refund after a timeout repeats it under the same one
+/// and the service never refunds twice.
+///
+/// # Errors
+///
+/// No key: `428 idempotency_key_required`, before anything is read or
+/// asked of Meta.
+pub fn refund_key(key: Option<IdempotencyKey>) -> Result<IdempotencyKey, ServiceError> {
+    key.ok_or_else(|| ServiceError::new(ErrorCode::IDEMPOTENCY_KEY_REQUIRED))
 }
 
 // ─── The operations ──────────────────────────────────────────────────────

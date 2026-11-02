@@ -668,6 +668,7 @@ async fn payments(h: &Harness, admin: &str) -> Vec<String> {
         .call(
             Call::new(Method::POST, format!("/v1/numbers/{PN}/payments/refunds"))
                 .key(&key)
+                .header("idempotency-key", "refund-1")
                 .json(&json!({"reference_id": "BM345A-12", "speed": "normal",
                               "payment_config_id": "test-payment-configuration",
                               "amount": {"currency": "INR", "value": "100", "offset": "100"}})),

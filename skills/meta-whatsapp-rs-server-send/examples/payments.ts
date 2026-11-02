@@ -69,9 +69,10 @@ export async function payment(api: WhatsApp, pn: string, configuration: string, 
   return data.data;
 }
 
-// Refund under a key derived from your own record: a timeout may have
-// refunded (may_have_been_sent): repeat with the SAME key, or look the
-// payment up; never refund again under a new key.
+// Refund under a key derived from your own record. The key is required
+// (without one: 428 idempotency_key_required, nothing refunded). A
+// timeout may have refunded (may_have_been_sent): repeat with the SAME
+// key, or look the payment up; never refund again under a new key.
 export async function refund(api: WhatsApp, pn: string, request: PaymentRefundRequest, reference: string) {
   const { data, error } = await api.POST("/v1/numbers/{pn}/payments/refunds", {
     params: { path: { pn }, header: { "Idempotency-Key": reference } },

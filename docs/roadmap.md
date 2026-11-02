@@ -4702,6 +4702,13 @@ design's (§9).
   generated from `openapi/v1.json` by openapi-typescript, the `api-axum`
   client of D26's swap.
   - **After:** M2c, and S15 unless the owner refuses D20 (a).
+  - **Before the first release** (P2's security review, finding M2: a
+    v1 client generated from the document before P2 types the admin key
+    answers' `scopes` as the closed `Scope`, so `payments` falls outside
+    them; 4 of the 271 operation checks): `Key.scopes` in responses
+    becomes an open `KnownScope | string`, as `ErrorCode` and `EventType`
+    already are, while the request's scopes (a key's minting) stay
+    closed, so a scope added later is additive.
   - **Decisive:** M4.1–M4.3; the image's contents list matches the
     image (an extra binary fails it).
 
@@ -5161,6 +5168,12 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     `a_refund_whose_check_failed_was_not_sent_and_frees_its_key`,
     `an_inbox_reply_carries_a_payment_message_checked_and_within_its_window`,
     and M1.7's capture (`check_audit`).
+  - **Follow-ups decided on 2026-11-02** (the coordinator, the owner's
+    delegation): a refund requires an `Idempotency-Key` (D56 amended:
+    `428 idempotency_key_required`, a new code, additive; decisive
+    `a_refund_without_an_idempotency_key_sends_nothing`); the OAuth
+    link's answers carry `Cache-Control: no-store`; the open `Scope` of
+    the answers waits for the first release (M4).
   - **Not done here:** the data endpoint link of a configuration and
     India's checkout button templates (the library's P1d first); the
     alpha third-party validation (P1d).

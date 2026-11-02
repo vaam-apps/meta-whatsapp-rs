@@ -37,7 +37,7 @@ use meta_whatsapp_rs::client::payments::{
 };
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
-use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
+use meta_whatsapp_rs::webhooks::axum::http::{HeaderValue, StatusCode, header};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::payments::{self as domain, PaymentConfigurations, Payments};
 use serde::{Deserialize, Serialize};
@@ -546,6 +546,15 @@ fn payments<'a>(
     Ok(Payments::new(state.authz(), caller, owned.capability(state))?.observed_by(state.metrics()))
 }
 
+/// `answer` with `Cache-Control: no-store`: an OAuth link is a credential,
+/// which no cache on the way may keep (its replay included).
+fn no_store(mut answer: Response) -> Response {
+    answer
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    answer
+}
+
 /// The answer of a creation or a new link: the link to the caller, and
 /// the same answer without it to keep for a repeat.
 fn link_answer(status: StatusCode, link: PaymentOauthLink) -> Result<Success, ApiError> {
@@ -645,14 +654,15 @@ pub(crate) async fn create_payment_configuration(
         Ok(configurations) => configurations,
         Err(error) => return error.into_response(),
     };
-    state
+    let answer = state
         .idempotent(
             &caller,
             key,
             fingerprint,
             create(&configurations, &configuration),
         )
-        .await
+        .await;
+    no_store(answer)
 }
 
 /// `GET /v1/wabas/{waba_id}/payment-configurations/{configuration_name}`:
@@ -779,14 +789,15 @@ pub(crate) async fn regenerate_payment_oauth_link(
         Ok(configurations) => configurations,
         Err(error) => return error.into_response(),
     };
-    state
+    let answer = state
         .idempotent(
             &caller,
             key,
             fingerprint,
             regenerate(&configurations, &name, &request),
         )
-        .await
+        .await;
+    no_store(answer)
 }
 
 // ─── Lookup and refunds ──────────────────────────────────────────────────
@@ -849,7 +860,7 @@ async fn refund(
     params(
         ("pn" = String, Path, description = "The phone number id that sent the `order_details` message"),
         ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
-        ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never refund twice"),
+        ("Idempotency-Key" = String, Header, description = "Required: 1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never refund twice (repeat a refund under the same key, never a new one)"),
     ),
     request_body = RefundBody,
     responses(
@@ -859,6 +870,7 @@ async fn refund(
         (status = 404, description = "`not_found`: no such number for this tenant, or `payment_config_id` names no configuration of its WABA (nothing refunded)", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
         (status = 422, description = "`invalid_request` (with `field`: `reference_id`, `amount.value`, `amount.offset`, …), Meta's `invalid_parameter`, `idempotency_key_reused`: nothing refunded", body = ErrorBody),
+        (status = 428, description = "`idempotency_key_required`: no `Idempotency-Key`, nothing refunded", body = ErrorBody),
         (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed: see `may_have_been_sent`", body = ErrorBody),
         (status = 504, description = "`timeout`: the refund may have been made (`may_have_been_sent: true`): look the payment up, or repeat with the same key", body = ErrorBody),
@@ -871,6 +883,11 @@ pub(crate) async fn refund_payment(
     KeyHeader(key): KeyHeader,
     ApiJson(body): ApiJson<Value>,
 ) -> Response {
+    // Money moves only under a key (D56): refused before the body is checked.
+    let key = match domain::refund_key(key) {
+        Ok(key) => key,
+        Err(error) => return ApiError::from(error).into_response(),
+    };
     let fingerprint = Fingerprint::refund_payment(owned.phone_number_id(), &body);
     let request = serde_json::from_value::<RefundBody>(body)
         .map_err(|_| ApiError::invalid("body"))
@@ -884,7 +901,7 @@ pub(crate) async fn refund_payment(
         Err(error) => return error.into_response(),
     };
     state
-        .idempotent(&caller, key, fingerprint, refund(&payments, &request))
+        .idempotent(&caller, Some(key), fingerprint, refund(&payments, &request))
         .await
 }
 
