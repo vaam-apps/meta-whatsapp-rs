@@ -2384,6 +2384,20 @@ owner's confirmation before the first release
 ([architecture.md](../architecture.md#stable-identifiers)). The live
 check of which behaviour Meta has (OQ #43) is still to be run.
 
+**Decided with roadmap M2f (D86–D91)**, by the coordinator on
+2026-11-02 under the owner's delegation: D86, D87, D88 and D91 as their
+implementer proposed them, D89 and D90 changed to narrow by default (an
+erasure reaches the calling tenant's own data only: its own outbox rows,
+and the inbox only on a number with no history cut); each ships
+swappable as its row says. The wider reach of D89 and D90 (the number's
+operator-only rows, a previous holder's hidden records) is an
+irreversible deletion beyond the caller's own data, so it stays the
+owner's open choice ([roadmap § Owner
+touchpoints](../roadmap.md#owner-touchpoints)). Migration 8's names and
+the erasure's stored names are stable identifiers, pending the owner's
+confirmation before the first release
+([architecture.md](../architecture.md#stable-identifiers)).
+
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** The
 questions the service inherits were decided on 2026-09-26 under the same
 delegation, each with its roadmap item: #5 (multi-WABA signups: opt-in,

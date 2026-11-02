@@ -37,6 +37,8 @@
 //!   cut), the erasure is `409 erasure_crosses_binding` and erases
 //!   nothing: neither the previous holder's hidden records of the person
 //!   nor the new holder's (design D90, narrow by default).
+//!   An erasure whose outbox fails, between the outbox's erasure and the
+//!   inbox's, is completed by a repeat (the outbox goes first).
 //! - Only the order's own number opens the services.
 //! - Roadmap M2g: the window is what a free-form reply would meet (and the
 //!   list's is the same); marking a conversation read resets `unread`
@@ -139,6 +141,10 @@ pub async fn run(backend: &dyn Backend) {
     ))
     .await;
     Box::pin(an_erasure_on_a_number_with_a_previous_holder_erases_nothing(backend)).await;
+    Box::pin(an_erasure_failing_part_way_is_completed_by_a_repeat(
+        backend,
+    ))
+    .await;
     Box::pin(housekeeping_applies_the_inbox_stores_retention(backend)).await;
 }
 
@@ -1361,6 +1367,117 @@ pub async fn an_erasure_on_a_number_with_a_previous_holder_erases_nothing(backen
         naming(&stream_of(backend, "inbox-erase-cut-b").await),
         1,
         "a refused erasure erased"
+    );
+}
+
+/// An outbox whose next `erase_contacts` fails, once: the rest is the
+/// backend's.
+struct FailsOneErasure {
+    inner: Arc<dyn crate::outbox::Outbox>,
+    armed: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl crate::outbox::Outbox for FailsOneErasure {
+    async fn insert(
+        &self,
+        event: &crate::outbox::NewEvent,
+    ) -> crate::store::StoreResult<Option<i64>> {
+        self.inner.insert(event).await
+    }
+    async fn page(
+        &self,
+        query: &crate::outbox::EventQuery,
+    ) -> crate::store::StoreResult<crate::outbox::EventPage> {
+        self.inner.page(query).await
+    }
+    async fn purge(&self, older_than: Duration) -> crate::store::StoreResult<u64> {
+        self.inner.purge(older_than).await
+    }
+    async fn received_media(
+        &self,
+        media_id: &meta_whatsapp_rs::core::ids::MediaId,
+    ) -> crate::store::StoreResult<Vec<crate::outbox::ReceivedMedia>> {
+        self.inner.received_media(media_id).await
+    }
+    async fn erase_contacts(
+        &self,
+        tenant: &TenantId,
+        phone_number_id: &PhoneNumberId,
+        contacts: &[String],
+    ) -> crate::store::StoreResult<u64> {
+        if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Err(StorageError::Backend(anyhow::anyhow!(
+                "the suite's outbox failure"
+            )));
+        }
+        self.inner
+            .erase_contacts(tenant, phone_number_id, contacts)
+            .await
+    }
+}
+
+/// Roadmap M2f, design D90: the outbox goes before the inbox, so an
+/// erasure that fails between them is completed by a repeat.
+///
+/// 1. A customer's text under their phone number, then a message carrying
+///    both their phone number and their BSUID (the inbox links the two).
+/// 2. Their erasure by the BSUID alone meets an outbox that fails: `503`,
+///    and the inbox still holds both conversations (and the link).
+/// 3. The repeat, the outbox working again, finds both identities through
+///    the link and erases both, in the inbox and the outbox.
+///
+/// Decisive: the order of the outbox's and the inbox's erasures (the
+/// inbox first deletes the link with the first attempt, and the repeat,
+/// knowing the BSUID alone, leaves the outbox's row of the phone number).
+pub async fn an_erasure_failing_part_way_is_completed_by_a_repeat(backend: &dyn Backend) {
+    const BSUID: &str = "US.13491208655302741919";
+    let (waba, pn) = ("102290129340302", "106540352242802");
+    let m = merchant(backend, "inbox-erase-order", waba, pn).await;
+    let pipeline = pipeline(backend);
+    let clock = ManualClock::new(OffsetDateTime::now_utc());
+    let at = now() + 1;
+    deliver(
+        &pipeline,
+        &text(waba, pn, CONTACT, "wamid.ORDER-1", "hi", at),
+    )
+    .await;
+    let mut linked = text(waba, pn, CONTACT, "wamid.ORDER-2", "it's me", at);
+    linked["entry"][0]["changes"][0]["value"]["contacts"][0]["user_id"] = json!(BSUID);
+    linked["entry"][0]["changes"][0]["value"]["messages"][0]["from_user_id"] = json!(BSUID);
+    deliver(&pipeline, &linked).await;
+    let naming = |rows: &[String]| rows.iter().filter(|d| d.contains(CONTACT)).count();
+    assert_eq!(naming(&stream_of(backend, "inbox-erase-order").await), 2);
+    let inbox = m.inbox(backend, ReplyChecks::ALL, &clock);
+    let threads = || async { inbox.list(&first(50)).await.unwrap().items.len() };
+    assert_eq!(threads().await, 2, "the phone number's and the BSUID's");
+    let deployment =
+        ErasureDeployment::new(ErasureKey::new(SecretBytes::new(ERASURE_KEY.to_vec())).unwrap())
+            .with_journal(Arc::new(KeptJournal::default()));
+    let failing = FailsOneErasure {
+        inner: backend.outbox(),
+        armed: std::sync::atomic::AtomicBool::new(true),
+    };
+    let bsuid = [BSUID.to_owned()];
+    let failed = m
+        .erasures(backend, &failing, Some(&deployment), &clock)
+        .erase(pn, &bsuid)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (failed.status(), failed.code()),
+        (503, "storage_unavailable")
+    );
+    assert_eq!(threads().await, 2, "the inbox went before the outbox");
+    m.erasures(backend, &failing, Some(&deployment), &clock)
+        .erase(pn, &bsuid)
+        .await
+        .unwrap();
+    assert_eq!(threads().await, 0, "the repeat erased");
+    assert_eq!(
+        naming(&stream_of(backend, "inbox-erase-order").await),
+        0,
+        "the repeat left the outbox's row of the phone number"
     );
 }
 

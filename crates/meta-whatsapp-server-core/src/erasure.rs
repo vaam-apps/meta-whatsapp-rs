@@ -73,8 +73,9 @@
 //! **What it does not reach** (the guides list them for the deployer):
 //! the number's operator-only outbox rows and another tenant's (a previous
 //! holder's), both kept by the outbox's retention; a number with a cut
-//! (step 3: refused whole); rows inserted before the outbox kept contacts (migration
-//! 8: a rolling deploy's previous release, and every row before it), a
+//! (step 3: refused whole); rows inserted before the outbox kept contacts
+//! (migration 8: a rolling deploy's previous release, and every row before
+//! it), a
 //! customer quoted in someone else's message, a body the library could not
 //! parse, the 24-hour idempotency answers of sends to them, the webhook
 //! dedup markers (keyed hashes, kept on purpose), what was forwarded
