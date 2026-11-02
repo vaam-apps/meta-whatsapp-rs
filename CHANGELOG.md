@@ -226,7 +226,8 @@ stored data, the owner's).
 ### Added
 
 - **A number's registration and its two-step PIN in the service**
-  (roadmap M3d; design §4.2, D6, and D65–D69 proposed, not decided;
+  (roadmap M3d; design §4.2, D6, and D65–D69 decided by the coordinator
+  on 2026-11-02;
   parity rows 108 and 128, categories 20 and 35, coverage row 33).
   Routes, additive in `openapi/v1.json` (tag `registration`, scope
   `numbers`): `POST /v1/numbers/{pn}/request-code`, `…/verify-code`,

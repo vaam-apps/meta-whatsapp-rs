@@ -4839,11 +4839,11 @@ design's (§9).
     `wa.server.registration`, a stable identifier pending the owner):
     register and deregister 5 in 72 hours, the code's request and check
     10 an hour (`WA_SERVER_REGISTRATION_*`, `WA_SERVER_VERIFICATION_*`;
-    design D66, proposed). `Idempotency-Key` on the request of a code, a
+    design D66). `Idempotency-Key` on the request of a code, a
     registration and a deregistration, a registration's fingerprint
-    never over the PIN (`Fingerprint::register_number`, D67, proposed). A
+    never over the PIN (`Fingerprint::register_number`, D67). A
     deregistration takes the number's id again (`confirm`,
-    `registration::confirmed`, D68, proposed) and is audited
+    `registration::confirmed`, D68) and is audited
     (`number_deregistered`), as the PIN change is (`two_step_pin_set`;
     the audit `Subject` gained `phone_number_id`). The OpenAPI document
     is additive only (912 lines added, none removed: five paths, the tag
@@ -5325,6 +5325,10 @@ everything else goes into the parity-completion report.
   `wa_server.otp.shared_rate`, its key's derivation and record, and the
   label `meta-whatsapp-server/otp-shared-limit/v1`, added and awaiting
   confirmation), for the same reason as L5's.
+- **A scope of its own for deregistering a number** (M3d, design D68):
+  the coordinator decided the scope `numbers`, a confirmation in the body
+  and an audit event; a separate scope would be a new stored name (keys
+  keep their scopes), so whether to add one is the owner's.
 - **Zero-tap authentication templates** (M3c, M3g): creating one sets
   Meta's `zero_tap_terms_accepted`, an acknowledgement of the WhatsApp
   Business terms for zero-tap and of the customers' expectation of an
