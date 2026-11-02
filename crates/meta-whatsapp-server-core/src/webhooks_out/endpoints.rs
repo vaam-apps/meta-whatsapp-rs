@@ -63,13 +63,21 @@ pub struct OpenEndpoints<'a> {
     tenant: &'a TenantId,
 }
 
-/// What a creation asks: the URL and the types.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What a creation asks: the URL and the types. `Debug` omits the URL.
+#[derive(Clone, PartialEq, Eq)]
 pub struct CreateEndpoint {
     /// Where to deliver.
     pub url: String,
     /// The `KnownEventType`s to deliver.
     pub types: Vec<String>,
+}
+
+impl std::fmt::Debug for CreateEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateEndpoint")
+            .field("types", &self.types)
+            .finish_non_exhaustive()
+    }
 }
 
 /// An endpoint id from a path: one of another shape names nothing.

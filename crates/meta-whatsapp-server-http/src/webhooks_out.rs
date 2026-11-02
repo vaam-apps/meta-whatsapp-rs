@@ -7,9 +7,10 @@
 //!   certificate's check, on the platform's trust store and an explicit
 //!   aws-lc-rs provider) and the `Host` header. One connection per attempt,
 //!   HTTP/1.1, the whole attempt within its time limit, a redirect never
-//!   followed (its status is the answer), at most
-//!   [`SendRequest::max_response_bytes`] of the body read, the connection
-//!   then dropped.
+//!   followed (its status is the answer), the answer's head within
+//!   16 KiB, at most [`SendRequest::max_response_bytes`] of the body read,
+//!   the connection then dropped, and dropped too when the time limit
+//!   cuts the attempt.
 //! - [`SystemResolver`] asks the system's resolver (`getaddrinfo`, through
 //!   tokio): every call a fresh lookup, which the core checks.
 
@@ -103,16 +104,37 @@ impl HyperSender {
     }
 }
 
+/// The most of an answer hyper buffers at once, its head included (its
+/// default is about 400 KiB): a head past it is [`SendError::Protocol`].
+/// hyper's floor is 8 KiB.
+const MAX_ANSWER_BUFFER: usize = 16 * 1024;
+
+/// The task driving an attempt's connection, aborted when the attempt
+/// ends however it ends (its time limit included): the connection, and
+/// its socket, go with it. Detached, a receiver that stops reading would
+/// keep it for as long as it wished (a TLS close waits for the peer).
+struct Driver(tokio::task::JoinHandle<()>);
+
+impl Drop for Driver {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// One `POST` on `io`, its status, at most `max_response_bytes` of its
 /// body read.
 async fn exchange<I>(io: I, request: SendRequest) -> Result<u16, SendError>
 where
     I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(io))
+    let (mut sender, connection) = hyper::client::conn::http1::Builder::new()
+        .max_buf_size(MAX_ANSWER_BUFFER)
+        .handshake(TokioIo::new(io))
         .await
         .map_err(|_| SendError::Protocol)?;
-    let driver = tokio::spawn(connection);
+    let _driver = Driver(tokio::spawn(async move {
+        let _ = connection.await;
+    }));
     let mut builder = Request::post(request.destination.path_and_query.as_str())
         .header(header::HOST, request.destination.authority.as_str());
     for (name, value) in &request.headers {
@@ -142,8 +164,7 @@ where
         Ok(status)
     }
     .await;
-    // The rest of the answer is never read: the connection goes.
-    driver.abort();
+    // The rest of the answer is never read: the connection goes (`Driver`).
     result
 }
 
@@ -419,6 +440,99 @@ mod tests {
                 .await,
             Err(SendError::Tls),
             "an untrusted issuer"
+        );
+    }
+
+    /// A rustls server config presenting a fresh self-signed certificate
+    /// for `name`, and that certificate.
+    fn tls_server(name: &str) -> (Arc<rustls::ServerConfig>, CertificateDer<'static>) {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let cert = rcgen::CertificateParams::new(vec![name.to_owned()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+        let der = cert.der().clone();
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![der.clone()],
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der())),
+        )
+        .unwrap();
+        (Arc::new(config), der)
+    }
+
+    /// A slow-loris receiver (roadmap M2c's security review): it completes
+    /// the TLS handshake, then never reads. The attempt times out, and its
+    /// connection goes with it: the receiver's writes then meet a closed
+    /// socket. Kept open, every such attempt would hold a socket and a
+    /// task for as long as the receiver wished (a TLS close waits for the
+    /// peer to read). Decisive: the connection's task aborted when the
+    /// attempt is dropped.
+    #[tokio::test]
+    async fn a_timed_out_attempt_closes_its_connection() {
+        let (config, cert) = tls_server("receiver.test");
+        let acceptor = tokio_rustls::TlsAcceptor::from(config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let tls = acceptor.accept(tcp).await.unwrap();
+            let _ = held_tx.send(tls);
+        });
+        let mut roots = RootCertStore::empty();
+        roots.add(cert).unwrap();
+        let sender = HyperSender::with_roots(roots).unwrap();
+        let mut slow = request("https://receiver.test/hook", addr);
+        // More than the sockets' buffers hold: the write blocks.
+        slow.body = vec![b'x'; 32 * 1024 * 1024];
+        slow.timeout = Duration::from_millis(500);
+        assert_eq!(sender.send(slow).await, Err(SendError::Timeout));
+        let mut tls = held_rx.await.unwrap();
+        let tcp = &mut tls.get_mut().0;
+        let mut closed = false;
+        for _ in 0..40 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if tcp.write_all(b"x").await.is_err() {
+                closed = true;
+                break;
+            }
+        }
+        assert!(closed, "the attempt's connection outlived it");
+    }
+
+    /// An answer's head is bounded too: a receiver sending 64 KiB of
+    /// headers is `Protocol`, not buffered whole (hyper's default buffer
+    /// is about 400 KiB, 32 attempts at once). Decisive:
+    /// `MAX_ANSWER_BUFFER`.
+    #[tokio::test]
+    async fn an_oversized_answer_head_is_refused() {
+        let mut answer = b"HTTP/1.1 200 OK\r\n".to_vec();
+        for i in 0..64 {
+            answer.extend_from_slice(format!("x-pad-{i}: {}\r\n", "y".repeat(1000)).as_bytes());
+        }
+        answer.extend_from_slice(b"content-length: 0\r\n\r\n");
+        let (addr, _, _) = receiver(answer).await;
+        assert_eq!(
+            HyperSender::new()
+                .unwrap()
+                .send(request("http://receiver.test/", addr))
+                .await,
+            Err(SendError::Protocol)
+        );
+        let (small, _, _) =
+            receiver(b"HTTP/1.1 204 No Content\r\nx-small: 1\r\n\r\n".to_vec()).await;
+        assert_eq!(
+            HyperSender::new()
+                .unwrap()
+                .send(request("http://receiver.test/", small))
+                .await,
+            Ok(204)
         );
     }
 

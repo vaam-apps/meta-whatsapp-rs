@@ -228,7 +228,8 @@ stored data, the owner's).
 
 - **Webhooks out** (roadmap M2c, acceptance test M2.4; parity row 10 now
   done in the service; categories 19 and 39; coverage row 33; design
-  §4.4's *as built* and the proposed D105–D113).
+  §4.4's *as built*; D105–D113, decided by the coordinator under the
+  owner's delegation).
   - **Routes** (scope `webhooks`, additive in `openapi/v1.json`): `POST`
     and `GET /v1/webhook-endpoints`, `GET`, `PATCH` and `DELETE
     /v1/webhook-endpoints/{id}`, `POST …/{id}/rotate-secret`, `POST
@@ -243,13 +244,17 @@ stored data, the owner's).
     doubling to an hour with jitter for 72 h
     (`WA_SERVER_WEBHOOK_RETRY_WINDOW`), then `failed`, an endpoint failing
     the whole window disabled; one replica per delivery (a claim under a
-    lease), bounded per endpoint, tenant and replica.
+    lease, `WA_SERVER_WEBHOOK_LEASE`), bounded per endpoint, tenant and
+    replica (`WA_SERVER_WEBHOOK_IN_FLIGHT`, `…_PER_TENANT`,
+    `…_PER_ENDPOINT`).
   - **Destinations**: `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` (names,
     `*.` names, CIDRs), `https` outside development, every resolved
     address checked at creation and again at every attempt, the checked
     address the one connected to, non-public addresses only inside a
-    listed CIDR, metadata addresses never; no redirect followed, 1 KiB of
-    the answer read, 10 s.
+    listed CIDR (every IPv6 address outside `2000::/3` among them),
+    metadata addresses never; no redirect followed, the answer's head
+    within 16 KiB and 1 KiB of its body read, 10 s, the connection closed
+    when the time limit cuts the attempt.
   - **Secrets**: `whsec_` and 32 random bytes, shown once, sealed under
     `WA_SERVER_DATA_KEY` (`WA_SERVER_DATA_KEY_ID`,
     `WA_SERVER_DATA_PREVIOUS_KEYS`); a throwaway key on memory storage.

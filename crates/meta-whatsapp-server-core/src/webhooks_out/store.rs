@@ -27,7 +27,7 @@
 //! - **One clock**: what is due is decided by the instant the caller
 //!   passes (the dispatcher's, the service's `Clock`), never the
 //!   database's own, so the retry schedule runs on one clock, which a test
-//!   controls (design D107, proposed).
+//!   controls (design D107; replicas' clocks must agree within the lease).
 
 use std::time::Duration;
 
@@ -38,8 +38,9 @@ use super::{AttemptError, Delivery, DeliveryId, Endpoint, EndpointId, SealedSecr
 use crate::model::{Listing, PageRequest, TenantId};
 use crate::store::StoreResult;
 
-/// An endpoint to create.
-#[derive(Debug, Clone)]
+/// An endpoint to create. `Debug` omits its URL (its path or query may
+/// carry a token of the receiver's) and its secret.
+#[derive(Clone)]
 pub struct NewEndpoint {
     /// Its id.
     pub id: EndpointId,
@@ -58,6 +59,17 @@ pub struct NewEndpoint {
     pub now: OffsetDateTime,
 }
 
+impl std::fmt::Debug for NewEndpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewEndpoint")
+            .field("id", &self.id)
+            .field("tenant", &self.tenant)
+            .field("types", &self.types.len())
+            .field("cursor", &self.cursor)
+            .finish_non_exhaustive()
+    }
+}
+
 /// What a creation did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateOutcome {
@@ -69,8 +81,9 @@ pub enum CreateOutcome {
     LimitReached,
 }
 
-/// A change of an endpoint (`PATCH`): `None` leaves a field.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// A change of an endpoint (`PATCH`): `None` leaves a field. `Debug`
+/// says whether the URL changes, never what to.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct EndpointChange {
     /// A new URL, checked.
     pub url: Option<String>,
@@ -79,6 +92,16 @@ pub struct EndpointChange {
     /// On or off. Turning it on clears the service's reason and the
     /// failure streak.
     pub enabled: Option<bool>,
+}
+
+impl std::fmt::Debug for EndpointChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EndpointChange")
+            .field("url", &self.url.as_ref().map(|_| ".."))
+            .field("types", &self.types.as_ref().map(Vec::len))
+            .field("enabled", &self.enabled)
+            .finish()
+    }
 }
 
 /// A delivery to record.
@@ -284,7 +307,10 @@ pub trait WebhookStore: Send + Sync + 'static {
         give_up_at: OffsetDateTime,
     ) -> StoreResult<Option<Delivery>>;
 
-    /// Delete the settled deliveries (delivered or failed) made before
-    /// `before`; how many went. No lock of its own: housekeeping runs it.
+    /// Delete the settled deliveries (delivered or failed) settled before
+    /// `before`: their last attempt started before it, or, never
+    /// attempted, they were made before it (a delivery made long ago and
+    /// retried by hand yesterday stays). How many went. No lock of its
+    /// own: housekeeping runs it.
     async fn purge_deliveries(&self, before: OffsetDateTime) -> StoreResult<u64>;
 }

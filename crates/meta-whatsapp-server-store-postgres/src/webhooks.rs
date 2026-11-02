@@ -608,7 +608,7 @@ impl WebhookStore for PgWebhookStore {
     async fn purge_deliveries(&self, before: OffsetDateTime) -> StoreResult<u64> {
         let done = sqlx::query(
             "DELETE FROM wa_server_webhook_deliveries \
-             WHERE status <> 'pending' AND created_at < $1",
+             WHERE status <> 'pending' AND COALESCE(last_attempt_at, created_at) < $1",
         )
         .bind(before)
         .execute(&self.pool)

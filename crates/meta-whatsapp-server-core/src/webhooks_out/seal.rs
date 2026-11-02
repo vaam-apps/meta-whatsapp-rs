@@ -225,7 +225,8 @@ impl DataKeys {
             )
             .ok()
             .map(SecretBytes::new)?;
-        EndpointSecret::parse(&B64.encode(plain.expose_secret()))
+        // The key as it is, zeroized on drop: no base64 copy of it.
+        EndpointSecret::from_key(plain)
     }
 }
 
@@ -330,6 +331,38 @@ mod tests {
         assert!(
             keys()
                 .open(&endpoint, &by_hand(b"wa-rs/token-vault/v1"))
+                .is_none()
+        );
+    }
+
+    /// The key id is bound too, not only named: one key's bytes listed
+    /// under two ids, a blob relabelled from one to the other does not
+    /// open (the key it names would decrypt it, the associated data
+    /// refuses it). Decisive: the key id in the associated data.
+    #[test]
+    fn a_sealed_secret_is_bound_to_its_key_id() {
+        let endpoint = EndpointId::generate().unwrap();
+        let secret = EndpointSecret::generate().unwrap();
+        let bytes = B64.encode([3u8; 32]);
+        let sealed = DataKeys::new(DataKey::from_base64("k1", &bytes).unwrap())
+            .seal(&endpoint, &secret)
+            .unwrap();
+        let both = DataKeys::new(DataKey::from_base64("k2", &bytes).unwrap())
+            .with_previous(DataKey::from_base64("k1", &bytes).unwrap())
+            .unwrap();
+        assert_eq!(
+            both.open(&endpoint, &sealed).map(|s| s.expose()),
+            Some(secret.expose())
+        );
+        let relabelled = sealed.as_stored().replacen("v1.k1.", "v1.k2.", 1);
+        assert!(
+            both.open(&endpoint, &SealedSecret::from_stored(relabelled))
+                .is_none(),
+            "the same key under another id"
+        );
+        let other_version = sealed.as_stored().replacen("v1.", "v2.", 1);
+        assert!(
+            both.open(&endpoint, &SealedSecret::from_stored(other_version))
                 .is_none()
         );
     }

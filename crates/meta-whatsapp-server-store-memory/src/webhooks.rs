@@ -485,7 +485,11 @@ impl WebhookStore for MemoryWebhookStore {
         let mut state = self.lock();
         let held = state.deliveries.len();
         state.deliveries.retain(|_, r| {
-            r.delivery.status == DeliveryStatus::Pending || r.delivery.created_at >= before
+            r.delivery.status == DeliveryStatus::Pending
+                || r.delivery
+                    .last_attempt_at
+                    .unwrap_or(r.delivery.created_at)
+                    >= before
         });
         Ok(u64::try_from(held - state.deliveries.len()).unwrap_or(u64::MAX))
     }

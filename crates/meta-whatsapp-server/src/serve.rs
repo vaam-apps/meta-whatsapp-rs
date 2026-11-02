@@ -522,6 +522,7 @@ pub fn webhooks_out(config: WebhookConfig) -> anyhow::Result<Option<WebhooksOut>
         Arc::new(HyperSender::new().context("building webhooks out's TLS configuration")?),
     );
     out.schedule.window = config.retry_window;
+    out.dispatch = config.dispatch;
     Ok(Some(out))
 }
 

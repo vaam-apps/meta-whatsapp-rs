@@ -645,9 +645,28 @@ async fn webhook_endpoints(h: &Harness, admin: &str) -> Vec<String> {
     let pinged = h
         .call(Call::new(Method::POST, format!("/v1/webhook-endpoints/{id}/test")).key(&key))
         .await;
+    // The dispatcher's round too: the ping signed with both secrets and
+    // attempted (a closed loopback port), its logs captured with the
+    // routes'.
+    if let Some(out) = h.state.settings().webhooks_out.clone() {
+        let dispatcher = meta_whatsapp_server_core::webhooks_out::dispatch::Dispatcher::new(
+            h.backend.as_ref(),
+            std::sync::Arc::new(h.clock.clone()),
+            out,
+        );
+        dispatcher.fan_out().await.unwrap();
+        assert_eq!(dispatcher.dispatch_due().await, 1, "the ping, attempted");
+    }
     let deliveries = h
         .call(Call::get(format!("/v1/webhook-endpoints/{id}/deliveries")).key(&key))
         .await;
+    if configured {
+        assert_eq!(
+            deliveries.json()["data"][0]["status"], "failed",
+            "{}",
+            deliveries.text
+        );
+    }
     let ping = if configured {
         pinged.json()["id"].as_str().unwrap().to_owned()
     } else {

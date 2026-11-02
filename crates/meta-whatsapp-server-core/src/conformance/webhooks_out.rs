@@ -915,6 +915,24 @@ pub async fn a_settlement_records_its_attempt(backend: &dyn Backend) {
     // A failed one retried by hand: pending, due now, a new window; a
     // pending one is left as it is.
     let window_end = late + time::Duration::hours(72);
+    // The tenant's other endpoint: its id names none of this one's
+    // deliveries, and the failed one stays failed (the retry below finds
+    // it so, due at `late`, not at this call's instant).
+    let sibling = created(store.as_ref(), &new_endpoint(&a, 0)).await;
+    assert_eq!(
+        store
+            .retry_delivery(
+                &tenant(&a),
+                &sibling.id,
+                &retry.delivery.id,
+                late - time::Duration::minutes(5),
+                window_end - time::Duration::minutes(5)
+            )
+            .await
+            .unwrap(),
+        None,
+        "a sibling endpoint's id"
+    );
     let manual = store
         .retry_delivery(
             &tenant(&a),
@@ -1062,6 +1080,56 @@ pub async fn deliveries_go_with_their_endpoint_and_tenant(backend: &dyn Backend)
         left[0].status,
         DeliveryStatus::Pending,
         "a pending one is never purged"
+    );
+    // Its retention runs from its settlement, not its creation: made at
+    // `at`, settled 40 days later, it stays 30 days after that.
+    let late = at + time::Duration::days(40);
+    let c = &take(store.as_ref(), &kept.id, late).await;
+    store
+        .settle(
+            &Attempt {
+                delivery: c.delivery.id.clone(),
+                claim: c.claim.clone(),
+                outcome: Outcome::Failed,
+                started_at: late,
+                duration_ms: 1,
+                status: Some(500),
+                error: Some(AttemptError::Status),
+                counted: true,
+                disable_if_failing_since: None,
+            },
+            late,
+        )
+        .await
+        .unwrap();
+    store
+        .purge_deliveries(at + time::Duration::days(31))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .deliveries(&tenant(&a), &kept.id, &page)
+            .await
+            .unwrap()
+            .unwrap()
+            .items
+            .len(),
+        1,
+        "settled 9 days before the cutoff's 31: kept"
+    );
+    store
+        .purge_deliveries(late + time::Duration::seconds(1))
+        .await
+        .unwrap();
+    assert!(
+        store
+            .deliveries(&tenant(&a), &kept.id, &page)
+            .await
+            .unwrap()
+            .unwrap()
+            .items
+            .is_empty(),
+        "settled before the cutoff: purged"
     );
     // The tenant's deletion takes the rest.
     assert_eq!(
@@ -1475,6 +1543,31 @@ pub async fn a_delivery_is_signed_and_carries_its_tenants_events_only(backend: &
             .code(),
         "not_found"
     );
+    // Nor through an endpoint of its own: A's delivery id under B's
+    // endpoint names nothing, and A's delivery is left as it is.
+    assert_eq!(
+        open_b
+            .retry(eb.id.as_str(), listed[0].id.as_str())
+            .await
+            .unwrap_err()
+            .code(),
+        "not_found"
+    );
+    assert_eq!(
+        backend
+            .webhooks()
+            .retry_delivery(
+                &tenant(&b),
+                &eb.id,
+                &listed[0].id,
+                START,
+                START + time::Duration::hours(72)
+            )
+            .await
+            .unwrap(),
+        None,
+        "the store, below the service"
+    );
     assert_eq!(
         open_b.test(ea.id.as_str()).await.unwrap_err().code(),
         "not_found"
@@ -1566,7 +1659,39 @@ pub async fn a_delivery_is_signed_and_carries_its_tenants_events_only(backend: &
             listed[0].status,
             listed[0].last_status
         ),
-        (ping.id, DeliveryStatus::Failed, Some(500))
+        (ping.id.clone(), DeliveryStatus::Failed, Some(500))
+    );
+    // A ping retried by hand gets a new window, and is still tried once:
+    // one more attempt, then failed, never pending for the window.
+    let retried = rig
+        .endpoints
+        .open(&rig.authz, &ca)
+        .unwrap()
+        .retry(ea.id.as_str(), ping.id.as_str())
+        .await
+        .unwrap();
+    assert_eq!(retried.status, DeliveryStatus::Pending);
+    assert!(retried.give_up_at > rig.clock.now());
+    assert_eq!(round(&rig).await, 1);
+    rig.clock.advance(Duration::from_secs(3600));
+    assert_eq!(round(&rig).await, 0, "a retried ping is tried once too");
+    let again = rig
+        .endpoints
+        .open(&rig.authz, &ca)
+        .unwrap()
+        .deliveries(
+            ea.id.as_str(),
+            &PageRequest {
+                after: None,
+                limit: 1,
+            },
+        )
+        .await
+        .unwrap()
+        .items;
+    assert_eq!(
+        (again[0].id.clone(), again[0].status, again[0].attempts),
+        (ping.id, DeliveryStatus::Failed, 2)
     );
     rig.sender.status.store(200, Ordering::SeqCst);
     // An unconfigured deployment opens nothing.

@@ -56,6 +56,8 @@
 //! | `WA_SERVER_DATA_KEY` (secret), `WA_SERVER_DATA_KEY_ID`, `WA_SERVER_DATA_PREVIOUS_KEYS` (secret) | unset, `k1`, none | the key webhook endpoints' signing secrets are sealed under (base64 of 32 bytes), its id (1 to 32 of `[A-Za-z0-9_-]`) and the previous ones (`<id>:<base64>`, comma-separated, each id once), which still open what they sealed. Unset: with memory storage a throwaway key, with Postgres no webhooks out (`409 webhooks_not_configured`, no dispatcher) |
 //! | `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` | none: every destination refused | comma-separated host names (`hooks.example.com`), `*.`-prefixed ones (`*.example.com`) and CIDRs (`10.0.0.0/8`, not `/0`); a private, loopback or link-local address passes only inside a listed CIDR, an unspecified, multicast or metadata address never (`meta_whatsapp_server_core::webhooks_out::destination`); plain `http` destinations only with `WA_SERVER_ENV=development` |
 //! | `WA_SERVER_WEBHOOK_RETRY_WINDOW` | `72h` | how long a delivery is retried before it is `failed`; an endpoint failing for the whole window is disabled |
+//! | `WA_SERVER_WEBHOOK_IN_FLIGHT`, `…_IN_FLIGHT_PER_TENANT`, `…_IN_FLIGHT_PER_ENDPOINT` | `32`, `8`, `4` | attempts in flight at once on a replica: in all, of one tenant, to one endpoint (positive whole numbers) |
+//! | `WA_SERVER_WEBHOOK_LEASE` | `60s` | how long a replica's claim holds a delivery before another may claim it again; at least `30s` (an attempt takes up to 16 s), and replicas' clocks must agree within it (design D107) |
 //!
 //! And the routing of a moved WABA's events ([`MoveRules`], roadmap S2b,
 //! design D36; none applies to a WABA no other tenant held):
@@ -88,6 +90,7 @@ use meta_whatsapp_server_core::otp::OtpKeys;
 use meta_whatsapp_server_core::registration::{AttemptLimit, AttemptLimits};
 use meta_whatsapp_server_core::signup::AccountUpdateConfirmation;
 use meta_whatsapp_server_core::webhooks_out::DEFAULT_RETRY_WINDOW;
+use meta_whatsapp_server_core::webhooks_out::dispatch::DispatchSettings;
 use meta_whatsapp_server_core::webhooks_out::destination::DestinationPolicy;
 use meta_whatsapp_server_core::webhooks_out::seal::{DataKey, DataKeys};
 
@@ -337,7 +340,16 @@ pub struct WebhookConfig {
     pub destinations: DestinationPolicy,
     /// `WA_SERVER_WEBHOOK_RETRY_WINDOW`.
     pub retry_window: Duration,
+    /// `WA_SERVER_WEBHOOK_IN_FLIGHT`, `…_IN_FLIGHT_PER_TENANT`,
+    /// `…_IN_FLIGHT_PER_ENDPOINT` and `WA_SERVER_WEBHOOK_LEASE`: the
+    /// dispatcher's bounds and lease (design D108).
+    pub dispatch: DispatchSettings,
 }
+
+/// The shortest `WA_SERVER_WEBHOOK_LEASE`: an attempt takes up to 16 s (a
+/// 5 s lookup, the sender's 10 s and the dispatcher's second), and its
+/// event read and settlement come on top.
+pub const MIN_WEBHOOK_LEASE: Duration = Duration::from_secs(30);
 
 impl fmt::Debug for Config {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -643,11 +655,44 @@ fn webhook_config(
             window => window,
         },
     };
+    let defaults = DispatchSettings::default();
+    let bound = |name: &'static str, default: usize| -> Result<usize, ConfigError> {
+        match positive(r, name)? {
+            None => Ok(default),
+            Some(n) => usize::try_from(n).map_err(|_| ConfigError::Invalid {
+                name,
+                reason: "expected a smaller number",
+            }),
+        }
+    };
+    let lease = match r.plain("WA_SERVER_WEBHOOK_LEASE")? {
+        None => defaults.lease,
+        Some(value) => match duration("WA_SERVER_WEBHOOK_LEASE", &value)? {
+            short if short < MIN_WEBHOOK_LEASE => {
+                return Err(ConfigError::Invalid {
+                    name: "WA_SERVER_WEBHOOK_LEASE",
+                    reason: "expected at least 30s (an attempt takes up to 16 s)",
+                });
+            }
+            lease => lease,
+        },
+    };
+    let dispatch = DispatchSettings {
+        workers: bound("WA_SERVER_WEBHOOK_IN_FLIGHT", defaults.workers)?,
+        per_tenant: bound("WA_SERVER_WEBHOOK_IN_FLIGHT_PER_TENANT", defaults.per_tenant)?,
+        per_endpoint: bound(
+            "WA_SERVER_WEBHOOK_IN_FLIGHT_PER_ENDPOINT",
+            defaults.per_endpoint,
+        )?,
+        lease,
+        ..defaults
+    };
     Ok(WebhookConfig {
         data_keys,
         data_key_is_throwaway: throwaway,
         destinations,
         retry_window,
+        dispatch,
     })
 }
 

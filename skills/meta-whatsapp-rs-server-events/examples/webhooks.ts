@@ -59,7 +59,9 @@ export async function verifyDelivery(secret: string, headers: Headers, body: Uin
   if (id === null || timestamp === null || signatures === null) {
     return false;
   }
-  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > TOLERANCE_SECONDS) {
+  // An integer of seconds: `Number("x")` is NaN, which no comparison refuses.
+  const seconds = Number(timestamp);
+  if (!Number.isSafeInteger(seconds) || Math.abs(Date.now() / 1000 - seconds) > TOLERANCE_SECONDS) {
     return false;
   }
   const key = await crypto.subtle.importKey(
@@ -73,8 +75,14 @@ export async function verifyDelivery(secret: string, headers: Headers, body: Uin
     if (!entry.startsWith("v1,")) {
       continue; // another scheme
     }
+    let candidate: Uint8Array<ArrayBuffer>;
+    try {
+      candidate = base64(entry.slice(3));
+    } catch {
+      continue; // not base64: skipped, as the libraries do
+    }
     // crypto.subtle.verify compares in constant time.
-    if (await crypto.subtle.verify("HMAC", key, base64(entry.slice(3)), signed)) {
+    if (await crypto.subtle.verify("HMAC", key, candidate, signed)) {
       return true;
     }
   }

@@ -36,7 +36,7 @@ use crate::state::Grant;
 // ─── Requests ────────────────────────────────────────────────────────────
 
 /// `POST /v1/webhook-endpoints`.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(as = CreateWebhookEndpoint)]
 pub struct CreateWebhookEndpointBody {
@@ -51,7 +51,7 @@ pub struct CreateWebhookEndpointBody {
 }
 
 /// `PATCH /v1/webhook-endpoints/{id}`: what is absent is left.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(as = UpdateWebhookEndpoint)]
 pub struct UpdateWebhookEndpointBody {
@@ -69,7 +69,7 @@ pub struct UpdateWebhookEndpointBody {
 // ─── Answers ─────────────────────────────────────────────────────────────
 
 /// A webhook endpoint (never its secret).
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Serialize, ToSchema)]
 #[schema(as = WebhookEndpoint)]
 pub struct WebhookEndpointView {
     /// Its id (`whe_` and 32 hex digits).
@@ -230,6 +230,36 @@ pub struct WebhookDeliveryList {
     /// Pass as `cursor` for the next (older) page; `null` on the last.
     #[schema(required = true)]
     pub next_cursor: Option<String>,
+}
+
+/// The URL's path or query may carry a token of the receiver's: `Debug`
+/// omits it.
+impl std::fmt::Debug for CreateWebhookEndpointBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CreateWebhookEndpointBody")
+            .field("types", &self.types)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for UpdateWebhookEndpointBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpdateWebhookEndpointBody")
+            .field("url", &self.url.as_ref().map(|_| ".."))
+            .field("types", &self.types)
+            .field("enabled", &self.enabled)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for WebhookEndpointView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebhookEndpointView")
+            .field("id", &self.id)
+            .field("types", &self.types)
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
 }
 
 // ─── The routes ──────────────────────────────────────────────────────────

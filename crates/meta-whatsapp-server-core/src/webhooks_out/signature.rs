@@ -75,6 +75,12 @@ impl EndpointSecret {
             .then(|| Self(SecretBytes::new(key)))
     }
 
+    /// `key` itself (opened from its seal): `None` unless 24 to 64 bytes.
+    /// No copy of it is made, in base64 or otherwise.
+    pub(crate) fn from_key(key: SecretBytes) -> Option<Self> {
+        KEY_BYTES.contains(&key.len()).then(|| Self(key))
+    }
+
     /// The key's bytes.
     pub fn key(&self) -> &[u8] {
         self.0.expose_secret()

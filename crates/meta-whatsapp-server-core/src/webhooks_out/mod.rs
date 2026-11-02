@@ -25,9 +25,10 @@
 //!
 //! **What is not built** (the design's §4.4 names them): `tenants` on an
 //! endpoint made with a platform key (an endpoint is its creator's tenant's,
-//! the `WA-Tenant` it acted as), a data key rotation walk (a previous key
-//! still opens what it sealed), and a connection pool to the receivers
-//! (each attempt opens its own connection to the address it checked).
+//! the `WA-Tenant` it acted as; roadmap M2m), a data key rotation walk (a
+//! previous key still opens what it sealed; M2i), and a connection pool to
+//! the receivers (each attempt opens its own connection to the address it
+//! checked; M2j).
 
 use std::fmt;
 use std::time::Duration;

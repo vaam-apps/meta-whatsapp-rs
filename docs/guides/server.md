@@ -138,6 +138,8 @@ read yet: set, it stops the start.
 | `WA_SERVER_DATA_KEY_ID`, `WA_SERVER_DATA_PREVIOUS_KEYS` | `k1`, — | the data key's id (1 to 32 of `A-Z a-z 0-9 - _`) and older keys still read, `<id>:<base64>` comma-separated, every id once |
 | `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` | none: every destination refused | where webhook endpoints may point: host names (`hooks.example.com`), `*.`-prefixed ones (`*.example.com`) and CIDRs (`10.0.0.0/8`, never `/0`), comma-separated |
 | `WA_SERVER_WEBHOOK_RETRY_WINDOW` | `72h` | how long a delivery is retried before it is `failed` |
+| `WA_SERVER_WEBHOOK_IN_FLIGHT`, `WA_SERVER_WEBHOOK_IN_FLIGHT_PER_TENANT`, `WA_SERVER_WEBHOOK_IN_FLIGHT_PER_ENDPOINT` | `32`, `8`, `4` | webhook deliveries attempted at once on a replica: in all, of one tenant, to one endpoint |
+| `WA_SERVER_WEBHOOK_LEASE` | `60s` | how long a replica holds a delivery it claimed before another may attempt it; at least `30s`; keep the replicas' clocks within it of each other |
 | `WA_SERVER_STREAMS_PER_REPLICA` | `1000` | live event streams open at once on a replica, every tenant's (keep it under the internal listener's 4,096 connections) |
 
 **The service refuses to start** rather than run unsafely: on a missing
@@ -1399,7 +1401,9 @@ way (design §4.4; roadmap M2c). The operator sets two things:
   looked up when the endpoint is made and again at every attempt, and the
   attempt connects to the address it checked: a host that later resolves
   to a private address is refused then (`destination_refused`), nothing
-  sent. Allow egress to those destinations.
+  sent. Allow egress to those destinations. A listed CIDR lets every
+  tenant reach every host and port inside it (each seeing the status its
+  attempt got): list the receivers' own addresses, not a whole cluster's.
 
 A tenant (scope `webhooks`) makes an endpoint:
 
@@ -1442,8 +1446,9 @@ types recorded from then on (10 endpoints a tenant,
 
 Every replica dispatches: a delivery is claimed by one of them under a
 lease, so a replica that stops mid-attempt leaves it to another after a
-minute. One slow receiver holds at most 4 attempts a replica; a tenant,
-8; a replica, 32. A platform key's endpoint is the tenant's it acts as
+minute (`WA_SERVER_WEBHOOK_LEASE`; the replicas' clocks must agree
+within it). One slow receiver holds at most 4 attempts a replica; a
+tenant, 8; a replica, 32 (`WA_SERVER_WEBHOOK_IN_FLIGHT…`). A platform key's endpoint is the tenant's it acts as
 (`WA-Tenant`): make one per tenant.
 
 ## Errors

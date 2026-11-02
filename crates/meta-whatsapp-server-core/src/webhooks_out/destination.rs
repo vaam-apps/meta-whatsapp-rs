@@ -18,8 +18,10 @@
 //!   is refused, whichever address it would have used: an IPv4-mapped,
 //!   -compatible or NAT64 IPv6 address is judged as the IPv4 address it
 //!   carries. A private, loopback, link-local, shared (CGNAT),
-//!   documentation, benchmarking, reserved, 6to4 or Teredo address passes
-//!   only inside a listed CIDR (a receiver in the same cluster); an
+//!   documentation, benchmarking, reserved, 6to4 or Teredo address, and
+//!   any IPv6 address outside the global unicast `2000::/3` (the
+//!   IPv4-translated `::ffff:0:a.b.c.d` among them), passes only inside a
+//!   listed CIDR (a receiver in the same cluster); an
 //!   unspecified (`0.0.0.0/8`, `::`), broadcast or multicast address and
 //!   the clouds' metadata addresses never do, listed or not. A public
 //!   address passes for a host listed by name, or inside a listed CIDR.
@@ -226,7 +228,11 @@ fn forbidden(ip: IpAddr) -> bool {
 
 /// Not a public address: private, loopback, link-local, shared, reserved,
 /// documentation, benchmarking, protocol assignments, 6to4, Teredo,
-/// unique-local, site-local (IANA's special-purpose registries).
+/// unique-local, site-local (IANA's special-purpose registries), and every
+/// IPv6 address outside the global unicast block `2000::/3` (the
+/// IPv4-translated `::ffff:0:0:0/96`, the dummy prefix `100:0:0:1::/64`,
+/// SRv6's `5f00::/16`, the reserved rest), or inside `3fff::/20`
+/// (documentation).
 pub fn is_special(ip: IpAddr) -> bool {
     const V4: [(u32, u8); 14] = [
         (0x0000_0000, 8),  // 0.0.0.0/8 "this network"
@@ -244,7 +250,7 @@ pub fn is_special(ip: IpAddr) -> bool {
         (0xcb00_7100, 24), // 203.0.113.0/24 documentation
         (0xe000_0000, 3),  // 224.0.0.0/4 multicast and 240.0.0.0/4 reserved
     ];
-    const V6: [(u128, u8); 12] = [
+    const V6: [(u128, u8); 13] = [
         (0, 128),                                        // ::
         (1, 128),                                        // ::1
         (0xffff_0000_0000, 96),                          // ::ffff:0:0/96 (judged as IPv4 first)
@@ -254,6 +260,7 @@ pub fn is_special(ip: IpAddr) -> bool {
         (0x2001_0000_0000_0000_0000_0000_0000_0000, 23), // protocol assignments, Teredo
         (0x2001_0db8_0000_0000_0000_0000_0000_0000, 32), // documentation
         (0x2002_0000_0000_0000_0000_0000_0000_0000, 16), // 6to4
+        (0x3fff_0000_0000_0000_0000_0000_0000_0000, 20), // documentation (RFC 9637)
         (0xfc00_0000_0000_0000_0000_0000_0000_0000, 7),  // unique-local
         (0xfe80_0000_0000_0000_0000_0000_0000_0000, 9), // link-local fe80::/10 and site-local fec0::/10
         (0xff00_0000_0000_0000_0000_0000_0000_0000, 8), // multicast
@@ -266,13 +273,19 @@ pub fn is_special(ip: IpAddr) -> bool {
             };
             block.contains(IpAddr::V4(v4))
         }),
-        IpAddr::V6(v6) => V6.iter().any(|(net, prefix)| {
-            let block = Cidr {
-                network: IpAddr::V6(Ipv6Addr::from(*net)),
-                prefix: *prefix,
-            };
-            block.contains(IpAddr::V6(v6))
-        }),
+        IpAddr::V6(v6) => {
+            // Only global unicast is public: whatever else a later RFC
+            // carves out of the reserved space is refused already.
+            let global_unicast = u128::from(v6) >> 125 == 0b001;
+            !global_unicast
+                || V6.iter().any(|(net, prefix)| {
+                    let block = Cidr {
+                        network: IpAddr::V6(Ipv6Addr::from(*net)),
+                        prefix: *prefix,
+                    };
+                    block.contains(IpAddr::V6(v6))
+                })
+        }
     }
 }
 
@@ -618,6 +631,18 @@ mod tests {
             "2002:7f00:1::",
             "2001::1",
             "2001:db8::1",
+            // IPv4-translated (SIIT): `::ffff:0:127.0.0.1`, which a
+            // translator on the path turns into loopback.
+            "::ffff:0:7f00:1",
+            "::ffff:0:a9fe:a9fe",
+            "64:ff9b:1::a00:1",
+            "100::1",
+            "100:0:0:1::1",
+            "5f00::1",
+            "3fff::1",
+            "4000::1",
+            "1000::1",
+            "e000::1",
         ] {
             assert!(!p.admits(&d, ip(special)), "{special}");
         }
@@ -643,7 +668,10 @@ mod tests {
             "93.184.216.34",
             "8.8.8.8",
             "2606:4700::1111",
+            "2a00:1450:4001::1",
+            "3ffe::1",
             "::ffff:8.8.8.8",
+            "64:ff9b::808:808",
         ] {
             assert!(p.admits(&d, ip(public)), "{public}");
         }
@@ -704,6 +732,97 @@ mod tests {
             Refusal::Address,
             "one address outside the list refuses the host"
         );
+    }
+
+    /// The spellings a review tries (roadmap M2c's security review): the
+    /// short and trailing-dot IPv4 forms are the address they spell; a
+    /// look-alike name (Cyrillic `а`, punycode once parsed), a name that
+    /// merely ends like a listed one, a listed name under another
+    /// domain, and a name with credentials before it are refused; a
+    /// listed name written with an ideographic full stop or percent
+    /// escapes is that name (WHATWG), so it passes and its own lookup
+    /// decides. Decisive: the `.` the `*.` pattern keeps, WHATWG parsing.
+    #[test]
+    fn host_spellings_are_judged_as_what_they_parse_to() {
+        let p = policy("hooks.example.com, *.medusa.example");
+        for url in [
+            "https://127.1/",
+            "https://0x7f000001/",
+            "https://127.0.0.1./",
+            "https://017700000001/",
+            "https://[::ffff:127.0.0.1]/",
+            "https://[::ffff:0:7f00:1]/",
+            "https://[0:0:0:0:0:ffff:7f00:1]/",
+            "https://[64:ff9b::7f00:1]/",
+        ] {
+            assert_eq!(p.check_url(url).unwrap_err(), Refusal::NotListed, "{url}");
+        }
+        let loopback = policy("127.0.0.0/8");
+        for url in [
+            "https://127.1/",
+            "https://0x7f000001/",
+            "https://127.0.0.1./",
+        ] {
+            let d = loopback.check_url(url).unwrap();
+            assert_eq!(d.host, Host::Ip(ip("127.0.0.1")), "{url}");
+        }
+        for url in [
+            "https://hooks.ex\u{0430}mple.com/",
+            "https://xn--hooks-example-com/",
+            "https://evilmedusa.example/",
+            "https://medusa.example.evil.example/",
+            "https://hooks.example.com.evil.example/",
+            "https://hooks.example.co/",
+            "https://evil.example\\@hooks.example.com/",
+        ] {
+            assert_eq!(p.check_url(url).unwrap_err(), Refusal::NotListed, "{url}");
+        }
+        assert_eq!(
+            p.check_url("https://evil.example@hooks.example.com/")
+                .unwrap_err(),
+            Refusal::Url,
+            "userinfo"
+        );
+        for url in [
+            "https://hooks\u{3002}example.com/",
+            "https://hooks%2Eexample.com/",
+            "https://HOOKS.EXAMPLE.COM:443/",
+        ] {
+            let d = p.check_url(url).unwrap();
+            assert_eq!(d.host, Host::Name("hooks.example.com".to_owned()), "{url}");
+            assert_eq!(d.authority, "hooks.example.com", "{url}");
+        }
+    }
+
+    /// CIDR edges: the first and last address of a block are in it, the
+    /// ones either side are not; `/32` and `/128` hold one address;
+    /// host bits in the network are masked.
+    #[test]
+    fn cidr_blocks_hold_their_edges_only() {
+        let block = Cidr::parse("192.168.4.0/22").unwrap();
+        assert!(block.contains(ip("192.168.4.0")));
+        assert!(block.contains(ip("192.168.7.255")));
+        assert!(!block.contains(ip("192.168.3.255")));
+        assert!(!block.contains(ip("192.168.8.0")));
+        let one = Cidr::parse("203.0.113.7/32").unwrap();
+        assert!(one.contains(ip("203.0.113.7")));
+        assert!(!one.contains(ip("203.0.113.6")));
+        assert!(!one.contains(ip("203.0.113.8")));
+        assert_eq!(Cidr::parse("203.0.113.7"), Some(one));
+        let half = Cidr::parse("0.0.0.0/1").unwrap();
+        assert!(half.contains(ip("127.255.255.255")));
+        assert!(!half.contains(ip("128.0.0.0")));
+        let masked = Cidr::parse("10.1.2.3/8").unwrap();
+        assert!(masked.contains(ip("10.200.0.1")));
+        let v6 = Cidr::parse("fd00:1::/32").unwrap();
+        assert!(v6.contains(ip("fd00:1:ffff:ffff:ffff:ffff:ffff:ffff")));
+        assert!(!v6.contains(ip("fd00:2::")));
+        let host = Cidr::parse("fd00::1/128").unwrap();
+        assert!(host.contains(ip("fd00::1")));
+        assert!(!host.contains(ip("fd00::2")));
+        for bad in ["10.0.0.0/", "10.0.0.0/+8", "10.0.0.0/-1", "::/129", "10.0.0/8"] {
+            assert_eq!(Cidr::parse(bad), None, "{bad}");
+        }
     }
 
     /// M2.4's rebinding case at its source: the first lookup answers a
