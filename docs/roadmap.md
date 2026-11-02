@@ -4635,8 +4635,8 @@ design's (§9).
     and the HTTP scope case, over the new routes too). Left, and why: a group conversation
     gets one receipt, for its latest message (Meta marks group messages
     one by one); the window names no refusal reason (D62); the list reads a
-    few rows per conversation for its windows (D63); D60–D63 are proposals,
-    the coordinator's to decide.
+    few rows per conversation for its windows (D63). D60–D63 are the
+    coordinator's decisions of 2026-11-02, each swappable.
 - [x] **M2h. A number's own move record** (row 111; added by M2a, and
   folded into it by the coordinator: the inbox never ships with the leak):
   the binding epoch for a number Meta migrated from

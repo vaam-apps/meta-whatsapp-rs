@@ -219,7 +219,8 @@ stored data, the owner's).
 ### Added
 
 - **The inbox's other routes in the service** (roadmap M2g; parity row
-  111 now done on the service's side; design D60–D63, proposed). Scope
+  111 now done on the service's side; design D60–D63, decided by the
+  coordinator on 2026-11-02). Scope
   `inbox`, each from the number's binding epoch on, as M2a's routes:
   - `GET /v1/numbers/{pn}/conversations/{contact}/window`
     (`get_conversation_window`, read class): `{open, closes_at}`, `open`
