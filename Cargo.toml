@@ -13,6 +13,7 @@ members = [
   "crates/meta-whatsapp-server-core",
   "crates/meta-whatsapp-server-store-memory",
   "crates/meta-whatsapp-server-store-postgres",
+  "crates/meta-whatsapp-server-store-mongodb",
   "crates/meta-whatsapp-server-http",
   "crates/meta-whatsapp-server-api-axum",
   "crates/meta-whatsapp-server",
@@ -30,7 +31,9 @@ exclude = [".xtask"]
 # The service's crates (meta-whatsapp-server-core; the backends
 # meta-whatsapp-server-store-memory and -store-postgres; the HTTP layer,
 # meta-whatsapp-server-http; the API adapter, meta-whatsapp-server-api-axum;
-# and the binary, meta-whatsapp-server: roadmap S7) are members (every `--workspace` recipe, and so `just ci`, covers them)
+# and the binary, meta-whatsapp-server: roadmap S7; and the MongoDB outbox
+# spike, meta-whatsapp-server-store-mongodb, which the binary does not
+# compose: roadmap S9) are members (every `--workspace` recipe, and so `just ci`, covers them)
 # but not default ones: a bare `cargo build` or `cargo test` in the root
 # builds the library alone, with the features its crates choose. The docs
 # MCP server under tools/ is a member on the same terms.
@@ -147,9 +150,11 @@ rustls-platform-verifier = "0.7"
 # meta-whatsapp-adapters' tests/redis_tls_handshake.rs (a name or an IP
 # address the server's certificate does not carry, an untrusted issuer).
 rcgen = { version = "0.14", default-features = false }
-# Test-only, for now: meta-whatsapp-adapters' tests/live_mongodb.rs, the
-# replica-set smoke test of roadmap S8 (a dev-dependency there, so no
-# library build links it). No default features: the default TLS feature,
+# meta-whatsapp-adapters' tests/live_mongodb.rs, the replica-set smoke test
+# of roadmap S8 (a dev-dependency there, so no library build links it), and
+# the service's MongoDB outbox spike, meta-whatsapp-server-store-mongodb
+# (roadmap S9: a service crate the binary does not compose, so no library
+# build and no service build links it either). No default features: the default TLS feature,
 # `rustls-tls`, is rustls on `ring`, and `dns-resolver` (hickory, for
 # `mongodb+srv://`) is not needed. Members choose `rustls-tls-aws-lc`
 # (rustls with an explicit aws-lc-rs provider, never the process default).
