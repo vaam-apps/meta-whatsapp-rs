@@ -368,6 +368,590 @@ fn a_png_reaches_ffmpeg_without_its_text_and_nothing_after_its_end() {
     );
 }
 
+/// Every attempt of the animated sticker's ladder: the input options
+/// before `-i`, the bounds, `libwebp_anim`, the aspect ratio kept, never
+/// enlarged, sizes and frame rates that only fall.
+#[test]
+fn the_animation_arguments_are_fixed_literals() {
+    let expected: Vec<&str> = "-hide_banner -nostdin -nostats -loglevel error \
+         -max_alloc 268435456 -abort_on empty_output \
+         -protocol_whitelist pipe -format_whitelist gif \
+         -max_pixels 2097152 \
+         -i pipe:0 -map 0:v:0 -map_metadata -1 -fps_mode vfr -frames:v 500 \
+         -vf"
+        .split_whitespace()
+        .chain([
+            "scale=w='min(iw,512)':h='min(ih,512)':force_original_aspect_ratio=decrease,format=yuva420p|yuv420p",
+        ])
+        .chain(
+            "-c:v libwebp_anim -lossless 0 -compression_level 4 -quality 75 -f image2pipe pipe:1"
+                .split_whitespace(),
+        )
+        .collect();
+    assert_eq!(animation::arguments(&animation::LADDER[0]), expected);
+    assert_eq!(animation::MAX_PIXELS_ARG, animation::MAX_PIXELS.to_string());
+    assert_eq!(animation::MAX_PIXELS, 2048 * 1024);
+    assert_eq!(animation::MAX_FRAMES_ARG, animation::MAX_FRAMES.to_string());
+    assert_eq!(animation::MAX_FRAMES, 500);
+    assert_eq!(animation::MAX_DURATION_CS, 1000);
+    assert_eq!(animation::FRAME_PIXELS_COUNTED, 512 * 512);
+    assert_eq!(animation::MAX_FRAME_PIXELS, 100 * 512 * 512);
+
+    let ladder = animation::ladder(TargetFormat::AnimatedSticker).unwrap();
+    assert_eq!(ladder, animation::LADDER);
+    assert!(ladder.len() >= 5);
+    let (mut size_cap, mut fps_cap) = (u32::MAX, u32::MAX);
+    for (n, rung) in ladder.iter().enumerate() {
+        let args = animation::arguments(rung);
+        let input = args.iter().position(|a| *a == "-i").unwrap();
+        for option in ["-protocol_whitelist", "-format_whitelist", "-max_pixels"] {
+            let at = args.iter().position(|a| *a == option).unwrap();
+            assert!(at < input, "{option} must precede -i");
+        }
+        assert_eq!(&args[..animation::INPUT_ARGS.len()], animation::INPUT_ARGS);
+        assert_eq!(&args[args.len() - 3..], ["-f", "image2pipe", "pipe:1"]);
+        assert_eq!(&rung.encoder[..2], ["-c:v", "libwebp_anim"]);
+        assert!(
+            rung.filter.ends_with(",format=yuva420p|yuv420p"),
+            "{}",
+            rung.filter
+        );
+        // `fps=N,` first (the first attempt keeps the GIF's own), then a
+        // square of S, never more than the animation's own size.
+        let scale = if let Some(rest) = rung.filter.strip_prefix("fps=") {
+            let (fps, scale) = rest.split_once(',').unwrap();
+            let fps: u32 = fps.parse().unwrap();
+            assert!(n > 0 && fps <= fps_cap, "frame rates only fall");
+            fps_cap = fps;
+            scale
+        } else {
+            assert_eq!(n, 0, "only the first attempt keeps the frame rate");
+            rung.filter
+        };
+        let size: u32 = scale
+            .strip_prefix("scale=w='min(iw,")
+            .and_then(|s| s.split_once(')'))
+            .unwrap()
+            .0
+            .parse()
+            .unwrap();
+        assert!(
+            scale.starts_with(&format!(
+                "scale=w='min(iw,{size})':h='min(ih,{size})':force_original_aspect_ratio=decrease,"
+            )),
+            "{scale}"
+        );
+        assert!(size <= size_cap && size <= 512, "sizes only fall");
+        size_cap = size;
+    }
+    assert!(animation::ladder(TargetFormat::StaticSticker).is_none());
+    assert!(image::ladder(TargetFormat::AnimatedSticker).is_none());
+    assert!(arguments(TargetFormat::AnimatedSticker).is_none());
+}
+
+/// GIF sub-blocks: `data` cut into runs of at most 255 bytes, each after
+/// its length, then the zero length that ends them.
+fn gif_sub_blocks(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() + data.len() / 255 + 2);
+    for run in data.chunks(255) {
+        out.push(u8::try_from(run.len()).unwrap());
+        out.extend_from_slice(run);
+    }
+    out.push(0);
+    out
+}
+
+/// A GIF: its header, a canvas of `width` × `height` with a global colour
+/// table of two colours, then `blocks` (the caller adds the trailer).
+fn gif(width: u16, height: u16, blocks: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = b"GIF89a".to_vec();
+    out.extend_from_slice(&width.to_le_bytes());
+    out.extend_from_slice(&height.to_le_bytes());
+    out.extend_from_slice(&[0x80, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF]);
+    for block in blocks {
+        out.extend_from_slice(block);
+    }
+    out
+}
+
+/// A graphic control extension: a frame's delay, in hundredths.
+fn gif_delay(delay: u16) -> Vec<u8> {
+    let [lo, hi] = delay.to_le_bytes();
+    vec![0x21, 0xF9, 4, 0x04, lo, hi, 0, 0]
+}
+
+/// One image: a 1 × 1 frame with a local colour table, its LZW data.
+fn gif_frame() -> Vec<u8> {
+    let mut out = vec![0x2C, 0, 0, 0, 0, 1, 0, 1, 0, 0x80, 0, 0, 0, 0xFF, 0, 0, 2];
+    out.extend_from_slice(&gif_sub_blocks(&[0x44, 0x01]));
+    out
+}
+
+/// An extension of `label` carrying `data`.
+fn gif_extension(label: u8, data: &[u8]) -> Vec<u8> {
+    [&[0x21, label][..], &gif_sub_blocks(data)].concat()
+}
+
+/// An application extension: its eleven-byte identifier, then `data`.
+fn gif_application(id: &[u8; 11], data: &[u8]) -> Vec<u8> {
+    [&[0x21, 0xFF, 11][..], id, &gif_sub_blocks(data)].concat()
+}
+
+const GIF_TRAILER: [u8; 1] = [0x3B];
+
+/// `n` frames, each `delay` hundredths, and the trailer, on a canvas of
+/// 16 × 16.
+fn gif_of(n: usize, delay: u16) -> Vec<u8> {
+    let mut blocks = Vec::with_capacity(2 * n + 1);
+    for _ in 0..n {
+        blocks.push(gif_delay(delay));
+        blocks.push(gif_frame());
+    }
+    blocks.push(GIF_TRAILER.to_vec());
+    gif(16, 16, &blocks)
+}
+
+#[test]
+fn the_animation_input_check_wants_a_gif() {
+    assert!(animation::accepted(b"GIF89a\x10\0\x10\0"));
+    assert!(animation::accepted(b"GIF87a\x10\0\x10\0"));
+    for refused in [
+        &b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"[..],
+        &[0xFF, 0xD8, 0xFF, 0xE0],
+        b"RIFF\x1a\0\0\0WEBPVP8X",
+        b"GIF8",
+        b"GIF90a",
+        b"",
+    ] {
+        assert!(!animation::accepted(refused), "{refused:?}");
+    }
+}
+
+/// What ffmpeg gets of a GIF: its header, colour tables, graphic control
+/// extensions and images up to its trailer, without comments, plain text
+/// or application extensions (the loop count, XMP, an ICC profile), and
+/// nothing after the trailer. A GIF with nothing to take out is passed on
+/// as it is, uncopied.
+#[test]
+fn a_gif_reaches_ffmpeg_without_its_metadata_and_nothing_after_its_trailer() {
+    let file = gif(
+        16,
+        16,
+        &[
+            gif_application(b"NETSCAPE2.0", &[1, 0, 0]),
+            gif_extension(0xFE, b"Jane Doe, 12 Main Street"),
+            gif_delay(10),
+            gif_frame(),
+            gif_application(b"XMP DataXMP", &[b'x'; 600]),
+            gif_extension(0x01, &[0; 12]),
+            gif_application(b"ICCRGBG1012", &[7; 300]),
+            // Superseded by the next one, which is the frame's.
+            gif_delay(70),
+            gif_delay(20),
+            gif_frame(),
+            // No frame after it.
+            gif_delay(30),
+            GIF_TRAILER.to_vec(),
+            // After the trailer: another GIF's blocks, then anything.
+            gif_extension(0xFE, b"after the end"),
+            gif_frame(),
+            b"trailing".to_vec(),
+        ],
+    );
+    let given = animation::prepared(&Bytes::from(file)).unwrap();
+    let expected = gif(
+        16,
+        16,
+        &[
+            gif_delay(10),
+            gif_frame(),
+            gif_delay(20),
+            gif_frame(),
+            GIF_TRAILER.to_vec(),
+        ],
+    );
+    assert_eq!(&given[..], &expected[..]);
+
+    // Nothing to take out: the same bytes, not a copy.
+    let clean = Bytes::from(expected);
+    let given = animation::prepared(&clean).unwrap();
+    assert_eq!((given.as_ptr(), given.len()), (clean.as_ptr(), clean.len()));
+    // A GIF without a global colour table, and one whose comment's data
+    // runs over many sub-blocks.
+    let mut bare = gif(16, 16, &[]);
+    bare.truncate(13);
+    bare[10] = 0;
+    let bare = [&bare[..], &gif_of(2, 10)[19..]].concat();
+    assert_eq!(
+        animation::prepared(&Bytes::from(bare.clone())).unwrap(),
+        bare
+    );
+    let long_comment = [
+        &gif_of(2, 10)[..19],
+        &gif_extension(0xFE, &vec![b'c'; 100_000]),
+        &gif_of(2, 10)[19..],
+    ]
+    .concat();
+    assert_eq!(
+        &animation::prepared(&Bytes::from(long_comment)).unwrap()[..],
+        &gif_of(2, 10)[..]
+    );
+}
+
+#[test]
+fn a_gif_cut_short_or_malformed_is_refused() {
+    let whole = gif_of(2, 10);
+    let truncated = "a GIF whose blocks stop before its trailer (a truncated file)";
+    // Cut anywhere before the trailer: in the header, the colour table,
+    // a block, between blocks.
+    for cut in [5, 12, 15, 19, 22, 27, 30, whole.len() - 1] {
+        assert_eq!(
+            animation::prepared(&Bytes::from(whole[..cut].to_vec())),
+            Err(truncated),
+            "cut at {cut}"
+        );
+    }
+    // A sub-block that runs past the end.
+    let mut overrun = gif(16, 16, &[gif_delay(10), gif_frame()]);
+    let last = overrun.len() - 1;
+    overrun[last] = 200;
+    assert_eq!(animation::prepared(&Bytes::from(overrun)), Err(truncated));
+    let unknown = gif(16, 16, &[gif_delay(10), gif_frame(), vec![0x00]]);
+    assert_eq!(
+        animation::prepared(&Bytes::from(unknown)),
+        Err("a GIF block that is not an extension, an image or its trailer")
+    );
+    let wide_control = gif(
+        16,
+        16,
+        &[
+            gif_extension(0xF9, &[0x04, 10, 0, 0, 0]),
+            gif_frame(),
+            gif_frame(),
+            GIF_TRAILER.to_vec(),
+        ],
+    );
+    assert_eq!(
+        animation::prepared(&Bytes::from(wide_control)),
+        Err("a GIF graphic control extension of the wrong size")
+    );
+    // Its sub-blocks reaching eight bytes, but the first not of four (two
+    // and one: ffmpeg skips such an extension, and its "delay" is no
+    // delay); and one of four, then another.
+    for data in [
+        vec![0x21, 0xF9, 2, 0, 0x10, 1, 0x27, 0],
+        vec![0x21, 0xF9, 4, 0, 10, 0, 0, 1, 9, 0],
+    ] {
+        let file = gif(
+            16,
+            16,
+            &[data, gif_frame(), gif_frame(), GIF_TRAILER.to_vec()],
+        );
+        assert_eq!(
+            animation::prepared(&Bytes::from(file)),
+            Err("a GIF graphic control extension of the wrong size")
+        );
+    }
+}
+
+/// The frame bound: 500 frames pass, 501 are refused; one frame is no
+/// animation.
+#[test]
+fn a_gif_over_the_frame_bound_is_refused() {
+    assert!(animation::prepared(&Bytes::from(gif_of(500, 2))).is_ok());
+    assert_eq!(
+        animation::prepared(&Bytes::from(gif_of(501, 2))),
+        Err("an animation of more than 500 frames")
+    );
+    assert_eq!(
+        animation::prepared(&Bytes::from(gif_of(1, 10))),
+        Err("a GIF of fewer than two frames (no animation)")
+    );
+    assert_eq!(
+        animation::prepared(&Bytes::from(gif(16, 16, &[GIF_TRAILER.to_vec()]))),
+        Err("a GIF of fewer than two frames (no animation)")
+    );
+}
+
+/// The time bound: 10 s pass, a hundredth more is refused; a frame
+/// without a delay, or with one under two hundredths, counts a tenth of a
+/// second; a delay counts for the one frame after it, and of two delays
+/// before a frame the second.
+#[test]
+fn a_gif_over_the_time_bound_is_refused() {
+    let too_long = Err("an animation longer than 10 seconds");
+    assert!(animation::prepared(&Bytes::from(gif_of(2, 500))).is_ok());
+    let over = gif(
+        16,
+        16,
+        &[
+            gif_delay(500),
+            gif_frame(),
+            gif_delay(501),
+            gif_frame(),
+            GIF_TRAILER.to_vec(),
+        ],
+    );
+    assert_eq!(animation::prepared(&Bytes::from(over)), too_long);
+    // 100 frames of a hundredth (or none) are 10 s; 101 are over.
+    for delay in [0, 1] {
+        assert!(animation::prepared(&Bytes::from(gif_of(100, delay))).is_ok());
+        assert_eq!(
+            animation::prepared(&Bytes::from(gif_of(101, delay))),
+            too_long
+        );
+    }
+    let mut undelayed = vec![gif_frame(); 101];
+    undelayed.push(GIF_TRAILER.to_vec());
+    assert_eq!(
+        animation::prepared(&Bytes::from(gif(16, 16, &undelayed))),
+        too_long
+    );
+    // The second of two delays counts, the first not at all.
+    let twice = |first: u16, second: u16| {
+        gif(
+            16,
+            16,
+            &[
+                gif_delay(first),
+                gif_delay(second),
+                gif_frame(),
+                gif_delay(500),
+                gif_frame(),
+                GIF_TRAILER.to_vec(),
+            ],
+        )
+    };
+    assert!(animation::prepared(&Bytes::from(twice(900, 500))).is_ok());
+    assert_eq!(animation::prepared(&Bytes::from(twice(500, 501))), too_long);
+    // 9.9 s, then a frame without its own delay: 10 s.
+    let mut blocks = vec![gif_delay(990), gif_frame(), gif_frame()];
+    blocks.push(GIF_TRAILER.to_vec());
+    assert!(animation::prepared(&Bytes::from(gif(16, 16, &blocks))).is_ok());
+    blocks.insert(2, gif_frame());
+    assert_eq!(
+        animation::prepared(&Bytes::from(gif(16, 16, &blocks))),
+        too_long
+    );
+}
+
+/// The bound on frames times pixels: 100 frames of a canvas of 512 × 512
+/// or more pass, 101 are refused; a smaller canvas counts its own pixels
+/// (400 frames of 256 × 256 pass, 401 are refused), and a tiny one meets
+/// the frame bound first.
+#[test]
+fn a_gif_over_the_frame_pixel_bound_is_refused() {
+    let too_many = Err(
+        "an animation of more frames than its size allows (100 of 512 x 512 pixels or more, 26214400 pixels in all)",
+    );
+    // `n` frames of two hundredths each (500 within 10 s).
+    let frames = |width: u16, height: u16, n: usize| {
+        let mut blocks: Vec<Vec<u8>> = (0..n).flat_map(|_| [gif_delay(2), gif_frame()]).collect();
+        blocks.push(GIF_TRAILER.to_vec());
+        Bytes::from(gif(width, height, &blocks))
+    };
+    for (w, h) in [(512, 512), (2048, 1024), (1920, 1080), (513, 512)] {
+        assert!(animation::prepared(&frames(w, h, 100)).is_ok(), "{w}x{h}");
+        assert_eq!(animation::prepared(&frames(w, h, 101)), too_many, "{w}x{h}");
+    }
+    assert!(animation::prepared(&frames(256, 256, 400)).is_ok());
+    assert_eq!(animation::prepared(&frames(256, 256, 401)), too_many);
+    // 511 × 512: 100 frames and a few more.
+    assert!(animation::prepared(&frames(511, 512, 100)).is_ok());
+    assert_eq!(animation::prepared(&frames(511, 512, 101)), too_many);
+    assert_eq!(
+        animation::prepared(&frames(128, 128, 501)),
+        Err("an animation of more than 500 frames")
+    );
+}
+
+/// The pixel bound, on the canvas: 2048 × 1024 passes, a row more is
+/// refused, and so is a canvas of no pixels.
+#[test]
+fn a_gif_over_the_pixel_bound_is_refused() {
+    let blocks = [
+        gif_delay(10),
+        gif_frame(),
+        gif_delay(10),
+        gif_frame(),
+        GIF_TRAILER.to_vec(),
+    ];
+    assert!(animation::prepared(&Bytes::from(gif(2048, 1024, &blocks))).is_ok());
+    assert!(animation::prepared(&Bytes::from(gif(1920, 1080, &blocks))).is_ok());
+    for (w, h) in [(2048, 1025), (65535, 65535), (1025, 2048)] {
+        assert_eq!(
+            animation::prepared(&Bytes::from(gif(w, h, &blocks))),
+            Err("a GIF whose canvas is over 2097152 pixels (2 Mi)"),
+            "{w}x{h}"
+        );
+    }
+    for (w, h) in [(0, 16), (16, 0)] {
+        assert_eq!(
+            animation::prepared(&Bytes::from(gif(w, h, &blocks))),
+            Err("a GIF whose canvas has no pixels")
+        );
+    }
+}
+
+/// A WebP file of these chunks, each padded to an even length.
+fn riff(chunks: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
+    let mut body = b"WEBP".to_vec();
+    for (kind, data) in chunks {
+        body.extend_from_slice(kind);
+        body.extend_from_slice(&u32::try_from(data.len()).unwrap().to_le_bytes());
+        body.extend_from_slice(data);
+        if data.len() % 2 == 1 {
+            body.push(0);
+        }
+    }
+    let mut out = b"RIFF".to_vec();
+    out.extend_from_slice(&u32::try_from(body.len()).unwrap().to_le_bytes());
+    out.extend_from_slice(&body);
+    out
+}
+
+/// The extended header, with `flags` (0x02 animation, 0x10 alpha), for a
+/// canvas of 64 × 64.
+fn vp8x(flags: u8) -> ([u8; 4], Vec<u8>) {
+    (*b"VP8X", vec![flags, 0, 0, 0, 63, 0, 0, 63, 0, 0])
+}
+
+/// The animation header: a background colour, loop forever.
+fn anim() -> ([u8; 4], Vec<u8>) {
+    (*b"ANIM", vec![0xFF, 0xFF, 0xFF, 0xFF, 0, 0])
+}
+
+/// One frame: its header (position, size, 100 ms, flags), then an odd
+/// length `VP8 ` chunk.
+fn anmf() -> ([u8; 4], Vec<u8>) {
+    let mut data = vec![0, 0, 0, 0, 0, 0, 63, 0, 0, 63, 0, 0, 100, 0, 0, 0];
+    data.extend_from_slice(b"VP8 \x0b\0\0\0");
+    data.extend_from_slice(&[9; 11]);
+    data.push(0);
+    (*b"ANMF", data)
+}
+
+fn animated_webp() -> Vec<u8> {
+    riff(&[vp8x(0x12), anim(), anmf(), anmf()])
+}
+
+#[test]
+fn the_animation_output_check_reads_the_chunks() {
+    let a = TargetFormat::AnimatedSticker;
+    assert_eq!(check_output(a, &animated_webp()), Ok(()));
+    // An unknown chunk is fine; one frame is a still image.
+    assert_eq!(
+        check_output(
+            a,
+            &riff(&[
+                vp8x(0x02),
+                anim(),
+                anmf(),
+                (*b"XYZW", vec![1, 2, 3]),
+                anmf()
+            ])
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        check_output(a, &riff(&[vp8x(0x12), anim(), anmf()])),
+        Err("an animated WebP of one frame (ANMF): a still image")
+    );
+    let not_animated = Err("a WebP that is not animated");
+    // A still image, simple or extended, even with an animation's chunks.
+    assert_eq!(check_output(a, &webp(*b"VP8 ", &[0; 10])), not_animated);
+    assert_eq!(check_output(a, &webp(*b"VP8L", &[0; 10])), not_animated);
+    assert_eq!(
+        check_output(a, &riff(&[vp8x(0x10), anim(), anmf(), anmf()])),
+        not_animated
+    );
+    assert_eq!(
+        check_output(a, &riff(&[anim(), vp8x(0x12), anmf()])),
+        not_animated
+    );
+    assert_eq!(
+        check_output(a, &riff(&[vp8x(0x12), anmf(), anmf()])),
+        Err("a WebP frame before its animation header")
+    );
+    assert_eq!(
+        check_output(a, &riff(&[vp8x(0x12), anmf(), anim(), anmf()])),
+        Err("a WebP frame before its animation header")
+    );
+    assert_eq!(
+        check_output(a, &riff(&[vp8x(0x12), anim()])),
+        Err("an animated WebP without frames (ANMF)")
+    );
+    assert_eq!(
+        check_output(a, &riff(&[vp8x(0x12)])),
+        Err("a WebP without its animation header (ANIM)")
+    );
+    for image in [*b"VP8 ", *b"VP8L", *b"ALPH"] {
+        assert_eq!(
+            check_output(
+                a,
+                &riff(&[vp8x(0x12), anim(), anmf(), anmf(), (image, vec![0; 10])])
+            ),
+            Err("an animated WebP with an image outside its frames"),
+            "{image:?}"
+        );
+    }
+    assert_eq!(
+        check_output(a, &riff(&[(*b"VP8X", vec![0x12, 0, 0]), anim(), anmf()])),
+        Err("a truncated WebP header")
+    );
+    assert_eq!(
+        check_output(a, &riff(&[vp8x(0x12), (*b"ANIM", vec![0; 4]), anmf()])),
+        Err("a truncated WebP animation header")
+    );
+    assert_eq!(
+        check_output(a, &riff(&[vp8x(0x12), anim(), (*b"ANMF", vec![0; 8])])),
+        Err("a truncated WebP frame")
+    );
+}
+
+/// The animated sticker's check reads the RIFF size and where the chunks
+/// end; anything but a WebP is refused, and the static sticker's check
+/// refuses an animated one.
+#[test]
+fn the_animation_output_check_reads_the_riff_size_and_where_chunks_end() {
+    let a = TargetFormat::AnimatedSticker;
+    let file = animated_webp();
+    assert_eq!(
+        check_output(a, &file[..file.len() - 1]),
+        Err("a WebP file whose RIFF size is not its length")
+    );
+    let mut zero = file.clone();
+    zero[4..8].copy_from_slice(&[0; 4]);
+    assert_eq!(
+        check_output(a, &zero),
+        Err("a WebP file whose RIFF size is not its length")
+    );
+    let mut overrun = file.clone();
+    // The last frame's length, one more than there is.
+    let at = file.len() - anmf().1.len() - 4;
+    let len = u32::try_from(anmf().1.len() + 2).unwrap();
+    overrun[at..at + 4].copy_from_slice(&len.to_le_bytes());
+    assert_eq!(
+        check_output(a, &overrun),
+        Err("a WebP chunk past the file's end")
+    );
+    let mut tail = riff(&[vp8x(0x12), anim(), anmf()]);
+    tail.extend_from_slice(b"ANMF");
+    let size = u32::try_from(tail.len() - 8).unwrap();
+    tail[4..8].copy_from_slice(&size.to_le_bytes());
+    assert_eq!(
+        check_output(a, &tail),
+        Err("a WebP chunk past the file's end")
+    );
+    assert_eq!(check_output(a, &png(8, 6)), Err("no WebP file"));
+    assert_eq!(check_output(a, &[]), Err("no WebP file"));
+    // And the static sticker's check refuses this one.
+    assert_eq!(
+        check_output(TargetFormat::StaticSticker, &animated_webp()),
+        Err("an animated WebP")
+    );
+}
+
 /// A PNG's first colour profile (`iCCP`) is kept when its data is at
 /// most 16 KiB; a larger one, and any second one, is not (ffmpeg
 /// inflates a profile whole: 200 KB of it inflating to 200 MiB took
@@ -987,7 +1571,7 @@ mod processes {
             // Each encoder name, each of the wrong kind.
             (
                 "encoders_wrong_kind",
-                "printf ' A....D libwebp   libwebp\\n A....D mjpeg   MJPEG\\n A....D png   PNG\\n V....D libopus   libopus\\n'\n"
+                "printf ' A....D libwebp   libwebp\\n A....D libwebp_anim   libwebp\\n A....D mjpeg   MJPEG\\n A....D png   PNG\\n V....D libopus   libopus\\n'\n"
                     .to_owned(),
             ),
             (
@@ -997,6 +1581,57 @@ mod processes {
             (
                 "encoders_images",
                 "printf ' V....D libwebp   libwebp WebP image (codec webp)\\n VFS... mjpeg   MJPEG\\n VF...D png   PNG\\n A....D opus   Opus\\n'\n"
+                    .to_owned(),
+            ),
+        ]
+    }
+
+    /// The animation tests' stand-ins, and the files they answer, written
+    /// in `dir` (`webp.bin`, a still WebP, is the image tests').
+    fn animation_scripts(dir: &Path) -> Vec<(&'static str, String)> {
+        std::fs::write(dir.join("anim.bin"), animated_webp()).unwrap();
+        std::fs::write(dir.join("no_frames.bin"), riff(&[vp8x(0x12), anim()])).unwrap();
+        let d = dir.display();
+        vec![
+            // The animation tests' own marker.
+            (
+                "animation_marker",
+                format!("touch '{d}/animation_marker.ran'\n"),
+            ),
+            // Records its arguments and its input, answers an animated
+            // WebP.
+            (
+                "record_animation",
+                format!(
+                    "printf '%s\\n' \"$@\" >> '{d}/record_animation.args'\ncat > '{d}/record_animation.stdin'\ncat '{d}/anim.bin'\n"
+                ),
+            ),
+            // Counts its runs and records their arguments; answers more
+            // than an animated sticker takes twice, then an animated WebP.
+            (
+                "anim_ladder",
+                format!(
+                    "n=$(cat '{d}/anim_ladder.count' 2>/dev/null || echo 0)\nn=$((n + 1))\necho $n > '{d}/anim_ladder.count'\n\
+                     echo \"$*\" >> '{d}/anim_ladder.args'\ncat > /dev/null\n\
+                     if [ $n -le 2 ]; then head -c 500001 /dev/zero; else cat '{d}/anim.bin'; fi\n"
+                ),
+            ),
+            // Counts its runs; always answers too much.
+            (
+                "too_much_anim",
+                format!(
+                    "n=$(cat '{d}/too_much_anim.count' 2>/dev/null || echo 0)\necho $((n + 1)) > '{d}/too_much_anim.count'\n\
+                     cat > /dev/null\nexec cat /dev/zero\n"
+                ),
+            ),
+            ("still", format!("cat > /dev/null\ncat '{d}/webp.bin'\n")),
+            (
+                "no_frames",
+                format!("cat > /dev/null\ncat '{d}/no_frames.bin'\n"),
+            ),
+            (
+                "encoders_anim",
+                "printf ' V....D libwebp_anim         libwebp WebP image (codec webp)\\n V....D libwebp              libwebp WebP image (codec webp)\\n'\n"
                     .to_owned(),
             ),
         ]
@@ -1058,7 +1693,11 @@ mod processes {
                     "printf ' A....D opus   Opus\\n A....D libvorbis   Vorbis\\n'\n".to_owned(),
                 ),
             ];
-            for (name, body) in scripts.into_iter().chain(image_scripts(&dir)) {
+            for (name, body) in scripts
+                .into_iter()
+                .chain(image_scripts(&dir))
+                .chain(animation_scripts(&dir))
+            {
                 let path = dir.join(name);
                 std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1568,6 +2207,7 @@ mod processes {
         let f = fakes();
         for target in [
             TargetFormat::StaticSticker,
+            TargetFormat::AnimatedSticker,
             TargetFormat::Jpeg,
             TargetFormat::Png,
             TargetFormat::OggOpus,
@@ -1600,5 +2240,196 @@ mod processes {
         );
         assert!(err.to_string().contains("an animated WebP"), "{err}");
         assert!(err.to_string().contains("libwebp"), "{err}");
+    }
+
+    /// A PNG, a JPEG, a WebP or an animated PNG is refused for an animated
+    /// sticker by its first bytes, and a GIF out of bounds or cut short by
+    /// the walk: `ffmpeg` never starts.
+    #[tokio::test]
+    async fn an_animation_off_the_list_or_out_of_bounds_never_reaches_ffmpeg() {
+        let f = fakes();
+        let c = f.converter("animation_marker");
+        let t = TargetFormat::AnimatedSticker;
+        for input in [
+            PNG_START,
+            &[0xFF, 0xD8, 0xFF, 0xE0, 0, 16][..],
+            b"RIFF\x1a\0\0\0WEBPVP8X",
+            b"\x89PNG\r\n\x1a\n\0\0\0\x08acTL",
+        ] {
+            let err = convert_to(&c, input, t).await.unwrap_err();
+            assert!(
+                matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+                "{err:?}"
+            );
+            assert!(err.to_string().contains("not a GIF's"), "{err}");
+        }
+        let blocks = [
+            gif_delay(10),
+            gif_frame(),
+            gif_delay(10),
+            gif_frame(),
+            GIF_TRAILER.to_vec(),
+        ];
+        let mut large: Vec<Vec<u8>> = (0..101).flat_map(|_| [gif_delay(2), gif_frame()]).collect();
+        large.push(GIF_TRAILER.to_vec());
+        for (input, why) in [
+            (gif_of(501, 2), "more than 500 frames"),
+            (gif_of(101, 0), "longer than 10 seconds"),
+            (gif(512, 512, &large), "more frames than its size allows"),
+            (gif_of(1, 10), "fewer than two frames"),
+            (gif(2048, 1025, &blocks), "over 2097152 pixels"),
+            (gif_of(2, 10)[..40].to_vec(), "truncated"),
+        ] {
+            let err = convert_to(&c, &input, t).await.unwrap_err();
+            assert!(
+                matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+                "{why}: {err:?}"
+            );
+            assert!(err.to_string().contains(why), "{err}");
+        }
+        assert!(
+            !f.path("animation_marker.ran").exists(),
+            "ffmpeg was started"
+        );
+    }
+
+    /// ffmpeg reads the GIF without its comment, its application
+    /// extension and what follows its trailer, with the first attempt's
+    /// arguments, and its animated WebP comes back.
+    #[tokio::test]
+    async fn ffmpeg_gets_the_gif_without_its_metadata_and_an_animation_comes_back() {
+        let f = fakes();
+        let input = gif(
+            16,
+            16,
+            &[
+                gif_extension(0xFE, b"Jane Doe"),
+                gif_delay(10),
+                gif_frame(),
+                gif_application(b"XMP DataXMP", b"<x:xmpmeta/>"),
+                gif_delay(10),
+                gif_frame(),
+                GIF_TRAILER.to_vec(),
+                b"appended".to_vec(),
+            ],
+        );
+        let out = convert_to(
+            &f.converter("record_animation"),
+            &input,
+            TargetFormat::AnimatedSticker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(out.format, TargetFormat::AnimatedSticker);
+        assert_eq!(&out.data[..], &animated_webp()[..]);
+        assert_eq!(
+            std::fs::read(f.path("record_animation.stdin")).unwrap(),
+            gif_of(2, 10)
+        );
+        let args = std::fs::read_to_string(f.path("record_animation.args")).unwrap();
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            animation::arguments(&animation::LADDER[0]),
+            "one attempt"
+        );
+    }
+
+    /// Too large, too large, then within the limit: the third attempt's
+    /// result, after the animation ladder's first three command lines.
+    #[tokio::test]
+    async fn the_animation_ladder_steps_down_until_the_result_fits() {
+        let f = fakes();
+        let out = convert_to(
+            &f.converter("anim_ladder"),
+            &gif_of(2, 10),
+            TargetFormat::AnimatedSticker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(&out.data[..], &animated_webp()[..]);
+        let runs = std::fs::read_to_string(f.path("anim_ladder.args")).unwrap();
+        let expected: Vec<String> = animation::LADDER[..3]
+            .iter()
+            .map(|rung| animation::arguments(rung).join(" "))
+            .collect();
+        assert_eq!(runs.lines().collect::<Vec<_>>(), expected);
+    }
+
+    #[tokio::test]
+    async fn every_animation_attempt_over_the_limit_is_a_validation_error() {
+        let f = fakes();
+        let err = convert_to(
+            &f.converter("too_much_anim"),
+            &gif_of(2, 10),
+            TargetFormat::AnimatedSticker,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, Error::Validation(v) if v.field == "input"),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string().contains("each of the 6 sizes")
+                && err.to_string().contains("500000 bytes"),
+            "{err}"
+        );
+        let runs = std::fs::read_to_string(f.path("too_much_anim.count")).unwrap();
+        assert_eq!(runs.trim(), animation::LADDER.len().to_string());
+    }
+
+    /// A still WebP (libwebp's answer to frames that are all alike) is the
+    /// input's doing; an animated header without frames is not ffmpeg's
+    /// output at all.
+    #[tokio::test]
+    async fn a_still_or_frameless_webp_is_no_animated_sticker() {
+        let f = fakes();
+        let err = convert_to(
+            &f.converter("still"),
+            &gif_of(2, 10),
+            TargetFormat::AnimatedSticker,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("all alike"), "{err}");
+        let err = convert_to(
+            &f.converter("no_frames"),
+            &gif_of(2, 10),
+            TargetFormat::AnimatedSticker,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, Error::Conversion(ConversionError::OutputInvalid(_))),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string().contains("without frames") && err.to_string().contains("libwebp_anim"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn check_for_wants_libwebp_anim() {
+        let f = fakes();
+        f.converter("encoders_anim")
+            .check_for(&[TargetFormat::AnimatedSticker, TargetFormat::StaticSticker])
+            .await
+            .unwrap();
+        // `libwebp` is not `libwebp_anim`.
+        let err = f
+            .converter("encoders_images")
+            .check_for(&[TargetFormat::AnimatedSticker])
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Conversion(ConversionError::EncoderMissing(_))),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("no libwebp_anim encoder"), "{err}");
     }
 }

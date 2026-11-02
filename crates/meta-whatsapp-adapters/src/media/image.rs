@@ -59,7 +59,8 @@ pub(super) const INPUT_ARGS: &[&str] = &[
 /// After the encoder: the encoder's packet as it is, on stdout. Not the
 /// `webp` muxer: writing to a pipe, it left the RIFF size of a large
 /// WebP at zero (it patches it by seeking back, which a pipe cannot do),
-/// where libwebp's own packet carries it.
+/// where libwebp's own packet carries it (`libwebp_anim`'s one packet is
+/// the whole animated file).
 pub(super) const OUTPUT_ARGS: &[&str] = &["-f", "image2pipe", "pipe:1"];
 
 /// One attempt: a filter (scale, then the pixel format) and an encoder
@@ -256,14 +257,14 @@ pub(super) fn prepared(data: &Bytes) -> Result<Bytes, &'static str> {
 
 /// A piece of what `ffmpeg` is given: a range of the input, or bytes
 /// written in its place.
-enum Piece {
+pub(super) enum Piece {
     Input(Range<usize>),
     Written(Vec<u8>),
 }
 
 /// Keep `range` of the input, merged with the range before it when the
 /// two touch.
-fn keep(pieces: &mut Vec<Piece>, range: Range<usize>) {
+pub(super) fn keep(pieces: &mut Vec<Piece>, range: Range<usize>) {
     if let Some(Piece::Input(last)) = pieces.last_mut()
         && last.end == range.start
     {
@@ -285,7 +286,7 @@ fn keep_or_write(pieces: &mut Vec<Piece>, data: &[u8], range: Range<usize>, writ
 
 /// The pieces, gathered: `data` itself, uncopied, when they are all of
 /// it; a slice of it when they are one range; a copy otherwise.
-fn gathered(data: &Bytes, pieces: &[Piece]) -> Bytes {
+pub(super) fn gathered(data: &Bytes, pieces: &[Piece]) -> Bytes {
     match pieces {
         [Piece::Input(whole)] if *whole == (0..data.len()) => data.clone(),
         [Piece::Input(one)] => data.slice(one.clone()),

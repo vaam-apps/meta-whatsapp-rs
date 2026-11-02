@@ -75,7 +75,7 @@ leaks its library's types through a port.
 | `store::ConversationStore` | `append`, `append_synced` (a batch of coexistence history: no window, never unread), `fill_media_placeholder`, `revoke` (number and direction scoped, never the conversation; the content kept; a tombstone, history only, when the message is not stored yet), `update_status` (scoped: `phone_number_id, id, status, at, error`), `messages`, `conversations`, `mark_read`, `last_inbound_at`; `message` (the lookup, scoped: `phone_number_id, id`, never another number's); `record_window_event`, `window_events` (a call or a standby message that reopens the window: never history, never the summary); `set_thread_owner`, `thread_owner` (Conversation Routing: the latest record wins); `put_contact`, `remove_contact`, `contact`, `contacts` (the coexistence address book; a removal is kept, key and time only, so an older sync arriving after it is refused); `link_identity`, `identity_links` (two identities of one person on one number, as Meta reports a BSUID or number change); `identities` (a person's keys on one number: the closure over the synced contacts and the links, read only); `erase_all` (a person on one number, deleted: every record under their keys, the contacts and links naming them, and their messages in groups redacted or deleted per the store's `ErasureMode`); `purge_before` (by age, one number or all); `trim_conversations` (a cap on each conversation's history: its newest rows kept, every row counting, the summary deleted when its latest message goes; one number or all); `erase` (one key), `erasure_mode`, `retention`, `apply_retention` (provided: redact group messages and keep everything unless the adapter is configured) | `meta_whatsapp_adapters::store::conversation_conformance` (executable) |
 | `sink::EventSink<E>` | `deliver` | rustdoc |
 | `clock::Clock` | `now` | — |
-| `media::MediaConverter` | `convert` (a `MediaInput` into a `TargetFormat`: `OggOpus`, a voice message's mono Ogg Opus, uploaded as `audio/ogg`; `StaticSticker`, a static WebP sticker, `image/webp`; `Jpeg` and `Png`, 8-bit images, `image/jpeg` and `image/png`; `TargetFormat::max_bytes` is core's own `media::AUDIO_MAX_BYTES`, `media::STATIC_STICKER_MAX_BYTES` (100 000) and `media::IMAGE_MAX_BYTES` (5 000 000: Meta's figures read as decimal), kept within the client's upload table by `every_target_format_is_what_the_upload_check_takes`) | rustdoc; `meta-whatsapp-client` re-exports it from `client::media` (`Media::upload_converted`) |
+| `media::MediaConverter` | `convert` (a `MediaInput` into a `TargetFormat`: `OggOpus`, a voice message's mono Ogg Opus, uploaded as `audio/ogg`; `StaticSticker`, a static WebP sticker, and `AnimatedSticker`, an animated one, both `image/webp`; `Jpeg` and `Png`, 8-bit images, `image/jpeg` and `image/png`; `TargetFormat::max_bytes` is core's own `media::AUDIO_MAX_BYTES`, `media::STATIC_STICKER_MAX_BYTES` (100 000), `media::ANIMATED_STICKER_MAX_BYTES` (500 000) and `media::IMAGE_MAX_BYTES` (5 000 000: Meta's figures read as decimal), kept within the client's upload table by `every_target_format_is_what_the_upload_check_takes`) | rustdoc; `meta-whatsapp-client` re-exports it from `client::media` (`Media::upload_converted`) |
 
 Typed stores are built **on `KvStore`**, never as new ports: token vault,
 OTP challenges, webhook dedup, Embedded Signup sessions, bot cooldowns,
@@ -1114,7 +1114,21 @@ keyed by business number and contact, and
   256 MiB a single allocation; brought under the format's limit by a
   fixed ladder of sizes and qualities (each attempt killed once past
   it, the whole ladder within the timeout), the result's header
-  checked. An empty or oversized input (or a result over the limit
+  checked. An animated sticker (roadmap L19c) is made from a GIF only
+  (its first bytes, then `-format_whitelist gif`; ffmpeg 6.1 reads no
+  animated PNG or WebP from a pipe), walked block by block first: one
+  cut short or with a block GIF does not define is refused, and so is
+  one out of bounds (a canvas over 2 Mi pixels, fewer than 2 frames or
+  more than 500, more than 100 of 512 × 512 or larger, longer than
+  10 s), and ffmpeg gets it without its comments, plain text and
+  application extensions, with only the last graphic control extension
+  before each frame, and without anything after its trailer (ffmpeg holds them in memory with the first frame);
+  `libwebp_anim` on a fixed ladder of sizes, frame rates and qualities,
+  256 MiB a single allocation (the whole file is one packet), and the
+  result's chunks checked (`VP8X` with the animation flag, `ANIM`
+  before the `ANMF` frames, none outside them); frames all alike, which
+  libwebp makes a still image of, are refused. An empty or oversized
+  input (or a result over the limit
   after every attempt) is a `ValidationError` on `input`; every other
   failure an `Error::Conversion` (see Error tree).
 - `store::RedisKvStore` (feature `redis`; CAS via Lua). Requires the
