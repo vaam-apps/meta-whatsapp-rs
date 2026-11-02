@@ -276,6 +276,16 @@ async fn the_owner_reads_the_vault_on_every_owned_route() {
             continue;
         }
         let label = operation.label();
+        // A number's live event stream needs the number to be the
+        // tenant's (step 4, the first test above), and no token: it reads
+        // the service's own outbox, never the vault nor Meta (roadmap M2b).
+        if operation.template == "/v1/numbers/{pn}/events/stream" {
+            let before = h.kv.vault_reads();
+            let reply = h.call(call(&operation, &a_key, None)).await;
+            assert_eq!(reply.status, StatusCode::OK, "{label}: {}", reply.text);
+            assert_eq!(h.kv.vault_reads(), before, "{label} read the vault");
+            continue;
+        }
         let before = h.kv.vault_reads();
         let asked = h.graph.requests().len();
         if let Some((_, _, status)) = ASK_META_NOTHING

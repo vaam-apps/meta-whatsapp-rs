@@ -12,18 +12,21 @@
 //! The library's records (the token vault, OTP challenges, signup
 //! sessions, webhook dedup) stay in its `KvStore`; these are the tables
 //! the design adds (`wa_server_*`, docs/design/server.md, section 2.2).
-//! The event outbox has a port of its own: [`Outbox`].
+//! The event outbox has a port of its own: [`Outbox`], and its wake-ups
+//! another: [`EventNotifier`] (`PgNotifier`, `LocalNotifier`; roadmap
+//! M2b).
 
 pub use meta_whatsapp_server_http::store::{
-    Backend, BackendKind, HOUSEKEEPING, HOUSEKEEPING_LEASE, IdempotencyRecords, Janitor,
-    LeaderLock, LeaderTurn, Outbox, RecordStore, SchemaMigrator, Store, StoreResult, Turn, listing,
+    Backend, BackendKind, EventNotifier, HOUSEKEEPING, HOUSEKEEPING_LEASE, IdempotencyRecords,
+    Janitor, LeaderLock, LeaderTurn, LocalNotifier, Outbox, RecordStore, SchemaMigrator, Store,
+    StoreResult, Turn, listing,
 };
 #[cfg(feature = "store-memory")]
 pub use meta_whatsapp_server_store_memory::{MemoryBackend, MemoryLeaderLock, MemoryStore};
 #[cfg(feature = "store-postgres")]
 pub use meta_whatsapp_server_store_postgres::{
-    HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, PgBackend, PgJanitor, PgLeaderLock,
-    PgMigrator, PgStore, lock_key, migrate, migrations,
+    EVENTS_CHANNEL, HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, PgBackend, PgJanitor,
+    PgLeaderLock, PgMigrator, PgNotifier, PgStore, lock_key, migrate, migrations,
 };
 
 /// The event outbox (`wa_server_events`, docs/design/server.md, section

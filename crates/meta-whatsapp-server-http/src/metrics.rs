@@ -18,6 +18,7 @@
 //! | `wa_server_webhook_sink_failures_total` | `stage`: `routing`, `serialization`, `inbox`, `outbox`, `outbox_busy` (the outbox reported contention, `StorageError::Busy`: on Postgres, a lock waited for over 2 s; the delivery is `busy`) |
 //! | `wa_server_idempotency_total` | `outcome`: `replayed`, `reused`, `in_progress`, `outcome_unknown` (a repeat that met a key's record) |
 //! | `wa_server_rate_limited_total` | `class` (`send`, `read`, `templates`): requests refused `429` by the service's own limits |
+//! | `wa_server_event_streams_open` | none: the live event streams open on the replica, read when scraped (a gauge; roadmap M2b) |
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -26,6 +27,7 @@ use meta_whatsapp_rs::webhooks::axum::http::Method;
 use prometheus_client::encoding::EncodeLabelSet;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
+use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::metrics::histogram::{Histogram, exponential_buckets};
 use prometheus_client::registry::Registry;
 
@@ -105,6 +107,7 @@ pub struct Metrics {
     webhook_failures: Family<StageLabels, Counter>,
     idempotency: Family<OutcomeLabels, Counter>,
     rate_limited: Family<ClassLabels, Counter>,
+    streams_open: Gauge,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -182,6 +185,12 @@ impl Metrics {
             "Requests refused by the service's rate limits, by route class",
             rate_limited.clone(),
         );
+        let streams_open = Gauge::default();
+        registry.register(
+            "event_streams_open",
+            "Live event streams open on this replica",
+            streams_open.clone(),
+        );
         Self {
             registry: Arc::new(Mutex::new(registry)),
             requests,
@@ -193,6 +202,7 @@ impl Metrics {
             webhook_failures,
             idempotency,
             rate_limited,
+            streams_open,
         }
     }
 
@@ -296,6 +306,13 @@ impl Metrics {
                 class: class.to_owned(),
             })
             .inc();
+    }
+
+    /// Set how many live event streams are open on this replica (what
+    /// `/metrics` does before it renders).
+    pub fn streams_open(&self, open: usize) {
+        self.streams_open
+            .set(i64::try_from(open).unwrap_or(i64::MAX));
     }
 
     /// The Prometheus text exposition.

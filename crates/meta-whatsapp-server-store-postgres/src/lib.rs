@@ -4,7 +4,9 @@
 //!
 //! [`PgBackend`] is a `meta_whatsapp_server_core::backend::Backend` on one
 //! pool: the core's ports ([`PgStore`] for the records and the idempotency
-//! records, [`PgEventStore`] for the event outbox, [`PgLeaderLock`]
+//! records, [`PgEventStore`] for the event outbox, [`PgNotifier`] for its
+//! notifications (`NOTIFY` on [`EVENTS_CHANNEL`], one `LISTEN` connection
+//! per replica: roadmap M2b), [`PgLeaderLock`]
 //! (advisory locks), [`PgJanitor`] (the library's expired key/value rows),
 //! [`PgMigrator`]) with the library's `PostgresKvStore` and
 //! `PostgresConversationStore`. Its migrations are this crate's
@@ -22,9 +24,11 @@
 //! service's core, never on the service's HTTP crates.
 
 mod events;
+mod notify;
 mod postgres;
 
 pub use events::PgEventStore;
+pub use notify::{EVENTS_CHANNEL, LISTEN_WAIT, PgNotifier};
 pub use postgres::{
     HOUSEKEEPING_LOCK, MIGRATION_LOCK, MIGRATIONS_TABLE, PgBackend, PgJanitor, PgLeaderLock,
     PgMigrator, PgStore, lock_key, migrate, migrations,

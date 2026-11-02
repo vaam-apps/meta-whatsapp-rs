@@ -92,7 +92,7 @@ async fn every_line_keeps_its_target_from_before_the_crate_split() {
 /// Each module roadmap S7 moved that logs, under the crates' directory,
 /// and the target its lines had before the split: the module path it had
 /// in `meta-whatsapp-server` (dda06c9).
-const MOVED_LOG_TARGETS: [(&str, &str); 8] = [
+const MOVED_LOG_TARGETS: [(&str, &str); 9] = [
     (
         "meta-whatsapp-server-http/src/api/mod.rs",
         "meta_whatsapp_server::api",
@@ -113,8 +113,10 @@ const MOVED_LOG_TARGETS: [(&str, &str); 8] = [
         "meta-whatsapp-server-http/src/telemetry.rs",
         "meta_whatsapp_server::telemetry",
     ),
+    // The envelope moved from the API adapter's events module with its
+    // log line, and its target (roadmap M2b).
     (
-        "meta-whatsapp-server-api-axum/src/api/events.rs",
+        "meta-whatsapp-server-http/src/api/events.rs",
         "meta_whatsapp_server::api::events",
     ),
     (
@@ -124,6 +126,11 @@ const MOVED_LOG_TARGETS: [(&str, &str); 8] = [
     (
         "meta-whatsapp-server-store-postgres/src/events.rs",
         "meta_whatsapp_server::store::events_postgres",
+    ),
+    // New in roadmap M2b: the Postgres notifier's listener.
+    (
+        "meta-whatsapp-server-store-postgres/src/notify.rs",
+        "meta_whatsapp_server::store::notify_postgres",
     ),
 ];
 
