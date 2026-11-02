@@ -43,7 +43,8 @@ its code and Meta's `business-phone-numbers/media` and
 `messages/audio-messages` pages of 2026-11-01, and again with stickers
 and image resizing (roadmap L19b), against its code and Meta's
 `messages/sticker-messages` and `business-phone-numbers/media` pages of
-2026-11-01; row 91 with retention and
+2026-11-01, and again with animated stickers (roadmap L19c), against its
+code and the same pages of 2026-11-01; row 91 with retention and
 auto-delete (roadmap B4), against its code; row 117 with `llms.txt` and
 the service's `doctor` (roadmap L22a), against their code and tests and
 Meta's webhook pages of 2026-11-01 (§ Sources); row 6 with the
@@ -80,7 +81,7 @@ reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
-| Library | 126 | 5 | 0 | 1 |
+| Library | 127 | 4 | 0 | 1 |
 | Service | 44 | 22 | 65 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
@@ -88,7 +89,7 @@ reached.
   n/a column is a side that does not carry the capability at all: the
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
-- Each of the library's 5 partial or gap rows is cited by a
+- Each of the library's 4 partial or gap rows is cited by a
   [roadmap](roadmap.md) item. Each of the service's 87 names, in its
   status, the roadmap items that bring it; by family (a row can name
   two): M2 7, M3 11, M4 2, M5 70, P 1 (payments: P1d).
@@ -153,7 +154,7 @@ The owner's definition (2026-09-26):
   under the same name), `inbox::` is `meta_whatsapp_rs::inbox::`,
   `server::` is `meta_whatsapp_server::`, the service's binary (its
   process: configuration, `serve`, the command line), `server_core::` is
-  `server_core::`, its framework-free core (the domain, the
+  `meta_whatsapp_server_core::`, its framework-free core (the domain, the
   authorization order, event routing and polling, idempotency, the error
   model as data, and the ports its backends implement), and since roadmap
   S7 the crates the binary composes: `server_http::` is
@@ -308,7 +309,7 @@ The owner's definition (2026-09-26):
 | 45 | Media | Download received media | Yes | Yes (by key) | `reference/media/media-api.md`, `reference/media/media-download-api.md` | `Media::download` (SHA-256 checked; of media hosts, the token goes only to Graph and `lookaside.fbsbx.com`, and otherwise to one `GET` on `api.facebook.com`, roadmap L10a) | `GET /v1/numbers/{pn}/media/{media_id}` (`server_http::api::media::download_media`, over `server_core::media::Media::download`: whole, or the core's `server_core::media::MediaStream`, one chunk held back); whether Meta serves a *received* media id under the route's `phone_number_id` check is unverified (OPEN_QUESTIONS #43, decided: exempt the ids the service recorded as received, M2e) | done / partial (M2e) |
 | 46 | Media | Delete media | — | — | `reference/media/media-api.md` | `Media::delete` | `DELETE /v1/numbers/{pn}/media/{media_id}` (`server_http::api::media::delete_media`, over `server_core::media::Media::delete`) | done / done |
 | 47 | Media | Resumable upload (template header handles, profile pictures) | — | — | Graph's Resumable Upload API, documented outside the WhatsApp docs; the WhatsApp pages that rely on it: `templates/template-media.md` (header handles), `reference/whatsapp-business-profile/whatsapp-business-profile-node-api.md` (pictures) | `Media::resumable_upload` | not exposed | done / gap (M5c1) |
-| 48 | Media | Converting media (voice to Opus, stickers from images, resizing) | Yes | Yes (runs locally: ffmpeg, sharp) | none (client side); accepted formats: `business-phone-numbers/media` (Ogg "OPUS codecs only", "mono input only"; images "8-bit, RGB or RGBA", JPEG and PNG, 5 MB), `messages/audio-messages`, `messages/sticker-messages` (WebP, 100 KB static, 500 KB animated; no dimensions) | partial: through the port `core::media::MediaConverter`, voice to Opus (`core::media::TargetFormat::OggOpus`: mono Ogg Opus, uploaded as `audio/ogg`; L19), a PNG or JPEG into a static sticker (`core::media::TargetFormat::StaticSticker`: a static WebP within 100 000 bytes, uploaded as `image/webp`) or under the image limit (`core::media::TargetFormat::Jpeg`, `core::media::TargetFormat::Png`: 8-bit, within 5 000 000 bytes; L19b), each of which `client::media::validate_upload` takes (`client::media::Media::upload_converted`), implemented by `adapters::media::FfmpegConverter` (feature `ffmpeg`, off by default: an `ffmpeg` the integrator installs, run with fixed arguments, stdin and stdout only, its input protocols and formats restricted (an image: PNG or JPEG, by its first bytes and by ffmpeg's own detection), bounded in input, pixels, output and time, an image brought under its limit by a fixed ladder of sizes and qualities; failures `core::error::ConversionError`); animated stickers (Meta's 500 KB WebP) are not made, a GIF or an animated PNG is refused (L19c) | gap: the image carries no `ffmpeg` ([design §7](design/server.md#7-operations), M4); configuring a converter is M5c1's | partial / gap (M5c1) |
+| 48 | Media | Converting media (voice to Opus, stickers from images, resizing) | Yes | Yes (runs locally: ffmpeg, sharp) | none (client side); accepted formats: `business-phone-numbers/media` (Ogg "OPUS codecs only", "mono input only"; images "8-bit, RGB or RGBA", JPEG and PNG, 5 MB), `messages/audio-messages`, `messages/sticker-messages` (WebP, 100 KB static, 500 KB animated; no dimensions) | done: through the port `core::media::MediaConverter`, voice to Opus (`core::media::TargetFormat::OggOpus`: mono Ogg Opus, uploaded as `audio/ogg`; L19), a PNG or JPEG into a static sticker (`core::media::TargetFormat::StaticSticker`: a static WebP within 100 000 bytes, uploaded as `image/webp`) or under the image limit (`core::media::TargetFormat::Jpeg`, `core::media::TargetFormat::Png`: 8-bit, within 5 000 000 bytes; L19b), an animated GIF into an animated sticker (`core::media::TargetFormat::AnimatedSticker`: an animated WebP within 500 000 bytes, uploaded as `image/webp`; L19c), each of which `client::media::validate_upload` takes (`client::media::Media::upload_converted`), implemented by `adapters::media::FfmpegConverter` (feature `ffmpeg`, off by default: an `ffmpeg` the integrator installs, run with fixed arguments, stdin and stdout only, its input protocols and formats restricted (an image: PNG or JPEG; an animation: GIF; by its first bytes and by ffmpeg's own detection, a PNG's text and a GIF's comments and application extensions taken out first), bounded in input, pixels, frames (an animation: 500, and 100 of 512 × 512 or larger), length (10 s), output and time, an image or an animation brought under its limit by a fixed ladder of sizes, frame rates and qualities, the output's header or chunks checked; failures `core::error::ConversionError`); an animated PNG or WebP is refused (ffmpeg 6.1 reads neither from a pipe) | gap: the image carries no `ffmpeg` ([design §7](design/server.md#7-operations), M4); configuring a converter is M5c1's | done / gap (M5c1) |
 | 154 | Media | A GIF (an animated mp4) as a template's media header | Yes (GIF playback, row 43) | No, or sent as plain media (row 43) | Marketing Messages API only: `marketing-messages/features.md` (an animated GIF header), `templates/components.md` (header format `GIF`: an mp4 of at most 3.5 MB); no page shows the send-time header parameter for a GIF (re-read for L13 on 2026-11-01: `templates/components.md`, `templates/template-media.md`, `marketing-messages/features.md`, `marketing-messages/send-marketing-messages.md`, the MM API and Messages API references) | the definition: `client::templates::HeaderFormat::Gif`; the send-time parameter is not typed, for want of a page showing it (`client::templates::Parameter::Other` would carry it verbatim; unverified); sent through `client::marketing::Marketing::send` | creating the template takes Meta's JSON (`POST /v1/wabas/{waba_id}/templates`); Marketing Messages API sends are not exposed (row 136) | partial / gap (M5h) |
 
 ### D. Interactive messages and Flows

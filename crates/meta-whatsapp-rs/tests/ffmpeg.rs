@@ -1,14 +1,16 @@
 //! `adapters::media::FfmpegConverter` against a real `ffmpeg`, its result
-//! through `client::media::Media::upload_converted` (roadmap L19's and
-//! L19b's decisive tests: voice, then stickers and images). In the facade,
-//! where the adapters and the client meet: neither depends on the other.
-//! The tests make their inputs themselves (in Rust, or with ffmpeg's
-//! `lavfi` sources); no media file is committed.
+//! through `client::media::Media::upload_converted` (roadmap L19's,
+//! L19b's and L19c's decisive tests: voice, then stickers and images, then
+//! animated stickers). In the facade, where the adapters and the client
+//! meet: neither depends on the other. The tests make their inputs
+//! themselves (in Rust, or with ffmpeg's `lavfi` sources); no media file
+//! is committed.
 //!
 //! The binary is `META_WHATSAPP_RS_TEST_FFMPEG` when set, else `ffmpeg` on
 //! `PATH` (and `META_WHATSAPP_RS_TEST_FFPROBE`, else `ffprobe`). Without
 //! one that starts and has libopus (and, for the image tests, libwebp,
-//! mjpeg and png), every test here skips, printing why,
+//! mjpeg and png; for the animation tests, `libwebp_anim`), every test here
+//! skips, printing why,
 //! unless `META_WHATSAPP_RS_REQUIRE_FFMPEG=1`, which turns the skip into a
 //! failure. CI installs `ffmpeg` on its runner and sets it, so the tests
 //! count there; no image or dev container carries one. That variable is
@@ -39,6 +41,21 @@ fn required() -> bool {
 
 fn program(var: &str, default: &str) -> PathBuf {
     std::env::var_os(var).map_or_else(|| PathBuf::from(default), PathBuf::from)
+}
+
+/// The tests that assert a wall-clock bound take the CPU alone: run beside
+/// the animation tests (each an ffmpeg using every core), a conversion the
+/// CI runner finishes in about 11 s took over 15. Every other test shares.
+static CPU: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
+/// A share of the CPU, beside the other tests that share it.
+async fn cpu_shared() -> tokio::sync::RwLockReadGuard<'static, ()> {
+    CPU.read().await
+}
+
+/// The CPU alone, for a test that asserts how long a conversion takes.
+async fn cpu_alone() -> tokio::sync::RwLockWriteGuard<'static, ()> {
+    CPU.write().await
 }
 
 /// The converter over the test's `ffmpeg`, or `None` (skip) without one.
@@ -160,6 +177,7 @@ fn opus_head(ogg: &[u8]) -> &[u8] {
 
 #[tokio::test]
 async fn ffmpeg_turns_wav_into_ogg_opus_that_upload_accepts() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -248,6 +266,7 @@ async fn ffmpeg_turns_wav_into_ogg_opus_that_upload_accepts() {
 
 #[tokio::test]
 async fn ffmpeg_reads_browser_and_phone_recordings() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -293,6 +312,7 @@ async fn ffmpeg_reads_browser_and_phone_recordings() {
 
 #[tokio::test]
 async fn ffmpeg_refuses_a_format_off_its_list() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -334,6 +354,7 @@ async fn ffmpeg_refuses_a_format_off_its_list() {
 
 #[tokio::test]
 async fn ffmpeg_refuses_input_it_cannot_read() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -503,6 +524,7 @@ fn with_external_alias(mov: &[u8], target: &Path) -> Vec<u8> {
 /// silence of its own is no audio.
 #[tokio::test]
 async fn ffmpeg_never_reads_a_file_an_mp4_names() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -590,6 +612,7 @@ async fn ffmpeg_never_reads_a_file_an_mp4_names() {
 /// voice note.
 #[tokio::test]
 async fn ffmpeg_refuses_input_with_no_audio() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -632,6 +655,7 @@ fn ogg_opus_duration(ogg: &[u8]) -> Duration {
 /// and converts all twenty seconds.
 #[tokio::test]
 async fn ffmpeg_reads_an_m4a_whose_index_comes_last() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -708,6 +732,7 @@ async fn ffmpeg_reads_an_m4a_whose_index_comes_last() {
 /// the bound (the CI runner's ffmpeg reached the cap in about 11 s).
 #[tokio::test]
 async fn ffmpeg_refuses_a_header_that_inflates_the_input() {
+    let _cpu = cpu_alone().await;
     let Some(converter) = converter().await else {
         return;
     };
@@ -923,6 +948,7 @@ async fn assert_uploaded(media: meta_whatsapp_rs::client::media::ConvertedMedia,
 /// `Media::upload`'s type check takes as a sticker.
 #[tokio::test]
 async fn ffmpeg_turns_a_png_into_a_static_webp_sticker_that_upload_accepts() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -967,6 +993,7 @@ async fn ffmpeg_turns_a_png_into_a_static_webp_sticker_that_upload_accepts() {
 /// alpha channel are kept.
 #[tokio::test]
 async fn ffmpeg_keeps_a_small_sticker_s_size_and_transparency() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -994,6 +1021,7 @@ async fn ffmpeg_keeps_a_small_sticker_s_size_and_transparency() {
 /// ratio kept.
 #[tokio::test]
 async fn ffmpeg_brings_a_jpeg_over_five_megabytes_under_the_image_limit() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1038,6 +1066,7 @@ async fn ffmpeg_brings_a_jpeg_over_five_megabytes_under_the_image_limit() {
 /// keeps its size and becomes 8-bit RGB.
 #[tokio::test]
 async fn ffmpeg_makes_a_png_eight_bit_and_under_the_image_limit() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1122,6 +1151,7 @@ fn without_whitelist(ffmpeg: &PathBuf, file: &[u8]) -> Option<Vec<u8>> {
 /// without the whitelist.
 #[tokio::test]
 async fn ffmpeg_refuses_a_gif_a_jpeg_ls_an_animated_png_and_a_crafted_png() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1187,6 +1217,7 @@ async fn ffmpeg_refuses_a_gif_a_jpeg_ls_an_animated_png_and_a_crafted_png() {
 /// converts it.
 #[tokio::test]
 async fn ffmpeg_refuses_an_image_over_the_pixel_bound() {
+    let _cpu = cpu_alone().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1256,6 +1287,7 @@ fn with_orientation(jpeg: &[u8], orientation: u16) -> Vec<u8> {
 /// pixels rotated (640 × 480 becomes 480 × 640), its EXIF dropped.
 #[tokio::test]
 async fn ffmpeg_applies_a_jpeg_s_orientation_and_drops_its_exif() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1282,6 +1314,436 @@ async fn ffmpeg_applies_a_jpeg_s_orientation_and_drops_its_exif() {
     assert_eq!((w.width, w.height), (480, 640));
 }
 
+/// The bound on ffmpeg's memory the bombs below are held to: far over
+/// what ffmpeg needs for a small image (about 50 MB), far under what
+/// they take it to unstripped (some 900 MB for the EXIF, 650 MB for the
+/// profile).
+#[cfg(target_os = "linux")]
+const PEAK_BOUND_KIB: u64 = 400 * 1024;
+
+/// A wrapper around the test's ffmpeg that adds its pid to `pids`, then
+/// `exec`s ffmpeg (the same process): what a converter over it, or a
+/// control run of it, does is ffmpeg's, measured by [`measured`].
+#[cfg(target_os = "linux")]
+struct Watched {
+    wrapper: PathBuf,
+    pids: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+impl Watched {
+    fn new(ffmpeg: &Path, name: &str) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!(
+            "meta-whatsapp-rs-ffmpeg-peak-{}-{name}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (wrapper, pids) = (dir.join("ffmpeg"), dir.join("pids"));
+        std::fs::write(&pids, "").unwrap();
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\necho $$ >> '{}'\nexec '{}' \"$@\"\n",
+                pids.display(),
+                ffmpeg.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Another test forking while the script was open for writing can
+        // keep it busy for a moment ("text file busy"): until it runs.
+        let started = Instant::now();
+        while run(&wrapper, &["-hide_banner", "-version"], &[]).is_none() {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the wrapper never ran"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Self { wrapper, pids }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for Watched {
+    fn drop(&mut self) {
+        if let Some(dir) = self.wrapper.parent() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
+/// `work`'s result, and the highest resident memory (`VmHWM`, KiB) of
+/// the processes `watched` started meanwhile, read from `/proc` every
+/// millisecond. A lower bound on their true peak (what happens after the
+/// last read is missed), which a bomb reaches early and keeps (the
+/// high-water mark only rises): enough for a bound, and for a control
+/// over it.
+#[cfg(target_os = "linux")]
+async fn measured<T>(watched: &Watched, work: impl std::future::Future<Output = T>) -> (T, u64) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let stop = Arc::new(AtomicBool::new(false));
+    let pids = watched.pids.clone();
+    let sampler = std::thread::spawn({
+        let stop = Arc::clone(&stop);
+        move || {
+            let mut peak = 0u64;
+            loop {
+                let last = stop.load(Ordering::SeqCst);
+                for pid in std::fs::read_to_string(&pids).unwrap_or_default().lines() {
+                    let status = std::fs::read_to_string(format!("/proc/{pid}/status"));
+                    let kib = status.ok().and_then(|s| {
+                        s.lines()
+                            .find_map(|l| l.strip_prefix("VmHWM:"))
+                            .and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+                    });
+                    peak = peak.max(kib.unwrap_or(0));
+                }
+                if last {
+                    return peak;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    });
+    let out = work.await;
+    stop.store(true, Ordering::SeqCst);
+    (out, sampler.join().unwrap())
+}
+
+/// The converter's first attempt at a JPEG, literal by literal (as
+/// `image::arguments(&JPEG[0])` in the adapters): the control runs it on
+/// the file as it is, without the converter's walk.
+#[cfg(target_os = "linux")]
+const JPEG_ATTEMPT: &[&str] = &[
+    "-hide_banner",
+    "-nostdin",
+    "-nostats",
+    "-loglevel",
+    "error",
+    "-max_alloc",
+    "268435456",
+    "-abort_on",
+    "empty_output",
+    "-protocol_whitelist",
+    "pipe",
+    "-format_whitelist",
+    "png_pipe,jpeg_pipe",
+    "-max_pixels",
+    "33554432",
+    "-i",
+    "pipe:0",
+    "-map",
+    "0:v:0",
+    "-map_metadata",
+    "-1",
+    "-frames:v",
+    "1",
+    "-vf",
+    "format=yuvj420p",
+    "-c:v",
+    "mjpeg",
+    "-q:v",
+    "2",
+    "-f",
+    "image2pipe",
+    "pipe:1",
+];
+
+/// An EXIF alias bomb: one APP1 segment of the largest length, its first
+/// IFD of `entries` ASCII entries (tags from `first`) all pointing at the
+/// same value, which fills the rest of the segment: ffmpeg 6.1 copies the
+/// value once for each. With `orientation`, an Orientation entry first.
+#[cfg(target_os = "linux")]
+fn exif_bomb(entries: u16, first: u16, orientation: Option<u16>) -> Vec<u8> {
+    let n = u32::from(entries) + u32::from(orientation.is_some());
+    let value_at = 8 + 2 + 12 * n + 4;
+    // Segment length 65533: the length field, `Exif\0\0`, the TIFF data.
+    let tiff_len = 65533 - 2 - 6;
+    let value_len = tiff_len - value_at;
+    let mut tiff = b"II*\0".to_vec();
+    tiff.extend_from_slice(&8u32.to_le_bytes());
+    tiff.extend_from_slice(&u16::try_from(n).unwrap().to_le_bytes());
+    if let Some(o) = orientation {
+        tiff.extend_from_slice(&0x0112u16.to_le_bytes());
+        tiff.extend_from_slice(&3u16.to_le_bytes());
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&o.to_le_bytes());
+        tiff.extend_from_slice(&[0, 0]);
+    }
+    for i in 0..entries {
+        tiff.extend_from_slice(&(first + i).to_le_bytes());
+        tiff.extend_from_slice(&2u16.to_le_bytes()); // ASCII
+        tiff.extend_from_slice(&value_len.to_le_bytes());
+        tiff.extend_from_slice(&value_at.to_le_bytes());
+    }
+    tiff.extend_from_slice(&0u32.to_le_bytes());
+    tiff.resize(usize::try_from(tiff_len).unwrap() - 1, b'A');
+    tiff.push(0);
+    let mut segment = vec![0xFF, 0xE1];
+    segment.extend_from_slice(&65533u16.to_be_bytes());
+    segment.extend_from_slice(b"Exif\0\0");
+    segment.extend_from_slice(&tiff);
+    segment
+}
+
+/// A 67 KB JPEG whose one EXIF segment takes ffmpeg 6.1 to some 900 MB
+/// (the control, the file as it is) goes through the converter, with a
+/// second such segment, under [`PEAK_BOUND_KIB`]: the converter gives
+/// ffmpeg a minimal EXIF of the first segment's Orientation, which it
+/// still applies (64 × 48 comes out 48 × 64), and drops the second.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn ffmpeg_applies_the_orientation_of_a_jpeg_whose_exif_is_a_bomb() {
+    let _cpu = cpu_shared().await;
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let plain = lavfi(&ffmpeg, "testsrc2=s=64x48", &["-c:v", "mjpeg"]);
+    let first = exif_bomb(2700, 0x1000, Some(6));
+    let one = [&plain[..2], &first, &plain[2..]].concat();
+    let two = [
+        &plain[..2],
+        &first,
+        &exif_bomb(2700, 0x1000 + 2700, None),
+        &plain[2..],
+    ]
+    .concat();
+    assert!(one.len() < 70_000 && two.len() < 140_000, "{}", two.len());
+
+    let control = Watched::new(&ffmpeg, "exif-control");
+    let (_, unstripped) = measured(&control, async {
+        run(&control.wrapper, JPEG_ATTEMPT, &one)
+    })
+    .await;
+    let watched = Watched::new(&ffmpeg, "exif");
+    let c = FfmpegConverter::new().with_program(&watched.wrapper);
+    let (image, peak) = measured(
+        &watched,
+        c.convert(MediaInput::new(two), TargetFormat::Jpeg),
+    )
+    .await;
+    eprintln!(
+        "EXIF bomb: ffmpeg peaked at {} MB on the file as it is, {} MB through the converter",
+        unstripped / 1024,
+        peak / 1024
+    );
+    assert!(
+        unstripped > PEAK_BOUND_KIB,
+        "the control: {unstripped} KiB, not a bomb to this ffmpeg"
+    );
+    let image = image.unwrap();
+    assert!(peak < PEAK_BOUND_KIB, "{peak} KiB");
+    let (_, width, height, _) = jpeg_frame(&image.data);
+    assert_eq!((width, height), (48, 64));
+}
+
+/// The Adler-32 of `data` (zlib's trailer).
+#[cfg(target_os = "linux")]
+fn adler32(data: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for &byte in data {
+        a = (a + u32::from(byte)) % 65521;
+        b = (b + a) % 65521;
+    }
+    (b << 16) | a
+}
+
+/// `data` as a zlib stream of stored (uncompressed) blocks.
+#[cfg(target_os = "linux")]
+fn zlib_stored(data: &[u8]) -> Vec<u8> {
+    let mut out = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = data.chunks(65535).collect();
+    for (i, block) in blocks.iter().enumerate() {
+        out.push(u8::from(i + 1 == blocks.len()));
+        let len = u16::try_from(block.len()).unwrap();
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&(!len).to_le_bytes());
+        out.extend_from_slice(block);
+    }
+    out.extend_from_slice(&adler32(data).to_be_bytes());
+    out
+}
+
+/// A zlib stream inflating to `1 + 258 * copies` zero bytes, in one
+/// fixed-Huffman block: a zero, then copies of 258 bytes at distance 1
+/// (13 bits each), the end of the block, the trailer.
+#[cfg(target_os = "linux")]
+fn zlib_zeros(copies: usize) -> Vec<u8> {
+    let mut bits: Vec<bool> = Vec::with_capacity(copies * 13 + 32);
+    // Huffman codes go most significant bit first, everything else least.
+    let code = |bits: &mut Vec<bool>, code: u32, len: u32| {
+        bits.extend((0..len).rev().map(|i| code >> i & 1 == 1));
+    };
+    bits.extend([true, true, false]); // last block, fixed Huffman (01)
+    code(&mut bits, 0x30, 8); // literal 0
+    for _ in 0..copies {
+        code(&mut bits, 0xC5, 8); // length 258 (symbol 285)
+        code(&mut bits, 0, 5); // distance 1
+    }
+    code(&mut bits, 0, 7); // end of block
+    let mut out = vec![0x78, 0x01];
+    out.extend(bits.chunks(8).map(|byte| {
+        byte.iter()
+            .enumerate()
+            .fold(0u8, |acc, (i, &bit)| acc | (u8::from(bit) << i))
+    }));
+    // Adler-32 of n zeros: a stays 1, b is n.
+    let n = u32::try_from((1 + 258 * copies) % 65521).unwrap();
+    out.extend_from_slice(&((n << 16) | 1).to_be_bytes());
+    out
+}
+
+/// The CRC-32 of a PNG chunk's type and data.
+#[cfg(target_os = "linux")]
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for &byte in data {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+/// A colour profile chunk (`iCCP`) named `icc` of `compressed`, with its
+/// CRC: ffmpeg reads this one.
+#[cfg(target_os = "linux")]
+fn iccp(compressed: &[u8]) -> Vec<u8> {
+    let data = [&b"icc\0\0"[..], compressed].concat();
+    let mut out = u32::try_from(data.len()).unwrap().to_be_bytes().to_vec();
+    let typed = [&b"iCCP"[..], &data].concat();
+    out.extend_from_slice(&typed);
+    out.extend_from_slice(&crc32(&typed).to_be_bytes());
+    out
+}
+
+/// A PNG's small colour profile is kept: the PNG result carries one. A
+/// profile over 16 KiB is not: one of 1.3 MB inflating to 200 MiB, which
+/// takes ffmpeg 6.1 to some 650 MB (the control, the file as it is),
+/// goes through the converter under [`PEAK_BOUND_KIB`], and its result
+/// has no profile.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn ffmpeg_keeps_a_small_colour_profile_and_drops_a_large_one() {
+    let _cpu = cpu_shared().await;
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let plain = lavfi(&ffmpeg, "testsrc2=s=64x48", &["-c:v", "png"]);
+    // After the header (signature and IHDR: 33 bytes).
+    let with = |chunk: &[u8]| [&plain[..33], chunk, &plain[33..]].concat();
+    let has_profile = |png: &[u8]| png.windows(4).any(|w| w == b"iCCP");
+
+    let small = zlib_stored(&[0x5A; 3000]);
+    assert!(small.len() < 16 * 1024);
+    let out = converter
+        .convert(MediaInput::new(with(&iccp(&small))), TargetFormat::Png)
+        .await
+        .unwrap();
+    assert!(has_profile(&out.data), "the small profile was dropped");
+
+    let large = zlib_zeros(812_800);
+    assert!(large.len() < 1_400_000, "{}", large.len());
+    let bomb = with(&iccp(&large));
+    let control = Watched::new(&ffmpeg, "iccp-control");
+    let (_, unstripped) = measured(&control, async {
+        run(&control.wrapper, JPEG_ATTEMPT, &bomb)
+    })
+    .await;
+    let watched = Watched::new(&ffmpeg, "iccp");
+    let c = FfmpegConverter::new().with_program(&watched.wrapper);
+    let (out, peak) = measured(
+        &watched,
+        c.convert(MediaInput::new(bomb), TargetFormat::Png),
+    )
+    .await;
+    eprintln!(
+        "iCCP bomb: ffmpeg peaked at {} MB on the file as it is, {} MB through the converter",
+        unstripped / 1024,
+        peak / 1024
+    );
+    assert!(
+        unstripped > PEAK_BOUND_KIB,
+        "the control: {unstripped} KiB, not a bomb to this ffmpeg"
+    );
+    let out = out.unwrap();
+    assert!(peak < PEAK_BOUND_KIB, "{peak} KiB");
+    assert!(!has_profile(&out.data), "the large profile was kept");
+    assert_eq!(png_header(&out.data).0, 64);
+}
+
+/// A JPEG's colour profile in one `APP2` segment of at most 16 KiB
+/// reaches a JPEG result, its bytes whole, and a PNG result as an
+/// `iCCP` chunk; a profile in two chunks is dropped whole, and the
+/// result has none.
+#[tokio::test]
+async fn ffmpeg_keeps_a_jpeg_s_small_colour_profile_in_one_chunk() {
+    let _cpu = cpu_shared().await;
+    let Some(converter) = converter_for(&IMAGES).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let plain = lavfi(&ffmpeg, "testsrc2=s=64x48", &["-c:v", "mjpeg"]);
+    let bytes: Vec<u8> = (0..3000u32)
+        .map(|i| b"ICCprofile"[(i % 10) as usize])
+        .collect();
+    let chunk = |n: u8, count: u8, data: &[u8]| {
+        let body = [&b"ICC_PROFILE\0"[..], &[n, count], data].concat();
+        let mut segment = vec![0xFF, 0xE2];
+        segment.extend_from_slice(&u16::try_from(body.len() + 2).unwrap().to_be_bytes());
+        segment.extend_from_slice(&body);
+        segment
+    };
+    let one = [&plain[..2], &chunk(1, 1, &bytes), &plain[2..]].concat();
+    let image = converter
+        .convert(MediaInput::new(one.clone()), TargetFormat::Jpeg)
+        .await
+        .unwrap();
+    assert!(
+        image.data.windows(12).any(|w| w == b"ICC_PROFILE\0"),
+        "no profile in the JPEG result"
+    );
+    assert!(
+        image.data.windows(bytes.len()).any(|w| w == &bytes[..]),
+        "the profile's bytes changed"
+    );
+    let png = converter
+        .convert(MediaInput::new(one), TargetFormat::Png)
+        .await
+        .unwrap();
+    assert!(
+        png.data.windows(4).any(|w| w == b"iCCP"),
+        "no profile in the PNG result"
+    );
+
+    let (first, second) = bytes.split_at(1500);
+    let two = [
+        &plain[..2],
+        &chunk(1, 2, first),
+        &chunk(2, 2, second),
+        &plain[2..],
+    ]
+    .concat();
+    let image = converter
+        .convert(MediaInput::new(two), TargetFormat::Jpeg)
+        .await
+        .unwrap();
+    assert!(
+        !image.data.windows(11).any(|w| w == b"ICC_PROFILE"),
+        "a profile in two chunks was kept"
+    );
+}
+
 /// One PNG chunk: length, type, data and a zero CRC, never checked (the
 /// converter takes these chunks out before ffmpeg reads them).
 fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
@@ -1298,6 +1760,7 @@ fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
 /// first image comes out, alone, without the text.
 #[tokio::test]
 async fn ffmpeg_converts_the_first_image_of_a_png_without_its_text() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1360,6 +1823,7 @@ async fn ffmpeg_converts_the_first_image_of_a_png_without_its_text() {
 /// without the bound converts it.
 #[tokio::test]
 async fn ffmpeg_refuses_a_frame_over_the_allocation_bound() {
+    let _cpu = cpu_shared().await;
     let Some(converter) = converter_for(&IMAGES).await else {
         return;
     };
@@ -1416,4 +1880,458 @@ async fn ffmpeg_refuses_a_frame_over_the_allocation_bound() {
         .unwrap();
     let (_, width, height, _) = jpeg_frame(&under.data);
     assert_eq!((width, height), (8192, 4094));
+}
+
+// Animated stickers (roadmap L19c).
+
+/// An animation made by a `lavfi` source, in the container `muxer` names
+/// (a GIF, an animated PNG, an animated WebP): the tests' animations,
+/// made here rather than committed.
+fn lavfi_animation(ffmpeg: &PathBuf, source: &str, frames: usize, muxer: &[&str]) -> Vec<u8> {
+    let frames = frames.to_string();
+    let mut args = vec![
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        source,
+        "-frames:v",
+        frames.as_str(),
+    ];
+    args.extend_from_slice(muxer);
+    args.push("pipe:1");
+    run(ffmpeg, &args, &[]).unwrap_or_else(|| panic!("making {source} as {muxer:?}"))
+}
+
+/// A GIF of `frames` frames of `source`.
+fn gif(ffmpeg: &PathBuf, source: &str, frames: usize) -> Vec<u8> {
+    let gif = lavfi_animation(ffmpeg, source, frames, &["-f", "gif"]);
+    assert!(gif.starts_with(b"GIF89a"), "not a GIF");
+    gif
+}
+
+/// An animated WebP, read here apart from the converter's own check
+/// (Google's "WebP Container Specification", extended file format): its
+/// chunks in order, the extended header's flags and canvas, the animation
+/// header's loop count, and its frames with their total duration.
+#[derive(Debug)]
+struct AnimatedWebp {
+    chunks: Vec<[u8; 4]>,
+    flags: u8,
+    width: u32,
+    height: u32,
+    loops: u32,
+    frames: usize,
+    duration_ms: u32,
+}
+
+fn animated_webp(file: &[u8]) -> AnimatedWebp {
+    assert_eq!(&file[..4], b"RIFF", "not a RIFF file");
+    assert_eq!(&file[8..12], b"WEBP", "not a WebP file");
+    assert_eq!(
+        usize::try_from(le32(file, 4)).unwrap() + 8,
+        file.len(),
+        "the RIFF size is not the file's"
+    );
+    let mut w = AnimatedWebp {
+        chunks: Vec::new(),
+        flags: 0,
+        width: 0,
+        height: 0,
+        loops: u32::MAX,
+        frames: 0,
+        duration_ms: 0,
+    };
+    let mut at = 12;
+    while at < file.len() {
+        let kind = <[u8; 4]>::try_from(&file[at..at + 4]).unwrap();
+        let len = usize::try_from(le32(file, at + 4)).unwrap();
+        let data = &file[at + 8..at + 8 + len];
+        match &kind {
+            b"VP8X" => {
+                w.flags = data[0];
+                w.width = 1 + le24(data, 4);
+                w.height = 1 + le24(data, 7);
+            }
+            b"ANIM" => w.loops = le16(data, 4),
+            b"ANMF" => {
+                w.frames += 1;
+                w.duration_ms += le24(data, 12);
+            }
+            _ => {}
+        }
+        w.chunks.push(kind);
+        at += 8 + len + len % 2;
+    }
+    assert_eq!(at, file.len(), "chunks past the end");
+    w
+}
+
+/// A busy animated GIF (5 s of a moving picture at 20 frames a second,
+/// 480 × 360) comes out as an animated WebP within 500 000 bytes: its
+/// extended header has the animation flag, an `ANIM` chunk comes before
+/// its `ANMF` frames, it loops forever and plays for the GIF's time, its
+/// aspect ratio kept; `Media::upload`'s type check takes it as a
+/// sticker.
+#[tokio::test]
+async fn ffmpeg_turns_a_gif_into_an_animated_webp_sticker_that_upload_accepts() {
+    let _cpu = cpu_alone().await;
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let animation = gif(&ffmpeg, "testsrc2=s=480x360:r=20", 100);
+    assert!(animation.len() > 500_000, "{} bytes", animation.len());
+
+    let started = Instant::now();
+    let sticker = converter
+        .convert(MediaInput::new(animation), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap();
+    eprintln!(
+        "animated sticker: {} bytes in {:?}",
+        sticker.data.len(),
+        started.elapsed()
+    );
+    assert_eq!(sticker.format, TargetFormat::AnimatedSticker);
+    let len = sticker.data.len();
+    assert!(len <= 500_000, "{len} bytes");
+    let w = animated_webp(&sticker.data);
+    assert_eq!(&w.chunks[0], b"VP8X");
+    assert_eq!(w.flags & 0x02, 0x02, "the animation flag is not set: {w:?}");
+    let anim = w
+        .chunks
+        .iter()
+        .position(|c| c == b"ANIM")
+        .expect("no ANIM chunk");
+    let first_frame = w
+        .chunks
+        .iter()
+        .position(|c| c == b"ANMF")
+        .expect("no ANMF chunk");
+    assert!(anim < first_frame, "{w:?}");
+    assert!(w.frames >= 2, "{w:?}");
+    for still in [b"VP8 ", b"VP8L"] {
+        assert!(!w.chunks.contains(still), "{w:?}");
+    }
+    assert_eq!(w.loops, 0, "loops forever");
+    assert!(
+        (4800..=5200).contains(&w.duration_ms),
+        "plays {} ms",
+        w.duration_ms
+    );
+    assert!(
+        w.width <= 480 && w.width * 3 == w.height * 4,
+        "{}x{}",
+        w.width,
+        w.height
+    );
+
+    assert_eq!(
+        validate_upload(sticker.format.mime_type(), u64::try_from(len).unwrap()),
+        Ok(MediaKind::Sticker)
+    );
+    assert_uploaded(sticker, "animated").await;
+}
+
+/// The frame bound: a GIF of 501 frames is refused, before ffmpeg reads
+/// it; one of 500 converts. The control: ffmpeg alone converts the 501
+/// frames, so the bound is the converter's.
+#[tokio::test]
+async fn ffmpeg_refuses_an_animation_over_the_frame_bound() {
+    let _cpu = cpu_shared().await;
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let over = gif(&ffmpeg, "testsrc2=s=32x32:r=50", 501);
+    let direct = run(
+        &ffmpeg,
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            "-c:v",
+            "libwebp_anim",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+        ],
+        &over,
+    )
+    .expect("ffmpeg did not convert it");
+    assert_eq!(animated_webp(&direct).flags & 0x02, 0x02);
+
+    let err = converter
+        .convert(MediaInput::new(over), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("more than 500 frames"), "{err}");
+
+    let at_bound = gif(&ffmpeg, "testsrc2=s=32x32:r=50", 500);
+    let sticker = converter
+        .convert(MediaInput::new(at_bound), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap();
+    assert!(animated_webp(&sticker.data).frames >= 2);
+}
+
+/// The time bound: 11 frames of a second each are refused; 10 convert.
+#[tokio::test]
+async fn ffmpeg_refuses_an_animation_over_the_time_bound() {
+    let _cpu = cpu_shared().await;
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let over = gif(&ffmpeg, "testsrc2=s=32x32:r=1", 11);
+    let err = converter
+        .convert(MediaInput::new(over), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("longer than 10 seconds"), "{err}");
+    let at_bound = gif(&ffmpeg, "testsrc2=s=32x32:r=1", 10);
+    let sticker = converter
+        .convert(MediaInput::new(at_bound), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap();
+    let w = animated_webp(&sticker.data);
+    assert!(
+        (9_000..=10_000).contains(&w.duration_ms),
+        "plays {} ms",
+        w.duration_ms
+    );
+}
+
+/// The bound on frames times pixels: 101 frames of 512 × 512 (within the
+/// frame, time and pixel bounds) are refused, before ffmpeg reads them.
+/// The control: ffmpeg alone converts them.
+#[tokio::test]
+async fn ffmpeg_refuses_an_animation_over_the_frame_pixel_bound() {
+    let _cpu = cpu_shared().await;
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let over = gif(&ffmpeg, "testsrc2=s=512x512:r=25", 101);
+    let direct = run(
+        &ffmpeg,
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "pipe:0",
+            "-vf",
+            "scale=64:64",
+            "-c:v",
+            "libwebp_anim",
+            "-f",
+            "image2pipe",
+            "pipe:1",
+        ],
+        &over,
+    )
+    .expect("ffmpeg did not convert it");
+    assert!(animated_webp(&direct).frames >= 2);
+    let err = converter
+        .convert(MediaInput::new(over), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
+    assert!(
+        err.to_string().contains("more frames than its size allows"),
+        "{err}"
+    );
+}
+
+/// The pixel bound: a GIF whose canvas is 2048 × 1026 (two rows past
+/// 2 Mi pixels: lavfi keeps sizes even) is refused; 2048 × 1024 converts,
+/// scaled within 512. The control: ffmpeg alone converts the larger one.
+#[tokio::test]
+async fn ffmpeg_refuses_an_animation_over_the_pixel_bound() {
+    let _cpu = cpu_shared().await;
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let over = gif(&ffmpeg, "testsrc2=s=2048x1026:r=5", 2);
+    assert!(
+        run(
+            &ffmpeg,
+            &[
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                "-c:v",
+                "libwebp_anim",
+                "-f",
+                "image2pipe",
+                "pipe:1",
+            ],
+            &over,
+        )
+        .is_some_and(|o| o.starts_with(b"RIFF")),
+        "ffmpeg did not convert it"
+    );
+    let err = converter
+        .convert(MediaInput::new(over), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
+    assert!(err.to_string().contains("over 2097152 pixels"), "{err}");
+
+    let at_bound = gif(&ffmpeg, "testsrc2=s=2048x1024:r=5", 2);
+    let sticker = converter
+        .convert(MediaInput::new(at_bound), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap();
+    let w = animated_webp(&sticker.data);
+    assert_eq!((w.width, w.height), (512, 256), "{w:?}");
+}
+
+/// `gif` with `extensions` spliced in after its header and global colour
+/// table, before its first block.
+fn with_extensions(gif: &[u8], extensions: &[u8]) -> Vec<u8> {
+    let flags = gif[10];
+    let header = 13
+        + if flags & 0x80 == 0 {
+            0
+        } else {
+            3 << ((flags & 7) + 1)
+        };
+    [&gif[..header], extensions, &gif[header..]].concat()
+}
+
+/// `data` as GIF sub-blocks: runs of at most 255 bytes, each after its
+/// length, then a zero length.
+fn sub_blocks(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for run in data.chunks(255) {
+        out.push(u8::try_from(run.len()).unwrap());
+        out.extend_from_slice(run);
+    }
+    out.push(0);
+    out
+}
+
+/// A GIF with megabytes of comments, XMP and an ICC profile around its
+/// frames (which ffmpeg would hold in memory with the first frame) still
+/// converts, and nothing of them reaches the sticker.
+#[tokio::test]
+async fn ffmpeg_makes_a_sticker_of_a_gif_without_its_comments_and_extensions() {
+    let _cpu = cpu_shared().await;
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let plain = gif(&ffmpeg, "testsrc2=s=160x120:r=10", 10);
+    let comment = b"Jane Doe, 12 Main Street. ".repeat(80_000);
+    // A comment, two application extensions (an identifier of eleven
+    // bytes, then data) and a plain text one (a header of twelve, then
+    // text).
+    let extensions = [
+        &[0x21, 0xFE][..],
+        &sub_blocks(&comment),
+        &[0x21, 0xFF, 11],
+        b"XMP DataXMP",
+        &sub_blocks(b"<x:xmpmeta>Jane</x:xmpmeta>"),
+        &[0x21, 0xFF, 11],
+        b"ICCRGBG1012",
+        &sub_blocks(&[7; 3000]),
+        &[0x21, 0x01, 12],
+        &[0; 12],
+        &sub_blocks(b"Jane"),
+    ]
+    .concat();
+    let rich = [
+        with_extensions(&plain, &extensions),
+        b"Jane, after the trailer".to_vec(),
+    ]
+    .concat();
+    assert!(rich.len() > 2_000_000, "{} bytes", rich.len());
+    let sticker = converter
+        .convert(MediaInput::new(rich), TargetFormat::AnimatedSticker)
+        .await
+        .unwrap();
+    assert!(!sticker.data.windows(4).any(|w| w == b"Jane"));
+    let w = animated_webp(&sticker.data);
+    assert_eq!((w.width, w.height, w.frames), (160, 120, 10), "{w:?}");
+    for metadata in [b"EXIF", b"XMP ", b"ICCP"] {
+        assert!(!w.chunks.contains(metadata), "{w:?}");
+    }
+}
+
+/// An animated PNG, an animated WebP, a PNG, a JPEG, a GIF of one frame
+/// and a GIF whose frames are all alike are refused for an animated
+/// sticker; a GIF is still refused for a static one.
+#[tokio::test]
+async fn ffmpeg_refuses_what_is_not_an_animated_gif() {
+    let _cpu = cpu_shared().await;
+    let Some(converter) = converter_for(&[TargetFormat::AnimatedSticker]).await else {
+        return;
+    };
+    let ffmpeg = converter.program().to_path_buf();
+    let source = "testsrc2=s=160x120:r=5";
+    let apng = lavfi_animation(&ffmpeg, source, 5, &["-plays", "0", "-f", "apng"]);
+    assert!(apng.windows(4).any(|w| w == b"acTL"), "not animated");
+    let webp = lavfi_animation(
+        &ffmpeg,
+        source,
+        5,
+        &["-c:v", "libwebp_anim", "-f", "image2pipe"],
+    );
+    assert_eq!(animated_webp(&webp).flags & 0x02, 0x02, "not animated");
+    let png = lavfi(&ffmpeg, source, &["-c:v", "png"]);
+    let jpeg = lavfi(&ffmpeg, source, &["-c:v", "mjpeg"]);
+    let one = gif(&ffmpeg, source, 1);
+    let still = gif(&ffmpeg, "color=c=red:s=160x120:r=5", 5);
+    for (what, file, why) in [
+        ("apng", &apng, "not a GIF's"),
+        ("webp", &webp, "not a GIF's"),
+        ("png", &png, "not a GIF's"),
+        ("jpeg", &jpeg, "not a GIF's"),
+        ("one frame", &one, "fewer than two frames"),
+        ("still", &still, "all alike"),
+    ] {
+        let err = converter
+            .convert(MediaInput::new(file.clone()), TargetFormat::AnimatedSticker)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+            "{what}: {err:?}"
+        );
+        assert!(err.to_string().contains(why), "{what}: {err}");
+    }
+    let animated = gif(&ffmpeg, source, 5);
+    let err = converter
+        .convert(MediaInput::new(animated), TargetFormat::StaticSticker)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Conversion(ConversionError::InputRejected(_))),
+        "{err:?}"
+    );
 }

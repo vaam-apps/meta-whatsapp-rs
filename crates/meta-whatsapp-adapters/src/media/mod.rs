@@ -5,17 +5,20 @@
 //! Nothing is linked or bundled. The converter starts the `ffmpeg`
 //! binary as a child process, feeds it the input on stdin and reads the
 //! result from stdout; no file is written. Install `ffmpeg` built with
-//! `libopus` (voice) and `libwebp` (stickers) on the host (Debian and
-//! Ubuntu: `apt-get install ffmpeg`, whose build has both), or point
+//! `libopus` (voice) and `libwebp` (stickers, `libwebp` and
+//! `libwebp_anim`) on the host (Debian and Ubuntu: `apt-get install
+//! ffmpeg`, whose build has them), or point
 //! [`FfmpegConverter::with_program`] at one, and call
 //! [`FfmpegConverter::check`] (or [`check_for`](FfmpegConverter::check_for)
 //! with the formats you convert to) at startup to fail early. The
 //! service's public image carries no `ffmpeg`: a deployment that wants
 //! conversion adds it, under the licence of the build it chooses.
 //!
-//! It makes four formats: [`TargetFormat::OggOpus`] from a recording
-//! (below), and [`TargetFormat::StaticSticker`], [`TargetFormat::Jpeg`]
-//! and [`TargetFormat::Png`] from a PNG or a JPEG ([Images](#images)).
+//! It makes five formats: [`TargetFormat::OggOpus`] from a recording
+//! (below), [`TargetFormat::StaticSticker`], [`TargetFormat::Jpeg`]
+//! and [`TargetFormat::Png`] from a PNG or a JPEG ([Images](#images)),
+//! and [`TargetFormat::AnimatedSticker`] from a GIF
+//! ([Animations](#animations)).
 //!
 //! # What it runs
 //!
@@ -78,16 +81,49 @@
 //! detects the format again itself and may read nothing but a single PNG
 //! or JPEG (`-format_whitelist png_pipe,jpeg_pipe`): a JPEG-LS image or
 //! an animated PNG, which begin as a JPEG and a PNG do, are refused
-//! there. A PNG is walked chunk by chunk before `ffmpeg` sees it: one
-//! whose chunks stop before its end chunk (a truncated file) is
-//! [`ConversionError::InputRejected`], and `ffmpeg` gets it without its
-//! text and EXIF chunks (`tEXt`, `zTXt`, `iTXt`, `eXIf`) and without
-//! anything after its end chunk. That is a memory bound, not a nicety:
-//! `ffmpeg` 6.1 inflates every `zTXt` chunk and keeps the text until the
-//! frame is decoded, each under the allocation bound but not all of them
-//! together (four chunks of 100 KB, each inflating to 100 MiB, took
-//! 1.6 GB). Each attempt runs these arguments, the filter and the encoder
-//! from a fixed table:
+//! there. Before `ffmpeg` sees it, the image is walked, and what `ffmpeg`
+//! is given of it is a memory bound, not a nicety: `ffmpeg` 6.1 keeps
+//! some of an image's metadata many times over, each copy under the
+//! allocation bound but not all of them together (measured against
+//! ffmpeg 6.1.1):
+//!
+//! - **A PNG**, chunk by chunk: one whose chunks stop before its end
+//!   chunk (a truncated file) is [`ConversionError::InputRejected`];
+//!   `ffmpeg` gets it without its text and EXIF chunks (`tEXt`, `zTXt`,
+//!   `iTXt`, `eXIf`), with its first colour profile chunk (`iCCP`) only
+//!   if that is at most 16 KiB and no other, and without anything after
+//!   its end chunk. `ffmpeg` inflates every `zTXt` chunk and keeps the
+//!   text until the frame is decoded (four chunks of 100 KB, each
+//!   inflating to 100 MiB, took 1.6 GB), and inflates a profile whole
+//!   (one of 200 KB inflating to 200 MiB took 660 MB; a real one is a
+//!   few kilobytes).
+//! - **A JPEG**, segment by segment: one cut short before its end of
+//!   image, with a segment whose length runs past the end (or is under
+//!   two bytes), with a table, frame or scan header whose length is not
+//!   its content (libjpeg refuses one too), or with a second start of
+//!   image, is [`ConversionError::InputRejected`]. `ffmpeg` gets only
+//!   what it reads whole: the quantization and Huffman tables, the frame
+//!   header (baseline, extended, progressive or lossless; JPEG-LS's, for
+//!   the format whitelist to refuse), the restart interval, the scans and
+//!   their entropy-coded data, the first JFIF and Adobe segments
+//!   rewritten to their fixed fields (no thumbnail), the first colour
+//!   profile segment (`APP2`, `ICC_PROFILE`) when it holds a whole profile
+//!   in one chunk (1 of 1) of at most 16 KiB, in place of the first EXIF
+//!   segment a minimal EXIF of its Orientation alone (1 to 8; no EXIF
+//!   without a valid one), and the end of image. Every other `APP1`
+//!   (EXIF, XMP), every other `APP2` (so a profile split over several
+//!   chunks is dropped whole, and that image loses its colour profile),
+//!   `APP13`, comments, the other application segments, the markers `ffmpeg` does not decode,
+//!   bytes between segments and anything after the end of image are
+//!   dropped. `ffmpeg` copies an EXIF value once for every IFD entry
+//!   pointing at it, over every `APP1` it reads (a 67 KB JPEG of one
+//!   crafted segment took 916 MB, a 658 KB one of ten 8.4 GB), and moves
+//!   on by the bytes it read rather than by a segment's length, so a
+//!   segment it reads only in part could hide another from the walk:
+//!   each segment it is given is one it reads whole.
+//!
+//! Each attempt runs these arguments, the filter and the encoder from a
+//! fixed table:
 //!
 //! ```text
 //! ffmpeg -hide_banner -nostdin -nostats -loglevel error
@@ -109,11 +145,14 @@
 //! - **The first frame, nothing else**: no metadata (EXIF can carry a
 //!   place and a camera owner's name). A JPEG's EXIF orientation is
 //!   applied to the pixels before it is dropped (ffmpeg 6.1 rotates a
-//!   frame by it), so a photo taken upright stays upright. The colour
-//!   profile (ICC) is not metadata to `ffmpeg`: a JPEG or a PNG result
-//!   keeps the input's, so that its colours stay what they were (a WebP
-//!   result has none). A truncated JPEG is not refused: `ffmpeg` decodes
-//!   what there is of it, the rest grey.
+//!   frame by the minimal EXIF above), so a photo taken upright stays
+//!   upright. The colour profile (ICC) is not metadata to `ffmpeg`: a
+//!   JPEG or a PNG result keeps the input's, so that its colours stay
+//!   what they were (a WebP result has none), when it is the one profile
+//!   the walk above keeps, at most 16 KiB for a JPEG and a PNG alike (a
+//!   JPEG's in a single chunk). An image whose profile is larger, or a
+//!   JPEG's in several chunks, comes out without one, and a wide-gamut
+//!   photo (Display P3) is then shown as sRGB.
 //! - **Under the limit by a ladder**, since a size cannot be asked of an
 //!   encoder: the attempts below run in turn until one's result is within
 //!   [`TargetFormat::max_bytes`] (an attempt past it is killed as soon as
@@ -141,19 +180,112 @@
 //! and three components; a PNG of 8-bit RGB or RGBA, one image whose
 //! chunks end with its end chunk and the file.
 //!
+//! # Animations
+//!
+//! An animated sticker is made from a **GIF** only: of the animations
+//! ffmpeg 6.1 might read, an animated PNG cannot be read from a pipe (its
+//! reader seeks) and an animated WebP cannot be decoded at all (its WebP
+//! decoder skips the frames). The input's first bytes are read before
+//! `ffmpeg` starts (`GIF87a` or `GIF89a`: anything else, a PNG, a JPEG or
+//! a WebP among them, is [`ConversionError::InputRejected`] without
+//! starting it), and `ffmpeg`'s own detection may land on nothing but
+//! `gif` (`-format_whitelist gif`). The GIF is walked block by block
+//! first, and refused ([`ConversionError::InputRejected`], before
+//! `ffmpeg` starts) when it is cut short of its trailer, has a block GIF
+//! does not define, or is out of bounds:
+//!
+//! - **pixels**: a canvas of more than 2 Mi pixels (2 097 152: 2048 ×
+//!   1024, or 1920 × 1080), which `-max_pixels` refuses again;
+//! - **frames**: fewer than two (no animation) or more than 500
+//!   (`-frames:v 500` stops `ffmpeg` at as many again);
+//! - **frames times pixels**: more than 100 frames of a canvas of
+//!   512 × 512 or larger, each frame counted for its canvas's pixels up
+//!   to 512 × 512 (25 Mi, 26 214 400, in all: 400 frames of 256 × 256),
+//!   since an attempt costs its frames times the pixels it encodes and
+//!   every attempt decodes every frame again;
+//! - **time**: longer than 10 s (WhatsApp's own rule for an animated
+//!   sticker), each frame counted for its delay, or a tenth of a second
+//!   when it gives none or one under two hundredths (as browsers and
+//!   ffmpeg do): a lower frame rate repeats a slow frame to fill its
+//!   time, so the length bounds what the later attempts encode.
+//!
+//! `ffmpeg` gets the GIF without its comments, plain text and
+//! application extensions (a loop count, XMP, an ICC profile) and without
+//! anything after its trailer: only its header, colour tables, images
+//! and, before each image, the last graphic control extension given for
+//! it (its delay, transparency and disposal). None of them is compressed,
+//! so unlike a PNG's text none can inflate, but `ffmpeg` 6.1 holds them
+//! all in memory with the first frame (60 MB of comments took it 162 MB,
+//! where the same GIF without them takes 51 MB; 64 MB of graphic control
+//! extensions in a row, 169 MB), and they carry personal data. Each
+//! attempt runs these arguments, the filter and the encoder from a fixed
+//! table:
+//!
+//! ```text
+//! ffmpeg -hide_banner -nostdin -nostats -loglevel error
+//!        -max_alloc 268435456 -abort_on empty_output
+//!        -protocol_whitelist pipe -format_whitelist gif
+//!        -max_pixels 2097152
+//!        -i pipe:0
+//!        -map 0:v:0 -map_metadata -1 -fps_mode vfr -frames:v 500
+//!        -vf <filter> <encoder> -f image2pipe pipe:1
+//! ```
+//!
+//! Each frame keeps its own time (`-fps_mode vfr`) until an attempt
+//! lowers the frame rate. `libwebp_anim` hands over the whole file at the
+//! end, so an attempt over the limit is found then; a single allocation
+//! may be 256 MiB, for that one packet (26 MB for 100 frames of
+//! 512 × 512 that compress badly; a smaller bound fails the attempt as
+//! out of memory instead of trying the next). The result loops forever
+//! (libwebp's default; a GIF's own loop count is not kept).
+//!
+//! | Attempt | Largest side | Frame rate | Quality (`libwebp_anim`, lossy, level 4) |
+//! | --- | --- | --- | --- |
+//! | 1 | 512 | the GIF's own | 75 |
+//! | 2 | 512 | 15 a second | 50 |
+//! | 3 | 384 | 12 | 40 |
+//! | 4 | 256 | 10 | 40 |
+//! | 5 | 192 | 8 | 30 |
+//! | 6 | 128 | 5 | 25 |
+//!
+//! The aspect ratio is kept, an animation is never enlarged and its
+//! transparency is kept. Meta gives no dimensions, frame rate or length
+//! for an animated sticker: 512 pixels is where the ladder starts, so
+//! that an attempt's cost (its frames times its pixels) stays within the
+//! timeout. Frames that are all alike come out of `libwebp` as a still
+//! image, which is [`ConversionError::InputRejected`] (make a
+//! [`TargetFormat::StaticSticker`] of a PNG or a JPEG instead). The output
+//! is checked before it is returned: a WebP file whose RIFF size is its
+//! length, its chunks ending with it, the first an extended header
+//! (`VP8X`) with the animation flag, an `ANIM` chunk before the frames, at
+//! least two `ANMF` chunks (one is a still image labelled animated), and
+//! no image outside them. Converting an animation is slower than an
+//! image, each attempt decoding and encoding every frame again (on a
+//! 4-core machine, against ffmpeg 6.1.1): the worst measured within the
+//! bounds, 100 frames of 1024 × 1024 noise with noisy transparency, took
+//! 44 s for the six attempts, none of them within the limit, and 136 MB
+//! at the first; 100 frames of 2048 × 1024 noise 36 s; a 5 s, 480 × 360
+//! GIF of 100 busy frames 3.7 s, two attempts. Before the frame-pixel
+//! bound, 500 frames of 512 × 512 noise took 59 s over 10 s of play, and
+//! 66 s over 30 s.
+//! Keep the timeout at its default, or above it on a slower host.
+//!
 //! # Bounds and errors
 //!
 //! | Bound or failure | Default | Error |
 //! | --- | --- | --- |
 //! | an empty input, or one over [`with_max_input_bytes`](FfmpegConverter::with_max_input_bytes) | 64 MiB | [`Error::Validation`] on `input`, before `ffmpeg` starts |
-//! | a result over the format's limit ([`TargetFormat::max_bytes`]: 16 MiB for audio) | — | [`Error::Validation`] on `input`; `ffmpeg` is killed (for an image, the next attempt runs, and only the last one's overflow is this error) |
+//! | a result over the format's limit ([`TargetFormat::max_bytes`]: 16 MiB for audio) | — | [`Error::Validation`] on `input`; `ffmpeg` is killed (for an image or an animation, the next attempt runs, and only the last one's overflow is this error) |
 //! | `ffmpeg` missing or not executable | — | [`ConversionError::BinaryMissing`] |
-//! | no libopus, libwebp, mjpeg or png encoder ([`FfmpegConverter::check_for`]) | — | [`ConversionError::EncoderMissing`] |
-//! | an image whose first bytes are not a PNG's or a JPEG's, or a PNG whose chunks stop before its end chunk | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
+//! | no `libopus`, `libwebp`, `libwebp_anim`, `mjpeg` or `png` encoder ([`FfmpegConverter::check_for`]) | — | [`ConversionError::EncoderMissing`] |
+//! | an image whose first bytes are not a PNG's or a JPEG's; a PNG whose chunks stop before its end chunk; a JPEG that stops before its end of image, whose segment's length runs past the end or is not its header's content, or with a second start of image | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
+//! | an image's metadata (a PNG's text and EXIF chunks, a JPEG's application segments and comments, any colour profile but one of at most 16 KiB, a JPEG's in one chunk; [Images](#images)) | — | not passed to `ffmpeg`: a JPEG's EXIF becomes its Orientation alone |
+//! | an animation whose first bytes are not a GIF's; a GIF cut short of its trailer, with a block GIF does not define, of a canvas over 2 Mi pixels, of fewer than 2 frames or more than 500, of more than 100 frames of 512 × 512 or more (frames times pixels), or longer than 10 s | — | [`ConversionError::InputRejected`], before `ffmpeg` starts |
+//! | an animation whose frames are all alike (`libwebp` makes a still image of it) | — | [`ConversionError::InputRejected`] |
 //! | `ffmpeg` fails (input it cannot read, a format off the list, an image over 32 Mi pixels) | — | [`ConversionError::InputRejected`] |
 //! | the output is not the format asked for (a binary that is not the `ffmpeg` it should be) | — | [`ConversionError::OutputInvalid`] |
-//! | one allocation in `ffmpeg` over 16 MiB for audio (`-max_alloc`: a header declaring an absurd sample rate), 256 MiB for an image | — | [`ConversionError::InputRejected`]; on an `ffmpeg` whose allocations stay under the bound, the result cap above stops it instead |
-//! | a conversion over [`with_timeout`](FfmpegConverter::with_timeout), every attempt of an image's ladder together | 60 s | [`ConversionError::Timeout`], the one retryable; `ffmpeg` is killed |
+//! | one allocation in `ffmpeg` over 16 MiB for audio (`-max_alloc`: a header declaring an absurd sample rate), 256 MiB for an image or an animation | — | [`ConversionError::InputRejected`]; on an `ffmpeg` whose allocations stay under the bound, the result cap above stops it instead |
+//! | a conversion over [`with_timeout`](FfmpegConverter::with_timeout), every attempt of an image's or an animation's ladder together | 60 s | [`ConversionError::Timeout`], the one retryable; `ffmpeg` is killed |
 //! | `ffmpeg` killed by a signal, or a pipe to it broken | — | [`ConversionError::Killed`] |
 //!
 //! Every [`ConversionError`] is [`Error::Conversion`]: never
@@ -166,8 +298,9 @@
 //! queued: bound how many run at once yourself (each one is a process
 //! using about a CPU core, for up to the timeout, and memory this crate
 //! does not cap beyond `-max_alloc`'s per allocation, and an image at the
-//! pixel bound takes several frames of it: a cgroup, or `ulimit -v` in a
-//! wrapper script, bounds it). Run it on a tokio runtime with I/O enabled (what
+//! pixel bound takes several frames of it, an animation some 170 MB at
+//! the worst measured (padding in one frame's data): a cgroup, or `ulimit -v` in a wrapper script,
+//! bounds it). Run it on a tokio runtime with I/O enabled (what
 //! `#[tokio::main]` builds): child processes need tokio's I/O driver.
 //!
 //! ```no_run
@@ -194,6 +327,7 @@
 //! # Ok(()) }
 //! ```
 
+mod animation;
 mod image;
 mod mp4;
 #[cfg(test)]
@@ -317,6 +451,7 @@ fn encoder(target: TargetFormat) -> Option<Encoder> {
     let (kind, name, makes) = match target {
         TargetFormat::OggOpus => ('A', "libopus", "mono Ogg Opus"),
         TargetFormat::StaticSticker => ('V', "libwebp", "a static WebP sticker"),
+        TargetFormat::AnimatedSticker => ('V', "libwebp_anim", "an animated WebP sticker"),
         TargetFormat::Jpeg => ('V', "mjpeg", "an 8-bit colour JPEG"),
         TargetFormat::Png => ('V', "png", "an 8-bit RGB or RGBA PNG"),
         _ => return None,
@@ -392,8 +527,8 @@ impl FfmpegConverter {
     }
 
     /// The longest one conversion may take, writing the input and reading
-    /// the result included, and for an image every attempt of its ladder
-    /// together; past it the process is killed
+    /// the result included, and for an image or an animation every attempt
+    /// of its ladder together; past it the process is killed
     /// ([`DEFAULT_TIMEOUT`](Self::DEFAULT_TIMEOUT) unless set).
     #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -431,7 +566,8 @@ impl FfmpegConverter {
 
     /// Check that the binary starts and has the encoder each of `targets`
     /// needs (`libopus` for [`TargetFormat::OggOpus`], `libwebp` for
-    /// [`TargetFormat::StaticSticker`], `mjpeg` for [`TargetFormat::Jpeg`],
+    /// [`TargetFormat::StaticSticker`], `libwebp_anim` for
+    /// [`TargetFormat::AnimatedSticker`], `mjpeg` for [`TargetFormat::Jpeg`],
     /// `png` for [`TargetFormat::Png`]), with `ffmpeg -encoders`. Decoders
     /// are not checked: every `ffmpeg` build but a stripped-down one reads
     /// the input formats.
@@ -605,22 +741,38 @@ impl FfmpegConverter {
         self.checked(target, out)
     }
 
-    /// An image into `target`, trying each rung of `ladder` in turn until
-    /// one's result is within the format's limit, all within the timeout.
+    /// An image (or, for [`TargetFormat::AnimatedSticker`], an animation)
+    /// into `target`, trying each rung of `ladder` in turn until one's
+    /// result is within the format's limit, all within the timeout.
     async fn convert_image(
         &self,
         data: Bytes,
         target: TargetFormat,
         ladder: &'static [image::Rung],
     ) -> Result<ConvertedMedia> {
-        if !image::accepted(&data) {
+        let animated = target == TargetFormat::AnimatedSticker;
+        let (accepted, from) = if animated {
+            (animation::accepted(&data), "a GIF's, the animations")
+        } else {
+            (image::accepted(&data), "a PNG's or a JPEG's, the images")
+        };
+        if !accepted {
             return Err(ConversionError::InputRejected(format!(
-                "its first bytes are not a PNG's or a JPEG's, the images FfmpegConverter makes {target:?} from"
+                "its first bytes are not {from} FfmpegConverter makes {target:?} from"
             ))
             .into());
         }
-        // A PNG without its text and EXIF chunks, nothing after its end.
-        let data = image::prepared(&data).map_err(|why| {
+        // A PNG without its text, EXIF and large colour profile; a JPEG
+        // with only the segments ffmpeg reads whole, its EXIF reduced to
+        // the orientation; nothing after either's end. A GIF without its
+        // comments and application extensions, nothing after its trailer,
+        // and within the animation's bounds.
+        let prepared = if animated {
+            animation::prepared(&data)
+        } else {
+            image::prepared(&data)
+        };
+        let data = prepared.map_err(|why| {
             ConversionError::InputRejected(format!("{why}: not converted to {target:?}"))
         })?;
         let max = target.max_bytes();
@@ -633,13 +785,25 @@ impl FfmpegConverter {
             if left.is_zero() {
                 return Err(ConversionError::Timeout(self.timeout).into());
             }
-            let args = image::arguments(rung);
+            let args = if animated {
+                animation::arguments(rung)
+            } else {
+                image::arguments(rung)
+            };
             match self.run(&args, Some(data.clone()), max, left).await? {
                 // Too large: the next rung is smaller.
                 Run::Overflow => {}
                 Run::Done(out, status) => {
                     if !status.success() {
                         return Err(failed(target, status));
+                    }
+                    // libwebp makes a still image of frames that are all
+                    // alike: the input's doing, not the program's.
+                    if animated && check_output(TargetFormat::StaticSticker, &out).is_ok() {
+                        return Err(ConversionError::InputRejected(format!(
+                            "its frames are all alike, and libwebp made a still image of them: not converted to {target:?}"
+                        ))
+                        .into());
                     }
                     return self.checked(target, out);
                 }
@@ -666,7 +830,7 @@ impl FfmpegConverter {
 impl MediaConverter for FfmpegConverter {
     async fn convert(&self, input: MediaInput, target: TargetFormat) -> Result<ConvertedMedia> {
         let audio = arguments(target);
-        let ladder = image::ladder(target);
+        let ladder = image::ladder(target).or_else(|| animation::ladder(target));
         if audio.is_none() && ladder.is_none() {
             return Err(unsupported(target));
         }
@@ -773,8 +937,9 @@ fn describe(status: ExitStatus) -> String {
 
 /// Check that `out` is `target`: for Ogg Opus, an Ogg stream whose first
 /// page opens it and carries an `OpusHead` for one channel (RFC 7845
-/// § 5.1); for an image, its header ([`image::check`]). Returns what it
-/// found instead, in words.
+/// § 5.1); for an image, its header ([`image::check`]); for an animated
+/// sticker, its chunks ([`animation::check`]). Returns what it found
+/// instead, in words.
 fn check_output(target: TargetFormat, out: &[u8]) -> std::result::Result<(), &'static str> {
     match target {
         TargetFormat::OggOpus => {
@@ -788,6 +953,7 @@ fn check_output(target: TargetFormat, out: &[u8]) -> std::result::Result<(), &'s
                 None => Err("a truncated Opus header"),
             }
         }
+        TargetFormat::AnimatedSticker => animation::check(out),
         _ => image::check(target, out),
     }
 }
