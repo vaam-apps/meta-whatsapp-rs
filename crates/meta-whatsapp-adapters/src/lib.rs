@@ -13,6 +13,7 @@
 //! | `postgres` | `store::PostgresKvStore`, `store::PostgresConversationStore`, `store::postgres::migrate` | `KvStore`, `ConversationStore` | sqlx (Postgres, tokio, rustls) |
 //! | `sqlite` | `store::SqliteKvStore`, `store::SqliteConversationStore`, `store::sqlite::migrate` | `KvStore`, `ConversationStore` | sqlx (SQLite, tokio; the SQLite library compiled in, no TLS) |
 //! | `redis` | `store::RedisKvStore`, `store::RedisConversationStore`, `store::RedisTls` (`rediss://`) | `KvStore`, `ConversationStore` | redis (tokio, connection manager; none of its TLS features), rustls and tokio-rustls (aws-lc-rs), rustls-platform-verifier |
+//! | `mongodb` | `store::MongoKvStore`, `store::MongoConversationStore`, `store::mongodb::migrate` | `KvStore`, `ConversationStore` | mongodb 3.9 (rustls with an explicit aws-lc-rs provider, BSON 3); a replica set |
 //! | `ffmpeg` | `media::FfmpegConverter` | `MediaConverter` | tokio `process`; runs an `ffmpeg` you install, links none |
 //!
 //! Every feature compiles on its own; none is required by another.
@@ -44,13 +45,17 @@
 //!   cheap expiring keys (dedup markers, OTPs); make it persistent if tokens
 //!   live there. Use **SQLite** for one process on one machine that must
 //!   keep its state across restarts (a CLI, an edge or desktop deployment).
-//!   Use **memory** for tests, development, or one instance that can afford
-//!   to lose OTPs and dedup markers on restart.
+//!   Use **MongoDB** when it is the database you run: like Postgres, tokens
+//!   and OTP state survive restarts and are shared by every instance, and
+//!   dead records are removed by a TTL index. Use **memory** for tests,
+//!   development, or one instance that can afford to lose OTPs and dedup
+//!   markers on restart.
 //! - **Conversation history (`ConversationStore`)** backs the in-app inbox.
 //!   **Postgres** in production; **SQLite** for one process on one
 //!   machine; **Redis** where Redis is the database you run (persistent,
-//!   `noeviction`; a store's whole inbox on one shard); **memory** for tests
-//!   and demos.
+//!   `noeviction`; a store's whole inbox on one shard); **MongoDB** where
+//!   MongoDB is (a replica set: its writes are transactions); **memory** for
+//!   tests and demos.
 //! - **Sinks** route webhook events: a `sink::ChannelSink` to a worker for
 //!   anything slow, a `sink::BroadcastSink` for live inbox views, a
 //!   `sink::FanoutSink` to do both.
@@ -71,8 +76,9 @@
 //! `Expiry::At(t)` is compared against the *server's* time, and a test's
 //! `ManualClock` cannot move a Postgres or Redis store forward. Keep
 //! database hosts on NTP. `store::SqliteKvStore` has no server: it uses
-//! an injectable `Clock` too, the application's. Precision: Postgres and
-//! SQLite keep microseconds, Redis milliseconds.
+//! an injectable `Clock` too, the application's. `store::MongoKvStore`
+//! uses the MongoDB server's `$$NOW`, as Postgres uses its own. Precision:
+//! Postgres and SQLite keep microseconds, Redis and MongoDB milliseconds.
 //!
 //! # Wiring
 //!

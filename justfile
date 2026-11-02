@@ -30,6 +30,8 @@ test:
 # files in META_WHATSAPP_RS_TEST_REDISS_CA, `…_CLIENT_CERT` and `…_CLIENT_KEY`.
 # The MongoDB URL (roadmap S8) is a single-node replica set's, with
 # `directConnection=true`: the set's member address is the container's own.
+# The adapters' `live_` filter takes the MongoDB adapters' tests too
+# (roadmap S17, `live_mongodb_*` in tests/live_mongodb.rs, feature `mongodb`).
 # META_WHATSAPP_RS_REQUIRE_LIVE=1 turns a missing service into a failure
 # instead of a skip.
 test-live:
@@ -216,6 +218,7 @@ features:
     cargo check -p meta-whatsapp-adapters --no-default-features --features postgres
     cargo check -p meta-whatsapp-adapters --no-default-features --features sqlite
     cargo check -p meta-whatsapp-adapters --no-default-features --features redis
+    cargo check -p meta-whatsapp-adapters --no-default-features --features mongodb
     cargo check -p meta-whatsapp-adapters --no-default-features --features ffmpeg
     cargo check -p meta-whatsapp-webhooks --no-default-features --all-targets
     cargo check -p meta-whatsapp-webhooks --features axum
@@ -229,6 +232,7 @@ features:
     cargo check -p meta-whatsapp-rs --no-default-features --features postgres
     cargo check -p meta-whatsapp-rs --no-default-features --features sqlite
     cargo check -p meta-whatsapp-rs --no-default-features --features redis
+    cargo check -p meta-whatsapp-rs --no-default-features --features mongodb
     cargo check -p meta-whatsapp-rs --no-default-features --features axum
     cargo check -p meta-whatsapp-rs --no-default-features --features typst
     cargo check -p meta-whatsapp-rs --no-default-features --features flows-endpoint

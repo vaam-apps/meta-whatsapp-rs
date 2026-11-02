@@ -1,6 +1,6 @@
 [package]
 name = "meta-whatsapp-adapters"
-description = "Adapters for the meta-whatsapp-core ports: reqwest transport, memory/Postgres/SQLite/Redis stores, event sinks and streams."
+description = "Adapters for the meta-whatsapp-core ports: reqwest transport, memory/Postgres/SQLite/Redis/MongoDB stores, event sinks and streams."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -44,6 +44,11 @@ redis = [
   "tokio/rt",
   "tokio/sync",
 ]
+# MongoDB KvStore + ConversationStore (roadmap S17), on a replica set (the
+# conversation store's writes that touch several documents are
+# multi-document transactions), with `store::mongodb::migrate` creating
+# their collections and indexes.
+mongodb = ["dep:mongodb"]
 # Channel, broadcast, fan-out, filter, fn and tracing sinks, and event streams.
 sinks = ["tokio/sync", "dep:tokio-stream"]
 # `media::FfmpegConverter`: core's `MediaConverter` port over an `ffmpeg`
@@ -101,6 +106,14 @@ rustls-platform-verifier = { workspace = true, optional = true }
 # `rediss://` is parsed here: redis-rs refuses the scheme without its TLS
 # features.
 url = { workspace = true, optional = true }
+# The `mongodb` feature's driver (roadmap S17), as S8's smoke test and S9's
+# outbox take it: no default features (`rustls-tls` is rustls on `ring`),
+# `rustls-tls-aws-lc` (rustls with an explicit aws-lc-rs provider, never the
+# process default: the provider reqwest, sqlx and `RedisTls` use here),
+# `compat-3-3-0` (which the driver requires) and the BSON 3 API (`bson-3`).
+# It brings `tiny-keccak` (CC0-1.0, allowed in deny.toml by the owner's
+# decision of 2026-11-02) into the licence check.
+mongodb = { workspace = true, optional = true, features = ["compat-3-3-0", "bson-3", "rustls-tls-aws-lc"] }
 
 [dev-dependencies]
 meta-whatsapp-core = { workspace = true, features = ["testing"] }
@@ -119,8 +132,8 @@ rustls = { workspace = true, features = ["ring", "aws_lc_rs", "std", "tls12"] }
 # aws-lc-rs (none is committed).
 rcgen = { workspace = true, features = ["aws_lc_rs", "pem"] }
 # tests/live_mongodb.rs (roadmap S8): a multi-document transaction against
-# the test replica set. A dev-dependency only, until S17's `mongodb` feature.
-# The driver requires a TLS feature: `rustls-tls-aws-lc` builds its rustls
+# the test replica set, which needs the driver without the `mongodb` feature
+# too (S17's adapters and their live tests are behind it). The driver requires a TLS feature: `rustls-tls-aws-lc` builds its rustls
 # configuration with an explicit aws-lc-rs provider (not `rustls-tls`, which
 # is `ring`); the test server itself is plain. `compat-3-3-0` is required by
 # the driver; `bson-3` picks the current bson.

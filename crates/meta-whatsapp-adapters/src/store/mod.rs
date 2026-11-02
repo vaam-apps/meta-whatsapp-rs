@@ -14,6 +14,8 @@
 //! | `SqliteConversationStore` | `ConversationStore` | `sqlite` | — |
 //! | `RedisKvStore` | `KvStore` | `redis` | the **Redis server's** `TIME` |
 //! | `RedisConversationStore` | `ConversationStore` | `redis` | — |
+//! | `MongoKvStore` | `KvStore` | `mongodb` | the **database server's** `$$NOW` |
+//! | `MongoConversationStore` | `ConversationStore` | `mongodb` | — |
 //!
 //! `RedisKvStore` and `RedisConversationStore` take any async redis
 //! connection: `redis://` through redis-rs (`ConnectionManager`),
@@ -34,6 +36,8 @@ pub mod conversation_conformance;
 mod memory_conversation;
 #[cfg(feature = "memory")]
 mod memory_kv;
+#[cfg(feature = "mongodb")]
+pub mod mongodb;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 #[cfg(feature = "redis")]
@@ -47,6 +51,8 @@ pub mod sqlite;
 #[cfg(any(feature = "postgres", feature = "sqlite"))]
 mod table_prefix;
 
+#[cfg(feature = "mongodb")]
+pub use self::mongodb::{MongoConversationStore, MongoKvStore};
 /// The `redis` this adapter is built against — `RedisKvStore::new` takes its
 /// connection types, so build connections with this re-export rather than
 /// pinning redis yourself.

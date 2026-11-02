@@ -155,6 +155,7 @@
 //! | `postgres` | | `adapters::store::{PostgresKvStore, PostgresConversationStore}` and `adapters::store::postgres::migrate` (sqlx) |
 //! | `sqlite` | | `adapters::store::{SqliteKvStore, SqliteConversationStore}` and `adapters::store::sqlite::migrate` (sqlx, SQLite compiled in): one process on one machine |
 //! | `redis` | | `adapters::store::{RedisKvStore, RedisConversationStore}`, and `adapters::store::RedisTls` for `rediss://` (aws-lc-rs, never the process default) |
+//! | `mongodb` | | `adapters::store::{MongoKvStore, MongoConversationStore}` and `adapters::store::mongodb::migrate` (the `mongodb` driver, rustls on aws-lc-rs): a replica set |
 //! | `axum` | | `webhooks::router` (`GET`/`POST` webhook endpoint) and `webhooks::sse` (live inbox stream) |
 //! | `typst` | | the `typst` module: invoice, receipt and voucher templates → PDF/PNG |
 //! | `flows-endpoint` | | `client::flows::endpoint`: WhatsApp Flows data-endpoint crypto (aws-lc-rs) |
