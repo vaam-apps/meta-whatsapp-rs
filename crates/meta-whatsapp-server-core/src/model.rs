@@ -113,11 +113,15 @@ pub enum Scope {
     Otp,
     /// WABAs, numbers and profiles.
     Numbers,
+    /// Payments: a WABA's payment configurations, a payment's lookup and
+    /// its refunds (roadmap P2). The payment messages themselves are
+    /// sends (`send`).
+    Payments,
 }
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 9] = [
+    pub const ALL: [Scope; 10] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -127,6 +131,7 @@ impl Scope {
         Self::Signup,
         Self::Otp,
         Self::Numbers,
+        Self::Payments,
     ];
 
     /// Stored and API name.
@@ -141,6 +146,7 @@ impl Scope {
             Self::Signup => "signup",
             Self::Otp => "otp",
             Self::Numbers => "numbers",
+            Self::Payments => "payments",
         }
     }
 

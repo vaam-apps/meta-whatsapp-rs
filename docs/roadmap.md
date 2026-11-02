@@ -51,7 +51,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3g; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
-| last | P1a–P1d, P2 (payments) |
+| last | P1a–P1d, P2 (payments; P2 done) |
 
 ## 1. The service's modular split (design §8, D26)
 
@@ -4615,7 +4615,7 @@ design's (§9).
     fails it; the journal and the audit event hold no identity in
     clear; a tenant's key cannot erase on another tenant's number.
 
-- [ ] **M2g. The inbox's other routes** (row 111; added by M2a, kept as
+- [x] **M2g. The inbox's other routes** (row 111; added by M2a, kept as
   an item by the coordinator's decision of 2026-11-01): the design's `GET
   /v1/numbers/{pn}/conversations/{contact}/window` (`{open, closes_at}`,
   `Inbox::check_reply`'s answer beside the recorded window) and `POST
@@ -4628,6 +4628,88 @@ design's (§9).
     id to the new holder (removing the epoch from the lookup fails it);
     after the read route, `unread` is 0 and Meta got one read receipt for
     the latest inbound message only with `notify_customer`.
+  - **Landed:** three routes in `meta-whatsapp-server-api-axum`
+    (`api::inbox`, tag and scope `inbox`), each over the core's
+    `inbox::Conversations` on an `OwnedNumber` (the whole authorization
+    order, the vault included, as M2a's decision 3), each answered only if
+    the number's binding still holds once read (`OwnedNumber::still_held`,
+    `503 storage_unavailable`): `GET
+    /v1/numbers/{pn}/conversations/{contact}/window`
+    (`get_conversation_window`, read class: `Conversations::window`,
+    `{open, closes_at}`, `open` the reply's own checks run with nothing
+    sent, the cut's then the library's `Inbox::check_reply`; `closes_at`
+    the recorded window, `null` for one opened before the cut); `POST
+    /v1/numbers/{pn}/conversations/{contact}/read` (`mark_conversation_read`,
+    send class: `Conversations::mark_read`; an optional body
+    `{notify_customer}`, unknown fields `422 body`; the receipt first, with
+    the number's token, for the latest inbound message among the
+    conversation's latest 1000 (`UNREAD_SCAN`), a revoke's tombstone
+    skipped, none for one dated before the cut or older than Meta's 30 days,
+    `inbox::READ_RECEIPT_MAX_AGE`; then `ConversationStore::mark_read`; a
+    refused receipt resets nothing; an optional `Idempotency-Key` over
+    `Fingerprint::mark_conversation_read`, the number, the contact decoded
+    and the body, `null` when empty; `204` with no body, kept and replayed
+    as such by the HTTP crate's `Success::no_content`); and `GET
+    /v1/numbers/{pn}/messages/{message_id}` (`get_inbox_message`, read
+    class: `Conversations::message`, the store's lookup on the number,
+    `{contact, message}`; dated before the cut, `404 not_found`, the body of
+    an id the number never had; `422 message_id` for a blank id, one with
+    a control character or over 256 bytes). The list's items gain
+    `window`, the window route's answer for each
+    (`Conversations::list_with_windows`; `Conversations::list` unchanged).
+    The reply's cut check is now `Conversations::cut_refuses_free_form`
+    (M2a's `refuse_across_the_cut`, split so the window shares it: the
+    swap of M2a's decision 8 drops its calls, the reply's and the window's).
+    Three tenant operations (`operation::Operation::GetConversationWindow`,
+    `MarkConversationRead`, `GetInboxMessage`). The OpenAPI document is
+    additive only (513 lines added: three paths, three schemas,
+    `Conversation`'s required `window`; the one line removed is a comma).
+    No new setting and no new stored name. Decisive tests, on the core's
+    memory backend, the memory crate's and live on Postgres:
+    `conformance::inbox::the_previous_holders_message_window_and_receipt_never_reach_the_new_holder`
+    and `marking_a_conversation_read_resets_unread_and_receipts_the_latest_inbound_message`,
+    with `the_window_is_what_a_reply_would_meet`,
+    `a_message_is_found_by_id_on_its_own_number` and the stale capability's
+    new reads in `a_capability_made_before_its_number_left_reads_nothing`;
+    over HTTP, `tests/inbox.rs`'s
+    `the_previous_holders_message_window_and_receipt_never_reach_the_new_holder`
+    and `the_read_route_resets_unread_and_receipts_the_latest_inbound_message`
+    (also live, `live_postgres.rs`), `the_window_route_answers_what_a_reply_would_meet`,
+    `a_refused_read_receipt_resets_nothing`, the scope test, M1.3's tables,
+    M1.5's sentinel and M1.7's log capture over the new routes. By
+    mutation, each failing a test: the cut removed from the lookup by id
+    (the core's and the HTTP decisive case), from the receipt's choice
+    (the same), from the window's `closes_at` or from its `open` (the
+    core's decisive case); the store's reset removed, the receipt sent
+    without `notify_customer`, the receipt's message not required inbound,
+    the receipt's age limit removed (the core's read case); the binding
+    not read again in the window, the lookup or before the receipt (the
+    stale capability's case); `open` from the recorded window alone, no
+    `check_reply` (`the_window_is_what_a_reply_would_meet`); the read
+    route's `Idempotency-Key` ignored (the HTTP read case); the window's
+    operation under another scope (the axum crate's
+    `each_tenant_route_is_one_core_operation_with_its_groups_scope`); and
+    step 4's tenant filters removed from `Authorizer::owned_number` (M1.3
+    and the HTTP scope case, over the new routes too). Left, and why: a group conversation
+    gets one receipt, for its latest message (Meta marks group messages
+    one by one); the window names no refusal reason (D62); the list reads a
+    few rows per conversation for its windows (D63). D60–D63 are the
+    coordinator's decisions of 2026-11-02, each swappable.
+  - **Review** (sabotage, security lens): the binding is read again after
+    the receipt, before the reset, so a number that moved while Meta
+    answered resets nothing (`503`; the next holder's count was the stale
+    request's to zero); three guards no test held are pinned, the receipt's
+    tombstone skip (without it the receipt named a message never
+    received), its scan past the history's first page and the 30 days'
+    bound, to the second
+    (`conformance::inbox::a_read_receipt_skips_a_tombstone_and_reads_past_the_first_page`,
+    `a_number_that_moves_during_the_receipt_resets_nothing`, in `run`);
+    the idempotency claim corrected: a `503` after the receipt went
+    releases its key, and its repeat sends the receipt again. Left: a
+    receipt for a message its customer revoked after it arrived (status
+    `deleted`) is still sent, and Meta documents neither its answer nor a
+    repeat's; the read reset and the window emit no live event (M2b's
+    stream carries Meta's events only).
 - [x] **M2h. A number's own move record** (row 111; added by M2a, and
   folded into it by the coordinator: the inbox never ships with the leak):
   the binding epoch for a number Meta migrated from
@@ -4708,7 +4790,7 @@ design's (§9).
     `wa_server_signup_attempts` and `wa_server_vault_records`,
     expand-only, its names pending the owner), held by the new
     conformance suite `signup`. A new error code, `409
-    signup_not_configured`. The OpenAPI document is additive only (844
+    signup_not_configured`. The OpenAPI document is additive only (852
     lines added, one changed by a trailing comma: four paths and the admin
     one, the tag `signup`, eight schemas, the code, `VaultRotation`'s two
     fields). The production guide gains the vault key cadence (§ 2, "Vault
@@ -4931,6 +5013,13 @@ design's (§9).
   generated from `openapi/v1.json` by openapi-typescript, the `api-axum`
   client of D26's swap.
   - **After:** M2c, and S15 unless the owner refuses D20 (a).
+  - **Before the first release** (P2's security review, finding M2: a
+    v1 client generated from the document before P2 types the admin key
+    answers' `scopes` as the closed `Scope`, so `payments` falls outside
+    them; 4 of the 271 operation checks): `Key.scopes` in responses
+    becomes an open `KnownScope | string`, as `ErrorCode` and `EventType`
+    already are, while the request's scopes (a key's minting) stay
+    closed, so a scope added later is additive.
   - **Decisive:** M4.1–M4.3; the image's contents list matches the
     image (an extra binary fails it).
 
@@ -5283,10 +5372,129 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     send examples; each endpoint sample request decrypted and answered
     with its sample response through the Flows endpoint's crypto; the
     two third-party validation payloads of `pg` as exact JSON.
-- [ ] **P2. Payment routes in the service** (rows 38, 141).
+- [x] **P2. Payment routes in the service** (rows 38, 141).
   - **After:** P1a, P1b, P1c.
   - **Decisive:** M1.3 over the new routes; an order-details send
     carries the tenant's token.
+  - **Found already working before P2:** the payment templates' sends
+    and creations (P1c: `type` `template`, read through the library's
+    types); the payment webhooks, routed to the tenant like every event
+    (`payment_configuration_updated`, already a tenant type, by WABA;
+    India's payment status in `status_updated` and Brazil's
+    `payment_method` reply in `message_received`, by number). Missing:
+    the `order_details` and `order_status` interactive messages (`422
+    unsupported_message_type`: design §4.3 listed `button`, `list`,
+    `cta_url` only) and every payment call (configurations, lookup,
+    refunds).
+  - **Landed:** the send union's `interactive` gains `order_details` and
+    `order_status` (`meta_whatsapp_server_core::messages::InteractiveType`,
+    `ActionParameters::Order`: Meta's `action.parameters` read into the
+    library's `OrderDetailsParameters`, or the order status's
+    `reference_id`, `order` and `payment`, with no key dropped, then the
+    library's checks; an `order_details` header an image only; an
+    `order_status` checked by Brazil's rules, its wire naming no
+    currency), for sends and inbox replies alike. Seven routes in
+    `meta-whatsapp-server-api-axum` (`api::payments`, tag and scope
+    `payments`, a new scope), each a core service
+    (`meta_whatsapp_server_core::payments`: `PaymentConfigurations` on an
+    `OwnedWaba`, `Payments` on an `OwnedNumber`, each opened only for the
+    admitted caller's own tenant, with the binding's vault token):
+    `GET`, `POST /v1/wabas/{waba_id}/payment-configurations`
+    (`list_payment_configurations`, read class;
+    `create_payment_configuration`, send class, an `Idempotency-Key` over
+    `Fingerprint::create_payment_configuration`), `GET`, `DELETE
+    …/{configuration_name}` (`get_payment_configuration`, read: `404`
+    for Meta's empty `data` or its refusal of the name;
+    `delete_payment_configuration`, send), `POST
+    …/{configuration_name}/oauth-link` (`regenerate_payment_oauth_link`,
+    send, a key over `Fingerprint::regenerate_payment_oauth_link`), `GET
+    /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}`
+    (`get_payment`, read) and `POST /v1/numbers/{pn}/payments/refunds`
+    (`refund_payment`, send, a key over `Fingerprint::refund_payment`).
+    A lookup and a refund look the configuration they name up in the
+    number's own WABA first (`GET /{waba_id}/payment_configuration/{name}`):
+    one the WABA has none of is `404`, nothing read or refunded. The
+    OAuth link is answered and never kept: the idempotency engine keeps a
+    second body when the handler gives one (`idempotency::Answer::keeping`,
+    the HTTP adapter's `Success::json_keeping`), the link's answer
+    without it. A refund, a creation, a removal and a new link are tenant
+    audit events (`payment_refunded`, `payment_configuration_created`,
+    `payment_configuration_deleted`, `payment_oauth_link_regenerated`).
+    Meta's `details` are kept on every payment route (the terms of
+    service's link is there); no route accepts Meta's terms. No new error
+    code; the OpenAPI document is additive (five paths, the tag
+    `payments`, eighteen schemas; `interactive.type` and `Scope` gain
+    values, `action.parameters` an `anyOf` alternative). Tests: the
+    service's `tests/payments.rs` (every route's exact request and its
+    page's sample response, the decisive token case
+    `an_order_details_send_carries_the_tenants_token_never_the_operators`,
+    the configuration check
+    `another_wabas_configuration_is_not_found_and_nothing_is_read_or_refunded`,
+    the refund's key `a_refund_is_never_made_twice`, the link never kept
+    `a_created_configurations_oauth_link_is_answered_never_kept`, the
+    scope, the terms' refusal), the M1.3 table pinning the seven routes
+    (`tests/authz.rs`, and live on Postgres
+    `live_postgres_another_tenants_number_is_not_found_before_the_vault`
+    with four of them, and
+    `live_postgres_a_payments_key_reaches_its_wabas_configurations`),
+    M1.5's sentinel over them (`tests/errors.rs`), M1.7's capture (every
+    payment route exercised, the OAuth links among the secrets, the audit
+    events in order), the core's
+    `payment_interactives_are_read_whole_and_checked`,
+    `a_configuration_is_checked_before_any_request`,
+    `a_refund_is_checked_before_any_request`, the conformance case
+    `templates::the_payment_services_open_for_their_own_tenant_only` (in
+    `conformance::run`: the core's memory backend, the memory crate's,
+    live on Postgres), and the classes' and scopes' tables. By mutation,
+    each failing its test: the configuration check dropped from the
+    lookup or the refund; the link kept for a repeat (in the handler, or
+    the engine keeping the answered body); the refund outside its key;
+    the send through the authorizer's tokenless client instead of the
+    number's; `order_details` or `order_status` out of the send union;
+    the payment routes' `details` dropped; a payment message's button
+    keys, or its parameters' dropped-key check, skipped; the provider
+    list unchecked; the payment group behind the `send` scope, or a
+    payment operation's scope moved; the tenant check of
+    `PaymentConfigurations::new` or `Payments::new` dropped; and step 4
+    of `owned_waba` dropped (the M1.3 table, the payment routes
+    included).
+  - **Decided** (the coordinator's decisions of 2026-11-01 under the
+    owner's delegation, each swappable: design §10, D50 to D58): a
+    `payments` scope (D50; its stored name pending the owner's
+    confirmation); the configuration check before a lookup or a refund
+    (D51); the OAuth link never kept (D52); an `order_status` checked by
+    Brazil's rules (D53); times as RFC 3339 strings under Meta's names
+    (D54); providers among Meta's four (D55); the refund's body (D56);
+    Meta's `details` kept (D57); the four audit events (D58).
+  - **Review** (adversarial, security lens): a configuration name holding
+    `/` or `\` is refused (Meta could read the library's `%2F` as
+    several segments); the check trusts only an answer of the very name
+    asked; a check that fails was not sent (`may_have_been_sent: false`,
+    the refund's key released, where it was kept as a refund that may
+    have been made); the payment changes' audit events name what
+    reconciles them, and a change cut by a timeout is audited, its
+    outcome `unknown`. New decisive tests:
+    `a_configuration_meta_answers_under_another_name_is_not_found`,
+    `a_refunds_amount_is_checked_before_any_request`,
+    `a_refund_whose_check_failed_was_not_sent_and_frees_its_key`,
+    `an_inbox_reply_carries_a_payment_message_checked_and_within_its_window`,
+    and M1.7's capture (`check_audit`).
+  - **Follow-ups decided on 2026-11-02** (the coordinator, the owner's
+    delegation): a refund requires an `Idempotency-Key` (D56 amended:
+    `428 idempotency_key_required`, a new code, additive; decisive
+    `a_refund_without_an_idempotency_key_sends_nothing`); the OAuth
+    link's answers carry `Cache-Control: no-store`; the open `Scope` of
+    the answers waits for the first release (M4).
+  - **Not done here:** the data endpoint link of a configuration and
+    India's checkout button templates (the library's P1d first); the
+    alpha third-party validation (P1d).
+  - **Also, after the first release** (from S7, carried by M2a and now
+    by P2, which landed before it): drop the legacy fingerprint (S6's
+    window: `Fingerprint::legacy_v1_json`, `legacy_v1_upload`,
+    `or_legacy`, and the handlers' `Uri`), once every deployment has run
+    a release with S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. The next item
+    of the service's to land after the first release carries this line
+    if it lands before it.
 
 ## Done criteria for parity
 
@@ -5331,7 +5539,9 @@ everything else goes into the parity-completion report.
   release is a data migration.
 - **New stable identifiers**, confirmed before the first release: each
   store namespace or stored name an item adds after the table in
-  architecture.md § Stable identifiers was last confirmed (B2b's
+  architecture.md § Stable identifiers was last confirmed (P2's key
+  scope `payments`, stored in `wa_server_api_keys.scopes`, added and
+  awaiting confirmation; B2b's
   `wa.bot.pacer` and its record layout, added and awaiting
   confirmation; B3's `wa.bot.jobs`, `wa.bot.jobs.due`,
   `wa.bot.jobs.sent`, `wa.bot.jobs.message` and `wa.bot.jobs.limited`,

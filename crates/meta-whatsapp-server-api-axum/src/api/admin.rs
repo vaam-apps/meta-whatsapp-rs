@@ -473,6 +473,8 @@ pub enum ScopeName {
     Otp,
     /// WABAs, numbers, profiles.
     Numbers,
+    /// Payment configurations, payment lookups and refunds.
+    Payments,
 }
 
 impl From<ScopeName> for Scope {
@@ -487,6 +489,7 @@ impl From<ScopeName> for Scope {
             ScopeName::Signup => Scope::Signup,
             ScopeName::Otp => Scope::Otp,
             ScopeName::Numbers => Scope::Numbers,
+            ScopeName::Payments => Scope::Payments,
         }
     }
 }
@@ -503,6 +506,7 @@ impl From<Scope> for ScopeName {
             Scope::Signup => ScopeName::Signup,
             Scope::Otp => ScopeName::Otp,
             Scope::Numbers => ScopeName::Numbers,
+            Scope::Payments => ScopeName::Payments,
         }
     }
 }

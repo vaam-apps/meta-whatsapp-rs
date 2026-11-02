@@ -225,6 +225,85 @@ stored data, the owner's).
 
 ### Added
 
+- **Payments in the service** (roadmap P2, parity rows 38, now done in
+  the service too, and 141; from `payments/payments-in/onboarding-apis`
+  and `payments/payments-in/pg`, read on 2026-11-01).
+  - **The payment messages**: `POST /v1/numbers/{pn}/messages` (and an
+    inbox reply) takes `interactive` of type `order_details` and
+    `order_status`, `action.parameters` as Meta's pages write them, read
+    into the library's types with no key dropped and checked by the
+    library's rules for the order's currency (an `order_status`, whose
+    wire names no currency, by Brazil's, the wider) before the request;
+    `422 unsupported_message_type` before.
+  - **A new key scope, `payments`**, and seven routes under it: a WABA's
+    payment configurations (`GET`, `POST
+    /v1/wabas/{waba_id}/payment-configurations`; `GET`, `DELETE
+    …/{configuration_name}`; `POST …/{configuration_name}/oauth-link`),
+    an order's payment (`GET
+    /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}`) and
+    its refund (`POST /v1/numbers/{pn}/payments/refunds`), over the
+    core's `payments::PaymentConfigurations` and `payments::Payments`.
+    A lookup and a refund look their configuration up in the number's
+    own WABA first (`404` when it is not there, or when Meta answers
+    another name, nothing read or refunded), and a configuration's name
+    is one path segment (`/` and `\` refused). A creation, a new OAuth link and a refund take an
+    `Idempotency-Key`; the answer kept for one has no OAuth link (the
+    link is a credential the records never store), through the
+    idempotency engine's new `Answer::keeping` and the HTTP adapter's
+    `Success::json_keeping`. A refund, a creation, a removal and a new
+    link are tenant audit events (`audit::payment_audit`: the
+    configuration, and a refund's number, order, amount and Meta's
+    refund id; an `outcome`, `unknown` for a call cut by a timeout).
+    A refund requires an `Idempotency-Key` (`428
+    idempotency_key_required`, a new error code, without one), and the
+    OAuth link's answers carry `Cache-Control: no-store`. Decisions D50
+    to D58 (design §10; D56 amended on 2026-11-02). Keys minted before do not carry the
+    new scope: mint one that does.
+  - The OpenAPI document is additive: five paths, the tag `payments`,
+    eighteen schemas, the values `order_details`, `order_status` of
+    `InteractiveType` and `payments` of `Scope`, and `action.parameters`
+    an `anyOf` of the URL button's and a payment message's (Meta's
+    object, `OrderParameters`).
+- **The inbox's other routes in the service** (roadmap M2g; parity row
+  111 now done on the service's side; design D60–D63, decided by the
+  coordinator on 2026-11-02). Scope
+  `inbox`, each from the number's binding epoch on, as M2a's routes:
+  - `GET /v1/numbers/{pn}/conversations/{contact}/window`
+    (`get_conversation_window`, read class): `{open, closes_at}`, `open`
+    what a free-form reply would meet now (the reply's own checks, the
+    library's `Inbox::check_reply` among them, run with nothing sent),
+    `closes_at` the recorded window; a window the previous holder's
+    customer opened shows neither. The conversation list's items gain
+    the same `window` (`Conversations::list_with_windows`).
+  - `POST /v1/numbers/{pn}/conversations/{contact}/read`
+    (`mark_conversation_read`, send class, an optional
+    `Idempotency-Key` over `Fingerprint::mark_conversation_read`):
+    `unread` reset; with `{"notify_customer": true}`, one read receipt
+    first (`messages/mark-message-as-read`, the number's token) for the
+    latest inbound message only, never for one dated before the epoch
+    or older than Meta's 30 days (`inbox::READ_RECEIPT_MAX_AGE`); a
+    receipt Meta refuses resets nothing, nor does one answered after the
+    number moved (the binding is read again before the reset: `503`).
+    `204`, with no body and no `Content-Type`, replayed alike
+    (`Success::no_content`).
+  - `GET /v1/numbers/{pn}/messages/{message_id}` (`get_inbox_message`,
+    read class): `{contact, message}` through `ConversationStore::message`;
+    a message dated before the epoch is `404 not_found`, the answer for
+    an id the number never had.
+  - The OpenAPI document is additive only (513 lines added: three paths,
+    the schemas `ConversationWindow`, `MarkConversationRead` and
+    `NumberInboxMessage`, and the required `window` on `Conversation`;
+    the one line removed is the comma after `unread` in its `required`
+    list). Decisive tests: `conformance::inbox::
+    the_previous_holders_message_window_and_receipt_never_reach_the_new_holder`
+    and `marking_a_conversation_read_resets_unread_and_receipts_the_latest_inbound_message`
+    on the core's memory backend, the memory crate's and live on
+    Postgres; over HTTP the same two in `tests/inbox.rs` and
+    `live_postgres.rs`, with the window route, Meta's refusal of a
+    receipt, the scope, M1.3's table, M1.5's sentinel and M1.7's log
+    capture over the new routes.
+  - No new setting and no new stored name.
+
 - **Live updates in the service** (roadmap M2b; design §4.5, D39–D43
   decided by the coordinator on 2026-11-01;
   parity row 10, categories 19 and 39, coverage row 33).
@@ -644,7 +723,7 @@ stored data, the owner's).
   their names pending the owner's confirmation). A new error code, `409
   signup_not_configured` (no `WA_APP_ID` or `WA_ES_CONFIG_ID`). The token,
   the PIN, the code and the state are in no answer, log, error, audit
-  event or row. The OpenAPI document is additive only (844 lines added,
+  event or row. The OpenAPI document is additive only (852 lines added,
   one changed: a trailing comma). Decisive tests: acceptance tests M3.1
   to M3.4 in `tests/signup.rs` (M3.3 live on Postgres too), the log
   capture `tests/signup_logs.rs`, and the core's `conformance::signup`
@@ -2481,6 +2560,13 @@ stored data, the owner's).
 
 ### Changed
 
+- **The service's core** (roadmap P2): `messages::InteractiveAction::parameters`
+  is a `messages::ActionParameters` (a URL button's, or a payment
+  message's Meta object), not a `CtaUrlParameters`;
+  `messages::InteractiveType` gains `OrderDetails` and `OrderStatus`,
+  `model::Scope` `Payments`, `operation::Operation` the seven payment
+  operations. Code that matches on them exhaustively, or builds an
+  `InteractiveAction` with a URL button's parameters, must follow.
 - **Breaking — one shape for every open enum** (roadmap L20a, decided as
   OPEN_QUESTIONS #27, now closed). Every enum Meta may extend, 197 of them in
   `meta-whatsapp-client`, `meta-whatsapp-webhooks` and core, is now

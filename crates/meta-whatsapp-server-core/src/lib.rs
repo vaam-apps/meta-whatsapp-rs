@@ -15,7 +15,8 @@
 //! | [`messages`] | the message operations as services: the send request (free of any API toolkit), the recipient and E.164 rules, sending (the accepted message) and marking read |
 //! | [`numbers`] | the number operations as services: a number's live details, its business profile read and changed, disconnecting a WABA |
 //! | [`media`] | the media operations as services: an upload checked (type, size, file name) before any request, a download verified against Meta's SHA-256 (whole, or as a framework-free byte stream that ends before its last chunk on a mismatch), a deletion of the number's own media only |
-//! | [`inbox`] | the inbox operations as services: a number's conversations and one conversation's history, from its binding's start on (decision D10: a moved number's history hidden from its new tenant, never purged), and a reply through the library's inbox, checked against the 24-hour window and the thread's owner first ([`inbox::ReplyChecksByNumber`]: the checks per number) |
+//! | [`inbox`] | the inbox operations as services: a number's conversations and one conversation's history, from its binding's start on (decision D10: a moved number's history hidden from its new tenant, never purged), and a reply through the library's inbox, checked against the 24-hour window and the thread's owner first ([`inbox::ReplyChecksByNumber`]: the checks per number); since roadmap M2g, a conversation's window as a reply would meet it, in the list too, marking a conversation read (a read receipt on request) and a message by id, each from the binding's start on |
+//! | [`payments`] | the payment operations as services (roadmap P2): a WABA's payment configurations (list, get, create, a new OAuth link, delete), a payment's lookup and its refund on a number, each configuration named looked for in the number's own WABA first |
 //! | [`templates`] | the template operations as services: the list (cached per WABA, [`templates::TemplateCache`]), the lookup of an id in a WABA, creation (the definition checked first), authentication templates in one or more languages, deletion |
 //! | [`otp`] | one-time passcodes as services, through the library's `OtpService`: a code sent from the tenant's sending number (its own, or the deployment's default OTP tenant's: decision D8), under the tenant's namespace, and a typed code checked |
 //! | [`signup`] | Embedded Signup as services, over the library's `EmbeddedSignup`: an attempt bound to the tenant, its completion (decision D4 on the claimed WABA, then in the library's approval, before anything is stored, subscribed or shared), the kept attempts and their resumption, in both partner modes; offboarding (a tenant's disconnection and `account_update` webhooks, the credit line revoked first), and the operator's explicit re-funding of a revoked business |
@@ -83,6 +84,7 @@ pub mod observe;
 pub mod operation;
 pub mod otp;
 pub mod outbox;
+pub mod payments;
 pub mod ratelimit;
 pub mod request;
 pub mod signup;

@@ -835,7 +835,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 9] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 10] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -907,6 +907,8 @@ impl Sample {
                 "message_id" => SAMPLE_MESSAGE_ID,
                 "contact" => SAMPLE_CONTACT,
                 "media_id" => SAMPLE_MEDIA_ID,
+                "configuration_name" => SAMPLE_PAYMENT_CONFIGURATION,
+                "reference_id" => SAMPLE_REFERENCE_ID,
                 _ => "placeholder",
             });
             rest = &rest[end + 1..];
@@ -927,6 +929,12 @@ pub const SAMPLE_MEDIA_ID: &str = "1037543291543636";
 
 /// A template id (`templates/template-management`).
 pub const SAMPLE_TEMPLATE_ID: &str = "1407680676729941";
+
+/// A payment configuration's name (`payments/payments-in/onboarding-apis`).
+pub const SAMPLE_PAYMENT_CONFIGURATION: &str = "test-payment-configuration";
+
+/// An order's `reference_id` (`payments/payments-in/pg`).
+pub const SAMPLE_REFERENCE_ID: &str = "BM345A-12";
 
 /// The phone number every sample send goes to (`messages/text-messages`).
 pub const SAMPLE_TO: &str = "+16505551234";
@@ -1003,6 +1011,21 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "add_security_recommendation": true,
             "code_expiration_minutes": 10
         }),
+        // payments-in/onboarding-apis, "Create a payment configuration".
+        ("POST", "/v1/wabas/{waba_id}/payment-configurations") => serde_json::json!({
+            "configuration_name": SAMPLE_PAYMENT_CONFIGURATION,
+            "purpose_code": "00",
+            "merchant_category_code": "0000",
+            "provider_name": "razorpay",
+            "redirect_url": "https://test-redirect-url.com"
+        }),
+        // payments-in/pg, "Step 8: Refunds".
+        ("POST", "/v1/numbers/{pn}/payments/refunds") => serde_json::json!({
+            "reference_id": SAMPLE_REFERENCE_ID,
+            "speed": "normal",
+            "payment_config_id": SAMPLE_PAYMENT_CONFIGURATION,
+            "amount": {"currency": "INR", "value": "100", "offset": "100"}
+        }),
         ("POST" | "PATCH" | "PUT", _) => serde_json::json!({}),
         _ => return None,
     })
@@ -1031,6 +1054,15 @@ pub fn sample_call(operation: &Operation, sample: &Sample, key: Option<&str>) ->
     }
     if let Some(body) = sample_body(&operation.method, &operation.template) {
         call = call.json(&body);
+    }
+    // A refund requires an `Idempotency-Key` (design D56): a fresh one per
+    // call, so that no call replays another's answer.
+    if (operation.method.as_str(), operation.template.as_str())
+        == ("POST", "/v1/numbers/{pn}/payments/refunds")
+    {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        call = call.header("idempotency-key", &format!("sample-refund-{n}"));
     }
     call
 }

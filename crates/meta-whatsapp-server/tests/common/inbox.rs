@@ -73,7 +73,19 @@ pub async fn m2_1(h: &Harness) {
     assert_eq!(conversation["contact"], EXAMPLE_WA_ID);
     assert_eq!(conversation["last_text"], EXAMPLE_TEXT);
     assert_eq!(conversation["unread"], 1);
+    // Roadmap M2g: the list's window, open for 24 hours from the message.
+    assert_eq!(conversation["window"]["open"], true, "{listed}");
     let sent_at = conversation["last_inbound_at"].as_str().unwrap().to_owned();
+    let closes =
+        time::OffsetDateTime::parse(&sent_at, &time::format_description::well_known::Rfc3339)
+            .unwrap()
+            + time::Duration::hours(24);
+    assert_eq!(
+        conversation["window"]["closes_at"],
+        closes
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+    );
     assert_eq!(conversation["last_message_at"], sent_at.as_str());
     let history_path = format!("/v1/numbers/{pn}/conversations/{EXAMPLE_WA_ID}/messages");
     let history = read(h, &key, &history_path).await;
@@ -360,4 +372,245 @@ pub async fn a_number_migrated_between_two_tenants_wabas_hides_its_history(h: &H
         !read_history.to_string().contains("1 Hacker Way"),
         "{read_history}"
     );
+}
+
+/// `POST …/{contact}/read` with `key`, `body` (none: an empty body) and
+/// `idempotency_key` (none: no header).
+pub fn mark_read(
+    key: &str,
+    pn: &str,
+    contact: &str,
+    body: Option<&Value>,
+    idempotency_key: Option<&str>,
+) -> Call {
+    let mut call = Call::new(
+        Method::POST,
+        format!("/v1/numbers/{pn}/conversations/{contact}/read"),
+    )
+    .key(key);
+    if let Some(body) = body {
+        call = call.json(body);
+    }
+    if let Some(idempotency_key) = idempotency_key {
+        call = call.header("idempotency-key", idempotency_key);
+    }
+    call
+}
+
+/// Roadmap M2g over HTTP, decisive: merchant-a's customer writes; the WABA
+/// moves to merchant-b, whose key gets `404` for merchant-a's message by
+/// id (the body of an id the number never had), a window neither open nor
+/// dated, and a `204` for marking the conversation read with
+/// `notify_customer` that sent Meta nothing; once the customer writes to
+/// merchant-b, its message is found, its window open, and its receipt sent
+/// with merchant-b's own token.
+#[allow(clippy::too_many_lines)] // a scenario: it reads top to bottom
+pub async fn the_previous_holders_message_window_and_receipt_never_reach_the_new_holder(
+    h: &Harness,
+) {
+    let (waba, pn) = (EXAMPLE_WABA, EXAMPLE_PN);
+    h.tenant("merchant-a").await;
+    h.tenant("merchant-b").await;
+    h.connect("merchant-a", waba, &[pn], "TOKEN-OF-A").await;
+    let a_key = h.tenant_key("merchant-a", &[Scope::Inbox]).await;
+    let mut before = dated(text(waba, pn, "wamid.M2G-A"), now());
+    before["entry"][0]["changes"][0]["value"]["messages"][0]["text"]["body"] =
+        json!("My address is 1 Hacker Way");
+    assert_eq!(h.webhook(&bytes(&before)).await.status, StatusCode::OK);
+    let by_id = |id: &str| format!("/v1/numbers/{pn}/messages/{id}");
+    let window = format!("/v1/numbers/{pn}/conversations/{EXAMPLE_WA_ID}/window");
+    let theirs = read(h, &a_key, &by_id("wamid.M2G-A")).await;
+    assert_eq!(theirs["contact"], EXAMPLE_WA_ID);
+    assert_eq!(theirs["message"]["id"], "wamid.M2G-A");
+    assert_eq!(read(h, &a_key, &window).await["open"], true, "A's window");
+
+    // The move.
+    assert!(
+        h.store
+            .unbind_waba(&WabaId::new(waba).unwrap())
+            .await
+            .unwrap()
+    );
+    h.connect("merchant-b", waba, &[pn], "TOKEN-OF-B").await;
+    let b_key = h.tenant_key("merchant-b", &[Scope::Inbox]).await;
+    let hidden = h.call(Call::get(by_id("wamid.M2G-A")).key(&b_key)).await;
+    let missing = h.call(Call::get(by_id("wamid.NEVER")).key(&b_key)).await;
+    assert_eq!(
+        (hidden.status, hidden.code().as_str()),
+        (StatusCode::NOT_FOUND, "not_found"),
+        "the previous holder's message, shown to the new one: {}",
+        hidden.text
+    );
+    let (mut hidden, mut missing) = (hidden.json(), missing.json());
+    hidden["error"]["request_id"] = Value::Null;
+    missing["error"]["request_id"] = Value::Null;
+    assert_eq!(hidden, missing, "a hidden message looks like a missing one");
+    assert!(!hidden.to_string().contains("Hacker Way"));
+    assert_eq!(
+        read(h, &b_key, &window).await,
+        json!({"open": false, "closes_at": null}),
+        "the previous holder's customer's window, shown to the new one"
+    );
+    let marked = h
+        .call(mark_read(
+            &b_key,
+            pn,
+            EXAMPLE_WA_ID,
+            Some(&json!({"notify_customer": true})),
+            Some("m2g:read:1"),
+        ))
+        .await;
+    assert_eq!(marked.status, StatusCode::NO_CONTENT, "{}", marked.text);
+    assert!(
+        h.graph.requests().is_empty(),
+        "a receipt for the previous holder's message: {:?}",
+        h.graph.requests()
+    );
+
+    // The customer writes to merchant-b (after a move, an event of the
+    // binding's own second reaches nobody: the next one).
+    let at = now() + 1;
+    let after = dated(text(waba, pn, "wamid.M2G-B"), at);
+    assert_eq!(h.webhook(&bytes(&after)).await.status, StatusCode::OK);
+    let ours = read(h, &b_key, &by_id("wamid.M2G-B")).await;
+    assert_eq!(ours["message"]["direction"], "inbound");
+    let shown = read(h, &b_key, &window).await;
+    assert_eq!(shown["open"], true, "{shown}");
+    let closes = time::OffsetDateTime::from_unix_timestamp(at + 24 * 3600)
+        .unwrap()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    assert_eq!(shown["closes_at"], closes.as_str());
+    let listed = read(h, &b_key, &format!("/v1/numbers/{pn}/conversations")).await;
+    assert_eq!(listed["data"][0]["window"], shown, "the list's window");
+    h.graph.push_json(200, json!({"success": true}));
+    let marked = h
+        .call(mark_read(
+            &b_key,
+            pn,
+            EXAMPLE_WA_ID,
+            Some(&json!({"notify_customer": true})),
+            Some("m2g:read:2"),
+        ))
+        .await;
+    assert_eq!(marked.status, StatusCode::NO_CONTENT, "{}", marked.text);
+    let [receipt] = h.graph.requests().try_into().unwrap();
+    assert_eq!(receipt.bearer(), Some("TOKEN-OF-B"), "merchant-b's token");
+    assert_eq!(receipt.json().unwrap()["message_id"], "wamid.M2G-B");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// Roadmap M2g over HTTP, decisive: the read route. Without a body, the
+/// unread count is reset and Meta asked nothing; with `notify_customer`
+/// and an `Idempotency-Key`, `unread` is 0 and Meta got one read receipt,
+/// Meta's documented request with the merchant's token, for the latest
+/// inbound message only (not the merchant's reply recorded after it); the
+/// same key and body replay the `204` (`Idempotent-Replayed`) with no
+/// second receipt, another body under it is `422 idempotency_key_reused`;
+/// a body with an unknown field is `422 body`, with nothing reset.
+#[allow(clippy::too_many_lines)] // a scenario: it reads top to bottom
+pub async fn the_read_route_resets_unread_and_receipts_the_latest_inbound_message(h: &Harness) {
+    let (waba, pn) = (EXAMPLE_WABA, EXAMPLE_PN);
+    h.tenant("merchant-42").await;
+    h.connect("merchant-42", waba, &[pn], TOKEN).await;
+    let key = h.tenant_key("merchant-42", &[Scope::Inbox]).await;
+    let at = now();
+    for (i, wamid) in ["wamid.READ-1", "wamid.READ-2"].into_iter().enumerate() {
+        let body = dated(text(waba, pn, wamid), at + i64::try_from(i).unwrap());
+        assert_eq!(h.webhook(&bytes(&body)).await.status, StatusCode::OK);
+    }
+    h.clock
+        .set(time::OffsetDateTime::now_utc() + time::Duration::seconds(5));
+    let conversations = format!("/v1/numbers/{pn}/conversations");
+    let unread = async || read(h, &key, &conversations).await["data"][0]["unread"].clone();
+    assert_eq!(unread().await, 2);
+    h.graph.push_json(200, accepted("wamid.READ-REPLY"));
+    let replied = h
+        .call(reply(&key, pn, EXAMPLE_WA_ID, "read:reply", "Checking"))
+        .await;
+    assert_eq!(replied.status, StatusCode::ACCEPTED, "{}", replied.text);
+
+    // No body: reset, nothing asked.
+    let plain = h.call(mark_read(&key, pn, EXAMPLE_WA_ID, None, None)).await;
+    assert_eq!(plain.status, StatusCode::NO_CONTENT, "{}", plain.text);
+    assert!(plain.text.is_empty());
+    assert!(plain.headers.get("content-type").is_none());
+    assert_eq!(unread().await, 0);
+    assert_eq!(h.graph.requests().len(), 1, "no receipt asked");
+
+    // A new message, then a body the route does not take.
+    let later = dated(text(waba, pn, "wamid.READ-3"), at + 2);
+    assert_eq!(h.webhook(&bytes(&later)).await.status, StatusCode::OK);
+    assert_eq!(unread().await, 1);
+    let unknown = h
+        .call(mark_read(
+            &key,
+            pn,
+            EXAMPLE_WA_ID,
+            Some(&json!({"notify_customer": true, "typing_indicator": true})),
+            None,
+        ))
+        .await;
+    assert_eq!(
+        (unknown.status, unknown.json()["error"]["field"].as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some("body"))
+    );
+    assert_eq!(unread().await, 1, "nothing reset");
+
+    // With notify_customer, under a key.
+    let notify = json!({"notify_customer": true});
+    h.graph.push_json(200, json!({"success": true}));
+    let first = h
+        .call(mark_read(
+            &key,
+            pn,
+            EXAMPLE_WA_ID,
+            Some(&notify),
+            Some("ticket-881:read"),
+        ))
+        .await;
+    assert_eq!(first.status, StatusCode::NO_CONTENT, "{}", first.text);
+    assert_eq!(unread().await, 0);
+    let requests = h.graph.requests();
+    assert_eq!(requests.len(), 2, "one read receipt");
+    assert_eq!(requests[1].method, Method::POST);
+    assert_eq!(requests[1].path(), format!("/v25.0/{pn}/messages"));
+    assert_eq!(requests[1].bearer(), Some(TOKEN), "the merchant's token");
+    assert_eq!(
+        requests[1].json().unwrap(),
+        json!({
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": "wamid.READ-3"
+        }),
+        "the latest inbound message only"
+    );
+    // The same request, the contact percent-encoded: replayed.
+    let again = h
+        .call(mark_read(
+            &key,
+            pn,
+            "%31%36%35%30%35%35%35%31%32%33%34",
+            Some(&notify),
+            Some("ticket-881:read"),
+        ))
+        .await;
+    assert_eq!(again.status, StatusCode::NO_CONTENT, "{}", again.text);
+    assert_eq!(again.headers.get("idempotent-replayed").unwrap(), "true");
+    assert!(again.headers.get("content-type").is_none());
+    assert_eq!(h.graph.requests().len(), 2, "a second receipt was sent");
+    let other = h
+        .call(mark_read(
+            &key,
+            pn,
+            EXAMPLE_WA_ID,
+            None,
+            Some("ticket-881:read"),
+        ))
+        .await;
+    assert_eq!(
+        (other.status, other.code().as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, "idempotency_key_reused")
+    );
+    assert_eq!(h.graph.remaining(), 0);
 }
