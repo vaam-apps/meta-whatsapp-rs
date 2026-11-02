@@ -21,7 +21,7 @@
 //! [`meta_whatsapp_server_core::registration::verification_code`]). The
 //! answers name the number and what was done, nothing of the request.
 
-use meta_whatsapp_rs::client::phone_numbers::CodeMethod;
+use meta_whatsapp_rs::client::phone_numbers::{CodeMethod, DataLocalizationRegion};
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::State;
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
@@ -315,7 +315,7 @@ pub(crate) async fn register_number(
     // Never over the PIN (decision D6): the record holds nothing of it.
     let fingerprint = Fingerprint::register_number(
         owned.phone_number_id(),
-        region.as_ref().map(|region| region.as_str()),
+        region.as_ref().map(DataLocalizationRegion::as_str),
     );
     let operation = async {
         registration(&state, &caller, &owned)?

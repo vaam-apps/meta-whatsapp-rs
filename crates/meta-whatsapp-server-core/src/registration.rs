@@ -201,11 +201,11 @@ pub struct AttemptLimit {
 /// Every budget's limit, per number, shared by every replica.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AttemptLimits {
-    /// [`AttemptBudget::Registration`]: `WA_SERVER_REGISTRATION_ATTEMPTS`
-    /// and `WA_SERVER_REGISTRATION_WINDOW`.
+    /// The [`AttemptBudget::Registration`] budget
+    /// (`WA_SERVER_REGISTRATION_ATTEMPTS`, `WA_SERVER_REGISTRATION_WINDOW`).
     pub registration: AttemptLimit,
-    /// [`AttemptBudget::Verification`]: `WA_SERVER_VERIFICATION_ATTEMPTS`
-    /// and `WA_SERVER_VERIFICATION_WINDOW`.
+    /// The [`AttemptBudget::Verification`] budget
+    /// (`WA_SERVER_VERIFICATION_ATTEMPTS`, `WA_SERVER_VERIFICATION_WINDOW`).
     pub verification: AttemptLimit,
 }
 
@@ -649,7 +649,7 @@ mod tests {
         let (counters, clock, _) = attempts(AttemptLimits {
             registration: AttemptLimit {
                 attempts: 2,
-                window: Duration::from_secs(3600),
+                window: Duration::from_hours(1),
             },
             ..AttemptLimits::default()
         });
@@ -660,7 +660,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        clock.advance(Duration::from_secs(600));
+        clock.advance(Duration::from_mins(10));
         let refused = counters
             .charge(AttemptBudget::Registration, &a)
             .await
@@ -682,7 +682,7 @@ mod tests {
             .await
             .unwrap();
         // The window's end: a new one, with this attempt.
-        clock.advance(Duration::from_secs(3000));
+        clock.advance(Duration::from_mins(50));
         counters
             .charge(AttemptBudget::Registration, &a)
             .await

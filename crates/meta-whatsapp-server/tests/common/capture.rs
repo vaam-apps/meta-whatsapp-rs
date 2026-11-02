@@ -553,10 +553,6 @@ pub const CONTACT_PHONE: &str = "+1 (940) 555-1234";
 pub const CALLBACK_DATA: &str = "order:1234:shipped";
 pub const IDEMPOTENCY_KEY: &str = "order-1234-shipped-notice";
 
-/// The M1b routes, each exercised, with the tokens, text, recipients and
-/// contacts M1.7 forbids in the logs; returns the key it minted and what
-/// must not be logged.
-#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 /// The registration routes (roadmap M3d), each with a PIN or a code in
 /// its body, and a refusal whose texts quote the PIN: the PIN and the code
 /// are secrets, looked for as a leaked string, JSON value or Meta text
@@ -617,6 +613,10 @@ async fn registration(h: &Harness, tenant_key: &str) -> Vec<String> {
     secrets
 }
 
+/// The M1b routes, each exercised, with the tokens, text, recipients and
+/// contacts M1.7 forbids in the logs; returns the key it minted and what
+/// must not be logged.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
     let minted = h
         .call(

@@ -169,14 +169,14 @@ pub async fn record(h: &Harness, key: &str) -> IdempotencyRecord {
             &IdempotencyKey::parse(key).unwrap(),
             &[0; 32],
             "probe",
-            Duration::from_secs(60),
-            Duration::from_secs(3600),
+            Duration::from_mins(1),
+            Duration::from_hours(1),
         )
         .await
         .unwrap();
     match claimed {
         IdempotencyClaim::Existing(record) => record,
-        other => panic!("{key}: no record ({other:?})"),
+        other @ IdempotencyClaim::Claimed => panic!("{key}: no record ({other:?})"),
     }
 }
 
@@ -236,7 +236,10 @@ pub fn logs_hold_no_secret(logs: &str) {
 /// own token.
 pub fn meta_got_the_secrets(h: &Harness) {
     let requests = h.graph.requests();
-    let bodies: Vec<Value> = requests.iter().filter_map(|r| r.json()).collect();
+    let bodies: Vec<Value> = requests
+        .iter()
+        .filter_map(meta_whatsapp_rs::core::testing::RecordedRequest::json)
+        .collect();
     assert!(bodies.contains(&json!({"messaging_product": "whatsapp", "pin": PIN})));
     assert!(bodies.contains(&json!({"messaging_product": "whatsapp", "pin": WRONG_PIN})));
     assert!(bodies.contains(&json!({"code": CODE_DIGITS})));

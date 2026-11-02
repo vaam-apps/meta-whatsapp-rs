@@ -188,7 +188,7 @@ async fn a_registrations_pin_and_code_are_in_no_store_and_no_answer() {
             IdempotencyState::Completed { body, .. } => {
                 flow::holds_no_secret(body, &format!("{key}'s kept answer"));
             }
-            other => panic!("{key}: {other:?}"),
+            other @ IdempotencyState::InProgress { .. } => panic!("{key}: {other:?}"),
         }
     }
     // The registrations' records hold the number's fingerprint, which no
