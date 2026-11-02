@@ -52,13 +52,24 @@ cargo build --release -p meta-whatsapp-server
 ```
 
 The binary composes the service's crates by its Cargo features, all on
-by default:
+by default but `api-cratestack`:
 
 | Feature | Compiles in | Without it |
 | --- | --- | --- |
-| `api-axum` | the `/v1` API and its OpenAPI document (`meta-whatsapp-server-api-axum`) | the build fails: it is the only API adapter |
+| `api-axum` | the `/v1` API and its OpenAPI document (`meta-whatsapp-server-api-axum`) | the build fails: it is the API adapter the internal listener serves |
 | `store-postgres` | the Postgres backend and its migrations (`meta-whatsapp-server-store-postgres`), and sqlx | a set `DATABASE_URL` is refused at start, naming the feature |
 | `store-memory` | memory storage, `WA_SERVER_ENV=development` only (`meta-whatsapp-server-store-memory`) | development without `DATABASE_URL` is refused at start, naming the feature |
+| `api-cratestack` (not a default; its name is pending the owner's confirmation before the first release) | the CrateStack API adapter (`meta-whatsapp-server-api-cratestack`, [roadmap](../roadmap.md) S10): one procedure, `version`, which nothing serves yet; CrateStack and its dependencies, `ring` among them | nothing changes: no route uses it before S13 |
+
+Every command first installs aws-lc-rs as rustls' process-default
+crypto provider, unless one is installed already (`meta_whatsapp_server::tls`,
+design D20 (b)): a build with `api-cratestack` compiles both of rustls'
+providers in, `ring` through CrateStack's HTTP client, and rustls cannot
+choose between them by itself. An integrator who runs the service from
+their own binary without `cli::run_with` calls
+`tls::install_default_provider()` first, or installs the provider they
+prefer before it. Postgres TLS is unaffected: sqlx names its provider
+itself (aws-lc-rs).
 
 A production binary without memory storage, or a development one
 without sqlx in its build:

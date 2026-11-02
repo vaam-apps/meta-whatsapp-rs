@@ -472,8 +472,10 @@ The owner's definition (2026-09-26):
 item, each naming its crate, what it comes after and its decisive test:
 
 - **The service's modular split** (S1–S18 and U1–U4, design D26): a framework-free
-  core with ports, CrateStack as the default API and store once the
-  owner accepts design D20 (a), the axum API (permanent, the swap
+  core with ports, CrateStack as the default API and store once S16
+  flips them (its licence, design D20 (a), decided by the owner on
+  2026-11-02: yes; CrateStack in the workspace since S10, one procedure,
+  not served), the axum API (permanent, the swap
   target) and the sqlx store kept, MongoDB later. Row 112, and the
   ground every service milestone below builds on.
 - **The bot framework**, a new library crate `meta-whatsapp-bot`:

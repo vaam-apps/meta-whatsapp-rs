@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# TEST-ONLY TLS material for the `rediss://` live tests (roadmap L21c): a CA,
-# a server certificate (localhost, 127.0.0.1, redis-tls) and a client
-# certificate, both signed by that CA, valid for 30 days. Nothing here is
-# committed: the files go to $1, by default .test-tls/ at the repository
-# root (gitignored).
+# TEST-ONLY TLS material for the `rediss://` live tests (roadmap L21c) and
+# the test Postgres's TLS (roadmap S10): a CA, a server certificate
+# (localhost, 127.0.0.1, redis-tls) and a client certificate, both signed by
+# that CA, valid for 30 days. Nothing here is committed: the files go to $1,
+# by default .test-tls/ at the repository root (gitignored).
 #
 # Used by `just test-live` before it starts compose.test.yaml, and by the
 # devcontainer's `initializeCommand` before its sidecars start: the
 # redis-tls service reads the server files, the tests the CA and the client
-# files. The CA key is deleted once both certificates are signed, so nothing
-# else can be signed with it; the other keys are left world-readable, so the
-# Redis container's own user can read them. Never use these anywhere else.
+# files; the postgres service serves the same server certificate, which
+# `sslmode=require` encrypts with but does not verify. The CA key is deleted
+# once both certificates are signed, so nothing else can be signed with it;
+# the other keys are left world-readable, so the Redis container's own user
+# can read them (the postgres service copies its key to a 0600 file first,
+# as Postgres requires). Never use these anywhere else.
 #
 # Does nothing while every file is there and the certificates are good for
 # another day; otherwise regenerates all of them. Plain `openssl req` and

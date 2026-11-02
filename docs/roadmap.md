@@ -62,10 +62,10 @@ ports are made right for any backend (S1–S6), then the crates split
 (S7), then MongoDB (S8, S9, S17, S18) and CrateStack (S10–S16) are
 added behind them. `/v1` stays served, and `openapi/v1.json` stays
 byte-identical, until the default flips (S16); after it,
-`meta-whatsapp-server-api-axum` keeps both, as the swap target. The
-CrateStack defaults of D26 hold once the owner accepts D20 (a); until
-then, and for good if the owner refuses, the defaults stay `api-axum`
-and `store-postgres`.
+`meta-whatsapp-server-api-axum` keeps both, as the swap target. D20
+(a), CrateStack's licence, was decided by the owner on 2026-11-02: yes,
+so the CrateStack defaults of D26 hold once S16 flips them; until then
+the defaults stay `api-axum` and `store-postgres`.
 
 - [x] **S1. Extract `meta-whatsapp-server-core`** (new crate, depending
   on the facade with `default-features = false`): the model, keys, event
@@ -1389,13 +1389,13 @@ and `store-postgres`.
   - **Decisive:** each issue carries a minimal `.cstack` schema and the
     statement our store needs that it cannot express; design §8.6 links
     every one of them.
-- [ ] **S10. CrateStack enters the workspace** (D20; the workspace
+- [x] **S10. CrateStack enters the workspace** (D20; the workspace
   manifest, `deny.toml`, `meta-whatsapp-server`): the `deny.toml`
   licence exception for BlueOak-1.0.0 scoped to `minicbor` and
   `minicbor-serde`, aws-lc-rs installed as rustls's process default at
   start, a minimal `meta-whatsapp-server-api-cratestack` with one
-  procedure, not the default. A refusal of D20 (a) means no CrateStack
-  in the build: S10–S16 do not happen.
+  procedure, not the default. D20 (a) was decided by the owner on
+  2026-11-02: yes, so S10–S16 go ahead.
   - **After:** S7. The owner's yes to D20 (a) came on 2026-11-02
     (BlueOak-1.0.0 allowed for `minicbor` and `minicbor-serde` only):
     this item adds that scoped exception to `deny.toml`, and nothing
@@ -1406,6 +1406,61 @@ and `store-postgres`.
     U2); a test that builds a rustls client configuration from the
     process default after start-up passes in that binary, and panics
     when the install is removed.
+  - **Landed:** `deny.toml` gains two `[[licenses.exceptions]]` entries,
+    BlueOak-1.0.0 for `minicbor` and for `minicbor-serde`, and no `allow`
+    entry: `just deny` exits 0, and 4 with the entries removed (both
+    crates rejected, nothing else). CrateStack comes from crates.io as
+    `cratestack-api` 0.17.2, its `db = None` facade, pinned in the
+    workspace manifest to `~0.17.2` under the key `cratestack` (its
+    macros' generated code names `::cratestack::` paths), without
+    default features but `codec-json`; it brings no sqlx. The new crate,
+    `meta-whatsapp-server-api-cratestack` (`publish = false`, a member,
+    not a default one), compiles `schema/api.cstack`
+    (`datasource { provider = "none" }`) with one procedure, `version`:
+    `POST /$procs/version`, `@allow(true)` and no key, as
+    `GET /v1/version`, answering its four fields (`server`,
+    `meta_whatsapp_rs_revision`, `graph_api_version`, `api_version`),
+    JSON only (D19: a CBOR caller gets `406`, a CBOR body `415`), a
+    1 KiB body bound of its own (`413` past it). Its `router(ApiVersion)`
+    returns an axum 0.8 router (the facade's axum, one crate), and its
+    tests pin the exact request and answer. The binary compiles it in
+    with a new feature, `api-cratestack`, not a default, re-exports it
+    as `meta_whatsapp_server::api_cratestack`, and does not serve it:
+    `api-axum` stays the default and the only adapter the internal
+    listener serves, and `openapi/v1.json` is unchanged; its
+    `tests/api_cratestack.rs` checks the procedure's answer equals
+    `GET /v1/version`'s on one state. CrateStack's HTTP client
+    (`cratestack-client-rust`) brings rustls with `ring`, so a build with
+    the feature compiles both providers into rustls (sqlx keeps
+    aws-lc-rs: `ring` reaches sqlx only with `cratestack-pg`, S14, until
+    U2). `meta_whatsapp_server::tls::install_default_provider` installs
+    aws-lc-rs as the process default unless one is installed already,
+    and `cli::run_with` calls it before every command. The service's
+    `tests/tls.rs` (built with `api-cratestack`):
+    `a_client_configuration_builds_from_the_process_default_after_start_up`
+    shows `ClientConfig::builder()` panicking before start-up (both
+    providers linked), runs the command line (`openapi`), then builds
+    one on the installed aws-lc-rs; with the install removed from
+    `run_with` it panics there with rustls' "Could not automatically
+    determine the process-level CryptoProvider".
+    `live_postgres_sslmode_require_with_both_providers_linked` connects
+    through `config::database` and `serve::connect` with
+    `sslmode=require` and reads `pg_stat_ssl` (a session without TLS
+    fails it). For it, the test Postgres of `compose.test.yaml` and the
+    devcontainer speaks TLS, on the test-only server certificate of
+    `tools/test-tls/generate.sh` (copied to a 0600 key in the container
+    first), and still accepts plain connections. `just features` checks
+    the new crate alone and the binary with `api-cratestack`.
+  - **Proposed** (for the coordinator to decide, AGENTS.md § Decisions;
+    each swappable): the procedure (`version`, mirroring an existing
+    no-key route); the adapter's `router(ApiVersion)` signature (S13
+    moves it to the state and its grant); the install in `cli::run_with`,
+    keeping a provider already installed; the 1 KiB body bound; the
+    re-export rather than serving the router before S13.
+  - **Pending the owner** (names before the first release): the
+    feature `api-cratestack`, the crate name
+    `meta-whatsapp-server-api-cratestack`, and the procedure's wire name
+    and fields (`/$procs/version`, the four above).
 - [ ] **S11. The system principal, a spike**
   (`meta-whatsapp-server-store-cratestack`, one model): CrateStack
   applies its policies to in-process calls too (its ADR 0018), so the
@@ -1418,7 +1473,8 @@ and `store-postgres`.
     the first.
 - [ ] **S12. A CrateStack upgrade cadence** (the workspace manifest, a
   scheduled CI job): the `cratestack*` crates pinned to one minor
-  (`~0.13`) and to one version between them; a weekly job that opens an
+  (`~0.13` when this was written; S10 pinned `cratestack-api` to
+  `~0.17.2`) and to one version between them; a weekly job that opens an
   issue when CrateStack releases a new minor; one upgrade PR per
   release, through the review pipeline.
   - **After:** S10.
@@ -5454,10 +5510,11 @@ design's (§9).
   third-party licences listed in the image (no `ffmpeg`: L19), a Compose
   smoke test, the default API adapter's TypeScript client published
   (D11: npm; publishing is the owner's), the documents route. The client
-  is S15's, generated by CrateStack; if the owner refuses D20 (a), it is
-  generated from `openapi/v1.json` by openapi-typescript, the `api-axum`
-  client of D26's swap.
-  - **After:** M2c, and S15 unless the owner refuses D20 (a).
+  is S15's, generated by CrateStack (D20 (a), decided by the owner on
+  2026-11-02: yes; the `api-axum` client of D26's swap stays generated
+  from `openapi/v1.json` by openapi-typescript).
+  - **After:** M2c and S15 (D20 (a) decided by the owner on 2026-11-02:
+    yes).
   - **Before the first release** (P2's security review, finding M2: a
     v1 client generated from the document before P2 types the admin key
     answers' `scopes` as the closed `Scope`, so `payments` falls outside
@@ -6110,8 +6167,8 @@ everything else goes into the parity-completion report.
 
 - **D20 (a)**, the BlueOak-1.0.0 licence of `minicbor`: **decided by
   the owner on 2026-11-02: yes**, for `minicbor` and `minicbor-serde`
-  only. S10 adds the scoped exception to `deny.toml` when CrateStack
-  enters the workspace; nothing waits on the owner for it any more.
+  only. S10 added the scoped exception to `deny.toml` when CrateStack
+  entered the workspace; nothing waits on the owner for it any more.
 - **The merges of U1–U3** in the owner's cratestack repository. S16's
   default flip waits on U1.
 - **Publishing**: to crates.io (parity row 115) and to npm (D11, M4).
@@ -6189,7 +6246,11 @@ everything else goes into the parity-completion report.
   collections `wa_server_events`, `wa_server_event_streams` and
   `wa_server_wabas`, their fields and their index names, added by a spike
   composed into no binary and awaiting confirmation, which S18 may still
-  change before then), for the same reason as L5's.
+  change before then; S10's binary feature `api-cratestack`, the crate
+  `meta-whatsapp-server-api-cratestack` and its procedure's wire name and
+  fields (`POST /$procs/version`: `server`, `meta_whatsapp_rs_revision`,
+  `graph_api_version`, `api_version`), added and served by nothing yet,
+  awaiting confirmation), for the same reason as L5's.
 - **CC0-1.0 for the MongoDB driver** (S9, then S17 and S18): the
   `mongodb` crate reaches `tiny-keccak` (CC0-1.0, a public-domain
   dedication, compiled into a proc-macro that runs at build time)
