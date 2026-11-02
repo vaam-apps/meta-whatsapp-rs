@@ -366,6 +366,19 @@ const CALLS_META: &[&str] = &[
     "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
     "GET /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
     "POST /v1/numbers/{pn}/payments/refunds",
+    // Roadmap M5b.
+    "PATCH /v1/wabas/{waba_id}/templates/{id}",
+    "POST /v1/wabas/{waba_id}/templates/{id}/unpause",
+    "GET /v1/wabas/{waba_id}/templates/{id}/compare",
+    "POST /v1/wabas/{waba_id}/templates/archive",
+    "POST /v1/wabas/{waba_id}/templates/unarchive",
+    "GET /v1/wabas/{waba_id}/templates/library",
+    "POST /v1/wabas/{waba_id}/templates/library",
+    "POST /v1/wabas/{waba_id}/templates/migrations",
+    "POST /v1/wabas/{waba_id}/template-groups",
+    "GET /v1/wabas/{waba_id}/template-groups/{group_id}",
+    "PATCH /v1/wabas/{waba_id}/template-groups/{group_id}",
+    "DELETE /v1/wabas/{waba_id}/template-groups/{group_id}",
 ];
 
 /// Operations whose call to Meta is best effort: whatever Meta answers,
@@ -400,6 +413,19 @@ const DETAILS_KEPT: &[&str] = &[
     "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
     "GET /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
     "POST /v1/numbers/{pn}/payments/refunds",
+    // Roadmap M5b.
+    "PATCH /v1/wabas/{waba_id}/templates/{id}",
+    "POST /v1/wabas/{waba_id}/templates/{id}/unpause",
+    "GET /v1/wabas/{waba_id}/templates/{id}/compare",
+    "POST /v1/wabas/{waba_id}/templates/archive",
+    "POST /v1/wabas/{waba_id}/templates/unarchive",
+    "GET /v1/wabas/{waba_id}/templates/library",
+    "POST /v1/wabas/{waba_id}/templates/library",
+    "POST /v1/wabas/{waba_id}/templates/migrations",
+    "POST /v1/wabas/{waba_id}/template-groups",
+    "GET /v1/wabas/{waba_id}/template-groups/{group_id}",
+    "PATCH /v1/wabas/{waba_id}/template-groups/{group_id}",
+    "DELETE /v1/wabas/{waba_id}/template-groups/{group_id}",
 ];
 
 /// Operations on an object named by id (a media id, a template id): Meta
@@ -410,6 +436,14 @@ const OBJECT_BY_ID: &[&str] = &[
     "GET /v1/numbers/{pn}/media/{media_id}",
     "DELETE /v1/numbers/{pn}/media/{media_id}",
     "GET /v1/wabas/{waba_id}/templates/{id}",
+    // Roadmap M5b: a template id looked for by its name first, a group
+    // read for its WABA first.
+    "PATCH /v1/wabas/{waba_id}/templates/{id}",
+    "POST /v1/wabas/{waba_id}/templates/{id}/unpause",
+    "GET /v1/wabas/{waba_id}/templates/{id}/compare",
+    "GET /v1/wabas/{waba_id}/template-groups/{group_id}",
+    "PATCH /v1/wabas/{waba_id}/template-groups/{group_id}",
+    "DELETE /v1/wabas/{waba_id}/template-groups/{group_id}",
     // A configuration named by its name (roadmap P2): in its WABA's path,
     // or looked for there before a lookup or a refund.
     "GET /v1/wabas/{waba_id}/payment-configurations/{configuration_name}",

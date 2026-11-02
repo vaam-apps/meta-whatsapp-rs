@@ -1388,6 +1388,41 @@ fn parameter_debug_redacts_text_and_codes() {
     assert!(debug.contains("[REDACTED]"));
 }
 
+/// A Flow button's `flow_token` identifies the Flow's session to the
+/// business's data endpoint: `Debug` hides it, on the action and on the
+/// template message holding it (alternate form too), while the wire still
+/// carries it, as for a Flow message (`a_flow_token_is_redacted_from_debug`
+/// in the messages' tests). Decisive: `ParameterAction`'s own `Debug` (a
+/// derived one prints the token; roadmap M5a's review found it so).
+#[test]
+fn a_flow_buttons_token_is_redacted_from_debug() {
+    const TOKEN: &str = "AQAAAAACS5FpgQ_cAAAAAD0QI3s.";
+    let m = TemplateMessage::new("book_table", "en_US").flow_button(
+        0,
+        Some(TOKEN.into()),
+        Some(json!({"guests": 2})),
+    );
+    for shown in [format!("{m:?}"), format!("{m:#?}")] {
+        assert!(!shown.contains(TOKEN), "{shown}");
+        assert!(shown.contains("[REDACTED]"), "{shown}");
+        assert!(shown.contains("guests"), "the rest is shown: {shown}");
+    }
+    let action = ParameterAction {
+        flow_token: Some(TOKEN.into()),
+        ..ParameterAction::default()
+    };
+    let shown = format!("{action:?}");
+    assert!(
+        shown.contains(r#"flow_token: Some("[REDACTED]")"#),
+        "{shown}"
+    );
+    assert!(format!("{:?}", ParameterAction::default()).contains("flow_token: None"));
+    assert_eq!(
+        serde_json::to_value(&m).unwrap()["components"][0]["parameters"][0]["action"]["flow_token"],
+        TOKEN
+    );
+}
+
 #[test]
 fn bad_button_index_is_a_parse_error() {
     let raw = json!({"type": "button", "sub_type": "url", "index": "first", "parameters": []});

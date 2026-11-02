@@ -785,9 +785,32 @@ pub struct DirectSendConfigObject {
     pub template_name: String,
 }
 
+/// A raw Meta object (a send's `template`) in a `Debug`: its keys, never
+/// its values, as [`ActionParameters`] shows an object (design D103): a
+/// template's Flow button carries the Flow's `flow_token`, and its
+/// parameters a customer's data or a one-time passcode.
+pub struct KeysOnly<'a>(pub &'a Option<Value>);
+
+impl std::fmt::Debug for KeysOnly<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            None => f.write_str("None"),
+            Some(Value::Object(object)) => f
+                .debug_struct("Object")
+                .field("keys", &object.keys().collect::<Vec<_>>())
+                .finish_non_exhaustive(),
+            Some(_) => f.write_str("Some(..)"),
+        }
+    }
+}
+
 /// A message to send, as the request carried it: `kind` (the request's
 /// `type`) names the one content object present.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Its `Debug` shows `template`'s keys only ([`KeysOnly`]): a template's
+/// Flow button carries the Flow's `flow_token` (roadmap M5b, the M5a
+/// review's finding).
+#[derive(Clone, PartialEq)]
 pub struct SendMessage {
     /// Who receives it.
     pub to: RecipientObject,
@@ -859,10 +882,59 @@ impl SendMessage {
     }
 }
 
+impl std::fmt::Debug for SendMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Every field named, so that a new one fails to compile here.
+        let Self {
+            to,
+            kind,
+            text,
+            image,
+            video,
+            audio,
+            document,
+            sticker,
+            location,
+            contacts,
+            reaction,
+            template,
+            interactive,
+            pin,
+            reply_to,
+            callback_data,
+            category,
+            ttl_seconds,
+            direct_send_config,
+        } = self;
+        f.debug_struct("SendMessage")
+            .field("to", to)
+            .field("kind", kind)
+            .field("text", text)
+            .field("image", image)
+            .field("video", video)
+            .field("audio", audio)
+            .field("document", document)
+            .field("sticker", sticker)
+            .field("location", location)
+            .field("contacts", contacts)
+            .field("reaction", reaction)
+            .field("template", &KeysOnly(template))
+            .field("interactive", interactive)
+            .field("pin", pin)
+            .field("reply_to", reply_to)
+            .field("callback_data", callback_data)
+            .field("category", category)
+            .field("ttl_seconds", ttl_seconds)
+            .field("direct_send_config", direct_send_config)
+            .finish()
+    }
+}
+
 /// A reply to a conversation, as the request carried it (roadmap M2a): a
 /// [`SendMessage`] without `to`, as the conversation names its contact.
 /// `kind` (the request's `type`) names the one content object present.
-#[derive(Debug, Clone, PartialEq)]
+/// Its `Debug` shows `template`'s keys only, as [`SendMessage`]'s does.
+#[derive(Clone, PartialEq)]
 pub struct ReplyMessage {
     /// Which content object follows.
     pub kind: MessageType,
@@ -975,6 +1047,52 @@ impl ReplyMessage {
             ttl_seconds,
             direct_send_config,
         }
+    }
+}
+
+impl std::fmt::Debug for ReplyMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Every field named, so that a new one fails to compile here.
+        let Self {
+            kind,
+            text,
+            image,
+            video,
+            audio,
+            document,
+            sticker,
+            location,
+            contacts,
+            reaction,
+            template,
+            interactive,
+            pin,
+            reply_to,
+            callback_data,
+            category,
+            ttl_seconds,
+            direct_send_config,
+        } = self;
+        f.debug_struct("ReplyMessage")
+            .field("kind", kind)
+            .field("text", text)
+            .field("image", image)
+            .field("video", video)
+            .field("audio", audio)
+            .field("document", document)
+            .field("sticker", sticker)
+            .field("location", location)
+            .field("contacts", contacts)
+            .field("reaction", reaction)
+            .field("template", &KeysOnly(template))
+            .field("interactive", interactive)
+            .field("pin", pin)
+            .field("reply_to", reply_to)
+            .field("callback_data", callback_data)
+            .field("category", category)
+            .field("ttl_seconds", ttl_seconds)
+            .field("direct_send_config", direct_send_config)
+            .finish()
     }
 }
 
@@ -2113,19 +2231,55 @@ fn request_field(library: &str) -> String {
 
 /// An object a message names by id, which Meta would find through any
 /// WABA the number's token reaches (a token may reach other tenants').
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum NamedObject<'m> {
     /// A Flow message's `flow_id`.
     Flow(&'m FlowId),
     /// A product message's `catalog_id` (one per message: a product
     /// carousel's cards share theirs, which the library checks).
     Catalog(&'m CatalogId),
+    /// The catalogs a template's product parameters name (a single-product
+    /// template's header, a product card carousel's cards; roadmap M5b,
+    /// left to it by M5a): every `catalog_id` the template as sent would
+    /// carry, at any depth, a parameter the library does not type
+    /// included, each of which must be the WABA's.
+    TemplateCatalogs(Vec<String>),
+}
+
+/// Every `catalog_id` in `value`, at any depth (a string, or a number
+/// written as one).
+fn catalog_ids(value: &Value, found: &mut Vec<String>) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                match (key.as_str(), value) {
+                    ("catalog_id", Value::String(id)) => found.push(id.clone()),
+                    ("catalog_id", Value::Number(id)) => found.push(id.to_string()),
+                    _ => catalog_ids(value, found),
+                }
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| catalog_ids(item, found)),
+        _ => {}
+    }
 }
 
 /// The object `message` names by id, if any. A Flow named by `flow_name`
 /// is Meta's to find within the sending number's WABA; a
 /// `catalog_message` names none (Meta shows the WABA's own catalog).
 fn named_object(message: &OutboundMessage) -> Option<NamedObject<'_>> {
+    if let MessageContent::Template(template) = &message.content {
+        // What Meta would receive, so that a parameter in a catch-all is
+        // read as well as a typed one.
+        let mut found = Vec::new();
+        catalog_ids(
+            &serde_json::to_value(template).unwrap_or(Value::Null),
+            &mut found,
+        );
+        found.sort_unstable();
+        found.dedup();
+        return (!found.is_empty()).then_some(NamedObject::TemplateCatalogs(found));
+    }
     let MessageContent::Interactive(interactive) = &message.content else {
         return None;
     };
@@ -2186,6 +2340,15 @@ pub(crate) async fn admit_named_object(
             .product_catalogs(&[])
             .await
             .map(|page| page.data.iter().any(|catalog| catalog.id == *id)),
+        Some(NamedObject::TemplateCatalogs(ids)) => number
+            .client()
+            .waba(number.waba_id().clone())
+            .product_catalogs(&[])
+            .await
+            .map(|page| {
+                ids.iter()
+                    .all(|id| page.data.iter().any(|catalog| catalog.id.as_str() == id))
+            }),
     };
     match checked {
         Ok(true) => Ok(()),
@@ -2634,6 +2797,51 @@ mod tests {
         assert!(!shown.contains(token), "{shown}");
         assert_eq!(
             serde_json::to_value(&built).unwrap()["interactive"]["action"]["parameters"]["flow_token"],
+            token
+        );
+    }
+
+    /// A template's Flow button carries the Flow's `flow_token` (Meta's
+    /// `flows/guides/flows-templates`): the request's raw `template` shows
+    /// its keys only in `Debug`, on a send and on a reply, and the library's
+    /// message built from it hides the token too (its `ParameterAction`'s
+    /// `Debug`), while Meta still receives it. Roadmap M5b fixes what the
+    /// M5a review found. Decisive: `SendMessage`'s and `ReplyMessage`'s own
+    /// `Debug` (a derived one prints the object), and the library's
+    /// `ParameterAction`'s.
+    #[test]
+    fn a_templates_flow_token_never_reaches_debug() {
+        use serde_json::json;
+        let token = "SECRET-TEMPLATE-FLOW-TOKEN-1";
+        let template = json!({"name": "book_table", "language": {"code": "en_US"},
+            "components": [{"type": "button", "sub_type": "flow", "index": "0",
+                "parameters": [{"type": "action", "action": {"flow_token": token,
+                    "flow_action_data": {"guests": 2}}}]}]});
+        let mut send = SendMessage::new(phone("+16505551234"), MessageType::Template);
+        send.template = Some(template.clone());
+        let mut reply = ReplyMessage::new(MessageType::Template);
+        reply.template = Some(template);
+        for shown in [
+            format!("{send:?}"),
+            format!("{send:#?}"),
+            format!("{reply:?}"),
+            format!("{reply:#?}"),
+        ] {
+            assert!(!shown.contains(token), "{shown}");
+            assert!(
+                shown.contains("components") && shown.contains("language"),
+                "the keys are shown: {shown}"
+            );
+        }
+        assert!(format!("{:?}", KeysOnly(&None)).contains("None"));
+        assert!(!format!("{:?}", KeysOnly(&Some(json!(token)))).contains(token));
+        let built = message(send).unwrap();
+        for shown in [format!("{built:?}"), format!("{built:#?}")] {
+            assert!(!shown.contains(token), "{shown}");
+        }
+        assert_eq!(
+            serde_json::to_value(&built).unwrap()["template"]["components"][0]["parameters"][0]["action"]
+                ["flow_token"],
             token
         );
     }

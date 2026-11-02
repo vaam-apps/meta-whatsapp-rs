@@ -893,7 +893,9 @@ pub struct DirectSendConfig {
 }
 
 /// A message to send: `type` names the one content object present.
-#[derive(Debug, Deserialize, ToSchema)]
+// Its `Debug` shows `template`'s keys only (a template's Flow button
+// carries the Flow's `flow_token`; roadmap M5b).
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SendMessage {
     /// Who receives it.
@@ -940,6 +942,54 @@ pub struct SendMessage {
     pub ttl_seconds: Option<u32>,
     /// Direct Send's business-named template (`utility` only).
     pub direct_send_config: Option<DirectSendConfig>,
+}
+
+impl std::fmt::Debug for SendMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Every field named, so that a new one fails to compile here.
+        let Self {
+            to,
+            kind,
+            text,
+            image,
+            video,
+            audio,
+            document,
+            sticker,
+            location,
+            contacts,
+            reaction,
+            template,
+            interactive,
+            pin,
+            reply_to,
+            callback_data,
+            category,
+            ttl_seconds,
+            direct_send_config,
+        } = self;
+        f.debug_struct("SendMessage")
+            .field("to", to)
+            .field("kind", kind)
+            .field("text", text)
+            .field("image", image)
+            .field("video", video)
+            .field("audio", audio)
+            .field("document", document)
+            .field("sticker", sticker)
+            .field("location", location)
+            .field("contacts", contacts)
+            .field("reaction", reaction)
+            .field("template", &domain::KeysOnly(template))
+            .field("interactive", interactive)
+            .field("pin", pin)
+            .field("reply_to", reply_to)
+            .field("callback_data", callback_data)
+            .field("category", category)
+            .field("ttl_seconds", ttl_seconds)
+            .field("direct_send_config", direct_send_config)
+            .finish()
+    }
 }
 
 // ─── The answer ──────────────────────────────────────────────────────────
@@ -1661,6 +1711,34 @@ mod tests {
         let shown = format!("{request:?}");
         assert!(!shown.contains(token), "{shown}");
         assert!(shown.contains("flow_token"), "{shown}");
+    }
+
+    /// A template's Flow button carries the Flow's token too
+    /// (`flows/guides/flows-templates`): the request's raw `template`
+    /// shows its keys only, on a send and on an inbox reply (roadmap M5b,
+    /// the M5a review's finding). Decisive: `SendMessage`'s and
+    /// `ReplyMessage`'s own `Debug` (a derived one prints the object).
+    #[test]
+    fn a_templates_flow_token_never_reaches_the_requests_debug() {
+        let token = "SECRET-TEMPLATE-FLOW-TOKEN-2";
+        let template = json!({"name": "book_table", "language": {"code": "en_US"},
+            "components": [{"type": "button", "sub_type": "flow", "index": "0",
+                "parameters": [{"type": "action", "action": {"flow_token": token}}]}]});
+        let send: SendMessage = serde_json::from_value(json!({
+            "to": {"phone": "+16505551234"}, "type": "template", "template": template
+        }))
+        .unwrap();
+        let reply: super::super::inbox::ReplyMessage =
+            serde_json::from_value(json!({"type": "template", "template": template})).unwrap();
+        for shown in [
+            format!("{send:?}"),
+            format!("{send:#?}"),
+            format!("{reply:?}"),
+            format!("{reply:#?}"),
+        ] {
+            assert!(!shown.contains(token), "{shown}");
+            assert!(shown.contains("components"), "the keys are shown: {shown}");
+        }
     }
 
     /// A type the service does not send is `unsupported_message_type`;

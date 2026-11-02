@@ -28,6 +28,8 @@ pub mod otp;
 pub mod payments;
 pub mod registration;
 pub mod signup;
+pub mod template_groups;
+pub mod template_lifecycle;
 pub mod templates;
 
 pub use meta_whatsapp_server_http::api::{
@@ -91,7 +93,7 @@ impl Modify for Security {
         (name = "registration", description = "A number's verification code, registration, deregistration and two-step PIN, the PIN typed per attempt and never stored (scope `numbers`)"),
         (name = "messages", description = "Sending messages and read receipts (scope `send`)"),
         (name = "media", description = "Uploading, downloading and deleting media (scope `media`)"),
-        (name = "templates", description = "Listing, creating and deleting message templates (scope `templates`)"),
+        (name = "templates", description = "Message templates (scope `templates`): listing, creating and deleting them; since roadmap M5b editing, unpausing, comparing, archiving and unarchiving them, the Template Library, migrations and template groups"),
         (name = "payments", description = "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"),
         (name = "inbox", description = "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"),
         (name = "erasure", description = "Erasing a customer on a number, from the inbox and the event outbox, journaled and audited: irreversible, only when called (scope `erasure`)"),
@@ -198,8 +200,27 @@ fn templates_routes() -> OpenApiRouter<Grant> {
             templates::create_template,
             templates::delete_templates
         ))
-        .routes(routes!(templates::get_template))
+        .routes(routes!(
+            templates::get_template,
+            template_lifecycle::edit_template
+        ))
         .routes(routes!(templates::create_authentication_template))
+        // Roadmap M5b.
+        .routes(routes!(template_lifecycle::unpause_template))
+        .routes(routes!(template_lifecycle::compare_templates))
+        .routes(routes!(template_lifecycle::archive_templates))
+        .routes(routes!(template_lifecycle::unarchive_templates))
+        .routes(routes!(
+            template_lifecycle::list_library_templates,
+            template_lifecycle::create_library_template
+        ))
+        .routes(routes!(template_lifecycle::migrate_templates))
+        .routes(routes!(template_groups::create_template_group))
+        .routes(routes!(
+            template_groups::get_template_group,
+            template_groups::update_template_group,
+            template_groups::delete_template_group
+        ))
 }
 
 fn otp_routes() -> OpenApiRouter<Grant> {
@@ -424,6 +445,11 @@ mod tests {
             ("messages.rs", include_str!("messages.rs")),
             ("payments.rs", include_str!("payments.rs")),
             ("templates.rs", include_str!("templates.rs")),
+            (
+                "template_lifecycle.rs",
+                include_str!("template_lifecycle.rs"),
+            ),
+            ("template_groups.rs", include_str!("template_groups.rs")),
             ("otp.rs", include_str!("otp.rs")),
             ("signup.rs", include_str!("signup.rs")),
         ];

@@ -121,7 +121,19 @@ impl RouteClass {
             | Operation::CreateTemplate
             | Operation::DeleteTemplates
             | Operation::GetTemplate
-            | Operation::CreateAuthenticationTemplate => Self::Templates,
+            | Operation::CreateAuthenticationTemplate
+            | Operation::EditTemplate
+            | Operation::ListLibraryTemplates
+            | Operation::CreateLibraryTemplate
+            | Operation::MigrateTemplates
+            | Operation::CompareTemplates
+            | Operation::UnpauseTemplate
+            | Operation::ArchiveTemplates
+            | Operation::UnarchiveTemplates
+            | Operation::CreateTemplateGroup
+            | Operation::GetTemplateGroup
+            | Operation::UpdateTemplateGroup
+            | Operation::DeleteTemplateGroup => Self::Templates,
             Operation::IssueOtp => Self::OtpIssue,
             Operation::VerifyOtp => Self::OtpVerify,
         }
@@ -484,6 +496,18 @@ mod tests {
             ("list_signup_attempts", RouteClass::Read),
             ("resume_signup", RouteClass::Send),
             ("erase_customer", RouteClass::Send),
+            ("edit_template", RouteClass::Templates),
+            ("list_library_templates", RouteClass::Templates),
+            ("create_library_template", RouteClass::Templates),
+            ("migrate_templates", RouteClass::Templates),
+            ("compare_templates", RouteClass::Templates),
+            ("unpause_template", RouteClass::Templates),
+            ("archive_templates", RouteClass::Templates),
+            ("unarchive_templates", RouteClass::Templates),
+            ("create_template_group", RouteClass::Templates),
+            ("get_template_group", RouteClass::Templates),
+            ("update_template_group", RouteClass::Templates),
+            ("delete_template_group", RouteClass::Templates),
         ];
         assert_eq!(table.len(), Operation::ALL.len(), "every operation");
         for (id, class) in table {

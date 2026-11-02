@@ -1191,6 +1191,7 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
         )
         .await;
     assert_eq!(refused.status.as_u16(), 404, "{}", refused.text);
+    template_lifecycle(h, &key, waba).await;
     vec![
         key.clone(),
         key.rsplit('_').next().unwrap().to_owned(),
@@ -1204,6 +1205,155 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
         IDEMPOTENCY_KEY.to_owned(),
         FLOW_TOKEN.to_owned(),
     ]
+}
+
+/// Roadmap M5b's template routes, each once with Meta's documented answer:
+/// an edit, an unpause, a comparison, an archive and an unarchive, the
+/// library browsed and a template created from it, a migration, and a
+/// group created, read, changed and deleted (the changes audited).
+#[allow(clippy::too_many_lines)] // twelve routes, each with its scripted answer
+async fn template_lifecycle(h: &Harness, key: &str, waba: &str) {
+    const ID: &str = "1407680676729941";
+    const OTHER: &str = "1533406637136032";
+    let named = |id: &str| {
+        h.graph
+            .push_json(200, json!({"name": "order_confirmation", "id": id}));
+        h.graph.push_json(
+            200,
+            json!({"data": [{"id": id, "name": "order_confirmation"}]}),
+        );
+    };
+    let call = |method: Method, path: String| Call::new(method, path).key(key);
+    named(ID);
+    h.graph.push_json(200, json!({"success": true}));
+    let edited = h
+        .call(
+            call(Method::PATCH, format!("/v1/wabas/{waba}/templates/{ID}"))
+                .json(&json!({"category": "MARKETING"})),
+        )
+        .await;
+    assert_eq!(edited.status.as_u16(), 204, "{}", edited.text);
+    named(ID);
+    h.graph.push_json(200, json!({"success": true}));
+    let unpaused = h
+        .call(call(
+            Method::POST,
+            format!("/v1/wabas/{waba}/templates/{ID}/unpause"),
+        ))
+        .await;
+    assert_eq!(unpaused.status.as_u16(), 204, "{}", unpaused.text);
+    named(ID);
+    named(OTHER);
+    h.graph.push_json(
+        200,
+        json!({"data": [{"metric": "MESSAGE_SENDS", "type": "NUMBER_VALUES",
+                         "number_values": [{"key": ID, "value": 1273}, {"key": OTHER, "value": 1042}]}]}),
+    );
+    let compared = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{waba}/templates/{ID}/compare?template_ids={OTHER}&start=1674844791182&end=1674845395982"),
+        ))
+        .await;
+    assert_eq!(compared.status.as_u16(), 200, "{}", compared.text);
+    for (route, answer) in [
+        (
+            "archive",
+            json!({"archived_templates": [ID], "failed_templates": {}}),
+        ),
+        (
+            "unarchive",
+            json!({"unarchived_templates": [ID], "failed_templates": {}}),
+        ),
+    ] {
+        h.graph.push_json(200, json!({"data": [{"id": ID}]}));
+        h.graph.push_json(200, answer);
+        let done = h
+            .call(
+                call(Method::POST, format!("/v1/wabas/{waba}/templates/{route}"))
+                    .json(&json!({"hsm_ids": [ID]})),
+            )
+            .await;
+        assert_eq!(done.status.as_u16(), 200, "{route}: {}", done.text);
+    }
+    h.graph.push_json(
+        200,
+        json!({"data": [{"name": "delivery_update_1", "language": "en_US", "category": "UTILITY",
+                         "body": "Good news! Your order #{{1}} is on its way.", "id": "7147013345418927"}]}),
+    );
+    let browsed = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{waba}/templates/library?topic=order_management"),
+        ))
+        .await;
+    assert_eq!(browsed.status.as_u16(), 200, "{}", browsed.text);
+    h.graph.push_json(
+        200,
+        json!({"id": "1627019861106479", "status": "APPROVED", "category": "UTILITY"}),
+    );
+    let created = h
+        .call(
+            call(Method::POST, format!("/v1/wabas/{waba}/templates/library"))
+                .json(&super::sample_library_template()),
+        )
+        .await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text);
+    h.graph.push_json(
+        200,
+        json!({"migrated_templates": ["1473688840035974"], "failed_templates": {}}),
+    );
+    let migrated = h
+        .call(
+            call(
+                Method::POST,
+                format!("/v1/wabas/{waba}/templates/migrations"),
+            )
+            .json(&json!({"source_waba_id": waba, "page_number": 0})),
+        )
+        .await;
+    assert_eq!(migrated.status.as_u16(), 200, "{}", migrated.text);
+    let group = "9020555671393375";
+    let group_answer = json!({"name": "Black Friday 2024", "id": group,
+        "whatsapp_business_account": {"id": waba, "name": "Lucky Shrub"}});
+    h.graph.push_json(200, json!({"data": [{"id": ID}]}));
+    h.graph.push_json(200, json!({"id": group}));
+    let grouped = h
+        .call(
+            call(Method::POST, format!("/v1/wabas/{waba}/template-groups"))
+                .json(&json!({"name": "Black Friday 2024", "whatsapp_business_templates": [ID]})),
+        )
+        .await;
+    assert_eq!(grouped.status.as_u16(), 201, "{}", grouped.text);
+    h.graph.push_json(200, group_answer.clone());
+    let read = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{waba}/template-groups/{group}"),
+        ))
+        .await;
+    assert_eq!(read.status.as_u16(), 200, "{}", read.text);
+    h.graph.push_json(200, group_answer.clone());
+    h.graph.push_json(200, json!({"success": true}));
+    let renamed = h
+        .call(
+            call(
+                Method::PATCH,
+                format!("/v1/wabas/{waba}/template-groups/{group}"),
+            )
+            .json(&json!({"name": "Black Friday 2025"})),
+        )
+        .await;
+    assert_eq!(renamed.status.as_u16(), 204, "{}", renamed.text);
+    h.graph.push_json(200, group_answer);
+    h.graph.push_json(200, json!({"success": true}));
+    let deleted = h
+        .call(call(
+            Method::DELETE,
+            format!("/v1/wabas/{waba}/template-groups/{group}"),
+        ))
+        .await;
+    assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
 }
 
 /// An OTP recipient: in no log line.
@@ -1412,6 +1562,7 @@ fn logged_requests(logs: &str) -> BTreeSet<(String, String)> {
 /// Every change an operator made (a successful non-GET on `/v1/admin`) has
 /// an `audit` event in its request, and every keyed request that passed
 /// step 1 names its key's public id (security review L4).
+#[allow(clippy::too_many_lines)] // one list of every audited action, then their fields
 fn check_audit(logs: &str) {
     let events: Vec<serde_json::Value> = logs
         .lines()
@@ -1484,6 +1635,14 @@ fn check_audit(logs: &str) {
         [
             "templates_deleted",
             "template_deleted",
+            // Roadmap M5b.
+            "template_edited",
+            "template_unpaused",
+            "templates_archived",
+            "templates_unarchived",
+            "templates_migrated",
+            "template_group_updated",
+            "template_group_deleted",
             "two_step_pin_set",
             "number_deregistered",
             "payment_configuration_created",
@@ -1493,7 +1652,7 @@ fn check_audit(logs: &str) {
             "payment_refunded",
             "payment_refunded"
         ],
-        "the template deletions', the PIN change's, the deregistration's and the payment changes' audit events"
+        "the template changes', the PIN change's, the deregistration's and the payment changes' audit events"
     );
     for fields in &deletions {
         assert!(fields["key_id"].is_string(), "{fields}");

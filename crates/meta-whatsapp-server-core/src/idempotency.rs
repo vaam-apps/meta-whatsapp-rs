@@ -76,6 +76,7 @@ use crate::store::IdempotencyRecords;
 /// | `request_verification_code` ([`Self::request_verification_code`]) | the number's id; the delivery method and the language, as a JSON object, canonical as above |
 /// | `register_number` ([`Self::register_number`]) | the number's id; the data localization region, or none: **never the PIN** (roadmap M3d, decisions D6 and D67), so no record holds anything derived from it |
 /// | `deregister_number` ([`Self::deregister_number`]) | the number's id (the body's confirmation is that id again) |
+/// | `create_library_template`, `migrate_templates`, `create_template_group` ([`Self::create_library_template`], [`Self::migrate_templates`], [`Self::create_template_group`]; roadmap M5b) | the WABA's id; the JSON body, canonical as above |
 ///
 /// The same request always has the same fingerprint; another operation,
 /// another number or WABA, or another body has another. Fingerprints are
@@ -256,6 +257,36 @@ impl Fingerprint {
     /// (roadmap P2).
     pub fn refund_payment(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
         Self::json(Operation::RefundPayment, &[("pn", number.as_str())], body)
+    }
+
+    /// `create_library_template` in `waba`, with the JSON body the request
+    /// carried (roadmap M5b; no legacy fingerprint).
+    pub fn create_library_template(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreateLibraryTemplate,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `migrate_templates` into `waba`, with the JSON body the request
+    /// carried (roadmap M5b; no legacy fingerprint).
+    pub fn migrate_templates(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::MigrateTemplates,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `create_template_group` in `waba`, with the JSON body the request
+    /// carried (roadmap M5b; no legacy fingerprint).
+    pub fn create_template_group(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreateTemplateGroup,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
     }
 
     /// `operation` with its named parameters `params` (in any order: they

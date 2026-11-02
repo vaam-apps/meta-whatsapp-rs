@@ -115,6 +115,29 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::POST, "/v1/wabas/{waba_id}/templates"),
         (Method::DELETE, "/v1/wabas/{waba_id}/templates"),
         (Method::GET, "/v1/wabas/{waba_id}/templates/{id}"),
+        // Roadmap M5b (the design's M5.1): a template's life after its
+        // creation, and its groups.
+        (Method::PATCH, "/v1/wabas/{waba_id}/templates/{id}"),
+        (Method::POST, "/v1/wabas/{waba_id}/templates/{id}/unpause"),
+        (Method::GET, "/v1/wabas/{waba_id}/templates/{id}/compare"),
+        (Method::POST, "/v1/wabas/{waba_id}/templates/archive"),
+        (Method::POST, "/v1/wabas/{waba_id}/templates/unarchive"),
+        (Method::GET, "/v1/wabas/{waba_id}/templates/library"),
+        (Method::POST, "/v1/wabas/{waba_id}/templates/library"),
+        (Method::POST, "/v1/wabas/{waba_id}/templates/migrations"),
+        (Method::POST, "/v1/wabas/{waba_id}/template-groups"),
+        (
+            Method::GET,
+            "/v1/wabas/{waba_id}/template-groups/{group_id}",
+        ),
+        (
+            Method::PATCH,
+            "/v1/wabas/{waba_id}/template-groups/{group_id}",
+        ),
+        (
+            Method::DELETE,
+            "/v1/wabas/{waba_id}/template-groups/{group_id}",
+        ),
         // Roadmap P2: a payment configuration is its WABA's; a payment and
         // a refund their number's.
         (Method::GET, "/v1/wabas/{waba_id}/payment-configurations"),
