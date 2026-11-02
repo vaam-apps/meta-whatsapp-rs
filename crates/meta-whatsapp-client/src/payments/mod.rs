@@ -15,6 +15,8 @@
 //! `payments/payments-br/boleto`, `payments/payments-br/one-click-payments`;
 //! the templates: `payments/payments-in/orderdetailstemplate`,
 //! `payments/payments-in/orderstatustemplate`,
+//! `payments/payments-in/checkout-button-templates` (and its checkout
+//! endpoint, [`checkout`](self#checkout-button-templates)),
 //! `payments/payments-br/orderdetailstemplate`,
 //! `payments/payments-br/payment-request-cta`.
 //!
@@ -28,7 +30,7 @@
 //! | [`Client::messages`] with a [`TemplateMessage`](crate::templates::TemplateMessage) | `POST /{PHONE_NUMBER_ID}/messages` |
 //! | [`Client::templates`](crate::Client::templates) with a [`TemplateDefinition`](crate::templates::TemplateDefinition) | `POST /{WABA_ID}/message_templates` |
 //! | [`Client::payments`] | `GET /{PHONE_NUMBER_ID}/payments/{PAYMENT_CONFIGURATION}/{REFERENCE_ID}`, `POST /{PHONE_NUMBER_ID}/payments_refund` |
-//! | [`Client::payment_configurations`] | `GET /{WABA_ID}/payment_configurations`, `GET /{WABA_ID}/payment_configuration/{CONFIGURATION_NAME}`, `POST /{WABA_ID}/payment_configuration`, `POST /{WABA_ID}/generate_payment_configuration_oauth_link`, `DELETE /{WABA_ID}/payment_configuration` |
+//! | [`Client::payment_configurations`] | `GET /{WABA_ID}/payment_configurations`, `GET /{WABA_ID}/payment_configuration/{CONFIGURATION_NAME}`, `POST /{WABA_ID}/payment_configuration`, `POST /{WABA_ID}/payment_configuration/{CONFIGURATION_NAME}` (the data endpoint), `POST /{WABA_ID}/generate_payment_configuration_oauth_link`, `DELETE /{WABA_ID}/payment_configuration` |
 //!
 //! Every call authenticates with the token of the [`Client`] it was built
 //! from: the business's (a merchant's, with [`Client::with_token`]).
@@ -93,6 +95,8 @@
 //!   [`TemplateMessage::order_status`](crate::templates::TemplateMessage::order_status)
 //!   ([`TemplateOrderStatus`]: India's `reference_id` and statuses,
 //!   `pending` refused). Brazil documents no order status template.
+//! - **Checkout button** (India): see
+//!   [below](self#checkout-button-templates).
 //! - **Payment request** (Brazil): up to three
 //!   [`Button::payment_request`](crate::templates::Button::payment_request)
 //!   buttons, each of a different [`PaymentRequestSetting`] (Pix code,
@@ -110,6 +114,37 @@
 //! `status_updated` event with its `payment`, and Brazil's
 //! `payment_method` reply, an interactive reply of a `message_received`
 //! event.
+//!
+//! # Checkout button templates
+//!
+//! A `MARKETING` template that sells one product per `Buy now` button
+//! (`payments-in/checkout-button-templates`): a single product template
+//! (an `IMAGE` or `VIDEO` header, one
+//! [`Button::checkout`](crate::templates::Button::checkout), up to 9
+//! quick replies) or a media card carousel whose cards each start with
+//! one. Each button is sent with its order,
+//! [`TemplateMessage::order_details_button`](crate::templates::TemplateMessage::order_details_button),
+//! checked by India's rules, which may offer the buyer
+//! [`ShippingInfo`] (physical goods); each order details button of a
+//! message has its own `reference_id`. The buyer pays through a payment
+//! gateway configuration.
+//!
+//! In beta, a **checkout endpoint** of yours lists coupons, applies them
+//! and prices shipping while the buyer checks out: link it to the
+//! configuration with
+//! [`PaymentConfigurations::link_data_endpoint`], and serve it with
+//! `payments::checkout` (feature `flows-endpoint`: the exchange is
+//! encrypted as a Flow endpoint's, with the same key and crypto). Its
+//! answers apply an [`AppliedCoupon`], whose discount comes off the total.
+//!
+//! # Third party validation (alpha)
+//!
+//! A Razorpay or `PayU` merchant names the bank accounts an order must be
+//! paid from: a [`PaymentSetting::third_party_validation`] carrying the
+//! accounts encrypted with the gateway's public key, an
+//! [`EncryptedPaymentGatewayData`] (`payments-in/pg`, "Third party
+//! validation"). The encryption is the gateway's, done by the caller;
+//! `Debug` never shows the ciphertext.
 //!
 //! # Where the pages disagree
 //!
@@ -151,6 +186,19 @@
 //!   required: [`PaymentRequestSetting`] is its own type.
 //! - A payment request's `currency` is "used with `total_amount`" for a
 //!   Pix code: the two are required together.
+//! - An expiration's `description`: `payments-in/pg` says the business
+//!   "must define" it; the checkout button template page sends a
+//!   button's expiration without one. It is required in an
+//!   `order_details` message ([`OrderExpiration::new`]), optional in a
+//!   template button ([`OrderExpiration::at`]).
+//! - The data endpoint's field: `data-endpoint-url` in the table,
+//!   `data_endpoint_url` in the example, which is what is sent.
+//! - The checkout endpoint's total: no sentence says it, every example
+//!   takes the applied coupon's discount off `subtotal + tax + shipping -
+//!   discount` ([`OrderDetailsParameters::expected_total`]).
+//! - A checkout button template's `category`, `type` and `format` are
+//!   printed in lower case: they are sent upper case, as every
+//!   template's, and either parses.
 //!
 //! # What is checked locally
 //!
@@ -168,6 +216,14 @@
 //! transitions, like India's, are Meta's to refuse (error `2046`); a Pix
 //! code's validity is not read from the code, by WhatsApp or here.
 //!
+//! A send cannot tell a checkout button template from an order details
+//! template (the definition is Meta's): `shipping_info` is accepted in any
+//! template button's INR order of physical goods, and its absence is not
+//! refused for physical goods ("required for physical-goods type"), which
+//! an order details template does not need. A third party validation
+//! setting does not require a `payment_gateway` setting next to it: the
+//! page shows it alone.
+//!
 //! # Payment data, not secrets
 //!
 //! A Pix code, its key and merchant name, a Boleto's digitable line and
@@ -175,15 +231,21 @@
 //! `Debug` shows them; a `CPF` key is a person's taxpayer number, which
 //! the buyer sees too. An [`OffsiteCardPay::credential_id`] is your id of
 //! a stored card, not the card: Meta returns it in the buyer's reply. Do
-//! not put a card number or a PSP token there.
+//! not put a card number or a PSP token there. A shipping address and the
+//! buyer's phone number (a checkout endpoint's `user_id`) are personal
+//! data, shown by `Debug` as the rest of an order. The secrets are a third
+//! party validation's [`EncryptedPaymentGatewayData`] (the buyer's bank
+//! accounts) and, at the checkout endpoint, the Flows endpoint's: the
+//! private key and each request's AES key, which `Debug` never shows.
 //!
 //! # Retries
 //!
 //! A message, a refund, a configuration created or an OAuth link
 //! regenerated is never replayed after a timeout or a server error
 //! ([`crate::RetryPolicy`]): each would happen twice. Only a refusal that
-//! provably did nothing (throttling, an HTTP 429) is sent again. Reads and
-//! the deletion are replayed.
+//! provably did nothing (throttling, an HTTP 429) is sent again. Reads,
+//! the deletion and the data endpoint's link (it sets a URL) are
+//! replayed.
 //!
 //! # No legal act here
 //!
@@ -242,12 +304,13 @@ use time::OffsetDateTime;
 
 pub use crate::common::SecretUrl;
 pub use crate::messages::payments::{
-    Amount, Beneficiary, BilldeskFields, Currency, DescribedAmount, Discount, GatewayProvider,
-    GoodsType, ImporterAddress, ItemImage, OffsiteCardPay, Order, OrderDetails,
-    OrderDetailsParameters, OrderExpiration, OrderItem, OrderStatus, OrderStatusValue, OrderUpdate,
-    PaymentGateway, PaymentLink, PaymentOption, PaymentSetting, PaymentType, PaymentUpdate,
-    PaymentUpdateStatus, PayuFields, PixDynamicCode, PixFlowType, PixKeyType, RazorpayFields,
-    UpiApp, ZaakpayFields,
+    Amount, AppliedCoupon, Beneficiary, BilldeskFields, Currency, DescribedAmount, Discount,
+    EncryptedPaymentGatewayData, GatewayProvider, GoodsType, ImporterAddress, ItemImage,
+    OffsiteCardPay, Order, OrderDetails, OrderDetailsParameters, OrderExpiration, OrderItem,
+    OrderStatus, OrderStatusValue, OrderUpdate, PaymentGateway, PaymentLink, PaymentOption,
+    PaymentSetting, PaymentType, PaymentUpdate, PaymentUpdateStatus, PayuFields, PixDynamicCode,
+    PixFlowType, PixKeyType, RazorpayFields, ShippingAddress, ShippingInfo, ThirdPartyValidation,
+    TpvGateway, UpiApp, ZaakpayFields,
 };
 pub use crate::templates::{
     PaymentRequest, PaymentRequestCard, PaymentRequestSetting, TemplateOrderStatus,
@@ -256,7 +319,10 @@ pub use crate::templates::{
 use crate::Client;
 use crate::messages::payments::CONFIGURATION_NAME_MAX;
 use crate::messages::validate;
+use crate::request::{decode_json, safe_snippet};
 
+#[cfg(feature = "flows-endpoint")]
+pub mod checkout;
 #[cfg(test)]
 mod tests;
 
@@ -916,6 +982,54 @@ struct NameBody<'a> {
     redirect_url: Option<&'a str>,
 }
 
+/// An absolute `https` URI without user info or a fragment, with no
+/// whitespace or control character anywhere: sent exactly as given.
+///
+/// Spelt out: `https://` (in any case) then a host. The WHATWG parser
+/// behind `url` also reads `https:host`, `https:/host`, `https:///host`
+/// and backslashes as `https://host/`, and an empty `@` as no user info;
+/// Meta's parser need not, and the string is sent as given, so those
+/// are refused rather than repaired. Hosts are not judged: an IP literal,
+/// a private address, a port or an IDN passes (only the deployment knows
+/// where its endpoint lives).
+fn check_https_url(field: &str, value: &str) -> Result<()> {
+    let invalid =
+        |reason: &'static str| -> Result<()> { Err(ValidationError::new(field, reason).into()) };
+    if value.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return invalid("must not contain whitespace or control characters");
+    }
+    if value.contains('\\') {
+        return invalid("must not contain a backslash");
+    }
+    let Some(rest) = value
+        .get(..8)
+        .filter(|scheme| scheme.eq_ignore_ascii_case("https://"))
+        .and_then(|_| value.get(8..))
+    else {
+        return invalid("must be an absolute URI starting `https://`");
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() {
+        return invalid("must name a host after `https://`");
+    }
+    if authority.contains('@') {
+        return invalid("must not carry user info");
+    }
+    let Ok(url) = url::Url::parse(value) else {
+        return invalid("must be an absolute URI");
+    };
+    if url.scheme() != "https" {
+        return invalid("must be an `https` URI");
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return invalid("must not carry user info");
+    }
+    if url.fragment().is_some() {
+        return invalid("must not carry a fragment");
+    }
+    Ok(())
+}
+
 fn check_name(configuration_name: &str) -> Result<()> {
     validate::text(
         "configuration_name",
@@ -1019,6 +1133,74 @@ impl PaymentConfigurations {
             .send_withheld(OAUTH_WITHHELD)
             .await
             .map_err(withhold_http_body)
+    }
+
+    /// `POST /{WABA_ID}/payment_configuration/{CONFIGURATION_NAME}`
+    /// `{"data_endpoint_url": …}`: link a checkout endpoint to a payment
+    /// gateway configuration, or change its URL ("Link or update data
+    /// endpoint", `payments-in/onboarding-apis`), which turns on coupons,
+    /// shipping addresses and real-time pricing in the checkout button
+    /// templates sent with that configuration
+    /// (`payments-in/checkout-button-templates`, beta, India; Meta enables
+    /// it per account on request). Serve the endpoint with
+    /// `payments::checkout` (feature `flows-endpoint`).
+    ///
+    /// `data_endpoint_url` must be an absolute `https` URI ("use `HTTPS`
+    /// and have a valid TLS/SSL certificate"), spelt `https://` then a
+    /// host, without user info (not even an empty `@`), a fragment, a
+    /// backslash, whitespace or control characters: a
+    /// [`ValidationError`] naming it otherwise, before any request. It is
+    /// sent as given. The host is not judged: an IP literal, a private
+    /// address, a port or an internationalized name passes, since only
+    /// your deployment knows where its endpoint lives (WhatsApp's clients
+    /// call it, not this library). The
+    /// name is one path segment. The page's table spells the field
+    /// `data-endpoint-url`, its example `data_endpoint_url`: the example's
+    /// is sent.
+    ///
+    /// The answer is not documented: a 2xx JSON object is taken as done,
+    /// unless it says `"success": false` (an [`Error::Http`]); a body that
+    /// is not one is an [`Error::Decode`]. Replayed on
+    /// transient errors: it sets a value. Unlinking is not documented
+    /// (the section's title says "delete", nothing shows how).
+    pub async fn link_data_endpoint(
+        &self,
+        configuration_name: &str,
+        data_endpoint_url: &str,
+    ) -> Result<()> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            data_endpoint_url: &'a str,
+        }
+        #[derive(Deserialize)]
+        struct Answer {
+            #[serde(default)]
+            success: Option<bool>,
+        }
+        const CONTEXT: &str = "payment configuration data endpoint response";
+        check_name(configuration_name)?;
+        check_https_url("data_endpoint_url", data_endpoint_url)?;
+        let resp = self
+            .client
+            .post_at(&[
+                self.waba_id.as_str(),
+                "payment_configuration",
+                configuration_name,
+            ])
+            .json(&Body { data_endpoint_url })
+            .idempotent(true)
+            .context(CONTEXT)
+            .send_raw()
+            .await?;
+        // Undocumented answer: only an explicit refusal fails.
+        let answer: Answer = decode_json(CONTEXT, &resp.body)?;
+        if answer.success == Some(false) {
+            return Err(Error::Http {
+                status: resp.status.as_u16(),
+                body_snippet: safe_snippet(&resp.body),
+            });
+        }
+        Ok(())
     }
 
     /// `DELETE /{WABA_ID}/payment_configuration`, the name in the JSON

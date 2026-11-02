@@ -13,6 +13,7 @@
 //! `calling/call-button-messages-deep-links`, and the Payments API's
 //! `payments/payments-in/orderdetailstemplate`,
 //! `payments/payments-in/orderstatustemplate`,
+//! `payments/payments-in/checkout-button-templates`,
 //! `payments/payments-br/orderdetailstemplate` and
 //! `payments/payments-br/payment-request-cta`.
 //!
@@ -41,7 +42,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use super::payments::{PaymentRequest, TemplateOrderStatus};
-use crate::messages::payments::{OrderDetailsParameters, OrderUpdate};
+use crate::messages::payments::{OrderContext, OrderDetailsParameters, OrderUpdate};
 
 /// The `template` object of a send request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -181,7 +182,12 @@ impl TemplateMessage {
     /// The order details button at `index`: the order to pay
     /// (`payments-in/orderdetailstemplate`,
     /// `payments-br/orderdetailstemplate`), checked by the rules of its
-    /// currency, as an `order_details` message's parameters.
+    /// currency, as an `order_details` message's parameters. A checkout
+    /// button's too (`payments-in/checkout-button-templates`: one per
+    /// product, in a carousel one per card), whose INR order may carry the
+    /// [`ShippingInfo`](crate::payments::ShippingInfo) offered to the buyer
+    /// and an expiration without a description. Each order details button
+    /// of a message has its own `reference_id`.
     #[must_use]
     pub fn order_details_button(self, index: u32, parameters: OrderDetailsParameters) -> Self {
         self.component(SendComponent::order_details_button(index, parameters))
@@ -225,8 +231,54 @@ impl TemplateMessage {
                 "must not be empty",
             ));
         }
-        validate_components(&self.components, "template.components")
+        validate_components(&self.components, "template.components")?;
+        unique_reference_ids(&self.components, "template.components")
     }
+}
+
+/// `payments-in/checkout-button-templates`, `<REFERENCE_ID>`: "If sending
+/// a carousel template, each checkout button must have a unique reference
+/// ID." Checked across every order details button of the message, the
+/// carousel's cards included (a single product template has one).
+fn unique_reference_ids(list: &[SendComponent], path: &str) -> Result<(), ValidationError> {
+    fn walk<'a>(
+        list: &'a [SendComponent],
+        path: &str,
+        seen: &mut std::collections::BTreeSet<&'a str>,
+    ) -> Result<(), ValidationError> {
+        for (i, c) in list.iter().enumerate() {
+            let field = format!("{path}[{i}]");
+            match c {
+                SendComponent::Carousel { cards } => {
+                    for (j, card) in cards.iter().enumerate() {
+                        walk(
+                            &card.components,
+                            &format!("{field}.cards[{j}].components"),
+                            seen,
+                        )?;
+                    }
+                }
+                SendComponent::Button { parameters, .. } => {
+                    for (j, p) in parameters.iter().enumerate() {
+                        if let Parameter::Action { action } = p
+                            && let Some(details) = &action.order_details
+                            && !seen.insert(details.reference_id.as_str())
+                        {
+                            return Err(ValidationError::new(
+                                format!(
+                                    "{field}.parameters[{j}].action.order_details.reference_id"
+                                ),
+                                "each order details button of a message needs its own reference id",
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    walk(list, path, &mut std::collections::BTreeSet::new())
 }
 
 fn validate_components(list: &[SendComponent], path: &str) -> Result<(), ValidationError> {
@@ -321,7 +373,10 @@ fn validate_parameter(p: &Parameter, field: &str) -> Result<(), ValidationError>
         }
         Parameter::Action { action } => {
             if let Some(details) = &action.order_details {
-                details.validate_at(&format!("{field}.action.order_details"))?;
+                details.validate_at(
+                    &format!("{field}.action.order_details"),
+                    OrderContext::TemplateButton,
+                )?;
             }
             if let Some(request) = &action.payment_request {
                 request.validate(&format!("{field}.action.payment_request"))?;

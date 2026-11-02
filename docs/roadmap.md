@@ -51,7 +51,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3g; B2–B4 |
 | 6 | M4; M5a–M5l |
 | 7 | S17, S18 (MongoDB) |
-| last | P1a–P1d, P2 (payments; P2 done) |
+| last | P1a–P1d, P2, P2b (payments; P1d and P2 done) |
 
 ## 1. The service's modular split (design §8, D26)
 
@@ -5344,7 +5344,7 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
        button that did not parse typed (the review's extension).
     8. The button `index` stays a string, as every template button's,
        though the order details pages print a number.
-- [ ] **P1d. India's checkout button templates** (`meta-whatsapp-client`;
+- [x] **P1d. India's checkout button templates** (`meta-whatsapp-client`;
   row 141): the checkout button templates
   (`payments/payments-in/checkout-button-templates`: one `order_details`
   button labelled `Buy now` per product, in a single product template or
@@ -5362,6 +5362,137 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     send examples; each endpoint sample request decrypted and answered
     with its sample response through the Flows endpoint's crypto; the
     two third-party validation payloads of `pg` as exact JSON.
+  - **Landed:** the checkout button (`client::templates::Button::checkout`,
+    `Button::CHECKOUT_LABEL`: an `ORDER_DETAILS` button labelled `Buy now`
+    is checked as one: a `MARKETING` template with an `IMAGE` or `VIDEO`
+    header, one checkout button and up to 9 quick replies, or the first
+    button of each media card), sent with
+    `TemplateMessage::order_details_button` and an order that may offer
+    `client::payments::ShippingInfo` (INR, physical goods; refused in an
+    `order_details` message), each order details button of a message
+    with its own `reference_id`; the checkout endpoint
+    (`client::payments::checkout`, feature `flows-endpoint`:
+    `FlowEndpointKey::decrypt_checkout_request` on the Flows endpoint's
+    `decrypt_request`, made generic inside the crate, `CheckoutRequest`,
+    `CheckoutSubAction`, `CheckoutResponse` checked by `validate` before
+    `ResponseSealer::seal`: India's rules, no payment settings, the total
+    less the `AppliedCoupon`'s discount, a coupon after `apply_coupon` and
+    none after `remove_coupon`); the link
+    (`PaymentConfigurations::link_data_endpoint`: an `https` URL,
+    replayed, its answer undocumented); the third party validation
+    (`PaymentSetting::third_party_validation`, `TpvGateway`,
+    `EncryptedPaymentGatewayData`, redacted from `Debug`). An
+    expiration's description is now optional
+    (`OrderExpiration::description` an `Option`, `OrderExpiration::at`),
+    still required in an `order_details` message. Every example of the
+    three pages an exact-JSON test (`payments/tests/checkout.rs`, the
+    endpoint's in `payments/tests/checkout/endpoint.rs`: each sample
+    request encrypted as the WhatsApp client does, decrypted, answered
+    with the typed sample response, sealed and opened again to the page's
+    JSON). Not wrapped, being undocumented: unlinking the data endpoint,
+    a shipping address's floor number (its key is never shown), and a
+    health check or error answer at the checkout endpoint (a request
+    without a sub-action parses, to be answered as a Flow endpoint's).
+  - **Review (crypto, secrets, money, the URL, mutations):** the
+    checkout endpoint is the Flows endpoint's crypto, not a copy
+    (`decrypt_request` and `decrypt_checkout_request` both call
+    `decrypt_as`, whose behaviour and error are `decrypt_request`'s
+    before: one `CryptoError::Decrypt` for a payload that does not
+    decrypt and one that does not parse, so no answer tells them
+    apart); the AES and private keys reach no `Debug` or error, nor
+    does `EncryptedPaymentGatewayData`, through a setting, an order, a
+    template message or a refusal. `link_data_endpoint` accepted what
+    the WHATWG parser repairs and sent it unrepaired (`https:host`,
+    `https:/host`, `https:///host`, backslashes, an empty `@`): it now
+    requires `https://` then a host, without `@` before the path or a
+    backslash (`link_data_endpoint_checks_first_and_reads_a_refusal`);
+    hosts stay unjudged, private addresses and IDNs included, since
+    only the deployment knows
+    (`link_data_endpoint_takes_any_https_host_as_given`). Nine guards
+    survived their deletion and are pinned: a checkout answer's
+    `payment_configuration`, Brazil's `payment_type` and India's
+    beneficiaries, the coupon's code, the shipping country and the
+    version (`a_checkout_answer_names_no_way_to_pay_and_is_whole`),
+    `shipping_info` in a BRL order
+    (`shipping_info_is_a_template_buttons_and_physical_goods_only`),
+    `expected_total` for a coupon worth more than the order
+    (`a_coupon_never_takes_the_total_below_zero`), and the exact label
+    (`a_checkout_template_is_marketing_with_an_image_or_video_header`,
+    `a_carousel_card_starts_with_its_checkout_button`). A checkout
+    button's own category check could never fire (the single product
+    rule and the carousel rule refuse first) and is gone. The carousel
+    rules hold on Meta's media card example with a button replaced
+    (`a_checkout_carousel_is_metas_media_card_example_with_a_button_replaced`).
+  - **Decided 2026-11-02** (the coordinator, under the owner's
+    delegation, AGENTS.md § Decisions; each swappable):
+    1. The exact label `Buy now` (`Button::CHECKOUT_LABEL`, the case and
+       spacing the page prints, "non-customizable") marks a checkout
+       button; any other label, `buy now` or `Buy now ` among them, keeps
+       P1c's order details rules. Side effect: a Brazil order details
+       template labelled `Buy now` (Brazil's example prints a
+       placeholder) is checked as a checkout button, so it must be
+       `MARKETING` with an `IMAGE` or `VIDEO` header. Swap: an explicit
+       marker (a `Button::Checkout` variant, or a flag on
+       `Button::OrderDetails`) read by `templates::validate::is_checkout`
+       and built by `Button::checkout`, in place of the label.
+    2. An expiration's description is optional
+       (`OrderExpiration::description` an `Option`, `OrderExpiration::at`)
+       except in an `order_details` message, where `payments-in/pg` says
+       the business "must define" it. Swap: the `(None,
+       OrderContext::Message)` arm of `Order::validate`, one arm per
+       context.
+    3. `shipping_info` is accepted in a template button's INR order of
+       physical goods and in the checkout endpoint's exchange, refused in
+       an `order_details` message, in BRL and for digital goods; its
+       absence for physical goods is not refused (a send cannot tell a
+       checkout button template from an order details template); its
+       `selected_address` only in a checkout answer; every address limit
+       of the page; the floor number, whose key no example shows, is not
+       modelled. Swap: `OrderDetailsParameters::validate_checkout_parts`
+       and `ShippingInfo::validate`, by `OrderContext`.
+    4. `coupon` (`AppliedCoupon`) only in a checkout answer, refused in a
+       send; its discount comes off `subtotal + tax + shipping -
+       discount` (`OrderDetailsParameters::expected_total`: the page's
+       examples, no sentence). Swap: `expected_total` and the coupon arm
+       of `validate_checkout_parts`.
+    5. A checkout answer refuses payment settings (`payment_settings`,
+       the older `payment_configuration`, Brazil's `payment_type`),
+       requires INR, and `CheckoutResponse::validate` refuses a
+       sub-action this client does not know (`CheckoutSubAction::Other`)
+       and data its sub-action does not take. Swap:
+       `CheckoutResponse::validate` and
+       `OrderDetailsParameters::validate_checkout_payment`; an answer to
+       a new sub-action can be sealed without `validate` meanwhile.
+    6. `CheckoutRequest::sub_action` and `data` are `Option` (a request
+       without them, a health check should one come, parses); a request
+       that decrypts but does not parse typed is `CryptoError::Decrypt`
+       (HTTP 421), the same error as one that does not decrypt, so no
+       answer tells the two apart. Swap: the crate-internal
+       `FlowEndpointKey::decrypt_as` made public (or a
+       `decrypt_as::<serde_json::Value>` entry), for a caller that wants
+       the untyped payload.
+    7. Signatures: the page does not say whether a checkout request
+       carries `X-Hub-Signature-256`; the module docs say to verify it
+       when present (`flows::endpoint::verify_request_signature`) and
+       never to price from the request's amounts, since anyone can
+       encrypt to a public key. Nothing enforces it. Swap: a caller-side
+       check; a signature required by `decrypt_checkout_request` would
+       be a new entry point beside it.
+    8. `link_data_endpoint` is replayed after a timeout (it sets a
+       value), sends `data_endpoint_url` (the example's spelling, not the
+       table's `data-endpoint-url`), and takes any 2xx JSON object but
+       `"success": false` as done. Swap: `.idempotent(true)` and the
+       `Body` field in `PaymentConfigurations::link_data_endpoint`.
+    9. Third party validation is `{"type": <gateway>, <gateway>:
+       {"encrypted_payment_gateway_data": …}}`, `TpvGateway` the page's
+       two (Razorpay, `PayU`; `#[non_exhaustive]`), INR only, with no
+       `payment_gateway` setting required beside it, the encryption the
+       caller's. Swap: `PaymentSetting`'s serde impls and
+       `only_currency`; a new gateway is a `TpvGateway` variant.
+    10. `reference_id`s are unique across every order details button of
+        one message, carousel cards included (the page says each
+        carousel button; a single product template has one). Swap:
+        `templates::send::unique_reference_ids`.
 - [x] **P2. Payment routes in the service** (rows 38, 141).
   - **After:** P1a, P1b, P1c.
   - **Decisive:** M1.3 over the new routes; an order-details send
@@ -5485,6 +5616,23 @@ and Brazil (Pix, Boleto, payment links, one-click), typed, instead of
     a release with S6 for one `WA_SERVER_IDEMPOTENCY_TTL`. The next item
     of the service's to land after the first release carries this line
     if it lands before it.
+- [ ] **P2b. The checkout endpoint's link in the service** (row 141;
+  added by P1d's review, kept by the coordinator's decision of
+  2026-11-02).
+  - **After:** P1d, P2.
+  - **Kind:** additive.
+  - **Decisive:** M1.3 over the new route; the link
+    (`PaymentConfigurations::link_data_endpoint`) carries the tenant's
+    token and Meta's body, `{"data_endpoint_url": …}`, exactly; a URL
+    the library refuses is `422` before any request.
+  - **Why:** with P1d merged, the service sends checkout button
+    templates and third party validation settings through
+    `POST /v1/numbers/{pn}/messages`, read through the library's types
+    (`checkout_templates_and_third_party_validation_are_sent_as_their_pages_print_them`
+    in `tests/payments.rs`), but has no route for the data endpoint's
+    link. Whether the service also hosts a tenant's checkout endpoint
+    (its private key in the vault, its pricing the tenant's) is this
+    item's design question, not decided here.
 
 ## Done criteria for parity
 

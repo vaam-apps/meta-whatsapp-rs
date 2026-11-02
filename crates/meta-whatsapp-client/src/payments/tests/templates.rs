@@ -22,7 +22,7 @@ const PIX_CODE: &str = "00020101021226700014br.gov.bcb.pix2548pix.example.com...
 const DIGITABLE_LINE: &str = "03399026944140000002628346101018898510000008848";
 
 /// A button `index` printed as a number, as the string this client sends.
-fn string_index(mut v: Value) -> Value {
+pub(super) fn string_index(mut v: Value) -> Value {
     fn walk(v: &mut Value) {
         match v {
             Value::Object(map) => {
@@ -45,7 +45,7 @@ fn string_index(mut v: Value) -> Value {
 }
 
 /// Run `f` on a current-thread runtime.
-fn block_on<F: std::future::Future>(f: F) -> F::Output {
+pub(super) fn block_on<F: std::future::Future>(f: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -56,7 +56,7 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 /// Create `definition` against Meta's `answer` and return the body that
 /// went out, after checking the request and that nothing else was sent.
 #[track_caller]
-fn created(
+pub(super) fn created(
     definition: &TemplateDefinition,
     answer: Value,
 ) -> (Value, crate::templates::TemplateCreated) {
@@ -79,7 +79,7 @@ fn created(
 /// Send `template` against Meta's `answer` and return the body that went
 /// out, after checking the request and that nothing else was sent.
 #[track_caller]
-fn sent_template(template: TemplateMessage, answer: &Value) -> Value {
+pub(super) fn sent_template(template: TemplateMessage, answer: &Value) -> Value {
     let message = OutboundMessage::new(Recipient::phone(TO), template);
     if let Err(e) = message.validate() {
         panic!("documented example failed validation: {e}");
@@ -108,7 +108,7 @@ fn sent_template(template: TemplateMessage, answer: &Value) -> Value {
 }
 
 /// The order details pages' send response.
-fn wamid_response() -> Value {
+pub(super) fn wamid_response() -> Value {
     json!({
         "messaging_product": "whatsapp",
         "contacts": [{"input": TO, "wa_id": TO}],
@@ -118,7 +118,7 @@ fn wamid_response() -> Value {
 
 /// The `template` of a send body parses back into `built`.
 #[track_caller]
-fn parses_back(body: &Value, built: &TemplateMessage) {
+pub(super) fn parses_back(body: &Value, built: &TemplateMessage) {
     let parsed: TemplateMessage = serde_json::from_value(body["template"].clone()).unwrap();
     assert_eq!(&parsed, built);
     parsed.validate().unwrap();
@@ -126,13 +126,13 @@ fn parses_back(body: &Value, built: &TemplateMessage) {
 
 /// The validation error of `template`, as `(field, reason)`.
 #[track_caller]
-fn refused(template: &TemplateMessage) -> String {
+pub(super) fn refused(template: &TemplateMessage) -> String {
     template.validate().unwrap_err().field
 }
 
 /// The validation error of `definition`'s field.
 #[track_caller]
-fn refused_definition(definition: &TemplateDefinition) -> String {
+pub(super) fn refused_definition(definition: &TemplateDefinition) -> String {
     definition.validate().unwrap_err().field
 }
 

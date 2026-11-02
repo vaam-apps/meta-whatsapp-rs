@@ -225,6 +225,51 @@ stored data, the owner's).
 
 ### Added
 
+- **India's checkout button templates and the third party validation**
+  (roadmap P1d, parity row 141, now done in the library; category 15,
+  coverage row 32; from `payments/payments-in/checkout-button-templates`,
+  `payments/payments-in/onboarding-apis` and `payments/payments-in/pg`,
+  read on 2026-11-02).
+  - **Templates** (`meta_whatsapp_client::templates`): `Button::checkout()`
+    and `Button::CHECKOUT_LABEL` (`Buy now`). An `ORDER_DETAILS` button
+    so labelled is checked as a checkout button: a `MARKETING` template
+    with an `IMAGE` or `VIDEO` header (required), one checkout button and
+    up to 9 quick replies, or the first button of each card of a media
+    card carousel. Sent with `TemplateMessage::order_details_button`,
+    whose order may carry `payments::ShippingInfo` (`ShippingAddress`,
+    every limit of the page) in INR for physical goods; each order
+    details button of a message has its own `reference_id`.
+  - **The checkout endpoint** (`meta_whatsapp_client::payments::checkout`,
+    feature `flows-endpoint`): `FlowEndpointKey::decrypt_checkout_request`
+    (the Flows endpoint's crypto, `decrypt_request` made generic inside
+    the crate, not re-implemented), `CheckoutRequest` (`CheckoutSubAction`:
+    `get_coupons`, `apply_coupon`, `remove_coupon`, `apply_shipping`;
+    `CheckoutInput` with the buyer's `user_id`, `SelectedCoupon` and
+    selected address) and `CheckoutResponse` (`Coupon`s, or the repriced
+    order), whose `validate` checks India's rules, no payment settings,
+    the total equal to `subtotal + tax + shipping - discount - coupon
+    discount`, a coupon after `apply_coupon` and none after
+    `remove_coupon`. `OrderDetailsParameters` gains `shipping_info`,
+    `coupon` (`AppliedCoupon`), and `coupon()`, `without_coupon()`,
+    `expected_total()`, `with_expected_total()`.
+  - **The data endpoint's link**: `PaymentConfigurations::link_data_endpoint`
+    (`POST /{WABA_ID}/payment_configuration/{CONFIGURATION_NAME}`,
+    `data_endpoint_url`, an absolute URL spelt `https://` then a host,
+    without user info (an empty `@` included), fragment or backslash,
+    sent as given, any host accepted (a private address too: only the
+    deployment knows); replayed: it sets a value; the answer is
+    undocumented, so only `"success": false` fails).
+  - **Third party validation** (alpha): `PaymentSetting::third_party_validation`
+    (`ThirdPartyValidation`, `TpvGateway::Razorpay` or `Payu`), its
+    `EncryptedPaymentGatewayData` never shown by `Debug`; INR only. The
+    gateway's encryption is the caller's.
+  - Every example of the three pages is an exact-JSON test; each
+    endpoint sample request is encrypted as the WhatsApp client does,
+    decrypted, answered with the typed sample response, sealed, and
+    opened again to the page's JSON. Not wrapped, being undocumented:
+    unlinking the data endpoint, a shipping address's floor number, a
+    health check or error answer at the checkout endpoint.
+
 - **A number's registration and its two-step PIN in the service**
   (roadmap M3d; design §4.2, D6, and D65–D69 decided by the coordinator
   on 2026-11-02;
@@ -2536,6 +2581,17 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking — an order's expiration description is optional** (roadmap
+  P1d): `OrderExpiration::description` is an `Option<String>`
+  (`OrderExpiration::new` still sets it; `OrderExpiration::at` leaves it
+  out), because the checkout button template page sends a button's
+  expiration without one. An `order_details` message still requires it
+  (`payments-in/pg`). Code reading the field gets an `Option`.
+- **New public fields** (roadmap P1d): `payments::OrderDetailsParameters`
+  gains `shipping_info` and `coupon`, and `payments::PaymentSetting` the
+  `ThirdPartyValidation` variant (the enum is `#[non_exhaustive]`). Code
+  building the struct with a literal must add them (`None`); its
+  constructors set them.
 - **The service's core** (roadmap P2): `messages::InteractiveAction::parameters`
   is a `messages::ActionParameters` (a URL button's, or a payment
   message's Meta object), not a `CtaUrlParameters`;

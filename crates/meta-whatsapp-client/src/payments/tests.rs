@@ -23,6 +23,9 @@ use meta_whatsapp_core::ids::CatalogId;
 
 /// Brazil's pages and rules (roadmap P1b), on this module's helpers.
 mod brazil;
+/// India's checkout button templates, their endpoint and the third party
+/// validation (roadmap P1d), on this module's helpers.
+mod checkout;
 /// The payment templates (roadmap P1c), on this module's helpers.
 mod templates;
 

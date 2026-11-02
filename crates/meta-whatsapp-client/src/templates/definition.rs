@@ -13,6 +13,7 @@
 //! button's Android app deep link), and the Payments API's
 //! `payments/payments-in/orderdetailstemplate`,
 //! `payments/payments-in/orderstatustemplate`,
+//! `payments/payments-in/checkout-button-templates` (the checkout button),
 //! `payments/payments-br/orderdetailstemplate` and
 //! `payments/payments-br/payment-request-cta` (the `ORDER_DETAILS` and
 //! `PAYMENT_REQUEST` buttons, `sub_category` `ORDER_STATUS`).
@@ -707,10 +708,16 @@ pub enum Button {
     /// [`TemplateMessage::order_details_button`](super::TemplateMessage::order_details_button)).
     /// A `UTILITY` or `MARKETING` template, whose header is `TEXT`,
     /// `IMAGE` or `DOCUMENT`.
+    ///
+    /// Labelled [`Button::CHECKOUT_LABEL`] (`Buy now`, [`Button::checkout`]),
+    /// it is a checkout button instead (`payments-in/checkout-button-templates`,
+    /// India): a `MARKETING` template with an `IMAGE` or `VIDEO` header, one
+    /// checkout button and up to 9 quick replies, or the first button of
+    /// each card of a media card carousel, one product per button.
     #[serde(alias = "order_details")]
     OrderDetails {
         /// Label: India's page fixes it to `Review and Pay`; Brazil's
-        /// example prints a placeholder.
+        /// example prints a placeholder; a checkout button's is `Buy now`.
         text: String,
     },
     /// Asks for a payment by Pix, Boleto, payment link or one-click card
@@ -816,10 +823,23 @@ impl Button {
         Self::RequestContactInfo { text: None }
     }
 
+    /// The label of a checkout button, which the checkout button template
+    /// page calls "non-customizable": an `ORDER_DETAILS` button labelled so
+    /// is checked as a checkout button.
+    pub const CHECKOUT_LABEL: &'static str = "Buy now";
+
     /// Order details button labelled `text` (`Review and Pay` on India's
     /// page).
     pub fn order_details(text: impl Into<String>) -> Self {
         Self::OrderDetails { text: text.into() }
+    }
+
+    /// A checkout button (`payments-in/checkout-button-templates`):
+    /// `{"type": "ORDER_DETAILS", "text": "Buy now"}`, for one product,
+    /// whose order is given at send time
+    /// ([`TemplateMessage::order_details_button`](super::TemplateMessage::order_details_button)).
+    pub fn checkout() -> Self {
+        Self::order_details(Self::CHECKOUT_LABEL)
     }
 
     /// Payment request button for `setting`, with the label the method

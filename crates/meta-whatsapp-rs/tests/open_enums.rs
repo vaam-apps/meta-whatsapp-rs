@@ -197,6 +197,8 @@ fn checked() -> BTreeMap<&'static str, bool> {
         client::payments::RefundSpeed,
         client::payments::PaymentConfigurationStatus,
         client::payments::PaymentProvider,
+        #[cfg(feature = "flows-endpoint")]
+        client::payments::checkout::CheckoutSubAction,
         client::phone_numbers::BusinessEntityType,
         client::phone_numbers::ObaStatus,
         client::phone_numbers::DataLocalizationRegion,
@@ -350,7 +352,13 @@ fn every_open_enum_keeps_an_unlisted_value_verbatim() {
     let missing: Vec<&String> = declared
         .iter()
         .filter(|name| !checked.contains_key(name.as_str()))
-        .filter(|name| cfg!(feature = "flows-endpoint") || !name.contains("::flows::endpoint::"))
+        // The Flows endpoint and the checkout endpoint are behind
+        // `flows-endpoint`.
+        .filter(|name| {
+            cfg!(feature = "flows-endpoint")
+                || !(name.contains("::flows::endpoint::")
+                    || name.contains("::payments::checkout::"))
+        })
         .collect();
     let stale: Vec<&&str> = checked
         .keys()

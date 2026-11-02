@@ -646,8 +646,10 @@ in `status_updated`, Brazil's `payment_method` reply in
 `message_received`. A refund, a configuration's creation or removal and
 a new OAuth link are the caller's audit events. No route accepts Meta's
 terms (AGENTS.md § Decisions): the merchant opens Meta's link. Brazil
-documents neither configurations nor lookups; the data endpoint link and
-India's checkout button templates wait for the library (roadmap P1d).
+documents neither configurations nor lookups. India's checkout button
+templates and the third party validation are sends too, read through
+the library's types since roadmap P1d; the data endpoint link has no
+route yet (roadmap P2b).
 
 **Inbox** (scope `inbox`)
 

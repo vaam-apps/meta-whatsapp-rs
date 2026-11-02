@@ -363,6 +363,128 @@ async fn payment_messages_are_checked_before_any_request() {
     assert!(h.graph.requests().is_empty(), "nothing was sent");
 }
 
+/// `payments-in/checkout-button-templates`, "Send a checkout button
+/// template", the example request's `template` (its button `index` a
+/// string, as every template button's here).
+fn checkout_template() -> Value {
+    let address = json!({
+        "name": "Nidhi Tripathi", "phone_number": "919000090000",
+        "address": "Bandra Kurla Complex", "city": "Mumbai", "state": "Maharastra",
+        "in_pin_code": "400051", "house_number": "12", "tower_number": "5",
+        "building_name": "One BKC", "landmark_area": "Near BKC Circle"
+    });
+    json!({
+      "name": "item_back_in_stock_v2",
+      "language": {"policy": "deterministic", "code": "en_US"},
+      "components": [
+        {"type": "header", "parameters": [{"type": "image", "image": {"id": "1558081531584829"}}]},
+        {"type": "body", "parameters": [{"type": "text", "text": "Nidhi"},
+                                        {"type": "text", "text": "Blue Elf Aloe"}]},
+        {"type": "button", "sub_type": "order_details", "index": "0", "parameters": [
+          {"type": "action", "action": {"order_details": {
+            "reference_id": "abc.123_xyz-1",
+            "type": "physical-goods",
+            "currency": "INR",
+            "payment_settings": [{"type": "payment_gateway", "payment_gateway": {
+              "type": "razorpay", "configuration_name": "prod-razor-pay-config-05"}}],
+            "shipping_info": {"country": "IN", "addresses": [address]},
+            "order": {
+              "items": [{
+                "amount": {"offset": 100, "value": 200000},
+                "sale_amount": {"offset": 100, "value": 150000},
+                "name": "Blue Elf Aloe", "quantity": 1,
+                "country_of_origin": "India",
+                "importer_name": "Lucky Shrub Imports and Exports",
+                "importer_address": {"address_line1": "One BKC",
+                  "address_line2": "Bandra Kurla Complex", "city": "Mumbai",
+                  "zone_code": "MH", "postal_code": "400051", "country_code": "IN"}
+              }],
+              "subtotal": {"offset": 100, "value": 150000},
+              "shipping": {"offset": 100, "value": 20000},
+              "tax": {"offset": 100, "value": 10000},
+              "discount": {"offset": 100, "value": 15000, "description": "Additional 10% off"},
+              "status": "pending",
+              "expiration": {"timestamp": "1726627150"}
+            },
+            "total_amount": {"offset": 100, "value": 165000}
+          }}}
+        ]}
+      ]
+    })
+}
+
+/// Roadmap P1d through the service: a checkout button template's send
+/// (its `shipping_info`, its expiration without a description) and a
+/// third party validation setting reach Meta as their pages print them,
+/// read through the library's types with no key dropped; what P1d keeps
+/// out of a send is `422` before any request: a coupon (the checkout
+/// endpoint's), `shipping_info` in an `order_details` message, and an
+/// `order_details` message's expiration without its description.
+#[tokio::test]
+async fn checkout_templates_and_third_party_validation_are_sent_as_their_pages_print_them() {
+    let (h, key) = connected(&[Scope::Send]).await;
+    let template = checkout_template();
+    h.graph.push_json(200, accepted());
+    let body = json!({"to": {"phone": TO}, "type": "template", "template": template});
+    let reply = h.call(send(PN, &key, &body)).await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED, "{}", reply.text);
+    let request = h.graph.last_request().unwrap();
+    assert_eq!(request.bearer(), Some(TOKEN));
+    assert_eq!(
+        request.json().unwrap(),
+        json!({"messaging_product": "whatsapp", "recipient_type": "individual", "to": TO,
+               "type": "template", "template": template})
+    );
+    // `payments-in/pg`, "Third party validation": a Razorpay setting.
+    let mut tpv = razorpay_order_details();
+    tpv["action"]["parameters"]["payment_settings"] = json!([{"type": "razorpay",
+        "razorpay": {"encrypted_payment_gateway_data": "encrypted-data"}}]);
+    h.graph.push_json(200, accepted());
+    let reply = h.call(send(PN, &key, &interactive_send(&tpv))).await;
+    assert_eq!(reply.status, StatusCode::ACCEPTED, "{}", reply.text);
+    assert_eq!(
+        h.graph.last_request().unwrap().json().unwrap(),
+        envelope(&tpv)
+    );
+    let sent = h.graph.requests().len();
+
+    let order = "template.components[2].parameters[0].action.order_details";
+    let mut couponed = body.clone();
+    couponed["template"]["components"][2]["parameters"][0]["action"]["order_details"]["coupon"] =
+        json!({"code": "TRYNEW10", "discount": {"value": 16500, "offset": 100}});
+    let mut shipped = razorpay_order_details();
+    shipped["action"]["parameters"]["type"] = json!("physical-goods");
+    shipped["action"]["parameters"]["shipping_info"] = json!({"country": "IN", "addresses": []});
+    let mut undescribed = razorpay_order_details();
+    undescribed["action"]["parameters"]["order"]["expiration"] = json!({"timestamp": "1767225600"});
+    for (body, field) in [
+        (couponed, format!("{order}.coupon")),
+        (
+            interactive_send(&shipped),
+            "interactive.action.parameters.shipping_info".to_owned(),
+        ),
+        (
+            interactive_send(&undescribed),
+            "interactive.action.parameters.order.expiration.description".to_owned(),
+        ),
+    ] {
+        let reply = h.call(send(PN, &key, &body)).await;
+        assert_eq!(
+            refused(&reply),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_request".to_owned(),
+                Some(field)
+            ),
+            "{body}: {}",
+            reply.text
+        );
+        assert!(!reply.text.contains("encrypted-data"));
+    }
+    assert_eq!(h.graph.requests().len(), sent, "nothing more reached Meta");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// `payments-in/onboarding-apis`: a configuration as Meta's sample
 /// response prints it.
 fn configuration() -> Value {
