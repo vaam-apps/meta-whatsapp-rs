@@ -20,6 +20,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 
+use crate::notify::EventNotifier;
 use crate::outbox::Outbox;
 use crate::store::{IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator};
 
@@ -55,8 +56,8 @@ impl BackendKind {
 }
 
 /// Every port the service stores through, over one database: its own
-/// ([`RecordStore`], [`IdempotencyRecords`], [`Outbox`], [`LeaderLock`],
-/// [`Janitor`], [`SchemaMigrator`]) and the library's ([`KvStore`]: the
+/// ([`RecordStore`], [`IdempotencyRecords`], [`Outbox`], [`EventNotifier`],
+/// [`LeaderLock`], [`Janitor`], [`SchemaMigrator`]) and the library's ([`KvStore`]: the
 /// token vault and webhook dedup; [`ConversationStore`]: the inbox).
 ///
 /// **Every accessor returns a handle to the same data on every call**:
@@ -78,6 +79,14 @@ pub trait Backend: Send + Sync + 'static {
 
     /// The event outbox.
     fn outbox(&self) -> Arc<dyn Outbox>;
+
+    /// What wakes the live event streams of every replica on a new
+    /// outbox event ([`EventNotifier`], roadmap M2b): a notification is a
+    /// wake-up only, the outbox stays the source of truth. One process's
+    /// backend can hand out a [`crate::notify::LocalNotifier`] (built once
+    /// and shared, as every accessor's handle is); one shared by several
+    /// replicas needs its database's own (Postgres: `LISTEN`/`NOTIFY`).
+    fn notifier(&self) -> Arc<dyn EventNotifier>;
 
     /// Leader election for housekeeping.
     fn leader_lock(&self) -> Arc<dyn LeaderLock>;

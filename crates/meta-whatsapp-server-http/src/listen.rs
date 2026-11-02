@@ -11,13 +11,22 @@
 //!   connection whose request head is not complete in time is closed;
 //! - a **connection cap** ([`Limits::max_connections`]): past it, new
 //!   connections wait in the kernel's backlog until one closes;
+//! - a **write timeout** ([`Limits::write_timeout`]): a connection that
+//!   accepts no byte of its answer for that long (a client that stopped
+//!   reading, its TCP window full) is closed, and its answer dropped: a
+//!   live event stream's client stalled that way would otherwise hold its
+//!   connection, and the answer's buffers, until the operating system gave
+//!   up on it, which a client acknowledging zero-window probes delays for
+//!   ever;
 //! - **graceful shutdown**: once `shutdown` completes, no connection is
 //!   accepted and open ones finish their request (the caller bounds the
 //!   wait with `WA_SERVER_SHUTDOWN_GRACE`).
 //!
 //! The request deadline is a layer of the routers ([`crate::api`]).
 
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use hyper::server::conn::http1;
@@ -25,8 +34,10 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use hyper_util::service::TowerToHyperService;
 use meta_whatsapp_rs::webhooks::axum::Router;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
+use tokio::time::Sleep;
 
 /// The target of this module's log lines: the module they were logged
 /// from before roadmap S7 moved it out of `meta-whatsapp-server`.
@@ -39,7 +50,16 @@ pub struct Limits {
     pub header_read_timeout: Duration,
     /// Connections served at once.
     pub max_connections: usize,
+    /// How long a connection may accept no byte of its answer before it
+    /// is closed.
+    pub write_timeout: Duration,
 }
+
+/// [`Limits::write_timeout`] of both listeners: a minute without a byte
+/// taken. Longer than a live event stream's slow-client wait (30 s), which
+/// ends the stream and gives its place back first; a client reading
+/// slowly, a byte at a time, is not cut.
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The public listener's limits: Meta and whoever else reaches the
 /// ingress. Only 64 deliveries are read at once per replica
@@ -48,6 +68,7 @@ pub struct Limits {
 pub const PUBLIC_LIMITS: Limits = Limits {
     header_read_timeout: Duration::from_secs(10),
     max_connections: 256,
+    write_timeout: WRITE_TIMEOUT,
 };
 
 /// The internal listener's limits: the integrators' backends and
@@ -55,6 +76,7 @@ pub const PUBLIC_LIMITS: Limits = Limits {
 pub const INTERNAL_LIMITS: Limits = Limits {
     header_read_timeout: Duration::from_secs(10),
     max_connections: 4096,
+    write_timeout: WRITE_TIMEOUT,
 };
 
 /// Serve `router` on `listener` within `limits` until `shutdown`
@@ -101,7 +123,7 @@ pub async fn serve(
             },
         };
         let connection = http.serve_connection(
-            TokioIo::new(stream),
+            TokioIo::new(WriteTimeout::new(stream, limits.write_timeout)),
             TowerToHyperService::new(router.clone()),
         );
         let connection = graceful.watch(connection);
@@ -119,6 +141,95 @@ pub async fn serve(
     drop(listener);
     graceful.shutdown().await;
     Ok(())
+}
+
+/// A connection whose writes fail once none made progress for `wait`
+/// ([`Limits::write_timeout`]): hyper then closes it, dropping the answer
+/// it was writing (a live event stream's body among them).
+struct WriteTimeout<T> {
+    io: T,
+    wait: Duration,
+    /// Set by the first write that could not proceed, cleared by the next
+    /// that does.
+    stalled: Option<Pin<Box<Sleep>>>,
+}
+
+impl<T> WriteTimeout<T> {
+    fn new(io: T, wait: Duration) -> Self {
+        Self {
+            io,
+            wait,
+            stalled: None,
+        }
+    }
+
+    /// `polled`, a write's outcome: progress clears the stall; no progress
+    /// for [`Self::wait`] is `TimedOut`.
+    fn watch<R>(
+        &mut self,
+        cx: &mut Context<'_>,
+        polled: Poll<std::io::Result<R>>,
+    ) -> Poll<std::io::Result<R>> {
+        if polled.is_ready() {
+            self.stalled = None;
+            return polled;
+        }
+        let wait = self.wait;
+        let stalled = self
+            .stalled
+            .get_or_insert_with(|| Box::pin(tokio::time::sleep(wait)));
+        if stalled.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "the client took no byte of its answer within the write timeout",
+            )));
+        }
+        Poll::Pending
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for WriteTimeout<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.io).poll_read(cx, buf)
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for WriteTimeout<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let polled = Pin::new(&mut self.io).poll_write(cx, buf);
+        self.watch(cx, polled)
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        let polled = Pin::new(&mut self.io).poll_write_vectored(cx, bufs);
+        self.watch(cx, polled)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.io.is_write_vectored()
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let polled = Pin::new(&mut self.io).poll_flush(cx);
+        self.watch(cx, polled)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let polled = Pin::new(&mut self.io).poll_shutdown(cx);
+        self.watch(cx, polled)
+    }
 }
 
 fn is_connection_error(error: &std::io::Error) -> bool {
@@ -143,7 +254,21 @@ mod tests {
     async fn start(limits: Limits) -> (SocketAddr, oneshot::Sender<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let router = Router::new().route("/", get(|| async { "ok" }));
+        let router = Router::new()
+            .route("/", get(|| async { "ok" }))
+            // An answer with no end, as a live event stream's.
+            .route(
+                "/endless",
+                get(|| async {
+                    let chunk =
+                        meta_whatsapp_rs::webhooks::axum::body::Bytes::from(vec![b'x'; 64 * 1024]);
+                    meta_whatsapp_rs::webhooks::axum::body::Body::from_stream(
+                        futures::stream::repeat_with(move || {
+                            Ok::<_, std::convert::Infallible>(chunk.clone())
+                        }),
+                    )
+                }),
+            );
         let (stop, stopped) = oneshot::channel::<()>();
         tokio::spawn(serve(listener, router, limits, async {
             let _ = stopped.await;
@@ -172,6 +297,7 @@ mod tests {
         let (addr, _stop) = start(Limits {
             header_read_timeout: Duration::from_millis(300),
             max_connections: 8,
+            write_timeout: WRITE_TIMEOUT,
         })
         .await;
         let mut slow = TcpStream::connect(addr).await.unwrap();
@@ -207,6 +333,7 @@ mod tests {
         let (addr, _stop) = start(Limits {
             header_read_timeout: Duration::from_secs(30),
             max_connections: 2,
+            write_timeout: WRITE_TIMEOUT,
         })
         .await;
         // Two connections that hold their slot (an unfinished head).
@@ -230,6 +357,39 @@ mod tests {
             .await
             .expect("served once a slot was free");
         assert!(answer.starts_with(b"HTTP/1.1 200"), "{answer:?}");
+    }
+
+    /// A client that stops reading an answer with no end (a live event
+    /// stream's), its TCP window full, is closed once no byte was taken
+    /// for the write timeout, so its connection and the answer go; with a
+    /// minute's timeout it is still open after a second (the control).
+    /// Decisive: `WriteTimeout` around the connection.
+    #[tokio::test]
+    async fn a_client_that_stops_reading_is_closed_after_the_write_timeout() {
+        let _ports = crate::LOOPBACK_PORTS.lock().await;
+        for (write_timeout, closed) in [(Duration::from_millis(300), true), (WRITE_TIMEOUT, false)]
+        {
+            let (addr, _stop) = start(Limits {
+                header_read_timeout: Duration::from_secs(10),
+                max_connections: 8,
+                write_timeout,
+            })
+            .await;
+            let mut stalled = TcpStream::connect(addr).await.unwrap();
+            stalled
+                .write_all(b"GET /endless HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .await
+                .unwrap();
+            // Reads nothing while the server fills both buffers.
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let wait = if closed {
+                Duration::from_secs(10)
+            } else {
+                Duration::from_secs(1)
+            };
+            let answer = read_until_closed(&mut stalled, wait).await;
+            assert_eq!(answer.is_some(), closed, "write timeout {write_timeout:?}");
+        }
     }
 
     /// After the shutdown signal, no connection is accepted.
