@@ -221,7 +221,8 @@ stored data, the owner's).
   amended on 2026-09-27: after a handover to this app, the window check
   lets Meta decide (`ReplyChecks::trust_handover`, L7).
 - Service: #43, media ids the service recorded as received exempted from
-  the `phone_number_id` check (M2e).
+  the `phone_number_id` check (M2e; landed, see Added; the live check
+  against Meta is still to run, so the entry stays).
 
 ### Added
 
@@ -277,6 +278,33 @@ stored data, the owner's).
     opened again to the page's JSON. Not wrapped, being undocumented:
     unlinking the data endpoint, a shipping address's floor number, a
     health check or error answer at the checkout endpoint.
+
+- **Received media in the service** (roadmap M2e, OPEN_QUESTIONS #43,
+  parity row 45, now done in the service too; choices D77–D79, decided
+  by the coordinator under the owner's delegation).
+  `GET /v1/numbers/{pn}/media/{media_id}` downloads a media id the
+  service recorded as received on that number for the caller's tenant
+  (a customer's image, video, audio, document or sticker, or an edit into
+  one, from the number's binding epoch on) with `GET /{media_id}`,
+  without `phone_number_id`, with the number's token, then Meta's URL
+  through the library's host allow-list, within the same limits and
+  verified the same way. A media id recorded as received anywhere else
+  (another number or tenant, an operator-only row, before the binding
+  epoch) is `404 not_found` for a download and for
+  `DELETE /v1/numbers/{pn}/media/{media_id}`, with nothing asked of Meta.
+  Every other id, and every deletion, keeps Meta's check. No route or
+  schema changed (the OpenAPI document is unchanged). Postgres migration
+  7, `received media`: the column `wa_server_events.media_id` (no
+  default, no table rewrite) and its partial index
+  `wa_server_events_media_idx`, stable identifiers pending the owner's
+  confirmation; rows from before it record none. In the core,
+  `outbox::NewEvent::received_media`, `outbox::received_media_id`,
+  `outbox::ReceivedMedia`, `outbox::RECEIVED_MEDIA_ROWS` and
+  `media::Received`, `media::Media::received`; conformance cases
+  `outbox::received_media` and
+  `media::a_media_id_received_elsewhere_is_not_found_with_no_request`.
+  The live check of which behaviour Meta has is still to run
+  (OPEN_QUESTIONS #43 says how).
 
 - **A number's registration and its two-step PIN in the service**
   (roadmap M3d; design §4.2, D6, and D65–D69 decided by the coordinator
@@ -2646,6 +2674,12 @@ stored data, the owner's).
 
 ### Changed
 
+- **The service's core** (roadmap M2e): `outbox::Outbox` gains a
+  required `received_media` (a backend of your own must answer it: the
+  rows that recorded a media id, kept at insert from
+  `NewEvent::received_media`; the `conformance` suites check it), and
+  `media::Media::new` takes the bundle's outbox as a fourth argument. An
+  API adapter or a backend built outside this repository must follow.
 - **Breaking — an order's expiration description is optional** (roadmap
   P1d): `OrderExpiration::description` is an `Option<String>`
   (`OrderExpiration::new` still sets it; `OrderExpiration::at` leaves it

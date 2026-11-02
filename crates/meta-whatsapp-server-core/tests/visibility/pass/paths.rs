@@ -19,6 +19,7 @@ use meta_whatsapp_server_core::inbound::{DELIVERED, Inbound, Pipeline, Refused};
 use meta_whatsapp_server_core::media::{DownloadLimits, Media, MediaSlots, Upload};
 use meta_whatsapp_server_core::model::TenantId;
 use meta_whatsapp_server_core::operation::Operation;
+use meta_whatsapp_server_core::outbox::Outbox;
 use meta_whatsapp_server_core::ratelimit::{RateLimiter, RateLimits, RouteClass, Slots};
 use meta_whatsapp_server_core::store::RecordStore;
 
@@ -34,6 +35,7 @@ async fn public(
     waba_id: &WabaId,
     pn: PhoneNumberId,
     error: &Error,
+    outbox: &dyn Outbox,
 ) -> Result<(), ServiceError> {
     let _: &Client = authz.client();
     let _: &str = admin.key_id();
@@ -46,7 +48,7 @@ async fn public(
     let _: ServiceError = number.failed(authz, error).await;
     let _: &Client = number.client();
     // The media services, on the number, with limits and an upload made
-    // only by their checks.
+    // only by their checks, reading the received media ids of an outbox.
     let slots = Slots::new(2);
     let media = Media::new(
         authz,
@@ -55,6 +57,7 @@ async fn public(
             transfers: &slots,
             streams: &slots,
         },
+        outbox,
     )?;
     let limits = DownloadLimits::parse(Some("true"), None, 1024)?;
     let _ = media.download("1", limits).await?;

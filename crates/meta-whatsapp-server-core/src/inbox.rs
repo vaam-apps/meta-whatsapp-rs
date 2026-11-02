@@ -208,8 +208,10 @@ fn read_position(cursor: &str) -> Result<(OffsetDateTime, String), ServiceError>
 }
 
 /// Whether a record dated `at` is the holder's to read, under the cut
-/// `from` ([`crate::authz::history_from`]).
-fn visible(from: Option<OffsetDateTime>, at: OffsetDateTime) -> bool {
+/// `from` ([`crate::authz::history_from`]): dated at or after it. The
+/// media services cut received media ids with it too (roadmap M2e,
+/// `crate::media::Received::among`).
+pub(crate) fn visible(from: Option<OffsetDateTime>, at: OffsetDateTime) -> bool {
     from.is_none_or(|from| at >= from)
 }
 

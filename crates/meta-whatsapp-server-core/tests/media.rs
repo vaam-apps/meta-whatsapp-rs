@@ -47,3 +47,14 @@ async fn a_failed_download_yields_no_unverified_end_and_frees_its_slot() {
     conformance::media::a_failed_download_yields_no_unverified_end_and_frees_its_slot(&backend)
         .await;
 }
+
+/// Roadmap M2e, decisive: a media id the service recorded as received on
+/// the tenant's number is asked from Meta without `phone_number_id`; one
+/// recorded on another number, another tenant's row, or before the
+/// binding epoch is `404` with zero requests; every other id keeps Meta's
+/// check.
+#[tokio::test]
+async fn a_media_id_received_elsewhere_is_not_found_with_no_request() {
+    let backend = memory::Memory::default();
+    conformance::media::a_media_id_received_elsewhere_is_not_found_with_no_request(&backend).await;
+}

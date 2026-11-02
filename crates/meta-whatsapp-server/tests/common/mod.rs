@@ -5,6 +5,7 @@
 
 pub mod capture;
 pub mod inbox;
+pub mod media;
 pub mod meta;
 pub mod moving;
 pub mod otp;
@@ -280,6 +281,13 @@ impl EventStore for RecordingEvents {
 
     async fn purge(&self, older_than: std::time::Duration) -> Result<u64, StorageError> {
         self.inner.purge(older_than).await
+    }
+
+    async fn received_media(
+        &self,
+        media_id: &meta_whatsapp_rs::core::ids::MediaId,
+    ) -> Result<Vec<meta_whatsapp_server_core::outbox::ReceivedMedia>, StorageError> {
+        self.inner.received_media(media_id).await
     }
 }
 

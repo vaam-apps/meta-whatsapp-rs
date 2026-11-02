@@ -659,8 +659,8 @@ model evolution (46).
     sent to the number (a media id received by webhook), the M2 inbox
     cannot fetch customers' files through the service: they answer `404`
     like another tenant's.
-    Today: every media id goes through the check; nothing exempts a
-    received one.
+    Until M2e: every media id went through the check; nothing exempted
+    a received one (since M2e: "Built", below).
     Planned remedy: exempt a media id the service itself recorded as
     received on that tenant's number (from M1c's events), and ask Meta
     for it without `phone_number_id`. M1c records inbound events now; the
@@ -676,6 +676,39 @@ model evolution (46).
     tenant's own events carried; the live check with a real received media
     id still says which behaviour Meta has. Swappable: the exemption is
     one lookup. Roadmap M2e.
+
+    **Built 2026-11-02 (roadmap M2e; its choices D77–D79 decided by the
+    coordinator under the owner's delegation, swappable):** the outbox
+    keeps beside each `message_received` row the media id its customer
+    sent (`wa_server_events.media_id`, migration 7). A media id recorded
+    on the caller's own number, routed
+    to its tenant, from the number's binding epoch on, is downloaded with
+    `GET /{media_id}` and no `phone_number_id` (the binding read again
+    first); one recorded anywhere else (another number or tenant, an
+    operator-only row, before the epoch) is `404` with nothing asked of
+    Meta, for a download and a deletion, whatever Meta's check would have
+    answered; an id never recorded keeps the check, and a deletion always
+    does. So the route is safe whichever way Meta behaves for the ids the
+    service saw; for an id it never saw (purged, or from before the
+    release), it is what M1b was.
+
+    **The live check is still to run** (nothing here calls Meta's API).
+    The owner or the coordinator runs it once, with a test number of a
+    WABA they control and its token, and records the four answers here:
+    1. send the number an image from a phone; read its media id from the
+       service (`GET /v1/events?types=message_received`:
+       `data.message.image.id`) or from the webhook;
+    2. `GET https://graph.facebook.com/v25.0/{media_id}?phone_number_id={pn}`
+       with the token, `{pn}` the receiving number: `200` (Meta's check
+       admits received media) or a refusal (it is what M2e works around);
+    3. the same without `phone_number_id`: `200` expected (Meta's
+       documented call; what the service now sends);
+    4. the same with `phone_number_id` of **another** number the token
+       reaches: a refusal means the M1b check alone protected received
+       media too; a `200` means it did not, and M2e's local refusal is
+       what keeps one tenant from another's customers' files;
+    5. through the service, `GET /v1/numbers/{pn}/media/{media_id}` with
+       the receiving tenant's key: `200`, the file verified.
 
 <!-- 46 follows 43 in this section: a list of its own. -->
 

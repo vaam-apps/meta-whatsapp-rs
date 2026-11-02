@@ -4590,7 +4590,7 @@ design's (§9).
   - **After:** S7, L7.
   - **Decisive:** M2.6; taking one of the three types out of
     `TENANT_EVENT_TYPES` fails it.
-- [ ] **M2e. Received media** (row 45; OPEN_QUESTIONS #43): a media id
+- [x] **M2e. Received media** (row 45; OPEN_QUESTIONS #43): a media id
   the service recorded as received on the tenant's number is asked from
   Meta without `phone_number_id`; every other id keeps the check; a live
   check against Meta records which behaviour Meta has.
@@ -4598,6 +4598,75 @@ design's (§9).
   - **Decisive:** another tenant's received media id is `404` with zero
     requests (removing the "recorded on this tenant's number" lookup
     fails it); the live check's result is recorded in OPEN_QUESTIONS #43.
+  - **Landed** (ticked for the first half of its decisive line; **the
+    live check against Meta is still to run**, OPEN_QUESTIONS #43 says
+    how): no route added; `GET` and `DELETE
+    /v1/numbers/{pn}/media/{media_id}` read, before Meta is asked, where
+    the id was recorded as received. The record is the outbox's
+    (D77): `NewEvent::received_media` (the core's `received_media_id`:
+    a `message_received` event's image, video, audio, document or
+    sticker `{type}.id`, or an edit's, digits only) is kept beside the
+    row at insert, on Postgres in `wa_server_events.media_id` with the
+    partial index `wa_server_events_media_idx` (migration 7, expand-only,
+    no table rewrite; a previous release's rows record none), in memory
+    beside the row; `Outbox::received_media` (a port change, required:
+    D79) answers the rows of an id, every stream, the operator-only one
+    included, newest first, at most 16 (`RECEIVED_MEDIA_ROWS`). The core's
+    `Media::received` reads them for the number (`media::Received`): a
+    row of this number routed to its tenant, received from the binding
+    epoch on (`authz::history_from`, on the row's `created_at`) is
+    `Here`, and a download asks `GET /{media_id}` without
+    `phone_number_id`, once `OwnedNumber::still_held` (`503` otherwise),
+    with the number's token, then Meta's URL through the library's
+    allow-list, within the same limits and verification; any other row
+    makes it `Elsewhere`, `404 not_found` for a download and a deletion
+    with nothing asked of Meta (D78; one `info` line, no id); no row,
+    `Never`, Meta's check as in M1b. A deletion is never unscoped.
+    `Media::new` takes the bundle's outbox (breaking for an adapter
+    calling it; the HTTP crate passes the state's). The OpenAPI document
+    is unchanged. Decisive tests, on the core's memory backend, the
+    memory crate's and live on Postgres:
+    `conformance::media::a_media_id_received_elsewhere_is_not_found_with_no_request`
+    (the received id downloaded unscoped with the number's token, each
+    request with the client's time limit; `404` with zero requests on
+    another tenant's number, the tenant's other number, the number's new
+    holder after a move, an operator-only row on it, and before the cut
+    once the number came back; `503` with zero requests for a capability
+    made before the move; a deletion and an upload's id keep the check;
+    Meta's URL off its host `502 upstream` with the token sent nowhere;
+    a reported size over `max_bytes` `413`) and
+    `conformance::outbox::received_media`; over HTTP,
+    `tests/media.rs`'s
+    `another_tenants_received_media_id_is_not_found_with_no_request`
+    (Meta's image webhook through `/webhooks/meta`; also live,
+    `live_postgres.rs`); `metas_media_messages_record_their_media_id_and_nothing_else_does`
+    over every fixture of the library; the log capture
+    `a_received_media_refusal_logs_no_url_id_or_token`; and on Postgres
+    `live_postgres_migration_7_rewrites_no_table_and_records_from_its_release_on`.
+    By mutation, each failing a test: the lookup removed (any recorded
+    row exempting), its tenant, its number or its cut left out; an id
+    received elsewhere sent to Meta's check instead, for a download or a
+    deletion; a received id kept scoped; the binding not read again; the
+    memory or Postgres backend recording no id; an edit not followed, the
+    type not matched, the id not checked; the library's host allow-list
+    and its request time limit removed. The security review (2026-11-02)
+    found the lookup walking the whole outbox on Postgres while
+    `media_id` had no statistics (from migration 7 until the next
+    analyze; a million rows read per request) and made the partial index
+    `(media_id, created_at)`, pinned by its plan in the migration's live
+    test; it pinned the cut's instant and the "one row here is enough"
+    rule (`Received::among`, sharing the inbox's `visible`), each media
+    type's own object, and the `RECEIVED_MEDIA_ROWS` bound in the outbox
+    suite; it documented the refusal's timing (D78). D77–D79 are the
+    coordinator's decisions (2026-11-02, under the owner's delegation,
+    swappable). Migration 7's names are stable identifiers pending the
+    owner (§ Owner touchpoints).
+  - **Left, and why:** the live check (no real account here: run by the
+    owner or the coordinator, OPEN_QUESTIONS #43); media of a coexistence
+    history sync (`history` webhooks) and of the business's own echoes
+    are not recorded (they are not a customer's message on a live
+    number), so they keep the check; a received id older than the
+    outbox's retention keeps the check (Meta keeps it about as long).
 - [ ] **M2f. Erasure in the service** (row 91; D10, D30, D31): an
   admin- or tenant-scoped route that erases a customer on a number
   through the library's `identities` and `erase_all`; deletes the
@@ -5802,7 +5871,11 @@ everything else goes into the parity-completion report.
   Redis conversation layout, added and awaiting confirmation; and L21a's
   `wa.webhook.deadletter` and `wa.webhook.deadletter.contact`, with their
   keys' derivations and their records' shapes, added and awaiting
-  confirmation before the first release; M3d's `wa.server.registration`
+  confirmation before the first release; M2e's Postgres migration 7,
+  "received media": the column `wa_server_events.media_id` (no default:
+  `NULL` for the rows before it, and for those a previous release's
+  replica inserts) and its partial index `wa_server_events_media_idx`,
+  added and awaiting confirmation; M3d's `wa.server.registration`
   namespace, its keys `<budget>:<phone_number_id>` and its record
   `{"v":1,"since","count"}`, ephemeral, added and awaiting confirmation;
   M2b's Postgres channel

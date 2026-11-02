@@ -1771,6 +1771,13 @@ impl Outbox for WatchedOutbox {
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
         self.inner.purge(older_than).await
     }
+
+    async fn received_media(
+        &self,
+        media_id: &meta_whatsapp_rs::core::ids::MediaId,
+    ) -> StoreResult<Vec<crate::outbox::ReceivedMedia>> {
+        self.inner.received_media(media_id).await
+    }
 }
 
 /// The backend's key/value store, counting every call.

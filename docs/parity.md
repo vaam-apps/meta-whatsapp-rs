@@ -72,7 +72,7 @@ its code and tests and Meta's `payments-in/checkout-button-templates`,
 `onboarding-apis` and `pg` pages of 2026-11-02.; the service's cells of rows 108 and 128 with registration and
 the PIN (roadmap M3d), against their code and tests and Meta's
 `business-phone-numbers/registration`, `two-step-verification` and
-registration reference pages of 2026-11-02; the service's cells of rows 120 and 142 with the Embedded Signup routes in both partner modes (roadmap M3a), against their code and tests and Meta's `webhooks/reference/account_update` page of 2026-11-02, the rest as the library's onboarding tests carry Meta's pages. Every cell
+registration reference pages of 2026-11-02; the service's cell of row 45 with received media (roadmap M2e), against its code and tests and Meta's `reference/media/media-api` page of 2026-11-02; the service's cells of rows 120 and 142 with the Embedded Signup routes in both partner modes (roadmap M3a), against their code and tests and Meta's `webhooks/reference/account_update` page of 2026-11-02, the rest as the library's onboarding tests carry Meta's pages. Every cell
 about us was
 checked against the code: a cell that
 says a thing is done names the symbol that does it, and what the service
@@ -83,13 +83,13 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**48 of the 132 counted rows are done on both sides.** Parity is not
+**49 of the 132 counted rows are done on both sides.** Parity is not
 reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
 | Library | 128 | 3 | 0 | 1 |
-| Service | 48 | 22 | 61 | 1 |
+| Service | 49 | 21 | 61 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
   over WhatsApp Web ("n/a — unofficial protocol"). The counted rows'
@@ -97,9 +97,9 @@ reached.
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
 - Each of the library's 3 partial or gap rows is cited by a
-  [roadmap](roadmap.md) item. Each of the service's 83 names, in its
+  [roadmap](roadmap.md) item. Each of the service's 82 names, in its
   status, the roadmap items that bring it; by family (a row can name
-  two): M2 6, M3 7, M4 2, M5 70, P 1 (payments: P2b).
+  two): M2 5, M3 7, M4 2, M5 70, P 1 (payments: P2b).
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
@@ -313,7 +313,7 @@ The owner's definition (2026-09-26):
 | 42 | Media | Voice note | Yes | Partial (arrives as audio) | `messages/audio-messages` (voice messages, Ogg with Opus) | `Audio::voice` | `audio.voice` | done / done |
 | 43 | Media | Round video notes, view-once, albums (GIF playback: row 154) | Yes | No, or sent as plain media | an inbound `gif` is unsupported (`webhooks/reference/messages/unsupported.md`); view-once is unsupported in groups and turned off for coexistence (`groups`, `embedded-signup/onboarding-business-app-users`); none of these in `reference/whatsapp-business-phone-number/message-api.md`; the nearest to an album is a media carousel (row 51) | — | — | n/a — unofficial protocol (a GIF as a template header is row 154) |
 | 44 | Media | Upload, type and size checked | Yes (URL, file or buffer) | Yes | `reference/whatsapp-business-phone-number/media-upload-api.md` | `client::media::Media::upload` | `POST /v1/numbers/{pn}/media` (`server_http::api::media::upload_media`, over `server_core::media::Media::upload`, the checks `server_core::media::Upload::new`) | done / done |
-| 45 | Media | Download received media | Yes | Yes (by key) | `reference/media/media-api.md`, `reference/media/media-download-api.md` | `Media::download` (SHA-256 checked; of media hosts, the token goes only to Graph and `lookaside.fbsbx.com`, and otherwise to one `GET` on `api.facebook.com`, roadmap L10a) | `GET /v1/numbers/{pn}/media/{media_id}` (`server_http::api::media::download_media`, over `server_core::media::Media::download`: whole, or the core's `server_core::media::MediaStream`, one chunk held back); whether Meta serves a *received* media id under the route's `phone_number_id` check is unverified (OPEN_QUESTIONS #43, decided: exempt the ids the service recorded as received, M2e) | done / partial (M2e) |
+| 45 | Media | Download received media | Yes | Yes (by key) | `reference/media/media-api.md`, `reference/media/media-download-api.md` | `Media::download` (SHA-256 checked; of media hosts, the token goes only to Graph and `lookaside.fbsbx.com`, and otherwise to one `GET` on `api.facebook.com`, roadmap L10a) | `GET /v1/numbers/{pn}/media/{media_id}` (`server_http::api::media::download_media`, over `server_core::media::Media::download`: whole, or the core's `server_core::media::MediaStream`, one chunk held back); since M2e a media id the service recorded as received on the number (`server_core::outbox::Outbox::received_media`, the outbox row of the event routed to the tenant, from the binding epoch on) is asked without the `phone_number_id` check, and one recorded elsewhere is `404` with nothing asked (`server_core::media::Media::received`); the live check of Meta's own behaviour is still to run (OPEN_QUESTIONS #43) | done / done |
 | 46 | Media | Delete media | — | — | `reference/media/media-api.md` | `Media::delete` | `DELETE /v1/numbers/{pn}/media/{media_id}` (`server_http::api::media::delete_media`, over `server_core::media::Media::delete`) | done / done |
 | 47 | Media | Resumable upload (template header handles, profile pictures) | — | — | Graph's Resumable Upload API, documented outside the WhatsApp docs; the WhatsApp pages that rely on it: `templates/template-media.md` (header handles), `reference/whatsapp-business-profile/whatsapp-business-profile-node-api.md` (pictures) | `Media::resumable_upload` | not exposed | done / gap (M5c1) |
 | 48 | Media | Converting media (voice to Opus, stickers from images, resizing) | Yes | Yes (runs locally: ffmpeg, sharp) | none (client side); accepted formats: `business-phone-numbers/media` (Ogg "OPUS codecs only", "mono input only"; images "8-bit, RGB or RGBA", JPEG and PNG, 5 MB), `messages/audio-messages`, `messages/sticker-messages` (WebP, 100 KB static, 500 KB animated; no dimensions) | done: through the port `core::media::MediaConverter`, voice to Opus (`core::media::TargetFormat::OggOpus`: mono Ogg Opus, uploaded as `audio/ogg`; L19), a PNG or JPEG into a static sticker (`core::media::TargetFormat::StaticSticker`: a static WebP within 100 000 bytes, uploaded as `image/webp`) or under the image limit (`core::media::TargetFormat::Jpeg`, `core::media::TargetFormat::Png`: 8-bit, within 5 000 000 bytes; L19b), an animated GIF into an animated sticker (`core::media::TargetFormat::AnimatedSticker`: an animated WebP within 500 000 bytes, uploaded as `image/webp`; L19c), each of which `client::media::validate_upload` takes (`client::media::Media::upload_converted`), implemented by `adapters::media::FfmpegConverter` (feature `ffmpeg`, off by default: an `ffmpeg` the integrator installs, run with fixed arguments, stdin and stdout only, its input protocols and formats restricted (an image: PNG or JPEG; an animation: GIF; by its first bytes and by ffmpeg's own detection, a PNG's text and a GIF's comments and application extensions taken out first), bounded in input, pixels, frames (an animation: 500, and 100 of 512 × 512 or larger), length (10 s), output and time, an image or an animation brought under its limit by a fixed ladder of sizes, frame rates and qualities, the output's header or chunks checked; failures `core::error::ConversionError`); an animated PNG or WebP is refused (ffmpeg 6.1 reads neither from a pipe) | gap: the image carries no `ffmpeg` ([design §7](design/server.md#7-operations), M4); configuring a converter is M5c1's | done / gap (M5c1) |

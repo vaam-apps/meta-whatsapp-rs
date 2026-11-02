@@ -5,7 +5,7 @@ description: "Sending WhatsApp messages, media and templates, and replying from 
 
 # meta-whatsapp-rs-server-send
 
-> **Verified against meta-whatsapp-rs 5d205a567f605a3281b533bdf8024c0215a8489e (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 08271f08c9e14c5a40cc558d854dc5ebb0343cdb (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/send.ts](examples/send.ts) and [examples/payments.ts](examples/payments.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -113,9 +113,9 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/media" -H "Authorization
 Downloads are checked against Meta's SHA-256 before the first byte:
 `integrity` (502) instead of a corrupt file, `X-WA-SHA256` on success.
 At most `max_bytes` (16 MiB by default and at most); larger files need
-`stream` set to true, where a mismatch **aborts the connection** before
-the last chunk: keep the bytes aside until the body ended cleanly. A
-`media_id` is digits, and your number's: another's is `not_found`.
+`stream` true, where a mismatch **aborts the connection** before the last
+chunk: keep the bytes until the body ended. `media_id` is digits, your
+number's; a customer's file, from the number it reached (else `not_found`).
 
 ```ts
 const { data, error, response } = await api.GET("/v1/numbers/{pn}/media/{media_id}", {
@@ -149,8 +149,8 @@ sent; a platform key shares the tenant's budget. Meta's own limits answer
   timed-out message went out: its status event (`GET /v1/events`) or your
   `Idempotency-Key` repeat does.
 - No campaign pacing or opt-out registry: respect `marketing_opted_out`.
-- Meta documents its per-number media check for uploads only: a file
-  received by webhook answering `not_found` may be that; report it.
+- A customer's file older than `WA_SERVER_OUTBOX_RETENTION` (7 days) goes
+  through Meta's per-number check, documented for uploads only.
 - No Direct Send, Flows, product or carousel messages; no documents route (M4). India's checkout button templates are sent as any payment template (the order details button's order may offer shipping addresses); linking their checkout endpoint has no route yet. Authentication templates and login codes: `meta-whatsapp-rs-server-otp`.
 
 ## Related skills

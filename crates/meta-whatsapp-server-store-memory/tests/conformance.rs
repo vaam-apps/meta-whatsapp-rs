@@ -235,6 +235,28 @@ impl Outbox for IgnoresTheGuard {
     async fn purge(&self, _older_than: Duration) -> StoreResult<u64> {
         Ok(0)
     }
+
+    async fn received_media(
+        &self,
+        media_id: &meta_whatsapp_rs::core::ids::MediaId,
+    ) -> StoreResult<Vec<meta_whatsapp_server_core::outbox::ReceivedMedia>> {
+        let rows = self.rows.lock().unwrap();
+        Ok(rows
+            .iter()
+            .rev()
+            .filter(|row| {
+                meta_whatsapp_server_core::outbox::received_media_id(&row.event_type, &row.data)
+                    .as_ref()
+                    == Some(media_id)
+            })
+            .map(|row| meta_whatsapp_server_core::outbox::ReceivedMedia {
+                tenant: row.tenant.clone(),
+                phone_number_id: row.phone_number_id.clone(),
+                received_at: row.created_at,
+            })
+            .take(meta_whatsapp_server_core::outbox::RECEIVED_MEDIA_ROWS)
+            .collect())
+    }
 }
 
 /// S2's security review, L4, closed by roadmap S3: an outbox that ignores
@@ -351,6 +373,13 @@ impl Outbox for RewritesTheGuard {
 
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
         self.inner.purge(older_than).await
+    }
+
+    async fn received_media(
+        &self,
+        media_id: &meta_whatsapp_rs::core::ids::MediaId,
+    ) -> StoreResult<Vec<meta_whatsapp_server_core::outbox::ReceivedMedia>> {
+        self.inner.received_media(media_id).await
     }
 }
 
@@ -555,6 +584,13 @@ impl Outbox for IgnoresTheTenant {
 
     async fn purge(&self, older_than: Duration) -> StoreResult<u64> {
         self.inner.purge(older_than).await
+    }
+
+    async fn received_media(
+        &self,
+        media_id: &meta_whatsapp_rs::core::ids::MediaId,
+    ) -> StoreResult<Vec<meta_whatsapp_server_core::outbox::ReceivedMedia>> {
+        self.inner.received_media(media_id).await
     }
 }
 
