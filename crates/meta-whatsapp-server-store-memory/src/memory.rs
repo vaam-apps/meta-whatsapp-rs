@@ -22,8 +22,8 @@ use crate::MemoryEventStore;
 use meta_whatsapp_server_core::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
-    NumberBinding, NumberStatus, NumberTombstone, OtpSettings, PageRequest, Tenant, TenantId,
-    TenantStatus, WabaBinding, WabaTombstone,
+    NewSignupAttempt, NumberBinding, NumberStatus, NumberTombstone, OtpSettings, PageRequest,
+    SignupAttempt, Tenant, TenantId, TenantStatus, VaultEntry, WabaBinding, WabaTombstone,
 };
 
 /// In-memory [`RecordStore`] and [`IdempotencyRecords`]. Its event outbox is [`MemoryStore::outbox`]: one
@@ -94,6 +94,12 @@ pub(super) struct State {
     /// Each tenant's OTP settings, by tenant id, in their stored form
     /// (`OtpSettings::to_stored`), as Postgres keeps them (roadmap M3c).
     otp_settings: BTreeMap<String, serde_json::Value>,
+    /// Signup attempts, by WABA id (roadmap M3a): one per WABA, gone with
+    /// its binding.
+    signup_attempts: BTreeMap<String, SignupAttempt>,
+    /// The vault's records kept past a binding, by [`VaultEntry::key`]
+    /// (roadmap M3a): kept for good.
+    vault_entries: BTreeMap<String, VaultEntry>,
 }
 
 /// Lock `state`, a poisoned lock included (no invariant spans a panic).
@@ -531,6 +537,115 @@ impl RecordStore for MemoryStore {
         }
         Ok(true)
     }
+
+    async fn set_credit_allocation_if(
+        &self,
+        epoch: &BindingEpoch,
+        allocation_config_id: &str,
+    ) -> StoreResult<bool> {
+        let mut state = self.lock();
+        if !holds(&state, epoch) {
+            return Ok(false);
+        }
+        if let Some(binding) = state.wabas.get_mut(epoch.waba_id.as_str()) {
+            binding.credit_allocation_id = Some(allocation_config_id.to_owned());
+        }
+        Ok(true)
+    }
+
+    async fn save_signup_attempt(&self, attempt: &NewSignupAttempt) -> StoreResult<bool> {
+        let now = OffsetDateTime::now_utc();
+        let mut state = self.lock();
+        let bound = state
+            .wabas
+            .get(attempt.waba_id.as_str())
+            .is_some_and(|w| w.tenant_id == attempt.tenant_id);
+        if !bound {
+            return Ok(false);
+        }
+        // A replacement of the same tenant's attempt keeps when it began.
+        let created_at = state
+            .signup_attempts
+            .get(attempt.waba_id.as_str())
+            .filter(|kept| kept.tenant_id == attempt.tenant_id)
+            .map_or(now, |kept| kept.created_at);
+        state.signup_attempts.insert(
+            attempt.waba_id.as_str().to_owned(),
+            SignupAttempt {
+                tenant_id: attempt.tenant_id.clone(),
+                waba_id: attempt.waba_id.clone(),
+                failed_step: attempt.failed_step.clone(),
+                session: attempt.session.clone(),
+                finish_kind: attempt.finish_kind.clone(),
+                created_at,
+                updated_at: now,
+            },
+        );
+        Ok(true)
+    }
+
+    async fn signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<Option<SignupAttempt>> {
+        Ok(self
+            .lock()
+            .signup_attempts
+            .get(waba_id.as_str())
+            .filter(|attempt| &attempt.tenant_id == tenant)
+            .cloned())
+    }
+
+    async fn signup_attempts(
+        &self,
+        tenant: &TenantId,
+        request: &PageRequest,
+    ) -> StoreResult<Listing<SignupAttempt>> {
+        let state = self.lock();
+        let items = page(&state.signup_attempts, request, |a: &SignupAttempt| {
+            &a.tenant_id == tenant
+        });
+        Ok(listing(
+            items.into_iter().map(|(_, a)| a).collect(),
+            request.limit,
+            |a: &SignupAttempt| a.waba_id.as_str().to_owned(),
+        ))
+    }
+
+    async fn delete_signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<bool> {
+        let mut state = self.lock();
+        let theirs = state
+            .signup_attempts
+            .get(waba_id.as_str())
+            .is_some_and(|attempt| &attempt.tenant_id == tenant);
+        if theirs {
+            state.signup_attempts.remove(waba_id.as_str());
+        }
+        Ok(theirs)
+    }
+
+    async fn record_vault_entry(&self, entry: &VaultEntry) -> StoreResult<()> {
+        self.lock()
+            .vault_entries
+            .entry(entry.key())
+            .or_insert_with(|| entry.clone());
+        Ok(())
+    }
+
+    async fn vault_entries(&self, request: &PageRequest) -> StoreResult<Listing<VaultEntry>> {
+        let state = self.lock();
+        let items = page(&state.vault_entries, request, |_| true);
+        Ok(listing(
+            items.into_iter().map(|(_, e)| e).collect(),
+            request.limit,
+            VaultEntry::key,
+        ))
+    }
 }
 
 /// Whether `epoch.waba_id` is still bound as `epoch` says: the same
@@ -556,6 +671,8 @@ fn unbind(state: &mut State, waba_id: &WabaId) -> bool {
         .map(|(pn, _)| pn.clone())
         .collect();
     release(state, &numbers, now);
+    // Its signup attempt goes with it (Postgres: ON DELETE CASCADE).
+    state.signup_attempts.remove(waba_id.as_str());
     state.tombstones.insert(
         waba_id.as_str().to_owned(),
         WabaTombstone::of(&binding, now),

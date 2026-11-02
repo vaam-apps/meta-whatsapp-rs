@@ -201,7 +201,8 @@ service's use `wa_server_` and their own migration history:
 | `wa_server_waba_tombstones` (S2b) | `waba_id` (unique) → the tenant its last unbinding was from (null once deleted), when, and when it had last left another tenant before |
 | `wa_server_numbers` | `phone_number_id` (unique) → tenant, WABA, status (`connected`, `reconnect_required`, `disconnected`), when it came under its tenant and when another tenant last released it (M2h) |
 | `wa_server_number_tombstones` (M2h) | `phone_number_id` (unique) → the tenant its last release was from (null once deleted), when, and when it had last been released by another tenant before |
-| `wa_server_signup_attempts` | resumable attempts: tenant, WABA, failed step, session info (never the code or PIN) |
+| `wa_server_signup_attempts` | resumable attempts: tenant, WABA, failed step, session info (never the code or PIN); *as built in M3a* (migration 6): one per WABA, its primary key referencing the WABA's binding `ON DELETE CASCADE` (an attempt goes with its binding), the flow's completion (`finish_kind`), `created_at` and `updated_at` |
+| `wa_server_vault_records` (M3a) | the token vault's records kept past a binding, which a key rotation walks besides the bindings: `kind` (`waba`: a credit ledger; `business`: a revocation marker) and `id`, kept for good |
 | `wa_server_idempotency` | [§5.4](#54-idempotency-keys) |
 | `wa_server_events`, `wa_server_event_streams` | the outbox: tenant (null = operator-only), the sequence within its tenant's stream, id, number, WABA, type, JSON and its size; each stream's last sequence and how far it was purged |
 | `wa_server_webhook_endpoints`, `…_deliveries` | [§4.4](#44-webhooks-out) |
@@ -491,7 +492,26 @@ only with the `Authorizer` that made it
   `account_updated` with `PARTNER_APP_UNINSTALLED` or `ACCOUNT_DELETED`
   does the same and emits `number_disconnected`. A tenant whose token no
   longer works (`409 number_not_connected` or `reconnect_required`)
-  cannot disconnect: the operator's path is the admin unbind.
+  cannot disconnect: the operator's path is the admin unbind. *As built
+  in M3a*: in Solution Partner mode the disconnection revokes the credit
+  line between the unsubscription and the deletion (the library's
+  `EmbeddedSignup::offboard`, then the binding the capability was made
+  from; a revocation that fails deletes nothing, `step:
+  revoke_credit_line`). The webhooks are acted on by the core's
+  `signup::AccountUpdates` (the pipeline's `AccountActions`, after the
+  event is recorded): `PARTNER_APP_UNINSTALLED` of the deployment's own
+  app (`partner_app_id` is `WA_APP_ID`) and `ACCOUNT_DELETED` offboard
+  (revoke first in Solution Partner mode, from the owner the vault
+  recorded, else the webhook's `owner_business_id`; then the token; then
+  the bindings), `PARTNER_REMOVED` revokes at once in Solution Partner
+  mode (D14) and leaves the token and the bindings; each is confirmed
+  with Graph first ([§6](#6-security), D72). No `number_disconnected`
+  event is emitted yet (the service's number events are M2c–M2e's): the
+  `account_updated` event reaches the tenant. A partner disconnection
+  deletes only the token and the binding it read before the
+  revocation's calls (a WABA moved meanwhile keeps its new holder's). In
+  Solution Partner mode a tenant's deletion revokes each of its WABAs'
+  lines the same way; the admin unbind revokes nothing (D75).
 - **Admin unbind** (`DELETE /v1/admin/wabas/{waba_id}/binding`, D4): with
   the stored token, if usable, unsubscribe the app, at best (Meta refusing
   does not stop it); then delete the vault entry, then the bindings. A
@@ -580,7 +600,7 @@ Rules the service implements:
 | `GET /v1/wabas`, `GET /v1/numbers` | the tenant's WABAs; its numbers with connection status | → `{data: [...]}` |
 | `GET /v1/numbers/{pn}` | live details: display number, verified name, quality, name status, throughput | → object |
 | `GET`, `PATCH /v1/numbers/{pn}/profile` | business profile: about, address, description, email, websites, vertical | partial profile → profile |
-| `DELETE /v1/wabas/{waba_id}` | disconnect ([§3.4](#34-how-numbers-get-bound)); if unsubscribing fails, nothing is deleted and the answer is Meta's error's code and status ([§5.2](#52-codes-and-statuses): `502` when Meta fails, `403` or `409` when it refuses, `504` on a timeout); a tenant whose token no longer works asks the operator for the admin unbind | → 204 |
+| `DELETE /v1/wabas/{waba_id}` | disconnect ([§3.4](#34-how-numbers-get-bound)); in Solution Partner mode the credit line revoked after the unsubscribe and before the token and bindings, only those the capability was made from (M3a; audited `credit_line_revoked`); if unsubscribing fails, nothing is deleted and the answer is Meta's error's code and status ([§5.2](#52-codes-and-statuses): `502` when Meta fails, `403` or `409` when it refuses, `504` on a timeout); a tenant whose token no longer works asks the operator for the admin unbind | → 204 |
 
 **Registration and the two-step PIN** (scope `numbers`; roadmap M3d,
 decision D6: the PIN is typed per attempt and never stored)
@@ -681,10 +701,10 @@ receives its own tenant's events.
 
 | Method and path | Does | Request → response | Notable errors |
 | --- | --- | --- | --- |
-| `POST /v1/signup/sessions` | bind an attempt (15 min) to the tenant; what `FB.init` and `FB.login` need | `{coexistence?}` → `{state, expires_at, app_id, config_id, graph_api_version, launch_options}` | |
-| `POST /v1/signup/complete` | redeem for this tenant, then onboard | `{state, code, event, pin?}` → `{status: connected \| cancelled, waba_id, phone_number_ids, steps_completed, needs_coexistence_sync, credit_allocation_id?}` | 403 `stale_attempt`; 409 `waba_owned_by_another_tenant`; 502 `onboarding_failed` (`step`, `resumable`) |
-| `GET /v1/signup/attempts` | the tenant's resumable attempts | → `{data: [{waba_id, failed_step, updated_at}]}` | |
-| `POST /v1/signup/resume` | rerun the steps after the stored token | `{waba_id, pin?}` → like `complete` | 404 `nothing_to_resume`; 502 `onboarding_failed` |
+| `POST /v1/signup/sessions` | bind an attempt (15 min) to the tenant; what `FB.init` and `FB.login` need; *as built in M3a*: the library's `SignupSessions::start` (`wa.es.session`, unchanged), `launch_options` the library's `LaunchOptions` as JSON (coexistence's `featureType` when asked), `200`, asks Meta nothing, rate class `send` | `{coexistence?}` → `{state, expires_at, app_id, config_id, graph_api_version, launch_options}` | *as built*: 409 `signup_not_configured` (no `WA_APP_ID` or `WA_ES_CONFIG_ID`) |
+| `POST /v1/signup/complete` | redeem for this tenant, then onboard; *as built in M3a*: every input checked first (`422` on `state`, `code`, `pin`, `event`, `body`; 16 KiB), D4 on the claimed WABA before the redemption, then the library's `onboard_with_approval`, whose approval binds the verified WABA and all its numbers (D4 atomically) before anything is stored, subscribed or shared; a `CANCEL` answers `cancelled` with its `current_step` and redeems nothing; an attempt that stopped after its token was stored kept (`resumable: true`); audited `signup_completed` | `{state, code, event, pin?}` → `{status: connected \| cancelled, waba_id, phone_number_ids, steps_completed, needs_coexistence_sync, credit_allocation_id?}` | 403 `stale_attempt`; 409 `waba_owned_by_another_tenant`; 502 `onboarding_failed` (`step`, `resumable`) |
+| `GET /v1/signup/attempts` | the tenant's resumable attempts; *as built in M3a*: paged as every list, with `created_at` too, rate class `read` | → `{data: [{waba_id, failed_step, updated_at}]}` | |
+| `POST /v1/signup/resume` | rerun the steps after the stored token; *as built in M3a*: the tenant's own attempt only (another tenant's is `404`, nothing read), the library's `resume_with_approval` from the stored token, no code (`OnboardingRequest::for_resume`, the kept completion setting the coexistence steps), its approval checking the binding again before any credit call; the attempt dropped once done, kept at its new step otherwise; audited `signup_resumed` | `{waba_id, pin?}` → like `complete` | 404 `nothing_to_resume`; 502 `onboarding_failed` |
 | `POST /v1/numbers/{pn}/coexistence-sync` | start the contacts and history sync, once, within 24 h (D7) | `{types}` → 202 | 409 `sync_not_allowed` |
 | `POST /v1/otp/issue` | send a code with the tenant's authentication template; *as built in M3c*: from the sending number of the tenant's OTP settings, else the default OTP tenant's (D8, [§4.7](#47-otp)), an `Idempotency-Key` as on a send (its fingerprint keyed with the pepper), rate class `otp_issue` | `{phone, purpose?}` → `{status: sent, challenge_id, expires_at}` or `{status: cooling_down \| rate_limited, retry_after_seconds}` | 422 `phone`, `recipient_not_supported`; 502/504 with `may_have_been_sent: true`; *as built*: 409 `otp_not_configured` |
 | `POST /v1/otp/verify` | check the typed code; always counts as an attempt; *as built in M3c*: asks Meta nothing and reads no token, rate class `otp_verify`; another tenant's code is `not_found`, the namespace being the caller's tenant | `{phone, purpose?, code}` → `{result: verified \| invalid \| expired \| too_many_attempts \| not_found, attempts_left?}` | 422; *as built*: 409 `otp_not_configured` |
@@ -697,10 +717,11 @@ a caller's generic error handling can never swallow `invalid`.
 
 | Method and path | Does |
 | --- | --- |
-| `POST`, `GET`, `PATCH`, `DELETE /v1/admin/tenants[/{id}]` | create, list, suspend, configure (OTP sender and template, limits), delete (disconnects every WABA); *as built in M3c*: the OTP settings are a resource of their own, `GET`, `PUT` and `DELETE /v1/admin/tenants/{id}/otp` (the sending number, which must be one of the tenant's, the template and language, the library's limits; audited), and `PATCH` stays name and status; per-tenant rate limits are not settable |
+| `POST`, `GET`, `PATCH`, `DELETE /v1/admin/tenants[/{id}]` | create, list, suspend, configure (OTP sender and template, limits), delete (disconnects every WABA; in Solution Partner mode each WABA's credit line revoked first, a failed revocation deleting nothing, D75); *as built in M3c*: the OTP settings are a resource of their own, `GET`, `PUT` and `DELETE /v1/admin/tenants/{id}/otp` (the sending number, which must be one of the tenant's, the template and language, the library's limits; audited), and `PATCH` stays name and status; per-tenant rate limits are not settable |
 | `…/tenants/{id}/keys[/{key_id}]`, `/v1/admin/platform-keys[/{key_id}]` | mint, list, revoke keys; platform keys with their allowed tenants |
-| `POST /v1/admin/tenants/{id}/wabas`; `GET /v1/admin/wabas/{waba_id}`; `DELETE /v1/admin/wabas/{waba_id}/binding` | attach an own WABA, verified with Meta and subscribed; which tenant holds a WABA, and its numbers; unbind (D4: token deleted too, [§3.4](#34-how-numbers-get-bound)) |
-| `POST /v1/admin/vault/rotate` | re-encrypt every WABA's token under the active key, walking `wa_server_wabas` (the vault cannot list itself), within the request deadline: a walk cut there answers `504 timeout` and is repeated (idempotent), and `meta-whatsapp-server vault rotate` has no deadline. It walks bound WABAs only, which holds every vault record in M1a; M3 keeps records past a binding (credit ledgers of offboarded WABAs, revocation markers), and the walk must cover those too (`TokenVault::rotate` on each such WABA, `rotate_business` on each marker) before an operator may drop an old key |
+| `POST /v1/admin/tenants/{id}/wabas`; `GET /v1/admin/wabas/{waba_id}`; `DELETE /v1/admin/wabas/{waba_id}/binding` | attach an own WABA, verified with Meta and subscribed; which tenant holds a WABA, and its numbers; unbind (D4: token deleted too, [§3.4](#34-how-numbers-get-bound); no credit line revoked, D75) |
+| `POST /v1/admin/vault/rotate` | re-encrypt every WABA's token under the active key, walking `wa_server_wabas` (the vault cannot list itself), within the request deadline: a walk cut there answers `504 timeout` and is repeated (idempotent), and `meta-whatsapp-server vault rotate` has no deadline. It walks bound WABAs only, which holds every vault record in M1a; M3 keeps records past a binding (credit ledgers of offboarded WABAs, revocation markers), and the walk must cover those too (`TokenVault::rotate` on each such WABA, `rotate_business` on each marker) before an operator may drop an old key. *As built in M3a*: it does: the records kept past a binding are remembered in `wa_server_vault_records` when they may be written (a Solution Partner's approval, an offboarding, a revocation; D71) and walked after the bindings, the answer gaining `records` and `failed_records`; the old key may go once `failed` and `failed_records` are both empty |
+| `POST /v1/admin/wabas/{waba_id}/credit-line/reshare` (M3a) | fund again a business whose credit line was revoked: the operator's explicit, audited decision (`credit_line_reshared`; D14, D74), the library's `resume_with_approval` with `reshare_after_revocation` from the WABA's stored token; `409 signup_not_configured` outside Solution Partner mode |
 | `GET /livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` | internal listener, no key; `version` reports server, meta-whatsapp-rs revision, Graph and API versions; `/v1/openapi.json` is served by the axum API adapter, while the CrateStack adapter's contract is its `.cstack` schema ([§8](#8-modular-architecture-and-client-sdks)) |
 
 The public listener serves `GET|POST /webhooks/meta` and `GET /livez`,
@@ -895,9 +916,31 @@ including their public previews, on 2026-10-15
 | Steps | exchange code, `debug_token`, verify assets, store token, subscribe app, register number | the same, plus, between `subscribe_app` and `register_phone` (Meta's documented order): adding the partner's system user to the merchant's WABA (`POST /{waba_id}/assigned_users`, a prerequisite of the one-call method) and sharing the partner's extended credit line (`POST /{extended_credit_line_id}/whatsapp_credit_sharing_and_attach` with `waba_id`, `waba_currency`) with the **partner's system user token**, never the merchant's; the returned allocation config id is stored on the WABA. Meta's newer two-call method (share with the system token, attach with the merchant's token) is supported by the library as an option |
 | Who pays Meta | the merchant, after adding a payment method in WhatsApp Manager | the partner's credit line |
 | Extra settings | — | `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` (default; one of AUD, EUR, GBP, IDR, INR, USD; a signup may override it). A credit line cannot be changed once attached to a WABA |
-| Library | implemented | in flight (L3): the step's name, resume behaviour and error kinds come from it |
+| Library | implemented | implemented (L2, L3): the step's name, resume behaviour and error kinds come from it |
 
 The mode is per deployment (per Meta app), not per tenant.
+
+*As built in M3a*: the core's `signup` module (`Signups`, built by the
+HTTP crate's `AppState::from_backend` on the bundle's `KvStore` and the
+service's clock, with the deployment's `SignupDeployment`: the app, the
+configuration, the mode; `Signups::open` admits the `Caller`) drives the
+library's `EmbeddedSignup` with the vault the `Authorizer` holds
+(`Authorizer::vault_for_signup`, crate-private, a UI case pins it). Both
+modes run `onboard_with_approval` and `resume_with_approval`: the
+approval is where the WABA is bound (D4, before anything is stored,
+subscribed or shared), in a Solution Partner's flow too, where the
+library records it in the credit ledger. A completion confirms the
+binding once onboarded (moved meanwhile, the token it stored is taken
+back, `503`); a store that failed after the approval bound a WABA no one
+held takes the binding back. The PIN is typed per attempt and never
+stored (D6); the merchant's token, the PIN, the code and the state are in
+no answer, log, error, audit event or row; Meta's texts are withheld from
+the logs (`ServiceError::from_library_withholding_texts`, as on the OTP
+routes) and its `details` from the answers. Not built: a per-signup
+currency (`WA_WABA_CURRENCY` for every merchant), the two-call credit
+method (`CreditSharing::ShareThenAttach`), clearing a pending share
+(`EmbeddedSignup::clear_pending_share`), hosted signup and several WABAs
+per signup (M3f).
 
 **Decision (D5): onboarding mode in production (OQ #3).** (a) Tech
 Provider: merchants pay Meta; (b) Solution Partner: the platform pays
@@ -1002,7 +1045,7 @@ each new kind into `unknown` silently.
 | HTTP | Codes | Meaning |
 | --- | --- | --- |
 | 422 | `invalid_request` (local validation, with `field`), `invalid_parameter`, `unsupported_message_type`, `recipient_not_supported`, `undeliverable`, `template_parameter_mismatch`, `template_not_found`, `template_text_too_long`, `template_policy_violation`, `template_rejected`, `sample_template_not_allowed` (Meta's `hello_world` from a number that is not one of its public test numbers), `idempotency_key_reused` | fix the request; nothing was sent |
-| 409 | `customer_service_window_closed`, `thread_owned_elsewhere` (Meta's `131070`, a service message without owning the thread, and the inbox's local refusal while another app owns it), `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a stored token: a merchant's, or an attached WABA's once stored), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown`, `otp_not_configured` (roadmap M3c: no OTP settings for the tenant and no default OTP tenant, or the sending number is no longer its holder's) | a state must change first |
+| 409 | `customer_service_window_closed`, `thread_owned_elsewhere` (Meta's `131070`, a service message without owning the thread, and the inbox's local refusal while another app owns it), `marketing_opted_out`, `blocked_by_business`, `experiment_holdout`, `template_paused`, `template_disabled`, `template_syncing`, `template_unavailable`, `template_limit_reached`, `flow_unavailable`, `registration`, `two_step_verification`, `sync_not_allowed`, `duplicate_onboarding`, `number_not_connected`, `reconnect_required` (also Meta's `authentication` on a stored token: a merchant's, or an attached WABA's once stored), `waba_owned_by_another_tenant` (also a phone number another tenant holds), `tenant_exists`, `idempotency_in_progress`, `outcome_unknown`, `otp_not_configured` (roadmap M3c: no OTP settings for the tenant and no default OTP tenant, or the sending number is no longer its holder's), `signup_not_configured` (roadmap M3a: no `WA_APP_ID` or `WA_ES_CONFIG_ID`) | a state must change first |
 | 403 | `permission`, `account_restricted`, `country_restricted`, `payment`, `feature_not_available`, `marketing_not_allowed`; `forbidden`, `tenant_suspended`, `stale_attempt` | not allowed, by Meta or the service |
 | 429 | `rate_limited` (Meta's throttling codes, `ErrorKind::RateLimited`: 4, 80007, 130429, and the Graph API's Business Use Case limits 80008, 80009, 80014), `pair_rate_limited`, `spam_rate_limited`, `ecosystem_engagement_limit`, `classification_limit_reached`, `too_many_requests`, `too_many_streams` | `Retry-After` when known (the service's own limits, `too_many_requests` and `too_many_streams`: Meta's wait is not forwarded); `retryable` says whether waiting helps (false for 131048, 131049) |
 | 404, 410, 413 | `not_found`, `nothing_to_resume`; `cursor_expired`; `payload_too_large`, `media_too_large` | |
@@ -1115,7 +1158,16 @@ client certificate, admitted to `/webhooks/meta`. The app secret signs
 every tenant's deliveries: whoever holds it can forge any tenant's
 events. So from M3, a webhook that would do something destructive (a
 `PARTNER_APP_UNINSTALLED` disconnecting a WABA, a credit line revoked) is
-confirmed with Graph first, not acted on by its signature alone. The internal listener is reachable only from the
+confirmed with Graph first, not acted on by its signature alone. *As
+built in M3a* (D72): `debug_token` on the WABA's stored token, under the
+app token; one Meta still reports valid and granted the WABA contradicts
+the webhook, which is recorded and not acted on (`warn`, target `audit`).
+A WABA with no stored token leaves nothing to confirm with: what the
+library then acts on is its own records (a revocation finds the line's
+records for the business, or none). Meta documents no read that confirms
+either event, and that a removed or uninstalled merchant's token stops
+being valid or granted is this design's assumption: a deployment where it
+does not hold sets `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION=signature`. The internal listener is reachable only from the
 private network (a `NetworkPolicy` admitting the two backends). Egress:
 `graph.facebook.com`, `lookaside.fbsbx.com`, allowed webhook destinations.
 
@@ -1151,6 +1203,7 @@ third-party licences of what it contains (M4); it contains no `ffmpeg`
 | `WA_APP_ID`, `WA_APP_SECRET`, `WA_VERIFY_TOKEN`, `WA_ES_CONFIG_ID` | — | the Meta app |
 | `WA_VAULT_KEY*`, `WA_OTP_PEPPER`, `WA_SERVER_DATA_KEY*` | — | [§6](#6-security); `WA_VAULT_KEY_ID` defaults to `k1`, `WA_VAULT_PREVIOUS_KEYS` is `<id>:<base64 of 32 bytes>`, comma-separated, each id once (the active key's included: a repeated id refuses the start) |
 | `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` |
+| `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` (M3a) | `graph` | D72: an `account_update` that offboards a merchant or revokes their line confirmed with Graph first (`graph`), or acted on by its signature alone (`signature`) |
 | `WA_GRAPH_API_VERSION`, `WA_GRAPH_ENDPOINT` | `ApiVersion::DEFAULT` (v25.0), Graph | the version is also handed to the signup page; the endpoint serves proxies and test stubs, and must be `https` outside development (every token travels to it) |
 | `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` | none | hosts and CIDRs for webhooks-out |
 | `WA_SERVER_OUTBOX_RETENTION`, `…_IDEMPOTENCY_TTL`, `…_WEBHOOK_RETRY_WINDOW` | 7 d, 24 h, 72 h | |
@@ -1797,6 +1850,23 @@ What it holds today, where it differs from the target above:
   (`Fingerprint::issue_otp`, D47). The conformance suite `otp` holds a
   backend to the settings' record and runs M3.5's namespace case with no
   HTTP layer.
+- **Embedded Signup is the core's** (M3a). `signup` holds `Signups`
+  (the library's `SignupSessions` on the bundle's `KvStore`, the
+  deployment's `SignupDeployment`), opened for an admitted `Caller`
+  (`Signup`: `start`, `complete`, `attempts`, `resume`), and
+  `AccountUpdates`, the webhook pipeline's `AccountActions`
+  (`Pipeline::with_account_actions`), which offboards a merchant on
+  `account_update` once the event is recorded (routed while the WABA is
+  still bound); `Signups::offboard` is a Solution Partner's
+  disconnection (`numbers::Waba::offboarded_by`), and
+  `Signups::reshare_credit_line` the operator's re-funding. The attempts
+  and the vault's records kept past a binding are a `RecordStore` port
+  change (`save_signup_attempt`, `signup_attempt`, `signup_attempts`,
+  `delete_signup_attempt`, `set_credit_allocation_if`,
+  `record_vault_entry`, `vault_entries`: both in-tree backends, the
+  Postgres one in migration 6), held by the conformance suite `signup`,
+  which also runs acceptance test M3.4's D4 case and a rotation reaching
+  an offboarded WABA's ledger with no HTTP layer.
 - **Adapter-neutral pieces** (S6). The tenant operations are named by
   id (`operation::Operation`: the HTTP adapter's `operationId`s, with
   their scope), and what the core decides about a request follows its
@@ -2259,6 +2329,13 @@ choice stays the owner's.
 | D67 | Idempotency on the registration routes | none (the design listed them nowhere) / on the request of a code, a registration and a deregistration, the PIN no input of the fingerprint / the same, an HMAC of the PIN in it | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the fingerprint without the PIN, and a wrong PIN releases the key.** A 6-digit PIN's digest is the PIN (a million guesses), and even keyed it is a stored derivative of it: the fingerprint is the number and the region only. The cost: a repeat under a kept key with another PIN replays the first answer; a wrong PIN (`133005`, nothing registered) releases the key, so the corrected PIN reuses it. A replay never sends the repeat's PIN, so its answer says nothing of it. Verifying a code and setting the PIN take no key (a check, and a value set). Swap: `Fingerprint::register_number` | M3d |
 | D68 | Deregistration, destructive at Meta | the scope `numbers` alone / the number's id again in the body (`confirm`), audited / an operator-only route or a scope of its own | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the scope `numbers`, the number's id again in the body (`confirm`), and an audit event (`number_deregistered`).** Meta's page: the number stops working with the Cloud API until registered again (with its PIN), its history is kept and its local storage stays on, a coexistence number cannot be deregistered, and deregistering is limited to 10 requests per number in a moving 72 hours (D66's budget counts it with registering). Under an `Idempotency-Key` a replay never asks Meta again. The merchant owns the number, so the operator is not in the way; the confirmation stops a call aimed at the wrong path, and the audit event names the key. A scope of its own would be a new stored name (keys keep their scopes), so it stays the owner's (roadmap § Owner touchpoints). Swap: `registration::confirmed`; an operator-only deployment withholds the route by scope until then | M3d |
 | D69 | Meta's texts on the registration routes | `details` and debug logs as other routes / none at all | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: none.** Meta's texts could quote the request (the PIN, the code); the answer keeps Meta's code, subcode and trace id (`OwnedNumber::failed_withholding_texts`, M3c's). The cost: `133008`'s wait, which Meta gives in `details`, is not passed on; a caller waits for the attempt budget's `Retry-After` instead. Swap: `registration::Registration`'s `failed`, which calls `OwnedNumber::failed_withholding_texts`; `OwnedNumber::failed` (texts at `debug`) and `ServiceError::with_details` (`details` answered) are the other routes' | M3d |
+| D70 | Where an Embedded Signup attempt that stopped after its token was stored is kept (§2.2's `wa_server_signup_attempts`) | a `RecordStore` port change (a table) / a typed store on the library's `KvStore` (no listing: an index record per tenant) | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the `RecordStore` port change, as built.** One attempt per WABA, its tenant's only, gone with its binding (Postgres: a foreign key, `ON DELETE CASCADE`), the session info and the completion kept, never the code or the PIN. Its stored names (migration 6's tables) stay pending the owner (architecture.md § Stable identifiers). Swap: a backend's `RecordStore` (`save_signup_attempt`, `signup_attempt`, `signup_attempts`, `delete_signup_attempt`; the conformance suite `signup` holds the contract) | M3 |
+| D71 | How a key rotation reaches the vault's records kept past a binding (credit ledgers, revocation markers), which the vault cannot list | a list of them in the service's records, written when they may be written / a listing in the library's vault (a stored format change: the owner's) / the operator's by hand | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the list, as built.** `wa_server_vault_records` (`waba` and `business` entries), written at a Solution Partner's approval (the WABA and its owner), at every offboarding and revocation, kept for good; the rotation walks it after the bindings and reports `records` and `failed_records`. Its table name stays pending the owner. Swap: `RecordStore::record_vault_entry` and `vault_entries` (the rotation is `authz::rotate_vault`) | M3 |
+| D72 | How a destructive `account_update` is confirmed with Graph (§6) | `debug_token` on the stored token / none (the signature) / another read | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: `debug_token` on the WABA's stored token, the setting as the swap.** The binding and the token are read together (the token while the binding held), the token checked with `debug_token`: still valid and granted the WABA is a contradiction, recorded and not acted on (logged, target `audit`). Meta documents no confirming read, so this is an assumption. What it cannot confirm rests on the signature alone: a WABA with no stored token has nothing to delete, and only its line is revoked (from the vault's ledger, else the webhook's `owner_business_id`), as is a `PARTNER_REMOVED` naming no WABA; a revocation the operator's reshare (D74) undoes, never a deletion. With `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION=signature` the app secret's signature is the only gate: whoever holds the secret can sign a delivery that deletes any merchant's token and revokes their line. The action runs after the event is recorded; a retryable failure fails the delivery (`500`, Meta redelivers and the action runs again from fresh reads: the revocation is safe to repeat and the delete is conditional), any other is logged for the operator. Swap: `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` (`signup::AccountUpdateConfirmation`) | M3 |
+| D73 | Which `account_update` events the service acts on, and how | as below / every partner event / none (the integrator's) | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the events acted on, as built.** `PARTNER_APP_UNINSTALLED` of the deployment's app (`partner_app_id` is `WA_APP_ID`) and `ACCOUNT_DELETED` offboard: revoke first in Solution Partner mode, then the token and the bindings, only those read before the revocation's calls (a WABA moved meanwhile keeps its new holder's, logged); `PARTNER_REMOVED` revokes only, in Solution Partner mode (D14), the token kept; a Multi-Partner Solution's removal is not acted on (the deployment's partner business is no setting yet). Swap: the core's `inbound::AccountActions` (`Pipeline::with_account_actions`) | M3 |
+| D74 | The explicit operator action that funds a revoked business again (D14) | an admin route re-sharing at once / a one-time grant a tenant's next signup consumes / none | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the admin reshare route.** `POST /v1/admin/wabas/{waba_id}/credit-line/reshare`, audited (`credit_line_reshared`), from the WABA's stored token (the library's `resume_with_approval` with `reshare_after_revocation`), the binding checked again before any credit call; no tenant route ever opts in. Not a legal act (no terms are accepted): no deployment setting gates it. Swap: the route (the core's `Signups::reshare_credit_line`) | M3 |
+| D75 | Whether the admin unbind and a tenant's deletion revoke a Solution Partner's line | no / yes / the deletion only | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: a tenant's deletion revokes; the admin unbind does not.** In Solution Partner mode, deleting a tenant revokes the credit line of each WABA it holds, in the order of `DELETE /v1/wabas/{waba_id}` (unsubscribe, revoke, then the token and the bindings, only those the capability was made from); a revocation that fails deletes nothing and is the answer (`step: revoke_credit_line`), so a deleted tenant's WABAs never stay funded by the partner. Each revocation, a tenant's or an admin's, is an audit event (`credit_line_revoked`). The admin unbind revokes nothing, as built: the operator may be moving the WABA to another tenant (revocation is per business, all its WABAs), and revokes explicitly when that is meant (the library's `EmbeddedSignup::revoke_credit_line`). Swap: `Admin::offboarded_by` (the tenant deletion's handler; without it a deletion revokes nothing), and calling `Signups::offboard` from `Admin::unbind` | M3 |
+| D76 | The signup routes' small choices | as below / others | **Coordinator's decision 2026-11-02 under the owner's delegation, swappable: the small choices, as built.** A missing `WA_APP_ID` or `WA_ES_CONFIG_ID` answers `409 signup_not_configured` (a new code, §5.2) rather than refusing the start (a deployment without signup is valid); `start`, `complete` and `resume` charge the `send` class, the attempts list `read` (§6 names none); `POST /v1/signup/sessions` answers `200`; a `CANCEL` answers `cancelled` with its `current_step`, redeeming nothing; the credit allocation is stored on the binding (`wa_server_wabas.credit_allocation_id`); completions and resumptions are tenant `audit` events (`signup_completed`, `signup_resumed`), the webhooks' actions `audit` events with `origin: webhook`. Swap: each is one place in `server_core::signup` or the API adapter | M3 |
 
 **Inherited from [OPEN_QUESTIONS.md](../../OPEN_QUESTIONS.md).** The
 questions the service inherits were decided on 2026-09-26 under the same
@@ -2276,6 +2353,14 @@ an item lands, the service keeps the library's behaviour and makes it
 visible to callers. #33 (message ids unique per store) stays open: its
 alternative is a primary-key migration of stored messages, which is the
 owner's; L5 and L8 are shaped to work with either answer.
+
+**Proposed with roadmap M3a (D70–D76)**, pending the coordinator's
+decision under the delegation (AGENTS.md § Decisions): each ships
+swappable as its row says; D70's and D71's stored names are the owner's
+to confirm before the first release (architecture.md § Stable
+identifiers). No step of Embedded Signup accepts terms or signs anything
+(`embedded-signup/*`, `solution-providers/share-and-revoke-credit-lines`):
+no legal act is taken.
 
 **Decided with roadmap M2b (D39–D42)**, by the coordinator on
 2026-11-01 under the delegation (AGENTS.md § Decisions): each ships

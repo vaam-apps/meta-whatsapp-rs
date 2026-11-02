@@ -122,11 +122,23 @@ pub enum Operation {
     /// `refund_payment`: a refund of an order paid through a payment
     /// gateway.
     RefundPayment,
+    /// `start_signup`: an Embedded Signup attempt bound to the tenant, and
+    /// what the page's `FB.login` needs (roadmap M3a).
+    StartSignup,
+    /// `complete_signup`: the attempt redeemed for the tenant, then the
+    /// business onboarded (roadmap M3a).
+    CompleteSignup,
+    /// `list_signup_attempts`: the tenant's resumable attempts (roadmap
+    /// M3a).
+    ListSignupAttempts,
+    /// `resume_signup`: an attempt's steps after the stored token run
+    /// again (roadmap M3a).
+    ResumeSignup,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 44] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -167,6 +179,10 @@ impl Operation {
         Self::RegeneratePaymentOauthLink,
         Self::GetPayment,
         Self::RefundPayment,
+        Self::StartSignup,
+        Self::CompleteSignup,
+        Self::ListSignupAttempts,
+        Self::ResumeSignup,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -212,6 +228,10 @@ impl Operation {
             Self::RegeneratePaymentOauthLink => "regenerate_payment_oauth_link",
             Self::GetPayment => "get_payment",
             Self::RefundPayment => "refund_payment",
+            Self::StartSignup => "start_signup",
+            Self::CompleteSignup => "complete_signup",
+            Self::ListSignupAttempts => "list_signup_attempts",
+            Self::ResumeSignup => "resume_signup",
         }
     }
 
@@ -258,6 +278,10 @@ impl Operation {
             | Self::RegeneratePaymentOauthLink
             | Self::GetPayment
             | Self::RefundPayment => Scope::Payments,
+            Self::StartSignup
+            | Self::CompleteSignup
+            | Self::ListSignupAttempts
+            | Self::ResumeSignup => Scope::Signup,
         }
     }
 }

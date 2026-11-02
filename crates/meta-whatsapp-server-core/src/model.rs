@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::ids::{BusinessId, PhoneNumberId, WabaId};
 use time::OffsetDateTime;
 
 /// A tenant id: the integrator's own (e.g. the CMS merchant id), 1 to 64
@@ -620,6 +620,100 @@ pub enum DeleteTenantOutcome {
     HasWabas,
 }
 
+/// A signup attempt to keep (roadmap M3a): an Embedded Signup onboarding
+/// that stopped after its token was stored, which the tenant resumes
+/// (`POST /v1/signup/resume`). What [`RecordStore::save_signup_attempt`](crate::store::RecordStore::save_signup_attempt)
+/// writes; the store adds the times. **Never the code or the PIN**: the
+/// session info is the browser's ids (the library's `SessionInfo`,
+/// serialized), checked against what onboarding stored when the attempt
+/// is resumed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewSignupAttempt {
+    /// The tenant whose attempt it is: the WABA's binding's.
+    pub tenant_id: TenantId,
+    /// The verified WABA.
+    pub waba_id: WabaId,
+    /// The step it stopped at (the library's `steps`, e.g.
+    /// `register_phone`).
+    pub failed_step: String,
+    /// The session info, as the library serializes it (`SessionInfo`).
+    pub session: serde_json::Value,
+    /// Which completion the flow reported (the `event` string, e.g.
+    /// `FINISH` or `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING`), when known:
+    /// a coexistence attempt resumes its sync steps.
+    pub finish_kind: Option<String>,
+}
+
+/// A kept signup attempt, as a store reads it back (roadmap M3a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignupAttempt {
+    /// The tenant whose attempt it is.
+    pub tenant_id: TenantId,
+    /// The verified WABA: one attempt per WABA.
+    pub waba_id: WabaId,
+    /// The step it last stopped at.
+    pub failed_step: String,
+    /// The session info ([`NewSignupAttempt::session`]).
+    pub session: serde_json::Value,
+    /// [`NewSignupAttempt::finish_kind`].
+    pub finish_kind: Option<String>,
+    /// When it was first kept.
+    pub created_at: OffsetDateTime,
+    /// When it last stopped.
+    pub updated_at: OffsetDateTime,
+}
+
+/// A record the token vault keeps past a WABA's binding, which a key
+/// rotation must reach though no binding names it any more (roadmap M3a,
+/// design section 4.2): the vault cannot list its records. Solution Partner
+/// mode writes them, in the vault's own store, under the vault's keys.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum VaultEntry {
+    /// A WABA whose credit ledger may exist (the library's
+    /// `credit/<WABA_ID>`), which outlives its token: the library's
+    /// `TokenVault::rotate` reseals it, and the revocation marker of the
+    /// business it names.
+    Waba(WabaId),
+    /// A business whose revocation marker may exist (the library's
+    /// `revoked/<BUSINESS_ID>`): `TokenVault::rotate_business` reseals it.
+    Business(BusinessId),
+}
+
+impl VaultEntry {
+    /// Its stored kind: `waba` or `business`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Waba(_) => "waba",
+            Self::Business(_) => "business",
+        }
+    }
+
+    /// Its id.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Waba(id) => id.as_str(),
+            Self::Business(id) => id.as_str(),
+        }
+    }
+
+    /// Its key in a listing: `<kind>/<id>`, which the listing is in byte
+    /// order of, and its cursor names.
+    pub fn key(&self) -> String {
+        format!("{}/{}", self.kind(), self.id())
+    }
+
+    /// The entry of `kind` and `id` as a store keeps them; `None` for a
+    /// kind or an id this release did not write (a backend answers that
+    /// as a storage failure).
+    pub fn parse(kind: &str, id: &str) -> Option<Self> {
+        match kind {
+            "waba" => WabaId::new(id).ok().map(Self::Waba),
+            "business" => BusinessId::new(id).ok().map(Self::Business),
+            _ => None,
+        }
+    }
+}
+
 /// Longest `Idempotency-Key` accepted, in bytes.
 pub const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
 
@@ -856,6 +950,32 @@ impl OtpSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The kinds of the vault's records kept past a binding (roadmap M3a,
+    /// `wa_server_vault_records.kind`) and the listing's key: stored names,
+    /// pending the owner's confirmation (docs/architecture.md, § Stable
+    /// identifiers). Renamed, the kept entries stop reading (a storage
+    /// failure), and a rotation reaches none of them.
+    #[test]
+    fn the_vault_entry_kinds_are_pinned() {
+        let waba = VaultEntry::Waba(WabaId::new("524126980791429").unwrap());
+        let business = VaultEntry::Business(BusinessId::new("2729063490586005").unwrap());
+        assert_eq!(
+            (waba.kind(), waba.key()),
+            ("\x77aba", "\x77aba/524126980791429".to_owned())
+        );
+        assert_eq!(
+            (business.kind(), business.key()),
+            ("business", "business/2729063490586005".to_owned())
+        );
+        assert_eq!(VaultEntry::parse("\x77aba", "524126980791429"), Some(waba));
+        assert_eq!(
+            VaultEntry::parse("business", "2729063490586005"),
+            Some(business)
+        );
+        assert_eq!(VaultEntry::parse("token", "1"), None, "another kind");
+        assert_eq!(VaultEntry::parse("\x77aba", "../1"), None, "not an id");
+    }
 
     /// The stored layout of a tenant's OTP settings (roadmap M3c): its
     /// version and field names are a stored name, pending the owner's

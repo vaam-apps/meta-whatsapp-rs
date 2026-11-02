@@ -71,6 +71,7 @@ One task each, installable with `npx skills add vaam-apps/meta-whatsapp-rs`.
 - [meta-whatsapp-rs-server-send](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-send/SKILL.md): messages, media and templates through the service
 - [meta-whatsapp-rs-server-events](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-events/SKILL.md): Meta's webhooks and polled events through the service
 - [meta-whatsapp-rs-server-otp](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-otp/SKILL.md): WhatsApp login codes and authentication templates through the service
+- [meta-whatsapp-rs-server-onboarding](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-onboarding/SKILL.md): merchants connecting their WhatsApp number through the service (Embedded Signup), in both partner modes
 - [meta-whatsapp-rs-server-registration](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-registration/SKILL.md): a number's registration and two-step PIN through the service
 
 ## Optional

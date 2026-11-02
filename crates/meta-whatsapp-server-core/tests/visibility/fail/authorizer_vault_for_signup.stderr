@@ -1,0 +1,10 @@
+error[E0624]: method `vault_for_signup` is private
+ --> tests/visibility/fail/authorizer_vault_for_signup.rs:7:19
+  |
+7 |     let _ = authz.vault_for_signup();
+  |                   ^^^^^^^^^^^^^^^^ private method
+  |
+ ::: src/authz.rs
+  |
+  |     pub(crate) fn vault_for_signup(&self) -> &TokenVault {
+  |     ---------------------------------------------------- private method defined here

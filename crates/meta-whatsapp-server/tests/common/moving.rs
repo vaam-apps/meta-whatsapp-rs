@@ -17,8 +17,8 @@ use meta_whatsapp_rs::core::store::{Expiry, KvStore, StoreKey, Versioned};
 use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::model::{
     ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim, IdempotencyKey,
-    KeyScope, Listing, NewApiKey, NumberBinding, NumberStatus, OtpSettings, PageRequest, Tenant,
-    TenantId, TenantStatus, WabaBinding,
+    KeyScope, Listing, NewApiKey, NewSignupAttempt, NumberBinding, NumberStatus, OtpSettings,
+    PageRequest, SignupAttempt, Tenant, TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
 use meta_whatsapp_server::store::{IdempotencyRecords, RecordStore, Store, StoreResult};
 use serde_json::json;
@@ -37,6 +37,9 @@ pub struct Moving {
     after_wabas: Mutex<Option<Hook>>,
     /// Run once the next `bind_waba` has bound.
     after_bind: Mutex<Option<Hook>>,
+    /// Run once the next `record_vault_entry` has recorded: an
+    /// offboarding's last write before the revocation's calls to Meta.
+    after_vault_entry: Mutex<Option<Hook>>,
 }
 
 impl Moving {
@@ -46,7 +49,13 @@ impl Moving {
             after_waba: Mutex::new(None),
             after_wabas: Mutex::new(None),
             after_bind: Mutex::new(None),
+            after_vault_entry: Mutex::new(None),
         }
+    }
+
+    /// Run `hook` once the next `record_vault_entry` has recorded.
+    pub fn after_recording_vault_entry(&self, hook: Hook) {
+        *self.after_vault_entry.lock().unwrap() = Some(hook);
     }
 
     /// Run `hook` once the next `bind_waba` has bound.
@@ -70,6 +79,7 @@ impl Moving {
         self.after_waba.lock().unwrap().is_some()
             || self.after_wabas.lock().unwrap().is_some()
             || self.after_bind.lock().unwrap().is_some()
+            || self.after_vault_entry.lock().unwrap().is_some()
     }
 }
 
@@ -321,6 +331,50 @@ impl RecordStore for Moving {
         status: NumberStatus,
     ) -> StoreResult<bool> {
         self.inner.set_waba_status_if(epoch, status).await
+    }
+    async fn set_credit_allocation_if(
+        &self,
+        epoch: &BindingEpoch,
+        allocation_config_id: &str,
+    ) -> StoreResult<bool> {
+        self.inner
+            .set_credit_allocation_if(epoch, allocation_config_id)
+            .await
+    }
+    async fn save_signup_attempt(&self, attempt: &NewSignupAttempt) -> StoreResult<bool> {
+        self.inner.save_signup_attempt(attempt).await
+    }
+    async fn signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<Option<SignupAttempt>> {
+        self.inner.signup_attempt(tenant, waba_id).await
+    }
+    async fn signup_attempts(
+        &self,
+        tenant: &TenantId,
+        page: &PageRequest,
+    ) -> StoreResult<Listing<SignupAttempt>> {
+        self.inner.signup_attempts(tenant, page).await
+    }
+    async fn delete_signup_attempt(
+        &self,
+        tenant: &TenantId,
+        waba_id: &WabaId,
+    ) -> StoreResult<bool> {
+        self.inner.delete_signup_attempt(tenant, waba_id).await
+    }
+    async fn record_vault_entry(&self, entry: &VaultEntry) -> StoreResult<()> {
+        let recorded = self.inner.record_vault_entry(entry).await;
+        let hook = self.after_vault_entry.lock().unwrap().take();
+        if let Some(hook) = hook {
+            hook.await;
+        }
+        recorded
+    }
+    async fn vault_entries(&self, page: &PageRequest) -> StoreResult<Listing<VaultEntry>> {
+        self.inner.vault_entries(page).await
     }
 }
 

@@ -22,6 +22,7 @@ use meta_whatsapp_server_core::inbox::ReplyChecksByNumber;
 use meta_whatsapp_server_core::live::{LiveSettings, Streams};
 use meta_whatsapp_server_core::otp::{OtpCodes, OtpDeployment};
 use meta_whatsapp_server_core::registration::{AttemptLimits, RegistrationAttempts};
+use meta_whatsapp_server_core::signup::{SignupDeployment, Signups};
 use meta_whatsapp_server_core::templates::TemplateCache;
 
 /// Default `WA_SERVER_IDEMPOTENCY_TTL`: how long an idempotency key's
@@ -84,6 +85,14 @@ pub struct Settings {
     /// it, with a throwaway pepper on memory storage in development).
     /// `Debug` shows no pepper.
     pub otp: Option<OtpDeployment>,
+    /// The deployment's Embedded Signup (roadmap M3a): the Meta app
+    /// (`WA_APP_ID`, `WA_APP_SECRET`), its configuration
+    /// (`WA_ES_CONFIG_ID`) and the mode (`WA_ONBOARDING_MODE`, a Solution
+    /// Partner's credit line). `None`, every signup route is `409
+    /// signup_not_configured` and no account update is acted on (the
+    /// default, for tests; `serve` sets it when `WA_APP_ID` and
+    /// `WA_ES_CONFIG_ID` are). `Debug` shows no secret.
+    pub signup: Option<SignupDeployment>,
     /// `WA_SERVER_REGISTRATION_*` and `WA_SERVER_VERIFICATION_*`: a
     /// number's registration and verification attempts, per number,
     /// shared by every replica (roadmap M3d).
@@ -103,6 +112,7 @@ impl Default for Settings {
             live: LiveSettings::default(),
             inbox_reply_checks: ReplyChecksByNumber::new(),
             otp: None,
+            signup: None,
             registration_attempts: AttemptLimits::default(),
         }
     }
@@ -123,7 +133,8 @@ struct Inner {
     idempotency: Arc<dyn IdempotencyRecords>,
     conversations: Arc<dyn ConversationStore>,
     clock: Arc<dyn Clock>,
-    authz: Authorizer,
+    /// Shared with the webhook pipeline's account actions (roadmap M3a).
+    authz: Arc<Authorizer>,
     metrics: Metrics,
     events: Events,
     shutting_down: AtomicBool,
@@ -133,6 +144,7 @@ struct Inner {
     stream_slots: Slots,
     templates: TemplateCache,
     otp: OtpCodes,
+    signups: Signups,
     streams: Streams,
     registration_attempts: RegistrationAttempts,
 }
@@ -183,8 +195,18 @@ impl AppState {
         let vault = TokenVault::new(backend.kv(), vault_keys)?;
         // One clock for the whole service: the webhook pipeline's.
         let clock = inbound.clock();
-        let authz = Authorizer::new(store.clone(), vault, client)?.with_clock(clock.clone());
-        let events = Events::new(inbound, backend.as_ref(), metrics.clone());
+        let authz =
+            Arc::new(Authorizer::new(store.clone(), vault, client)?.with_clock(clock.clone()));
+        // Embedded Signup's attempts in the bundle's key/value store, as the
+        // vault; its offboarding acts on the webhook pipeline's account
+        // updates, through the same authorization order (roadmap M3a).
+        let signups = Signups::new(backend.kv(), clock.clone(), settings.signup.clone());
+        let events = Events::new(
+            inbound,
+            backend.as_ref(),
+            metrics.clone(),
+            signups.account_actions(authz.clone()),
+        );
         // The codes in the bundle's key/value store, as the vault, on the
         // service's one clock.
         let otp = OtpCodes::new(backend.kv(), clock.clone(), settings.otp.clone());
@@ -208,6 +230,7 @@ impl AppState {
                 stream_slots: Slots::new(settings.media_streams),
                 templates: TemplateCache::new(settings.template_cache_ttl),
                 otp,
+                signups,
                 streams,
                 registration_attempts,
                 settings,
@@ -399,6 +422,13 @@ impl Grant {
     /// (`meta_whatsapp_server_core::otp::OtpCodes::open`).
     pub fn otp(&self) -> &OtpCodes {
         &self.0.inner.otp
+    }
+
+    /// The Embedded Signup services (roadmap M3a): attempts in the
+    /// backend's key/value store, opened for an admitted caller only
+    /// (`meta_whatsapp_server_core::signup::Signups::open`).
+    pub fn signups(&self) -> &Signups {
+        &self.0.inner.signups
     }
 
     /// A number's registration and verification attempts, counted on the
