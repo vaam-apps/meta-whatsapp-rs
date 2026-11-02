@@ -747,7 +747,10 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/conversations/US.1349120
   customer's calls and their messages seen in standby) is
   `customer_service_window_closed`; a service message while another app
   owns the thread under Conversation Routing (a `control_taken` the inbox
-  recorded) is `thread_owned_elsewhere`. A template is exempt from both,
+  recorded, or a standby copy of the customer's message) is
+  `thread_owned_elsewhere`. You poll the events these come from too
+  (`thread_control_changed`, `standby_observed`: roadmap M2d), so a UI
+  can tell its user why. A template is exempt from both,
   and so is a Direct Send `utility` or `authentication` reply (Meta
   sends it as a template); a `service` one is free-form. Every type a
   send takes, a reply takes ([Send messages](#send-messages)), a `pin`
@@ -1177,9 +1180,9 @@ tenant's deliveries: whoever holds it can forge any tenant's events.
   number or WABA no tenant holds, a field the library does not type
   (`unknown`), a signed body that is not a webhook (`unparsed`), partner
   solution updates, any event type the service has not reviewed yet
-  (today Conversation Routing's `standby_observed` and
+  (none today: Conversation Routing's `standby_observed` and
   `thread_control_changed`, and `user_action_reported`, a marketing
-  message's click, which M2 makes visible to their tenant),
+  message's click, reach their number's tenant since roadmap M2d),
   events Meta dated before the WABA's attaching (or, after a move from
   another tenant, in its second), undated events within the window
   after such a move, and replays (dated more than 7 days and an hour ago, what the dedup
@@ -1246,6 +1249,42 @@ older than what was purged, by retention or with a deleted tenant of the
 same id, is `410 cursor_expired`: resynchronise (from the inbox, when it
 lands in M2) and start again without `after`. A cursor past the tenant's
 newest sequence (a restored database) is `422` on `after`.
+
+The types (`KnownEventType` in the OpenAPI document) only grow within
+v1: switch on the ones you handle and let any other fall to a default.
+Among them since roadmap M2d:
+
+- `standby_observed`: a copy of a thread your number observes without
+  owning it (Conversation Routing): the customer's message, the owner's
+  send, or its status. Never answer one: the inbox records the
+  customer's message as a window event (no unread message) and the
+  thread as another app's, so a free-form reply is `409
+  thread_owned_elsewhere` until the thread comes back (or the number's
+  `WA_SERVER_INBOX_REPLY_CHECKS` turn that check off).
+- `thread_control_changed`: the thread was passed to you
+  (`data.update.type: control_passed`) or taken from you
+  (`control_taken`); the inbox's reply check follows it.
+- `user_action_reported`: a customer clicked a marketing message's body
+  or call-to-action (Meta names neither the customer nor the message:
+  `data.action` holds the click's time, the component, and Meta's
+  `click_id`, `tracking_token` and `product_id`).
+- The service's own events about your numbers, whose `data` names the
+  number and its WABA only: `number_connected` (attached or onboarded
+  through Embedded Signup, its token stored: also after a
+  reconnection), `number_disconnected` (with `data.reason`:
+  `tenant_disconnected` for your `DELETE /v1/wabas/{waba_id}`,
+  `operator_unbound` for the operator's unbind, `partner_app_uninstalled`
+  and `account_deleted` when Meta's `account_update` offboards the WABA;
+  more reasons may come: default on one you do not know),
+  `number_reconnect_required` (Meta refused the number's token: calls on
+  it answer `409 reconnect_required` until it is attached again). Each
+  comes once per binding of the number: a token refused again before a
+  reconnection records no second one. They tell you when to look, not
+  the state itself: an event is recorded just before its change, so a
+  change that then fails (a `503` your retry finishes) leaves it; a
+  retried attach can repeat `number_connected`; and
+  `number_reconnect_required` is best effort. `GET /v1/numbers` is the
+  state: read it when one comes (design D81).
 
 **4. One event by id.** `GET /v1/events/{id}` answers one of the
 tenant's events, whole, as polling does: what a webhook delivery that
@@ -1462,7 +1501,8 @@ SKIP token.wabas: the configuration is refused
 
 ## Not yet
 
-Webhooks-out and the service's own number events (M2); hosted Embedded
+Webhooks-out (M2); disconnection by Meta's webhooks (and its
+`number_disconnected`); hosted Embedded
 Signup, several WABAs in one signup and pre-verified numbers (M3f),
 clearing a lost credit share and the coexistence routes (M3b); zero-tap
 authentication templates and template previews (M3g); the

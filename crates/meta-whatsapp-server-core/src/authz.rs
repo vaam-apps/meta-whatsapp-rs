@@ -107,7 +107,8 @@ use crate::model::{
     ApiKeyRecord, BindingEpoch, KeyOwner, MAX_PAGE_SIZE, NumberBinding, NumberStatus, PageRequest,
     Scope, TenantId, TenantStatus, VaultEntry, WabaBinding,
 };
-use crate::store::RecordStore;
+use crate::number_events::{NumberEvent, NumberEvents};
+use crate::store::{RecordStore, StoreResult};
 
 /// The business token vault, readable only through the authorization
 /// order, and written only through [`Authorizer`]'s methods that take a
@@ -384,6 +385,9 @@ pub struct Authorizer {
     client: Client,
     issuer: Issuer,
     clock: Arc<dyn Clock>,
+    /// The service's number events (roadmap M2d); none until
+    /// [`Self::with_number_events`].
+    number_events: Option<NumberEvents>,
 }
 
 impl std::fmt::Debug for Authorizer {
@@ -421,7 +425,89 @@ impl Authorizer {
             client,
             issuer: Issuer::new(),
             clock: Arc::new(SystemClock),
+            number_events: None,
         })
+    }
+
+    /// Record the service's number events with `events` (roadmap M2d,
+    /// [`crate::number_events`]): `number_reconnect_required` when a
+    /// `190` marks a WABA's numbers, and, through the services that change
+    /// a binding (the admin attach and unbind, the tenant's disconnect),
+    /// `number_connected` and `number_disconnected`. Without it, none is
+    /// recorded (the core's suites that build an `Authorizer` of their
+    /// own). The server's `AppState` sets it, from the webhook pipeline
+    /// (`Inbound::number_events`).
+    #[must_use]
+    pub fn with_number_events(mut self, events: NumberEvents) -> Self {
+        self.number_events = Some(events);
+        self
+    }
+
+    /// Record `event` for `epoch`'s numbers: those of its WABA bound to its
+    /// tenant under it, as the records list them now (nothing without
+    /// [`Self::with_number_events`]). Crate-private: the services that
+    /// change a binding call it, at the step their module says.
+    pub(crate) async fn record_number_event(
+        &self,
+        epoch: &BindingEpoch,
+        event: NumberEvent,
+    ) -> StoreResult<()> {
+        let Some(events) = &self.number_events else {
+            return Ok(());
+        };
+        let numbers: Vec<PhoneNumberId> = self
+            .records
+            .waba_numbers(&epoch.waba_id)
+            .await?
+            .into_iter()
+            .filter(|n| n.tenant_id == epoch.tenant_id && n.waba_id == epoch.waba_id)
+            .map(|n| n.phone_number_id)
+            .collect();
+        events.record(event, epoch, &numbers).await?;
+        Ok(())
+    }
+
+    /// The numbers of `waba_id` bound to `tenant` that a `190` would mark
+    /// `reconnect_required` anew (those not marked already), read before
+    /// the mark: a refusal repeated on a token already marked records no
+    /// event. Empty without [`Self::with_number_events`], or when the
+    /// read fails (logged: the mark goes on).
+    async fn newly_refused(&self, waba_id: &WabaId, tenant: &TenantId) -> Vec<PhoneNumberId> {
+        if self.number_events.is_none() {
+            return Vec::new();
+        }
+        match self.records.waba_numbers(waba_id).await {
+            Ok(numbers) => numbers
+                .into_iter()
+                .filter(|n| {
+                    &n.tenant_id == tenant
+                        && &n.waba_id == waba_id
+                        && n.status != NumberStatus::ReconnectRequired
+                })
+                .map(|n| n.phone_number_id)
+                .collect(),
+            Err(storage) => {
+                tracing::warn!(error = %storage, "could not read the numbers a 190 marks");
+                Vec::new()
+            }
+        }
+    }
+
+    /// `number_reconnect_required` for `numbers` of `epoch`, once a `190`
+    /// marked them: best effort, as the mark is (a failure is logged).
+    async fn reconnect_required(&self, epoch: &BindingEpoch, numbers: &[PhoneNumberId]) {
+        let Some(events) = &self.number_events else {
+            return;
+        };
+        if numbers.is_empty() {
+            return;
+        }
+        if let Err(storage) = events
+            .record(NumberEvent::ReconnectRequired, epoch, numbers)
+            .await
+        {
+            tracing::warn!(error = %storage, "could not record number_reconnect_required");
+        }
     }
 
     /// Read "now" from `clock`: whether a key ([`Self::authenticate`]) or
@@ -968,13 +1054,37 @@ impl Authorizer {
     /// `reconnect_required`, whoever holds it (the admin's call, right
     /// after it stored the token).
     async fn graph_failed(&self, waba_id: &WabaId, error: &Error) -> ServiceError {
-        if error.kind() == ErrorKind::Authentication
-            && let Err(storage) = self
+        if error.kind() == ErrorKind::Authentication {
+            // Its holder now, for `number_reconnect_required` (roadmap M2d).
+            let held = if self.number_events.is_some() {
+                match self.records.waba(waba_id).await {
+                    Ok(held) => held.map(|binding| binding.epoch()),
+                    Err(storage) => {
+                        tracing::warn!(error = %storage, "could not read the binding a 190 marks");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let refused = match &held {
+                Some(epoch) => self.newly_refused(waba_id, &epoch.tenant_id).await,
+                None => Vec::new(),
+            };
+            match self
                 .records
                 .set_waba_status(waba_id, NumberStatus::ReconnectRequired)
                 .await
-        {
-            tracing::warn!(error = %storage, "could not mark the numbers reconnect_required");
+            {
+                Ok(()) => {
+                    if let Some(epoch) = &held {
+                        self.reconnect_required(epoch, &refused).await;
+                    }
+                }
+                Err(storage) => {
+                    tracing::warn!(error = %storage, "could not mark the numbers reconnect_required");
+                }
+            }
         }
         ServiceError::from_library(error)
     }
@@ -991,12 +1101,13 @@ impl Authorizer {
     /// numbers of `epoch`'s binding `reconnect_required`.
     async fn mark_failed_at(&self, epoch: &BindingEpoch, error: &Error) {
         if error.kind() == ErrorKind::Authentication {
+            let refused = self.newly_refused(&epoch.waba_id, &epoch.tenant_id).await;
             match self
                 .records
                 .set_waba_status_if(epoch, NumberStatus::ReconnectRequired)
                 .await
             {
-                Ok(true) => {}
+                Ok(true) => self.reconnect_required(epoch, &refused).await,
                 Ok(false) => tracing::info!(
                     "Meta refused a token whose WABA was unbound since: marked nothing"
                 ),

@@ -318,8 +318,64 @@ const HISTORY_TEXT: &str = "use code THANKS30";
 const UNPARSED_TEXT: &str = "a body that is not a webhook, which the logs must not hold";
 const OVERSIZED_TEXT: &str = "an oversized body the logs must not hold";
 const FAILED_TEXT: &str = "a message whose recording failed once";
+const STANDBY_TEXT: &str = "a standby copy the logs must not hold";
+const HANDOVER_TEXT: &str = "a handover note the logs must not hold";
+const CLICK_ID: &str = "click-id-the-logs-must-not-hold";
+const CLICK_TOKEN: &str = "tracking-token-the-logs-must-not-hold";
+const CLICK_PRODUCT: &str = "product-id-the-logs-must-not-hold";
 
-/// Coexistence: an echo of the merchant's phone app and a history sync; a
+/// Meta's examples of the three types roadmap M2d made tenant-visible, on
+/// `pn` of `waba`, carrying what the logs must not hold: a standby copy of
+/// the customer's message, a handover's note, a click's ids (Meta names
+/// neither the user nor the message, but the click id and token are
+/// Meta's tracking).
+fn reviewed_deliveries(waba: &str, pn: &str) -> [Vec<u8>; 3] {
+    use meta_whatsapp_server_core::conformance::webhooks::{REVIEWED_EXAMPLES, example_on};
+    // Another customer than the inbox exercise's (`EXAMPLE_WA_ID`): a
+    // standby copy and a handover mark the thread another app's, which
+    // would refuse that exercise's reply.
+    let of = |kind: &str, wanted: &str| {
+        REVIEWED_EXAMPLES
+            .iter()
+            .find(|(k, example)| *k == kind && example.contains(wanted))
+            .unwrap()
+            .1
+            .replace(EXAMPLE_WA_ID, "16505550199")
+    };
+    let at = super::meta::sent_now();
+    let mut standby = example_on(
+        &of("standby_observed", "Test standby message"),
+        waba,
+        pn,
+        "capture",
+        at,
+    );
+    standby["entry"][0]["changes"][0]["value"]["standby"]["messages"][0]["text"]["body"] =
+        json!(STANDBY_TEXT);
+    let mut handover = example_on(
+        &of("thread_control_changed", "control_taken"),
+        waba,
+        pn,
+        "capture",
+        at,
+    );
+    handover["entry"][0]["changes"][0]["value"]["control_taken"]["metadata"] = json!(HANDOVER_TEXT);
+    let mut click = example_on(
+        &of("user_action_reported", "user_actions"),
+        waba,
+        pn,
+        "capture",
+        at,
+    );
+    let data = &mut click["entry"][0]["changes"][0]["value"]["user_actions"][0]["marketing_messages_link_click_data"];
+    data["click_id"] = json!(CLICK_ID);
+    data["tracking_token"] = json!(CLICK_TOKEN);
+    data["product_id"] = json!(CLICK_PRODUCT);
+    [bytes(&standby), bytes(&handover), bytes(&click)]
+}
+
+/// Coexistence: an echo of the merchant's phone app and a history sync;
+/// Meta's examples of the three types roadmap M2d made tenant-visible; a
 /// signed body that is not a webhook; one over 3 MiB; one whose recording
 /// fails once (500), then goes through on Meta's redelivery. Returns the
 /// texts they carried.
@@ -330,7 +386,15 @@ async fn more_deliveries(h: &Harness, waba: &str, pn: &str) -> Vec<String> {
     item["text"]["body"] = json!(ECHO_TEXT);
     let history = with_ids(fixture("fields/history_threads.json"), waba, pn);
     let unparsed = format!("{{\"note\": \"{UNPARSED_TEXT}\"}}").into_bytes();
-    for body in [bytes(&echo), bytes(&history), unparsed] {
+    let [standby, handover, click] = reviewed_deliveries(waba, pn);
+    for body in [
+        bytes(&echo),
+        bytes(&history),
+        standby,
+        handover,
+        click,
+        unparsed,
+    ] {
         let reply = send(&h.public, signed(&body).build()).await;
         assert_eq!(reply.status.as_u16(), 200, "{}", reply.text);
     }
@@ -362,6 +426,13 @@ async fn more_deliveries(h: &Harness, waba: &str, pn: &str) -> Vec<String> {
         UNPARSED_TEXT,
         OVERSIZED_TEXT,
         FAILED_TEXT,
+        STANDBY_TEXT,
+        HANDOVER_TEXT,
+        CLICK_ID,
+        CLICK_TOKEN,
+        CLICK_PRODUCT,
+        // The standby copy's and the handover's customer.
+        "16505550199",
     ]
     .map(str::to_owned)
     .to_vec()
@@ -372,6 +443,7 @@ async fn more_deliveries(h: &Harness, waba: &str, pn: &str) -> Vec<String> {
 /// types, and refused ones), then polling them; returns what they carried
 /// that the logs must not: the signatures, the message text, the customer's
 /// name, BSUIDs and username.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
     const WABA: &str = "102290129340398";
     const PN: &str = "1972385232742141";
@@ -421,12 +493,19 @@ async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
     assert_eq!(
         types,
         [
+            // The attach's (roadmap M2d), one per number.
+            "number_connected",
+            "number_connected",
             "message_received",
             "message_received",
             "status_updated",
             "error_reported",
             "message_echoed",
             "history_synced",
+            // Tenant-visible since roadmap M2d.
+            "standby_observed",
+            "thread_control_changed",
+            "user_action_reported",
             "message_received"
         ]
     );
@@ -438,12 +517,27 @@ async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
         ECHO_TEXT,
         HISTORY_TEXT,
         FAILED_TEXT,
+        STANDBY_TEXT,
+        HANDOVER_TEXT,
+        CLICK_ID,
+        CLICK_TOKEN,
+        CLICK_PRODUCT,
     ] {
         assert!(polled.text.contains(private), "{private}: {}", polled.text);
     }
     // The same events by id and live (roadmap M2b): they carry what the
     // logs must not either.
-    let first = polled.json()["data"][0]["id"].as_str().unwrap().to_owned();
+    // The first message (the attach's `number_connected` events come
+    // before it: roadmap M2d).
+    let first = polled.json()["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "message_received")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let one = h
         .call(Call::get(format!("/v1/events/{first}")).key(tenant_key))
         .await;

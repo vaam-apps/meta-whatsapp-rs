@@ -39,7 +39,7 @@ use crate::store::StoreResult;
 pub const WITHIN: Duration = Duration::from_secs(2);
 
 /// How long a case waits to see that nothing comes.
-const QUIET: Duration = Duration::from_millis(400);
+pub(super) const QUIET: Duration = Duration::from_millis(400);
 
 /// Settings where only a wake-up reads the outbox in time: the re-poll and
 /// the heartbeat far off.
@@ -57,6 +57,7 @@ pub async fn run(backend: &dyn Backend) {
     the_notifier_wakes_its_tenants_subscriptions_only(backend).await;
     a_stream_sends_what_follows_its_cursor_and_resumes_exactly_after_it(backend).await;
     a_stream_sends_only_its_tenants_events(backend).await;
+    the_reviewed_types_reach_their_numbers_tenants_streams_only(backend).await;
     no_unknown_or_unparsed_event_reaches_a_stream(backend).await;
     a_lost_notification_still_delivers(backend).await;
     a_cursor_past_the_newest_sequence_is_refused_before_the_stream(backend).await;
@@ -75,7 +76,7 @@ fn tenant(id: &str) -> TenantId {
 
 /// An [`Authorizer`] over the backend's records (a vault and a Graph
 /// client it never uses: streams need no token).
-fn authorizer(backend: &dyn Backend) -> Authorizer {
+pub(super) fn authorizer(backend: &dyn Backend) -> Authorizer {
     let vault = TokenVault::new(
         backend.kv(),
         VaultKeys::new(VaultKey::generate("live-suite").unwrap()),
@@ -89,7 +90,7 @@ fn authorizer(backend: &dyn Backend) -> Authorizer {
 }
 
 /// An `events` key's caller for `tenant`, which `authz` admits.
-async fn caller(backend: &dyn Backend, authz: &Authorizer, tenant_id: &str) -> Caller {
+pub(super) async fn caller(backend: &dyn Backend, authz: &Authorizer, tenant_id: &str) -> Caller {
     let records = backend.records();
     let _ = records.create_tenant(&tenant(tenant_id), "").await;
     let key = mint(
@@ -377,6 +378,88 @@ pub async fn a_stream_sends_only_its_tenants_events(backend: &dyn Backend) {
         next_frame(&mut a_texts_only, QUIET).await.is_none(),
         "a type filter left out a's messages"
     );
+}
+
+/// Roadmap M2d's decisive case on the streams (acceptance test M2.6,
+/// design D25), through the core's webhook pipeline: Meta's examples of
+/// `standby_observed`, `thread_control_changed` and `user_action_reported`
+/// on tenant A's number reach A's stream and A's number's stream, each in
+/// order, and no stream of tenant B's (its own, nor its number's).
+/// Decisive: the three types in `TENANT_EVENT_TYPES` (one taken out, its
+/// examples reach no stream).
+#[allow(clippy::similar_names)] // a's and b's streams, side by side
+pub async fn the_reviewed_types_reach_their_numbers_tenants_streams_only(backend: &dyn Backend) {
+    use super::webhooks::{REVIEWED_EXAMPLES, example_for};
+    const A: Holder = Holder {
+        id: "live-reviewed-a",
+        waba: "102290129343061",
+        pn: "106540352243061",
+    };
+    const B: Holder = Holder {
+        id: "live-reviewed-b",
+        waba: "102290129343062",
+        pn: "106540352243062",
+    };
+    let records = backend.records();
+    hold(records.as_ref(), A).await;
+    hold(records.as_ref(), B).await;
+    let pipeline = plain_pipeline(backend);
+    let authz = authorizer(backend);
+    let (caller_a, caller_b) = (
+        caller(backend, &authz, A.id).await,
+        caller(backend, &authz, B.id).await,
+    );
+    let streams = Streams::new(backend.outbox(), backend.notifier(), woken_only());
+    let number = |holder: Holder| PhoneNumberId::new(holder.pn).unwrap();
+    let mut of_a = streams
+        .open_stream(&authz, &caller_a, StreamQuery::default())
+        .await
+        .unwrap();
+    let mut on_as_number = streams
+        .open_number_stream(&authz, &caller_a, number(A), StreamQuery::default())
+        .await
+        .unwrap();
+    let mut of_b = streams
+        .open_stream(&authz, &caller_b, StreamQuery::default())
+        .await
+        .unwrap();
+    let mut on_bs_number = streams
+        .open_number_stream(&authz, &caller_b, number(B), StreamQuery::default())
+        .await
+        .unwrap();
+    // Each example a second of its own, from the next (the binding's own
+    // second is too close after a move; this is a first onboarding, but
+    // the dates need not say so).
+    let at = time::OffsetDateTime::now_utc().unix_timestamp() + 1;
+    for (i, (kind, example)) in REVIEWED_EXAMPLES.iter().enumerate() {
+        let payload = example_for(
+            example,
+            A,
+            &format!("live-reviewed-{i}"),
+            at + i64::try_from(i).unwrap(),
+        );
+        deliver(&pipeline, &body(&payload)).await.unwrap();
+        for (name, stream) in [("a's stream", &mut of_a), ("a's number", &mut on_as_number)] {
+            match next_frame(stream, WITHIN).await {
+                Some(Frame::Event(event)) => {
+                    assert_eq!(event.event_type, *kind, "{name}, example {i}");
+                    assert_eq!(event.tenant, Some(tenant(A.id)), "{name}");
+                    assert_eq!(
+                        event.phone_number_id.as_ref().map(PhoneNumberId::as_str),
+                        Some(A.pn),
+                        "{name}"
+                    );
+                }
+                other => panic!("{name}, example {i} ({kind}): expected it, got {other:?}"),
+            }
+        }
+    }
+    for (name, stream) in [("b's stream", &mut of_b), ("b's number", &mut on_bs_number)] {
+        assert!(
+            next_frame(stream, QUIET).await.is_none(),
+            "{name}: another tenant's number's event reached it"
+        );
+    }
 }
 
 /// M2.3 on the streams, through the core's webhook pipeline: an
