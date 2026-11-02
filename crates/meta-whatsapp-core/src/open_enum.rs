@@ -74,6 +74,37 @@
 //! assert_eq!(new, Status::Other("ARCHIVED".to_owned()));
 //! assert_eq!(serde_json::to_string(&new).unwrap(), r#""ARCHIVED""#);
 //! ```
+//!
+//! Outside the crate that declares it, a `match` on a generated enum
+//! needs a wildcard arm, even one naming `Other`:
+//!
+//! ```compile_fail,E0004
+//! use meta_whatsapp_core::store::WindowEventKind;
+//!
+//! fn name(kind: &WindowEventKind) -> &str {
+//!     match kind {
+//!         WindowEventKind::CustomerCall => "call",
+//!         WindowEventKind::CallAccepted => "accepted",
+//!         WindowEventKind::StandbyMessage => "standby",
+//!         WindowEventKind::Other(name) => name,
+//!     }
+//! }
+//! ```
+//!
+//! ```
+//! use meta_whatsapp_core::store::WindowEventKind;
+//!
+//! fn name(kind: &WindowEventKind) -> &str {
+//!     match kind {
+//!         WindowEventKind::CustomerCall => "call",
+//!         WindowEventKind::CallAccepted => "accepted",
+//!         WindowEventKind::StandbyMessage => "standby",
+//!         WindowEventKind::Other(name) => name,
+//!         _ => "a value this revision names",
+//!     }
+//! }
+//! assert_eq!(name(&WindowEventKind::from("customer_call")), "call");
+//! ```
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -369,8 +400,8 @@ mod tests {
         pub enum Loose {
             /// `MARKETING`.
             Marketing => "MARKETING",
-            /// `en_US`.
-            EnUs => "en_US",
+            /// `en_US`, also spelled `en-US`.
+            EnUs => "en_US" | "en-US",
         }
     }
 
@@ -409,6 +440,24 @@ mod tests {
             assert!(serde_json::from_str::<Strict>(json).is_err(), "{json}");
         }
         assert_eq!(parse::<Option<Strict>>("null"), None);
+        // An owned string (`visit_string`, as from a `serde_json::Value`).
+        let owned = |v: serde_json::Value| serde_json::from_value::<Strict>(v).unwrap();
+        assert_eq!(owned(serde_json::json!("a")), Strict::A);
+        assert_eq!(owned(serde_json::json!("zzz")), Strict::Other("zzz".into()));
+        assert!(serde_json::from_value::<Strict>(serde_json::json!(42)).is_err());
+    }
+
+    #[test]
+    fn an_owned_string_parses_as_a_borrowed_one() {
+        // `serde_json::from_value` hands the visitor an owned `String`.
+        let owned = |v: serde_json::Value| serde_json::from_value::<Sample>(v).unwrap();
+        assert_eq!(owned(serde_json::json!("b_b")), Sample::B);
+        assert_eq!(owned(serde_json::json!("zzz")), Sample::Other("zzz".into()));
+        assert_eq!(owned(serde_json::json!(42)), Sample::Other("42".into()));
+        assert_eq!(
+            owned(serde_json::json!({"a": [1]})),
+            Sample::Other(r#"{"a":[1]}"#.into())
+        );
     }
 
     #[test]
@@ -462,6 +511,9 @@ mod tests {
     fn case_insensitive_matches_any_case_and_keeps_unknowns_verbatim() {
         assert_eq!(parse::<Loose>(r#""marketing""#), Loose::Marketing);
         assert_eq!(parse::<Loose>(r#""EN_us""#), Loose::EnUs);
+        // An alias matches in any case too, and serializes as the first.
+        assert_eq!(parse::<Loose>(r#""EN-us""#), Loose::EnUs);
+        assert_eq!(Loose::from("En-Us").as_str(), "en_US");
         assert_eq!(Loose::from("en_US").as_str(), "en_US");
         assert_eq!(Loose::from("Promo"), Loose::Other("Promo".into()));
         assert_eq!(

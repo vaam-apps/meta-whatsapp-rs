@@ -3408,11 +3408,13 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `every_open_enum_keeps_an_unlisted_value_verbatim` (three unlisted
     values through `Deserialize`, `Serialize`, `From`, `FromStr` and
     `Display` for every enum, the list compared with the macro's enums
-    in the source) and `no_enum_has_a_catch_all_of_another_shape` (no
-    `#[serde(other)]`, unit `Unknown` or hand-written string catch-all
-    outside `NOT_OPEN`, each entry with its reason: `ErrorKind`, the
-    bot's job states, the request-only `WabaCurrency` and
-    `GatewayProvider`). Left as they are, not string enums: the
+    in the source, and `#![string_only]` exactly on Flow JSON's) and
+    `no_enum_has_a_catch_all_of_another_shape` (no `#[serde(other)]`,
+    unit `Unknown` or hand-written string catch-all, `String`,
+    `Box<str>`, `Cow<str>` or a one-field struct variant, in
+    `crates/*/src` or `tools/*/src`, outside `NOT_OPEN`, each entry
+    with its reason: `ErrorKind`, the bot's job states, the request-only
+    `WabaCurrency` and `GatewayProvider`). Left as they are, not string enums: the
     structured catch-alls (`Unknown { raw }` of webhook messages and
     fields and of Flow JSON, `WebhookEvent::Unparsed`, the templates'
     `Other(Value)`, `EmbeddedSignupEvent::Unknown`) and

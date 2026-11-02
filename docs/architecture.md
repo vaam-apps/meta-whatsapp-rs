@@ -346,9 +346,13 @@ Rules for every endpoint module:
    `meta_whatsapp_core::open_enum!`, the documented values as variants
    and any other value kept verbatim in `Other(String)`, so a new value
    never breaks parsing and serializes back unchanged. Never write one
-   by hand, and never a unit `#[serde(other)] Unknown` (it drops Meta's
-   value, and writes its own name back where Meta's was); a value Meta
-   documents as `UNKNOWN` is a variant like any other. The macro's
+   by hand (the exceptions, two request values Meta never sends, are
+   listed with their reasons in the test's `NOT_OPEN`: `WabaCurrency`,
+   whose parse refuses an unlisted code, and `GatewayProvider`, whose
+   variants carry fields), and never a unit `#[serde(other)] Unknown`
+   (it drops Meta's value, and writes its own name back where Meta's
+   was); a value Meta documents as `UNKNOWN` is a variant like any
+   other. The macro's
    options cover what Meta's pages need: `#![case_insensitive]`,
    `#![normalize = fn]` (one value spelled two ways), and
    `#![string_only]` for documents this crate writes and reads back whole

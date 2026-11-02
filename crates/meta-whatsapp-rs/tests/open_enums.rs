@@ -371,6 +371,19 @@ fn every_open_enum_keeps_an_unlisted_value_verbatim() {
             "{name}: refuses a number exactly when it is `#![string_only]`"
         );
     }
+    // Which enums are `#![string_only]` is decided (roadmap L20a): Flow
+    // JSON's, a document this crate writes and reads back whole, so that
+    // a wrongly typed value leaves its component raw; no other.
+    let flow_json: BTreeSet<&String> = declared
+        .iter()
+        .filter(|name| name.starts_with("meta_whatsapp_client::flows::flow_json::"))
+        .collect();
+    assert!(flow_json.len() >= 10, "Flow JSON's enums: {flow_json:?}");
+    assert_eq!(
+        scan.string_only.iter().collect::<BTreeSet<_>>(),
+        flow_json,
+        "`#![string_only]` is for Flow JSON's enums, and every one of them"
+    );
 }
 
 #[test]
@@ -406,6 +419,33 @@ fn the_scan_catches_each_shape() {
         "pub enum Status {\n    Active,\n    #[serde(untagged)]\n    Raw(std::string::String),\n}\n",
     );
     assert_eq!(untagged.violations.len(), 1, "{:?}", untagged.violations);
+    for payload in [
+        "Box<str>",
+        "std::borrow::Cow<'static, str>",
+        "Arc<str>",
+        "Rc<String>",
+        "::std::string::String",
+    ] {
+        let boxed = file(&format!(
+            "pub enum Status {{\n    Active,\n    Other({payload}),\n}}\n"
+        ));
+        assert_eq!(
+            boxed.violations.len(),
+            1,
+            "{payload}: {:?}",
+            boxed.violations
+        );
+    }
+    let named = file("pub enum Status {\n    Active,\n    Other { value: String },\n}\n");
+    assert_eq!(named.violations.len(), 1, "{:?}", named.violations);
+    let raw = file(
+        "pub enum Message {\n    Text(String),\n    Unknown {\n        kind: Option<String>,\n        raw: Value,\n    },\n    Other(Value),\n}\n",
+    );
+    assert!(
+        raw.violations.is_empty(),
+        "structured: {:?}",
+        raw.violations
+    );
     let wrong =
         file("open_enum! {\n    pub enum Status {\n        Unknown => \"UNSET\",\n    }\n}\n");
     assert_eq!(wrong.violations.len(), 1, "{:?}", wrong.violations);
@@ -451,17 +491,25 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Every library and service source file (`crates/*/src`).
+/// Every library, service and tool source file (`crates/*/src`, and
+/// `tools/*/src` for the Rust tools that are workspace members, such as
+/// `tools/docs-mcp`).
 fn scan() -> Scan {
     let mut scan = Scan::default();
-    let crates = repo().join("crates");
-    let mut dirs: Vec<PathBuf> = fs::read_dir(&crates)
-        .unwrap()
-        .map(|e| e.unwrap().path().join("src"))
+    let mut dirs: Vec<PathBuf> = ["crates", "tools"]
+        .into_iter()
+        .flat_map(|parent| fs::read_dir(repo().join(parent)).unwrap())
+        .map(|e| e.unwrap().path())
+        .filter(|krate| krate.join("Cargo.toml").is_file())
+        .map(|krate| krate.join("src"))
         .filter(|src| src.is_dir())
         .collect();
     dirs.sort();
     assert!(dirs.len() >= 10, "found only {dirs:?}");
+    assert!(
+        dirs.iter().any(|d| d.ends_with("tools/docs-mcp/src")),
+        "the scan misses tools/docs-mcp: {dirs:?}"
+    );
     for src in dirs {
         let krate = src
             .parent()
@@ -563,6 +611,22 @@ fn ident(text: &str) -> String {
         .collect()
 }
 
+/// A type that holds a string and nothing else: `String`, `Box<str>`,
+/// `Cow<'_, str>`, `Arc<str>`, `Rc<str>`, by any path.
+fn is_string_type(ty: &str) -> bool {
+    let ty: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
+    let last = |t: &str| t.rsplit("::").next().unwrap_or(t).to_owned();
+    if last(&ty) == "String" {
+        return true;
+    }
+    let Some((outer, inner)) = ty.strip_suffix('>').and_then(|t| t.split_once('<')) else {
+        return false;
+    };
+    let inner = inner.rsplit(',').next().unwrap_or(inner);
+    matches!(last(outer).as_str(), "Box" | "Cow" | "Arc" | "Rc")
+        && (inner == "str" || last(inner) == "String")
+}
+
 /// What makes a hand-written enum's variants a catch-all of another shape.
 fn hand_written_catch_alls(variants: &[(String, String)]) -> Vec<&'static str> {
     let mut tripped = Vec::new();
@@ -570,14 +634,20 @@ fn hand_written_catch_alls(variants: &[(String, String)]) -> Vec<&'static str> {
         let body = body.trim();
         let (variant, payload) = match body.split_once('(') {
             Some((v, p)) => (v.trim(), Some(p.trim_end_matches(')').trim())),
-            None => (body.split(['{', '=']).next().unwrap().trim(), None),
+            None => match body.split_once('{') {
+                // A struct variant of one field is a tuple variant by
+                // another name (`Other { value: String }`).
+                Some((v, fields)) => {
+                    let fields = fields.trim_end_matches('}').trim().trim_end_matches(',');
+                    let one = (!fields.contains(','))
+                        .then(|| fields.split_once(':').map(|(_, ty)| ty.trim()))
+                        .flatten();
+                    (v.trim(), one)
+                }
+                None => (body.split('=').next().unwrap().trim(), None),
+            },
         };
-        let stringy = payload.is_some_and(|p| {
-            matches!(
-                p,
-                "String" | "std::string::String" | "::std::string::String"
-            )
-        });
+        let stringy = payload.is_some_and(is_string_type);
         if variant == "Unknown" && payload.is_none() && !body.contains('{') {
             tripped.push("a unit `Unknown`");
         }
