@@ -80,6 +80,13 @@ feature the driver requires; no library build links it until S17's
 `mongodb` feature. The server is MongoDB's, under the SSPL: it runs here as
 a test sidecar only, and nothing links or ships it.
 
+The service's MongoDB outbox spike (roadmap S9,
+`crates/meta-whatsapp-server-store-mongodb`, which no binary composes)
+runs the core's conformance suites against the same replica set in its
+`tests/live_mongodb.rs`, each backend in a `wa_test_*` database of its
+own; `just test-live` runs them, and `just test-live-clean` drops what a
+killed run left.
+
 The Compose project is `meta-whatsapp-rs-dev` (it was `wa-rs-dev` before
 the rename), and named volumes are per project: a container built before
 the rename kept its shell history, Claude config and cargo caches in the

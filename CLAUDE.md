@@ -55,6 +55,11 @@ capability table) and `docs/categories.md` (Meta's platform categories).
   and review the diff (within v1 a change must be additive). The
   binary builds with `api-axum` and either backend alone
   (`--no-default-features --features api-axum,store-memory`).
+- The MongoDB outbox spike (roadmap S9, composed into no binary):
+  `cargo test -p meta-whatsapp-server-store-mongodb --all-features`;
+  its `tests/live_mongodb.rs` runs the conformance suites live with its
+  outbox (the in-flight case needs the feature `test-hooks`, which
+  `--all-features` turns on).
 - Event data snapshots (after a webhook change in the library):
   `META_WHATSAPP_SERVER_UPDATE_SNAPSHOTS=1 cargo test -p meta-whatsapp-server --all-features --test event_data`,
   then review what it wrote under `crates/meta-whatsapp-server/tests/snapshots/event_data/`.

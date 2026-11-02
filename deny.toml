@@ -43,6 +43,8 @@ allow = [
   # Fonts bundled by typst-assets (OFL) — rendered output only.
   "OFL-1.1",
   "MIT-0",
+  # Owner's decision of 2026-11-02: for tiny-keccak through the mongodb driver (roadmap S9, S17).
+  "CC0-1.0",
 ]
 
 [bans]
