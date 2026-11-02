@@ -158,6 +158,7 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     secrets.extend(registration(h, &tenant_key).await);
     // Payments (roadmap P2): the OAuth links are credentials.
     secrets.extend(payments(h, &admin).await);
+    secrets.extend(webhook_endpoints(h, &admin).await);
     // Embedded Signup (roadmap M3a): neither the merchant's token, nor the
     // PIN, the code or the state is logged.
     secrets.extend(signup(h, &admin).await);
@@ -569,6 +570,122 @@ async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
         .map(str::to_owned),
     );
     carried
+}
+
+/// The webhook endpoint routes (roadmap M2c) for merchant-42: an endpoint
+/// made (its secret, shown once), listed, read, changed, its secret
+/// rotated (the new one), a ping, its deliveries, a retry of the ping, and
+/// its deletion. The secrets are what the logs must not hold. On a harness
+/// without webhooks out, every route answers `409 webhooks_not_configured`,
+/// and is exercised all the same.
+/// Webhooks out for a log test: a throwaway data key, loopback listed,
+/// plain `http`; no dispatcher runs, so nothing is sent.
+pub fn webhooks_out() -> meta_whatsapp_server_core::webhooks_out::dispatch::WebhooksOut {
+    use meta_whatsapp_server_core::webhooks_out::destination::DestinationPolicy;
+    use meta_whatsapp_server_core::webhooks_out::seal::{DataKey, DataKeys};
+    meta_whatsapp_server_core::webhooks_out::dispatch::WebhooksOut::new(
+        DataKeys::new(DataKey::generate("k1").unwrap()),
+        DestinationPolicy::parse("127.0.0.0/8", true).unwrap(),
+        std::sync::Arc::new(meta_whatsapp_server_http::webhooks_out::SystemResolver),
+        std::sync::Arc::new(meta_whatsapp_server_http::webhooks_out::HyperSender::new().unwrap()),
+    )
+}
+
+async fn webhook_endpoints(h: &Harness, admin: &str) -> Vec<String> {
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["webhooks"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let configured = h.state.settings().webhooks_out.is_some();
+    let mut secrets = Vec::new();
+    let created = h
+        .call(
+            Call::new(Method::POST, "/v1/webhook-endpoints")
+                .key(&key)
+                .json(&json!({"url": "http://127.0.0.1:9/hooks?token=receivers-own-token", "types": ["message_received"]})),
+        )
+        .await;
+    let id = if configured {
+        assert_eq!(created.status.as_u16(), 201, "{}", created.text);
+        secrets.push(created.json()["secret"].as_str().unwrap().to_owned());
+        created.json()["id"].as_str().unwrap().to_owned()
+    } else {
+        assert_eq!(created.code(), "webhooks_not_configured");
+        format!("whe_{}", "0".repeat(32))
+    };
+    secrets.push("receivers-own-token".to_owned());
+    let listed = h.call(Call::get("/v1/webhook-endpoints").key(&key)).await;
+    let read = h
+        .call(Call::get(format!("/v1/webhook-endpoints/{id}")).key(&key))
+        .await;
+    let changed = h
+        .call(
+            Call::new(Method::PATCH, format!("/v1/webhook-endpoints/{id}"))
+                .key(&key)
+                .json(&json!({"types": ["message_received", "status_updated"]})),
+        )
+        .await;
+    let rotated = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("/v1/webhook-endpoints/{id}/rotate-secret"),
+            )
+            .key(&key),
+        )
+        .await;
+    if configured {
+        secrets.push(rotated.json()["secret"].as_str().unwrap().to_owned());
+    }
+    let pinged = h
+        .call(Call::new(Method::POST, format!("/v1/webhook-endpoints/{id}/test")).key(&key))
+        .await;
+    let deliveries = h
+        .call(Call::get(format!("/v1/webhook-endpoints/{id}/deliveries")).key(&key))
+        .await;
+    let ping = if configured {
+        pinged.json()["id"].as_str().unwrap().to_owned()
+    } else {
+        format!("whd_{}", "0".repeat(32))
+    };
+    let retried = h
+        .call(
+            Call::new(
+                Method::POST,
+                format!("/v1/webhook-endpoints/{id}/deliveries/{ping}/retry"),
+            )
+            .key(&key),
+        )
+        .await;
+    let deleted = h
+        .call(Call::new(Method::DELETE, format!("/v1/webhook-endpoints/{id}")).key(&key))
+        .await;
+    if configured {
+        for (reply, status) in [
+            (&listed, 200),
+            (&read, 200),
+            (&changed, 200),
+            (&rotated, 200),
+            (&pinged, 202),
+            (&deliveries, 200),
+            (&retried, 202),
+            (&deleted, 204),
+        ] {
+            assert_eq!(reply.status.as_u16(), status, "{}", reply.text);
+        }
+    }
+    // Each secret's key alone, too (after `whsec_`).
+    let keys: Vec<String> = secrets
+        .iter()
+        .filter_map(|s| s.strip_prefix("whsec_").map(str::to_owned))
+        .collect();
+    secrets.extend(keys);
+    secrets
 }
 
 /// A reply's text, and a contact with no conversation, neither of which

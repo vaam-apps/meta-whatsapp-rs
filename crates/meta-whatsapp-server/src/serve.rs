@@ -44,14 +44,17 @@ use meta_whatsapp_server_core::admin::mint;
 use meta_whatsapp_server_core::housekeeping;
 use meta_whatsapp_server_core::otp::{OtpDeployment, OtpKeys};
 use meta_whatsapp_server_core::signup::{AccountUpdateConfirmation, SignupDeployment};
+use meta_whatsapp_server_core::webhooks_out::DELIVERY_TIMEOUT;
+use meta_whatsapp_server_core::webhooks_out::dispatch::{Dispatcher, WebhooksOut};
 use meta_whatsapp_server_http::api::public_router;
+use meta_whatsapp_server_http::webhooks_out::{HyperSender, SystemResolver};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 #[cfg(feature = "store-postgres")]
 use crate::config::DatabaseUrl;
-use crate::config::{Config, MigrateMode, OnboardingMode, Storage};
+use crate::config::{Config, MigrateMode, OnboardingMode, Storage, WebhookConfig};
 use crate::events::{HOUSEKEEPING_INTERVAL, Inbound};
 use crate::listen;
 use crate::metrics::Metrics;
@@ -268,6 +271,13 @@ fn warn_about(config: &Config) {
     if config.vault_key_is_throwaway {
         tracing::warn!("WA_VAULT_KEY is not set: throwaway vault key (development only)");
     }
+    if config.webhooks.data_key_is_throwaway {
+        tracing::warn!("WA_SERVER_DATA_KEY is not set: throwaway data key (development only)");
+    } else if config.webhooks.data_keys.is_none() {
+        tracing::warn!(
+            "WA_SERVER_DATA_KEY is not set: webhooks out are off (webhook endpoint routes answer 409 webhooks_not_configured)"
+        );
+    }
     if let Some(host) = config.graph_endpoint_override() {
         tracing::warn!(
             host = %host,
@@ -380,6 +390,7 @@ async fn run<S: Future<Output = ()>>(
         es_config_id,
         onboarding,
         account_update_confirmation,
+        webhooks,
         ..
     } = config;
     settings.otp = Some(otp_deployment(otp_pepper, otp_default_tenant)?);
@@ -390,6 +401,7 @@ async fn run<S: Future<Output = ()>>(
         onboarding,
         account_update_confirmation,
     );
+    settings.webhooks_out = webhooks_out(webhooks)?;
     let inbound = Inbound::new(app_secrets, verify_token)?.with_move_rules(move_rules);
     // The state and its grant: the internal listener's API adapter is
     // served with the grant, which no one else is given.
@@ -435,6 +447,7 @@ async fn run<S: Future<Output = ()>>(
     tracing::info!(%public_bind, %internal_bind, "listening");
 
     let (stop, stopped) = watch::channel(false);
+    let dispatcher = spawn_dispatcher(&state, backend.as_ref(), stopped.clone());
     let housekeeping = tokio::spawn(housekeeping::run(
         backend.clone(),
         outbox_retention,
@@ -463,8 +476,53 @@ async fn run<S: Future<Output = ()>>(
     )
     .await;
     housekeeping.abort();
+    end_dispatcher(dispatcher).await;
     backend.close().await;
     served
+}
+
+/// Webhooks out (roadmap M2c): a dispatcher on every replica, claiming
+/// deliveries under a lease, until `stopped` says so; none without a data
+/// key.
+fn spawn_dispatcher(
+    state: &AppState,
+    backend: &dyn Backend,
+    stopped: watch::Receiver<bool>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let out = state.settings().webhooks_out.clone()?;
+    Some(tokio::spawn(
+        Dispatcher::new(backend, state.clock(), out).run(stop_signal(stopped)),
+    ))
+}
+
+/// Wait for the dispatcher to end: its attempts in flight end within their
+/// time limit; one cut here is claimed again by another replica once its
+/// lease ends.
+async fn end_dispatcher(dispatcher: Option<tokio::task::JoinHandle<()>>) {
+    if let Some(dispatcher) = dispatcher
+        && tokio::time::timeout(DELIVERY_TIMEOUT, dispatcher)
+            .await
+            .is_err()
+    {
+        tracing::warn!("webhook deliveries in flight were cut by the shutdown");
+    }
+}
+
+/// Webhooks out's deployment (roadmap M2c): the data keys, the allow-list
+/// and the retry window from the configuration, the system's resolver and
+/// the TCP and TLS sender; `None` without a data key.
+pub fn webhooks_out(config: WebhookConfig) -> anyhow::Result<Option<WebhooksOut>> {
+    let Some(keys) = config.data_keys else {
+        return Ok(None);
+    };
+    let mut out = WebhooksOut::new(
+        keys,
+        config.destinations,
+        Arc::new(SystemResolver),
+        Arc::new(HyperSender::new().context("building webhooks out's TLS configuration")?),
+    );
+    out.schedule.window = config.retry_window;
+    Ok(Some(out))
 }
 
 /// Completes once `stop` says so: the shutdown future of a listener.

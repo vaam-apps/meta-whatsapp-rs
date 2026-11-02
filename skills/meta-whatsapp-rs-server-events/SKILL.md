@@ -1,14 +1,14 @@
 ---
 name: meta-whatsapp-rs-server-events
-description: "Receiving WhatsApp events through meta-whatsapp-server, the meta-whatsapp-rs HTTP service, from an app not written in Rust - pointing the Meta app's webhook at the service, how it verifies, deduplicates and routes Meta's deliveries to tenants (and keeps the rest operator-only), polling GET /v1/events from a TypeScript backend with a stored cursor (next_after, cursor_expired, types, phone_number_id), following them live over Server-Sent Events (GET /v1/events/stream, Last-Event-ID, lagged, shutdown, too_many_streams) and reading one event by id. Load when a non-Rust backend (a Medusa store, a CMS) needs incoming WhatsApp messages, delivery statuses or template reviews from meta-whatsapp-server, or when configuring Meta's callback URL for it."
+description: "Receiving WhatsApp events through meta-whatsapp-server, the meta-whatsapp-rs HTTP service, from an app not written in Rust - pointing the Meta app's webhook at the service, how it verifies, deduplicates and routes Meta's deliveries to tenants (and keeps the rest operator-only), polling GET /v1/events from a TypeScript backend with a stored cursor (next_after, cursor_expired, types, phone_number_id), following them live over Server-Sent Events (GET /v1/events/stream, Last-Event-ID, lagged, shutdown, too_many_streams), receiving them as signed webhooks at a URL of yours (POST /v1/webhook-endpoints, Standard Webhooks signatures verified in TypeScript, secret rotation, truncated deliveries) and reading one event by id. Load when a non-Rust backend (a Medusa store, a CMS) needs incoming WhatsApp messages, delivery statuses or template reviews from meta-whatsapp-server, or when configuring Meta's callback URL for it."
 ---
 
 # meta-whatsapp-rs-server-events
 
 > **Verified against meta-whatsapp-rs 28fab70672de0e011282672d43bfc87f89cbba1e (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
-Reference code: [examples/events.ts](examples/events.ts) (polling) and [examples/stream.ts](examples/stream.ts)
-(live), type-checked against the service's OpenAPI document. Operators' guide:
+Reference code: [examples/events.ts](examples/events.ts) (polling), [examples/stream.ts](examples/stream.ts)
+(live) and [examples/webhooks.ts](examples/webhooks.ts) (pushed), type-checked against the service's OpenAPI document. Operators' guide:
 [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#receiving-metas-webhooks).
 
 ## When to use
@@ -83,14 +83,6 @@ below, and `: keepalive` every 15 s. Catch up by polling first, then follow from
     });
 ```
 
-```ts
-        if (frame.event === "whatsapp") {
-          const event = JSON.parse(frame.data) as Event;
-          await handle(event);
-          await cursor.save(event.sequence);
-        } else if (frame.event === "lagged" || frame.event === "shutdown") {
-```
-
 - The stream may end with `event: lagged` (you took nothing for 30 s while 1 MiB waited, or events after your
   cursor were purged) or `event: shutdown` (the replica stops), each with `{"after": n}`, the last sequence sent:
   reconnect with it as `Last-Event-ID`.
@@ -98,6 +90,24 @@ below, and `: keepalive` every 15 s. Catch up by polling first, then follow from
   for polling; `too_many_streams` (429: 20 per tenant and replica, `WA_SERVER_STREAMS_PER_TENANT`) and
   `shutting_down` (503): wait `Retry-After`. A number not yours: `not_found`.
 - Browsers cannot send the key (an EventSource sends no Authorization header): relay the stream from your backend.
+
+## Receive them as webhooks (pushed to your URL)
+
+`POST /v1/webhook-endpoints` (scope `webhooks`) with `{url, types}` answers `201` and a `secret` (`whsec_…`), shown
+once; each new event of those types then comes as a `POST` of the envelope below (the operator lists your host in
+`WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS`). Verify the raw body, before parsing it (Standard Webhooks):
+
+```ts
+  const prefix = new TextEncoder().encode(`${id}.${timestamp}.`);
+  const signed = new Uint8Array(prefix.length + body.length);
+  signed.set(prefix);
+  signed.set(body, prefix.length);
+```
+
+- Answer 2xx within 10 s; anything else (a redirect too) is retried for 72 h, then `failed`. Deduplicate on
+  `webhook-id`, the event's `id`. `truncated: true` (over 256 KiB): `data` is null, read it by id.
+- `POST …/{id}/rotate-secret` answers a new secret; for 24 h deliveries carry both signatures: accept either.
+  `POST …/{id}/test` sends a ping; `GET …/{id}/deliveries` lists the attempts.
 
 ## The envelope, and one event by id
 
@@ -133,21 +143,11 @@ message), and the service's own: `number_connected`, `number_disconnected` (why 
 stay after a change that failed (a `503`), or be missing (`number_reconnect_required` is best effort), so read
 `GET /v1/numbers` when one comes.
 
-```ts
-    case "standby_observed":
-    case "thread_control_changed":
-      return;
-    case "number_disconnected": {
-      // tenant_disconnected, operator_unbound, account_deleted, … (more may come).
-      const data = event.data as Disconnected;
-```
-
 `GET /v1/events/{id}` answers one of your events, whole; another tenant's id, one past retention or no event's id
 is `not_found`, alike (the example's eventById).
 
 ## What meta-whatsapp-rs does not do
 
-- It pushes nothing to your URL yet: poll, or hold a stream. Signed webhooks to your backend come with M2c.
 - It never shows you operator-only events, nor another tenant's: a WABA moved to you gets no undated event (error,
   history) for 7 days and an hour.
 - It does not resynchronise you after `cursor_expired`, and keeps events 7 days by default (design D10, decided on

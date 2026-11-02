@@ -302,6 +302,7 @@ pub struct HarnessBackend {
     conversations: Arc<dyn ConversationStore>,
     outbox: Arc<RecordingEvents>,
     notifier: Arc<dyn EventNotifier>,
+    webhooks: Arc<dyn meta_whatsapp_server::store::WebhookStore>,
     memory: MemoryBackend,
 }
 
@@ -321,6 +322,9 @@ impl Backend for HarnessBackend {
     }
     fn notifier(&self) -> Arc<dyn EventNotifier> {
         self.notifier.clone()
+    }
+    fn webhooks(&self) -> Arc<dyn meta_whatsapp_server::store::WebhookStore> {
+        self.webhooks.clone()
     }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         self.memory.leader_lock()
@@ -367,6 +371,9 @@ pub struct Harness {
     /// The webhook pipeline's "now" (the replay window, the keyless dedup
     /// window): the time the harness was built until a test moves it.
     pub clock: ManualClock,
+    /// The bundle the state was composed from: what a test's own
+    /// webhooks-out dispatcher runs on (roadmap M2c).
+    pub backend: Arc<dyn Backend>,
 }
 
 /// The stores a [`Harness`] runs on.
@@ -379,6 +386,8 @@ pub struct Stores {
     /// `NOTIFY` on the database (two harnesses on one database are two
     /// replicas).
     pub notifier: Arc<dyn EventNotifier>,
+    /// Webhooks out's records (roadmap M2c), on the records' database.
+    pub webhooks: Arc<dyn meta_whatsapp_server::store::WebhookStore>,
 }
 
 impl Stores {
@@ -387,6 +396,7 @@ impl Stores {
         let store = MemoryStore::new();
         Self {
             events: store.outbox(),
+            webhooks: store.webhooks(),
             store: Arc::new(store),
             kv: Arc::new(MemoryKvStore::new()),
             conversations: Arc::new(MemoryConversationStore::new()),
@@ -397,8 +407,9 @@ impl Stores {
     /// Everything on Postgres, on `pool` (migrated).
     pub fn postgres(pool: &meta_whatsapp_rs::adapters::store::postgres::sqlx::PgPool) -> Self {
         use meta_whatsapp_rs::adapters::store::{PostgresConversationStore, PostgresKvStore};
-        use meta_whatsapp_server::store::{PgEventStore, PgNotifier, PgStore};
+        use meta_whatsapp_server::store::{PgEventStore, PgNotifier, PgStore, PgWebhookStore};
         Self {
+            webhooks: Arc::new(PgWebhookStore::new(pool.clone())),
             notifier: Arc::new(PgNotifier::new(pool.clone())),
             store: Arc::new(PgStore::new(pool.clone())),
             kv: Arc::new(PostgresKvStore::new(pool.clone())),
@@ -684,6 +695,7 @@ impl Harness {
             conversations,
             events,
             notifier,
+            webhooks,
         } = stores;
         let kv = Arc::new(CountingKv::new(kv));
         let outbox = Arc::new(RecordingEvents::new(events));
@@ -703,18 +715,19 @@ impl Harness {
         )
         .unwrap()
         .with_clock(Arc::new(clock.clone()));
-        let backend = HarnessBackend {
+        let backend: Arc<dyn Backend> = Arc::new(HarnessBackend {
             store: store.clone(),
             kv: kv.clone(),
             conversations: conversations.clone(),
             outbox: outbox.clone(),
             notifier,
+            webhooks,
             memory: MemoryBackend::new(),
-        };
+        });
         // The state and its grant, which the internal router is served
         // with (roadmap S7).
         let (state, grant) = AppState::from_backend(
-            Arc::new(backend),
+            backend.clone(),
             vault_keys(),
             client,
             inbound,
@@ -734,6 +747,7 @@ impl Harness {
             conversations,
             outbox,
             clock,
+            backend,
         }
     }
 

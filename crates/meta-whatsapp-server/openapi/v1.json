@@ -8299,6 +8299,1049 @@
           }
         ]
       }
+    },
+    "/v1/webhook-endpoints": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "`GET /v1/webhook-endpoints`.",
+        "operationId": "list_webhook_endpoints",
+        "parameters": [
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's endpoints",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpointList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`webhooks_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `limit` or `cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "`POST /v1/webhook-endpoints`.",
+        "operationId": "create_webhook_endpoint",
+        "parameters": [
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as: the endpoint is that tenant's",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWebhookEndpoint"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created, its `secret` shown this once. It receives the tenant's events recorded from now on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpointCreated"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (no `webhooks` scope), `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`webhooks_not_configured` (no data key), `webhook_endpoint_limit_reached` (10 per tenant)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `url` (not `https`, credentials in it, not in the allow-list, or its host resolving to an address the list does not admit), `types` (none, or one a tenant never receives) or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/webhook-endpoints/{id}": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "`GET /v1/webhook-endpoints/{id}`.",
+        "operationId": "get_webhook_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The endpoint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpoint"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no endpoint of this tenant has this id (another tenant's looks alike)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`webhooks_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "`DELETE /v1/webhook-endpoints/{id}`.",
+        "operationId": "delete_webhook_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, with its deliveries"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`, as for a read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`webhooks_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "`PATCH /v1/webhook-endpoints/{id}`.",
+        "operationId": "update_webhook_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWebhookEndpoint"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The endpoint, changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookEndpoint"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`, as for a read, before the change is checked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`webhooks_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `url`, `types` or `body`, as on a creation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/webhook-endpoints/{id}/deliveries": {
+      "get": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "`GET /v1/webhook-endpoints/{id}/deliveries`.",
+        "operationId": "list_webhook_deliveries",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Its deliveries, newest first; no bodies. Settled ones are kept 30 days",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDeliveryList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`, as for a read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`webhooks_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `limit` or `cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/webhook-endpoints/{id}/deliveries/{delivery_id}/retry": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "`POST /v1/webhook-endpoints/{id}/deliveries/{delivery_id}/retry`.",
+        "operationId": "retry_webhook_delivery",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "delivery_id",
+            "in": "path",
+            "description": "The delivery's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Pending again, due now, retried for a new window (a failed or delivered one; a pending one is left as it is). Its event goes again under the same `webhook-id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDelivery"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such delivery of this tenant's endpoint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`webhooks_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/webhook-endpoints/{id}/rotate-secret": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "`POST /v1/webhook-endpoints/{id}/rotate-secret`.",
+        "operationId": "rotate_webhook_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The new secret, shown this once. For 24 hours every delivery carries two signatures, the new secret's first; a rotation within them drops the oldest secret",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSecretRotated"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`, as for a read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`webhooks_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/webhook-endpoints/{id}/test": {
+      "post": {
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "`POST /v1/webhook-endpoints/{id}/test`.",
+        "operationId": "test_webhook_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The endpoint's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "A `ping` delivery, due now: the dispatcher attempts it once (its outcome in the endpoint's deliveries). Its body: `{id, type: \"ping\", api_version, tenant_id, endpoint_id, sent_at}`, signed as every delivery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDelivery"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`, as for a read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`webhooks_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -9201,6 +10244,28 @@
               "null"
             ],
             "description": "A label for operators, at most 256 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateWebhookEndpoint": {
+        "type": "object",
+        "description": "`POST /v1/webhook-endpoints`.",
+        "required": [
+          "url",
+          "types"
+        ],
+        "properties": {
+          "types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnownEventType"
+            },
+            "description": "The event types to deliver: `KnownEventType`s, at least one, each\nonce."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where to deliver: `https` (plain `http` only in a development\ndeployment), a host the operator's allow-list admits\n(`WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS`), at most 2048 bytes."
           }
         },
         "additionalProperties": false
@@ -10213,6 +11278,8 @@
           "outcome_unknown",
           "otp_not_configured",
           "signup_not_configured",
+          "webhooks_not_configured",
+          "webhook_endpoint_limit_reached",
           "permission",
           "account_restricted",
           "country_restricted",
@@ -12792,6 +13859,37 @@
         },
         "additionalProperties": false
       },
+      "UpdateWebhookEndpoint": {
+        "type": "object",
+        "description": "`PATCH /v1/webhook-endpoints/{id}`: what is absent is left.",
+        "properties": {
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Off stops deliveries (they wait); on resumes them, from where the\nendpoint stopped, within the outbox's retention, and clears the\nservice's `disabled_reason`."
+          },
+          "types": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/KnownEventType"
+            },
+            "description": "New event types."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new URL, checked as on a creation."
+          }
+        },
+        "additionalProperties": false
+      },
       "VaultRotation": {
         "type": "object",
         "description": "What a vault rotation did.",
@@ -13019,6 +14117,259 @@
             "description": "Pass as `cursor` for the next page; `null` on the last one."
           }
         }
+      },
+      "WebhookDelivery": {
+        "type": "object",
+        "description": "A delivery: one event (or a ping) to one endpoint, and its attempts.",
+        "required": [
+          "id",
+          "event_id",
+          "sequence",
+          "type",
+          "status",
+          "attempts",
+          "next_attempt_at",
+          "last_attempt_at",
+          "last_status",
+          "last_error",
+          "last_duration_ms",
+          "give_up_at",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempts made.",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was made (RFC 3339)."
+          },
+          "event_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its event's id (`evt_…`, the deliveries' `webhook-id`); `null` for\na ping."
+          },
+          "give_up_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When retries end (RFC 3339): a failed attempt after it fails the\ndelivery."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id (`whd_` and 32 hex digits)."
+          },
+          "last_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the last attempt started (RFC 3339)."
+          },
+          "last_duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How long the last attempt took, in milliseconds.",
+            "minimum": 0
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the last attempt failed: `timeout`, `connect`, `tls`, `status`\n(a non-2xx answer, a redirect included: never followed),\n`protocol`, `destination_refused` (the URL or an address its host\nresolved to is outside the allow-list), `resolve_failed`,\n`secret_unavailable`, `event_gone` (past the outbox's retention);\nnew values may appear."
+          },
+          "last_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The last attempt's HTTP status, when the receiver answered.",
+            "minimum": 0
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the next attempt is due (RFC 3339), while pending."
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Its event's sequence; `null` for a ping."
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending`, `delivered` or `failed`."
+          },
+          "type": {
+            "type": "string",
+            "description": "Its event's type, or `ping`."
+          }
+        }
+      },
+      "WebhookDeliveryList": {
+        "type": "object",
+        "description": "A page of deliveries.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookDelivery"
+            },
+            "description": "The deliveries, newest first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next (older) page; `null` on the last."
+          }
+        }
+      },
+      "WebhookEndpoint": {
+        "type": "object",
+        "description": "A webhook endpoint (never its secret).",
+        "required": [
+          "id",
+          "url",
+          "types",
+          "enabled",
+          "disabled_reason",
+          "previous_secret_expires_at",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it was created (RFC 3339)."
+          },
+          "disabled_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the service turned it off: `failing` (its deliveries failed for\nthe whole retry window); `null` otherwise."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether deliveries are made."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id (`whe_` and 32 hex digits)."
+          },
+          "previous_secret_expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Until when the secret before the last rotation signs too (RFC\n3339); `null` without one."
+          },
+          "types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/KnownEventType"
+            },
+            "description": "The event types it receives."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it last changed (RFC 3339)."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where it delivers."
+          }
+        }
+      },
+      "WebhookEndpointCreated": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebhookEndpoint",
+            "description": "The endpoint."
+          },
+          {
+            "type": "object",
+            "required": [
+              "secret"
+            ],
+            "properties": {
+              "secret": {
+                "type": "string",
+                "description": "The signing secret, `whsec_` and the base64 of 32 bytes: verify\neach delivery's `webhook-signature` with it (Standard Webhooks).\nShown once: store it now."
+              }
+            }
+          }
+        ],
+        "description": "A created endpoint, and its secret, shown this once."
+      },
+      "WebhookEndpointList": {
+        "type": "object",
+        "description": "A page of endpoints.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookEndpoint"
+            },
+            "description": "The endpoints, in byte order of their ids."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last."
+          }
+        }
+      },
+      "WebhookSecretRotated": {
+        "type": "object",
+        "description": "A new secret, shown this once.",
+        "required": [
+          "secret",
+          "previous_secret_expires_at"
+        ],
+        "properties": {
+          "previous_secret_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Until when the previous secret signs too (RFC 3339): accept either\nuntil then."
+          },
+          "secret": {
+            "type": "string",
+            "description": "The new signing secret (`whsec_…`): deliveries carry its signature\nfirst from now on."
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -13066,6 +14417,10 @@
     {
       "name": "events",
       "description": "Meta's webhook events, routed to their tenant (scope `events`)"
+    },
+    {
+      "name": "webhooks",
+      "description": "Webhook endpoints: the tenant's events pushed to its URLs, signed the Standard Webhooks way, retried for 72 hours; their secrets, pings and deliveries (scope `webhooks`)"
     },
     {
       "name": "otp",

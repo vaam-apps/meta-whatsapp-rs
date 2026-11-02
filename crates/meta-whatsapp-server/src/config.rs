@@ -49,6 +49,14 @@
 //! records are purged ([`Config::inbox_retention`]). Which one a deployment
 //! sets follows its privacy obligations: the deployer's call.
 //!
+//! And webhooks out ([`WebhookConfig`], roadmap M2c):
+//!
+//! | Variable | Default | What |
+//! | --- | --- | --- |
+//! | `WA_SERVER_DATA_KEY` (secret), `WA_SERVER_DATA_KEY_ID`, `WA_SERVER_DATA_PREVIOUS_KEYS` (secret) | unset, `k1`, none | the key webhook endpoints' signing secrets are sealed under (base64 of 32 bytes), its id (1 to 32 of `[A-Za-z0-9_-]`) and the previous ones (`<id>:<base64>`, comma-separated, each id once), which still open what they sealed. Unset: with memory storage a throwaway key, with Postgres no webhooks out (`409 webhooks_not_configured`, no dispatcher) |
+//! | `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` | none: every destination refused | comma-separated host names (`hooks.example.com`), `*.`-prefixed ones (`*.example.com`) and CIDRs (`10.0.0.0/8`, not `/0`); a private, loopback or link-local address passes only inside a listed CIDR, an unspecified, multicast or metadata address never (`meta_whatsapp_server_core::webhooks_out::destination`); plain `http` destinations only with `WA_SERVER_ENV=development` |
+//! | `WA_SERVER_WEBHOOK_RETRY_WINDOW` | `72h` | how long a delivery is retried before it is `failed`; an endpoint failing for the whole window is disabled |
+//!
 //! And the routing of a moved WABA's events ([`MoveRules`], roadmap S2b,
 //! design D36; none applies to a WABA no other tenant held):
 //!
@@ -79,6 +87,9 @@ use meta_whatsapp_server_core::model::TenantId;
 use meta_whatsapp_server_core::otp::OtpKeys;
 use meta_whatsapp_server_core::registration::{AttemptLimit, AttemptLimits};
 use meta_whatsapp_server_core::signup::AccountUpdateConfirmation;
+use meta_whatsapp_server_core::webhooks_out::DEFAULT_RETRY_WINDOW;
+use meta_whatsapp_server_core::webhooks_out::destination::DestinationPolicy;
+use meta_whatsapp_server_core::webhooks_out::seal::{DataKey, DataKeys};
 
 use crate::events::{
     DEFAULT_MOVE_SKEW_MARGIN, DEFAULT_UNDATED_AFTER_MOVE_WINDOW, MoveRules, UndatedAfterMove,
@@ -307,6 +318,25 @@ pub struct Config {
     /// and `WA_SERVER_MOVE_SKEW_MARGIN`: the routing of a moved WABA's
     /// events (roadmap S2b, design D36; [`MoveRules::default`] unset).
     pub move_rules: MoveRules,
+    /// `WA_SERVER_DATA_KEY*`, `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` and
+    /// `WA_SERVER_WEBHOOK_RETRY_WINDOW` (roadmap M2c).
+    pub webhooks: WebhookConfig,
+}
+
+/// Webhooks out's settings (roadmap M2c). `Debug` shows the data keys'
+/// ids, never a key.
+#[derive(Debug, Clone)]
+pub struct WebhookConfig {
+    /// `WA_SERVER_DATA_KEY` (+ id, + previous keys); a throwaway key with
+    /// memory storage; `None` with Postgres and no key: no webhooks out.
+    pub data_keys: Option<DataKeys>,
+    /// Whether the data key was generated for this process.
+    pub data_key_is_throwaway: bool,
+    /// `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS`, plain `http` allowed in
+    /// development only.
+    pub destinations: DestinationPolicy,
+    /// `WA_SERVER_WEBHOOK_RETRY_WINDOW`.
+    pub retry_window: Duration,
 }
 
 impl fmt::Debug for Config {
@@ -327,6 +357,7 @@ impl fmt::Debug for Config {
             .field("inbox_retention", &self.inbox_retention)
             .field("settings", &self.settings)
             .field("move_rules", &self.move_rules)
+            .field("webhooks", &self.webhooks)
             .finish_non_exhaustive()
     }
 }
@@ -506,6 +537,7 @@ impl Config {
         let runtime = runtime(&r)?;
         let settings = settings(&r)?;
         let move_rules = move_rules(&r)?;
+        let webhooks = webhook_config(&r, postgres, environment)?;
         Ok(Self {
             environment,
             public_bind,
@@ -530,8 +562,93 @@ impl Config {
             log_filter: runtime.log_filter,
             settings,
             move_rules,
+            webhooks,
         })
     }
+}
+
+/// Webhooks out: the data keys (a throwaway one with memory storage, none
+/// with Postgres and no `WA_SERVER_DATA_KEY`), the allow-list (plain
+/// `http` in development only), the retry window (positive).
+fn webhook_config(
+    r: &Reader<'_>,
+    postgres: bool,
+    environment: Environment,
+) -> Result<WebhookConfig, ConfigError> {
+    let id = r
+        .plain("WA_SERVER_DATA_KEY_ID")?
+        .unwrap_or_else(|| "k1".to_owned());
+    let invalid_id = ConfigError::Invalid {
+        name: "WA_SERVER_DATA_KEY_ID",
+        reason: "1-32 characters of A-Z a-z 0-9 - _",
+    };
+    let (active, throwaway) = match r.optional_secret("WA_SERVER_DATA_KEY")? {
+        Some(encoded) => {
+            let key = DataKey::from_base64(id, &encoded).map_err(|e| match e {
+                meta_whatsapp_server_core::webhooks_out::seal::InvalidDataKey::Id => {
+                    invalid_id.clone()
+                }
+                _ => ConfigError::Invalid {
+                    name: "WA_SERVER_DATA_KEY",
+                    reason: "expected base64 of exactly 32 bytes",
+                },
+            })?;
+            (Some(key), false)
+        }
+        None if postgres => (None, false),
+        None => (
+            Some(DataKey::generate(id).map_err(|_| invalid_id.clone())?),
+            true,
+        ),
+    };
+    let data_keys = match active {
+        None => None,
+        Some(active) => {
+            let mut keys = DataKeys::new(active);
+            if let Some(previous) = r.optional_secret("WA_SERVER_DATA_PREVIOUS_KEYS")? {
+                let invalid = ConfigError::Invalid {
+                    name: "WA_SERVER_DATA_PREVIOUS_KEYS",
+                    reason: "expected <id>:<base64 of 32 bytes>, comma-separated, each id once (WA_SERVER_DATA_KEY_ID's included)",
+                };
+                for entry in previous.split(',') {
+                    let (id, encoded) = entry
+                        .trim()
+                        .split_once(':')
+                        .ok_or_else(|| invalid.clone())?;
+                    let key = DataKey::from_base64(id, encoded).map_err(|_| invalid.clone())?;
+                    keys = keys.with_previous(key).map_err(|_| invalid.clone())?;
+                }
+            }
+            Some(keys)
+        }
+    };
+    let destinations = DestinationPolicy::parse(
+        &r.plain("WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS")?
+            .unwrap_or_default(),
+        environment == Environment::Development,
+    )
+    .map_err(|_| ConfigError::Invalid {
+        name: "WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS",
+        reason: "expected host names, *.-prefixed host names and CIDRs (not /0), comma-separated",
+    })?;
+    let retry_window = match r.plain("WA_SERVER_WEBHOOK_RETRY_WINDOW")? {
+        None => DEFAULT_RETRY_WINDOW,
+        Some(value) => match duration("WA_SERVER_WEBHOOK_RETRY_WINDOW", &value)? {
+            zero if zero.is_zero() => {
+                return Err(ConfigError::Invalid {
+                    name: "WA_SERVER_WEBHOOK_RETRY_WINDOW",
+                    reason: "expected a positive duration such as 72h",
+                });
+            }
+            window => window,
+        },
+    };
+    Ok(WebhookConfig {
+        data_keys,
+        data_key_is_throwaway: throwaway,
+        destinations,
+        retry_window,
+    })
 }
 
 /// `WA_SERVER_UNDATED_AFTER_MOVE` (`operator_only`, the default, or

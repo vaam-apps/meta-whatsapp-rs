@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`), `/v1/events` (scope `events`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -28,6 +28,7 @@ pub mod payments;
 pub mod registration;
 pub mod signup;
 pub mod templates;
+pub mod webhook_endpoints;
 
 pub use meta_whatsapp_server_http::api::{
     MAX_BODY_BYTES, PUBLIC_OPERATIONS, PUBLIC_ROUTES, REQUEST_DEADLINE, common, media, ops,
@@ -94,6 +95,7 @@ impl Modify for Security {
         (name = "payments", description = "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"),
         (name = "inbox", description = "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"),
         (name = "events", description = "Meta's webhook events, routed to their tenant (scope `events`)"),
+        (name = "webhooks", description = "Webhook endpoints: the tenant's events pushed to its URLs, signed the Standard Webhooks way, retried for 72 hours; their secrets, pings and deliveries (scope `webhooks`)"),
         (name = "otp", description = "One-time passcodes sent with the tenant's authentication template, and checked (scope `otp`)"),
         (name = "signup", description = "Embedded Signup: an attempt bound to the tenant, its completion (the business onboarded, the WABA and its numbers bound to the tenant), and the attempts to resume (scope `signup`)"),
         (name = "operations", description = "Health, metrics, this document, versions (no key)"),
@@ -196,6 +198,23 @@ fn templates_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(templates::create_authentication_template))
 }
 
+fn webhook_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(
+            webhook_endpoints::create_webhook_endpoint,
+            webhook_endpoints::list_webhook_endpoints
+        ))
+        .routes(routes!(
+            webhook_endpoints::get_webhook_endpoint,
+            webhook_endpoints::update_webhook_endpoint,
+            webhook_endpoints::delete_webhook_endpoint
+        ))
+        .routes(routes!(webhook_endpoints::rotate_webhook_secret))
+        .routes(routes!(webhook_endpoints::test_webhook_endpoint))
+        .routes(routes!(webhook_endpoints::list_webhook_deliveries))
+        .routes(routes!(webhook_endpoints::retry_webhook_delivery))
+}
+
 fn otp_routes() -> OpenApiRouter<Grant> {
     OpenApiRouter::new()
         .routes(routes!(otp::issue_otp))
@@ -255,6 +274,7 @@ fn api_routes(
         .merge(tenant(inbox_routes(), Scope::Inbox))
         .merge(tenant(payments_routes(), Scope::Payments))
         .merge(tenant(events_routes(), Scope::Events))
+        .merge(tenant(webhook_routes(), Scope::Webhooks))
         .merge(tenant(otp_routes(), Scope::Otp))
         .merge(tenant(signup_routes(), Scope::Signup))
         .merge(ops_routes())
@@ -418,6 +438,7 @@ mod tests {
             ("templates.rs", include_str!("templates.rs")),
             ("otp.rs", include_str!("otp.rs")),
             ("signup.rs", include_str!("signup.rs")),
+            ("webhook_endpoints.rs", include_str!("webhook_endpoints.rs")),
         ];
         let mut plain = Vec::new();
         for (file, source) in sources {

@@ -163,6 +163,9 @@ impl Backend for Broken {
     fn notifier(&self) -> Arc<dyn EventNotifier> {
         self.0.notifier()
     }
+    fn webhooks(&self) -> Arc<dyn meta_whatsapp_server_core::webhooks_out::store::WebhookStore> {
+        self.0.webhooks()
+    }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         self.0.leader_lock()
     }

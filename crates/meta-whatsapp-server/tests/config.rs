@@ -693,3 +693,79 @@ fn the_routing_after_a_move_is_set_by_three_variables() {
         );
     }
 }
+
+/// Roadmap M2c: webhooks out's settings. On Postgres without
+/// `WA_SERVER_DATA_KEY` they are off (no data key), on memory a throwaway
+/// key; a key, its id and the previous keys are read, a repeated id or a
+/// key that is not 32 bytes refused; the allow-list admits nothing until
+/// set, plain `http` in development only, and `/0` or an entry that is no
+/// host or CIDR stops the start; the retry window is 72 h unless set, and
+/// never zero. No error quotes a value.
+#[test]
+fn webhooks_out_read_a_data_key_an_allow_list_and_a_window() {
+    let off = Config::from_env(&production()).unwrap();
+    assert!(off.webhooks.data_keys.is_none());
+    assert!(off.webhooks.destinations.is_empty());
+    assert_eq!(
+        off.webhooks.retry_window,
+        std::time::Duration::from_hours(72)
+    );
+    let dev = Config::from_env(&development()).unwrap();
+    assert!(dev.webhooks.data_key_is_throwaway);
+    assert!(dev.webhooks.destinations.allows_http());
+    assert!(!off.webhooks.destinations.allows_http());
+    let on = Config::from_env(
+        &production()
+            .set("WA_SERVER_DATA_KEY", VAULT_KEY)
+            .set("WA_SERVER_DATA_KEY_ID", "d2")
+            .set("WA_SERVER_DATA_PREVIOUS_KEYS", &format!("d1:{VAULT_KEY}"))
+            .set(
+                "WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS",
+                "hooks.example.com, 10.0.0.0/8",
+            )
+            .set("WA_SERVER_WEBHOOK_RETRY_WINDOW", "24h"),
+    )
+    .unwrap();
+    assert_eq!(
+        on.webhooks
+            .data_keys
+            .as_ref()
+            .map(meta_whatsapp_server_core::webhooks_out::seal::DataKeys::active_id),
+        Some("d2")
+    );
+    assert!(!on.webhooks.data_key_is_throwaway);
+    assert!(!on.webhooks.destinations.is_empty());
+    assert_eq!(
+        on.webhooks.retry_window,
+        std::time::Duration::from_hours(24)
+    );
+    assert!(!format!("{on:?}").contains(VAULT_KEY));
+    for (name, value) in [
+        ("WA_SERVER_DATA_KEY", "c2hvcnQ="),
+        ("WA_SERVER_DATA_KEY_ID", "a.b"),
+        (
+            "WA_SERVER_DATA_PREVIOUS_KEYS",
+            "k1:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        ),
+        ("WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS", "0.0.0.0/0"),
+        (
+            "WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS",
+            "https://hooks.example.com",
+        ),
+        ("WA_SERVER_WEBHOOK_RETRY_WINDOW", "0s"),
+    ] {
+        let error = refused(
+            &production()
+                .set("WA_SERVER_DATA_KEY", VAULT_KEY)
+                .set(name, value),
+        );
+        assert!(
+            matches!(error, ConfigError::Invalid { .. }),
+            "{name}: {error:?}"
+        );
+        assert!(
+            !error.to_string().contains(value),
+            "{name}: the value is quoted"
+        );
+    }
+}

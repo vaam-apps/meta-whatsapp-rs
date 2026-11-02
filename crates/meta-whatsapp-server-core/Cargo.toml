@@ -35,6 +35,10 @@ meta-whatsapp-rs.workspace = true
 # pipeline's sink wraps a storage failure in one (src/inbound.rs). Already
 # the library's dependency.
 anyhow.workspace = true
+# Webhook endpoints' signing secrets, sealed under `WA_SERVER_DATA_KEY`
+# (src/webhooks_out/seal.rs; design section 4.4). Already the library's
+# dependency (the token vault's cipher).
+aes-gcm.workspace = true
 async-trait.workspace = true
 # Meta reports a media file's SHA-256 in hex or base64 (src/media.rs).
 base64.workspace = true
@@ -64,6 +68,10 @@ time.workspace = true
 # (`select!`, src/live.rs).
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 tracing.workspace = true
+# A webhook endpoint's URL, parsed as WHATWG does (an IPv4 host in hex or
+# octal read as the address it is) before the allow-list checks it
+# (src/webhooks_out/destination.rs). Already the library's dependency.
+url.workspace = true
 # Meta's `details` lose format characters and line separators, not only
 # control characters (src/error.rs).
 unicode-properties.workspace = true

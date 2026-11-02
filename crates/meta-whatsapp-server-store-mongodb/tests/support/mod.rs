@@ -424,6 +424,12 @@ impl Backend for SpikeBackend {
     fn notifier(&self) -> Arc<dyn EventNotifier> {
         self.memory.notifier()
     }
+    /// The memory backend's (roadmap M2c): its tenants are the ones
+    /// [`MirroredRecords`] writes through to, and its dispatcher reads the
+    /// events from this outbox.
+    fn webhooks(&self) -> Arc<dyn meta_whatsapp_server_core::webhooks_out::store::WebhookStore> {
+        self.memory.webhooks()
+    }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         self.memory.leader_lock()
     }

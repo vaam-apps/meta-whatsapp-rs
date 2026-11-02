@@ -134,11 +134,31 @@ pub enum Operation {
     /// `resume_signup`: an attempt's steps after the stored token run
     /// again (roadmap M3a).
     ResumeSignup,
+    /// `create_webhook_endpoint`: a webhook endpoint created, its secret
+    /// shown once (roadmap M2c).
+    CreateWebhookEndpoint,
+    /// `list_webhook_endpoints`: the tenant's webhook endpoints.
+    ListWebhookEndpoints,
+    /// `get_webhook_endpoint`: one webhook endpoint.
+    GetWebhookEndpoint,
+    /// `update_webhook_endpoint`: a webhook endpoint's URL, types or
+    /// `enabled` changed.
+    UpdateWebhookEndpoint,
+    /// `delete_webhook_endpoint`: a webhook endpoint deleted.
+    DeleteWebhookEndpoint,
+    /// `rotate_webhook_secret`: a webhook endpoint's new secret.
+    RotateWebhookSecret,
+    /// `test_webhook_endpoint`: a ping to a webhook endpoint.
+    TestWebhookEndpoint,
+    /// `list_webhook_deliveries`: a webhook endpoint's deliveries.
+    ListWebhookDeliveries,
+    /// `retry_webhook_delivery`: a webhook delivery made again.
+    RetryWebhookDelivery,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 53] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -183,6 +203,15 @@ impl Operation {
         Self::CompleteSignup,
         Self::ListSignupAttempts,
         Self::ResumeSignup,
+        Self::CreateWebhookEndpoint,
+        Self::ListWebhookEndpoints,
+        Self::GetWebhookEndpoint,
+        Self::UpdateWebhookEndpoint,
+        Self::DeleteWebhookEndpoint,
+        Self::RotateWebhookSecret,
+        Self::TestWebhookEndpoint,
+        Self::ListWebhookDeliveries,
+        Self::RetryWebhookDelivery,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -232,6 +261,15 @@ impl Operation {
             Self::CompleteSignup => "complete_signup",
             Self::ListSignupAttempts => "list_signup_attempts",
             Self::ResumeSignup => "resume_signup",
+            Self::CreateWebhookEndpoint => "create_webhook_endpoint",
+            Self::ListWebhookEndpoints => "list_webhook_endpoints",
+            Self::GetWebhookEndpoint => "get_webhook_endpoint",
+            Self::UpdateWebhookEndpoint => "update_webhook_endpoint",
+            Self::DeleteWebhookEndpoint => "delete_webhook_endpoint",
+            Self::RotateWebhookSecret => "rotate_webhook_secret",
+            Self::TestWebhookEndpoint => "test_webhook_endpoint",
+            Self::ListWebhookDeliveries => "list_webhook_deliveries",
+            Self::RetryWebhookDelivery => "retry_webhook_delivery",
         }
     }
 
@@ -282,6 +320,15 @@ impl Operation {
             | Self::CompleteSignup
             | Self::ListSignupAttempts
             | Self::ResumeSignup => Scope::Signup,
+            Self::CreateWebhookEndpoint
+            | Self::ListWebhookEndpoints
+            | Self::GetWebhookEndpoint
+            | Self::UpdateWebhookEndpoint
+            | Self::DeleteWebhookEndpoint
+            | Self::RotateWebhookSecret
+            | Self::TestWebhookEndpoint
+            | Self::ListWebhookDeliveries
+            | Self::RetryWebhookDelivery => Scope::Webhooks,
         }
     }
 }

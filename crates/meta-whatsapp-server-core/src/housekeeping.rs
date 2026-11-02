@@ -2,8 +2,9 @@
 //! every [`HOUSEKEEPING_INTERVAL`], one round ([`round`]) under one
 //! [`LeaderLock`] turn, purging what expired on every port of the bundle
 //! (the outbox past its retention, the inbox past the retention its store
-//! was built with, the expired idempotency records, and what the
-//! backend's [`Janitor`] sweeps).
+//! was built with, the webhook deliveries settled more than 30 days ago,
+//! the expired idempotency records, and what the backend's [`Janitor`]
+//! sweeps).
 //!
 //! It reaches the database only through the bundle, so a backend an
 //! integrator brings is kept as the in-tree ones are, with nothing to
@@ -103,6 +104,18 @@ pub async fn round(backend: &dyn Backend, retention: Duration) -> bool {
             "inbox records past their retention purged"
         ),
         Err(error) => tracing::warn!(error = %error, "purging the inbox failed"),
+    }
+    // Webhook deliveries settled past their retention (roadmap M2c).
+    let deliveries_before = OffsetDateTime::now_utc()
+        - time::Duration::try_from(crate::webhooks_out::DELIVERY_RETENTION)
+            .unwrap_or(time::Duration::MAX);
+    match backend.webhooks().purge_deliveries(deliveries_before).await {
+        Ok(0) => {}
+        Ok(purged) => tracing::debug!(
+            purged,
+            "settled webhook deliveries past their retention purged"
+        ),
+        Err(error) => tracing::warn!(error = %error, "purging webhook deliveries failed"),
     }
     match backend.idempotency().purge_idempotency_keys().await {
         Ok(0) => {}

@@ -226,6 +226,37 @@ stored data, the owner's).
 
 ### Added
 
+- **Webhooks out** (roadmap M2c, acceptance test M2.4; parity row 10 now
+  done in the service; categories 19 and 39; coverage row 33; design
+  §4.4's *as built* and the proposed D105–D113).
+  - **Routes** (scope `webhooks`, additive in `openapi/v1.json`): `POST`
+    and `GET /v1/webhook-endpoints`, `GET`, `PATCH` and `DELETE
+    /v1/webhook-endpoints/{id}`, `POST …/{id}/rotate-secret`, `POST
+    …/{id}/test` (a ping, `202`), `GET …/{id}/deliveries`, `POST
+    …/{id}/deliveries/{delivery_id}/retry` (`202`). New codes: `409
+    webhooks_not_configured` (no `WA_SERVER_DATA_KEY`) and `409
+    webhook_endpoint_limit_reached` (10 a tenant).
+  - **Deliveries**: Standard Webhooks (`webhook-id` the event's id,
+    `webhook-timestamp`, `webhook-signature` `v1,…`, two during a 24 h
+    rotation), the envelope `GET /v1/events/{id}` answers, `data` left
+    out past 256 KiB (`truncated: true`); at least once, retried 10 s
+    doubling to an hour with jitter for 72 h
+    (`WA_SERVER_WEBHOOK_RETRY_WINDOW`), then `failed`, an endpoint failing
+    the whole window disabled; one replica per delivery (a claim under a
+    lease), bounded per endpoint, tenant and replica.
+  - **Destinations**: `WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS` (names,
+    `*.` names, CIDRs), `https` outside development, every resolved
+    address checked at creation and again at every attempt, the checked
+    address the one connected to, non-public addresses only inside a
+    listed CIDR, metadata addresses never; no redirect followed, 1 KiB of
+    the answer read, 10 s.
+  - **Secrets**: `whsec_` and 32 random bytes, shown once, sealed under
+    `WA_SERVER_DATA_KEY` (`WA_SERVER_DATA_KEY_ID`,
+    `WA_SERVER_DATA_PREVIOUS_KEYS`); a throwaway key on memory storage.
+  - **Storage**: Postgres migration 9, `webhooks out` (numbered after
+    M2f's 8), `wa_server_webhook_endpoints` and
+    `wa_server_webhook_deliveries`; every name pending the owner's
+    confirmation (docs/architecture.md § Stable identifiers).
 - **The send union's other types in the service** (roadmap M5a, parity
   rows 22, 29, 37, 51, 53, 56, 57, 59, 60 and 104, now done in the
   service too; categories 2, 4, 10, 11, 14 and 24, coverage row 33;
@@ -2806,6 +2837,13 @@ stored data, the owner's).
 
 ### Changed
 
+- **Breaking for a backend built outside this repository** (roadmap
+  M2c): `meta_whatsapp_server_core::backend::Backend` gains a required
+  `webhooks()` (the new port `webhooks_out::store::WebhookStore`; the
+  `conformance` suite `webhooks_out` checks it), and
+  `meta_whatsapp_server_core::operation::Operation::ALL` is a `[Self; 53]`
+  (was 44: nine webhook endpoint operations). The HTTP crate's
+  `state::Settings` gains `webhooks_out`, `None` by default.
 - **The service's core** (roadmap M5a): `messages::MessageType` gains
   `Pin`, `messages::InteractiveType` ten variants;
   `messages::SendMessage` and `ReplyMessage` gain `pin`, `category`,

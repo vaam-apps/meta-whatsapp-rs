@@ -86,6 +86,9 @@ impl Backend for Altered {
             .clone()
             .unwrap_or_else(|| self.inner.notifier())
     }
+    fn webhooks(&self) -> Arc<dyn meta_whatsapp_server_core::webhooks_out::store::WebhookStore> {
+        self.inner.webhooks()
+    }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         self.inner.leader_lock()
     }

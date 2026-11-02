@@ -24,6 +24,8 @@ use meta_whatsapp_server_core::otp::{OtpCodes, OtpDeployment};
 use meta_whatsapp_server_core::registration::{AttemptLimits, RegistrationAttempts};
 use meta_whatsapp_server_core::signup::{SignupDeployment, Signups};
 use meta_whatsapp_server_core::templates::TemplateCache;
+use meta_whatsapp_server_core::webhooks_out::dispatch::WebhooksOut;
+use meta_whatsapp_server_core::webhooks_out::endpoints::WebhookEndpoints;
 
 /// Default `WA_SERVER_IDEMPOTENCY_TTL`: how long an idempotency key's
 /// record is kept (docs/design/server.md, section 5.4).
@@ -97,6 +99,14 @@ pub struct Settings {
     /// number's registration and verification attempts, per number,
     /// shared by every replica (roadmap M3d).
     pub registration_attempts: AttemptLimits,
+    /// Webhooks out (roadmap M2c): the data key (`WA_SERVER_DATA_KEY`),
+    /// the allow-list (`WA_SERVER_WEBHOOK_ALLOWED_DESTINATIONS`), the
+    /// retry window (`WA_SERVER_WEBHOOK_RETRY_WINDOW`), the lookup and the
+    /// sender. `None`, every webhook endpoint route is `409
+    /// webhooks_not_configured` and `serve` runs no dispatcher (the
+    /// default, for tests; `serve` sets it when a data key is configured,
+    /// or with a throwaway one on memory storage). `Debug` shows no key.
+    pub webhooks_out: Option<WebhooksOut>,
 }
 
 impl Default for Settings {
@@ -114,6 +124,7 @@ impl Default for Settings {
             otp: None,
             signup: None,
             registration_attempts: AttemptLimits::default(),
+            webhooks_out: None,
         }
     }
 }
@@ -147,6 +158,7 @@ struct Inner {
     signups: Signups,
     streams: Streams,
     registration_attempts: RegistrationAttempts,
+    webhooks: WebhookEndpoints,
 }
 
 impl std::fmt::Debug for AppState {
@@ -220,6 +232,13 @@ impl AppState {
         let streams = Streams::new(backend.outbox(), backend.notifier(), settings.live);
         let registration_attempts =
             RegistrationAttempts::new(backend.kv(), settings.registration_attempts, clock.clone());
+        // Webhook endpoints in the bundle's webhook store, their cursors in
+        // the outbox the pipeline writes (roadmap M2c).
+        let webhooks = WebhookEndpoints::new(
+            backend.as_ref(),
+            clock.clone(),
+            settings.webhooks_out.clone(),
+        );
         let state = Self {
             inner: Arc::new(Inner {
                 idempotency: backend.idempotency(),
@@ -238,6 +257,7 @@ impl AppState {
                 signups,
                 streams,
                 registration_attempts,
+                webhooks,
                 settings,
             }),
         };
@@ -442,6 +462,13 @@ impl Grant {
     /// which open only on a number the authorization order made.
     pub fn registration_attempts(&self) -> &RegistrationAttempts {
         &self.0.inner.registration_attempts
+    }
+
+    /// The webhook endpoint services (roadmap M2c), opened for an admitted
+    /// caller only (`meta_whatsapp_server_core::webhooks_out::endpoints::WebhookEndpoints::open`),
+    /// on its tenant.
+    pub fn webhooks(&self) -> &WebhookEndpoints {
+        &self.0.inner.webhooks
     }
 
     /// The inbox (the backend's conversation store), for the core's inbox

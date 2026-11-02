@@ -823,6 +823,9 @@ impl Backend for Memory {
     fn notifier(&self) -> Arc<dyn EventNotifier> {
         self.notifier.clone()
     }
+    fn webhooks(&self) -> Arc<dyn meta_whatsapp_server_core::webhooks_out::store::WebhookStore> {
+        unimplemented!("not used by the suites this backend runs")
+    }
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         unimplemented!("not used by the suites this backend runs")
     }

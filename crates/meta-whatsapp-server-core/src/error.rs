@@ -109,6 +109,8 @@ codes! {
     OUTCOME_UNKNOWN = ("outcome_unknown", 409, "The outcome of the request with this Idempotency-Key is unknown: reconcile before retrying."),
     OTP_NOT_CONFIGURED = ("otp_not_configured", 409, "No OTP sender is set up for this tenant, or its sending number is no longer the sender's own: the operator sets one."),
     SIGNUP_NOT_CONFIGURED = ("signup_not_configured", 409, "Embedded Signup is not set up for this deployment: the operator sets WA_APP_ID and WA_ES_CONFIG_ID (and, for a Solution Partner, its credit line)."),
+    WEBHOOKS_NOT_CONFIGURED = ("webhooks_not_configured", 409, "Webhooks out are not set up for this deployment: the operator sets WA_SERVER_DATA_KEY."),
+    WEBHOOK_ENDPOINT_LIMIT_REACHED = ("webhook_endpoint_limit_reached", 409, "The tenant has as many webhook endpoints as allowed: delete one first."),
     // 403: not allowed, by Meta or the service.
     PERMISSION = ("permission", 403, "The token lacks a permission, or access to this asset."),
     ACCOUNT_RESTRICTED = ("account_restricted", 403, "The account is restricted for a policy violation."),

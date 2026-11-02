@@ -34,6 +34,7 @@
 //! | [`ratelimit`] | per-tenant token buckets by route class, charged by operation; transfer slots |
 //! | [`store`], [`outbox`], [`notify`], [`backend`] | the ports, and the bundle a backend gives |
 //! | [`housekeeping`] | the periodic purges, over a [`backend::Backend`], one replica at a time |
+//! | [`webhooks_out`] | webhooks out (roadmap M2c): endpoints and their secrets (Standard Webhooks, sealed under the data key), the destination allow-list checked at creation and at every attempt on a fresh, pinned lookup, the retry schedule, and the dispatcher: the outbox fanned out to each endpoint, deliveries claimed under a lease, bounded per endpoint, tenant and replica |
 //! | `conformance` (feature `conformance`) | the ports' contracts as executable suites, run over a [`backend::Backend`]: every backend's tests run them |
 //!
 //! # Ports
@@ -47,6 +48,7 @@
 //! | [`store::LeaderLock`] | `try_exclusive(name, lease)`: a lease | memory (the process), Postgres (an advisory lock, the session ended past the lease) |
 //! | [`store::Janitor`] | `purge_expired` | memory (nothing to do), Postgres (the library's key/value rows) |
 //! | [`store::SchemaMigrator`] | `migrate` | memory (nothing to do), Postgres |
+//! | [`webhooks_out::store::WebhookStore`] | endpoints, `fan_out`, `claim`, `settle`, deliveries (roadmap M2c) | memory, Postgres |
 //! | [`backend::Backend`] | all of the above, and the library's `KvStore` and `ConversationStore`, over one database | memory, Postgres |
 //!
 //! No port names a type of a database driver, an HTTP framework or an
@@ -93,5 +95,6 @@ pub mod request;
 pub mod signup;
 pub mod store;
 pub mod templates;
+pub mod webhooks_out;
 
 pub use error::ServiceError;
