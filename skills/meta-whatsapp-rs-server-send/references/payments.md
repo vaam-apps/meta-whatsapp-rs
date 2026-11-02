@@ -39,7 +39,7 @@ export function orderDetails(phone: string, body: string, parameters: OrderParam
   nothing sent. An `order_status` names no currency, so India's own
   refusals (a pending status) are Meta's.
 - **The OAuth link is a credential**: hand it to the merchant only (its
-  answers carry `Cache-Control: no-store`). A repeat of a creation under
+  answers tell every cache not to store them). A repeat of a creation under
   its `Idempotency-Key` answers `oauth_url` null: the service never
   stores the link; ask for a new one.
 - **A refund requires an `Idempotency-Key`**: without one it is
