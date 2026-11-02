@@ -1081,21 +1081,10 @@ async fn a_configuration_meta_answers_under_another_name_is_not_found() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
-/// Design D56 (review of P2): a refund's amount over HTTP, as a caller
-/// writes it, is checked before any request: a negative, fractional, zero,
-/// empty, signed, spaced or larger-than-64-bit `value`, an `offset` that
-/// is not 100, a currency that is not `INR` (in any other case), a missing
-/// amount; each is `422`, nothing refunded, nothing asked. Decisive: the
-/// parts' reading (`RefundAmountPart`, `AmountPart::value`), the offset
-/// and currency checks, and the library's positive amount.
-#[tokio::test]
-async fn a_refunds_amount_is_checked_before_any_request() {
-    let (h, key) = connected(&[Scope::Payments]).await;
-    let with = |amount: Value| {
-        json!({"reference_id": "reference-id-value", "payment_config_id": CONFIGURATION,
-               "amount": amount})
-    };
-    let cases = [
+/// The amounts [`a_refunds_amount_is_checked_before_any_request`] refuses,
+/// each with the field it is refused on.
+fn refused_amounts() -> Vec<(Value, &'static str)> {
+    vec![
         (
             json!({"currency": "INR", "value": -100, "offset": 100}),
             "body",
@@ -1157,7 +1146,24 @@ async fn a_refunds_amount_is_checked_before_any_request() {
             "amount.currency",
         ),
         (json!({"currency": "INR", "value": "100"}), "body"),
-    ];
+    ]
+}
+
+/// Design D56 (review of P2): a refund's amount over HTTP, as a caller
+/// writes it, is checked before any request: a negative, fractional, zero,
+/// empty, signed, spaced or larger-than-64-bit `value`, an `offset` that
+/// is not 100, a currency that is not `INR` (in any other case), a missing
+/// amount; each is `422`, nothing refunded, nothing asked. Decisive: the
+/// parts' reading (`RefundAmountPart`, `AmountPart::value`), the offset
+/// and currency checks, and the library's positive amount.
+#[tokio::test]
+async fn a_refunds_amount_is_checked_before_any_request() {
+    let (h, key) = connected(&[Scope::Payments]).await;
+    let with = |amount: Value| {
+        json!({"reference_id": "reference-id-value", "payment_config_id": CONFIGURATION,
+               "amount": amount})
+    };
+    let cases = refused_amounts();
     for (amount, field) in cases {
         let reply = h
             .call(refund(&key, &with(amount.clone())).header("idempotency-key", "refund:checked"))

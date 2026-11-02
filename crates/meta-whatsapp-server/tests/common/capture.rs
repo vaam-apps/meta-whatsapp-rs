@@ -1029,10 +1029,15 @@ fn check_audit(logs: &str) {
         assert_eq!(fields["tenant"], "merchant-42", "{fields}");
         assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
     }
-    // The payment changes carry what reconciles them (design D58): the
-    // configuration, and for a refund the number, the order, the amount
-    // and Meta's answer, or an unknown outcome when it timed out.
-    let payments: Vec<&serde_json::Value> = deletions
+    check_payment_audit(&deletions);
+}
+
+/// The payment changes' audit events (of the tenant changes `changes`)
+/// carry what reconciles them (design D58): the configuration, each
+/// change's outcome, and for a refund the number, the order, the amount
+/// and Meta's answer, or an unknown outcome when it timed out.
+fn check_payment_audit(changes: &[&serde_json::Value]) {
+    let payments: Vec<&serde_json::Value> = changes
         .iter()
         .copied()
         .filter(|fields| {
