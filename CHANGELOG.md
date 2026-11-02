@@ -226,6 +226,40 @@ stored data, the owner's).
 
 ### Added
 
+- **A template's life after its creation, in the service** (roadmap
+  M5b, parity rows 95, 96, 101 and 153 now done in the service, rows 99
+  and 100 verified through it; choices D115–D122, proposed, pending the
+  coordinator's decision; from Meta's template management, library,
+  migration, comparison, pausing, archival and groups pages, and the
+  marketing, utility and catalog template pages, read on 2026-11-02).
+  Scope `templates`, on a WABA of the tenant, each route the library's
+  call: `PATCH /v1/wabas/{waba_id}/templates/{id}` (an edit, Meta's
+  body), `POST …/templates/{id}/unpause`, `GET …/templates/{id}/compare`,
+  `POST …/templates/archive` and `…/unarchive` (`hsm_ids`), `GET` and
+  `POST …/templates/library` (the Template Library browsed, and a
+  template created from an entry), `POST …/templates/migrations` (from
+  another of the tenant's WABAs), and template groups (`POST
+  /v1/wabas/{waba_id}/template-groups`, `GET`, `PATCH`, `DELETE
+  …/template-groups/{group_id}`). The design's M5.2 for this family:
+  every template id a request names is the WABA's before anything acts
+  on it (one by its name, as a get; a list in one walk of the WABA's
+  templates, at most 10 pages of 100, D116), a migration's source is a
+  WABA of the caller's own tenant (D117), a group is read first and acted
+  on only when Meta names the path's WABA as its owner (D118); else
+  `404 not_found` with nothing done. Bodies are Meta's JSON with no key
+  dropped, a `zero_tap_terms_accepted: true` refused wherever it is. A
+  creation from the library, a migration and a group's creation take an
+  `Idempotency-Key` (D119); the changes are audited (D120). The OpenAPI
+  document is additive only (12 operations, 20 schemas; one tag's
+  description reworded). Every kind of parity row 99 (coupon,
+  limited-time offer, media-card and product-card carousels, location,
+  call permission request, catalog, MPM, SPM and the product header) is
+  created through the service from Meta's example with no key dropped,
+  and row 100's TTL and tap target reach Meta through it
+  (`tests/template_lifecycle.rs`). A template send naming a `catalog_id`
+  (a single-product header, a product card) is sent only when that
+  catalog is the number's WABA's, as a product message's is (D122; M5a
+  left it to M5b).
 - **The send union's other types in the service** (roadmap M5a, parity
   rows 22, 29, 37, 51, 53, 56, 57, 59, 60 and 104, now done in the
   service too; categories 2, 4, 10, 11, 14 and 24, coverage row 33;
@@ -4352,6 +4386,25 @@ them.
 
 ### Security
 
+**A Flow template button's `Debug` printed its `flow_token`, and so did
+the service's raw `template` object** (since the library's first Flow
+button and the service's first template send, found by M5a's review,
+closed by roadmap M5b before any release). The library's
+`meta_whatsapp_client::templates::ParameterAction` derived `Debug`, so a
+`TemplateMessage` with a Flow button showed the token; the service's
+`SendMessage` and `ReplyMessage` (the core's
+`meta_whatsapp_server_core::messages` and the axum adapter's request
+types) printed their `template` object whole, the Flow's token and every
+parameter (a customer's data, a one-time passcode) with it. The action's
+`Debug` now shows `[REDACTED]` for the token, as `FlowParameters` does,
+and the requests' `template` shows its keys only (`messages::KeysOnly`,
+design D121); `Serialize`, what Meta receives, is unchanged. Pinned by
+the library's
+`a_flow_buttons_token_is_redacted_from_debug`, the core's
+`a_templates_flow_token_never_reaches_debug` and the adapter's
+`a_templates_flow_token_never_reaches_the_requests_debug`, each failing
+if the derive comes back.
+
 **A Flow message's `Debug` printed its `flow_token`** (since the
 library's first Flow message, closed by M5a's review before any
 release). The library's
@@ -4362,8 +4415,8 @@ that formatted the message. Its `Debug` now shows `[REDACTED]`, as the
 data endpoint's `FlowRequest` does; `Serialize`, what Meta receives, is
 unchanged. The service never formatted one (design D103), and its own
 request types already showed a parameters object's keys only. A Flow
-template button's token (`templates::ParameterAction`) is still shown,
-the template routes' to close (roadmap M5b).
+template button's token (`templates::ParameterAction`) was still shown
+until roadmap M5b (above).
 
 **The service's generic template route accepted Meta's zero-tap terms
 for a tenant** (since roadmap M1b, closed by M3c's review before any

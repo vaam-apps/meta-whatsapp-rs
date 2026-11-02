@@ -13,7 +13,9 @@ its reasons and the owner's decisions, is
 > Accounts (WABAs), the numbers and business profile routes, vault key
 > rotation, sending messages (with idempotency keys), read receipts,
 > media upload, verified download and delete, template listing, creation
-> and deletion, per-tenant rate limits, Meta's webhooks into the inbox
+> and deletion, and since M5b their edits, unpausing, comparison,
+> archiving, the Template Library, migrations and template groups,
+> per-tenant rate limits, Meta's webhooks into the inbox
 > and the event outbox, polling events (`GET /v1/events`), one event by
 > id and live events as Server-Sent Events (M2b), the inbox's
 > conversations, history and replies (M2a), its window, read route and
@@ -424,8 +426,9 @@ concluding the message never went out.
   the tighter limits (1,024 characters of text, 60 of a header). Which
   formats Direct Send takes is Meta's to answer (its supported features
   page), as is an account's eligibility (`100`).
-- **Objects named by id**: a Flow's `flow_id` and a product message's
-  `catalog_id` are checked first to be the number's WABA's, with the
+- **Objects named by id**: a Flow's `flow_id`, a product message's `catalog_id` and
+  (since M5b) every `catalog_id` a template's product parameters carry
+  are checked first to be the number's WABA's, with the
   number's token (`GET /{flow_id}`, `GET /{waba_id}/product_catalogs`);
   another WABA's, or an id Meta refuses, is `404 not_found` and nothing
   is sent (a failed check: `may_have_been_sent: false`). A Flow's
@@ -643,6 +646,50 @@ The lookup has limits to know about:
   `GET …/templates/{id}` asks for the id's name, then 1 to 5 pages; a
   deletion by id reads 1 to 5 pages, then deletes. Lists answered from
   the cache cost nothing, lookups are never cached.
+
+### After the creation (roadmap M5b)
+
+The same scope, the same WABA's token, each route one of the library's
+calls:
+
+| Route | Does |
+| --- | --- |
+| `PATCH /v1/wabas/{waba_id}/templates/{id}` | edit (`category`, `components`, which replaces all of them, `message_send_ttl_seconds`, …: Meta's `POST /{TEMPLATE_ID}` body); `204`. Only `APPROVED`, `REJECTED` or `PAUSED` templates; an approved one 10 times in 30 days, so the edit is never retried for you |
+| `POST /v1/wabas/{waba_id}/templates/{id}/unpause` | unpause a template paused by its quality or by pacing; `204` |
+| `GET /v1/wabas/{waba_id}/templates/{id}/compare?template_ids=…&start=…&end=…` | compare with another of the WABA's templates (one id, Meta's `template_ids`; each sent 1,000 times in the window): `{data: [{metric, type, …}]}` as Meta answers |
+| `POST /v1/wabas/{waba_id}/templates/archive`, `…/unarchive` | `{"hsm_ids": [...]}`, 1 to 100; Meta's answer, its partial failures included (`failed_templates`: id → Meta's reason). An archived template is deleted 28 days later unless unarchived |
+| `GET /v1/wabas/{waba_id}/templates/library` | the Template Library (`?search=`, `topic=`, `usecase=`, `industry=`, `language=`, `name=`): Meta's first page, `{data: [...]}` |
+| `POST /v1/wabas/{waba_id}/templates/library` | create from a library entry (`name`, `language`, `category`, `library_template_name`, `library_template_button_inputs` as an **array of objects**, not the page's quoted string); `201 {id, status, category}`; takes an `Idempotency-Key` |
+| `POST /v1/wabas/{waba_id}/templates/migrations` | `{source_waba_id, page_number?, count?, template_ids?}`: recreate another of **your tenant's** WABAs' templates here (Meta's rule: the same business; `APPROVED` and `GREEN` or `UNKNOWN` quality only); `{migrated_templates, failed_templates}`; takes an `Idempotency-Key` |
+| `POST /v1/wabas/{waba_id}/template-groups` | create a group (`name`, `description`, `whatsapp_business_templates`: ids as strings or Meta's integers); `201 {id}`; takes an `Idempotency-Key` |
+| `GET`, `PATCH`, `DELETE /v1/wabas/{waba_id}/template-groups/{group_id}` | read it (with the first page of its templates), change it (`name`, `description`, `add_templates`, `remove_templates`), delete it (its templates stay) |
+
+What the service checks before Meta is asked, each refusal sending
+nothing:
+
+- **Every template id is the WABA's.** One id (an edit, an unpause,
+  both of a comparison) is looked up by its name, as a get is. A list
+  (an archive, an unarchive, a group's templates, a migration's) is
+  found in one walk of the WABA's templates, 100 a page and **at most
+  10 pages**: a WABA with more than 1,000 templates cannot act on those
+  past them here (design D116). An unarchive walks the archived ones.
+  An id not found is `404 not_found`, nothing done.
+- **A migration's source is one of your tenant's WABAs**, else `404`
+  before its token is read; its `template_ids` are found with its own
+  token, the migration posted with the destination's (design D117).
+- **A group is the WABA's**: read first, acted on only when Meta names
+  the path's WABA as its owner (design D118); a list of a WABA's groups,
+  and the pages after the first of a group's templates, are not offered
+  (no page of Meta's documents them).
+- Bodies are Meta's JSON, a key the service would not pass on refused on
+  its path, and a `zero_tap_terms_accepted: true` anywhere (an edit's
+  buttons, a library button input) refused as on a creation.
+
+Each change that succeeded is an `audit` event (`template_edited`,
+`template_unpaused`, `templates_archived`, `templates_unarchived`,
+`templates_migrated`, `template_group_updated`,
+`template_group_deleted`). Archiving, unarchiving, migrating and editing
+drop the WABA's cached pages on the replica that made them.
 
 ## Payments
 
