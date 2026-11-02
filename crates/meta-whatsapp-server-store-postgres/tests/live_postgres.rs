@@ -150,6 +150,105 @@ async fn live_postgres_migration_5_rewrites_no_table() {
     assert_eq!(moved.previous_tenant_released_at, Some(UNRECORDED_MOVE));
 }
 
+/// Roadmap M2e: migration 6 adds `wa_server_events.media_id` and its
+/// partial index without rewriting the outbox (the column has no default),
+/// so a deployment with a large outbox migrates without holding it for a
+/// copy. A row written before it records no media id, whatever its data
+/// says: its media goes through Meta's `phone_number_id` check, as every
+/// id did before. An insert the previous release makes (no `media_id`)
+/// still works after it, and records none either. A row this release
+/// inserts records its media id, found by the index. Decisive: a default
+/// on the column (it rewrites the table into a new file), an update of the
+/// existing rows (they would record theirs).
+#[tokio::test]
+async fn live_postgres_migration_6_rewrites_no_table_and_records_from_its_release_on() {
+    use meta_whatsapp_rs::adapters::store::postgres::sqlx::migrate::Migrator;
+    use meta_whatsapp_rs::core::ids::MediaId;
+    use meta_whatsapp_server_store_postgres::migrations;
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(3).await;
+    meta_whatsapp_rs::adapters::store::postgres::migrate(&pool)
+        .await
+        .unwrap();
+    let before_6: Vec<_> = migrations().into_iter().filter(|m| m.version < 6).collect();
+    assert_eq!(before_6.len(), 5);
+    let mut migrator = Migrator::with_migrations(before_6);
+    migrator.dangerous_set_table_name(MIGRATIONS_TABLE);
+    migrator.run(&pool).await.unwrap();
+    // A row of the previous release: an image received, operator-only (its
+    // sequence far past the stream's, which a raw insert does not draw).
+    let image = |id: &str, sequence: i64| {
+        format!(
+            "INSERT INTO wa_server_events \
+             (tenant_id, sequence, id, phone_number_id, event_type, data, data_bytes) \
+             VALUES (NULL, {sequence}, 'evt_m6_{sequence}', '6101', 'message_received', \
+                     '{{\"event\":\"message_received\",\"message\":{{\"type\":\"image\",\
+                     \"image\":{{\"id\":\"{id}\"}}}}}}'::json, 10)"
+        )
+    };
+    sqlx::query(sqlx::AssertSqlSafe(image("1003383421387261", 1001)))
+        .execute(&pool)
+        .await
+        .unwrap();
+    let file = || async {
+        let node: i64 = sqlx::query_scalar(
+            "SELECT relfilenode::bigint FROM pg_class \
+             WHERE oid = 'wa_server_events'::regclass",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        node
+    };
+    let before = file().await;
+    migrate(&pool).await.unwrap();
+    assert_eq!(file().await, before, "migration 6 rewrote wa_server_events");
+    let events = PgEventStore::new(pool.clone());
+    let media = |id: &str| MediaId::new(id).unwrap();
+    assert!(
+        events
+            .received_media(&media("1003383421387261"))
+            .await
+            .unwrap()
+            .is_empty(),
+        "a row from before migration 6 records a media id"
+    );
+    // The previous release's insert, after the migration.
+    sqlx::query(sqlx::AssertSqlSafe(image("1003383421387262", 1002)))
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(
+        events
+            .received_media(&media("1003383421387262"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // This release's insert records it.
+    let row = meta_whatsapp_server_core::outbox::NewEvent {
+        data: r#"{"event":"message_received","message":{"type":"image","image":{"id":"1003383421387263"}}}"#
+            .to_owned(),
+        ..outbox_suite::row(None, "message_received", "6101", None)
+    };
+    events.insert(&row).await.unwrap();
+    let found = events
+        .received_media(&media("1003383421387263"))
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].tenant, None);
+    assert_eq!(
+        found[0]
+            .phone_number_id
+            .as_ref()
+            .map(meta_whatsapp_rs::core::ids::PhoneNumberId::as_str),
+        Some("6101")
+    );
+}
+
 /// Roadmap M2a and M2h: a WABA unbound from one tenant before migration 5
 /// (migration 4 recorded the WABA's move, nothing recorded its numbers')
 /// and bound to another tenant after it, with its number: the number
@@ -341,7 +440,7 @@ async fn live_postgres_parallel_migrations_succeed() {
     .fetch_all(&first)
     .await
     .unwrap();
-    assert_eq!(service, [1, 2, 3, 4, 5]);
+    assert_eq!(service, [1, 2, 3, 4, 5, 6]);
     let library: Vec<i64> =
         sqlx::query_scalar("SELECT version FROM wa_sqlx_migrations WHERE success ORDER BY version")
             .fetch_all(&first)

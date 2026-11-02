@@ -93,6 +93,21 @@ async fn live_postgres_m2_1_an_inbound_message_is_listed_read_and_answered() {
     common::inbox::m2_1(&harness(&db).await).await;
 }
 
+/// Roadmap M2e's decisive case on Postgres: the media id received by
+/// another tenant's number (`wa_server_events.media_id`, migration 6) is
+/// `404` with zero requests; the receiving tenant downloads it without
+/// `phone_number_id` (`common::media`).
+#[tokio::test]
+async fn live_postgres_another_tenants_received_media_id_is_not_found_with_no_request() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::media::another_tenants_received_media_id_is_not_found_with_no_request(
+        &harness(&db).await,
+    )
+    .await;
+}
+
 /// The binding epoch on Postgres (roadmap M2a, decision D10): a moved
 /// number's history is hidden from its new tenant, and kept.
 #[tokio::test]

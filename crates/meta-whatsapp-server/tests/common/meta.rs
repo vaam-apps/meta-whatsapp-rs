@@ -27,6 +27,9 @@ pub fn fixture(name: &str) -> Value {
         "messages/text.json" => {
             include_str!("../../../meta-whatsapp-webhooks/tests/fixtures/messages/text.json")
         }
+        "messages/image.json" => {
+            include_str!("../../../meta-whatsapp-webhooks/tests/fixtures/messages/image.json")
+        }
         "messages/status_sent.json" => {
             include_str!("../../../meta-whatsapp-webhooks/tests/fixtures/messages/status_sent.json")
         }

@@ -1,6 +1,7 @@
 //! [`Outbox`] (formerly the service's `tests/common/events_suite.rs`):
 //! each tenant's own stream of sequences, pages and their byte budget,
-//! dedup and its window, filters, purges. Every row with a tenant is
+//! dedup and its window, filters, purges, the media ids rows record as
+//! received (roadmap M2e). Every row with a tenant is
 //! guarded by its number's binding, bound first ([`bind`]): an outbox
 //! keeps a row's tenant only while that binding holds it. What crosses
 //! into the records (the guard's cases, a tenant's deletion) is
@@ -8,7 +9,7 @@
 
 use std::time::Duration;
 
-use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::ids::{MediaId, PhoneNumberId, WabaId};
 
 use crate::backend::Backend;
 use crate::model::TenantId;
@@ -466,10 +467,136 @@ pub async fn purge_keeps_a_taken_key(backend: &dyn Backend) {
     );
 }
 
+/// `row` carrying a `message_received` event whose message is `message`
+/// (the library's serialization: `{"event", "message", …}`).
+fn message_row(tenant_id: Option<&str>, pn: &str, message: &serde_json::Value) -> NewEvent {
+    NewEvent {
+        data: serde_json::json!({"event": "message_received", "message": message,
+                                 "phone_number_id": pn})
+        .to_string(),
+        ..row(tenant_id, "message_received", pn, None)
+    }
+}
+
+/// Roadmap M2e: a row keeps the media id its event records as received
+/// ([`NewEvent::received_media`]), and [`Outbox::received_media`] finds
+/// every row of it, newest first, the operator-only ones included, each
+/// with its tenant and number; a row of another type, or a message with no
+/// media, records none; a redelivery (its dedup key stored) adds no row;
+/// a deleted tenant's rows go with it. Decisive: the id kept at insert,
+/// the operator-only stream searched too, the tenant's deletion.
+pub async fn received_media(backend: &dyn Backend) {
+    let outbox = backend.outbox();
+    let store = outbox.as_ref();
+    let records = backend.records();
+    bind(records.as_ref(), "suite-media-a", "771").await;
+    bind(records.as_ref(), "suite-media-b", "772").await;
+    let media = |id: &str| MediaId::new(id).unwrap();
+    let image = serde_json::json!({"type": "image", "image": {"id": "1003383421387256"}});
+    let mut received = message_row(Some("suite-media-a"), "771", &image);
+    received.dedup_key = Some(format!("suite-media-{}", super::unique()));
+    assert!(store.insert(&received).await.unwrap().is_some());
+    assert_eq!(store.insert(&received).await.unwrap(), None, "a redelivery");
+    let operator_only = message_row(None, "772", &image);
+    assert!(store.insert(&operator_only).await.unwrap().is_some());
+    // Another type with the same data, a text, a sticker of tenant b.
+    let status = NewEvent {
+        event_type: "status_updated".to_owned(),
+        ..message_row(Some("suite-media-b"), "772", &image)
+    };
+    store.insert(&status).await.unwrap();
+    let text = serde_json::json!({"type": "text", "text": {"body": "1003383421387256"}});
+    store
+        .insert(&message_row(Some("suite-media-b"), "772", &text))
+        .await
+        .unwrap();
+    let sticker = serde_json::json!({"type": "sticker", "sticker": {"id": "1908647269898587"}});
+    store
+        .insert(&message_row(Some("suite-media-b"), "772", &sticker))
+        .await
+        .unwrap();
+
+    let found = store
+        .received_media(&media("1003383421387256"))
+        .await
+        .unwrap();
+    let seen: Vec<(Option<&str>, Option<&str>)> = found
+        .iter()
+        .map(|row| {
+            (
+                row.tenant.as_ref().map(TenantId::as_str),
+                row.phone_number_id.as_ref().map(PhoneNumberId::as_str),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [(None, Some("772")), (Some("suite-media-a"), Some("771"))],
+        "every row of the id, newest first, the operator-only one included"
+    );
+    assert!(found[0].received_at >= found[1].received_at);
+    let sticker = store
+        .received_media(&media("1908647269898587"))
+        .await
+        .unwrap();
+    assert_eq!(
+        sticker
+            .iter()
+            .map(|row| row.tenant.as_ref().map(TenantId::as_str))
+            .collect::<Vec<_>>(),
+        [Some("suite-media-b")]
+    );
+    assert!(
+        store
+            .received_media(&media("1003383421387299"))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // A deleted tenant's rows go with it.
+    bind(records.as_ref(), "suite-media-gone", "773").await;
+    let video = serde_json::json!({"type": "video", "video": {"id": "731675419373506"}});
+    store
+        .insert(&message_row(Some("suite-media-gone"), "773", &video))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .received_media(&media("731675419373506"))
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        records
+            .unbind_waba(&WabaId::new(waba_of("773")).unwrap())
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        records
+            .delete_tenant(&tenant("suite-media-gone"))
+            .await
+            .unwrap(),
+        crate::model::DeleteTenantOutcome::Deleted
+    );
+    assert!(
+        store
+            .received_media(&media("731675419373506"))
+            .await
+            .unwrap()
+            .is_empty(),
+        "a deleted tenant's received media"
+    );
+}
+
 /// Every case above, on `backend`, empty, the purges last: they cut every
 /// stream's older rows, not only their own case's.
 pub async fn run(backend: &dyn Backend) {
     insert_and_page(backend).await;
+    received_media(backend).await;
     page_budget(backend).await;
     dedup(backend).await;
     dedup_window(backend).await;

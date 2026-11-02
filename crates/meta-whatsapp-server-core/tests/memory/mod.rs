@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use meta_whatsapp_rs::adapters::store::MemoryConversationStore;
-use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+use meta_whatsapp_rs::core::ids::{MediaId, PhoneNumberId, WabaId};
 use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use meta_whatsapp_server_core::backend::{Backend, BackendKind};
 use meta_whatsapp_server_core::model::{
@@ -31,7 +31,8 @@ use meta_whatsapp_server_core::model::{
 };
 use meta_whatsapp_server_core::notify::{EventNotifier, LocalNotifier};
 use meta_whatsapp_server_core::outbox::{
-    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RouteGuard, StoredEvent,
+    EventPage, EventQuery, GuardedBinding, NewEvent, Outbox, RECEIVED_MEDIA_ROWS, ReceivedMedia,
+    RouteGuard, StoredEvent,
 };
 use meta_whatsapp_server_core::store::{
     IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator, StoreResult, listing,
@@ -503,6 +504,8 @@ impl IdempotencyRecords for Idempotency {
 struct Row {
     dedup_key: Option<String>,
     dedup_until: Option<OffsetDateTime>,
+    /// The media id it records as received (roadmap M2e).
+    media_id: Option<MediaId>,
     event: StoredEvent,
 }
 
@@ -582,6 +585,7 @@ impl Outbox for Events {
         streams.rows.push(Row {
             dedup_key: event.dedup_key.clone(),
             dedup_until: event.dedup_window.map(|window| window.until),
+            media_id: event.received_media(),
             event: StoredEvent {
                 sequence,
                 id: event.id.clone(),
@@ -635,6 +639,23 @@ impl Outbox for Events {
 
     async fn purge(&self, _: Duration) -> StoreResult<u64> {
         unimplemented!("not used by the suites this backend runs")
+    }
+
+    async fn received_media(&self, media_id: &MediaId) -> StoreResult<Vec<ReceivedMedia>> {
+        let streams = self.streams.lock().unwrap();
+        let mut found: Vec<ReceivedMedia> = streams
+            .rows
+            .iter()
+            .filter(|row| row.media_id.as_ref() == Some(media_id))
+            .map(|row| ReceivedMedia {
+                tenant: row.event.tenant.clone(),
+                phone_number_id: row.event.phone_number_id.clone(),
+                received_at: row.event.created_at,
+            })
+            .collect();
+        found.sort_by_key(|row| std::cmp::Reverse(row.received_at));
+        found.truncate(RECEIVED_MEDIA_ROWS);
+        Ok(found)
     }
 }
 

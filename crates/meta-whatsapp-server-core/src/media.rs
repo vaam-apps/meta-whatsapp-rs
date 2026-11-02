@@ -4,7 +4,7 @@
 //! | Operation | Graph calls |
 //! | --- | --- |
 //! | [`Media::upload`] | `POST /{pn}/media` (multipart: `messaging_product`, `type`, `file`) |
-//! | [`Media::download`] | `GET /{media_id}?phone_number_id={pn}` (URL, MIME type, SHA-256, size), then the URL (`lookaside.fbsbx.com`, the only media host the library lets a token reach) |
+//! | [`Media::download`] | `GET /{media_id}?phone_number_id={pn}` (URL, MIME type, SHA-256, size), or `GET /{media_id}` for a media id the service recorded as received on the number (roadmap M2e), then the URL (`lookaside.fbsbx.com`, the only media host the library lets a token reach) |
 //! | [`Media::delete`] | `GET /{media_id}?phone_number_id={pn}` (it must be that media), then `DELETE /{media_id}?phone_number_id={pn}` |
 //!
 //! Pages: `business-phone-numbers/media`, `reference/media/media-api`,
@@ -58,6 +58,35 @@
 //! never read, downloaded or deleted, and never told apart from a missing
 //! one.
 //!
+//! **Received media** (roadmap M2e, `OPEN_QUESTIONS.md` #43). Meta
+//! documents the `phone_number_id` check for media uploaded on the number;
+//! a media id a customer sent (by webhook) was uploaded on no business
+//! number, and Meta does not say whether the check lets it through, or
+//! whether it lets another number's through. So before Meta is asked, the
+//! id is looked up among the media the service recorded as received
+//! ([`Outbox::received_media`]: the outbox rows of `message_received`
+//! events, each routed to its tenant by the binding it arrived under):
+//!
+//! - recorded on **this number, routed to this tenant**, and received from
+//!   the number's binding epoch on (the inbox's cut,
+//!   [`crate::authz::history_from`]): a download asks Meta for it without
+//!   `phone_number_id`, with the number's token, once the number's binding
+//!   is read again and still holds (`503 storage_unavailable` otherwise);
+//!   the URL Meta answers is fetched through the same allow-list, within
+//!   the same limits, verified the same way. A deletion keeps the check
+//!   (Meta's `DELETE` is documented for uploaded media);
+//! - recorded **anywhere else** (another number, another tenant's row on
+//!   this number, an operator-only row, a row from before the cut): `404
+//!   not_found`, the answer for a missing id, and **nothing is asked of
+//!   Meta**, neither for a download nor for a deletion, whatever Meta's
+//!   check would have answered;
+//! - **never recorded** (an upload's id, a received id the outbox purged
+//!   or received before the service recorded media ids): Meta's check, as
+//!   above.
+//!
+//! To swap (every id through Meta's check again, M1b's rule): answer
+//! [`Received::Never`] from [`Media::received`].
+//!
 //! The services open on a capability their own [`Authorizer`] made, and
 //! admit it first ([`Authorizer::admit_number`]). Failed Graph calls are
 //! told to the [`Observer`] (the adapter's metrics), a `190` marks the
@@ -83,6 +112,7 @@ use meta_whatsapp_rs::core::ids::MediaId;
 use crate::authz::{Authorizer, OwnedNumber, object_failed};
 use crate::error::{ErrorCode, ServiceError};
 use crate::observe::Observer;
+use crate::outbox::Outbox;
 use crate::ratelimit::{Slot, Slots};
 use crate::request::typed_graph_id;
 
@@ -515,13 +545,29 @@ pub struct MediaSlots<'a> {
 
 /// The media operations on a number the caller's tenant owns: an
 /// [`OwnedNumber`] its [`Authorizer`] made, and admits, with that number's
-/// token, taking slots of its tenant's share of [`MediaSlots`]. Cheap: a
-/// few references.
+/// token, taking slots of its tenant's share of [`MediaSlots`], and
+/// reading the media ids the bundle's [`Outbox`] recorded as received.
+/// Cheap: a few references.
 pub struct Media<'a> {
     authz: &'a Authorizer,
     number: &'a OwnedNumber,
     slots: MediaSlots<'a>,
+    received: &'a dyn Outbox,
     observer: &'a dyn Observer,
+}
+
+/// Where the service recorded a media id as received, for the caller's
+/// number (see the [module](self), "Received media").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Received {
+    /// On this number, routed to its tenant, from the binding epoch on:
+    /// downloaded without `phone_number_id`.
+    Here,
+    /// Elsewhere only: not found, nothing asked of Meta.
+    Elsewhere,
+    /// Never: Meta's `phone_number_id` check.
+    Never,
 }
 
 impl fmt::Debug for Media<'_> {
@@ -534,9 +580,11 @@ impl fmt::Debug for Media<'_> {
 
 impl<'a> Media<'a> {
     /// The media operations on `number`, once `authz` admits it
-    /// ([`Authorizer::admit_number`]), with slots of `slots`: a failed
-    /// call marks through `authz` ([`OwnedNumber::failed`]). Failed Graph
-    /// calls are reported to nobody until [`Self::observed_by`].
+    /// ([`Authorizer::admit_number`]), with slots of `slots`, reading the
+    /// media ids `received` (the bundle's outbox, the one the webhook
+    /// pipeline writes) recorded as received: a failed call marks through
+    /// `authz` ([`OwnedNumber::failed`]). Failed Graph calls are reported
+    /// to nobody until [`Self::observed_by`].
     ///
     /// # Errors
     ///
@@ -546,12 +594,14 @@ impl<'a> Media<'a> {
         authz: &'a Authorizer,
         number: &'a OwnedNumber,
         slots: MediaSlots<'a>,
+        received: &'a dyn Outbox,
     ) -> Result<Self, ServiceError> {
         authz.admit_number(number)?;
         Ok(Self {
             authz,
             number,
             slots,
+            received,
             observer: &(),
         })
     }
@@ -607,10 +657,70 @@ impl<'a> Media<'a> {
     /// The library's media API on the number, scoped to it
     /// (`phone_number_id={pn}` on the lookup and the deletion).
     fn scoped(&self) -> LibraryMedia {
+        self.unscoped().restrict_to_phone_number()
+    }
+
+    /// The library's media API with the number's token, not scoped: for a
+    /// media id the service recorded as received on the number only
+    /// ([`Received::Here`]).
+    fn unscoped(&self) -> LibraryMedia {
         self.number
             .client()
             .media(self.number.phone_number_id().clone())
-            .restrict_to_phone_number()
+    }
+
+    /// Where the service recorded `id` as received, for this number: the
+    /// outbox's rows of it ([`Outbox::received_media`]), one of them this
+    /// number's, routed to its tenant, and received from the binding epoch
+    /// on ([`crate::authz::history_from`]); others only; or none. Asks
+    /// Meta nothing.
+    ///
+    /// # Errors
+    ///
+    /// `503 storage_unavailable`.
+    pub async fn received(&self, id: &MediaId) -> Result<Received, ServiceError> {
+        let rows = self.received.received_media(id).await?;
+        if rows.is_empty() {
+            return Ok(Received::Never);
+        }
+        let from = self.number.history_from();
+        let here = rows.iter().any(|row| {
+            row.tenant.as_ref() == Some(self.number.tenant())
+                && row.phone_number_id.as_ref() == Some(self.number.phone_number_id())
+                && from.is_none_or(|from| row.received_at >= from)
+        });
+        Ok(if here {
+            Received::Here
+        } else {
+            Received::Elsewhere
+        })
+    }
+
+    /// The library's media API for a download of `id`: unscoped for a
+    /// media id received here, once the number's binding still holds;
+    /// scoped for one never recorded; `404 not_found` for one received
+    /// elsewhere, nothing asked.
+    async fn download_api(&self, id: &MediaId) -> Result<LibraryMedia, ServiceError> {
+        match self.received(id).await? {
+            Received::Here => {
+                // The exemption is the inbox's history: used only while
+                // the binding it was read under holds.
+                self.number.still_held(self.authz).await?;
+                Ok(self.unscoped())
+            }
+            Received::Elsewhere => Err(Self::received_elsewhere()),
+            Received::Never => Ok(self.scoped()),
+        }
+    }
+
+    /// A media id received elsewhere: `404 not_found`, as a missing one.
+    fn received_elsewhere() -> ServiceError {
+        tracing::info!(
+            target: LOG_TARGET,
+            "a media id received on another number, or before the number's binding: \
+             not found, Meta not asked"
+        );
+        ServiceError::not_found()
     }
 
     /// Upload `upload` with the number's token.
@@ -634,15 +744,21 @@ impl<'a> Media<'a> {
 
     /// The media `media_id` of the number, within `limits`, verified
     /// against the SHA-256 Meta reports (see the [module](self)): whole,
-    /// or as a [`MediaStream`] holding its slot.
+    /// or as a [`MediaStream`] holding its slot. A media id the service
+    /// recorded as received on the number is asked without
+    /// `phone_number_id` ([`Self::received`]).
     ///
     /// # Errors
     ///
     /// In this order: `422 invalid_request` on `media_id` (not a Meta id),
     /// before any request; `429 too_many_requests` (the tenant's share of
     /// the pool `limits` needs is taken), before any request; `404
-    /// not_found`, without Meta's code or text (Meta refusing the id, or
-    /// answering for another node); Meta's failure otherwise, with its
+    /// not_found` for a media id recorded as received elsewhere (another
+    /// number, another tenant, before the binding epoch), before any
+    /// request; `503 storage_unavailable` (the outbox; for a media id
+    /// received here, the number's binding moved since it was opened);
+    /// `404 not_found`, without Meta's code or text (Meta refusing the id,
+    /// or answering for another node); Meta's failure otherwise, with its
     /// `details`; `413 media_too_large` (the size Meta reports is over
     /// `max_bytes`); `502 integrity` (no usable SHA-256 reported), before
     /// the download; `502 upstream` (Meta's URL refused by the library's
@@ -666,7 +782,7 @@ impl<'a> Media<'a> {
             },
             self.number,
         )?;
-        let media = self.scoped();
+        let media = self.download_api(&id).await?;
         let info = match media.url(&id).await {
             // A media node, the one asked for.
             Ok(info) if info.id.as_str() == media_id => info,
@@ -731,15 +847,22 @@ impl<'a> Media<'a> {
     /// Delete the media `media_id` of the number: looked up first, as this
     /// number's media (`DELETE /{id}` deletes whatever node the id names,
     /// a flow, a QR code, that the token reaches), and only that deleted.
+    /// Always with `phone_number_id={pn}`, a media id received here
+    /// included; one recorded as received elsewhere is not asked of Meta.
     ///
     /// # Errors
     ///
     /// `422 invalid_request` on `media_id`, before any request; `404
-    /// not_found`, without Meta's code or text, and nothing deleted (Meta
-    /// refusing the id, or answering for another node); Meta's refusal of
-    /// the deletion (`404` as well) or failure, with its `details`.
+    /// not_found` for a media id recorded as received elsewhere, before any
+    /// request; `503 storage_unavailable` (the outbox); `404 not_found`,
+    /// without Meta's code or text, and nothing deleted (Meta refusing the
+    /// id, or answering for another node); Meta's refusal of the deletion
+    /// (`404` as well) or failure, with its `details`.
     pub async fn delete(&self, media_id: &str) -> Result<(), ServiceError> {
         let id: MediaId = typed_graph_id("media_id", media_id)?;
+        if self.received(&id).await? == Received::Elsewhere {
+            return Err(Self::received_elsewhere());
+        }
         let media = self.scoped();
         match media.url(&id).await {
             Ok(info) if info.id == id => {}
