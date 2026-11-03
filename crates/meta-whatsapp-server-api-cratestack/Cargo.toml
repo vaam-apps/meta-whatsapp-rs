@@ -1,0 +1,39 @@
+[package]
+name = "meta-whatsapp-server-api-cratestack"
+description = "The meta-whatsapp-rs service's API on CrateStack: procedures from a .cstack schema, beside the axum adapter."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# Part of the service (roadmap S10), never a library dependency: no crate of
+# the library depends on it.
+publish = false
+
+[lib]
+name = "meta_whatsapp_server_api_cratestack"
+
+[dependencies]
+# CrateStack's `db = None` facade (the workspace manifest says why, and how
+# it is pinned): the schema macro, the generated router, and axum 0.8, the
+# same crate the facade's `axum` re-exports.
+cratestack.workspace = true
+# The library, through the facade alone: the Graph API version type.
+meta-whatsapp-rs.workspace = true
+# The HTTP layer every adapter shares: the API's version constant (S13
+# adds the state and its grant, which the procedures will call through).
+meta-whatsapp-server-http.workspace = true
+# The code `include_server_schema!` generates derives serde's traits by
+# the crate's own name.
+serde.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+pretty_assertions.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

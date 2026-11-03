@@ -21,12 +21,20 @@ path = "src/main.rs"
 # API adapter for the internal listener, and the backends the command line
 # can open (`serve::BuiltinBackends`; an integrator's own through
 # `cli::run_with`). `just features` builds `api-axum` with each backend
-# alone.
+# alone, and with `api-cratestack`.
 [features]
 default = ["api-axum", "store-memory", "store-postgres"]
 # Today's `/v1` routes and `openapi/v1.json` (meta-whatsapp-server-api-axum):
-# the only API adapter, so a build without it does not compile.
+# the API adapter the internal listener serves, so a build without it does
+# not compile.
 api-axum = ["dep:meta-whatsapp-server-api-axum"]
+# The CrateStack API adapter (meta-whatsapp-server-api-cratestack, roadmap
+# S10): compiled in and re-exported as `api_cratestack`, not served (S13
+# adds the configuration that picks it), and not a default (S16 flips the
+# defaults). It brings CrateStack, and with it rustls' `ring` provider
+# beside aws-lc-rs (`tls`). The feature's name is pending the owner's
+# confirmation before the first release.
+api-cratestack = ["dep:meta-whatsapp-server-api-cratestack"]
 # Memory storage, `WA_SERVER_ENV=development` only
 # (meta-whatsapp-server-store-memory).
 store-memory = ["dep:meta-whatsapp-server-store-memory"]
@@ -45,8 +53,13 @@ meta-whatsapp-server-core.workspace = true
 # The state, the listeners and the public router.
 meta-whatsapp-server-http.workspace = true
 meta-whatsapp-server-api-axum = { workspace = true, optional = true }
+meta-whatsapp-server-api-cratestack = { workspace = true, optional = true }
 meta-whatsapp-server-store-memory = { workspace = true, optional = true }
 meta-whatsapp-server-store-postgres = { workspace = true, optional = true }
+# `tls`: aws-lc-rs installed as rustls' process-default crypto provider at
+# start (design D20 (b)). The rustls and the provider reqwest already
+# brings; `std` holds the process default.
+rustls = { workspace = true, features = ["aws_lc_rs", "std"] }
 
 anyhow.workspace = true
 # `doctor`: the app subscriptions answer (`GET /{app-id}/subscriptions`).

@@ -30,7 +30,11 @@ test:
 # files in META_WHATSAPP_RS_TEST_REDISS_CA, `…_CLIENT_CERT` and `…_CLIENT_KEY`.
 # The MongoDB URL (roadmap S8) is a single-node replica set's, with
 # `directConnection=true`: the set's member address is the container's own.
-# META_WHATSAPP_RS_REQUIRE_LIVE=1 turns a missing service into a failure
+# The Postgres must speak TLS (roadmap S10: the service's tests/tls.rs
+# connects with `sslmode=require`, and tests/tls_verify_ca.rs with
+# `sslmode=verify-ca` against META_WHATSAPP_RS_TEST_REDISS_CA, the test CA
+# that signs its certificate too); compose.test.yaml's and the
+# devcontainer's do. META_WHATSAPP_RS_REQUIRE_LIVE=1 turns a missing service into a failure
 # instead of a skip.
 test-live:
     #!/usr/bin/env bash
@@ -205,7 +209,10 @@ doc:
 # another; and the binary is built with `api-axum` and each backend alone:
 # a `#[cfg(feature = "store-…")]` gate it forgot fails one of them. The
 # MongoDB outbox spike (roadmap S9), which the binary does not compose, is
-# checked alone too, with and without its `test-hooks`.
+# checked alone too, with and without its `test-hooks`. The CrateStack API
+# adapter (roadmap S10) is checked alone, all targets, and the binary with
+# it on the memory backend (its tests, tests/tls.rs and tests/api_cratestack.rs,
+# run in `test`, with every feature).
 #
 # Each feature on its own, so a missing cfg gate cannot hide behind --all-features
 features:
@@ -248,7 +255,9 @@ features:
     cargo check -p meta-whatsapp-server-store-mongodb --all-targets --features test-hooks
     cargo check -p meta-whatsapp-server --no-default-features --features api-axum,store-memory
     cargo check -p meta-whatsapp-server --no-default-features --features api-axum,store-postgres
-    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude meta-whatsapp-server --exclude meta-whatsapp-server-http --exclude meta-whatsapp-server-api-axum --exclude meta-whatsapp-server-store-memory --exclude meta-whatsapp-server-store-postgres --no-default-features --no-deps
+    cargo check -p meta-whatsapp-server-api-cratestack --all-targets
+    cargo check -p meta-whatsapp-server --no-default-features --features api-axum,api-cratestack,store-memory
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude meta-whatsapp-server --exclude meta-whatsapp-server-http --exclude meta-whatsapp-server-api-axum --exclude meta-whatsapp-server-api-cratestack --exclude meta-whatsapp-server-store-memory --exclude meta-whatsapp-server-store-postgres --no-default-features --no-deps
 
 # Licenses, advisories, duplicate versions, sources
 deny:

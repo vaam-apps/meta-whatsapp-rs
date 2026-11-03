@@ -76,6 +76,11 @@ const _: () = assert!(crate::events::MAX_DELIVERIES_RECORDING < POOL_SIZE as usi
 
 /// A pool on `url`, with at least two connections (migrations hold one for
 /// their lock).
+///
+/// Call [`crate::tls::install_default_provider`] first, unless the process
+/// installed a rustls crypto provider already: [`crate::cli::run_with`]
+/// does, this does not (design D20 (b); in a build with both of rustls'
+/// providers, `sslmode=verify-ca` would panic without one).
 #[cfg(feature = "store-postgres")]
 pub async fn connect(url: &DatabaseUrl) -> anyhow::Result<PgPool> {
     // The error could quote the URL: say which variable, not what it held.
@@ -211,6 +216,11 @@ pub fn vault(kv: Arc<dyn KvStore>, keys: VaultKeys) -> anyhow::Result<TokenVault
 /// Run the service until `SIGTERM` or `SIGINT`, on the backend `config`
 /// names, opened by the in-tree [`BuiltinBackends`] ([`serve_from`]).
 ///
+/// Call [`crate::tls::install_default_provider`] first, unless the process
+/// installed a rustls crypto provider already: [`crate::cli::run_with`]
+/// does, this does not (design D20 (b); in a build with both of rustls'
+/// providers, `sslmode=verify-ca` would panic without one).
+///
 /// # Errors
 ///
 /// As [`serve_from`].
@@ -222,6 +232,11 @@ pub async fn serve(config: Config) -> anyhow::Result<()> {
 /// opens for `config.storage`: [`serve_with`] once it is open (the
 /// warnings about the configuration come first, as the backend may take
 /// a while to answer).
+///
+/// Call [`crate::tls::install_default_provider`] first, unless the process
+/// installed a rustls crypto provider already: [`crate::cli::run_with`]
+/// does, this does not (design D20 (b); in a build with both of rustls'
+/// providers, `sslmode=verify-ca` would panic without one).
 ///
 /// # Errors
 ///
@@ -238,6 +253,11 @@ pub async fn serve_from(config: Config, factory: &dyn BackendFactory) -> anyhow:
 /// ([`serve_until`]). `config.storage` is not read: `backend` is the
 /// storage.
 ///
+/// Call [`crate::tls::install_default_provider`] first, unless the process
+/// installed a rustls crypto provider already: [`crate::cli::run_with`]
+/// does, this does not (design D20 (b); in a build with both of rustls'
+/// providers, `sslmode=verify-ca` would panic without one).
+///
 /// # Errors
 ///
 /// As [`serve_until`].
@@ -253,6 +273,11 @@ pub async fn serve_with(config: Config, backend: Arc<dyn Backend>) -> anyhow::Re
 /// both listeners, run housekeeping over it
 /// ([`meta_whatsapp_server_core::housekeeping::run`]), and close it once
 /// the listeners stopped ([`supervise`]). `config.storage` is not read.
+///
+/// Call [`crate::tls::install_default_provider`] first, unless the process
+/// installed a rustls crypto provider already: [`crate::cli::run_with`]
+/// does, this does not (design D20 (b); in a build with both of rustls'
+/// providers, `sslmode=verify-ca` would panic without one).
 ///
 /// # Errors
 ///
