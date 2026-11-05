@@ -115,6 +115,64 @@ pub use lifecycle::{
     library_request, migration,
 };
 
+/// [`Templates::all_in_waba`]'s walk, for a service that holds no
+/// [`Templates`] (the analytics of templates, roadmap M5g): whether every
+/// one of `ids` is among the templates of `waba`, read with its own token,
+/// one walk of its list (`GET
+/// /{waba_id}/message_templates?fields=id&limit=100[&status=…]`, at most
+/// [`WALK_PAGES`] pages, stopping once all are found), never cached
+/// (design D116).
+///
+/// # Errors
+///
+/// `404 not_found`, without Meta's code or text, when one of them is not
+/// found in the pages read. Meta's refusal or failure, with its `details`,
+/// counted in `observer`.
+pub(crate) async fn all_templates_in_waba(
+    authz: &Authorizer,
+    observer: &dyn Observer,
+    waba: &OwnedWaba,
+    ids: &[TemplateId],
+    status: Option<TemplateStatus>,
+) -> Result<(), ServiceError> {
+    let mut missing: std::collections::HashSet<&TemplateId> = ids.iter().collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let templates = waba.client().templates(waba.waba_id().clone());
+    let mut query = TemplateListQuery::new()
+        .fields(["id"])
+        .limit(WALK_PAGE_SIZE);
+    query.status = status;
+    for _ in 0..WALK_PAGES {
+        let page = match templates.list(&query).await {
+            Ok(page) => page,
+            Err(error) => {
+                let api = waba.failed(authz, &error).await;
+                if error.graph().is_some() {
+                    observer.graph_error(api.code());
+                }
+                return Err(api.with_details(&error));
+            }
+        };
+        for template in &page.data {
+            missing.remove(&template.id);
+        }
+        if missing.is_empty() {
+            return Ok(());
+        }
+        match page.next_cursor() {
+            Some(after) => query.after = Some(after.to_owned()),
+            None => return Err(ServiceError::not_found()),
+        }
+    }
+    tracing::warn!(
+        target: LOG_TARGET,
+        "a template id was not found in the first pages of its WABA's templates"
+    );
+    Err(ServiceError::not_found())
+}
+
 // ─── The answers ─────────────────────────────────────────────────────────
 
 /// A template, as Meta describes it.
@@ -739,42 +797,7 @@ impl<'a> Templates<'a> {
         ids: &[TemplateId],
         status: Option<TemplateStatus>,
     ) -> Result<(), ServiceError> {
-        let mut missing: std::collections::HashSet<&TemplateId> = ids.iter().collect();
-        if missing.is_empty() {
-            return Ok(());
-        }
-        let templates = waba.client().templates(waba.waba_id().clone());
-        let mut query = TemplateListQuery::new()
-            .fields(["id"])
-            .limit(WALK_PAGE_SIZE);
-        query.status = status;
-        for _ in 0..WALK_PAGES {
-            let page = match templates.list(&query).await {
-                Ok(page) => page,
-                Err(error) => {
-                    let api = waba.failed(self.authz, &error).await;
-                    if error.graph().is_some() {
-                        self.observer.graph_error(api.code());
-                    }
-                    return Err(api.with_details(&error));
-                }
-            };
-            for template in &page.data {
-                missing.remove(&template.id);
-            }
-            if missing.is_empty() {
-                return Ok(());
-            }
-            match page.next_cursor() {
-                Some(after) => query.after = Some(after.to_owned()),
-                None => return Err(ServiceError::not_found()),
-            }
-        }
-        tracing::warn!(
-            target: LOG_TARGET,
-            "a template id was not found in the first pages of its WABA's templates"
-        );
-        Err(ServiceError::not_found())
+        all_templates_in_waba(self.authz, self.observer, waba, ids, status).await
     }
 
     /// The template `id` among the WABA's templates named `name`, with

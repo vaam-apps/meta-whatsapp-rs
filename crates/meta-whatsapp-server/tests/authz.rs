@@ -159,6 +159,28 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
             "/v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
         ),
         (Method::POST, "/v1/numbers/{pn}/payments/refunds"),
+        // Roadmap M5g (the design's M5.1): commerce, QR codes, analytics
+        // and the block list. A catalog is its WABA's, a code its number's.
+        (Method::GET, "/v1/numbers/{pn}/commerce-settings"),
+        (Method::PATCH, "/v1/numbers/{pn}/commerce-settings"),
+        (Method::GET, "/v1/wabas/{waba_id}/catalogs"),
+        (Method::GET, "/v1/wabas/{waba_id}/catalogs/{catalog_id}"),
+        (
+            Method::GET,
+            "/v1/wabas/{waba_id}/catalogs/{catalog_id}/products",
+        ),
+        (Method::POST, "/v1/numbers/{pn}/qr-codes"),
+        (Method::GET, "/v1/numbers/{pn}/qr-codes"),
+        (Method::GET, "/v1/numbers/{pn}/qr-codes/{code}"),
+        (Method::PATCH, "/v1/numbers/{pn}/qr-codes/{code}"),
+        (Method::DELETE, "/v1/numbers/{pn}/qr-codes/{code}"),
+        (Method::GET, "/v1/wabas/{waba_id}/analytics/messaging"),
+        (Method::GET, "/v1/wabas/{waba_id}/analytics/conversations"),
+        (Method::GET, "/v1/wabas/{waba_id}/analytics/pricing"),
+        (Method::GET, "/v1/wabas/{waba_id}/analytics/templates"),
+        (Method::GET, "/v1/numbers/{pn}/blocked-users"),
+        (Method::POST, "/v1/numbers/{pn}/blocked-users"),
+        (Method::POST, "/v1/numbers/{pn}/blocked-users/unblock"),
     ] {
         assert!(
             routes

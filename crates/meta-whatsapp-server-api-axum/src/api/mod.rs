@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`; erasing a customer `erasure`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`; erasing a customer `erasure`; commerce settings and catalogs `commerce`; QR codes `qr_codes`; analytics `analytics`; the block list `contacts`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -19,13 +19,18 @@
 //! documented either.
 
 pub mod admin;
+pub mod analytics;
+pub mod blocked_users;
+pub mod commerce;
 pub mod erasure;
 pub mod events;
 pub mod inbox;
+mod listing;
 pub mod messages;
 pub mod numbers;
 pub mod otp;
 pub mod payments;
+pub mod qr_codes;
 pub mod registration;
 pub mod signup;
 pub mod template_groups;
@@ -96,6 +101,10 @@ impl Modify for Security {
         (name = "media", description = "Uploading, downloading and deleting media (scope `media`)"),
         (name = "templates", description = "Message templates (scope `templates`): listing, creating and deleting them; since roadmap M5b editing, unpausing, comparing, archiving and unarchiving them, the Template Library, migrations and template groups"),
         (name = "payments", description = "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"),
+        (name = "commerce", description = "A number's commerce settings (the cart, the catalog's visibility) and the catalog its WABA connects, with its products (scope `commerce`)"),
+        (name = "qr_codes", description = "QR codes and short links that open a chat with a prefilled message, each checked to be the number's own (scope `qr_codes`)"),
+        (name = "analytics", description = "A WABA's messaging, conversation, pricing and template analytics, their ranges bounded (scope `analytics`)"),
+        (name = "contacts", description = "The block list: blocking and unblocking people on a number, audited by count (scope `contacts`)"),
         (name = "inbox", description = "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"),
         (name = "erasure", description = "Erasing a customer on a number, from the inbox and the event outbox, journaled and audited: irreversible, only when called (scope `erasure`)"),
         (name = "events", description = "Meta's webhook events, routed to their tenant (scope `events`)"),
@@ -225,6 +234,44 @@ fn templates_routes() -> OpenApiRouter<Grant> {
         ))
 }
 
+fn commerce_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(
+            commerce::get_commerce_settings,
+            commerce::update_commerce_settings
+        ))
+        .routes(routes!(commerce::list_catalogs))
+        .routes(routes!(commerce::get_catalog))
+        .routes(routes!(commerce::list_catalog_products))
+}
+
+fn qr_codes_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(qr_codes::create_qr_code, qr_codes::list_qr_codes))
+        .routes(routes!(
+            qr_codes::get_qr_code,
+            qr_codes::update_qr_code,
+            qr_codes::delete_qr_code
+        ))
+}
+
+fn analytics_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(analytics::get_messaging_analytics))
+        .routes(routes!(analytics::get_conversation_analytics))
+        .routes(routes!(analytics::get_pricing_analytics))
+        .routes(routes!(analytics::get_template_analytics))
+}
+
+fn contacts_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(
+            blocked_users::list_blocked_users,
+            blocked_users::block_users
+        ))
+        .routes(routes!(blocked_users::unblock_users))
+}
+
 fn webhook_routes() -> OpenApiRouter<Grant> {
     OpenApiRouter::new()
         .routes(routes!(
@@ -301,6 +348,10 @@ fn api_routes(
         .merge(tenant(inbox_routes(), Scope::Inbox))
         .merge(tenant(payments_routes(), Scope::Payments))
         .merge(tenant(erasure_routes(), Scope::Erasure))
+        .merge(tenant(commerce_routes(), Scope::Commerce))
+        .merge(tenant(qr_codes_routes(), Scope::QrCodes))
+        .merge(tenant(analytics_routes(), Scope::Analytics))
+        .merge(tenant(contacts_routes(), Scope::Contacts))
         .merge(tenant(events_routes(), Scope::Events))
         .merge(tenant(webhook_routes(), Scope::Webhooks))
         .merge(tenant(otp_routes(), Scope::Otp))
@@ -464,6 +515,11 @@ mod tests {
             ("inbox.rs", include_str!("inbox.rs")),
             ("messages.rs", include_str!("messages.rs")),
             ("payments.rs", include_str!("payments.rs")),
+            ("commerce.rs", include_str!("commerce.rs")),
+            ("qr_codes.rs", include_str!("qr_codes.rs")),
+            ("analytics.rs", include_str!("analytics.rs")),
+            ("blocked_users.rs", include_str!("blocked_users.rs")),
+            ("listing.rs", include_str!("listing.rs")),
             ("templates.rs", include_str!("templates.rs")),
             (
                 "template_lifecycle.rs",

@@ -905,7 +905,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 11] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 15] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -980,6 +980,8 @@ impl Sample {
                 "configuration_name" => SAMPLE_PAYMENT_CONFIGURATION,
                 "reference_id" => SAMPLE_REFERENCE_ID,
                 "group_id" => SAMPLE_TEMPLATE_GROUP_ID,
+                "catalog_id" => SAMPLE_CATALOG_ID,
+                "code" => SAMPLE_QR_CODE,
                 _ => "placeholder",
             });
             rest = &rest[end + 1..];
@@ -1003,6 +1005,12 @@ pub const SAMPLE_TEMPLATE_ID: &str = "1407680676729941";
 
 /// A template group's id (`templates/template-groups`).
 pub const SAMPLE_TEMPLATE_GROUP_ID: &str = "9020555671393375";
+
+/// A catalog's id (Meta's Catalog API).
+pub const SAMPLE_CATALOG_ID: &str = "194836987003835";
+
+/// A QR code's id (`qr-codes`, "Create QR code").
+pub const SAMPLE_QR_CODE: &str = "4O4YGZEG3RIVE1";
 
 /// A payment configuration's name (`payments/payments-in/onboarding-apis`).
 pub const SAMPLE_PAYMENT_CONFIGURATION: &str = "test-payment-configuration";
@@ -1052,12 +1060,34 @@ pub fn sample_library_template() -> Value {
 
 /// The query string an operation needs, so that a refusal is never the
 /// query's fault.
-pub fn sample_query(method: &Method, template: &str) -> Option<&'static str> {
+pub fn sample_query(method: &Method, template: &str) -> Option<String> {
+    // Roadmap M5g: analytics ranges are bounded by the look-back, so the
+    // sample's are two days to one day before now.
+    let range = || {
+        let now = time::OffsetDateTime::now_utc();
+        let at = |days: i64| {
+            (now - time::Duration::days(days))
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+                .replace('+', "%2B")
+        };
+        format!("start={}&end={}", at(2), at(1))
+    };
     match (method.as_str(), template) {
-        ("DELETE", "/v1/wabas/{waba_id}/templates") => Some("name=order_confirmation"),
+        ("DELETE", "/v1/wabas/{waba_id}/templates") => Some("name=order_confirmation".to_owned()),
         // templates/template-comparison, "Example request" (roadmap M5b).
         ("GET", "/v1/wabas/{waba_id}/templates/{id}/compare") => {
-            Some("template_ids=1533406637136032&start=1674844791182&end=1674845395982")
+            Some("template_ids=1533406637136032&start=1674844791182&end=1674845395982".to_owned())
+        }
+        ("GET", "/v1/wabas/{waba_id}/analytics/messaging") => {
+            Some(format!("{}&granularity=DAY", range()))
+        }
+        (
+            "GET",
+            "/v1/wabas/{waba_id}/analytics/conversations" | "/v1/wabas/{waba_id}/analytics/pricing",
+        ) => Some(format!("{}&granularity=DAILY", range())),
+        ("GET", "/v1/wabas/{waba_id}/analytics/templates") => {
+            Some(format!("{}&template_ids={SAMPLE_TEMPLATE_ID}", range()))
         }
         _ => None,
     }
@@ -1157,6 +1187,20 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "add_templates": [844_006_344_365_270_u64, 1_188_657_612_184_382_u64],
             "remove_templates": [1_035_843_174_854_974_u64]
         }),
+        // Roadmap M5g: the examples of the pages (`catalogs/set-commerce-settings`,
+        // `qr-codes`, `block-users`).
+        ("PATCH", "/v1/numbers/{pn}/commerce-settings") => {
+            serde_json::json!({"is_cart_enabled": true})
+        }
+        ("POST", "/v1/numbers/{pn}/qr-codes") => {
+            serde_json::json!({"prefilled_message": "Cyber Monday", "generate_qr_image": "SVG"})
+        }
+        ("PATCH", "/v1/numbers/{pn}/qr-codes/{code}") => {
+            serde_json::json!({"prefilled_message": "Cyber Monday 2"})
+        }
+        ("POST", "/v1/numbers/{pn}/blocked-users" | "/v1/numbers/{pn}/blocked-users/unblock") => {
+            serde_json::json!({"users": [{"phone": SAMPLE_TO}]})
+        }
         ("POST" | "PATCH" | "PUT", _) => serde_json::json!({}),
         _ => return None,
     })

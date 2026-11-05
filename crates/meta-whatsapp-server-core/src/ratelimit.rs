@@ -98,7 +98,18 @@ impl RouteClass {
             | Operation::ListSignupAttempts
             | Operation::ListWebhookEndpoints
             | Operation::GetWebhookEndpoint
-            | Operation::ListWebhookDeliveries => Self::Read,
+            | Operation::ListWebhookDeliveries
+            | Operation::GetCommerceSettings
+            | Operation::ListCatalogs
+            | Operation::GetCatalog
+            | Operation::ListCatalogProducts
+            | Operation::ListQrCodes
+            | Operation::GetQrCode
+            | Operation::GetMessagingAnalytics
+            | Operation::GetConversationAnalytics
+            | Operation::GetPricingAnalytics
+            | Operation::GetTemplateAnalytics
+            | Operation::ListBlockedUsers => Self::Read,
             Operation::UpdateProfile
             | Operation::DisconnectWaba
             | Operation::SendMessage
@@ -125,7 +136,13 @@ impl RouteClass {
             | Operation::DeleteWebhookEndpoint
             | Operation::RotateWebhookSecret
             | Operation::TestWebhookEndpoint
-            | Operation::RetryWebhookDelivery => Self::Send,
+            | Operation::RetryWebhookDelivery
+            | Operation::UpdateCommerceSettings
+            | Operation::CreateQrCode
+            | Operation::UpdateQrCode
+            | Operation::DeleteQrCode
+            | Operation::BlockUsers
+            | Operation::UnblockUsers => Self::Send,
             Operation::ListTemplates
             | Operation::CreateTemplate
             | Operation::DeleteTemplates
@@ -526,6 +543,23 @@ mod tests {
             ("get_template_group", RouteClass::Templates),
             ("update_template_group", RouteClass::Templates),
             ("delete_template_group", RouteClass::Templates),
+            ("get_commerce_settings", RouteClass::Read),
+            ("update_commerce_settings", RouteClass::Send),
+            ("list_catalogs", RouteClass::Read),
+            ("get_catalog", RouteClass::Read),
+            ("list_catalog_products", RouteClass::Read),
+            ("create_qr_code", RouteClass::Send),
+            ("list_qr_codes", RouteClass::Read),
+            ("get_qr_code", RouteClass::Read),
+            ("update_qr_code", RouteClass::Send),
+            ("delete_qr_code", RouteClass::Send),
+            ("get_messaging_analytics", RouteClass::Read),
+            ("get_conversation_analytics", RouteClass::Read),
+            ("get_pricing_analytics", RouteClass::Read),
+            ("get_template_analytics", RouteClass::Read),
+            ("list_blocked_users", RouteClass::Read),
+            ("block_users", RouteClass::Send),
+            ("unblock_users", RouteClass::Send),
         ];
         assert_eq!(table.len(), Operation::ALL.len(), "every operation");
         for (id, class) in table {

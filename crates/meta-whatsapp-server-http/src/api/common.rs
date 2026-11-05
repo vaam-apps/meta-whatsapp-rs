@@ -88,7 +88,8 @@ pub fn encode_cursor(after: &str) -> String {
     hex::encode(after)
 }
 
-fn decode_cursor(cursor: &str) -> Option<String> {
+/// The Meta cursor an opaque `cursor` (from [`encode_cursor`]) holds.
+pub fn decode_cursor(cursor: &str) -> Option<String> {
     String::from_utf8(hex::decode(cursor).ok()?).ok()
 }
 

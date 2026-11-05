@@ -122,11 +122,28 @@ pub enum Scope {
     /// pending the owner's confirmation: docs/architecture.md, § Stable
     /// identifiers).
     Erasure,
+    /// Commerce (roadmap M5g): a number's commerce settings (the cart,
+    /// the catalog's visibility) and the reads of the catalog a WABA
+    /// connects (a stored name, pending the owner's confirmation:
+    /// docs/architecture.md, § Stable identifiers).
+    Commerce,
+    /// QR codes and short links that open a chat with a prefilled
+    /// message (roadmap M5g; a stored name, pending the owner's
+    /// confirmation).
+    QrCodes,
+    /// A WABA's analytics (roadmap M5g; a stored name, pending the
+    /// owner's confirmation).
+    Analytics,
+    /// The people a number talks to (roadmap M5g): blocking and
+    /// unblocking them, and the block list. Blocking acts on a person,
+    /// so a scope of its own, which `send` does not grant (a stored name,
+    /// pending the owner's confirmation).
+    Contacts,
 }
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 11] = [
+    pub const ALL: [Scope; 15] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -138,6 +155,10 @@ impl Scope {
         Self::Numbers,
         Self::Payments,
         Self::Erasure,
+        Self::Commerce,
+        Self::QrCodes,
+        Self::Analytics,
+        Self::Contacts,
     ];
 
     /// Stored and API name.
@@ -154,6 +175,10 @@ impl Scope {
             Self::Numbers => "numbers",
             Self::Payments => "payments",
             Self::Erasure => "erasure",
+            Self::Commerce => "commerce",
+            Self::QrCodes => "qr_codes",
+            Self::Analytics => "analytics",
+            Self::Contacts => "contacts",
         }
     }
 

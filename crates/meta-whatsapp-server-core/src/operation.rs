@@ -181,11 +181,45 @@ pub enum Operation {
     UpdateTemplateGroup,
     /// `delete_template_group`: a template group deleted, its templates kept (roadmap M5b).
     DeleteTemplateGroup,
+    /// `get_commerce_settings`: a number's commerce settings (roadmap M5g).
+    GetCommerceSettings,
+    /// `update_commerce_settings`: a number's commerce settings changed: the cart enabled or not, the catalog shown or not (roadmap M5g).
+    UpdateCommerceSettings,
+    /// `list_catalogs`: the catalog a WABA connects (roadmap M5g).
+    ListCatalogs,
+    /// `get_catalog`: a catalog of a WABA, by id (roadmap M5g).
+    GetCatalog,
+    /// `list_catalog_products`: a page of a WABA's catalog's products (roadmap M5g).
+    ListCatalogProducts,
+    /// `create_qr_code`: a QR code and short link created (roadmap M5g).
+    CreateQrCode,
+    /// `list_qr_codes`: a number's QR codes (roadmap M5g).
+    ListQrCodes,
+    /// `get_qr_code`: one of a number's QR codes (roadmap M5g).
+    GetQrCode,
+    /// `update_qr_code`: a QR code's prefilled message changed (roadmap M5g).
+    UpdateQrCode,
+    /// `delete_qr_code`: a QR code deleted (roadmap M5g).
+    DeleteQrCode,
+    /// `get_messaging_analytics`: a WABA's messaging analytics (roadmap M5g).
+    GetMessagingAnalytics,
+    /// `get_conversation_analytics`: a WABA's conversation analytics (roadmap M5g).
+    GetConversationAnalytics,
+    /// `get_pricing_analytics`: a WABA's pricing analytics (roadmap M5g).
+    GetPricingAnalytics,
+    /// `get_template_analytics`: analytics of templates of a WABA (roadmap M5g).
+    GetTemplateAnalytics,
+    /// `list_blocked_users`: a number's block list (roadmap M5g).
+    ListBlockedUsers,
+    /// `block_users`: people blocked on a number (roadmap M5g).
+    BlockUsers,
+    /// `unblock_users`: people unblocked on a number (roadmap M5g).
+    UnblockUsers,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 66] = [
+    pub const ALL: [Self; 83] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -252,6 +286,23 @@ impl Operation {
         Self::GetTemplateGroup,
         Self::UpdateTemplateGroup,
         Self::DeleteTemplateGroup,
+        Self::GetCommerceSettings,
+        Self::UpdateCommerceSettings,
+        Self::ListCatalogs,
+        Self::GetCatalog,
+        Self::ListCatalogProducts,
+        Self::CreateQrCode,
+        Self::ListQrCodes,
+        Self::GetQrCode,
+        Self::UpdateQrCode,
+        Self::DeleteQrCode,
+        Self::GetMessagingAnalytics,
+        Self::GetConversationAnalytics,
+        Self::GetPricingAnalytics,
+        Self::GetTemplateAnalytics,
+        Self::ListBlockedUsers,
+        Self::BlockUsers,
+        Self::UnblockUsers,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -323,6 +374,23 @@ impl Operation {
             Self::GetTemplateGroup => "get_template_group",
             Self::UpdateTemplateGroup => "update_template_group",
             Self::DeleteTemplateGroup => "delete_template_group",
+            Self::GetCommerceSettings => "get_commerce_settings",
+            Self::UpdateCommerceSettings => "update_commerce_settings",
+            Self::ListCatalogs => "list_catalogs",
+            Self::GetCatalog => "get_catalog",
+            Self::ListCatalogProducts => "list_catalog_products",
+            Self::CreateQrCode => "create_qr_code",
+            Self::ListQrCodes => "list_qr_codes",
+            Self::GetQrCode => "get_qr_code",
+            Self::UpdateQrCode => "update_qr_code",
+            Self::DeleteQrCode => "delete_qr_code",
+            Self::GetMessagingAnalytics => "get_messaging_analytics",
+            Self::GetConversationAnalytics => "get_conversation_analytics",
+            Self::GetPricingAnalytics => "get_pricing_analytics",
+            Self::GetTemplateAnalytics => "get_template_analytics",
+            Self::ListBlockedUsers => "list_blocked_users",
+            Self::BlockUsers => "block_users",
+            Self::UnblockUsers => "unblock_users",
         }
     }
 
@@ -386,6 +454,21 @@ impl Operation {
             | Self::ListSignupAttempts
             | Self::ResumeSignup => Scope::Signup,
             Self::EraseCustomer => Scope::Erasure,
+            Self::GetCommerceSettings
+            | Self::UpdateCommerceSettings
+            | Self::ListCatalogs
+            | Self::GetCatalog
+            | Self::ListCatalogProducts => Scope::Commerce,
+            Self::CreateQrCode
+            | Self::ListQrCodes
+            | Self::GetQrCode
+            | Self::UpdateQrCode
+            | Self::DeleteQrCode => Scope::QrCodes,
+            Self::GetMessagingAnalytics
+            | Self::GetConversationAnalytics
+            | Self::GetPricingAnalytics
+            | Self::GetTemplateAnalytics => Scope::Analytics,
+            Self::ListBlockedUsers | Self::BlockUsers | Self::UnblockUsers => Scope::Contacts,
             Self::CreateWebhookEndpoint
             | Self::ListWebhookEndpoints
             | Self::GetWebhookEndpoint

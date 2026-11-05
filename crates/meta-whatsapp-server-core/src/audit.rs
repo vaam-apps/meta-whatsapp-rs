@@ -74,6 +74,44 @@ pub fn payment_audit(
     );
 }
 
+/// A tenant's block or unblock of people on a number (roadmap M5g;
+/// docs/design/server.md, D143), logged like [`tenant_audit`] (target
+/// `audit`, message `tenant change`) with `outcome` and the counts of
+/// [`ContactFacts`]. Never who: the people blocked are the caller's and
+/// Meta's (a phone number, a BSUID), in no log of the service.
+pub fn contacts_audit(
+    action: &'static str,
+    key_id: &str,
+    subject: &Subject<'_>,
+    contacts: &ContactFacts,
+    outcome: Outcome,
+) {
+    tracing::info!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
+        users = contacts.users,
+        done = contacts.done,
+        failed = contacts.failed,
+        outcome = outcome.as_str(),
+        "tenant change"
+    );
+}
+
+/// What a [`contacts_audit`] event names besides its [`Subject`]: counts.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ContactFacts {
+    /// How many people the request named.
+    pub users: u64,
+    /// How many Meta blocked (or unblocked); `0` when it did not answer.
+    pub done: u64,
+    /// How many Meta refused, one by one.
+    pub failed: u64,
+}
+
 /// A customer erased on a number (roadmap M2f: `crate::erasure`), logged
 /// like [`tenant_audit`] (target `audit`, message `tenant change`, action
 /// `customer_erased`) with the erasure's id (its journal entry's) and
