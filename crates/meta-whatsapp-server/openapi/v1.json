@@ -3646,6 +3646,2005 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/groups": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/groups`: a page of the number's groups.",
+        "operationId": "list_groups",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 1,024 (Meta's default is 25).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 1024,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "`next_after` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "`previous_before` of the next page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the number's active groups; each is recorded as the number's, so the routes on a group id find it (the way to adopt a group created before the service, or whose creation event was missed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `limit`, `after`, `before` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/groups`: ask Meta to create a group.",
+        "operationId": "create_group",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never create two groups",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGroupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Asked: Meta creates the group asynchronously. Its id and invite link come in a `group_lifecycle_update` event (type `group_create`, with this `request_id`), which also makes the group the number's here",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupCreationRequested"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `subject`, `description`, `join_approval_mode` or `body`; `idempotency_key_reused`: nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the group may have been created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/groups/{group_id}": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/groups/{group_id}`: one group.",
+        "operationId": "get_group",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "description": "A comma-separated list of `subject`, `description`,\n`join_approval_mode`, `suspended`, `creation_timestamp`,\n`total_participant_count`; all of them without it. The participants\nhave a route of their own.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Group"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such group among the number's (another tenant's looks like a missing one: decided before the token is opened, Meta not asked); or Meta no longer has it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `fields` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`DELETE /v1/numbers/{pn}/groups/{group_id}`: delete a group, removing\nevery participant and the business.",
+        "operationId": "delete_group",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Asked: the group's `group_lifecycle_update` event (type `group_delete`) tells whether it is gone, and forgets it here. There is no call to leave a group other than this one"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such group among the number's; nothing deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the group may have been deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`PATCH /v1/numbers/{pn}/groups/{group_id}`: change a group's subject\nand/or description.",
+        "operationId": "update_group",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateGroupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Asked: Meta tells the outcome of each field in a `group_settings_update` event"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such group among the number's; nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `update` (nothing to change), `subject`, `description` or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the group may have been changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/groups/{group_id}/analytics": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/groups/{group_id}/analytics`: a group's analytics,\nday by day.",
+        "operationId": "get_group_analytics",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "description": "Start of the range, RFC 3339: at most 90 days ago.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "End of the range, RFC 3339: after `start`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "metrics",
+            "in": "query",
+            "description": "A comma-separated list of `SENT`, `DELIVERED`, `READ`,\n`PARTICIPANTS_JOINED`, `PARTICIPANTS_LEFT`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "`next_after` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the group's days (Meta: daily granularity, a look-back of up to 90 days). Asked of the number's WABA, for this one group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupAnalytics"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such group among the number's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `start` (not RFC 3339, or more than 90 days ago), `end` (not after `start`), `metrics`, `after` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/groups/{group_id}/invite-link": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/groups/{group_id}/invite-link`: the group's\ninvite link.",
+        "operationId": "get_group_invite_link",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The invite link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupInviteLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such group among the number's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/groups/{group_id}/invite-link`: replace the\ninvite link; every previous link stops working.",
+        "operationId": "reset_group_invite_link",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The new invite link",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupInviteLink"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such group among the number's; nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the link may have been replaced; read it again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/groups/{group_id}/join-requests": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/groups/{group_id}/join-requests`: a page of the\ngroup's open join requests.",
+        "operationId": "list_group_join_requests",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "`next_after` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "`previous_before` of the next page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of open join requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupJoinRequestList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such group among the number's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `after`, `before` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/groups/{group_id}/join-requests/approve": {
+      "post": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/groups/{group_id}/join-requests/approve`:\napprove join requests.",
+        "operationId": "approve_group_join_requests",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupJoinRequestsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Request by request: which Meta approved and which it did not, and why (a partial success is still a `200`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupJoinRequestsResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such group among the number's; nothing approved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `join_request_ids`, `join_request_ids[i]` or `body`: never quoted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: they may have been approved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/groups/{group_id}/join-requests/reject": {
+      "post": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/groups/{group_id}/join-requests/reject`: reject\njoin requests.",
+        "operationId": "reject_group_join_requests",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupJoinRequestsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Request by request: which Meta rejected and which it did not, and why (a partial success is still a `200`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupJoinRequestsResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such group among the number's; nothing rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `join_request_ids`, `join_request_ids[i]` or `body`: never quoted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: they may have been rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/groups/{group_id}/participants": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/groups/{group_id}/participants`: the group's\nparticipants.",
+        "operationId": "list_group_participants",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The participants, the business excluded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupParticipants"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such group among the number's",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/groups/{group_id}/participants/remove": {
+      "post": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/groups/{group_id}/participants/remove`: remove\nparticipants, who can no longer join through an invite link.",
+        "operationId": "remove_group_participants",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveGroupParticipantsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Asked: Meta tells each participant's outcome in a `group_participants_update` event; `partial` says it did not remove everyone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupParticipantsRemoval"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such group among the number's; nothing removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `users`, `users[i]`, `users[i].phone`, `users[i].wa_id`, `users[i].user_id` or `body`: never quoted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: they may have been removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/media": {
       "post": {
         "tags": [
@@ -12794,6 +14793,34 @@
         ],
         "description": "A coordinate in decimal degrees: Meta's pages write it as a string\n(`\"37.44216251868683\"`); a JSON number is accepted too."
       },
+      "CreateGroupRequest": {
+        "type": "object",
+        "description": "A group to create.",
+        "required": [
+          "subject"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its description, at most 2,048 characters."
+          },
+          "join_approval_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`approval_required` (people who open the invite link ask to join,\nand you approve or reject them) or `auto_approve` (Meta's default)."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Its subject: 1 to 128 characters (Meta trims the whitespace)."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreatePaymentConfiguration": {
         "type": "object",
         "description": "A payment configuration to create, as Meta's page writes it\n(`payments/payments-in/onboarding-apis`, \"Create a payment\nconfiguration\").",
@@ -13338,6 +15365,545 @@
             ],
             "format": "int64",
             "description": "Meta's subcode, when it sent one (deprecated by Meta since v16)."
+          }
+        }
+      },
+      "Group": {
+        "type": "object",
+        "description": "A group, as Meta describes it.",
+        "required": [
+          "id",
+          "subject",
+          "description",
+          "join_approval_mode",
+          "suspended",
+          "creation_timestamp",
+          "total_participant_count"
+        ],
+        "properties": {
+          "creation_timestamp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was created (RFC 3339)."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its description."
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its id."
+          },
+          "join_approval_mode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`approval_required` or `auto_approve`."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its subject."
+          },
+          "suspended": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether WhatsApp suspended it."
+          },
+          "total_participant_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many participants it has, the business excluded.",
+            "minimum": 0
+          }
+        }
+      },
+      "GroupAnalytics": {
+        "type": "object",
+        "description": "A page of a group's analytics, day by day.",
+        "required": [
+          "data",
+          "next_after"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupAnalyticsDay"
+            },
+            "description": "The days, in Meta's order; a metric not asked for is `null`."
+          },
+          "next_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `after` for the next page; `null` on the last one."
+          }
+        }
+      },
+      "GroupAnalyticsDay": {
+        "type": "object",
+        "description": "A day of a group's analytics.",
+        "required": [
+          "start",
+          "end",
+          "sent",
+          "delivered",
+          "read",
+          "joined",
+          "left"
+        ],
+        "properties": {
+          "delivered": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Deliveries to participants (`DELIVERED`).",
+            "minimum": 0
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The day's end (RFC 3339)."
+          },
+          "joined": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Participants who joined (`PARTICIPANTS_JOINED`).",
+            "minimum": 0
+          },
+          "left": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Participants who left (`PARTICIPANTS_LEFT`).",
+            "minimum": 0
+          },
+          "read": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Reads by participants (`READ`).",
+            "minimum": 0
+          },
+          "sent": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Messages the business sent (`SENT`).",
+            "minimum": 0
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The day's start (RFC 3339)."
+          }
+        }
+      },
+      "GroupCreationRequested": {
+        "type": "object",
+        "description": "A group asked of Meta.",
+        "required": [
+          "request_id"
+        ],
+        "properties": {
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Meta's id of the creation request; the `group_lifecycle_update`\nevent that reports the group (its id and invite link) echoes it."
+          }
+        }
+      },
+      "GroupInviteLink": {
+        "type": "object",
+        "description": "A group's invite link: a credential, whoever holds it can join.",
+        "required": [
+          "invite_link"
+        ],
+        "properties": {
+          "invite_link": {
+            "type": "string",
+            "description": "`https://chat.whatsapp.com/<code>`."
+          }
+        }
+      },
+      "GroupJoinRequest": {
+        "type": "object",
+        "description": "An open join request.",
+        "required": [
+          "join_request_id",
+          "wa_id",
+          "user_id",
+          "parent_user_id",
+          "username",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When they asked (RFC 3339)."
+          },
+          "join_request_id": {
+            "type": "string",
+            "description": "Its id: what approving or rejecting takes."
+          },
+          "parent_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their parent BSUID."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their BSUID."
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their username."
+          },
+          "wa_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The person's phone number (absent when they have a username)."
+          }
+        }
+      },
+      "GroupJoinRequestFailure": {
+        "type": "object",
+        "description": "A join request Meta did not approve or reject.",
+        "required": [
+          "join_request_id",
+          "reasons"
+        ],
+        "properties": {
+          "join_request_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its id."
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupReason"
+            },
+            "description": "Why: Meta's codes, never its texts."
+          }
+        }
+      },
+      "GroupJoinRequestList": {
+        "type": "object",
+        "description": "A page of a group's open join requests.",
+        "required": [
+          "data",
+          "next_after",
+          "previous_before"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupJoinRequest"
+            },
+            "description": "The requests."
+          },
+          "next_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `after` for the next page; `null` on the last one."
+          },
+          "previous_before": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `before` for the page before."
+          }
+        }
+      },
+      "GroupJoinRequestsRequest": {
+        "type": "object",
+        "description": "The join requests to approve or reject. No `Debug`: the ids embed a\nnumber.",
+        "required": [
+          "join_request_ids"
+        ],
+        "properties": {
+          "join_request_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "1 to 100 join request ids, as the join requests route lists them.",
+            "maxItems": 100,
+            "minItems": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "GroupJoinRequestsResult": {
+        "type": "object",
+        "description": "What approving or rejecting join requests came to.",
+        "required": [
+          "done",
+          "failed",
+          "reasons"
+        ],
+        "properties": {
+          "done": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The requests Meta approved (or rejected)."
+          },
+          "failed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupJoinRequestFailure"
+            },
+            "description": "The ones it did not (a partial success is still a `200`)."
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupReason"
+            },
+            "description": "Meta's errors on the call as a whole: codes, never texts."
+          }
+        }
+      },
+      "GroupList": {
+        "type": "object",
+        "description": "A page of the number's groups.",
+        "required": [
+          "data",
+          "next_after",
+          "previous_before"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupSummary"
+            },
+            "description": "The groups."
+          },
+          "next_after": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `after` for the next page; `null` on the last one."
+          },
+          "previous_before": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `before` for the page before."
+          }
+        }
+      },
+      "GroupParticipant": {
+        "type": "object",
+        "description": "A participant of a group.",
+        "required": [
+          "wa_id",
+          "user_id",
+          "parent_user_id",
+          "username"
+        ],
+        "properties": {
+          "parent_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their parent BSUID, when the portfolio is enrolled for them."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their BSUID."
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their username."
+          },
+          "wa_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Their phone number as WhatsApp knows it (absent when they have a\nusername)."
+          }
+        }
+      },
+      "GroupParticipantRef": {
+        "type": "object",
+        "description": "A participant to remove: exactly one of the three.",
+        "properties": {
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A phone number in E.164 **with** its `+` (`+16505551234`)."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A business-scoped user id (`US.13491208655302741918`); a parent\nBSUID (`US.ENT.…`) is refused."
+          },
+          "wa_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A WhatsApp user id as the participants route lists it: digits, no\n`+` (`16505551234`)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "GroupParticipants": {
+        "type": "object",
+        "description": "A group's participants.",
+        "required": [
+          "participants",
+          "total_participant_count"
+        ],
+        "properties": {
+          "participants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupParticipant"
+            },
+            "description": "The participants, the business excluded."
+          },
+          "total_participant_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Their count, as Meta says it.",
+            "minimum": 0
+          }
+        }
+      },
+      "GroupParticipantsRemoval": {
+        "type": "object",
+        "description": "What removing participants came to.",
+        "required": [
+          "partial"
+        ],
+        "properties": {
+          "partial": {
+            "type": "boolean",
+            "description": "`true` when Meta says some were not removed (its `206`, code\n`131201`); the `group_participants_update` event says which."
+          }
+        }
+      },
+      "GroupReason": {
+        "type": "object",
+        "description": "Why Meta refused: its code and the service's kind, never its text.",
+        "required": [
+          "code",
+          "kind"
+        ],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Meta's error code."
+          },
+          "kind": {
+            "type": "string",
+            "description": "The service's error code for it, to branch on (`ErrorCode`'s)."
+          }
+        }
+      },
+      "GroupSummary": {
+        "type": "object",
+        "description": "A group of the listing.",
+        "required": [
+          "id",
+          "subject",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When it was created (RFC 3339)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its subject."
           }
         }
       },
@@ -15904,6 +18470,25 @@
           "pin_set"
         ]
       },
+      "RemoveGroupParticipantsRequest": {
+        "type": "object",
+        "description": "The participants to remove. No `Debug`: it names people.",
+        "required": [
+          "users"
+        ],
+        "properties": {
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GroupParticipantRef"
+            },
+            "description": "1 to 8 participants (Meta's limit a request).",
+            "maxItems": 8,
+            "minItems": 1
+          }
+        },
+        "additionalProperties": false
+      },
       "Reply": {
         "type": "object",
         "description": "A reply button's `reply`.",
@@ -16191,7 +18776,8 @@
           "otp",
           "numbers",
           "payments",
-          "erasure"
+          "erasure",
+          "groups"
         ]
       },
       "SendMessage": {
@@ -17231,6 +19817,27 @@
         },
         "additionalProperties": false
       },
+      "UpdateGroupRequest": {
+        "type": "object",
+        "description": "What to change in a group: at least one field.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new description, at most 2,048 characters (empty clears it)."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new subject: 1 to 128 characters."
+          }
+        },
+        "additionalProperties": false
+      },
       "UpdateTenant": {
         "type": "object",
         "description": "`PATCH /v1/admin/tenants/{id}`.",
@@ -17802,6 +20409,10 @@
     {
       "name": "templates",
       "description": "Message templates (scope `templates`): listing, creating and deleting them; since roadmap M5b editing, unpausing, comparing, archiving and unarchiving them, the Template Library, migrations and template groups"
+    },
+    {
+      "name": "groups",
+      "description": "A number's WhatsApp groups: creating, listing, reading, changing and deleting them, invite links, participants, join requests and analytics; a group is the number's or it does not exist (scope `groups`, roadmap M5f)"
     },
     {
       "name": "payments",

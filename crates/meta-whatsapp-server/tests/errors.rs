@@ -366,6 +366,20 @@ const CALLS_META: &[&str] = &[
     "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
     "GET /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
     "POST /v1/numbers/{pn}/payments/refunds",
+    // Roadmap M5f: the group routes, on a group the number holds.
+    "POST /v1/numbers/{pn}/groups",
+    "GET /v1/numbers/{pn}/groups",
+    "GET /v1/numbers/{pn}/groups/{group_id}",
+    "PATCH /v1/numbers/{pn}/groups/{group_id}",
+    "DELETE /v1/numbers/{pn}/groups/{group_id}",
+    "GET /v1/numbers/{pn}/groups/{group_id}/invite-link",
+    "POST /v1/numbers/{pn}/groups/{group_id}/invite-link",
+    "GET /v1/numbers/{pn}/groups/{group_id}/participants",
+    "POST /v1/numbers/{pn}/groups/{group_id}/participants/remove",
+    "GET /v1/numbers/{pn}/groups/{group_id}/join-requests",
+    "POST /v1/numbers/{pn}/groups/{group_id}/join-requests/approve",
+    "POST /v1/numbers/{pn}/groups/{group_id}/join-requests/reject",
+    "GET /v1/numbers/{pn}/groups/{group_id}/analytics",
     // Roadmap M5b.
     "PATCH /v1/wabas/{waba_id}/templates/{id}",
     "POST /v1/wabas/{waba_id}/templates/{id}/unpause",
@@ -449,6 +463,23 @@ const OBJECT_BY_ID: &[&str] = &[
     "GET /v1/wabas/{waba_id}/payment-configurations/{configuration_name}",
     "GET /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
     "POST /v1/numbers/{pn}/payments/refunds",
+    // Roadmap M5f: a group Meta no longer has.
+    "GET /v1/numbers/{pn}/groups/{group_id}",
+    "DELETE /v1/numbers/{pn}/groups/{group_id}",
+    "GET /v1/numbers/{pn}/groups/{group_id}/invite-link",
+    "GET /v1/numbers/{pn}/groups/{group_id}/participants",
+    "GET /v1/numbers/{pn}/groups/{group_id}/join-requests",
+    "GET /v1/numbers/{pn}/groups/{group_id}/analytics",
+];
+
+/// Operations whose answer is success for any 2xx Meta sends (the library:
+/// "Meta documents no response body; success unless `success: false`":
+/// roadmap M5f's group changes), so a `200` that is no JSON is not an error
+/// for them: it is `2xx`, and answers no Meta text.
+const SUCCESS_ON_ANY_200: &[&str] = &[
+    "PATCH /v1/numbers/{pn}/groups/{group_id}",
+    "DELETE /v1/numbers/{pn}/groups/{group_id}",
+    "POST /v1/numbers/{pn}/groups/{group_id}/participants/remove",
 ];
 
 /// Meta's answers the sentinel test gives every operation: `(status,
@@ -510,6 +541,16 @@ async fn a_sentinel_in_metas_answer_reaches_no_response() {
             let admin = h.admin_key().await;
             h.tenant(TENANT).await;
             h.connect(TENANT, WABA, &[PN], "TOKEN").await;
+            // The sample's group is the number's (roadmap M5f), as a group
+            // route needs it to ask Meta anything.
+            let held = h
+                .webhook(&common::meta::group_created(
+                    WABA,
+                    PN,
+                    common::SAMPLE_TEMPLATE_GROUP_ID,
+                ))
+                .await;
+            assert_eq!(held.status, StatusCode::OK, "{}", held.text);
             let key = h.tenant_key(TENANT, &Scope::ALL).await;
             let key = match (operation.keyed, operation.admin()) {
                 (false, _) => None,
@@ -529,6 +570,10 @@ async fn a_sentinel_in_metas_answer_reaches_no_response() {
             if BEST_EFFORT.contains(&operation.label().as_str()) {
                 assert_eq!(reply.status, StatusCode::NO_CONTENT, "{label}");
                 assert!(reply.text.is_empty(), "{label}");
+                continue;
+            }
+            if *status == 200 && SUCCESS_ON_ANY_200.contains(&operation.label().as_str()) {
+                assert!(reply.status.is_success(), "{label}: {}", reply.status);
                 continue;
             }
             assert!(

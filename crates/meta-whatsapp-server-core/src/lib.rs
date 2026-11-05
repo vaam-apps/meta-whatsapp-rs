@@ -74,6 +74,7 @@ pub mod conformance;
 pub mod erasure;
 pub mod error;
 pub mod events;
+pub mod groups;
 pub mod housekeeping;
 pub mod idempotency;
 pub mod inbound;

@@ -188,11 +188,37 @@ pub enum Operation {
     UpdateTemplateGroup,
     /// `delete_template_group`: a template group deleted, its templates kept (roadmap M5b).
     DeleteTemplateGroup,
+    /// `create_group`: a group asked of Meta, its id coming in a webhook (roadmap M5f; pending the owner's confirmation before the first release).
+    CreateGroup,
+    /// `list_groups`: a number's groups, which the service records as the number's (roadmap M5f; pending the owner's confirmation before the first release).
+    ListGroups,
+    /// `get_group`: a group of the number (roadmap M5f; pending the owner's confirmation before the first release).
+    GetGroup,
+    /// `update_group`: a group's subject and description changed (roadmap M5f; pending the owner's confirmation before the first release).
+    UpdateGroup,
+    /// `delete_group`: a group deleted, its participants removed (roadmap M5f; pending the owner's confirmation before the first release).
+    DeleteGroup,
+    /// `get_group_invite_link`: a group's invite link (roadmap M5f; pending the owner's confirmation before the first release).
+    GetGroupInviteLink,
+    /// `reset_group_invite_link`: a group's invite link replaced (roadmap M5f; pending the owner's confirmation before the first release).
+    ResetGroupInviteLink,
+    /// `list_group_participants`: a group's participants (roadmap M5f; pending the owner's confirmation before the first release).
+    ListGroupParticipants,
+    /// `remove_group_participants`: participants removed from a group (roadmap M5f; pending the owner's confirmation before the first release).
+    RemoveGroupParticipants,
+    /// `list_group_join_requests`: a group's open join requests (roadmap M5f; pending the owner's confirmation before the first release).
+    ListGroupJoinRequests,
+    /// `approve_group_join_requests`: join requests approved (roadmap M5f; pending the owner's confirmation before the first release).
+    ApproveGroupJoinRequests,
+    /// `reject_group_join_requests`: join requests rejected (roadmap M5f; pending the owner's confirmation before the first release).
+    RejectGroupJoinRequests,
+    /// `get_group_analytics`: a group's analytics, day by day (roadmap M5f; pending the owner's confirmation before the first release).
+    GetGroupAnalytics,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 69] = [
+    pub const ALL: [Self; 82] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -262,6 +288,19 @@ impl Operation {
         Self::GetTemplateGroup,
         Self::UpdateTemplateGroup,
         Self::DeleteTemplateGroup,
+        Self::CreateGroup,
+        Self::ListGroups,
+        Self::GetGroup,
+        Self::UpdateGroup,
+        Self::DeleteGroup,
+        Self::GetGroupInviteLink,
+        Self::ResetGroupInviteLink,
+        Self::ListGroupParticipants,
+        Self::RemoveGroupParticipants,
+        Self::ListGroupJoinRequests,
+        Self::ApproveGroupJoinRequests,
+        Self::RejectGroupJoinRequests,
+        Self::GetGroupAnalytics,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -336,6 +375,19 @@ impl Operation {
             Self::GetTemplateGroup => "get_template_group",
             Self::UpdateTemplateGroup => "update_template_group",
             Self::DeleteTemplateGroup => "delete_template_group",
+            Self::CreateGroup => "create_group",
+            Self::ListGroups => "list_groups",
+            Self::GetGroup => "get_group",
+            Self::UpdateGroup => "update_group",
+            Self::DeleteGroup => "delete_group",
+            Self::GetGroupInviteLink => "get_group_invite_link",
+            Self::ResetGroupInviteLink => "reset_group_invite_link",
+            Self::ListGroupParticipants => "list_group_participants",
+            Self::RemoveGroupParticipants => "remove_group_participants",
+            Self::ListGroupJoinRequests => "list_group_join_requests",
+            Self::ApproveGroupJoinRequests => "approve_group_join_requests",
+            Self::RejectGroupJoinRequests => "reject_group_join_requests",
+            Self::GetGroupAnalytics => "get_group_analytics",
         }
     }
 
@@ -413,6 +465,19 @@ impl Operation {
             | Self::TestWebhookEndpoint
             | Self::ListWebhookDeliveries
             | Self::RetryWebhookDelivery => Scope::Webhooks,
+            Self::CreateGroup
+            | Self::ListGroups
+            | Self::GetGroup
+            | Self::UpdateGroup
+            | Self::DeleteGroup
+            | Self::GetGroupInviteLink
+            | Self::ResetGroupInviteLink
+            | Self::ListGroupParticipants
+            | Self::RemoveGroupParticipants
+            | Self::ListGroupJoinRequests
+            | Self::ApproveGroupJoinRequests
+            | Self::RejectGroupJoinRequests
+            | Self::GetGroupAnalytics => Scope::Groups,
         }
     }
 }

@@ -905,7 +905,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 11] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 12] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -1052,14 +1052,25 @@ pub fn sample_library_template() -> Value {
 
 /// The query string an operation needs, so that a refusal is never the
 /// query's fault.
-pub fn sample_query(method: &Method, template: &str) -> Option<&'static str> {
+pub fn sample_query(method: &Method, template: &str) -> Option<String> {
     match (method.as_str(), template) {
-        ("DELETE", "/v1/wabas/{waba_id}/templates") => Some("name=order_confirmation"),
+        ("DELETE", "/v1/wabas/{waba_id}/templates") => Some("name=order_confirmation".to_owned()),
         // Roadmap M5c1: a chunk names where it starts.
-        ("POST", "/v1/numbers/{pn}/media-uploads/{upload_id}") => Some("file_offset=0"),
+        ("POST", "/v1/numbers/{pn}/media-uploads/{upload_id}") => Some("file_offset=0".to_owned()),
         // templates/template-comparison, "Example request" (roadmap M5b).
         ("GET", "/v1/wabas/{waba_id}/templates/{id}/compare") => {
-            Some("template_ids=1533406637136032&start=1674844791182&end=1674845395982")
+            Some("template_ids=1533406637136032&start=1674844791182&end=1674845395982".to_owned())
+        }
+        // Roadmap M5f: a group's analytics reach back 90 days at most, so
+        // the sample's range is two days to one day before now.
+        ("GET", "/v1/numbers/{pn}/groups/{group_id}/analytics") => {
+            let now = time::OffsetDateTime::now_utc();
+            let at = |days: i64| {
+                (now - time::Duration::days(days))
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap()
+            };
+            Some(format!("start={}&end={}&metrics=SENT", at(2), at(1)))
         }
         _ => None,
     }
@@ -1163,6 +1174,22 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "add_templates": [844_006_344_365_270_u64, 1_188_657_612_184_382_u64],
             "remove_templates": [1_035_843_174_854_974_u64]
         }),
+        // Roadmap M5f: a group's creation, a change and the participants
+        // and join requests of one (`groups/reference`).
+        ("POST", "/v1/numbers/{pn}/groups") => {
+            serde_json::json!({"subject": "New Purchase Inquiry"})
+        }
+        ("PATCH", "/v1/numbers/{pn}/groups/{group_id}") => {
+            serde_json::json!({"subject": "Watch Enthusiasts"})
+        }
+        ("POST", "/v1/numbers/{pn}/groups/{group_id}/participants/remove") => {
+            serde_json::json!({"users": [{"phone": SAMPLE_TO}]})
+        }
+        (
+            "POST",
+            "/v1/numbers/{pn}/groups/{group_id}/join-requests/approve"
+            | "/v1/numbers/{pn}/groups/{group_id}/join-requests/reject",
+        ) => serde_json::json!({"join_request_ids": ["MTY0NjcwNDM1OTU6MTIwMzYzNDA0Njk0MjMzODIw"]}),
         ("POST" | "PATCH" | "PUT", _) => serde_json::json!({}),
         _ => return None,
     })

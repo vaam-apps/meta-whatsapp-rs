@@ -21,6 +21,7 @@ use meta_whatsapp_rs::core::store::ConversationStore;
 use meta_whatsapp_rs::webhooks::axum::extract::FromRef;
 use meta_whatsapp_rs::{Client, Error};
 use meta_whatsapp_server_core::erasure::ErasureDeployment;
+use meta_whatsapp_server_core::groups::GroupRecords;
 use meta_whatsapp_server_core::inbox::ReplyChecksByNumber;
 use meta_whatsapp_server_core::live::{LiveSettings, Streams};
 use meta_whatsapp_server_core::otp::{OtpCodes, OtpDeployment};
@@ -180,6 +181,7 @@ struct Inner {
     stream_slots: Slots,
     templates: TemplateCache,
     uploads: UploadSessions,
+    group_records: GroupRecords,
     otp: OtpCodes,
     signups: Signups,
     streams: Streams,
@@ -268,6 +270,9 @@ impl AppState {
         // Resumable upload sessions in the bundle's key/value store, on
         // the service's one clock (roadmap M5c1).
         let uploads = UploadSessions::new(backend.kv(), clock.clone());
+        // The groups each number holds, on the same store (roadmap M5f): the
+        // webhook pipeline writes them from the same bundle's `KvStore`.
+        let group_records = GroupRecords::new(backend.kv());
         let state = Self {
             inner: Arc::new(Inner {
                 idempotency: backend.idempotency(),
@@ -283,6 +288,7 @@ impl AppState {
                 stream_slots: Slots::new(settings.media_streams),
                 templates: TemplateCache::new(settings.template_cache_ttl),
                 uploads,
+                group_records,
                 otp,
                 signups,
                 streams,
@@ -360,6 +366,11 @@ impl AppState {
     /// The resumable upload sessions (roadmap M5c1).
     pub(crate) fn upload_sessions(&self) -> &UploadSessions {
         &self.inner.uploads
+    }
+
+    /// The groups each number holds (roadmap M5f).
+    pub(crate) fn group_records(&self) -> &GroupRecords {
+        &self.inner.group_records
     }
 
     /// The template lists cached per WABA.
@@ -475,6 +486,13 @@ impl Grant {
     /// The template lists cached per WABA.
     pub fn template_cache(&self) -> &TemplateCache {
         self.0.template_cache()
+    }
+
+    /// The groups each number holds (roadmap M5f), which decide whether a
+    /// group is a number's before any token is opened
+    /// (`meta_whatsapp_server_core::groups::GroupRecords::owned`).
+    pub fn group_records(&self) -> &GroupRecords {
+        self.0.group_records()
     }
 
     /// The OTP services (roadmap M3c): codes in the backend's key/value

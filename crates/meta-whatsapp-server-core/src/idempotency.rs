@@ -79,6 +79,7 @@ use crate::uploads::NewUpload;
 /// | `request_verification_code` ([`Self::request_verification_code`]) | the number's id; the delivery method and the language, as a JSON object, canonical as above |
 /// | `register_number` ([`Self::register_number`]) | the number's id; the data localization region, or none: **never the PIN** (roadmap M3d, decisions D6 and D67), so no record holds anything derived from it |
 /// | `deregister_number` ([`Self::deregister_number`]) | the number's id (the body's confirmation is that id again) |
+/// | `create_group` ([`Self::create_group`]; roadmap M5f) | the number's id; the JSON body, canonical as above |
 /// | `create_library_template`, `migrate_templates`, `create_template_group` ([`Self::create_library_template`], [`Self::migrate_templates`], [`Self::create_template_group`]; roadmap M5b) | the WABA's id; the JSON body, canonical as above |
 ///
 /// The same request always has the same fingerprint; another operation,
@@ -321,6 +322,12 @@ impl Fingerprint {
             &[("waba_id", waba.as_str())],
             body,
         )
+    }
+
+    /// `create_group` on `number`, with the JSON body the request carried
+    /// (roadmap M5f; no legacy fingerprint).
+    pub fn create_group(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::CreateGroup, &[("pn", number.as_str())], body)
     }
 
     /// `operation` with its named parameters `params` (in any order: they
@@ -1539,6 +1546,26 @@ mod tests {
                 assert_ne!(one(&waba("1"), &body), other_op(&waba("1"), &body));
             }
         }
+    }
+
+    /// Roadmap M5f's keyed creation is scoped to the number, the body and
+    /// the operation: the same key and body on another number, with another
+    /// body, or as another operation, is another request. Decisive: the
+    /// `pn` parameter and the operation of `Fingerprint::create_group`, and
+    /// the body's canonical form.
+    #[test]
+    fn the_group_creation_fingerprint_is_per_number_body_and_operation() {
+        let body = serde_json::json!({"subject": "Cars", "description": "d"});
+        let other = serde_json::json!({"subject": "Cars", "description": "e"});
+        let reordered = serde_json::json!({"description": "d", "subject": "Cars"});
+        let build = Fingerprint::create_group;
+        assert_eq!(build(&pn("1"), &body), build(&pn("1"), &reordered));
+        assert_ne!(build(&pn("1"), &body), build(&pn("2"), &body));
+        assert_ne!(build(&pn("1"), &body), build(&pn("1"), &other));
+        assert_ne!(
+            build(&pn("1"), &body),
+            Fingerprint::send_message(&pn("1"), &body)
+        );
     }
 
     /// The canonical input is the JSON as parsed (D27: the request's JSON

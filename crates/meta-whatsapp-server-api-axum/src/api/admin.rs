@@ -485,6 +485,9 @@ pub enum ScopeName {
     Payments,
     /// Erasing a customer on a number (roadmap M2f).
     Erasure,
+    /// A number's groups: settings, invite links, participants, join
+    /// requests and analytics (roadmap M5f).
+    Groups,
 }
 
 impl From<ScopeName> for Scope {
@@ -501,6 +504,7 @@ impl From<ScopeName> for Scope {
             ScopeName::Numbers => Scope::Numbers,
             ScopeName::Payments => Scope::Payments,
             ScopeName::Erasure => Scope::Erasure,
+            ScopeName::Groups => Scope::Groups,
         }
     }
 }
@@ -519,6 +523,7 @@ impl From<Scope> for ScopeName {
             Scope::Numbers => ScopeName::Numbers,
             Scope::Payments => ScopeName::Payments,
             Scope::Erasure => ScopeName::Erasure,
+            Scope::Groups => ScopeName::Groups,
         }
     }
 }

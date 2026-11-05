@@ -122,11 +122,15 @@ pub enum Scope {
     /// pending the owner's confirmation: docs/architecture.md, § Stable
     /// identifiers).
     Erasure,
+    /// Groups: a number's groups, their settings, invite links,
+    /// participants, join requests and analytics (roadmap M5f; a stored
+    /// name, pending the owner's confirmation before the first release).
+    Groups,
 }
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 11] = [
+    pub const ALL: [Scope; 12] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -138,6 +142,7 @@ impl Scope {
         Self::Numbers,
         Self::Payments,
         Self::Erasure,
+        Self::Groups,
     ];
 
     /// Stored and API name.
@@ -154,6 +159,7 @@ impl Scope {
             Self::Numbers => "numbers",
             Self::Payments => "payments",
             Self::Erasure => "erasure",
+            Self::Groups => "groups",
         }
     }
 
