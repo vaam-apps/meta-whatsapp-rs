@@ -5,6 +5,7 @@
 
 pub mod capture;
 pub mod erasure;
+pub mod flows;
 pub mod inbox;
 pub mod media;
 pub mod meta;
@@ -629,6 +630,9 @@ pub fn test_settings() -> Settings {
         rate_limits: unlimited(),
         otp: Some(otp_deployment(None)),
         erasure: Some(erasure_deployment()),
+        // The Flows data endpoint (roadmap M5d), answered by an app that
+        // sends the KAT's summary screen.
+        flows: Some(flows::deployment(flows::Stub::summary())),
         ..Settings::default()
     }
 }
@@ -905,7 +909,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 15] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 16] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -980,6 +984,7 @@ impl Sample {
                 "configuration_name" => SAMPLE_PAYMENT_CONFIGURATION,
                 "reference_id" => SAMPLE_REFERENCE_ID,
                 "group_id" => SAMPLE_TEMPLATE_GROUP_ID,
+                "flow_id" => SAMPLE_FLOW_ID,
                 "catalog_id" => SAMPLE_CATALOG_ID,
                 "code" => SAMPLE_QR_CODE,
                 _ => "placeholder",
@@ -1006,6 +1011,8 @@ pub const SAMPLE_TEMPLATE_ID: &str = "1407680676729941";
 /// A template group's id (`templates/template-groups`).
 pub const SAMPLE_TEMPLATE_GROUP_ID: &str = "9020555671393375";
 
+/// A Flow's id (`flows/guides/flowsapi`: the page's ids are placeholders).
+pub const SAMPLE_FLOW_ID: &str = "1234567890123456";
 /// A catalog's id (Meta's Catalog API).
 pub const SAMPLE_CATALOG_ID: &str = "194836987003835";
 
@@ -1164,6 +1171,14 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "payment_config_id": SAMPLE_PAYMENT_CONFIGURATION,
             "amount": {"currency": "INR", "value": "100", "offset": "100"}
         }),
+        // Roadmap M5d: a Flow created from the page's example, and changed
+        // (`flows/guides/flowsapi`).
+        ("POST", "/v1/wabas/{waba_id}/flows") => {
+            serde_json::json!({"name": "My first flow", "categories": ["OTHER"]})
+        }
+        ("PATCH", "/v1/wabas/{waba_id}/flows/{flow_id}") => {
+            serde_json::json!({"name": "New flow name"})
+        }
         // Roadmap M5b: each route's example from Meta's page.
         // templates/template-management, "Edit template category".
         ("PATCH", "/v1/wabas/{waba_id}/templates/{id}") => {

@@ -24,6 +24,7 @@ pub mod blocked_users;
 pub mod commerce;
 pub mod erasure;
 pub mod events;
+pub mod flows;
 pub mod inbox;
 mod listing;
 pub mod messages;
@@ -100,6 +101,7 @@ impl Modify for Security {
         (name = "messages", description = "Sending messages and read receipts (scope `send`)"),
         (name = "media", description = "Uploading, downloading and deleting media (scope `media`)"),
         (name = "templates", description = "Message templates (scope `templates`): listing, creating and deleting them; since roadmap M5b editing, unpausing, comparing, archiving and unarchiving them, the Template Library, migrations and template groups"),
+        (name = "flows", description = "WhatsApp Flows (scope `flows`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"),
         (name = "payments", description = "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"),
         (name = "commerce", description = "A number's commerce settings (the cart, the catalog's visibility) and the catalog its WABA connects, with its products (scope `commerce`)"),
         (name = "qr_codes", description = "QR codes and short links that open a chat with a prefilled message, each checked to be the number's own (scope `qr_codes`)"),
@@ -234,6 +236,23 @@ fn templates_routes() -> OpenApiRouter<Grant> {
         ))
 }
 
+/// Roadmap M5d: a WABA's Flows. A Flow JSON is far larger than the other
+/// routes' bodies: 2 MiB (`flows::MAX_FLOW_BODY_BYTES`).
+fn flows_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(flows::list_flows, flows::create_flow))
+        .routes(routes!(
+            flows::get_flow,
+            flows::update_flow,
+            flows::delete_flow
+        ))
+        .routes(routes!(flows::upload_flow_json))
+        .routes(routes!(flows::preview_flow))
+        .routes(routes!(flows::publish_flow))
+        .routes(routes!(flows::deprecate_flow))
+        .layer(DefaultBodyLimit::max(flows::MAX_FLOW_BODY_BYTES))
+}
+
 fn commerce_routes() -> OpenApiRouter<Grant> {
     OpenApiRouter::new()
         .routes(routes!(
@@ -345,6 +364,7 @@ fn api_routes(
         .merge(tenant(messages_routes(), Scope::Send))
         .merge(tenant(media::routes(), Scope::Media))
         .merge(tenant(templates_routes(), Scope::Templates))
+        .merge(tenant(flows_routes(), Scope::Flows))
         .merge(tenant(inbox_routes(), Scope::Inbox))
         .merge(tenant(payments_routes(), Scope::Payments))
         .merge(tenant(erasure_routes(), Scope::Erasure))
@@ -487,7 +507,8 @@ mod tests {
                 assert_eq!(RouteClass::of(*operation), class, "{method} {template}");
                 continue;
             }
-            let before = if operation.scope() == Scope::Templates {
+            // Flows (scope `flows`, roadmap M5d) share the templates' budget.
+            let before = if matches!(operation.scope(), Scope::Templates | Scope::Flows) {
                 RouteClass::Templates
             } else if method == "GET" {
                 RouteClass::Read

@@ -248,7 +248,10 @@ async fn the_public_listener_serves_metas_check_and_livez_only() {
         .collect();
     assert_eq!(templates, internal_routes().into_iter().collect());
     assert!(h.graph.requests().is_empty());
-    assert_eq!(PUBLIC_ROUTES, ["/webhooks/meta", "/livez"]);
+    assert_eq!(
+        PUBLIC_ROUTES,
+        ["/webhooks/meta", "/webhooks/flows/{waba_id}", "/livez"]
+    );
 }
 
 /// Bodies over 64 KiB are refused with `413 payload_too_large`, at 64 KiB
@@ -411,7 +414,9 @@ async fn every_rate_limited_operation_declares_its_429() {
 /// a registration and a deregistration; and since roadmap P2 a payment
 /// configuration's creation, a new OAuth link and a refund; since roadmap
 /// M5b a template created from the library, a migration and a template
-/// group's creation; since roadmap M5c1 a resumable upload's start; since roadmap M5g a QR code's creation, a block and an unblock), and the upload is a multipart form.
+/// group's creation; since roadmap M5c1 a resumable upload's start; since
+/// roadmap M5d a Flow's creation; since roadmap M5g a QR code's creation, a
+/// block and an unblock), and the upload is a multipart form.
 #[test]
 fn idempotent_operations_declare_their_key() {
     let spec: Value = serde_json::from_str(COMMITTED).unwrap();
@@ -443,6 +448,7 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/numbers/{pn}/register",
             "POST /v1/numbers/{pn}/request-code",
             "POST /v1/otp/issue",
+            "POST /v1/wabas/{waba_id}/flows",
             "POST /v1/wabas/{waba_id}/payment-configurations",
             "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
             "POST /v1/wabas/{waba_id}/template-groups",

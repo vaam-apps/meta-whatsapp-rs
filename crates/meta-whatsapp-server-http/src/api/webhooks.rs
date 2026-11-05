@@ -89,7 +89,7 @@ pub async fn receive(State(state): State<AppState>, request: Request) -> Respons
 /// Whether a signature header is present and shaped like one (`sha256=`
 /// and 64 hex digits, either case, surrounding whitespace ignored: the
 /// library's rules). Needs neither the secret nor the body.
-fn signature_shaped(headers: &HeaderMap) -> Option<&str> {
+pub(crate) fn signature_shaped(headers: &HeaderMap) -> Option<&str> {
     let value = headers.get(SIGNATURE_HEADER)?.to_str().ok()?;
     let hex = value.trim().strip_prefix("sha256=")?;
     (hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then_some(value)
