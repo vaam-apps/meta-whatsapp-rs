@@ -520,6 +520,13 @@ impl Authorizer {
         self
     }
 
+    /// "Now", from the clock the service gave ([`Self::with_clock`]): what
+    /// a service bounds a time range by (roadmap M5g: the analytics'
+    /// look-back windows).
+    pub(crate) fn now(&self) -> OffsetDateTime {
+        self.clock.now()
+    }
+
     /// Whether this [`Authorizer`] made the capability carrying `issuer`,
     /// else `403 forbidden`, logged at `warn` (the operation's name only:
     /// a forged capability's fields are the forger's).

@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs 473e5534e9497aa0829aca5877d2dd48b5d8c90d (2026-11-05).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs e6cebefa7240233b0411f806092759c506d581fd (2026-11-05).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -27,7 +27,7 @@ merchants connecting their number (`meta-whatsapp-rs-server-onboarding`), a numb
 | `GET /v1/numbers/{pn}` | scope `numbers` | live details from Meta: `display_phone_number`, `verified_name`, `quality_rating`, `name_status`, `throughput` |
 | `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `profile_picture_url`, `websites`, `vertical`; the picture from a completed upload's id), and `/v1/numbers/{pn}/display-name` (`POST` asks Meta to review a new name, `GET` its status): `meta-whatsapp-rs-server-profile` |
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
-| `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, `GET /v1/numbers/{pn}/conversations`, `GET /v1/wabas/{waba_id}/payment-configurations`, … | scopes `send`, `media`, `templates`, `flows`, `inbox`, `payments` | sends, media, templates, the inbox, payments: `meta-whatsapp-rs-server-send` |
+| `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, `GET /v1/numbers/{pn}/conversations`, `GET /v1/wabas/{waba_id}/payment-configurations`, … | scopes `send`, `media`, `templates`, `flows`, `inbox`, `payments`, and (none granted by `send`, none on a key minted before M5g) `commerce`, `qr_codes`, `analytics`, `contacts` | sends, media, templates, the inbox, payments; commerce settings and catalogs, QR codes, analytics, the block list: `meta-whatsapp-rs-server-send` |
 | `GET /v1/events`, `GET /v1/events/{id}`, `GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream` | scope `events` | Meta's webhook events for the tenant, after a cursor, by id or live (Server-Sent Events): `meta-whatsapp-rs-server-events` |
 | `POST /v1/numbers/{pn}/request-code`, `POST /v1/numbers/{pn}/register`, … | scope `numbers` | the number's verification code, registration, PIN, deregistration: `meta-whatsapp-rs-server-registration` |
 | `POST /v1/otp/issue`, `POST /v1/otp/verify` | scope `otp` | login codes over WhatsApp: `meta-whatsapp-rs-server-otp` |

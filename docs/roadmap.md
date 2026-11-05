@@ -6554,7 +6554,7 @@ or WABA fails the family's own cross-tenant test).
     the request's key; with no callback configured it is `503` as in
     M5d; the callback's destination is refused as a webhook endpoint's
     is.
-- [ ] **M5e. Calling** (rows 74, 75, 134, 135).
+- [ ] **M5e. Calling** (rows 74, 75, 107, 134, 135): call analytics (row 107) among them.
   - **After:** S7, L14.
   - **Decisive:** M5.1, M5.2.
 - [x] **M5f. Groups** (rows 76, 77, 79, 81; row 76's picture is M5f2).
@@ -6653,10 +6653,59 @@ or WABA fails the family's own cross-tenant test).
   - **Decisive:** after a tenant's deletion and after an unbind, no key
     of the namespace names the number; a number's records of another
     number are untouched.
-- [ ] **M5g. Commerce, QR codes, analytics, block users** (rows 71,
+- [x] **M5g. Commerce, QR codes, analytics, block users** (rows 71,
   102, 103, 106, 107).
   - **After:** S7, L17.
   - **Decisive:** M5.1, M5.2.
+  - **Landed:** four scopes, each its own (D140, names pending the
+    owner's confirmation before the first release): `commerce`,
+    `qr_codes`, `analytics`, `contacts`; 17 operations (OpenAPI additive
+    only: 12 paths, no schema changed but `Scope`'s enum and the tags').
+    `GET`/`PATCH /v1/numbers/{pn}/commerce-settings`; `GET
+    /v1/wabas/{waba_id}/catalogs`, `…/catalogs/{catalog_id}`, `…/products`
+    (the catalog found in the WABA's own `product_catalogs` first, D141;
+    a page of 100 at most, D142); `POST`/`GET /v1/numbers/{pn}/qr-codes`
+    and `GET`/`PATCH`/`DELETE …/{code}` (a code found in the number's own
+    list, D144; an `Idempotency-Key` on the creation; a deletion
+    audited); `GET /v1/wabas/{waba_id}/analytics/messaging`,
+    `/conversations`, `/pricing`, `/templates` (a year's look-back, 90
+    days for templates, half hours at most 31 days, template ids found
+    among the WABA's own, D145); `GET`/`POST /v1/numbers/{pn}/blocked-users`
+    and `POST …/blocked-users/unblock` (people by phone and/or BSUID, an
+    `Idempotency-Key`, each change an audit event by count never by
+    person, Meta's texts in no answer and no log, D143). The core's
+    services: `server_core::{commerce, qr_codes, analytics,
+    blocked_users}`. Tests: `tests/commerce_qr_analytics.rs` (exact
+    requests from Meta's pages, the cross-object `404`s with only the
+    lookup sent, every refusal before any request, the bounds at their
+    edges), `tests/commerce_logs.rs` (the audit events), M5.1 by
+    construction (`tests/authz.rs`), M1.5 (`tests/errors.rs`), M1.7's
+    capture over every new route (`tests/common/capture.rs`). Not
+    offered, and tracked by M5g2: a catalog's product sets and one
+    product by id, the products edge's `filter`, template group
+    analytics, the two analytics switches (insights, click tracking);
+    call analytics wait for M5e; a group's analytics are M5f's, served
+    (row 107 stays partial for M5e and M5g2).
+- [ ] **M5g2. What M5g did not route** (rows 103, 107): a catalog's
+  product sets and one product by id, the products edge's `filter`,
+  template group analytics, and the two analytics switches (template
+  insights, button click tracking). Each keeps the rule M5g set: an
+  object named by id is checked against its owner before it is read
+  (D141, D144), and the names stay pending the owner's confirmation
+  before the first release.
+  - **After:** M5g.
+  - **Decisive:** M5.1, M5.2 for each. A set or a product that Meta's
+    pages show no way to tie to the WABA's own catalog stays unrouted:
+    it lands only with a check whose deletion fails a test (a product
+    set of another WABA's catalog is `404`, with only the check's
+    requests sent). The products edge's `filter` is Meta's documented
+    JSON, parsed and bounded before any request, never written into the
+    query unparsed; a malformed one is `422` with zero requests.
+    Template group analytics: a group id not among the WABA's own groups
+    (D118's read) is `404` with the analytics not asked for, its range
+    bounded as D145's. Each of the two switches is an audited change by
+    the caller (names pending), under an `Idempotency-Key`, answering no
+    text of Meta's, and refused to a key without the `analytics` scope.
 - [ ] **M5h. Marketing Messages API and CTWA** (rows 136–138, 154). The
   max-price agreement is its own admin route: an explicit, audited
   operator action, off until the deployment enables it; no other route

@@ -415,9 +415,9 @@ async fn every_rate_limited_operation_declares_its_429() {
 /// configuration's creation, a new OAuth link and a refund; since roadmap
 /// M5b a template created from the library, a migration and a template
 /// group's creation; since roadmap M5c1 a resumable upload's start; since
-/// roadmap M5f a group's creation, since roadmap M5d a Flow's creation, since
-/// roadmap M5c2 a display name's request), and
-/// the upload is a multipart form.
+/// roadmap M5d a Flow's creation; since roadmap M5f a group's creation; since
+/// roadmap M5g a QR code's creation, a block and an unblock; since roadmap
+/// M5c2 a display name's request), and the upload is a multipart form.
 #[test]
 fn idempotent_operations_declare_their_key() {
     let spec: Value = serde_json::from_str(COMMITTED).unwrap();
@@ -436,6 +436,8 @@ fn idempotent_operations_declare_their_key() {
     assert_eq!(
         declaring.into_iter().collect::<Vec<_>>(),
         [
+            "POST /v1/numbers/{pn}/blocked-users",
+            "POST /v1/numbers/{pn}/blocked-users/unblock",
             "POST /v1/numbers/{pn}/conversations/{contact}/messages",
             "POST /v1/numbers/{pn}/conversations/{contact}/read",
             "POST /v1/numbers/{pn}/deregister",
@@ -445,6 +447,7 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/numbers/{pn}/media-uploads",
             "POST /v1/numbers/{pn}/messages",
             "POST /v1/numbers/{pn}/payments/refunds",
+            "POST /v1/numbers/{pn}/qr-codes",
             "POST /v1/numbers/{pn}/register",
             "POST /v1/numbers/{pn}/request-code",
             "POST /v1/otp/issue",

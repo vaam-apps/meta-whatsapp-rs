@@ -2379,6 +2379,755 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/blocked-users": {
+      "get": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/blocked-users`: a page of the block list.",
+        "operationId": "list_blocked_users",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 100 (the service's bound; Meta's default without).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the block list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockedUserList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `limit`, `cursor` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/blocked-users`: block people.",
+        "operationId": "block_users",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never block twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockUsersRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Person by person: who was blocked, who Meta refused and why (a refusal of some is still a `200`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockUsersResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `users`, `users[i]`, `users[i].phone`, `users[i].user_id` or `body`; `idempotency_key_reused`: nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the people may have been blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/blocked-users/unblock": {
+      "post": {
+        "tags": [
+          "contacts"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/blocked-users/unblock`: unblock people.",
+        "operationId": "unblock_users",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never unblock twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockUsersRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Person by person: who was unblocked, who Meta refused and why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockUsersResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `users`, `users[i]`, `users[i].phone`, `users[i].user_id` or `body`; `idempotency_key_reused`: nothing sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the people may have been unblocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/commerce-settings": {
+      "get": {
+        "tags": [
+          "commerce"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/commerce-settings`: the number's cart and\ncatalog settings.",
+        "operationId": "get_commerce_settings",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommerceSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "commerce"
+        ],
+        "summary": "`PATCH /v1/numbers/{pn}/commerce-settings`: enable or disable the cart,\nshow or hide the catalog.",
+        "operationId": "update_commerce_settings",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommerceSettingsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Changed"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `update` (nothing to change) or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the settings may have been changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/conversations": {
       "get": {
         "tags": [
@@ -7999,6 +8748,786 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/qr-codes": {
+      "get": {
+        "tags": [
+          "qr_codes"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/qr-codes`: a page of the number's codes, newest\nfirst.",
+        "operationId": "list_qr_codes",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 25 (Meta's maximum; Meta's default without).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 25,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "image_format",
+            "in": "query",
+            "description": "Ask for each code's image, `PNG` or `SVG`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of codes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QrCodeList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `limit`, `cursor`, `image_format` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "qr_codes"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/qr-codes`: create a QR code and short link.",
+        "operationId": "create_qr_code",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never create twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateQrCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QrCode"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `prefilled_message`, `generate_qr_image` or `body`; `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the code may have been created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/qr-codes/{code}": {
+      "get": {
+        "tags": [
+          "qr_codes"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/qr-codes/{code}`: one of the number's codes.",
+        "operationId": "get_qr_code",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "path",
+            "description": "The code's 14-character id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "image_format",
+            "in": "query",
+            "description": "Ask for the code's image, `PNG` or `SVG`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QrCode"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such code on it (another number's code looks like a missing one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `code`, `image_format` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "qr_codes"
+        ],
+        "summary": "`DELETE /v1/numbers/{pn}/qr-codes/{code}`: delete a code (people who\nscan it afterwards are told it expired).",
+        "operationId": "delete_qr_code",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "path",
+            "description": "The code's 14-character id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such code on it; nothing deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the code may have been deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "qr_codes"
+        ],
+        "summary": "`PATCH /v1/numbers/{pn}/qr-codes/{code}`: change a code's prefilled\nmessage.",
+        "operationId": "update_qr_code",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "path",
+            "description": "The code's 14-character id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateQrCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The code, changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QrCode"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or no such code on it; nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `code`, `prefilled_message` or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the code may have been changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/register": {
       "post": {
         "tags": [
@@ -9664,6 +11193,1278 @@
           },
           "504": {
             "description": "`timeout`: nothing deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/analytics/conversations": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/analytics/conversations`: conversations and\ntheir cost.",
+        "operationId": "get_conversation_analytics",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "description": "Range start (RFC 3339): at most a year before now.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "Range end (RFC 3339): after `start`, at most a year later.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "granularity",
+            "in": "query",
+            "description": "`HALF_HOUR` (a range of 31 days at most), `DAILY` or `MONTHLY`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phone_numbers",
+            "in": "query",
+            "description": "Comma-separated business phone numbers, digits only.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "metric_types",
+            "in": "query",
+            "description": "Comma-separated: `COST`, `CONVERSATION`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "conversation_categories",
+            "in": "query",
+            "description": "Comma-separated: `AUTHENTICATION`, `MARKETING`, `SERVICE`, `UTILITY`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "conversation_types",
+            "in": "query",
+            "description": "Comma-separated: `FREE_ENTRY_POINT`, `FREE_TIER`, `REGULAR`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "conversation_directions",
+            "in": "query",
+            "description": "Comma-separated: `BUSINESS_INITIATED`, `USER_INITIATED`, `UNKNOWN`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dimensions",
+            "in": "query",
+            "description": "Comma-separated breakdowns: `CONVERSATION_CATEGORY`,\n`CONVERSATION_DIRECTION`, `CONVERSATION_TYPE`, `COUNTRY`, `PHONE`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The analytics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationAnalytics"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `start`, `end`, `granularity`, a filter (`name[i]` for a value) or `query`: nothing asked of Meta",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/analytics/messaging": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/analytics/messaging`: messages sent and\ndelivered.",
+        "operationId": "get_messaging_analytics",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "description": "Range start (RFC 3339): at most a year before now.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "Range end (RFC 3339): after `start`, at most a year later.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "granularity",
+            "in": "query",
+            "description": "`HALF_HOUR` (a range of 31 days at most), `DAY` or `MONTH`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phone_numbers",
+            "in": "query",
+            "description": "Comma-separated business phone numbers, digits only (`16505550111`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "country_codes",
+            "in": "query",
+            "description": "Comma-separated two-letter country codes.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The analytics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagingAnalytics"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `start`, `end`, `granularity`, `phone_numbers[i]`, `country_codes[i]` or `query`: nothing asked of Meta",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/analytics/pricing": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/analytics/pricing`: delivered messages by\npricing category and type.",
+        "operationId": "get_pricing_analytics",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "description": "Range start (RFC 3339): at most a year before now.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "Range end (RFC 3339): after `start`, at most a year later.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "granularity",
+            "in": "query",
+            "description": "`HALF_HOUR` (a range of 31 days at most), `DAILY` or `MONTHLY`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "phone_numbers",
+            "in": "query",
+            "description": "Comma-separated business phone numbers, digits only.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "country_codes",
+            "in": "query",
+            "description": "Comma-separated two-letter country codes.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "metric_types",
+            "in": "query",
+            "description": "Comma-separated: `COST`, `VOLUME`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pricing_types",
+            "in": "query",
+            "description": "Comma-separated: `FREE_CUSTOMER_SERVICE`, `FREE_ENTRY_POINT`, `REGULAR`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pricing_categories",
+            "in": "query",
+            "description": "Comma-separated: `AUTHENTICATION`, `AUTHENTICATION_INTERNATIONAL`,\n`MARKETING`, `MARKETING_LITE`, `SERVICE`, `UTILITY`,\n`REFERRAL_CONVERSION`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "dimensions",
+            "in": "query",
+            "description": "Comma-separated breakdowns: `COUNTRY`, `PHONE`, `PRICING_CATEGORY`,\n`PRICING_TYPE`, `TIER`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The analytics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PricingAnalytics"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `start`, `end`, `granularity`, a filter (`name[i]` for a value) or `query`: nothing asked of Meta",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/analytics/templates": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/analytics/templates`: sends, deliveries, reads,\nclicks and cost per template, daily.",
+        "operationId": "get_template_analytics",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "description": "Range start: RFC 3339, or a `YYYY-MM-DD` day (required with\n`use_waba_timezone`); at most 90 days before now.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "Range end, in the same format: after `start`, at most 90 days later.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "template_ids",
+            "in": "query",
+            "description": "Comma-separated template ids, 1 to 10, each of the WABA's own.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "metric_types",
+            "in": "query",
+            "description": "Comma-separated: `COST`, `CLICKED`, `DELIVERED`, `READ`, `SENT`\n(none: all).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "use_waba_timezone",
+            "in": "query",
+            "description": "Report in the WABA's timezone (`start` and `end` must be days).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of analytics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateAnalyticsList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or a template not among its own (the analytics are not asked for)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `start`, `end`, `template_ids` (`[i]` for an id), `metric_types[i]`, `cursor` or `query`: nothing asked of Meta",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/catalogs": {
+      "get": {
+        "tags": [
+          "commerce"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/catalogs`: the catalog the WABA connects.",
+        "operationId": "list_catalogs",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The catalogs (none, or one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/catalogs/{catalog_id}": {
+      "get": {
+        "tags": [
+          "commerce"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/catalogs/{catalog_id}`: one catalog of the\nWABA.",
+        "operationId": "get_catalog",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "catalog_id",
+            "in": "path",
+            "description": "Catalog id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Catalog"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such catalog among its own (another WABA's catalog looks like a missing one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `catalog_id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/catalogs/{catalog_id}/products": {
+      "get": {
+        "tags": [
+          "commerce"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/products`: a page of the\ncatalog's products.",
+        "operationId": "list_catalog_products",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "catalog_id",
+            "in": "path",
+            "description": "Catalog id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 100 (the service's bound; Meta's default without).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "return_only_approved_products",
+            "in": "query",
+            "description": "Only the products approved for WhatsApp (Meta's default: all).",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of products",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such catalog among its own (its products are not asked for)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `catalog_id`, `limit`, `cursor` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
             "content": {
               "application/json": {
                 "schema": {
@@ -15802,6 +18603,224 @@
           }
         }
       },
+      "BlockUser": {
+        "type": "object",
+        "description": "A person to block or unblock: a phone number, a business-scoped user\nid (BSUID), or both (Meta then uses the phone number).",
+        "properties": {
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "E.164 **with** its `+` (`+16505551234`)."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A business-scoped user id (`US.13491208655302741918`); a parent\nBSUID (`US.ENT.…`) is refused."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlockUserDone": {
+        "type": "object",
+        "description": "A person the operation succeeded for.",
+        "required": [
+          "input",
+          "wa_id",
+          "user_id"
+        ],
+        "properties": {
+          "input": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the request sent: the phone number, or the BSUID if only that."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The BSUID, when one was sent."
+          },
+          "wa_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The phone number as WhatsApp knows it (absent for a BSUID)."
+          }
+        }
+      },
+      "BlockUserReason": {
+        "type": "object",
+        "description": "Why Meta refused a person.",
+        "required": [
+          "code",
+          "kind"
+        ],
+        "properties": {
+          "code": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Meta's error code (`131047`: the person has not messaged the number\nin the last 24 hours; `131021`: the number itself)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "The service's error code for it, to branch on (`ErrorCode`'s)."
+          }
+        }
+      },
+      "BlockUserRefused": {
+        "type": "object",
+        "description": "A person Meta refused.",
+        "required": [
+          "input",
+          "wa_id",
+          "user_id",
+          "reasons"
+        ],
+        "properties": {
+          "input": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the request sent."
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockUserReason"
+            },
+            "description": "Why: Meta's codes, never its texts."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The BSUID, when one was sent."
+          },
+          "wa_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The phone number as WhatsApp knows it (may be absent)."
+          }
+        }
+      },
+      "BlockUsersRequest": {
+        "type": "object",
+        "description": "The people to block or unblock.",
+        "required": [
+          "users"
+        ],
+        "properties": {
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockUser"
+            },
+            "description": "1 to 1,000 people. Meta blocks only people who messaged the number\nin the last 24 hours."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlockUsersResult": {
+        "type": "object",
+        "description": "What a block or an unblock came to, person by person.",
+        "required": [
+          "done",
+          "refused",
+          "error_code"
+        ],
+        "properties": {
+          "done": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockUserDone"
+            },
+            "description": "The people blocked (or unblocked)."
+          },
+          "error_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Meta's code when it answered a partial failure (`139100`) next to\nthe lists."
+          },
+          "refused": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockUserRefused"
+            },
+            "description": "The people Meta refused."
+          }
+        }
+      },
+      "BlockedUser": {
+        "type": "object",
+        "description": "A person on the block list.",
+        "required": [
+          "wa_id",
+          "user_id",
+          "parent_user_id"
+        ],
+        "properties": {
+          "parent_user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The parent BSUID, when the portfolio is enrolled for them."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The BSUID."
+          },
+          "wa_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The phone number (absent when the person has a username)."
+          }
+        }
+      },
+      "BlockedUserList": {
+        "type": "object",
+        "description": "A page of the block list.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockedUser"
+            },
+            "description": "The people."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      },
       "CarouselCard": {
         "type": "object",
         "description": "A carousel card, as Meta writes it.",
@@ -15907,6 +18926,61 @@
           "product"
         ]
       },
+      "Catalog": {
+        "type": "object",
+        "description": "A catalog connected to a WABA.",
+        "required": [
+          "id",
+          "name",
+          "product_count",
+          "vertical"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          },
+          "product_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many products it holds.",
+            "minimum": 0
+          },
+          "vertical": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its kind, as Meta writes it (`commerce`, …)."
+          }
+        }
+      },
+      "CatalogList": {
+        "type": "object",
+        "description": "The catalogs a WABA connects (a WhatsApp account hierarchy has one at\nmost).",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Catalog"
+            },
+            "description": "The catalogs."
+          }
+        }
+      },
       "CatalogParameters": {
         "type": "object",
         "description": "A catalog message's `action.parameters` (`catalogs/catalog-messages`).\nSchema only: the request carries Meta's object.",
@@ -15959,6 +19033,59 @@
           "language": {
             "type": "string",
             "description": "The language of the code's message, e.g. `en_US` (not blank)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CommerceSettings": {
+        "type": "object",
+        "description": "A number's commerce settings.",
+        "required": [
+          "id",
+          "is_cart_enabled",
+          "is_catalog_visible"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The id of the settings object (not the number's)."
+          },
+          "is_cart_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the shopping cart is enabled (Meta's default: yes)."
+          },
+          "is_catalog_visible": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the catalog storefront icon is shown (Meta's default: no)."
+          }
+        }
+      },
+      "CommerceSettingsUpdate": {
+        "type": "object",
+        "description": "What to change in a number's commerce settings: at least one field.",
+        "properties": {
+          "is_cart_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Enable (`true`) or disable the shopping cart."
+          },
+          "is_catalog_visible": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Show (`true`) or hide the catalog storefront icon. Hiding it makes\nexisting catalog links show an \"Invalid catalog link\" warning."
           }
         },
         "additionalProperties": false
@@ -16397,6 +19524,101 @@
           }
         }
       },
+      "ConversationAnalytics": {
+        "type": "object",
+        "description": "Conversation analytics.",
+        "required": [
+          "data_points"
+        ],
+        "properties": {
+          "data_points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationDataPoint"
+            },
+            "description": "The data points (none when Meta has no data for the range)."
+          }
+        }
+      },
+      "ConversationDataPoint": {
+        "type": "object",
+        "description": "A conversation analytics interval; a breakdown is `null` unless its\ndimension was asked for.",
+        "required": [
+          "start",
+          "end",
+          "conversation",
+          "cost",
+          "phone_number",
+          "country",
+          "conversation_type",
+          "conversation_direction",
+          "conversation_category"
+        ],
+        "properties": {
+          "conversation": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Conversations.",
+            "minimum": 0
+          },
+          "conversation_category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The conversation category, as Meta writes it."
+          },
+          "conversation_direction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The conversation direction, as Meta writes it."
+          },
+          "conversation_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The conversation type, as Meta writes it."
+          },
+          "cost": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Approximate cost, in the WABA's currency (not returned for a WABA\non a partner's credit line)."
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country."
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Interval end (RFC 3339)."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The business phone number."
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Interval start (RFC 3339)."
+          }
+        }
+      },
       "ConversationList": {
         "type": "object",
         "description": "A page of conversations.",
@@ -16528,6 +19750,27 @@
               "null"
             ],
             "description": "Where the merchant lands once the gateway is linked."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateQrCode": {
+        "type": "object",
+        "description": "A new QR code.",
+        "required": [
+          "prefilled_message"
+        ],
+        "properties": {
+          "generate_qr_image": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Also render an image: `PNG`, or `SVG` (Meta recommends it for\nprint). The answer's `qr_image_url` is its link."
+          },
+          "prefilled_message": {
+            "type": "string",
+            "description": "The text prefilled in the user's composer, 1 to 140 characters."
           }
         },
         "additionalProperties": false
@@ -19267,6 +22510,86 @@
           "pin"
         ]
       },
+      "MessagingAnalytics": {
+        "type": "object",
+        "description": "Messaging analytics.",
+        "required": [
+          "phone_numbers",
+          "country_codes",
+          "granularity",
+          "data_points"
+        ],
+        "properties": {
+          "country_codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The countries included."
+          },
+          "data_points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessagingDataPoint"
+            },
+            "description": "The data points (none when Meta has no data for the range)."
+          },
+          "granularity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The granularity of the data points, as Meta writes it."
+          },
+          "phone_numbers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The business phone numbers included."
+          }
+        }
+      },
+      "MessagingDataPoint": {
+        "type": "object",
+        "description": "A messaging analytics interval.",
+        "required": [
+          "start",
+          "end",
+          "sent",
+          "delivered"
+        ],
+        "properties": {
+          "delivered": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Messages delivered.",
+            "minimum": 0
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Interval end (RFC 3339)."
+          },
+          "sent": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Messages sent.",
+            "minimum": 0
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Interval start (RFC 3339)."
+          }
+        }
+      },
       "MintPlatformKey": {
         "type": "object",
         "description": "`POST /v1/admin/platform-keys`.",
@@ -20252,6 +23575,218 @@
           "unpin"
         ]
       },
+      "PricingAnalytics": {
+        "type": "object",
+        "description": "Pricing analytics.",
+        "required": [
+          "data_points"
+        ],
+        "properties": {
+          "data_points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PricingDataPoint"
+            },
+            "description": "The data points (none when Meta has no data for the range)."
+          }
+        }
+      },
+      "PricingDataPoint": {
+        "type": "object",
+        "description": "A pricing analytics interval.",
+        "required": [
+          "start",
+          "end",
+          "phone_number",
+          "country",
+          "tier",
+          "pricing_type",
+          "pricing_category",
+          "volume",
+          "cost"
+        ],
+        "properties": {
+          "cost": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Approximate cost, in the WABA's currency."
+          },
+          "country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country."
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Interval end (RFC 3339)."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The business phone number."
+          },
+          "pricing_category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pricing category, as Meta writes it."
+          },
+          "pricing_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pricing type, as Meta writes it."
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Interval start (RFC 3339)."
+          },
+          "tier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The volume tier (`0:1000`; the upper bound may be `MAX`)."
+          },
+          "volume": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Messages delivered.",
+            "minimum": 0
+          }
+        }
+      },
+      "Product": {
+        "type": "object",
+        "description": "A product of a catalog.",
+        "required": [
+          "id",
+          "retailer_id",
+          "name",
+          "description",
+          "availability",
+          "condition",
+          "price",
+          "sale_price",
+          "currency",
+          "image_url",
+          "url",
+          "brand",
+          "review_status",
+          "visibility"
+        ],
+        "properties": {
+          "availability": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`in stock`, `out of stock`, …, as Meta writes it."
+          },
+          "brand": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its brand."
+          },
+          "condition": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`new`, `used`, …, as Meta writes it."
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its currency (ISO 4217)."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its description."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "image_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its main image."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          },
+          "price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its price, as Meta formats it."
+          },
+          "retailer_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The business's own id: what a product message names."
+          },
+          "review_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its review status, as Meta writes it."
+          },
+          "sale_price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its sale price, in the same format."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its page."
+          },
+          "visibility": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its visibility, as Meta writes it."
+          }
+        }
+      },
       "ProductItem": {
         "type": "object",
         "description": "A product of a `product_list` section.",
@@ -20265,6 +23800,30 @@
           }
         },
         "additionalProperties": false
+      },
+      "ProductList": {
+        "type": "object",
+        "description": "A page of a catalog's products.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Product"
+            },
+            "description": "The products, in Meta's order."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
       },
       "ProductSection": {
         "type": "object",
@@ -20412,6 +23971,61 @@
           }
         },
         "additionalProperties": false
+      },
+      "QrCode": {
+        "type": "object",
+        "description": "A QR code and short link.",
+        "required": [
+          "code",
+          "prefilled_message",
+          "deep_link_url",
+          "qr_image_url"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Its 14-character id."
+          },
+          "deep_link_url": {
+            "type": "string",
+            "description": "The `https://wa.me/message/<code>` short link."
+          },
+          "prefilled_message": {
+            "type": "string",
+            "description": "The text prefilled in the user's composer."
+          },
+          "qr_image_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The image's download URL, when an image format was asked for."
+          }
+        }
+      },
+      "QrCodeList": {
+        "type": "object",
+        "description": "A page of a number's QR codes.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QrCode"
+            },
+            "description": "The codes, newest first."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
       },
       "QuickReply": {
         "type": "object",
@@ -20893,6 +24507,10 @@
           "payments",
           "flows",
           "erasure",
+          "commerce",
+          "qr_codes",
+          "analytics",
+          "contacts",
           "groups"
         ]
       },
@@ -21364,6 +24982,101 @@
           }
         }
       },
+      "TemplateAnalytics": {
+        "type": "object",
+        "description": "A set of template analytics.",
+        "required": [
+          "granularity",
+          "product_type",
+          "waba_timezone",
+          "data_points"
+        ],
+        "properties": {
+          "data_points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateDataPoint"
+            },
+            "description": "The data points."
+          },
+          "granularity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`DAILY`, as Meta writes it."
+          },
+          "product_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The product the metrics are for (`cloud_api`)."
+          },
+          "waba_timezone": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The WABA's timezone, with `use_waba_timezone`."
+          }
+        }
+      },
+      "TemplateAnalyticsList": {
+        "type": "object",
+        "description": "A page of template analytics.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateAnalytics"
+            },
+            "description": "The sets."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      },
+      "TemplateClick": {
+        "type": "object",
+        "description": "A button's clicks.",
+        "required": [
+          "type",
+          "button_content",
+          "count"
+        ],
+        "properties": {
+          "button_content": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The button's text."
+          },
+          "count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The clicks.",
+            "minimum": 0
+          },
+          "type": {
+            "type": "string",
+            "description": "`url_button`, `unique_url_button`, `quick_reply_button`, as Meta\nwrites it."
+          }
+        }
+      },
       "TemplateComparison": {
         "type": "object",
         "description": "A comparison's metrics.",
@@ -21377,6 +25090,28 @@
               "$ref": "#/components/schemas/ComparisonMetric"
             },
             "description": "The metrics, as Meta answered them."
+          }
+        }
+      },
+      "TemplateCost": {
+        "type": "object",
+        "description": "A cost metric.",
+        "required": [
+          "type",
+          "value"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "`amount_spent`, `cost_per_delivered`, `cost_per_url_button_click`,\nas Meta writes it."
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The amount, in the WABA's currency."
           }
         }
       },
@@ -21406,6 +25141,75 @@
               "null"
             ],
             "description": "Initial status (usually `PENDING`)."
+          }
+        }
+      },
+      "TemplateDataPoint": {
+        "type": "object",
+        "description": "A template's day of analytics.",
+        "required": [
+          "template_id",
+          "start",
+          "end",
+          "sent",
+          "delivered",
+          "read",
+          "clicked",
+          "cost"
+        ],
+        "properties": {
+          "clicked": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateClick"
+            },
+            "description": "Button clicks (marketing and utility templates)."
+          },
+          "cost": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TemplateCost"
+            },
+            "description": "Cost metrics."
+          },
+          "delivered": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Deliveries.",
+            "minimum": 0
+          },
+          "end": {
+            "type": "string",
+            "description": "Day end, in the same format."
+          },
+          "read": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Reads (tracked for 7 days after the send).",
+            "minimum": 0
+          },
+          "sent": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Sends.",
+            "minimum": 0
+          },
+          "start": {
+            "type": "string",
+            "description": "Day start: RFC 3339, or a `YYYY-MM-DD` day."
+          },
+          "template_id": {
+            "type": "string",
+            "description": "The template."
           }
         }
       },
@@ -21950,6 +25754,20 @@
               "null"
             ],
             "description": "A new subject: 1 to 128 characters."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateQrCode": {
+        "type": "object",
+        "description": "What to change in a QR code.",
+        "required": [
+          "prefilled_message"
+        ],
+        "properties": {
+          "prefilled_message": {
+            "type": "string",
+            "description": "The new prefilled message, 1 to 140 characters."
           }
         },
         "additionalProperties": false
@@ -22537,6 +26355,22 @@
     {
       "name": "payments",
       "description": "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"
+    },
+    {
+      "name": "commerce",
+      "description": "A number's commerce settings (the cart, the catalog's visibility) and the catalog its WABA connects, with its products (scope `commerce`)"
+    },
+    {
+      "name": "qr_codes",
+      "description": "QR codes and short links that open a chat with a prefilled message, each checked to be the number's own (scope `qr_codes`)"
+    },
+    {
+      "name": "analytics",
+      "description": "A WABA's messaging, conversation, pricing and template analytics, their ranges bounded (scope `analytics`)"
+    },
+    {
+      "name": "contacts",
+      "description": "The block list: blocking and unblocking people on a number, audited by count (scope `contacts`)"
     },
     {
       "name": "inbox",
