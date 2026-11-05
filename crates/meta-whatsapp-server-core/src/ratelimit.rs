@@ -158,7 +158,16 @@ impl RouteClass {
             | Operation::CreateTemplateGroup
             | Operation::GetTemplateGroup
             | Operation::UpdateTemplateGroup
-            | Operation::DeleteTemplateGroup => Self::Templates,
+            | Operation::DeleteTemplateGroup
+            | Operation::CreateFlow
+            | Operation::ListFlows
+            | Operation::GetFlow
+            | Operation::UpdateFlow
+            | Operation::UploadFlowJson
+            | Operation::PreviewFlow
+            | Operation::PublishFlow
+            | Operation::DeprecateFlow
+            | Operation::DeleteFlow => Self::Templates,
             Operation::IssueOtp => Self::OtpIssue,
             Operation::VerifyOtp => Self::OtpVerify,
         }
@@ -558,6 +567,15 @@ mod tests {
             ("approve_group_join_requests", RouteClass::Send),
             ("reject_group_join_requests", RouteClass::Send),
             ("get_group_analytics", RouteClass::Read),
+            ("create_flow", RouteClass::Templates),
+            ("list_flows", RouteClass::Templates),
+            ("get_flow", RouteClass::Templates),
+            ("update_flow", RouteClass::Templates),
+            ("upload_flow_json", RouteClass::Templates),
+            ("preview_flow", RouteClass::Templates),
+            ("publish_flow", RouteClass::Templates),
+            ("deprecate_flow", RouteClass::Templates),
+            ("delete_flow", RouteClass::Templates),
         ];
         assert_eq!(table.len(), Operation::ALL.len(), "every operation");
         for (id, class) in table {
@@ -565,7 +583,9 @@ mod tests {
             assert_eq!(RouteClass::of(operation), class, "{id}");
             assert_eq!(
                 class == RouteClass::Templates,
-                operation.scope() == Scope::Templates,
+                // Meta's management calls of a WABA are one budget: Flows
+                // (scope `flows`, design D132) share the templates' class.
+                matches!(operation.scope(), Scope::Templates | Scope::Flows),
                 "{id}"
             );
         }

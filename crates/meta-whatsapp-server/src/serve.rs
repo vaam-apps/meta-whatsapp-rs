@@ -36,12 +36,14 @@ use meta_whatsapp_rs::adapters::store::postgres::sqlx::postgres::{
 };
 use meta_whatsapp_rs::client::AppCredentials;
 use meta_whatsapp_rs::client::embedded_signup::{SolutionPartner, TokenVault, VaultKeys};
+use meta_whatsapp_rs::client::flows::endpoint::FlowEndpointKey;
 use meta_whatsapp_rs::core::ids::AppId;
 use meta_whatsapp_rs::core::secret::AppSecret;
 use meta_whatsapp_rs::core::store::{KvStore, Retention};
 use meta_whatsapp_server_api_axum::api::internal_router;
 use meta_whatsapp_server_core::admin::mint;
 use meta_whatsapp_server_core::erasure::{ErasureDeployment, ErasureKey};
+use meta_whatsapp_server_core::flows_endpoint::{DeploymentKey, FlowsDeployment, NoHandler};
 use meta_whatsapp_server_core::housekeeping;
 use meta_whatsapp_server_core::otp::{OtpDeployment, OtpKeys};
 use meta_whatsapp_server_core::signup::{AccountUpdateConfirmation, SignupDeployment};
@@ -328,6 +330,24 @@ fn otp_deployment(
     Ok(OtpDeployment::new(keys, default_tenant))
 }
 
+/// The Flows data endpoint's settings (roadmap M5d): the deployment's Flow
+/// key, Meta's signatures checked against the app secrets, and no
+/// integrating app plugged in (`NoHandler`: a data exchange is `503`
+/// until an embedder supplies a `FlowHandler`, design D134). Without a
+/// key, `None`: the route is `404`.
+fn flows_deployment(
+    key: Option<FlowEndpointKey>,
+    app_secrets: &[AppSecret],
+) -> Option<FlowsDeployment> {
+    key.map(|key| {
+        FlowsDeployment::new(
+            app_secrets.to_vec(),
+            Arc::new(DeploymentKey::new(key)),
+            Arc::new(NoHandler),
+        )
+    })
+}
+
 /// Erasure's settings (roadmap M2f): the configured key, its journal the
 /// service's log (target `erasure_journal`); without one, on memory
 /// storage (development only) a throwaway key (the records die with the
@@ -438,6 +458,7 @@ async fn run<S: Future<Output = ()>>(
         otp_pepper,
         otp_default_tenant,
         erasure_key,
+        flows_private_key,
         app_id,
         es_config_id,
         onboarding,
@@ -458,6 +479,7 @@ async fn run<S: Future<Output = ()>>(
         account_update_confirmation,
     );
     settings.webhooks_out = webhooks_out(webhooks)?;
+    settings.flows = flows_deployment(flows_private_key, &app_secrets);
     let inbound = Inbound::new(app_secrets, verify_token)?.with_move_rules(move_rules);
     // The state and its grant: the internal listener's API adapter is
     // served with the grant, which no one else is given.

@@ -483,6 +483,8 @@ pub enum ScopeName {
     Numbers,
     /// Payment configurations, payment lookups and refunds.
     Payments,
+    /// WhatsApp Flows' management (roadmap M5d).
+    Flows,
     /// Erasing a customer on a number (roadmap M2f).
     Erasure,
     /// A number's groups: settings, invite links, participants, join
@@ -503,6 +505,7 @@ impl From<ScopeName> for Scope {
             ScopeName::Otp => Scope::Otp,
             ScopeName::Numbers => Scope::Numbers,
             ScopeName::Payments => Scope::Payments,
+            ScopeName::Flows => Scope::Flows,
             ScopeName::Erasure => Scope::Erasure,
             ScopeName::Groups => Scope::Groups,
         }
@@ -522,6 +525,7 @@ impl From<Scope> for ScopeName {
             Scope::Otp => ScopeName::Otp,
             Scope::Numbers => ScopeName::Numbers,
             Scope::Payments => ScopeName::Payments,
+            Scope::Flows => ScopeName::Flows,
             Scope::Erasure => ScopeName::Erasure,
             Scope::Groups => ScopeName::Groups,
         }

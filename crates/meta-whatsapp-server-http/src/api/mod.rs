@@ -9,11 +9,12 @@
 //!
 //! | Listener | Routes |
 //! | --- | --- |
-//! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else |
+//! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `POST /webhooks/flows/{waba_id}` (Meta's Flows data endpoint, bodies up to 256 KiB; roadmap M5d), `GET /livez`, nothing else |
 //! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | the API adapter's routes (`meta-whatsapp-server-api-axum`: `/v1/admin/…`, `/v1/wabas`, `/v1/numbers/…`, `/v1/events`, `/v1/openapi.json`), with this crate's media routes behind their scope and `/livez`, `/readyz`, `/metrics`, `/v1/version` |
 
 pub mod common;
 pub mod events;
+pub mod flows;
 pub mod media;
 pub mod ops;
 pub mod uploads;
@@ -29,7 +30,8 @@ use meta_whatsapp_rs::webhooks::axum::Router;
 use meta_whatsapp_rs::webhooks::axum::extract::{DefaultBodyLimit, Request, State};
 use meta_whatsapp_rs::webhooks::axum::middleware::{self, Next};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
-use meta_whatsapp_rs::webhooks::axum::routing::get;
+use meta_whatsapp_rs::webhooks::axum::routing::{get, post};
+use meta_whatsapp_server_core::flows_endpoint::MAX_REQUEST_BYTES;
 
 use crate::error::{ApiError, ErrorCode};
 use crate::events::MAX_WEBHOOK_BODY_BYTES;
@@ -53,15 +55,18 @@ pub const MAX_BODY_BYTES: usize = 64 * 1024;
 pub const REQUEST_DEADLINE: Duration = Duration::from_secs(55);
 
 /// The public listener's routes (not in the OpenAPI document: Meta's
-/// contract, not the integrators'): the paths of [`PUBLIC_OPERATIONS`].
-pub const PUBLIC_ROUTES: [&str; 2] = ["/webhooks/meta", "/livez"];
+/// contract, not the integrators'): the paths of [`PUBLIC_OPERATIONS`], as
+/// route templates.
+pub const PUBLIC_ROUTES: [&str; 3] = ["/webhooks/meta", "/webhooks/flows/{waba_id}", "/livez"];
 
 /// The public listener's operations, `(method, path)`: Meta's subscription
-/// check and deliveries, and liveness. Every other method on these paths is
+/// check and deliveries, its Flows data endpoint (roadmap M5d), and
+/// liveness. Every other method on these paths is
 /// `405`, every other path `404` (a test sends each).
-pub const PUBLIC_OPERATIONS: [(&str, &str); 3] = [
+pub const PUBLIC_OPERATIONS: [(&str, &str); 4] = [
     ("GET", "/webhooks/meta"),
     ("POST", "/webhooks/meta"),
+    ("POST", "/webhooks/flows/{waba_id}"),
     ("GET", "/livez"),
 ];
 
@@ -140,6 +145,11 @@ pub fn public_router(state: &AppState) -> Router {
     let webhook = get(webhooks::verify).post(webhooks::receive);
     let routes = axum::Router::new()
         .route("/webhooks/meta", webhook)
+        // The Flows data endpoint (roadmap M5d), its own body limit.
+        .route(
+            "/webhooks/flows/{waba_id}",
+            post(flows::receive).layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES)),
+        )
         .route("/livez", get(ops::livez));
     public_router_with(routes, state)
 }
@@ -291,16 +301,23 @@ mod tests {
         assert_eq!(paths, PUBLIC_ROUTES);
         let router = public_router(&AppState::for_tests());
         for path in PUBLIC_ROUTES {
+            // A route template, with an id in the parameter's place.
+            let uri = path.replace("{waba_id}", "102290129340398");
             for method in ["GET", "POST", "PUT", "PATCH", "DELETE"] {
                 let request = Request::builder()
                     .method(Method::from_bytes(method.as_bytes()).unwrap())
-                    .uri(path)
+                    .uri(uri.as_str())
                     .body(Body::empty())
                     .unwrap();
                 let status = router.clone().oneshot(request).await.unwrap().status();
                 if PUBLIC_OPERATIONS.contains(&(method, path)) {
+                    // The Flows data endpoint is `404` while the state has no
+                    // Flow key (this one has none): the route exists when it
+                    // is not `405`, and its other methods are.
+                    let unconfigured = path.starts_with("/webhooks/flows/");
                     assert!(
-                        status != StatusCode::NOT_FOUND && status != StatusCode::METHOD_NOT_ALLOWED,
+                        (unconfigured || status != StatusCode::NOT_FOUND)
+                            && status != StatusCode::METHOD_NOT_ALLOWED,
                         "{method} {path}: {status}"
                     );
                 } else {
@@ -341,6 +358,8 @@ mod tests {
             plain,
             [
                 "mod.rs: .route(\"/webhooks/meta\", webhook)",
+                // The Flows data endpoint (roadmap M5d), on several lines.
+                "mod.rs: .route(",
                 "mod.rs: .route(\"/livez\", get(ops::livez));",
             ]
         );

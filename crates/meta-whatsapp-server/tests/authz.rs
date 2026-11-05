@@ -163,6 +163,19 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
             Method::GET,
             "/v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
         ),
+        // Roadmap M5d (the design's M5.1): a WABA's Flows.
+        (Method::POST, "/v1/wabas/{waba_id}/flows"),
+        (Method::GET, "/v1/wabas/{waba_id}/flows"),
+        (Method::GET, "/v1/wabas/{waba_id}/flows/{flow_id}"),
+        (Method::PATCH, "/v1/wabas/{waba_id}/flows/{flow_id}"),
+        (Method::PUT, "/v1/wabas/{waba_id}/flows/{flow_id}/json"),
+        (Method::POST, "/v1/wabas/{waba_id}/flows/{flow_id}/preview"),
+        (Method::POST, "/v1/wabas/{waba_id}/flows/{flow_id}/publish"),
+        (
+            Method::POST,
+            "/v1/wabas/{waba_id}/flows/{flow_id}/deprecate",
+        ),
+        (Method::DELETE, "/v1/wabas/{waba_id}/flows/{flow_id}"),
         (Method::POST, "/v1/numbers/{pn}/payments/refunds"),
         // Roadmap M5f (the design's M5.1): a number's groups.
         (Method::POST, "/v1/numbers/{pn}/groups"),

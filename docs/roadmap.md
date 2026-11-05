@@ -6420,10 +6420,103 @@ or WABA fails the family's own cross-tenant test).
     holding the number, the sends name the second; another tenant's
     attach of it stays `409 waba_owned_by_another_tenant`; a send body
     naming `messaging_account_id` itself stays refused.
-- [ ] **M5d. Flows** (rows 61, 62): management and the data endpoint.
+- [x] **M5d. Flows** (rows 61, 62): management and the data endpoint.
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; the data endpoint answers a request
     sealed with Meta's example key, and refuses a bad signature.
+  - **Landed:** scope `flows` (D132; rate class `templates`), on a WABA of
+    the tenant, each route the library's call through the core's
+    `flows::Flows`: `POST` and `GET /v1/wabas/{waba_id}/flows` (a
+    creation: Meta's names, no other key, the Flow JSON the object or
+    Meta's text, a `clone_flow_id` read first; an `Idempotency-Key`, not
+    replayed on a timeout; a list by Meta's cursor), `GET`, `PATCH`,
+    `DELETE …/flows/{flow_id}`, `PUT …/flows/{flow_id}/json` (the Flow
+    JSON as the body, an object of at most 2 MiB, uploaded to Meta as a
+    multipart form byte for byte; Meta's validation errors are the
+    answer), `POST …/preview`, `…/publish` and `…/deprecate`. A Flow id
+    is the WABA's or does not exist (design D135): every route that names
+    one reads it first (`GET /{flow_id}`) and acts only when Meta names
+    the path's WABA as its owner, else `404` with nothing acted on and
+    that read the only request. The changes that succeed are audited
+    (`flow_updated`, `flow_json_uploaded`, `flow_published`,
+    `flow_deprecated`, `flow_deleted`). The data endpoint is `POST
+    /webhooks/flows/{waba_id}` on the public listener
+    (`server_core::flows_endpoint::FlowsEndpoint`, the HTTP crate's
+    `api::flows`): Meta's `X-Hub-Signature-256` checked in constant time
+    against every app secret before any record is read, key loaded or
+    byte parsed (`432`); the WABA's tenant (`404` unbound or suspended);
+    RSA-OAEP and AES-GCM with the deployment's Flow key
+    (`WA_SERVER_FLOWS_PRIVATE_KEY`; none: `404`), every failure `421`;
+    the health check and the error notification answered by the service,
+    a data exchange by the integrating app (`FlowHandler`, `503` when
+    unavailable or past 5 s); the answer sealed with the flipped IV; 256
+    KiB, 32 at once. The OpenAPI document is additive only (6 paths, 10
+    schemas, the `flows` tag). Tests: `tests/flows.rs` (each route's exact
+    requests from `flows/guides/flowsapi`, the multipart form, the
+    cursor, the idempotency key, every refusal before any request, and
+    `another_wabas_flow_is_not_found_and_nothing_is_acted_on` over every
+    route and five kinds of "not the WABA's"), `tests/flows_endpoint.rs`
+    (`metas_requests_are_answered_with_what_metas_code_seals`: the
+    requests and the sealed answers produced by Meta's own Node.js
+    sample code, `tests/flows_data/kat_endpoint.mjs`, byte for byte;
+    `a_completion_is_sealed_as_metas_sample_code_seals_it` over the
+    library's vector; `a_bad_signature_is_refused_with_no_side_effect`:
+    the app not asked, no vault read, no write, no event, Meta not
+    called), M5.1 by construction (`tests/authz.rs` iterates every
+    route), M1.5 (`tests/errors.rs`: the new routes in its lists), M1.7's
+    capture over every new route and the endpoint
+    (`tests/common/capture.rs`: the Flow key, a user's answer, the Flow
+    token, the preview link and the Flow JSON in no log line), the
+    start-up refusals (`tests/config.rs`), the core's checks
+    (`flows::tests`).
+  - **Decided** (design D132–D136, by the coordinator on 2026-11-05
+    under the owner's delegation, after an adversarial review, each
+    swappable): the routes under the WABA and a scope of their own,
+    `flows` (D132); one deployment Flow key behind the port `FlowKeys`
+    (D133; swap: a per-tenant vault record, M5d2); the integrating app a
+    trait, `FlowHandler`, the binary plugging in `NoHandler`, so a data
+    exchange is `503` until an embedder supplies a handler (D134; swap:
+    the callback URL, M5d2); the Flow read first with zero acting
+    requests for another WABA's, a creation keyed, the changes audited
+    (D135); the data endpoint's route, limits as constants and statuses
+    (D136; swap: settings). The review added: a Flow's `endpoint_uri` may
+    not be this service's address for another WABA (`422`), and the
+    tests of the 32 places, the 408 and the scope. The new setting, scope
+    name, route, metric, operation ids and audit actions are pending the
+    owner's confirmation before the first release; no legal act.
+  - **Not done here:** a per-tenant Flow key in the vault (a stored
+    kind the library lacks), a synchronous callback URL as the
+    integrating app (the webhooks-out `Sender` returns a status only),
+    uploading a number's business public key (M5c3, row 66), the
+    `application_id` of a Flow's update, a Flow's `health_status` and
+    assets (the library lacks them), the replay guard on a request's IV
+    (the library's note; decided against in D136: Meta states no
+    validity window), the `427` answer (the Flow token is no longer valid,
+    from the page of Meta's endpoint error codes); no call of
+    these routes was run against Meta live.
+- [ ] **M5d2. Flows: the app over HTTP, a key per tenant, the rest of
+  the API** (rows 61, 62): what M5d decided and left.
+  - **After:** M5d.
+  - **Scope:** the integrating app answering over HTTP (design D134's
+    swap: a tenant's callback URL called synchronously by the data
+    endpoint, its destination checked as a webhook endpoint's is, the
+    webhooks-out `Sender` gaining an exchange that returns a bounded
+    body, a secret per tenant); a Flow key per tenant (D133's swap: a
+    vault record kind in the library, `FlowKeys` reading it, a route to
+    set it); the business public key of a number (`BusinessEncryption`,
+    with the number settings of M5c3: route, audit); an uploaded media's
+    download and decryption (the library's `decrypt_media`, the media's
+    host checked); and, in the library first, the Flow `application_id`
+    of an update, a Flow's `health_status` and its assets (`Flow::assets`
+    is there; a route for it is the last step).
+    Also: a handler asking for Meta's `427` (the Flow token is no longer
+    valid), the request-IV replay guard and the data endpoint's limits as
+    settings (D136's swap), once Meta states a validity window.
+  - **Decisive:** M5.1, M5.2; a data exchange reaches the tenant's
+    callback with the decrypted request and its answer is sealed with
+    the request's key; with no callback configured it is `503` as in
+    M5d; the callback's destination is refused as a webhook endpoint's
+    is.
 - [ ] **M5e. Calling** (rows 74, 75, 134, 135).
   - **After:** S7, L14.
   - **Decisive:** M5.1, M5.2.

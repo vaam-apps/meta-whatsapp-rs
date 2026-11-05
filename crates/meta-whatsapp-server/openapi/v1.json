@@ -9402,6 +9402,1382 @@
         ]
       }
     },
+    "/v1/wabas/{waba_id}/flows": {
+      "get": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/flows`: a page of the WABA's Flows.",
+        "operationId": "list_flows",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of Flows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `query` (a parameter but `cursor`) or `cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/flows`: create a Flow (a draft, unless\npublished with it).",
+        "operationId": "create_flow",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never create twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlowCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created, as a draft (published too when `publish` was set and Meta found the Flow JSON valid)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowCreated"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or a `clone_flow_id` not in this WABA; nothing created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: over 2 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `body` (not Meta's object, or a key Meta's page does not list), `name`, `categories`, `categories[i]`, `clone_flow_id`, `endpoint_uri` or `flow_json`; `invalid_parameter`, `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the Flow may have been created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/flows/{flow_id}": {
+      "get": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/flows/{flow_id}`: one Flow.",
+        "operationId": "get_flow",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Flow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Flow"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such Flow in this WABA (another WABA's Flow looks like a missing one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `flow_id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`DELETE /v1/wabas/{waba_id}/flows/{flow_id}`: delete a draft Flow.",
+        "operationId": "delete_flow",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such Flow in this WABA; nothing deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `flow_id`; `invalid_parameter` (only a draft can be deleted: Meta's refusal)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the Flow may have been deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`PATCH /v1/wabas/{waba_id}/flows/{flow_id}`: change a Flow's name,\ncategories or endpoint.",
+        "operationId": "update_flow",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlowUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Changed"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such Flow in this WABA; nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: over 2 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `flow_id`, `body` (not Meta's object, a key the service does not send, or nothing to change), `name`, `categories`, `categories[i]` or `endpoint_uri`; `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the Flow may have been changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/flows/{flow_id}/deprecate": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/flows/{flow_id}/deprecate`: deprecate a\npublished Flow: it can no longer be sent or opened.",
+        "operationId": "deprecate_flow",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deprecated"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such Flow in this WABA; nothing deprecated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `flow_id`; `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the Flow may have been deprecated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/flows/{flow_id}/json": {
+      "put": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`PUT /v1/wabas/{waba_id}/flows/{flow_id}/json`: replace a Flow's Flow\nJSON. The body is the Flow JSON itself, sent to Meta as it arrived.",
+        "operationId": "upload_flow_json",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The Flow JSON (`flows/guides/flowjson`): a JSON object of at most 2 MiB, uploaded as sent",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Stored; Meta's validation errors, if any, in the answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowJsonUpload"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such Flow in this WABA; nothing uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`: over 2 MiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `flow_id` or `body` (not a JSON object); `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the Flow JSON may have been replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/flows/{flow_id}/preview": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/flows/{flow_id}/preview`: the Flow's web\npreview link.",
+        "operationId": "preview_flow",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FlowPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The link (a secret: do not log it)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowPreview"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such Flow in this WABA",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `flow_id` or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/flows/{flow_id}/publish": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/flows/{flow_id}/publish`: publish a Flow.\nA published Flow can no longer be deleted, only deprecated.",
+        "operationId": "publish_flow",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Published"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such Flow in this WABA; nothing published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `flow_id`; `invalid_parameter` (validation errors or publishing checks outstanding are Meta's)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the Flow may have been published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/wabas/{waba_id}/payment-configurations": {
       "get": {
         "tags": [
@@ -15247,6 +16623,75 @@
         ],
         "description": "An event type: a KnownEventType today. Types only grow within v1: ignore an unknown one."
       },
+      "Flow": {
+        "type": "object",
+        "description": "A Flow, as Meta describes it.",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "categories",
+          "validation_errors",
+          "json_version",
+          "data_api_version",
+          "endpoint_uri"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its categories, as Meta names them."
+          },
+          "data_api_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `data_api_version` of its uploaded Flow JSON (Flows with an\nendpoint; on a single Flow's read)."
+          },
+          "endpoint_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its data endpoint's URL (on a single Flow's read)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "json_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `version` of its uploaded Flow JSON (on a single Flow's read)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name (not shown to users)."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it is in its lifecycle, as Meta names it: `DRAFT`,\n`PUBLISHED`, `DEPRECATED`, `BLOCKED` or `THROTTLED`\n(`flows/guides/lifecycle`)."
+          },
+          "validation_errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlowValidationError"
+            },
+            "description": "What blocks its publication."
+          }
+        }
+      },
       "FlowActionPayload": {
         "type": "object",
         "description": "A Flow's first screen (`flow_action_payload`).",
@@ -15260,6 +16705,120 @@
           "screen": {
             "type": "string",
             "description": "The first screen's id."
+          }
+        }
+      },
+      "FlowCreateRequest": {
+        "type": "object",
+        "description": "A Flow to create, in Meta's JSON (`flows/guides/flowsapi`, \"Creating a\nFlow\"). Read as Meta's object: a key Meta's page does not list is\nrefused on `body`.",
+        "required": [
+          "name",
+          "categories"
+        ],
+        "properties": {
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its use cases, 1 to 8 of Meta's: `SIGN_UP`, `SIGN_IN`,\n`APPOINTMENT_BOOKING`, `LEAD_GENERATION`, `CONTACT_US`,\n`CUSTOMER_SUPPORT`, `SURVEY`, `OTHER`."
+          },
+          "clone_flow_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A Flow of this WABA to copy."
+          },
+          "endpoint_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The URL of the Flow's data endpoint (`https`, no credentials).\nMeta says to leave it out when cloning a Flow whose JSON is older\nthan version 3.0."
+          },
+          "flow_json": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The Flow JSON: the object itself, or its text (Meta's form), at\nmost 10 MiB."
+          },
+          "name": {
+            "type": "string",
+            "description": "The Flow's name, not shown to users (at most 256 characters)."
+          },
+          "publish": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Publish right away; Meta publishes only with a valid `flow_json`."
+          }
+        }
+      },
+      "FlowCreated": {
+        "type": "object",
+        "description": "A created Flow.",
+        "required": [
+          "id",
+          "validation_errors"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "validation_errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlowValidationError"
+            },
+            "description": "The problems Meta found in the `flow_json` sent with it: the Flow\nis created as a draft all the same, but cannot be published until\nthey are fixed."
+          }
+        }
+      },
+      "FlowJsonUpload": {
+        "type": "object",
+        "description": "What Meta made of an uploaded Flow JSON.",
+        "required": [
+          "success",
+          "validation_errors"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Meta's `success`: the upload was stored, errors or not."
+          },
+          "validation_errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlowValidationError"
+            },
+            "description": "The problems Meta found in it."
+          }
+        }
+      },
+      "FlowList": {
+        "type": "object",
+        "description": "A page of a WABA's Flows.",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Flow"
+            },
+            "description": "The Flows (Meta's default fields: id, name, status, categories and\nvalidation errors)."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the page after; absent on the last."
           }
         }
       },
@@ -15326,6 +16885,192 @@
               "null"
             ],
             "description": "`draft` or `published` (Meta's default)."
+          }
+        }
+      },
+      "FlowPreview": {
+        "type": "object",
+        "description": "A Flow's web preview link.",
+        "required": [
+          "preview_url",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "description": "When it expires, as Meta writes it (`2023-05-21T11:18:09+0000`):\n30 days after its creation."
+          },
+          "preview_url": {
+            "type": "string",
+            "description": "The preview page, which needs no login: **a secret**, its `token`\nopens the Flow for anyone holding it, until `expires_at` or until\ninvalidated. Can be embedded in an `<iframe>`."
+          }
+        }
+      },
+      "FlowPreviewRequest": {
+        "type": "object",
+        "description": "Whether to revoke the Flow's current preview link first.",
+        "properties": {
+          "invalidate": {
+            "type": "boolean",
+            "description": "`true` revokes the current link and returns a new one: use it when\na link was shared too widely. Default `false`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "FlowUpdateRequest": {
+        "type": "object",
+        "description": "What to change in a Flow, in Meta's JSON: every field optional, at\nleast one set. Only a draft's metadata is editable (a published Flow\nreturns to `DRAFT` when edited, `flows/guides/lifecycle`).",
+        "properties": {
+          "categories": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "New categories, replacing the current ones (1 to 8)."
+          },
+          "endpoint_uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new data endpoint URL (`https`, no credentials)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new name."
+          }
+        }
+      },
+      "FlowValidationError": {
+        "type": "object",
+        "description": "A problem Meta found in a Flow's JSON, as Meta writes it. Every one\nmust be fixed before the Flow is published.",
+        "required": [
+          "error",
+          "error_type",
+          "message",
+          "line_start",
+          "line_end",
+          "column_start",
+          "column_end",
+          "pointers"
+        ],
+        "properties": {
+          "column_end": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its last column.",
+            "minimum": 0
+          },
+          "column_start": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its first column.",
+            "minimum": 0
+          },
+          "error": {
+            "type": "string",
+            "description": "Machine-readable error (`INVALID_PROPERTY_VALUE`)."
+          },
+          "error_type": {
+            "type": "string",
+            "description": "Its family (`FLOW_JSON_ERROR`)."
+          },
+          "line_end": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its last line.",
+            "minimum": 0
+          },
+          "line_start": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The first line of the offending span in the uploaded JSON.",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string",
+            "description": "Meta's explanation of it."
+          },
+          "pointers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlowValidationPointer"
+            },
+            "description": "The places in the Flow JSON it refers to."
+          }
+        }
+      },
+      "FlowValidationPointer": {
+        "type": "object",
+        "description": "One place a validation error points at.",
+        "required": [
+          "line_start",
+          "line_end",
+          "column_start",
+          "column_end",
+          "path"
+        ],
+        "properties": {
+          "column_end": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Last column.",
+            "minimum": 0
+          },
+          "column_start": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "First column.",
+            "minimum": 0
+          },
+          "line_end": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Last line.",
+            "minimum": 0
+          },
+          "line_start": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "First line.",
+            "minimum": 0
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The path inside the Flow JSON (`screens [0]. layout.children [0].type`,\nspacing as Meta writes it)."
           }
         }
       },
@@ -18776,6 +20521,7 @@
           "otp",
           "numbers",
           "payments",
+          "flows",
           "erasure",
           "groups"
         ]
@@ -20413,6 +22159,10 @@
     {
       "name": "groups",
       "description": "A number's WhatsApp groups: creating, listing, reading, changing and deleting them, invite links, participants, join requests and analytics; a group is the number's or it does not exist (scope `groups`, roadmap M5f)"
+    },
+    {
+      "name": "flows",
+      "description": "WhatsApp Flows (scope `flows`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"
     },
     {
       "name": "payments",

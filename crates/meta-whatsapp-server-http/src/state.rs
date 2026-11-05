@@ -21,6 +21,7 @@ use meta_whatsapp_rs::core::store::ConversationStore;
 use meta_whatsapp_rs::webhooks::axum::extract::FromRef;
 use meta_whatsapp_rs::{Client, Error};
 use meta_whatsapp_server_core::erasure::ErasureDeployment;
+use meta_whatsapp_server_core::flows_endpoint::{FlowsDeployment, FlowsEndpoint};
 use meta_whatsapp_server_core::groups::GroupRecords;
 use meta_whatsapp_server_core::inbox::ReplyChecksByNumber;
 use meta_whatsapp_server_core::live::{LiveSettings, Streams};
@@ -130,6 +131,12 @@ pub struct Settings {
     /// default, for tests; `serve` sets it when a data key is configured,
     /// or with a throwaway one on memory storage). `Debug` shows no key.
     pub webhooks_out: Option<WebhooksOut>,
+    /// The Flows data endpoint (roadmap M5d): the app secrets Meta signs
+    /// with, the Flow key, the integrating app
+    /// (`WA_SERVER_FLOWS_PRIVATE_KEY_FILE`). `None`, `POST
+    /// /webhooks/flows/{waba_id}` is `404` (the default, for tests;
+    /// `serve` sets it when the key file is). `Debug` shows no secret.
+    pub flows: Option<FlowsDeployment>,
 }
 
 impl Default for Settings {
@@ -151,6 +158,7 @@ impl Default for Settings {
             registration_attempts: AttemptLimits::default(),
             erasure: None,
             webhooks_out: None,
+            flows: None,
         }
     }
 }
@@ -187,6 +195,7 @@ struct Inner {
     streams: Streams,
     registration_attempts: RegistrationAttempts,
     webhooks: WebhookEndpoints,
+    flows: Option<FlowsEndpoint>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -267,6 +276,11 @@ impl AppState {
             clock.clone(),
             settings.webhooks_out.clone(),
         );
+        // The Flows data endpoint routes by the backend's records.
+        let flows = settings
+            .flows
+            .clone()
+            .map(|deployment| FlowsEndpoint::new(deployment, store.clone()));
         // Resumable upload sessions in the bundle's key/value store, on
         // the service's one clock (roadmap M5c1).
         let uploads = UploadSessions::new(backend.kv(), clock.clone());
@@ -294,6 +308,7 @@ impl AppState {
                 streams,
                 registration_attempts,
                 webhooks,
+                flows,
                 settings,
             }),
         };
@@ -328,6 +343,11 @@ impl AppState {
     /// Meta's webhook verify token.
     pub(crate) fn verify_token(&self) -> &VerifyToken {
         self.inner.events.verify_token()
+    }
+
+    /// The Flows data endpoint, if the deployment has one.
+    pub fn flows_endpoint(&self) -> Option<&FlowsEndpoint> {
+        self.inner.flows.as_ref()
     }
 
     /// The metrics.

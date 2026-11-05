@@ -81,6 +81,7 @@ use crate::uploads::NewUpload;
 /// | `deregister_number` ([`Self::deregister_number`]) | the number's id (the body's confirmation is that id again) |
 /// | `create_group` ([`Self::create_group`]; roadmap M5f) | the number's id; the JSON body, canonical as above |
 /// | `create_library_template`, `migrate_templates`, `create_template_group` ([`Self::create_library_template`], [`Self::migrate_templates`], [`Self::create_template_group`]; roadmap M5b) | the WABA's id; the JSON body, canonical as above |
+/// | `create_flow` ([`Self::create_flow`]; roadmap M5d) | the WABA's id; the JSON body, canonical as above |
 ///
 /// The same request always has the same fingerprint; another operation,
 /// another number or WABA, or another body has another. Fingerprints are
@@ -328,6 +329,12 @@ impl Fingerprint {
     /// (roadmap M5f; no legacy fingerprint).
     pub fn create_group(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
         Self::json(Operation::CreateGroup, &[("pn", number.as_str())], body)
+    }
+
+    /// `create_flow` in `waba`, with the JSON body the request carried
+    /// (roadmap M5d; no legacy fingerprint).
+    pub fn create_flow(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::CreateFlow, &[("waba_id", waba.as_str())], body)
     }
 
     /// `operation` with its named parameters `params` (in any order: they
@@ -1565,6 +1572,32 @@ mod tests {
         assert_ne!(
             build(&pn("1"), &body),
             Fingerprint::send_message(&pn("1"), &body)
+        );
+    }
+
+    /// Roadmap M5d's keyed creation is scoped to the WABA, the body and the
+    /// operation. Decisive: the `waba_id` parameter, the operation, and the
+    /// body's canonical form.
+    #[test]
+    fn the_flow_creation_fingerprint_is_per_waba_body_and_operation() {
+        let body = serde_json::json!({"name": "x", "categories": ["OTHER"]});
+        let other = serde_json::json!({"name": "y", "categories": ["OTHER"]});
+        let reordered = serde_json::json!({"categories": ["OTHER"], "name": "x"});
+        assert_eq!(
+            Fingerprint::create_flow(&waba("1"), &body),
+            Fingerprint::create_flow(&waba("1"), &reordered)
+        );
+        assert_ne!(
+            Fingerprint::create_flow(&waba("1"), &body),
+            Fingerprint::create_flow(&waba("2"), &body)
+        );
+        assert_ne!(
+            Fingerprint::create_flow(&waba("1"), &body),
+            Fingerprint::create_flow(&waba("1"), &other)
+        );
+        assert_ne!(
+            Fingerprint::create_flow(&waba("1"), &body),
+            Fingerprint::create_template(&waba("1"), &body)
         );
     }
 
