@@ -306,10 +306,12 @@ stored data, the owner's).
     confirmation (docs/architecture.md § Stable identifiers).
 - **WhatsApp Flows in the service** (roadmap M5d, parity rows 61 and 62
   now partial in the service, the rest in M5d2; choices D132–D136,
-  proposed, pending the coordinator's decision; from Meta's
+  decided by the coordinator on 2026-11-05 after an adversarial review;
+  from Meta's
   `flows/guides/flowsapi`, `lifecycle`, `implementingyourflowendpoint`,
   `healthmonitoring` and `whatsapp-business-encryption` pages, read on
-  2026-11-05). **Management**: scope `templates`, on a WABA of the
+  2026-11-05). **Management**: a new scope, `flows` (one scope per family: a key
+  that edits templates does not manage Flows), on a WABA of the
   tenant, each route the library's call: `POST` and `GET
   /v1/wabas/{waba_id}/flows`, `GET`, `PATCH`, `DELETE
   …/flows/{flow_id}`, `PUT …/flows/{flow_id}/json` (the Flow JSON as the
@@ -321,7 +323,9 @@ stored data, the owner's).
   the only request (D135); a creation takes an `Idempotency-Key`; the
   changes are audited (`flow_updated`, `flow_json_uploaded`,
   `flow_published`, `flow_deprecated`, `flow_deleted`). The OpenAPI
-  document is additive only (6 paths, 10 schemas, the `flows` tag).
+  document is additive only (6 paths, 10 schemas, the `flows` tag, `flows`
+  in `Scope`). A Flow's `endpoint_uri` may not be this service's address
+  for another WABA (`422`): the signature binds the app, not the path.
   **The data endpoint**: `POST /webhooks/flows/{waba_id}` on the public
   listener, no API key: Meta's `X-Hub-Signature-256` checked in constant
   time against every app secret before any record is read, key loaded or
@@ -338,8 +342,9 @@ stored data, the owner's).
   Meta's own Node.js sample code (`tests/flows_data/kat_endpoint.mjs`),
   byte for byte. Not done: the app over HTTP, a key per tenant, the
   number's business public key, the Flow's assets, `health_status` and
-  `application_id` (M5d2); the replay guard on a request's IV. The new
-  setting, route, metric, operation ids and audit actions are pending the
+  `application_id` (M5d2); the replay guard on a request's IV (Meta states
+  no validity window for a request: design D136). The new setting, scope
+  name, route, metric, operation ids and audit actions are pending the
   owner's confirmation before the first release.
 - **A template's life after its creation, in the service** (roadmap
   M5b, parity rows 95, 96, 101 and 153 now done in the service, rows 99

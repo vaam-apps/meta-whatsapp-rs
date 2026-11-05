@@ -256,10 +256,12 @@ immutable. Three kinds of API key, all `wak_<key id>_<secret>`, sent as
 | admin key | nobody: `/v1/admin` only | operators |
 
 Tenant and platform keys carry scopes (`numbers`, `send`, `media`,
-`templates`, `inbox`, `events`, `otp`, `signup`, `payments` and `erasure`
-today; `webhooks` for the routes to come). `payments` (roadmap P2) and
-`erasure` (roadmap M2f) are new: a key minted before them does not carry
-them, so mint one that does for those routes. `inbox` does not grant
+`templates`, `flows`, `inbox`, `events`, `otp`, `signup`, `payments` and
+`erasure` today; `webhooks` for the routes to come). `payments` (roadmap
+P2), `erasure` (roadmap M2f) and `flows` (roadmap M5d) are new: a key
+minted before them does not carry them, so mint one that does for those
+routes. `templates` does not grant `flows`: a key that edits templates
+does not manage Flows. `inbox` does not grant
 `erasure`: give the key that erases to the part of your backend that
 handles privacy requests only. The service keeps only each key's id and the SHA-256 of its
 secret, and shows the key once. Rotate by minting a new one, deploying
@@ -719,7 +721,8 @@ WhatsApp Flows' management and their data endpoint (roadmap M5d; Meta's
 (`interactive` of type `flow`, or a template's Flow button: [Send
 messages](#send-messages)).
 
-**Managing a WABA's Flows** takes a key with the scope `templates`:
+**Managing a WABA's Flows** takes a key with the scope `flows` (not
+`templates`):
 
 | Route | What |
 | --- | --- |
@@ -746,7 +749,11 @@ messages](#send-messages)).
   Flow Builder), a Flow's `health_status`, and its assets.
 - Each change that succeeded is an `audit` event (`flow_updated`,
   `flow_json_uploaded`, `flow_published`, `flow_deprecated`,
-  `flow_deleted`); the rate class is `templates`.
+  `flow_deleted`; never a Flow's JSON); the rate class is `templates`.
+- **A Flow cannot point at another WABA's data endpoint.** A creation
+  or a change whose `endpoint_uri` is this service's address for Flows
+  (`…/webhooks/flows/<id>`) with another WABA's id is `422
+  invalid_request` on `endpoint_uri`; any other `https` URL is yours.
 
 **The data endpoint.** A Flow with an endpoint is called by Meta at its
 `endpoint_uri` on every screen that exchanges data. Either host your own
@@ -770,8 +777,10 @@ checked with the app secret (`WA_APP_SECRET`, and the previous one while
 rotating), is its authentication, before anything else is read. It
 answers the health check (`ping`) and an error notification itself; a
 data exchange is decided by the integrating app, a `FlowHandler` the
-embedder plugs in (design D134). **The binary plugs in none**: every data
-exchange is `503` until you embed the service with a handler, so use the
+embedder plugs in (design D134). **The binary plugs in none, so every
+data exchange answers `503` until an embedder supplies a handler**: embed
+the service with a `FlowHandler` (a callback URL the service calls is
+planned, roadmap M5d2), so use the
 service's endpoint with the binary only for a Flow whose health check
 matters, or host your own endpoint. Statuses: `432` bad signature, `421`
 cannot decrypt (Meta's client then downloads the public key again), `404`
@@ -779,8 +788,10 @@ no key, an unbound WABA or a suspended tenant, `503` the app unavailable
 or slower than 5 s, `500` it failed, `413` over 256 KiB. Nothing of a
 request's data, token or sealed text is logged;
 `wa_server_flow_endpoint_requests_total{outcome}` counts the answers.
-The request carries no Flow id: a Flow of one WABA can name another
-WABA's address, so the app checks the `flow_token` it put in the message.
+The request carries no Flow id, so a handler tells Flows apart by the
+`flow_token` it put in the message (check it: it is the session). A
+replayed signed request is answered again (Meta states no validity window
+for a request; design D136).
 
 
 ## Payments

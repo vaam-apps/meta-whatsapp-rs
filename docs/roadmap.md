@@ -6368,7 +6368,7 @@ or WABA fails the family's own cross-tenant test).
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; the data endpoint answers a request
     sealed with Meta's example key, and refuses a bad signature.
-  - **Landed:** scope `templates` (rate class `templates`), on a WABA of
+  - **Landed:** scope `flows` (D132; rate class `templates`), on a WABA of
     the tenant, each route the library's call through the core's
     `flows::Flows`: `POST` and `GET /v1/wabas/{waba_id}/flows` (a
     creation: Meta's names, no other key, the Flow JSON the object or
@@ -6413,26 +6413,33 @@ or WABA fails the family's own cross-tenant test).
     token, the preview link and the Flow JSON in no log line), the
     start-up refusals (`tests/config.rs`), the core's checks
     (`flows::tests`).
-  - **Proposed** (design D132–D136, by the implementer, for the
-    coordinator's decision, each swappable): the routes under the WABA,
-    the scope `templates` (D132); one deployment Flow key behind the port
-    `FlowKeys` (D133); the integrating app a trait, `FlowHandler`, the
-    binary plugging in `NoHandler` (D134); the Flow read first, a
-    creation keyed, the changes audited (D135); the data endpoint's route,
-    limits and statuses (D136). The new setting, route, metric, operation
-    ids and audit actions are pending the owner's confirmation before the
-    first release; no legal act.
+  - **Decided** (design D132–D136, by the coordinator on 2026-11-05
+    under the owner's delegation, after an adversarial review, each
+    swappable): the routes under the WABA and a scope of their own,
+    `flows` (D132); one deployment Flow key behind the port `FlowKeys`
+    (D133; swap: a per-tenant vault record, M5d2); the integrating app a
+    trait, `FlowHandler`, the binary plugging in `NoHandler`, so a data
+    exchange is `503` until an embedder supplies a handler (D134; swap:
+    the callback URL, M5d2); the Flow read first with zero acting
+    requests for another WABA's, a creation keyed, the changes audited
+    (D135); the data endpoint's route, limits as constants and statuses
+    (D136; swap: settings). The review added: a Flow's `endpoint_uri` may
+    not be this service's address for another WABA (`422`), and the
+    tests of the 32 places, the 408 and the scope. The new setting, scope
+    name, route, metric, operation ids and audit actions are pending the
+    owner's confirmation before the first release; no legal act.
   - **Not done here:** a per-tenant Flow key in the vault (a stored
     kind the library lacks), a synchronous callback URL as the
     integrating app (the webhooks-out `Sender` returns a status only),
     uploading a number's business public key (M5c3, row 66), the
     `application_id` of a Flow's update, a Flow's `health_status` and
     assets (the library lacks them), the replay guard on a request's IV
-    (the library's note), the page of Meta's endpoint error codes
-    (`flows/reference/error-codes`, HTTP 429 when fetched); no call of
+    (the library's note; decided against in D136: Meta states no
+    validity window), the `427` answer (the Flow token is no longer valid,
+    from the page of Meta's endpoint error codes); no call of
     these routes was run against Meta live.
 - [ ] **M5d2. Flows: the app over HTTP, a key per tenant, the rest of
-  the API** (rows 61, 62): what M5d proposed and left.
+  the API** (rows 61, 62): what M5d decided and left.
   - **After:** M5d.
   - **Scope:** the integrating app answering over HTTP (design D134's
     swap: a tenant's callback URL called synchronously by the data
@@ -6446,6 +6453,9 @@ or WABA fails the family's own cross-tenant test).
     host checked); and, in the library first, the Flow `application_id`
     of an update, a Flow's `health_status` and its assets (`Flow::assets`
     is there; a route for it is the last step).
+    Also: a handler asking for Meta's `427` (the Flow token is no longer
+    valid), the request-IV replay guard and the data endpoint's limits as
+    settings (D136's swap), once Meta states a validity window.
   - **Decisive:** M5.1, M5.2; a data exchange reaches the tenant's
     callback with the decrypted request and its answer is sealed with
     the request's key; with no callback configured it is `503` as in
