@@ -716,6 +716,9 @@ async fn meta_group_error_codes_answer_their_kinds_code_and_none_of_its_text() {
             "feature_not_available",
         ),
         (Method::GET, group.clone(), None, 131_041, 404, "not_found"),
+        // D172, the rule kept: a code no page documents (`131216`, `Unknown`)
+        // answered with a 4xx on a read is Meta refusing the group.
+        (Method::GET, group.clone(), None, 131_216, 404, "not_found"),
         (
             Method::GET,
             group.clone(),
@@ -861,6 +864,26 @@ async fn meta_group_error_codes_answer_their_kinds_code_and_none_of_its_text() {
         // Never retried: one request for the answer.
         assert_eq!(h.graph.remaining(), 0, "{what}");
     }
+}
+
+/// D172: the rule "a 4xx `Unknown` on a group read is Meta refusing the
+/// group" is for a 4xx only. An undocumented code on a 5xx is Meta failing,
+/// answered `502 unknown` with Meta's code, never `404`.
+#[tokio::test]
+async fn an_unknown_code_on_a_server_error_is_not_the_group_refused() {
+    let (h, key) = connected().await;
+    hold(&h, PN, GROUP).await;
+    let group = format!("/v1/numbers/{PN}/groups/{GROUP}");
+    h.graph.push_json(500, graph_error(131_216, "x"));
+    let reply = h.call(Call::get(&group).key(&key)).await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::BAD_GATEWAY, "unknown"),
+        "{}",
+        reply.text
+    );
+    assert_eq!(reply.json()["error"]["graph"]["code"], 131_216);
+    assert_eq!(h.graph.remaining(), 0);
 }
 
 // ─── Invite links, participants, join requests ───────────────────────────
