@@ -8,6 +8,11 @@
 //! | [`Templates::create`] | `POST /{waba_id}/message_templates` |
 //! | [`Templates::create_authentication`] | `POST /{waba_id}/upsert_message_templates` (`templates/authentication-templates/bulk-management`: one authentication template in one or more languages, created or updated; roadmap M3c) |
 //! | [`Templates::delete`] | `DELETE /{waba_id}/message_templates?name=…`; with an id, `GET /{waba_id}/message_templates?fields=name&name=…` first (the id must be among them), then `…&hsm_id=…` |
+//! | [`Templates::edit`], [`Templates::unpause`], [`Templates::compare`] (roadmap M5b) | the id's lookup by its name (as [`Templates::get`], both ids for a comparison), then `POST /{id}`, `POST /{id}/unpause`, `GET /{id}/compare` |
+//! | [`Templates::archive`], [`Templates::unarchive`] (roadmap M5b) | `GET /{waba_id}/message_templates?fields=id&limit=100[&status=ARCHIVED]` until every id is found ([`WALK_PAGES`] at most), then `POST /{waba_id}/message_templates/archive` (`unarchive`) |
+//! | [`Templates::library`], [`Templates::create_from_library`] (roadmap M5b) | `GET /message_template_library`; `POST /{waba_id}/message_templates` with `library_template_name` |
+//! | [`Templates::migrate`] (roadmap M5b) | the source opened as the caller's WABA, its ids walked with its token, then `POST /{waba_id}/migrate_message_templates` |
+//! | [`Templates::create_group`], [`Templates::group`], [`Templates::update_group`], [`Templates::delete_group`] (roadmap M5b) | `POST /{waba_id}/template_groups` after the walk; `GET /{group_id}` (its WABA must be this one), then `POST` or `DELETE /{group_id}` |
 //!
 //! Pages: `templates/template-management`, `templates/overview`,
 //! `reference/whatsapp-business-account/message-template-api`.
@@ -87,10 +92,28 @@ const LOOKUP_PAGE_SIZE: u32 = 100;
 /// counts as not the WABA's.
 const LOOKUP_PAGES: usize = 5;
 
+/// Page size of the walk over a WABA's templates that finds a bulk
+/// operation's ids ([`Templates::archive`], a group's templates, a
+/// migration's; roadmap M5b).
+const WALK_PAGE_SIZE: u32 = 100;
+
+/// Most pages that walk reads (1,000 templates): past them, an id counts as
+/// not the WABA's (design D116).
+pub const WALK_PAGES: usize = 10;
+
 /// Where the lookup's log line has always been written from: the target
 /// the service's operators filter on (`RUST_LOG`), kept when the lookup
 /// moved here (roadmap S5c).
 const LOG_TARGET: &str = "meta_whatsapp_server::api::templates";
+
+mod groups;
+mod lifecycle;
+
+pub use groups::{TemplateGroupDetails, group_creation, group_update};
+pub use lifecycle::{
+    LibraryFilter, MAX_BULK_IDS, MAX_MIGRATION_IDS, Migration, MigrationRequest, bulk_ids, edit,
+    library_request, migration,
+};
 
 // ─── The answers ─────────────────────────────────────────────────────────
 
@@ -575,6 +598,20 @@ impl<'a> Templates<'a> {
         self.counted(error).await.with_details(error)
     }
 
+    /// The caller's audit event `action` on the WABA
+    /// ([`crate::audit::tenant_audit`]).
+    fn audit(&self, action: &'static str) {
+        tenant_audit(
+            action,
+            self.caller.key_id(),
+            &Subject {
+                tenant: Some(self.caller.tenant().as_str()),
+                waba_id: Some(self.waba.waba_id().as_str()),
+                ..Subject::default()
+            },
+        );
+    }
+
     /// One page of the WABA's templates (`limit` of them, after Meta's
     /// cursor `after`, a [`TemplatePage::next_after`]), from the cache or
     /// from Meta, which then keeps it.
@@ -646,23 +683,98 @@ impl<'a> Templates<'a> {
     /// Meta's refusal or failure otherwise, with its `details`.
     pub async fn get(&self, id: &str) -> Result<Template, ServiceError> {
         let id: TemplateId = typed_graph_id("id", id)?;
-        // Its name: what the WABA's edge finds templates by. Nothing else of
-        // it is read before it is known to be the WABA's.
+        let template = self.owned_template(&id, &TEMPLATE_FIELDS).await?;
+        Ok(Template::from(template))
+    }
+
+    /// The template `id`, with `fields`, if it is the WABA's: its name
+    /// first (`GET /{id}?fields=name`, nothing else of it read before it is
+    /// known to be the WABA's), then the WABA's own templates of that name,
+    /// among which it must be ([`Self::in_waba`]). What every operation on
+    /// one template id checks before it acts (roadmap M5b: an edit, an
+    /// unpause, a comparison's two ids).
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found`, without Meta's code or text: Meta refusing the id,
+    /// or a template not among the WABA's. Meta's failure otherwise, with
+    /// its `details`.
+    async fn owned_template(
+        &self,
+        id: &TemplateId,
+        fields: &[&str],
+    ) -> Result<TemplateInfo, ServiceError> {
+        // Its name: what the WABA's edge finds templates by.
         let named = self
             .waba
             .client()
             .templates(self.waba.waba_id().clone())
-            .get_fields(&id, &["name"])
+            .get_fields(id, &["name"])
             .await;
         let name = match named {
             Ok(info) => info.name.ok_or_else(ServiceError::not_found)?,
             Err(error) => return Err(object_failed(self.counted(&error).await, &error)),
         };
-        let template = self
-            .in_waba(&name, &id, &TEMPLATE_FIELDS)
+        self.in_waba(&name, id, fields)
             .await?
-            .ok_or_else(ServiceError::not_found)?;
-        Ok(Template::from(template))
+            .ok_or_else(ServiceError::not_found)
+    }
+
+    /// Whether every one of `ids` is among the templates of `waba` (this
+    /// one, or a migration's source), read with its own token: one walk of
+    /// its list (`GET
+    /// /{waba_id}/message_templates?fields=id&limit=100[&status=…]`, at
+    /// most [`WALK_PAGES`] pages, stopping once all are found), never
+    /// cached. The bulk operations' check (roadmap M5b, design D116): an
+    /// archive, an unarchive, a group's templates, a migration's ids.
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found`, without Meta's code or text, when one of them is
+    /// not found in the pages read (another WABA's, none, or past them):
+    /// nothing is done. Meta's refusal or failure, with its `details`.
+    async fn all_in_waba(
+        &self,
+        waba: &OwnedWaba,
+        ids: &[TemplateId],
+        status: Option<TemplateStatus>,
+    ) -> Result<(), ServiceError> {
+        let mut missing: std::collections::HashSet<&TemplateId> = ids.iter().collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let templates = waba.client().templates(waba.waba_id().clone());
+        let mut query = TemplateListQuery::new()
+            .fields(["id"])
+            .limit(WALK_PAGE_SIZE);
+        query.status = status;
+        for _ in 0..WALK_PAGES {
+            let page = match templates.list(&query).await {
+                Ok(page) => page,
+                Err(error) => {
+                    let api = waba.failed(self.authz, &error).await;
+                    if error.graph().is_some() {
+                        self.observer.graph_error(api.code());
+                    }
+                    return Err(api.with_details(&error));
+                }
+            };
+            for template in &page.data {
+                missing.remove(&template.id);
+            }
+            if missing.is_empty() {
+                return Ok(());
+            }
+            match page.next_cursor() {
+                Some(after) => query.after = Some(after.to_owned()),
+                None => return Err(ServiceError::not_found()),
+            }
+        }
+        tracing::warn!(
+            target: LOG_TARGET,
+            "a template id was not found in the first pages of its WABA's templates"
+        );
+        Err(ServiceError::not_found())
     }
 
     /// The template `id` among the WABA's templates named `name`, with
@@ -794,19 +906,11 @@ impl<'a> Templates<'a> {
         self.cache.invalidate(self.waba.waba_id());
         match deleted {
             Ok(()) => {
-                tenant_audit(
-                    if id.is_some() {
-                        "template_deleted"
-                    } else {
-                        "templates_deleted"
-                    },
-                    self.caller.key_id(),
-                    &Subject {
-                        tenant: Some(self.caller.tenant().as_str()),
-                        waba_id: Some(self.waba.waba_id().as_str()),
-                        ..Subject::default()
-                    },
-                );
+                self.audit(if id.is_some() {
+                    "template_deleted"
+                } else {
+                    "templates_deleted"
+                });
                 Ok(())
             }
             Err(error) => Err(self.failed(&error).await),

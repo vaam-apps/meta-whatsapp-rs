@@ -30,7 +30,10 @@
 //! [`Parameter`]'s `Debug` redacts `text` and `coupon_code` values: those
 //! carry one-time passcodes in authentication templates (and customer data
 //! elsewhere), and a template message is exactly the kind of value that
-//! ends up in a `tracing` field.
+//! ends up in a `tracing` field. [`ParameterAction`]'s `Debug` redacts a
+//! Flow button's `flow_token`, which identifies the Flow's session to the
+//! business's data endpoint (as the Flow message's
+//! [`FlowParameters`](crate::messages::FlowParameters) does).
 
 use std::fmt;
 
@@ -1101,7 +1104,11 @@ pub struct ProductReference {
 }
 
 /// `action` parameter object; which fields apply depends on the button.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+///
+/// `Debug` hides `flow_token`: the token identifies the Flow's session to
+/// the business's data endpoint, so a logged template message must not
+/// carry it. `Serialize` is not redacted.
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ParameterAction {
     /// Flow buttons: token echoed in Flow responses (Meta default `"unused"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1122,6 +1129,32 @@ pub struct ParameterAction {
     /// Payment request buttons: the payment method and amount.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payment_request: Option<PaymentRequest>,
+}
+
+impl fmt::Debug for ParameterAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Every field named, so that a new one fails to compile here
+        // instead of escaping the redaction.
+        let Self {
+            flow_token,
+            flow_action_data,
+            thumbnail_product_retailer_id,
+            sections,
+            order_details,
+            payment_request,
+        } = self;
+        f.debug_struct("ParameterAction")
+            .field("flow_token", &flow_token.as_ref().map(|_| "[REDACTED]"))
+            .field("flow_action_data", flow_action_data)
+            .field(
+                "thumbnail_product_retailer_id",
+                thumbnail_product_retailer_id,
+            )
+            .field("sections", sections)
+            .field("order_details", order_details)
+            .field("payment_request", payment_request)
+            .finish()
+    }
 }
 
 /// A multi-product message section.

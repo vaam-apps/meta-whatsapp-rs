@@ -4649,7 +4649,8 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `subscriptions/listen` for a changed page (the tool list never
     changes).
 - [ ] **L23. Template groups and archiving** (`meta-whatsapp-client`,
-  `client::templates`; rows 101, 153): template groups' create, read,
+  `client::templates`; row 153, and archiving, done on both sides since
+  M5b): template groups' create, read,
   update and delete, after reading the reference Meta's changelog links
   (its guide is not in Meta's page list); archiving and unarchiving in
   bulk, after reading the endpoints `templates/template-management`
@@ -4658,7 +4659,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **After:** nothing.
   - **Decisive:** exact JSON; a group id is checked as digits before any
     request.
-  - **Partly landed** (left open, row 153 partial): row 101 done in the
+  - **Partly landed** (left open, row 153 partial): archiving done in the
     library; row 153's create, get, update and delete. Meta's pages as
     served on 2026-10-26 document both: `templates/template-archival` now
     shows `POST /{WABA_ID}/message_templates/archive` and `…/unarchive`,
@@ -6246,21 +6247,82 @@ or WABA fails the family's own cross-tenant test).
   - **Not done here:** Direct Send's interactive authentication message
     (a copy-code OTP button) and mixed URL and reply buttons, which the
     library does not model (its `MessageContent::Raw`, which the service
-    refuses); the catalog a template's product cards name (M5b's); a
-    group id checked against the number's groups (M5f's); the comparison
+    refuses); the catalog a template's product cards name (M5b's, done
+    there); a group id checked against the number's groups (M5f's); the comparison
     on the types before M5a (D100).
   - **Also, after the first release** (from S7, carried by M2a, P2 and
     now M5a, which landed before it): drop the legacy fingerprint (S6's
     window: `Fingerprint::legacy_v1_json`, `legacy_v1_upload`,
     `or_legacy`, and the handlers' `Uri`), once every deployment has run
     a release with S6 for one `WA_SERVER_IDEMPOTENCY_TTL`.
-- [ ] **M5b. Templates** (rows 95, 96, 99, 100, 101, 153): edit,
+- [x] **M5b. Templates** (rows 95, 96, 99, 100, 101, 153): edit,
   library, migrate, compare, unpause, archive and unarchive, template
   groups, each kind of row 99 created through the service (app deep
   links pass through since L24).
   - **After:** S7, L23.
   - **Decisive:** M5.1, M5.2; creating each kind of row 99 from Meta's
     example passes with no key dropped.
+  - **Landed:** scope `templates`, on a WABA of the tenant, each route
+    the library's call through the core's `templates::Templates`: `PATCH
+    /v1/wabas/{waba_id}/templates/{id}` (an edit, Meta's body read into
+    `TemplateEdit` with no key dropped; `name` and `language` refused),
+    `POST …/templates/{id}/unpause`, `GET …/templates/{id}/compare`
+    (`template_ids`, `start`, `end`), `POST …/templates/archive` and
+    `…/unarchive` (Meta's `hsm_ids`), `GET` and `POST …/templates/library`
+    (the Template Library's first page; a creation from an entry, its
+    button inputs an array of objects), `POST …/templates/migrations`,
+    and the groups (`POST /v1/wabas/{waba_id}/template-groups`, `GET`,
+    `PATCH`, `DELETE …/template-groups/{group_id}`). The design's M5.2:
+    one template id is looked up by its name among the WABA's own (as a
+    get), a list in one walk of the WABA's templates (`fields=id`, 100 a
+    page, 10 pages at most; an unarchive walks `status=ARCHIVED`), a
+    migration's source is opened as a WABA of the caller's own tenant and
+    its ids walked with its token, a group is read first and acted on
+    only when its `whatsapp_business_account` is the path's WABA; else
+    `404 not_found`, nothing done. A `zero_tap_terms_accepted: true` is
+    refused wherever it is (an edit's buttons, a library button input).
+    A creation from the library, a migration and a group's creation take
+    an `Idempotency-Key`; the changes that succeed are audited. M5a's
+    note, the catalog a template's product parameters name, is checked
+    too: a template send naming a `catalog_id` anywhere (a single-product
+    header, a product card, a parameter the library does not type) is
+    sent only when it is among `GET /{waba_id}/product_catalogs`, else
+    `404` with nothing sent (`messages::named_object`, D102's check). The
+    M5a review's leak is closed: the library's `ParameterAction` (a Flow
+    button's `action`) redacts `flow_token` in `Debug`, and the service's
+    raw `template` (`SendMessage`, `ReplyMessage`, core and adapter)
+    shows its keys only (CHANGELOG § Security). The OpenAPI document is
+    additive only (12 operations, 20 schemas; the templates tag's
+    description reworded). Tests: `tests/template_lifecycle.rs` (each
+    route's exact requests from Meta's examples, with the tenant's token;
+    another WABA's template, group or catalog `404` with nothing acted
+    on; each refusal before any request;
+    `each_kind_of_row_99_is_created_from_metas_example_with_no_key_dropped`
+    over the nine kinds' examples, a key the library would drop refused
+    in each; `a_ttl_and_a_tap_target_reach_meta`; the walk's bound;
+    `a_templates_catalog_is_the_numbers_wabas`), M5.1 by construction
+    (`tests/authz.rs` iterates every route), M1.5 (`tests/errors.rs`: the
+    new routes in its lists), M1.7's capture over every new route
+    (`tests/common/capture.rs`), the core's checks
+    (`templates::lifecycle`, `templates::groups` tests), the redactions
+    (`a_flow_buttons_token_is_redacted_from_debug`,
+    `a_templates_flow_token_never_reaches_debug`,
+    `a_templates_flow_token_never_reaches_the_requests_debug`).
+  - **Decided** (design D115–D122, by the coordinator on 2026-11-05
+    under the owner's delegation, each swappable): the routes (D115), the
+    walk for a bulk operation's ids (D116), a migration's source a WABA
+    of the caller's own tenant (D117), a group read for its WABA first
+    (D118), which operations take an `Idempotency-Key` (D119), the audit
+    actions (D120), a template's Flow token out of every log (D121), the catalog a template's products name checked before each send (D122). The
+    new operation ids and audit actions are pending the owner's
+    confirmation before the first release; no new setting, error code or
+    stored name in a store; no legal act.
+  - **Not done here:** the list of a WABA's template groups and the
+    pages after the first of a group's templates, and the library's next
+    page (no page of Meta's documents them; the library wraps none); a
+    WABA's templates past the walk's 1,000 for a bulk operation (D116);
+    a comparison of more than two templates (Meta's limit); no call of
+    these routes was run against Meta live.
 - [ ] **M5c1. Media: resumable upload and conversion** (rows 47, 48):
   resumable upload; conversion on upload only when the deployment
   configures a converter (L19).

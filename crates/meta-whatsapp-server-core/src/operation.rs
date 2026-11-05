@@ -157,11 +157,35 @@ pub enum Operation {
     ListWebhookDeliveries,
     /// `retry_webhook_delivery`: a webhook delivery made again.
     RetryWebhookDelivery,
+    /// `edit_template`: a template edited: its category, components or time to live (roadmap M5b).
+    EditTemplate,
+    /// `list_library_templates`: the Template Library's entries (roadmap M5b).
+    ListLibraryTemplates,
+    /// `create_library_template`: a template created from a Template Library entry (roadmap M5b).
+    CreateLibraryTemplate,
+    /// `migrate_templates`: templates recreated from another of the tenant's WABAs (roadmap M5b).
+    MigrateTemplates,
+    /// `compare_templates`: two templates of a WABA compared (roadmap M5b).
+    CompareTemplates,
+    /// `unpause_template`: a paused template unpaused (roadmap M5b).
+    UnpauseTemplate,
+    /// `archive_templates`: templates archived (roadmap M5b).
+    ArchiveTemplates,
+    /// `unarchive_templates`: archived templates unarchived (roadmap M5b).
+    UnarchiveTemplates,
+    /// `create_template_group`: a template group created (roadmap M5b).
+    CreateTemplateGroup,
+    /// `get_template_group`: a template group, by id (roadmap M5b).
+    GetTemplateGroup,
+    /// `update_template_group`: a template group renamed, described, or its templates changed (roadmap M5b).
+    UpdateTemplateGroup,
+    /// `delete_template_group`: a template group deleted, its templates kept (roadmap M5b).
+    DeleteTemplateGroup,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 54] = [
+    pub const ALL: [Self; 66] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -216,6 +240,18 @@ impl Operation {
         Self::TestWebhookEndpoint,
         Self::ListWebhookDeliveries,
         Self::RetryWebhookDelivery,
+        Self::EditTemplate,
+        Self::ListLibraryTemplates,
+        Self::CreateLibraryTemplate,
+        Self::MigrateTemplates,
+        Self::CompareTemplates,
+        Self::UnpauseTemplate,
+        Self::ArchiveTemplates,
+        Self::UnarchiveTemplates,
+        Self::CreateTemplateGroup,
+        Self::GetTemplateGroup,
+        Self::UpdateTemplateGroup,
+        Self::DeleteTemplateGroup,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -275,6 +311,18 @@ impl Operation {
             Self::TestWebhookEndpoint => "test_webhook_endpoint",
             Self::ListWebhookDeliveries => "list_webhook_deliveries",
             Self::RetryWebhookDelivery => "retry_webhook_delivery",
+            Self::EditTemplate => "edit_template",
+            Self::ListLibraryTemplates => "list_library_templates",
+            Self::CreateLibraryTemplate => "create_library_template",
+            Self::MigrateTemplates => "migrate_templates",
+            Self::CompareTemplates => "compare_templates",
+            Self::UnpauseTemplate => "unpause_template",
+            Self::ArchiveTemplates => "archive_templates",
+            Self::UnarchiveTemplates => "unarchive_templates",
+            Self::CreateTemplateGroup => "create_template_group",
+            Self::GetTemplateGroup => "get_template_group",
+            Self::UpdateTemplateGroup => "update_template_group",
+            Self::DeleteTemplateGroup => "delete_template_group",
         }
     }
 
@@ -303,7 +351,19 @@ impl Operation {
             | Self::CreateTemplate
             | Self::DeleteTemplates
             | Self::GetTemplate
-            | Self::CreateAuthenticationTemplate => Scope::Templates,
+            | Self::CreateAuthenticationTemplate
+            | Self::EditTemplate
+            | Self::ListLibraryTemplates
+            | Self::CreateLibraryTemplate
+            | Self::MigrateTemplates
+            | Self::CompareTemplates
+            | Self::UnpauseTemplate
+            | Self::ArchiveTemplates
+            | Self::UnarchiveTemplates
+            | Self::CreateTemplateGroup
+            | Self::GetTemplateGroup
+            | Self::UpdateTemplateGroup
+            | Self::DeleteTemplateGroup => Scope::Templates,
             Self::ListEvents | Self::GetEvent | Self::StreamEvents | Self::StreamNumberEvents => {
                 Scope::Events
             }
