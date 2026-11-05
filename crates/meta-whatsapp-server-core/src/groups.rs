@@ -892,7 +892,9 @@ impl<'a> Groups<'a> {
     /// the group is `404 not_found` (the record outlived the group, say).
     async fn failed_on_group(&self, error: &Error) -> ServiceError {
         let api = self.failed(error).await;
-        if object_refused(error) {
+        // An answer that does not decode is not Meta refusing the group (the
+        // id came from the service's own records, not from the caller).
+        if !matches!(error, Error::Decode { .. }) && object_refused(error) {
             tracing::debug!(
                 target: LOG_TARGET,
                 code = api.code(),

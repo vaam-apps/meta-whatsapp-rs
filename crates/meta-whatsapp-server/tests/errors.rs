@@ -478,7 +478,6 @@ const OBJECT_BY_ID: &[&str] = &[
 /// for them: it is `2xx`, and answers no Meta text.
 const SUCCESS_ON_ANY_200: &[&str] = &[
     "PATCH /v1/numbers/{pn}/groups/{group_id}",
-    "DELETE /v1/numbers/{pn}/groups/{group_id}",
     "POST /v1/numbers/{pn}/groups/{group_id}/participants/remove",
 ];
 
