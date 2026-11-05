@@ -226,6 +226,18 @@ stored data, the owner's).
 
 ### Added
 
+- **Service: commerce, QR codes, analytics and the block list** (roadmap
+  M5g, parity rows 71, 102, 103, 106 and 107). Four key scopes (`commerce`,
+  `qr_codes`, `analytics`, `contacts`; names pending the owner's
+  confirmation) and 17 routes: a number's commerce settings, the catalog
+  its WABA connects with its products (a catalog found in the WABA's own
+  list first), QR codes (a code found in the number's own list first), the
+  messaging, conversation, pricing and template analytics (ranges bounded
+  by Meta's look-back, half hours by the service), and the block list
+  (blocks and unblocks audited by count, never by person; Meta's texts in
+  no answer and no log). The OpenAPI document grew by 12 paths, additively.
+
+
 - **CrateStack enters the workspace** (roadmap S10, design D20 and §8.3;
   coverage row 33; no parity or category row changes status: the
   adapter serves nothing yet).

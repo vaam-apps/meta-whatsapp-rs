@@ -6368,17 +6368,45 @@ or WABA fails the family's own cross-tenant test).
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; the data endpoint answers a request
     sealed with Meta's example key, and refuses a bad signature.
-- [ ] **M5e. Calling** (rows 74, 75, 134, 135).
+- [ ] **M5e. Calling** (rows 74, 75, 107, 134, 135): call analytics (row 107) among them.
   - **After:** S7, L14.
   - **Decisive:** M5.1, M5.2.
-- [ ] **M5f. Groups** (rows 76, 77, 79, 81).
+- [ ] **M5f. Groups** (rows 76, 77, 79, 81, 107): group analytics (row 107) among them.
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; a group id not in the number's groups is
     `404` with zero vault reads.
-- [ ] **M5g. Commerce, QR codes, analytics, block users** (rows 71,
+- [x] **M5g. Commerce, QR codes, analytics, block users** (rows 71,
   102, 103, 106, 107).
   - **After:** S7, L17.
   - **Decisive:** M5.1, M5.2.
+  - **Landed:** four scopes, each its own (D140, names pending the
+    owner's confirmation before the first release): `commerce`,
+    `qr_codes`, `analytics`, `contacts`; 17 operations (OpenAPI additive
+    only: 12 paths, no schema changed but `Scope`'s enum and the tags').
+    `GET`/`PATCH /v1/numbers/{pn}/commerce-settings`; `GET
+    /v1/wabas/{waba_id}/catalogs`, `…/catalogs/{catalog_id}`, `…/products`
+    (the catalog found in the WABA's own `product_catalogs` first, D141;
+    a page of 100 at most, D142); `POST`/`GET /v1/numbers/{pn}/qr-codes`
+    and `GET`/`PATCH`/`DELETE …/{code}` (a code found in the number's own
+    list, D144; an `Idempotency-Key` on the creation; a deletion
+    audited); `GET /v1/wabas/{waba_id}/analytics/messaging`,
+    `/conversations`, `/pricing`, `/templates` (a year's look-back, 90
+    days for templates, half hours at most 31 days, template ids found
+    among the WABA's own, D145); `GET`/`POST /v1/numbers/{pn}/blocked-users`
+    and `POST …/blocked-users/unblock` (people by phone and/or BSUID, an
+    `Idempotency-Key`, each change an audit event by count never by
+    person, Meta's texts in no answer and no log, D143). The core's
+    services: `server_core::{commerce, qr_codes, analytics,
+    blocked_users}`. Tests: `tests/commerce_qr_analytics.rs` (exact
+    requests from Meta's pages, the cross-object `404`s with only the
+    lookup sent, every refusal before any request, the bounds at their
+    edges), `tests/commerce_logs.rs` (the audit events), M5.1 by
+    construction (`tests/authz.rs`), M1.5 (`tests/errors.rs`), M1.7's
+    capture over every new route (`tests/common/capture.rs`). Not
+    offered, and tracked by no row: a catalog's product sets and one
+    product by id, template group analytics, the two analytics switches
+    (insights, click tracking); call analytics wait for M5e, group
+    analytics for M5f (row 107 is partial until then).
 - [ ] **M5h. Marketing Messages API and CTWA** (rows 136–138, 154). The
   max-price agreement is its own admin route: an explicit, audited
   operator action, off until the deployment enables it; no other route
