@@ -37,7 +37,7 @@ pub async fn run(backend: &dyn Backend) {
     a_round_without_the_turn_does_nothing(backend).await;
 }
 
-const LEAD: Duration = Duration::from_secs(7 * 86_400);
+const LEAD: Duration = Duration::from_hours(7 * 24);
 const DAY: time::Duration = time::Duration::DAY;
 /// A token's text, which must reach no event.
 const SECRET: &str = "EAAG-the-token-the-expiry-event-must-never-quote";
@@ -186,7 +186,7 @@ pub async fn a_token_inside_the_lead_is_told_to_its_tenant_once(backend: &dyn Ba
         (1, 0),
         "a second round told it again: {second:?}"
     );
-    rig.clock.advance(Duration::from_secs(86_400));
+    rig.clock.advance(Duration::from_hours(24));
     assert_eq!(rig.round(backend).await.recorded, 0);
     assert_eq!(polled(backend, A.id).await.len(), 1);
     assert_eq!(rig.observer.told("recorded"), 1);
@@ -194,7 +194,7 @@ pub async fn a_token_inside_the_lead_is_told_to_its_tenant_once(backend: &dyn Ba
 
     // 25 days on (A expired 23 days ago, B has 4 left): B is told, A not
     // again.
-    rig.clock.advance(Duration::from_secs(24 * 86_400));
+    rig.clock.advance(Duration::from_hours(24 * 24));
     let later = rig.round(backend).await;
     assert_eq!((later.due, later.recorded), (1, 1), "{later:?}");
     let of_b = polled(backend, B.id).await;
@@ -249,7 +249,7 @@ pub async fn a_token_stored_again_is_told_again_and_one_expired_is_not(backend: 
     assert_ne!(before.generation, after.generation);
     assert_eq!(rig.round(backend).await.recorded, 0);
     // A new token a week after, expiring 3 days from then.
-    rig.clock.advance(Duration::from_secs(7 * 86_400));
+    rig.clock.advance(Duration::from_hours(7 * 24));
     rig.store(D, Some(3 * DAY)).await;
     let again = rig.round(backend).await;
     assert_eq!(again.recorded, 1, "{again:?}");

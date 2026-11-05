@@ -1,4 +1,4 @@
-//! The token-expiry event (roadmap M3e; OPEN_QUESTIONS #8; design D180 to
+//! The token-expiry event (roadmap M3e; `OPEN_QUESTIONS.md` #8; design D180 to
 //! D183): ahead of a stored business token's lapse, the tenant that holds
 //! its WABA is told, once, with `token_expiring` in its event outbox, and
 //! a counter moves.

@@ -28,8 +28,8 @@ const PN_B: &str = "106540352242923";
 /// The tokens' text, which no event or metric may hold.
 const TOKEN_A: &str = "EAAG-token-of-a-that-expires-soon";
 const TOKEN_B: &str = "EAAG-token-of-b-that-expires-later";
-const LEAD: Duration = Duration::from_secs(7 * 86_400);
-const DAY: Duration = Duration::from_secs(86_400);
+const LEAD: Duration = Duration::from_hours(7 * 24);
+const DAY: Duration = Duration::from_hours(24);
 
 async fn store(h: &Harness, tenant: &str, waba: &str, pn: &str, token: &str, in_days: i64) {
     h.connect(tenant, waba, &[pn], token).await;

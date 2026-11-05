@@ -517,16 +517,7 @@ async fn run<S: Future<Output = ()>>(
         HOUSEKEEPING_INTERVAL,
         stop_signal(stopped.clone()),
     ));
-    // The token-expiry event (roadmap M3e): off with `off`.
-    let token_expiry = token_expiry_lead.map(|lead| {
-        let (state, backend) = (state.clone(), backend.clone());
-        let stop = stop_signal(stopped.clone());
-        tokio::spawn(async move {
-            state
-                .run_token_expiry(backend, lead, TOKEN_EXPIRY_INTERVAL, stop)
-                .await;
-        })
-    });
+    let token_expiry = spawn_token_expiry(&state, &backend, token_expiry_lead, stopped.clone());
     let public_task = tokio::spawn(listen::serve(
         public,
         public_router(&state),
@@ -591,6 +582,24 @@ fn spawn_dispatcher(
     Some(tokio::spawn(
         Dispatcher::new(backend, state.clock(), out).run(stop_signal(stopped)),
     ))
+}
+
+/// The token-expiry event's task (roadmap M3e): a round every
+/// [`TOKEN_EXPIRY_INTERVAL`] telling `lead` ahead; `None` with `lead` unset
+/// (`WA_SERVER_TOKEN_EXPIRY_LEAD=off`).
+fn spawn_token_expiry(
+    state: &AppState,
+    backend: &Arc<dyn Backend>,
+    lead: Option<Duration>,
+    stopped: watch::Receiver<bool>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let lead = lead?;
+    let (state, backend) = (state.clone(), backend.clone());
+    Some(tokio::spawn(async move {
+        state
+            .run_token_expiry(backend, lead, TOKEN_EXPIRY_INTERVAL, stop_signal(stopped))
+            .await;
+    }))
 }
 
 /// Wait for the dispatcher to end: its attempts in flight end within their
