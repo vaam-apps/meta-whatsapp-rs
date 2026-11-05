@@ -4765,6 +4765,23 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `StorageStatus` an open enum, the value kept in `Other`);
     and `CallbackOverride` does not check its URI's scheme, where
     `set_webhook_url` requires `https`.
+- [ ] **L27. Group error codes** (`meta-whatsapp-core`, `ErrorKind`;
+  found reviewing M5f): `groups/error-codes` lists the codes the group
+  calls fail with (`131201`, "not all participant-level operations
+  succeeded", among them, and the `1312xx` refusals of a participant or
+  a join request: a recipient who has not accepted the terms, a group
+  at its limit, a participant already in the group). None has an
+  `ErrorKind`, so each is `Unknown`: the service answers `502 unknown`
+  with Meta's code (and, on the reads and `DELETE …/groups/{id}`, a
+  4xx `Unknown` is taken as Meta refusing the group: `404`).
+  - **Kind:** additive (new `ErrorKind` variants; `ErrorKind::ALL` and
+    the service's error table gain rows, which is a v1 addition to the
+    codes a route may answer).
+  - **After:** M5f.
+  - **Decisive:** each code of Meta's page classifies as its own kind;
+    the service's `every_error_kind_maps_to_a_documented_code_and_status`
+    still passes with the new kinds; a group route's refusal answers the
+    kind and none of Meta's text (the participant it may quote).
 
 ## 4. Service milestones
 
@@ -6454,8 +6471,8 @@ or WABA fails the family's own cross-tenant test).
     audit events by count), the core's checks (`groups` tests). The
     OpenAPI document is additive only (13 operations, 20 schemas, the
     scope and the tag).
-  - **Proposed** (design D150–D156, pending the coordinator's decision;
-    each swappable): the records and where they are written and read
+  - **Decided** (design D150–D156, by the coordinator on 2026-11-05
+    under the owner's delegation; each swappable): the records and where they are written and read
     (D150), the scope (D151), the routes' shape (D152), the creation
     alone takes an `Idempotency-Key` (D153), the bounds the service adds
     (D154), the audit events and the logs (D155), what is not offered
@@ -6469,9 +6486,25 @@ or WABA fails the family's own cross-tenant test).
     does not offer (D156); a group created before the service is found
     only after a listing or a lifecycle event (D150); the library's debug
     line for a Graph request names the path it calls, so a group's id is
-    in that one line at `debug`, and it classifies none of the groups'
-    error codes (`131201` onward: `502 unknown` with Meta's code); no
-    call of these routes was run against Meta live.
+    in that one line at `debug` (the business's own number, no
+    customer's: accepted, D155), and it classifies none of the groups'
+    error codes (`131201` onward: `502 unknown` with Meta's code: L27);
+    no call of these routes was run against Meta live.
+  - **Reviewed** (security, tenant isolation and personal data): a
+    record is keyed `<pn>.<hash>` with `pn` checked to be digits at each
+    writer and at the read (a number that is not a bound number's shape
+    is never keyed); a record is written only for an event the pipeline
+    routed to the number's holder, and read only after step 4 and a
+    tenant comparison, so a record outliving a move is inert (`a_number_that_moves_tenant_takes_no_group_records_with_it`).
+    **Left, recorded:** the records are not purged when a WABA is
+    unbound, a tenant is deleted or a customer is erased. `KvStore` has
+    no listing or prefix delete, so a purge needs a per-number index (or
+    a `KvStore` extension), which is not cheap; a record holds the tenant
+    id, the number and a hash of the group's id (no customer, no group
+    id), is inert once its number is not the tenant's, and the tenant
+    deletion and the erasure of a customer (M2f: customers, not groups)
+    leave nothing a person is named by. A deployment that must not keep
+    even that waits for M5f3.
 - [ ] **M5f2. Group pictures** (row 76): `PUT /v1/numbers/{pn}/groups/{group_id}/picture`
   over the library's `Group::set_picture` (a multipart upload of a
   square JPEG of at most 5 MiB; Meta checks the shape and the 192×192
@@ -6480,6 +6513,16 @@ or WABA fails the family's own cross-tenant test).
   - **After:** M5f.
   - **Decisive:** M5.1, M5.2; a file that is not a JPEG of at most 5 MiB
     is refused with no request.
+- [ ] **M5f3. Purging the group records** (D150): the records of a
+  number's groups (`wa.server.group`) go when the number's WABA is
+  unbound, when its tenant is deleted (M3a), and when the operator asks
+  for a number's. Needs a way to find a number's records: a per-number
+  index kept with them, or a prefix delete on `KvStore` (a port change,
+  with the conformance suite). Until then they are inert, not gone.
+  - **After:** M5f.
+  - **Decisive:** after a tenant's deletion and after an unbind, no key
+    of the namespace names the number; a number's records of another
+    number are untouched.
 - [ ] **M5g. Commerce, QR codes, analytics, block users** (rows 71,
   102, 103, 106, 107).
   - **After:** S7, L17.
