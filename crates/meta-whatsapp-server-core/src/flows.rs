@@ -271,6 +271,7 @@ struct NewFlowBody {
 pub struct NewFlow {
     request: CreateFlow,
     clone_of: Option<FlowId>,
+    endpoint_uri: Option<String>,
 }
 
 /// A Flow's metadata change, as the request carried it.
@@ -284,7 +285,10 @@ struct FlowChangeBody {
 
 /// A Flow's metadata change checked.
 #[derive(Debug, Clone)]
-pub struct FlowChange(UpdateFlow);
+pub struct FlowChange {
+    update: UpdateFlow,
+    endpoint_uri: Option<String>,
+}
 
 /// `id` from a path or a body, a Meta id, else `422` on `field`.
 fn flow_id(field: &'static str, id: &str) -> Result<FlowId, ServiceError> {
@@ -339,6 +343,64 @@ fn endpoint_uri(uri: &str) -> Result<(), ServiceError> {
     if ok { Ok(()) } else { Err(invalid()) }
 }
 
+/// A data endpoint URL that names this service's own address for Flows
+/// (`.../webhooks/flows/<id>`) must name the WABA the Flow is created or
+/// changed in (design D136): Meta's request carries no tenant or Flow id,
+/// so the address is what routes it to a tenant, and a tenant must not
+/// point a Flow of its own at another tenant's address (its users' answers
+/// would reach that tenant's app). A URL that does not have that shape is
+/// the tenant's own endpoint, whatever the host. Path segments are compared
+/// percent-decoded, so `%77ebhooks` does not slip by.
+fn endpoint_names_waba(uri: &str, waba: &WabaId) -> Result<(), ServiceError> {
+    let invalid = || ServiceError::invalid("endpoint_uri");
+    let url = url::Url::parse(uri).map_err(|_| invalid())?;
+    // Decoded as a whole, so an encoded slash splits a segment too.
+    let path = percent_decoded(url.path());
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    for window in segments.windows(3) {
+        if window[0].eq_ignore_ascii_case("webhooks")
+            && window[1].eq_ignore_ascii_case("flows")
+            && window[2] != waba.as_str()
+        {
+            return Err(invalid());
+        }
+    }
+    // The address with no id after it (`/webhooks/flows`) names no WABA.
+    let n = segments.len();
+    if n >= 2
+        && segments[n - 2].eq_ignore_ascii_case("webhooks")
+        && segments[n - 1].eq_ignore_ascii_case("flows")
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+/// `text` with its `%XX` escapes decoded (bytes that are not UTF-8 become
+/// U+FFFD, which matches nothing).
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while let Some(&byte) = bytes.get(i) {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|pair| std::str::from_utf8(pair).ok())
+            .and_then(|pair| u8::from_str_radix(pair, 16).ok());
+        match (byte, hex) {
+            (b'%', Some(decoded)) => {
+                out.push(decoded);
+                i += 3;
+            }
+            _ => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// A Flow JSON given as a request's `flow_json`: the text Meta takes, or
 /// the JSON object itself (written compactly).
 fn flow_json_text(value: &Value) -> Result<String, ServiceError> {
@@ -381,9 +443,9 @@ pub fn new_flow(body: &Value) -> Result<NewFlow, ServiceError> {
     if let Some(id) = &clone_of {
         request = request.clone_flow_id(id.clone());
     }
-    if let Some(uri) = uri {
-        endpoint_uri(&uri)?;
-        request = request.endpoint_uri(uri);
+    if let Some(uri) = &uri {
+        endpoint_uri(uri)?;
+        request = request.endpoint_uri(uri.clone());
     }
     if let Some(flow_json) = &flow_json {
         request = request.flow_json(flow_json_text(flow_json)?);
@@ -391,7 +453,11 @@ pub fn new_flow(body: &Value) -> Result<NewFlow, ServiceError> {
     if let Some(publish) = publish {
         request = request.publish(publish);
     }
-    Ok(NewFlow { request, clone_of })
+    Ok(NewFlow {
+        request,
+        clone_of,
+        endpoint_uri: uri,
+    })
 }
 
 /// A Flow's metadata change in Meta's JSON (`name`, `categories`,
@@ -419,11 +485,14 @@ pub fn flow_change(body: &Value) -> Result<FlowChange, ServiceError> {
     if let Some(values) = flow_categories {
         update = update.categories(categories("categories", &values)?);
     }
-    if let Some(uri) = uri {
-        endpoint_uri(&uri)?;
-        update = update.endpoint_uri(uri);
+    if let Some(uri) = &uri {
+        endpoint_uri(uri)?;
+        update = update.endpoint_uri(uri.clone());
     }
-    Ok(FlowChange(update))
+    Ok(FlowChange {
+        update,
+        endpoint_uri: uri,
+    })
 }
 
 /// A Flow JSON uploaded as the request's body: the bytes as they came
@@ -600,10 +669,15 @@ impl<'a> Flows<'a> {
     ///
     /// # Errors
     ///
-    /// `404 not_found` for a `clone_flow_id` not the WABA's, and nothing
-    /// created. Meta's refusal or failure, with its `details` (a timeout
+    /// `422 invalid_request` on `endpoint_uri` when it is this service's
+    /// address for another WABA's Flows (see [`endpoint_names_waba`]),
+    /// before any request. `404 not_found` for a `clone_flow_id` not the
+    /// WABA's, and nothing created. Meta's refusal or failure, with its `details` (a timeout
     /// `may_have_been_sent`).
     pub async fn create(&self, flow: &NewFlow) -> Result<FlowCreated, ServiceError> {
+        if let Some(uri) = &flow.endpoint_uri {
+            endpoint_names_waba(uri, self.waba.waba_id())?;
+        }
         if let Some(source) = &flow.clone_of {
             self.owned_flow(source).await?;
         }
@@ -632,12 +706,16 @@ impl<'a> Flows<'a> {
     ///
     /// # Errors
     ///
-    /// As [`Self::get`]; Meta's refusal of an edit (a published Flow's) is
+    /// As [`Self::get`]; `422` on `endpoint_uri` as [`Self::create`]
+    /// (before the read); Meta's refusal of an edit (a published Flow's) is
     /// Meta's, with its `details`.
     pub async fn update(&self, id: &str, change: &FlowChange) -> Result<(), ServiceError> {
         let id = flow_id("flow_id", id)?;
+        if let Some(uri) = &change.endpoint_uri {
+            endpoint_names_waba(uri, self.waba.waba_id())?;
+        }
         self.owned_flow(&id).await?;
-        let updated = self.waba.client().flow(id).update(&change.0).await;
+        let updated = self.waba.client().flow(id).update(&change.update).await;
         match updated {
             Ok(()) => {
                 self.audit("flow_updated");
@@ -831,6 +909,38 @@ mod tests {
             ),
         ] {
             assert_eq!(field(&new_flow(&body).unwrap_err()), at, "{body}");
+        }
+    }
+
+    /// A Flow's endpoint may not be this service's address for another
+    /// WABA (design D136). Decisive: `endpoint_names_waba`.
+    #[test]
+    fn an_endpoint_may_not_name_another_wabas_address() {
+        let waba = WabaId::new("102290129340398").unwrap();
+        for ok in [
+            "https://example.com/flows",
+            "https://flows.example.com/webhooks/flows/102290129340398",
+            "https://example.com/pfx/webhooks/flows/102290129340398/",
+            "https://example.com/webhooks/other/1",
+            "https://example.com/webhooks/meta",
+        ] {
+            assert!(endpoint_names_waba(ok, &waba).is_ok(), "{ok}");
+        }
+        for bad in [
+            "https://example.com/webhooks/flows/102290129340399",
+            "https://example.com/webhooks/flows",
+            "https://example.com/webhooks/flows/",
+            "https://example.com/webhooks/Flows/102290129340399",
+            "https://example.com/%77ebhooks/flows/102290129340399",
+            "https://example.com/webhooks%2Fflows/102290129340399",
+            "https://example.com/x/../webhooks/flows/102290129340399",
+            "https://example.com/webhooks/flows/102290129340398x",
+        ] {
+            assert_eq!(
+                field(&endpoint_names_waba(bad, &waba).unwrap_err()),
+                "endpoint_uri",
+                "{bad}"
+            );
         }
     }
 
