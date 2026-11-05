@@ -1,0 +1,680 @@
+//! Analytics (scope `analytics`; docs/design/server.md, section 4.2;
+//! roadmap M5g, page `analytics`): a WABA's messaging, conversation,
+//! pricing and template analytics. All reads.
+//!
+//! | Route | Graph call, with the tenant's WABA token |
+//! | --- | --- |
+//! | `GET /v1/wabas/{waba_id}/analytics/messaging` | `GET /{waba_id}?fields=analytics.start(…).end(…).granularity(…)…` |
+//! | `GET /v1/wabas/{waba_id}/analytics/conversations` | `GET /{waba_id}?fields=conversation_analytics.start(…).end(…).granularity(…)…` |
+//! | `GET /v1/wabas/{waba_id}/analytics/pricing` | `GET /{waba_id}?fields=pricing_analytics.start(…).end(…).granularity(…)…` |
+//! | `GET /v1/wabas/{waba_id}/analytics/templates` | the walk of the WABA's templates (every `template_ids` among them), then `GET /{waba_id}/template_analytics?…` |
+//!
+//! Times are RFC 3339 (percent-encode a `+` offset), and a template query
+//! also takes `YYYY-MM-DD` days. The ranges are bounded (the core's
+//! [`meta_whatsapp_server_core::analytics`], D145): the look-back Meta
+//! documents (a year; 90 days for templates), and, for `HALF_HOUR`, the
+//! service's 31 days. Lists are comma-separated, and each value one of
+//! Meta's. Not offered: call analytics (roadmap M5e), group analytics
+//! (M5f), template group analytics, and the two switches the page documents.
+
+use meta_whatsapp_rs::webhooks::axum::Json;
+use meta_whatsapp_rs::webhooks::axum::extract::State;
+use meta_whatsapp_server_core::analytics::{
+    self as domain, Analytics, Bound, ConversationRequest, MessagingRequest, Moment,
+    PricingRequest, TemplateRequest, parse_day,
+};
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+use utoipa::ToSchema;
+
+use super::common::{encode_cursor, rfc3339};
+use super::listing::{self, csv};
+use super::templates::ApiQuery;
+use crate::auth::{Caller, OwnedWaba};
+use crate::error::{ApiError, ErrorBody};
+use crate::state::Grant;
+
+// ─── The queries ─────────────────────────────────────────────────────────
+
+/// An RFC 3339 time of a query, else `422 invalid_request` on `field`.
+fn time_of(field: &str, value: &str) -> Result<OffsetDateTime, ApiError> {
+    OffsetDateTime::parse(value, &Rfc3339).map_err(|_| ApiError::invalid(field))
+}
+
+/// A template query's bound: an RFC 3339 time or a `YYYY-MM-DD` day.
+fn bound_of(field: &str, value: &str) -> Result<Bound, ApiError> {
+    match parse_day(value) {
+        Some(day) => Ok(Bound::Day(day)),
+        None => time_of(field, value).map(Bound::At),
+    }
+}
+
+/// The query of messaging analytics.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct MessagingQuery {
+    /// Range start (RFC 3339): at most a year before now.
+    pub start: String,
+    /// Range end (RFC 3339): after `start`, at most a year later.
+    pub end: String,
+    /// `HALF_HOUR` (a range of 31 days at most), `DAY` or `MONTH`.
+    pub granularity: String,
+    /// Comma-separated business phone numbers, digits only (`16505550111`).
+    pub phone_numbers: Option<String>,
+    /// Comma-separated two-letter country codes.
+    pub country_codes: Option<String>,
+}
+
+/// The query of conversation analytics.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationQuery {
+    /// Range start (RFC 3339): at most a year before now.
+    pub start: String,
+    /// Range end (RFC 3339): after `start`, at most a year later.
+    pub end: String,
+    /// `HALF_HOUR` (a range of 31 days at most), `DAILY` or `MONTHLY`.
+    pub granularity: String,
+    /// Comma-separated business phone numbers, digits only.
+    pub phone_numbers: Option<String>,
+    /// Comma-separated: `COST`, `CONVERSATION`.
+    pub metric_types: Option<String>,
+    /// Comma-separated: `AUTHENTICATION`, `MARKETING`, `SERVICE`, `UTILITY`.
+    pub conversation_categories: Option<String>,
+    /// Comma-separated: `FREE_ENTRY_POINT`, `FREE_TIER`, `REGULAR`.
+    pub conversation_types: Option<String>,
+    /// Comma-separated: `BUSINESS_INITIATED`, `USER_INITIATED`, `UNKNOWN`.
+    pub conversation_directions: Option<String>,
+    /// Comma-separated breakdowns: `CONVERSATION_CATEGORY`,
+    /// `CONVERSATION_DIRECTION`, `CONVERSATION_TYPE`, `COUNTRY`, `PHONE`.
+    pub dimensions: Option<String>,
+}
+
+/// The query of pricing analytics.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct PricingQuery {
+    /// Range start (RFC 3339): at most a year before now.
+    pub start: String,
+    /// Range end (RFC 3339): after `start`, at most a year later.
+    pub end: String,
+    /// `HALF_HOUR` (a range of 31 days at most), `DAILY` or `MONTHLY`.
+    pub granularity: String,
+    /// Comma-separated business phone numbers, digits only.
+    pub phone_numbers: Option<String>,
+    /// Comma-separated two-letter country codes.
+    pub country_codes: Option<String>,
+    /// Comma-separated: `COST`, `VOLUME`.
+    pub metric_types: Option<String>,
+    /// Comma-separated: `FREE_CUSTOMER_SERVICE`, `FREE_ENTRY_POINT`, `REGULAR`.
+    pub pricing_types: Option<String>,
+    /// Comma-separated: `AUTHENTICATION`, `AUTHENTICATION_INTERNATIONAL`,
+    /// `MARKETING`, `MARKETING_LITE`, `SERVICE`, `UTILITY`,
+    /// `REFERRAL_CONVERSION`.
+    pub pricing_categories: Option<String>,
+    /// Comma-separated breakdowns: `COUNTRY`, `PHONE`, `PRICING_CATEGORY`,
+    /// `PRICING_TYPE`, `TIER`.
+    pub dimensions: Option<String>,
+}
+
+/// The query of template analytics.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct TemplateQuery {
+    /// Range start: RFC 3339, or a `YYYY-MM-DD` day (required with
+    /// `use_waba_timezone`); at most 90 days before now.
+    pub start: String,
+    /// Range end, in the same format: after `start`, at most 90 days later.
+    pub end: String,
+    /// Comma-separated template ids, 1 to 10, each of the WABA's own.
+    pub template_ids: String,
+    /// Comma-separated: `COST`, `CLICKED`, `DELIVERED`, `READ`, `SENT`
+    /// (none: all).
+    pub metric_types: Option<String>,
+    /// Report in the WABA's timezone (`start` and `end` must be days).
+    pub use_waba_timezone: Option<bool>,
+    /// `next_cursor` of the previous page.
+    pub cursor: Option<String>,
+}
+
+// ─── The answers ─────────────────────────────────────────────────────────
+
+/// A messaging analytics interval.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = MessagingDataPoint)]
+pub struct MessagingPointView {
+    /// Interval start (RFC 3339).
+    #[schema(format = DateTime)]
+    pub start: String,
+    /// Interval end (RFC 3339).
+    #[schema(format = DateTime)]
+    pub end: String,
+    /// Messages sent.
+    #[schema(required = true)]
+    pub sent: Option<u64>,
+    /// Messages delivered.
+    #[schema(required = true)]
+    pub delivered: Option<u64>,
+}
+
+/// Messaging analytics.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = MessagingAnalytics)]
+pub struct MessagingView {
+    /// The business phone numbers included.
+    pub phone_numbers: Vec<String>,
+    /// The countries included.
+    pub country_codes: Vec<String>,
+    /// The granularity of the data points, as Meta writes it.
+    #[schema(required = true)]
+    pub granularity: Option<String>,
+    /// The data points (none when Meta has no data for the range).
+    pub data_points: Vec<MessagingPointView>,
+}
+
+impl From<domain::Messaging> for MessagingView {
+    fn from(analytics: domain::Messaging) -> Self {
+        Self {
+            phone_numbers: analytics.phone_numbers,
+            country_codes: analytics.country_codes,
+            granularity: analytics.granularity,
+            data_points: analytics
+                .data_points
+                .into_iter()
+                .map(|p| MessagingPointView {
+                    start: rfc3339(p.start),
+                    end: rfc3339(p.end),
+                    sent: p.sent,
+                    delivered: p.delivered,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// A conversation analytics interval; a breakdown is `null` unless its
+/// dimension was asked for.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = ConversationDataPoint)]
+pub struct ConversationPointView {
+    /// Interval start (RFC 3339).
+    #[schema(format = DateTime)]
+    pub start: String,
+    /// Interval end (RFC 3339).
+    #[schema(format = DateTime)]
+    pub end: String,
+    /// Conversations.
+    #[schema(required = true)]
+    pub conversation: Option<u64>,
+    /// Approximate cost, in the WABA's currency (not returned for a WABA
+    /// on a partner's credit line).
+    #[schema(required = true)]
+    pub cost: Option<f64>,
+    /// The business phone number.
+    #[schema(required = true)]
+    pub phone_number: Option<String>,
+    /// The country.
+    #[schema(required = true)]
+    pub country: Option<String>,
+    /// The conversation type, as Meta writes it.
+    #[schema(required = true)]
+    pub conversation_type: Option<String>,
+    /// The conversation direction, as Meta writes it.
+    #[schema(required = true)]
+    pub conversation_direction: Option<String>,
+    /// The conversation category, as Meta writes it.
+    #[schema(required = true)]
+    pub conversation_category: Option<String>,
+}
+
+impl From<domain::ConversationPoint> for ConversationPointView {
+    fn from(p: domain::ConversationPoint) -> Self {
+        Self {
+            start: rfc3339(p.start),
+            end: rfc3339(p.end),
+            conversation: p.conversation,
+            cost: p.cost,
+            phone_number: p.phone_number,
+            country: p.country,
+            conversation_type: p.conversation_type,
+            conversation_direction: p.conversation_direction,
+            conversation_category: p.conversation_category,
+        }
+    }
+}
+
+/// Conversation analytics.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = ConversationAnalytics)]
+pub struct ConversationView {
+    /// The data points (none when Meta has no data for the range).
+    pub data_points: Vec<ConversationPointView>,
+}
+
+/// A pricing analytics interval.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = PricingDataPoint)]
+pub struct PricingPointView {
+    /// Interval start (RFC 3339).
+    #[schema(format = DateTime)]
+    pub start: String,
+    /// Interval end (RFC 3339).
+    #[schema(format = DateTime)]
+    pub end: String,
+    /// The business phone number.
+    #[schema(required = true)]
+    pub phone_number: Option<String>,
+    /// The country.
+    #[schema(required = true)]
+    pub country: Option<String>,
+    /// The volume tier (`0:1000`; the upper bound may be `MAX`).
+    #[schema(required = true)]
+    pub tier: Option<String>,
+    /// The pricing type, as Meta writes it.
+    #[schema(required = true)]
+    pub pricing_type: Option<String>,
+    /// The pricing category, as Meta writes it.
+    #[schema(required = true)]
+    pub pricing_category: Option<String>,
+    /// Messages delivered.
+    #[schema(required = true)]
+    pub volume: Option<u64>,
+    /// Approximate cost, in the WABA's currency.
+    #[schema(required = true)]
+    pub cost: Option<f64>,
+}
+
+impl From<domain::PricingPoint> for PricingPointView {
+    fn from(p: domain::PricingPoint) -> Self {
+        Self {
+            start: rfc3339(p.start),
+            end: rfc3339(p.end),
+            phone_number: p.phone_number,
+            country: p.country,
+            tier: p.tier,
+            pricing_type: p.pricing_type,
+            pricing_category: p.pricing_category,
+            volume: p.volume,
+            cost: p.cost,
+        }
+    }
+}
+
+/// Pricing analytics.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = PricingAnalytics)]
+pub struct PricingView {
+    /// The data points (none when Meta has no data for the range).
+    pub data_points: Vec<PricingPointView>,
+}
+
+/// A button's clicks.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = TemplateClick)]
+pub struct ClickView {
+    /// `url_button`, `unique_url_button`, `quick_reply_button`, as Meta
+    /// writes it.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The button's text.
+    #[schema(required = true)]
+    pub button_content: Option<String>,
+    /// The clicks.
+    #[schema(required = true)]
+    pub count: Option<u64>,
+}
+
+/// A cost metric.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = TemplateCost)]
+pub struct CostView {
+    /// `amount_spent`, `cost_per_delivered`, `cost_per_url_button_click`,
+    /// as Meta writes it.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The amount, in the WABA's currency.
+    #[schema(required = true)]
+    pub value: Option<f64>,
+}
+
+/// A template's day of analytics.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = TemplateDataPoint)]
+pub struct TemplatePointView {
+    /// The template.
+    pub template_id: String,
+    /// Day start: RFC 3339, or a `YYYY-MM-DD` day.
+    pub start: String,
+    /// Day end, in the same format.
+    pub end: String,
+    /// Sends.
+    #[schema(required = true)]
+    pub sent: Option<u64>,
+    /// Deliveries.
+    #[schema(required = true)]
+    pub delivered: Option<u64>,
+    /// Reads (tracked for 7 days after the send).
+    #[schema(required = true)]
+    pub read: Option<u64>,
+    /// Button clicks (marketing and utility templates).
+    pub clicked: Vec<ClickView>,
+    /// Cost metrics.
+    pub cost: Vec<CostView>,
+}
+
+/// A set of template analytics.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = TemplateAnalytics)]
+pub struct TemplateSetView {
+    /// `DAILY`, as Meta writes it.
+    #[schema(required = true)]
+    pub granularity: Option<String>,
+    /// The product the metrics are for (`cloud_api`).
+    #[schema(required = true)]
+    pub product_type: Option<String>,
+    /// The WABA's timezone, with `use_waba_timezone`.
+    #[schema(required = true)]
+    pub waba_timezone: Option<String>,
+    /// The data points.
+    pub data_points: Vec<TemplatePointView>,
+}
+
+/// A page of template analytics.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TemplateAnalyticsList {
+    /// The sets.
+    pub data: Vec<TemplateSetView>,
+    /// Pass as `cursor` for the next page; `null` on the last one.
+    #[schema(required = true)]
+    pub next_cursor: Option<String>,
+}
+
+fn moment(moment: Moment) -> String {
+    match moment {
+        Moment::At(at) => rfc3339(at),
+        Moment::Day(day) => format!(
+            "{:04}-{:02}-{:02}",
+            day.year(),
+            u8::from(day.month()),
+            day.day()
+        ),
+    }
+}
+
+impl From<domain::TemplatePage> for TemplateAnalyticsList {
+    fn from(page: domain::TemplatePage) -> Self {
+        Self {
+            data: page
+                .sets
+                .into_iter()
+                .map(|set| TemplateSetView {
+                    granularity: set.granularity,
+                    product_type: set.product_type,
+                    waba_timezone: set.waba_timezone,
+                    data_points: set
+                        .data_points
+                        .into_iter()
+                        .map(|p| TemplatePointView {
+                            template_id: p.template_id,
+                            start: moment(p.start),
+                            end: moment(p.end),
+                            sent: p.sent,
+                            delivered: p.delivered,
+                            read: p.read,
+                            clicked: p
+                                .clicked
+                                .into_iter()
+                                .map(|c| ClickView {
+                                    kind: c.kind,
+                                    button_content: c.button_content,
+                                    count: c.count,
+                                })
+                                .collect(),
+                            cost: p
+                                .cost
+                                .into_iter()
+                                .map(|c| CostView {
+                                    kind: c.kind,
+                                    value: c.value,
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            next_cursor: page.next_after.as_deref().map(encode_cursor),
+        }
+    }
+}
+
+// ─── The routes ──────────────────────────────────────────────────────────
+
+fn analytics<'a>(
+    state: &'a Grant,
+    caller: &'a Caller,
+    owned: &'a OwnedWaba,
+) -> Result<Analytics<'a>, ApiError> {
+    Ok(
+        Analytics::new(state.authz(), caller, owned.capability(state))?
+            .observed_by(state.metrics()),
+    )
+}
+
+/// `GET /v1/wabas/{waba_id}/analytics/messaging`: messages sent and
+/// delivered.
+#[utoipa::path(
+    get,
+    path = "/v1/wabas/{waba_id}/analytics/messaging",
+    tag = "analytics",
+    security(("api_key" = [])),
+    params(
+        ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+        MessagingQuery,
+    ),
+    responses(
+        (status = 200, description = "The analytics", body = MessagingView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such WABA for this tenant", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `start`, `end`, `granularity`, `phone_numbers[i]`, `country_codes[i]` or `query`: nothing asked of Meta", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_messaging_analytics(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedWaba,
+    ApiQuery(query): ApiQuery<MessagingQuery>,
+) -> Result<Json<MessagingView>, ApiError> {
+    let request = MessagingRequest {
+        start: time_of("start", &query.start)?,
+        end: time_of("end", &query.end)?,
+        granularity: query.granularity,
+        phone_numbers: csv(query.phone_numbers.as_deref()),
+        country_codes: csv(query.country_codes.as_deref()),
+    };
+    let analytics = analytics(&state, &caller, &owned)?
+        .messaging(&request)
+        .await?;
+    Ok(Json(MessagingView::from(analytics)))
+}
+
+/// `GET /v1/wabas/{waba_id}/analytics/conversations`: conversations and
+/// their cost.
+#[utoipa::path(
+    get,
+    path = "/v1/wabas/{waba_id}/analytics/conversations",
+    tag = "analytics",
+    security(("api_key" = [])),
+    params(
+        ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+        ConversationQuery,
+    ),
+    responses(
+        (status = 200, description = "The analytics", body = ConversationView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such WABA for this tenant", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `start`, `end`, `granularity`, a filter (`name[i]` for a value) or `query`: nothing asked of Meta", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_conversation_analytics(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedWaba,
+    ApiQuery(query): ApiQuery<ConversationQuery>,
+) -> Result<Json<ConversationView>, ApiError> {
+    let request = ConversationRequest {
+        start: time_of("start", &query.start)?,
+        end: time_of("end", &query.end)?,
+        granularity: query.granularity,
+        phone_numbers: csv(query.phone_numbers.as_deref()),
+        metric_types: csv(query.metric_types.as_deref()),
+        conversation_categories: csv(query.conversation_categories.as_deref()),
+        conversation_types: csv(query.conversation_types.as_deref()),
+        conversation_directions: csv(query.conversation_directions.as_deref()),
+        dimensions: csv(query.dimensions.as_deref()),
+    };
+    let points = analytics(&state, &caller, &owned)?
+        .conversation(&request)
+        .await?;
+    Ok(Json(ConversationView {
+        data_points: points
+            .into_iter()
+            .map(ConversationPointView::from)
+            .collect(),
+    }))
+}
+
+/// `GET /v1/wabas/{waba_id}/analytics/pricing`: delivered messages by
+/// pricing category and type.
+#[utoipa::path(
+    get,
+    path = "/v1/wabas/{waba_id}/analytics/pricing",
+    tag = "analytics",
+    security(("api_key" = [])),
+    params(
+        ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+        PricingQuery,
+    ),
+    responses(
+        (status = 200, description = "The analytics", body = PricingView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such WABA for this tenant", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `start`, `end`, `granularity`, a filter (`name[i]` for a value) or `query`: nothing asked of Meta", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_pricing_analytics(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedWaba,
+    ApiQuery(query): ApiQuery<PricingQuery>,
+) -> Result<Json<PricingView>, ApiError> {
+    let request = PricingRequest {
+        start: time_of("start", &query.start)?,
+        end: time_of("end", &query.end)?,
+        granularity: query.granularity,
+        phone_numbers: csv(query.phone_numbers.as_deref()),
+        country_codes: csv(query.country_codes.as_deref()),
+        metric_types: csv(query.metric_types.as_deref()),
+        pricing_types: csv(query.pricing_types.as_deref()),
+        pricing_categories: csv(query.pricing_categories.as_deref()),
+        dimensions: csv(query.dimensions.as_deref()),
+    };
+    let points = analytics(&state, &caller, &owned)?
+        .pricing(&request)
+        .await?;
+    Ok(Json(PricingView {
+        data_points: points.into_iter().map(PricingPointView::from).collect(),
+    }))
+}
+
+/// `GET /v1/wabas/{waba_id}/analytics/templates`: sends, deliveries, reads,
+/// clicks and cost per template, daily.
+#[utoipa::path(
+    get,
+    path = "/v1/wabas/{waba_id}/analytics/templates",
+    tag = "analytics",
+    security(("api_key" = [])),
+    params(
+        ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+        TemplateQuery,
+    ),
+    responses(
+        (status = 200, description = "A page of analytics", body = TemplateAnalyticsList),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such WABA for this tenant, or a template not among its own (the analytics are not asked for)", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `start`, `end`, `template_ids` (`[i]` for an id), `metric_types[i]`, `cursor` or `query`: nothing asked of Meta", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_template_analytics(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedWaba,
+    ApiQuery(query): ApiQuery<TemplateQuery>,
+) -> Result<Json<TemplateAnalyticsList>, ApiError> {
+    let request = TemplateRequest {
+        start: bound_of("start", &query.start)?,
+        end: bound_of("end", &query.end)?,
+        template_ids: csv(Some(&query.template_ids)),
+        metric_types: csv(query.metric_types.as_deref()),
+        use_waba_timezone: query.use_waba_timezone,
+        after: listing::after(query.cursor.as_deref())?,
+    };
+    let page = analytics(&state, &caller, &owned)?
+        .template(&request)
+        .await?;
+    Ok(Json(TemplateAnalyticsList::from(page)))
+}
+
+#[cfg(test)]
+mod tests {
+    use time::macros::date;
+
+    use super::*;
+
+    /// A query's times are RFC 3339, a template's also a day; anything
+    /// else is `422` on the field. Decisive: each form.
+    #[test]
+    fn times_are_rfc_3339_and_a_template_bound_may_be_a_day() {
+        assert!(time_of("start", "2026-11-01T00:00:00Z").is_ok());
+        assert!(time_of("start", "1793836800").is_err(), "unix seconds");
+        assert!(time_of("start", "2026-11-01").is_err(), "a day");
+        assert_eq!(time_of("end", "x").unwrap_err().field(), Some("end"));
+        assert_eq!(
+            bound_of("start", "2026-11-01").unwrap(),
+            Bound::Day(date!(2026 - 11 - 01))
+        );
+        assert!(matches!(
+            bound_of("start", "2026-11-01T00:00:00Z").unwrap(),
+            Bound::At(_)
+        ));
+        assert_eq!(moment(Moment::Day(date!(2026 - 11 - 01))), "2026-11-01");
+    }
+}

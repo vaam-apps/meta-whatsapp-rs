@@ -487,6 +487,14 @@ pub enum ScopeName {
     Flows,
     /// Erasing a customer on a number (roadmap M2f).
     Erasure,
+    /// Commerce settings and the connected catalog's reads (roadmap M5g).
+    Commerce,
+    /// QR codes and short links (roadmap M5g).
+    QrCodes,
+    /// A WABA's analytics (roadmap M5g).
+    Analytics,
+    /// Blocking and unblocking people, and the block list (roadmap M5g).
+    Contacts,
     /// A number's groups: settings, invite links, participants, join
     /// requests and analytics (roadmap M5f).
     Groups,
@@ -507,6 +515,10 @@ impl From<ScopeName> for Scope {
             ScopeName::Payments => Scope::Payments,
             ScopeName::Flows => Scope::Flows,
             ScopeName::Erasure => Scope::Erasure,
+            ScopeName::Commerce => Scope::Commerce,
+            ScopeName::QrCodes => Scope::QrCodes,
+            ScopeName::Analytics => Scope::Analytics,
+            ScopeName::Contacts => Scope::Contacts,
             ScopeName::Groups => Scope::Groups,
         }
     }
@@ -527,6 +539,10 @@ impl From<Scope> for ScopeName {
             Scope::Payments => ScopeName::Payments,
             Scope::Flows => ScopeName::Flows,
             Scope::Erasure => ScopeName::Erasure,
+            Scope::Commerce => ScopeName::Commerce,
+            Scope::QrCodes => ScopeName::QrCodes,
+            Scope::Analytics => ScopeName::Analytics,
+            Scope::Contacts => ScopeName::Contacts,
             Scope::Groups => ScopeName::Groups,
         }
     }

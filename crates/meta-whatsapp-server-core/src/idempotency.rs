@@ -81,6 +81,7 @@ use crate::uploads::NewUpload;
 /// | `deregister_number` ([`Self::deregister_number`]) | the number's id (the body's confirmation is that id again) |
 /// | `create_group` ([`Self::create_group`]; roadmap M5f) | the number's id; the JSON body, canonical as above |
 /// | `create_library_template`, `migrate_templates`, `create_template_group` ([`Self::create_library_template`], [`Self::migrate_templates`], [`Self::create_template_group`]; roadmap M5b) | the WABA's id; the JSON body, canonical as above |
+/// | `create_qr_code`, `block_users`, `unblock_users` ([`Self::create_qr_code`], [`Self::block_users`], [`Self::unblock_users`]; roadmap M5g) | the number's id; the JSON body, canonical as above |
 /// | `create_flow` ([`Self::create_flow`]; roadmap M5d) | the WABA's id; the JSON body, canonical as above |
 ///
 /// The same request always has the same fingerprint; another operation,
@@ -323,6 +324,24 @@ impl Fingerprint {
             &[("waba_id", waba.as_str())],
             body,
         )
+    }
+
+    /// `create_qr_code` on `number`, with the JSON body the request carried
+    /// (roadmap M5g; no legacy fingerprint).
+    pub fn create_qr_code(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::CreateQrCode, &[("pn", number.as_str())], body)
+    }
+
+    /// `block_users` on `number`, with the JSON body the request carried
+    /// (roadmap M5g; no legacy fingerprint).
+    pub fn block_users(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::BlockUsers, &[("pn", number.as_str())], body)
+    }
+
+    /// `unblock_users` on `number`, with the JSON body the request carried
+    /// (roadmap M5g; no legacy fingerprint).
+    pub fn unblock_users(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::UnblockUsers, &[("pn", number.as_str())], body)
     }
 
     /// `create_group` on `number`, with the JSON body the request carried
@@ -1551,6 +1570,38 @@ mod tests {
         for (i, one) in constructors.iter().enumerate() {
             for other_op in &constructors[i + 1..] {
                 assert_ne!(one(&waba("1"), &body), other_op(&waba("1"), &body));
+            }
+        }
+    }
+
+    /// Roadmap M5g's keyed writes are scoped to the number, the body and
+    /// the operation: the same key and body on another number, with
+    /// another body, or on another of the three, is another request (a
+    /// reused key is `idempotency_key_reused`, never a replay of another
+    /// number's answer). Decisive: the `pn` parameter and the operation of
+    /// each constructor, and the body's canonical form.
+    #[test]
+    fn the_qr_code_and_block_list_fingerprints_are_per_number_body_and_operation() {
+        let body = serde_json::json!({"users": [{"phone": "+1"}], "n": 1});
+        let other = serde_json::json!({"users": [{"phone": "+2"}], "n": 1});
+        let reordered = serde_json::json!({"n": 1, "users": [{"phone": "+1"}]});
+        let constructors: [fn(&PhoneNumberId, &serde_json::Value) -> Fingerprint; 3] = [
+            Fingerprint::create_qr_code,
+            Fingerprint::block_users,
+            Fingerprint::unblock_users,
+        ];
+        for build in constructors {
+            assert_eq!(build(&pn("1"), &body), build(&pn("1"), &reordered));
+            assert_ne!(build(&pn("1"), &body), build(&pn("2"), &body));
+            assert_ne!(build(&pn("1"), &body), build(&pn("1"), &other));
+            assert_ne!(
+                build(&pn("1"), &body),
+                Fingerprint::send_message(&pn("1"), &body)
+            );
+        }
+        for (i, one) in constructors.iter().enumerate() {
+            for other_op in &constructors[i + 1..] {
+                assert_ne!(one(&pn("1"), &body), other_op(&pn("1"), &body));
             }
         }
     }

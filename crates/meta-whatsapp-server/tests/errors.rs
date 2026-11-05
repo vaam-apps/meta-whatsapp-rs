@@ -412,6 +412,24 @@ const CALLS_META: &[&str] = &[
     "POST /v1/wabas/{waba_id}/flows/{flow_id}/publish",
     "POST /v1/wabas/{waba_id}/flows/{flow_id}/deprecate",
     "DELETE /v1/wabas/{waba_id}/flows/{flow_id}",
+    // Roadmap M5g.
+    "GET /v1/numbers/{pn}/commerce-settings",
+    "PATCH /v1/numbers/{pn}/commerce-settings",
+    "GET /v1/wabas/{waba_id}/catalogs",
+    "GET /v1/wabas/{waba_id}/catalogs/{catalog_id}",
+    "GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/products",
+    "POST /v1/numbers/{pn}/qr-codes",
+    "GET /v1/numbers/{pn}/qr-codes",
+    "GET /v1/numbers/{pn}/qr-codes/{code}",
+    "PATCH /v1/numbers/{pn}/qr-codes/{code}",
+    "DELETE /v1/numbers/{pn}/qr-codes/{code}",
+    "GET /v1/wabas/{waba_id}/analytics/messaging",
+    "GET /v1/wabas/{waba_id}/analytics/conversations",
+    "GET /v1/wabas/{waba_id}/analytics/pricing",
+    "GET /v1/wabas/{waba_id}/analytics/templates",
+    "GET /v1/numbers/{pn}/blocked-users",
+    "POST /v1/numbers/{pn}/blocked-users",
+    "POST /v1/numbers/{pn}/blocked-users/unblock",
 ];
 
 /// Operations whose call to Meta is best effort: whatever Meta answers,
@@ -469,6 +487,20 @@ const DETAILS_KEPT: &[&str] = &[
     "POST /v1/wabas/{waba_id}/flows/{flow_id}/publish",
     "POST /v1/wabas/{waba_id}/flows/{flow_id}/deprecate",
     "DELETE /v1/wabas/{waba_id}/flows/{flow_id}",
+    // Roadmap M5g: not the QR codes that carry a message (create, change)
+    // and not the block list's, whose Meta texts may quote it (D143).
+    "GET /v1/numbers/{pn}/commerce-settings",
+    "PATCH /v1/numbers/{pn}/commerce-settings",
+    "GET /v1/wabas/{waba_id}/catalogs",
+    "GET /v1/wabas/{waba_id}/catalogs/{catalog_id}",
+    "GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/products",
+    "GET /v1/numbers/{pn}/qr-codes",
+    "GET /v1/numbers/{pn}/qr-codes/{code}",
+    "DELETE /v1/numbers/{pn}/qr-codes/{code}",
+    "GET /v1/wabas/{waba_id}/analytics/messaging",
+    "GET /v1/wabas/{waba_id}/analytics/conversations",
+    "GET /v1/wabas/{waba_id}/analytics/pricing",
+    "GET /v1/wabas/{waba_id}/analytics/templates",
 ];
 
 /// Operations on an object named by id (a media id, a template id): Meta

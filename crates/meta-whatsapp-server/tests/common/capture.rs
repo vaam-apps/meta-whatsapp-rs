@@ -336,6 +336,10 @@ pub async fn exercise(h: &Harness) -> Secrets {
     // preview link are secrets.
     secrets.section("flows");
     secrets.extend(flows(h, &admin).await);
+    // Commerce, QR codes, analytics and the block list (roadmap M5g): the
+    // people blocked, a code's message and a number filter are not logged.
+    secrets.section("commerce");
+    secrets.extend(commerce_qr_analytics(h, &admin).await);
     secrets.section("webhook_endpoints");
     secrets.extend(webhook_endpoints(h, &admin).await);
     // Embedded Signup (roadmap M3a): neither the merchant's token, nor the
@@ -1929,6 +1933,304 @@ async fn template_lifecycle(h: &Harness, key: &str, waba: &str) {
     assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
 }
 
+/// The person blocked (a phone number, its digits, a BSUID), a QR code's
+/// message and an analytics phone filter (roadmap M5g): in no log line.
+pub const BLOCKED_PHONE: &str = "+16505559876";
+pub const BLOCKED_DIGITS: &str = "16505559876";
+pub const BLOCKED_BSUID: &str = "US.99887766554433221100";
+pub const QR_MESSAGE: &str = "CAPTURE-QR-MESSAGE-Echeveria-monday";
+pub const ANALYTICS_NUMBER: &str = "16505550999";
+
+/// Roadmap M5g's routes on merchant-42's WABA and first number, each once
+/// with Meta's documented answer: the commerce settings and a catalog with
+/// its products, the QR codes (created, listed, read, changed, deleted),
+/// the four analytics, and the block list (a block answered in part, an
+/// unblock, a block cut by a timeout, one refused by Meta, whose texts
+/// quote the person); returns what the logs must not hold. The audit
+/// events are `check_audit`'s.
+#[allow(clippy::too_many_lines)] // eighteen routes, each with its scripted answer
+async fn commerce_qr_analytics(h: &Harness, admin: &str) -> Vec<String> {
+    use meta_whatsapp_rs::core::clock::Clock as _;
+    use time::format_description::well_known::Rfc3339;
+    const WABA: &str = "102290129340398";
+    const PN: &str = "1972385232742141";
+    const CATALOG: &str = "194836987003835";
+    const CODE: &str = "4O4YGZEG3RIVE1";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["commerce", "qr_codes", "analytics", "contacts"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let call = |method: Method, path: String| Call::new(method, path).key(&key);
+    let ok = |reply: &super::Reply, status: u16| {
+        assert_eq!(reply.status.as_u16(), status, "{}", reply.text);
+    };
+    // Commerce settings.
+    h.graph.push_json(
+        200,
+        json!({"data": [{"is_cart_enabled": true, "is_catalog_visible": true, "id": "727705352028726"}]}),
+    );
+    let settings = h
+        .call(call(
+            Method::GET,
+            format!("/v1/numbers/{PN}/commerce-settings"),
+        ))
+        .await;
+    ok(&settings, 200);
+    h.graph.push_json(200, json!({"success": true}));
+    let changed = h
+        .call(
+            call(Method::PATCH, format!("/v1/numbers/{PN}/commerce-settings"))
+                .json(&json!({"is_cart_enabled": false})),
+        )
+        .await;
+    ok(&changed, 204);
+    // The catalog, then its products.
+    let catalogs = json!({"data": [{"id": CATALOG, "name": "Lucky Shrub", "product_count": 1, "vertical": "commerce"}]});
+    h.graph.push_json(200, catalogs.clone());
+    let listed = h
+        .call(call(Method::GET, format!("/v1/wabas/{WABA}/catalogs")))
+        .await;
+    ok(&listed, 200);
+    h.graph.push_json(200, catalogs.clone());
+    let one = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/catalogs/{CATALOG}"),
+        ))
+        .await;
+    ok(&one, 200);
+    h.graph.push_json(200, catalogs);
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "5000000000000001", "retailer_id": "sku-1", "name": "Mug"}],
+               "paging": {"cursors": {"before": "QVFI", "after": "MjQZD"},
+                          "next": "https://graph.facebook.com/v25.0/x?after=MjQZD&access_token=CAPTURE-PAGING-TOKEN"}}),
+    );
+    let products = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/products?limit=1"),
+        ))
+        .await;
+    ok(&products, 200);
+    // QR codes.
+    let code = json!({"code": CODE, "prefilled_message": QR_MESSAGE,
+                      "deep_link_url": format!("https://wa.me/message/{CODE}")});
+    h.graph.push_json(200, code.clone());
+    let created = h
+        .call(
+            call(Method::POST, format!("/v1/numbers/{PN}/qr-codes"))
+                .json(&json!({"prefilled_message": QR_MESSAGE})),
+        )
+        .await;
+    ok(&created, 201);
+    h.graph.push_json(200, json!({"data": [code.clone()]}));
+    let codes = h
+        .call(call(Method::GET, format!("/v1/numbers/{PN}/qr-codes")))
+        .await;
+    ok(&codes, 200);
+    h.graph.push_json(200, json!({"data": [code.clone()]}));
+    let read = h
+        .call(call(
+            Method::GET,
+            format!("/v1/numbers/{PN}/qr-codes/{CODE}"),
+        ))
+        .await;
+    ok(&read, 200);
+    h.graph.push_json(200, json!({"data": [code.clone()]}));
+    h.graph.push_json(200, code.clone());
+    let updated = h
+        .call(
+            call(Method::PATCH, format!("/v1/numbers/{PN}/qr-codes/{CODE}"))
+                .json(&json!({"prefilled_message": QR_MESSAGE})),
+        )
+        .await;
+    ok(&updated, 200);
+    // A creation and a change Meta refuses with texts quoting the message:
+    // in no answer and no log (the message is a person's text).
+    let quoting = || {
+        json!({"error": {"message": format!("(#100) Invalid parameter {QR_MESSAGE}"),
+                         "type": "OAuthException", "code": 100,
+                         "error_data": {"details": QR_MESSAGE},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}})
+    };
+    h.graph.push_json(400, quoting());
+    let refused_creation = h
+        .call(
+            call(Method::POST, format!("/v1/numbers/{PN}/qr-codes"))
+                .json(&json!({"prefilled_message": QR_MESSAGE})),
+        )
+        .await;
+    assert!(
+        refused_creation.status.is_client_error(),
+        "{}",
+        refused_creation.text
+    );
+    h.graph.push_json(200, json!({"data": [code.clone()]}));
+    h.graph.push_json(400, quoting());
+    let refused_change = h
+        .call(
+            call(Method::PATCH, format!("/v1/numbers/{PN}/qr-codes/{CODE}"))
+                .json(&json!({"prefilled_message": QR_MESSAGE})),
+        )
+        .await;
+    assert!(
+        refused_change.status.is_client_error(),
+        "{}",
+        refused_change.text
+    );
+    // Another number's code: refused after the lookup, not audited.
+    h.graph.push_json(200, json!({"data": []}));
+    let other = h
+        .call(call(
+            Method::DELETE,
+            format!("/v1/numbers/{PN}/qr-codes/{CODE}"),
+        ))
+        .await;
+    ok(&other, 404);
+    h.graph.push_json(200, json!({"data": [code]}));
+    h.graph.push_json(200, json!({"success": true}));
+    let deleted = h
+        .call(call(
+            Method::DELETE,
+            format!("/v1/numbers/{PN}/qr-codes/{CODE}"),
+        ))
+        .await;
+    ok(&deleted, 204);
+    // Analytics.
+    let end = h.clock.now().replace_nanosecond(0).unwrap() - time::Duration::days(1);
+    let start = end - time::Duration::days(3);
+    let (s, e) = (start.unix_timestamp(), end.unix_timestamp());
+    let times = format!(
+        "start={}&end={}",
+        start.format(&Rfc3339).unwrap(),
+        end.format(&Rfc3339).unwrap()
+    );
+    h.graph.push_json(
+        200,
+        json!({"analytics": {"phone_numbers": [ANALYTICS_NUMBER], "country_codes": ["US"], "granularity": "DAY",
+               "data_points": [{"start": s, "end": e, "sent": 3, "delivered": 2}]}, "id": WABA}),
+    );
+    let messaging = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/analytics/messaging?{times}&granularity=DAY&phone_numbers={ANALYTICS_NUMBER}"),
+        ))
+        .await;
+    ok(&messaging, 200);
+    h.graph.push_json(
+        200,
+        json!({"conversation_analytics": {"data": [{"data_points": [
+            {"start": s, "end": e, "conversation": 3, "phone_number": ANALYTICS_NUMBER, "cost": 1.5}]}]}}),
+    );
+    let conversations = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/analytics/conversations?{times}&granularity=DAILY&dimensions=PHONE"),
+        ))
+        .await;
+    ok(&conversations, 200);
+    h.graph.push_json(
+        200,
+        json!({"pricing_analytics": {"data": [{"data_points": [
+            {"start": s, "end": e, "country": "IN", "pricing_type": "REGULAR", "volume": 2, "cost": 4.6}]}]}}),
+    );
+    let pricing = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/analytics/pricing?{times}&granularity=DAILY"),
+        ))
+        .await;
+    ok(&pricing, 200);
+    h.graph
+        .push_json(200, json!({"data": [{"id": "1421988012088524"}]}));
+    h.graph.push_json(
+        200,
+        json!({"data": [{"granularity": "DAILY", "product_type": "cloud_api", "data_points": [
+            {"template_id": "1421988012088524", "start": s, "end": e, "sent": 1, "delivered": 1, "read": 1}]}]}),
+    );
+    let templates = h
+        .call(call(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/analytics/templates?{times}&template_ids=1421988012088524"),
+        ))
+        .await;
+    ok(&templates, 200);
+    // The block list: a page, a block answered in part (Meta's texts quote
+    // the person), an unblock, a block cut by a timeout, a block Meta
+    // refuses with a text quoting the person.
+    h.graph.push_json(
+        200,
+        json!({"data": [{"messaging_product": "whatsapp", "wa_id": BLOCKED_DIGITS}],
+               "paging": {"cursors": {"after": "eyJ2", "before": "eyJ2"}}}),
+    );
+    let page = h
+        .call(call(Method::GET, format!("/v1/numbers/{PN}/blocked-users")))
+        .await;
+    ok(&page, 200);
+    let people = json!({"users": [{"phone": BLOCKED_PHONE}, {"user_id": BLOCKED_BSUID}]});
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "block_users": {
+            "added_users": [{"input": BLOCKED_PHONE, "wa_id": BLOCKED_DIGITS}],
+            "failed_users": [{"input": BLOCKED_BSUID, "user_id": BLOCKED_BSUID,
+                "errors": [{"message": format!("Re-engagement required for {BLOCKED_PHONE}"),
+                            "code": 131_047,
+                            "error_data": {"details": format!("{BLOCKED_BSUID} has not messaged")}}]}]}}),
+    );
+    let blocked = h
+        .call(call(Method::POST, format!("/v1/numbers/{PN}/blocked-users")).json(&people))
+        .await;
+    ok(&blocked, 200);
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "block_users": {
+            "removed_users": [{"input": BLOCKED_PHONE, "wa_id": BLOCKED_DIGITS}]}}),
+    );
+    let unblocked = h
+        .call(
+            call(
+                Method::POST,
+                format!("/v1/numbers/{PN}/blocked-users/unblock"),
+            )
+            .json(&json!({"users": [{"phone": BLOCKED_PHONE}]})),
+        )
+        .await;
+    ok(&unblocked, 200);
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let cut = h
+        .call(call(Method::POST, format!("/v1/numbers/{PN}/blocked-users")).json(&people))
+        .await;
+    ok(&cut, 504);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#100) Invalid parameter {BLOCKED_PHONE}"),
+                         "type": "OAuthException", "code": 100,
+                         "error_data": {"details": format!("{BLOCKED_DIGITS} {BLOCKED_BSUID}")},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let refused = h
+        .call(call(Method::POST, format!("/v1/numbers/{PN}/blocked-users")).json(&people))
+        .await;
+    assert!(refused.status.is_client_error(), "{}", refused.text);
+    vec![
+        key.clone(),
+        key.rsplit('_').next().unwrap().to_owned(),
+        BLOCKED_PHONE.to_owned(),
+        BLOCKED_DIGITS.to_owned(),
+        BLOCKED_BSUID.to_owned(),
+        QR_MESSAGE.to_owned(),
+        ANALYTICS_NUMBER.to_owned(),
+        "CAPTURE-PAGING-TOKEN".to_owned(),
+    ]
+}
+
 /// A group's id (`groups/webhooks`: it embeds the business number) is in no
 /// line of the service's own, and in the library's `graph request` debug
 /// line only (it names the path it calls: [`check`] says so); a group's
@@ -2545,9 +2847,14 @@ fn check_audit(logs: &str) {
             "flow_json_uploaded",
             "flow_published",
             "flow_deprecated",
-            "flow_deleted"
+            "flow_deleted",
+            // Roadmap M5g: a QR code's deletion, the blocks and the unblock.
+            "qr_code_deleted",
+            "users_blocked",
+            "users_unblocked",
+            "users_blocked"
         ],
-        "the template changes', the PIN change's, the deregistration's and the payment changes' audit events"
+        "the template changes', the PIN change's, the deregistration's, the payment changes', the QR code deletion's and the block list changes' audit events"
     );
     for fields in &deletions {
         assert!(fields["key_id"].is_string(), "{fields}");

@@ -15,7 +15,8 @@ its reasons and the owner's decisions, is
 > media upload, verified download and delete, template listing, creation
 > and deletion, and since M5b their edits, unpausing, comparison,
 > archiving, the Template Library, migrations and template groups,
-> per-tenant rate limits, Meta's webhooks into the inbox
+> commerce settings and the catalog's reads, QR codes, analytics and the
+> block list (M5g), per-tenant rate limits, Meta's webhooks into the inbox
 > and the event outbox, polling events (`GET /v1/events`), one event by
 > id and live events as Server-Sent Events (M2b), the inbox's
 > conversations, history and replies (M2a), its window, read route and
@@ -258,11 +259,12 @@ immutable. Three kinds of API key, all `wak_<key id>_<secret>`, sent as
 
 Tenant and platform keys carry scopes (`numbers`, `send`, `media`,
 `templates`, `flows`, `inbox`, `events`, `otp`, `signup`, `payments`,
-`erasure` and `groups` today; `webhooks` for the routes to come).
-`payments` (roadmap P2), `erasure` (roadmap M2f), `flows` (roadmap M5d) and
-`groups` (roadmap M5f) are new: a key minted before them does not carry
-them, so mint one that does for those routes. `templates` does not grant
-`flows`: a key that edits templates does not manage Flows. `inbox` does not grant
+`erasure`, `groups`, `commerce`, `qr_codes`, `analytics` and `contacts` today;
+`webhooks` for the routes to come). `payments` (roadmap P2), `erasure`
+(roadmap M2f), `flows` (roadmap M5d), `groups` (roadmap M5f) and the four
+of roadmap M5g are new: a key minted before them does not carry them, so
+mint one that does for those routes. `templates` does not grant `flows`: a
+key that edits templates does not manage Flows. `inbox` does not grant
 `erasure`: give the key that erases to the part of your backend that
 handles privacy requests only. The service keeps only each key's id and the SHA-256 of its
 secret, and shows the key once. Rotate by minting a new one, deploying
@@ -1000,6 +1002,71 @@ unanswered). The invite link is a credential: it is in the answer to its
 two routes and in no log. A group's id embeds the business number and is
 in none of the service's own lines; the library's debug line for a Graph
 request names the path it calls, so at `debug` it is in that one.
+
+## Commerce, QR codes, analytics and the block list
+
+Four scopes, one per family (roadmap M5g, design D140; the names are
+**pending the owner's confirmation before the first release**):
+`commerce`, `qr_codes`, `analytics` and `contacts`. A key minted before
+M5g carries none of them, and `send` grants none: blocking acts on a
+person and a QR code is public, so mint a key for these routes on
+purpose. Each route is one of the library's calls, made with the WABA's
+token.
+
+| Scope | Route | Does |
+| --- | --- | --- |
+| `commerce` | `GET`, `PATCH /v1/numbers/{pn}/commerce-settings` | the cart and the catalog's visibility; the change takes `is_cart_enabled` and/or `is_catalog_visible` (at least one), `204` |
+| `commerce` | `GET /v1/wabas/{waba_id}/catalogs`, `…/catalogs/{catalog_id}`, `…/catalogs/{catalog_id}/products` | the catalog the WABA connects, and its products, a page of 1 to 100 (`limit`, `cursor`, `return_only_approved_products`) |
+| `qr_codes` | `POST`, `GET /v1/numbers/{pn}/qr-codes` | create (`prefilled_message`, 1 to 140 characters; `generate_qr_image`, `PNG` or `SVG`; takes an `Idempotency-Key`), `201`; list, a page of 1 to 25 |
+| `qr_codes` | `GET`, `PATCH`, `DELETE /v1/numbers/{pn}/qr-codes/{code}` | read, change the message, delete (`204`, audited as `qr_code_deleted`) |
+| `analytics` | `GET /v1/wabas/{waba_id}/analytics/messaging`, `…/conversations`, `…/pricing`, `…/templates` | the four analytics: `start` and `end` (RFC 3339; template analytics also take `YYYY-MM-DD` days), `granularity`, the filters as comma-separated lists |
+| `contacts` | `GET`, `POST /v1/numbers/{pn}/blocked-users`, `POST …/blocked-users/unblock` | the block list (a page of 1 to 100); block or unblock 1 to 1,000 people, `{"users": [{"phone": "+1650…", "user_id": "US.…"}]}` (a phone with its `+`, a BSUID, or both); both take an `Idempotency-Key` |
+
+What the service checks before Meta is asked, each refusal sending nothing
+(or, for the two lookups, only the lookup):
+
+- **A catalog is the WABA's** (D141): it must be among the WABA's own
+  `product_catalogs` (one read), else `404 not_found`, and its products
+  are never asked for. Only the first page of that list is read.
+- **A QR code is the number's** (D144): the code is looked for in the
+  number's own list first (`GET /{pn}/message_qrdls?code=…`) and read,
+  changed or deleted only when that list holds it; another number's code,
+  or none, is `404 not_found`. **This costs one more request to Meta**
+  per read, change or deletion, and nothing is changed by a refusal.
+  Another tenant's number is refused with no request at all.
+- **Template analytics name the WABA's own templates** (D145, with the
+  walk of D116): 1 to 10 `template_ids`, each among the WABA's templates,
+  else `404 not_found` and the analytics are not asked for.
+- **Ranges and filters are bounded** (D145): `start` at most a year before
+  now (90 days for templates), `end` after `start`, a range of at most a
+  year (90 days for templates), a `HALF_HOUR` range of at most 31 days (the
+  service's bound: the answer holds a data point per half hour and
+  dimension); a list filter holds at most 50 values, each one of Meta's
+  documented values, a `phone_numbers` entry only digits (they are written
+  into a field expansion) and a `country_codes` entry two letters.
+- **Pages are bounded** (D142): `limit` 1 to 100 on products and the block
+  list, 1 to 25 on QR codes. A `cursor` is the opaque `next_cursor` of the
+  previous page; it only moves within the list the path names.
+- A block names people by phone number **with its `+`** or by BSUID (a
+  parent BSUID and a group are refused, `422`). Meta only blocks a person
+  who wrote to the number in the last 24 hours.
+
+A block or an unblock answers `200` even when Meta refused some people:
+`{done, refused, error_code}`, each refusal carrying Meta's error code
+and the service's kind for it (`reasons: [{code, kind}]`), **never Meta's
+text**, which may quote the person. Neither a failed block nor a failed QR
+creation or change carries or logs Meta's texts, for the same reason. A
+block, an unblock and a deletion of a QR code are audit events
+(`users_blocked`, `users_unblocked`, `qr_code_deleted`): the blocks by how
+many people they named, blocked and Meta refused, **never by who**; a
+timeout, or Meta's `139100` with an error status (some were not changed,
+not which), is an `unknown` outcome.
+
+Not routed (roadmap M5g2): a catalog's product sets, one product by its
+id, the products edge's `filter`, template group analytics, and the two
+analytics switches (template insights, button click tracking). Call
+analytics wait for the calling routes (M5e); a group's analytics are the
+groups' (above).
 
 ## The inbox
 

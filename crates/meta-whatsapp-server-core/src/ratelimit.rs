@@ -77,6 +77,7 @@ impl RouteClass {
 
     /// The class of `operation` (the module's table): its own, whatever
     /// HTTP method, or none, an adapter serves it with.
+    #[allow(clippy::too_many_lines)] // one arm per operation
     pub fn of(operation: Operation) -> Self {
         match operation {
             Operation::ListWabas
@@ -100,6 +101,17 @@ impl RouteClass {
             | Operation::ListWebhookEndpoints
             | Operation::GetWebhookEndpoint
             | Operation::ListWebhookDeliveries
+            | Operation::GetCommerceSettings
+            | Operation::ListCatalogs
+            | Operation::GetCatalog
+            | Operation::ListCatalogProducts
+            | Operation::ListQrCodes
+            | Operation::GetQrCode
+            | Operation::GetMessagingAnalytics
+            | Operation::GetConversationAnalytics
+            | Operation::GetPricingAnalytics
+            | Operation::GetTemplateAnalytics
+            | Operation::ListBlockedUsers
             | Operation::ListGroups
             | Operation::GetGroup
             | Operation::GetGroupInviteLink
@@ -135,6 +147,12 @@ impl RouteClass {
             | Operation::RotateWebhookSecret
             | Operation::TestWebhookEndpoint
             | Operation::RetryWebhookDelivery
+            | Operation::UpdateCommerceSettings
+            | Operation::CreateQrCode
+            | Operation::UpdateQrCode
+            | Operation::DeleteQrCode
+            | Operation::BlockUsers
+            | Operation::UnblockUsers
             | Operation::CreateGroup
             | Operation::UpdateGroup
             | Operation::DeleteGroup
@@ -482,7 +500,7 @@ mod tests {
     /// apart from writes, template management apart from both (its scope's
     /// operations, and only they). Decisive: each arm of `RouteClass::of`.
     #[test]
-    #[allow(clippy::too_many_lines)] // one row per operation
+    #[allow(clippy::too_many_lines)] // one row per operation, read top to bottom
     fn an_operations_class_is_the_tables() {
         use crate::model::Scope;
         let table = [
@@ -577,6 +595,23 @@ mod tests {
             ("publish_flow", RouteClass::Templates),
             ("deprecate_flow", RouteClass::Templates),
             ("delete_flow", RouteClass::Templates),
+            ("get_commerce_settings", RouteClass::Read),
+            ("update_commerce_settings", RouteClass::Send),
+            ("list_catalogs", RouteClass::Read),
+            ("get_catalog", RouteClass::Read),
+            ("list_catalog_products", RouteClass::Read),
+            ("create_qr_code", RouteClass::Send),
+            ("list_qr_codes", RouteClass::Read),
+            ("get_qr_code", RouteClass::Read),
+            ("update_qr_code", RouteClass::Send),
+            ("delete_qr_code", RouteClass::Send),
+            ("get_messaging_analytics", RouteClass::Read),
+            ("get_conversation_analytics", RouteClass::Read),
+            ("get_pricing_analytics", RouteClass::Read),
+            ("get_template_analytics", RouteClass::Read),
+            ("list_blocked_users", RouteClass::Read),
+            ("block_users", RouteClass::Send),
+            ("unblock_users", RouteClass::Send),
         ];
         assert_eq!(table.len(), Operation::ALL.len(), "every operation");
         for (id, class) in table {
