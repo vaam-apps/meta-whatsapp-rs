@@ -44,9 +44,12 @@ crates/
   meta-whatsapp-server-http  the service's HTTP layer: listeners, authentication before
                            the body, the error renderer, Meta's webhook, media, operations.
   meta-whatsapp-server-api-axum  the service's /v1 routes on axum and their OpenAPI document.
-  meta-whatsapp-server     the HTTP service (a binary composing the four above by its Cargo
-                           features, on the facade and the core): tenants, keys, the /v1 API
-                           for apps not written in Rust. See "Service" below.
+  meta-whatsapp-server-api-cratestack  the service's API on CrateStack (a .cstack schema of
+                           procedures): one procedure since roadmap S10, served by nothing yet.
+  meta-whatsapp-server     the HTTP service (a binary composing the crates above by its Cargo
+                           features, on the facade and the core; the MongoDB spike aside):
+                           tenants, keys, the /v1 API for apps not written in Rust. See
+                           "Service" below.
 .xtask                     repo automation (`cargo xtask meta-docs`): a workspace of its own,
                            with its own Cargo.lock, excluded from the root one, so its ureq
                            (rustls with `ring`) never enters a library or test build.
@@ -1686,16 +1689,29 @@ decisions and the delivery milestones, is
     and the OpenAPI document generated from them (utoipa), with the HTTP
     crate's media and operations groups; permanent, the swap target
     (design D26).
+  - `crates/meta-whatsapp-server-api-cratestack` (roadmap S10): the API
+    on CrateStack, its contract `schema/api.cstack` (`db = None`,
+    procedures only, REST, JSON), compiled with CrateStack's
+    `cratestack-api` (the only crate that depends on CrateStack); one
+    procedure so far, `version`. S13 brings the rest of the routes,
+    S16 makes it the default.
   - `crates/meta-whatsapp-server` (binary `meta-whatsapp-server`): the
     process (configuration, `serve`, the command line), composing one
     API adapter (feature `api-axum`) and the backends the command line
-    can open (`store-memory`, `store-postgres`), all three by default.
+    can open (`store-memory`, `store-postgres`), all three by default;
+    with the feature `api-cratestack` (not a default) it compiles the
+    CrateStack adapter in, which nothing serves before S13. Every
+    command first installs aws-lc-rs as rustls' process-default crypto
+    provider (`meta_whatsapp_server::tls`, design D20 (b)): CrateStack
+    links rustls' `ring` provider too, and with both rustls cannot pick
+    a default by itself.
     It re-exports the moved modules under their old paths
     (`meta_whatsapp_server::api`, `::state`, `::store`, …), and keeps
     the committed `openapi/v1.json`, which its `openapi` command prints.
 
   ```text
   meta-whatsapp-server (binary) ─┬─► meta-whatsapp-server-api-axum ─► meta-whatsapp-server-http ─┐
+                                 ├─► meta-whatsapp-server-api-cratestack ─► (the same, and CrateStack)
                                  ├─► meta-whatsapp-server-http ──────────────────────────────────┤
                                  ├─► meta-whatsapp-server-store-memory ──────────────────────────┤
                                  └─► meta-whatsapp-server-store-postgres ────────────────────────┴─► meta-whatsapp-server-core ─► meta-whatsapp-rs (facade)

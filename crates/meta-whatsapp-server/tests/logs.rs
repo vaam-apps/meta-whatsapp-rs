@@ -173,7 +173,8 @@ fn sources(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(String,
 
 /// [`every_line_keeps_its_target_from_before_the_crate_split`] sees only
 /// the lines its scenario logs; this reads every log line of the crates
-/// roadmap S7 made, logged or not (an accept error, a deadlocked insert, a
+/// roadmap S7 made, and of the CrateStack adapter S10 added (none logs
+/// yet), logged or not (an accept error, a deadlocked insert, a
 /// route that is no tenant operation): each is `tracing::<macro>!` with
 /// `target: LOG_TARGET` first, no `#[instrument]` and no bare macro, and
 /// each file that logs is one of [`MOVED_LOG_TARGETS`], whose
@@ -189,6 +190,7 @@ fn every_moved_log_line_names_its_target_from_before_the_crate_split() {
     for krate in [
         "meta-whatsapp-server-http",
         "meta-whatsapp-server-api-axum",
+        "meta-whatsapp-server-api-cratestack",
         "meta-whatsapp-server-store-memory",
         "meta-whatsapp-server-store-postgres",
     ] {

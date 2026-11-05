@@ -1,0 +1,25 @@
+// The service's CrateStack contract (docs/design/server.md, section 8.4):
+// procedures only, no database, so it runs over any backend. Roadmap S10
+// adds one procedure; S13 adds the rest, one resource group at a time,
+// each calling the core's services as the axum adapter's routes do.
+
+datasource db {
+  provider = "none"
+}
+
+// What `GET /v1/version` answers on the axum adapter, field for field.
+type Version {
+  // The service's version.
+  server String
+  // The meta-whatsapp-rs git revision the service was built from, when
+  // the build recorded it, else `unknown`.
+  meta_whatsapp_rs_revision String
+  // The Graph API version calls use, e.g. `v25.0`.
+  graph_api_version String
+  // The HTTP API's version: `v1`.
+  api_version String
+}
+
+// No key, as `GET /v1/version`: the internal listener only, once served.
+procedure version(): Version
+  @allow(true)
