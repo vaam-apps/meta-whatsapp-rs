@@ -528,7 +528,7 @@ pub(crate) async fn update_flow(
         ("flow_id" = String, Path, description = "Flow id"),
         ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
     ),
-    request_body(content = Object, description = "The Flow JSON (`flows/guides/flowjson`): a JSON object of at most 2 MiB, uploaded as sent", content_type = "application/json"),
+    request_body(content = HashMap<String, Value>, description = "The Flow JSON (`flows/guides/flowjson`): a JSON object of at most 2 MiB, uploaded as sent", content_type = "application/json"),
     responses(
         (status = 200, description = "Stored; Meta's validation errors, if any, in the answer", body = FlowJsonUploadView),
         (status = 401, description = "No valid key", body = ErrorBody),
