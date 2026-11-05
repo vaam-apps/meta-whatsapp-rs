@@ -1051,3 +1051,28 @@ async fn a_group_rate_limit_is_never_sent_again() {
     assert_eq!(err.kind(), ErrorKind::GroupRateLimited);
     assert_eq!(t.requests().len(), 1);
 }
+
+/// The same with a client that does retry (one retry, no delay) and a
+/// second answer waiting: a replay would consume it. A POST is not
+/// replayed (`may_resend` is false), and a GET is not either (the kind is
+/// not `is_retryable`), unlike `130429`, the throttling it must not be
+/// mistaken for (roadmap L27, D171).
+#[tokio::test]
+async fn a_retrying_client_does_not_replay_a_group_rate_limit() {
+    let limit = json!({"error": {"message": "(#131208) Group Rate Limit Hit", "type": "OAuthException", "code": 131208}});
+    let ok = json!({"invite_link": "https://chat.whatsapp.com/x"});
+    for post in [true, false] {
+        let t = ScriptedTransport::new();
+        t.push_json(429, limit.clone());
+        t.push_json(200, ok.clone());
+        let group = retrying(&t).group(GROUP);
+        let err = if post {
+            group.reset_invite_link().await.map(|_| ()).unwrap_err()
+        } else {
+            group.invite_link().await.map(|_| ()).unwrap_err()
+        };
+        assert_eq!(err.kind(), ErrorKind::GroupRateLimited, "post: {post}");
+        assert_eq!(t.requests().len(), 1, "post: {post}");
+        assert_eq!(t.remaining(), 1, "post: {post}");
+    }
+}
