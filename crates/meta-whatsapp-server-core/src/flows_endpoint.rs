@@ -25,7 +25,7 @@
 //! ```
 //!
 //! **How the integrating app answers** is the [`FlowHandler`] port (design
-//! D132): the service decrypts, the app decides the next screen. An
+//! D134): the service decrypts, the app decides the next screen. An
 //! embedder implements the trait; the binary's own handler is
 //! [`NoHandler`] (a health check and an error notification are answered
 //! by the service, every data exchange is `503 unavailable` until a

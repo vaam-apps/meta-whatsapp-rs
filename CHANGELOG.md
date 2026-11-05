@@ -305,7 +305,7 @@ stored data, the owner's).
     `wa_server_webhook_deliveries`; every name pending the owner's
     confirmation (docs/architecture.md § Stable identifiers).
 - **WhatsApp Flows in the service** (roadmap M5d, parity rows 61 and 62
-  now partial in the service, the rest in M5d2; choices D130–D134,
+  now partial in the service, the rest in M5d2; choices D132–D136,
   proposed, pending the coordinator's decision; from Meta's
   `flows/guides/flowsapi`, `lifecycle`, `implementingyourflowendpoint`,
   `healthmonitoring` and `whatsapp-business-encryption` pages, read on
@@ -318,7 +318,7 @@ stored data, the owner's).
   design's M5.2: a Flow id is read first (`GET /{flow_id}`) and acted on
   only when Meta names the path's WABA as its owner (a creation's
   `clone_flow_id` too), else `404` with nothing acted on and that read
-  the only request (D133); a creation takes an `Idempotency-Key`; the
+  the only request (D135); a creation takes an `Idempotency-Key`; the
   changes are audited (`flow_updated`, `flow_json_uploaded`,
   `flow_published`, `flow_deprecated`, `flow_deleted`). The OpenAPI
   document is additive only (6 paths, 10 schemas, the `flows` tag).

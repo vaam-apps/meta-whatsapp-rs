@@ -734,7 +734,7 @@ messages](#send-messages)).
   (`GET /{flow_id}`) and acted on only when Meta names the path's WABA as
   its owner (also for a `clone_flow_id`): another WABA's Flow, an id
   Meta refuses, or an id that is not a Flow is `404 not_found`, and that
-  read is the only request made (design D133).
+  read is the only request made (design D135).
 - **Meta validates the Flow JSON.** A creation or an upload with errors
   is stored all the same and answers `validation_errors` as Meta wrote
   them; publishing is refused (`422 invalid_parameter`, with Meta's
@@ -770,7 +770,7 @@ checked with the app secret (`WA_APP_SECRET`, and the previous one while
 rotating), is its authentication, before anything else is read. It
 answers the health check (`ping`) and an error notification itself; a
 data exchange is decided by the integrating app, a `FlowHandler` the
-embedder plugs in (design D132). **The binary plugs in none**: every data
+embedder plugs in (design D134). **The binary plugs in none**: every data
 exchange is `503` until you embed the service with a handler, so use the
 service's endpoint with the binary only for a Flow whose health check
 matters, or host your own endpoint. Statuses: `432` bad signature, `421`

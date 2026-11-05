@@ -256,7 +256,7 @@ fn reads_an_erasure_key_of_at_least_32_bytes() {
     }
 }
 
-/// Roadmap M5d (design D131): `WA_SERVER_FLOWS_PRIVATE_KEY` is the
+/// Roadmap M5d (design D133): `WA_SERVER_FLOWS_PRIVATE_KEY` is the
 /// deployment's Flow private key, an unencrypted 2048-bit RSA key in PEM,
 /// directly or from its `_FILE`; unset, the Flows data endpoint is off
 /// (`None`). A key that is not one (a password-protected PEM, which Meta's

@@ -669,7 +669,7 @@ async fn a_creation_is_checked_before_any_request() {
     assert!(h.graph.requests().is_empty(), "nothing sent");
 }
 
-/// A creation takes an `Idempotency-Key` (design D133): the same key and
+/// A creation takes an `Idempotency-Key` (design D135): the same key and
 /// body replay the first answer with no second request; the same key with
 /// another body is `422 idempotency_key_reused`, nothing sent. Decisive:
 /// `Fingerprint::create_flow` and the route's `state.idempotent`.

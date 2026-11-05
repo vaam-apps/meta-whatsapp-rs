@@ -6378,7 +6378,7 @@ or WABA fails the family's own cross-tenant test).
     JSON as the body, an object of at most 2 MiB, uploaded to Meta as a
     multipart form byte for byte; Meta's validation errors are the
     answer), `POST …/preview`, `…/publish` and `…/deprecate`. A Flow id
-    is the WABA's or does not exist (design D133): every route that names
+    is the WABA's or does not exist (design D135): every route that names
     one reads it first (`GET /{flow_id}`) and acts only when Meta names
     the path's WABA as its owner, else `404` with nothing acted on and
     that read the only request. The changes that succeed are audited
@@ -6413,13 +6413,13 @@ or WABA fails the family's own cross-tenant test).
     token, the preview link and the Flow JSON in no log line), the
     start-up refusals (`tests/config.rs`), the core's checks
     (`flows::tests`).
-  - **Proposed** (design D130–D134, by the implementer, for the
+  - **Proposed** (design D132–D136, by the implementer, for the
     coordinator's decision, each swappable): the routes under the WABA,
-    the scope `templates` (D130); one deployment Flow key behind the port
-    `FlowKeys` (D131); the integrating app a trait, `FlowHandler`, the
-    binary plugging in `NoHandler` (D132); the Flow read first, a
-    creation keyed, the changes audited (D133); the data endpoint's route,
-    limits and statuses (D134). The new setting, route, metric, operation
+    the scope `templates` (D132); one deployment Flow key behind the port
+    `FlowKeys` (D133); the integrating app a trait, `FlowHandler`, the
+    binary plugging in `NoHandler` (D134); the Flow read first, a
+    creation keyed, the changes audited (D135); the data endpoint's route,
+    limits and statuses (D136). The new setting, route, metric, operation
     ids and audit actions are pending the owner's confirmation before the
     first release; no legal act.
   - **Not done here:** a per-tenant Flow key in the vault (a stored
@@ -6434,11 +6434,11 @@ or WABA fails the family's own cross-tenant test).
 - [ ] **M5d2. Flows: the app over HTTP, a key per tenant, the rest of
   the API** (rows 61, 62): what M5d proposed and left.
   - **After:** M5d.
-  - **Scope:** the integrating app answering over HTTP (design D132's
+  - **Scope:** the integrating app answering over HTTP (design D134's
     swap: a tenant's callback URL called synchronously by the data
     endpoint, its destination checked as a webhook endpoint's is, the
     webhooks-out `Sender` gaining an exchange that returns a bounded
-    body, a secret per tenant); a Flow key per tenant (D131's swap: a
+    body, a secret per tenant); a Flow key per tenant (D133's swap: a
     vault record kind in the library, `FlowKeys` reading it, a route to
     set it); the business public key of a number (`BusinessEncryption`,
     with the number settings of M5c3: route, audit); an uploaded media's

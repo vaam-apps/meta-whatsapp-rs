@@ -333,7 +333,7 @@ fn otp_deployment(
 /// The Flows data endpoint's settings (roadmap M5d): the deployment's Flow
 /// key, Meta's signatures checked against the app secrets, and no
 /// integrating app plugged in (`NoHandler`: a data exchange is `503`
-/// until an embedder supplies a `FlowHandler`, design D132). Without a
+/// until an embedder supplies a `FlowHandler`, design D134). Without a
 /// key, `None`: the route is `404`.
 fn flows_deployment(
     key: Option<FlowEndpointKey>,
