@@ -96,8 +96,8 @@ use meta_whatsapp_rs::webhooks::axum::http::{HeaderName, HeaderValue, Method, St
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 pub use meta_whatsapp_server_core::media::MAX_WHOLE_DOWNLOAD;
 use meta_whatsapp_server_core::media::{
-    self as domain, DownloadBody, DownloadLimits, Media, MediaSlots, Upload, checked_type,
-    upload_cap,
+    self as domain, Conversion, DownloadBody, DownloadLimits, Media, MediaSlots, Upload,
+    checked_type, convert_target, upload_cap,
 };
 use serde::Serialize;
 use utoipa::ToSchema;
@@ -117,6 +117,8 @@ pub fn routes() -> OpenApiRouter<Grant> {
     OpenApiRouter::new()
         .routes(routes!(upload_media))
         .routes(routes!(download_media, delete_media))
+        // The resumable uploads (roadmap M5c1) are media too: one scope.
+        .merge(super::uploads::routes())
 }
 
 /// `X-WA-SHA256`: the downloaded file's SHA-256, hex.
@@ -129,6 +131,9 @@ pub const FORM_OVERHEAD: u64 = 64 * 1024;
 
 /// Longest `type` field.
 const MAX_TYPE_LEN: u64 = 255;
+
+/// Longest `convert` field: the longest format name is 16 characters.
+const MAX_CONVERT_LEN: u64 = 64;
 
 /// The answer to an upload.
 #[derive(Debug, Serialize, ToSchema)]
@@ -145,9 +150,18 @@ pub struct MediaUpload {
     #[schema(value_type = String, format = Binary)]
     pub file: Vec<u8>,
     /// Its MIME type, one of Meta's supported media types (e.g.
-    /// `image/png`, `application/pdf`).
+    /// `image/png`, `application/pdf`). Required, unless `convert` is
+    /// sent: then the file's bytes say what it is, and this is ignored.
     #[schema(rename = "type")]
-    pub kind: String,
+    pub kind: Option<String>,
+    /// Convert the file before it is uploaded, into this format: `ogg_opus`
+    /// (a voice message), `static_sticker`, `animated_sticker`, `jpeg` or
+    /// `png`. Only on a deployment that configures a converter
+    /// (`WA_SERVER_MEDIA_CONVERTER`); elsewhere the field is refused
+    /// (`422` on `body`), as any field this form does not take. What is
+    /// uploaded is the converted file, as the format's MIME type, named
+    /// after `file` with the format's extension.
+    pub convert: Option<String>,
 }
 
 /// A downloaded file's bytes.
@@ -177,6 +191,11 @@ fn form_error(error: &multer::Error) -> ApiError {
             if field_name.as_deref() == Some("type") =>
         {
             ApiError::invalid("type")
+        }
+        multer::Error::FieldSizeExceeded { field_name, .. }
+            if field_name.as_deref() == Some("convert") =>
+        {
+            ApiError::invalid("convert")
         }
         multer::Error::StreamSizeExceeded { .. } => ApiError::new(ErrorCode::PAYLOAD_TOO_LARGE),
         _ => ApiError::invalid("body"),
@@ -306,10 +325,30 @@ where
     }
 }
 
+/// What an upload's form holds once it is read and checked: a file ready
+/// for Meta, or one to convert first (`convert`, roadmap M5c1).
+enum Form {
+    /// A supported type and size, checked.
+    Ready(Upload),
+    /// A file to convert; the converter checks what it makes.
+    Convert(Conversion),
+}
+
 /// Read and check an upload's form: `type` and the size before any
 /// request. When `type` comes first, the body is read no further than the
 /// file's kind allows (and a chunk).
-async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiError> {
+///
+/// With `convertible` (the deployment configures a converter) the form
+/// also takes `convert`; the file is then read up to `max_bytes` whatever
+/// `type` says (the converter reads the bytes, not the claim), and `type`
+/// is checked only when `convert` is absent. Without it the form is what
+/// it was before roadmap M5c1: `convert` is an unknown field.
+#[allow(clippy::too_many_lines)] // one form, read top to bottom
+async fn read_upload(
+    max_bytes: u64,
+    convertible: bool,
+    request: Request,
+) -> Result<Form, ApiError> {
     let boundary = request
         .headers()
         .get(header::CONTENT_TYPE)
@@ -323,16 +362,25 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
         ended: false,
         framing: framing.clone(),
     };
+    let fields = if convertible {
+        vec!["file", "type", "convert"]
+    } else {
+        vec!["file", "type"]
+    };
     let constraints = multer::Constraints::new()
-        .allowed_fields(vec!["file", "type"])
+        .allowed_fields(fields)
         .size_limit(
             multer::SizeLimit::new()
                 .whole_stream(max_bytes.saturating_add(FORM_OVERHEAD))
                 .for_field("type", MAX_TYPE_LEN)
+                .for_field("convert", MAX_CONVERT_LEN)
                 .for_field("file", max_bytes),
         );
     let mut form = multer::Multipart::with_constraints(body, boundary, constraints);
     let mut mime_type: Option<String> = None;
+    // With a converter, `type` is kept as sent until `convert` is known.
+    let mut claimed_type: Option<String> = None;
+    let mut convert: Option<meta_whatsapp_rs::core::media::TargetFormat> = None;
     let mut file: Option<(Option<String>, Vec<u8>)> = None;
     loop {
         framing.arm();
@@ -342,15 +390,30 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
             break;
         };
         match field.name() {
-            Some("type") if mime_type.is_none() => {
+            Some("type") if mime_type.is_none() && claimed_type.is_none() => {
                 let value = field.text().await.map_err(|e| form_error(&e))?;
-                mime_type = Some(checked_type(&value).map_err(ApiError::from)?);
+                if convertible {
+                    claimed_type = Some(value);
+                } else {
+                    mime_type = Some(checked_type(&value).map_err(ApiError::from)?);
+                }
+            }
+            Some("convert") if convert.is_none() => {
+                let value = field.text().await.map_err(|e| form_error(&e))?;
+                convert = Some(convert_target(&value).map_err(ApiError::from)?);
             }
             Some("file") if file.is_none() => {
                 let given = field.file_name().map(str::to_owned);
                 // A known type caps the file at its kind's size as it
-                // streams in: no more of the body is read.
-                let cap = upload_cap(mime_type.as_deref(), max_bytes);
+                // streams in: no more of the body is read. With a
+                // converter, a `type` that is a claim only (`convert` sent,
+                // or yet to come) caps nothing but `max_bytes` when it is
+                // not a supported type.
+                let hint = claimed_type
+                    .as_deref()
+                    .filter(|_| convert.is_none())
+                    .and_then(|claimed| checked_type(claimed).ok());
+                let cap = upload_cap(mime_type.as_deref().or(hint.as_deref()), max_bytes);
                 let mut data = Vec::new();
                 while let Some(chunk) = field.chunk().await.map_err(|e| form_error(&e))? {
                     if u64::try_from(data.len() + chunk.len()).unwrap_or(u64::MAX) > cap {
@@ -361,19 +424,31 @@ async fn read_upload(max_bytes: u64, request: Request) -> Result<Upload, ApiErro
                 file = Some((given, data));
             }
             Some("type") => return Err(ApiError::invalid("type")),
+            Some("convert") => return Err(ApiError::invalid("convert")),
             Some("file") => return Err(ApiError::invalid("file")),
             _ => return Err(ApiError::invalid("body")),
         }
+    }
+    if let Some(target) = convert {
+        let (given, data) = file.ok_or_else(|| ApiError::invalid("file"))?;
+        return Ok(Form::Convert(Conversion::new(
+            target,
+            given.as_deref(),
+            Bytes::from(data),
+        )));
+    }
+    if let Some(claimed) = claimed_type {
+        mime_type = Some(checked_type(&claimed).map_err(ApiError::from)?);
     }
     let mime_type = mime_type.ok_or_else(|| ApiError::invalid("type"))?;
     let (given, data) = file.ok_or_else(|| ApiError::invalid("file"))?;
     // The core's checks: Meta's table (the library's own, which `upload`
     // repeats), and the file name sent.
-    Ok(Upload::new(
+    Ok(Form::Ready(Upload::new(
         &mime_type,
         given.as_deref(),
         Bytes::from(data),
-    )?)
+    )?))
 }
 
 /// The core's media operations on `owned`, with `state`'s slots, reading
@@ -390,7 +465,8 @@ fn media<'a>(state: &'a AppState, owned: &'a OwnedNumber) -> Result<Media<'a>, A
         },
         state.events().outbox(),
     )?
-    .observed_by(state.metrics()))
+    .observed_by(state.metrics())
+    .converting_with(state.settings().media_converter.as_deref()))
 }
 
 /// Upload with the number's token: `201` with the media id (the core's
@@ -444,7 +520,8 @@ pub(crate) async fn upload_media(
     };
     // The path as sent, for the legacy fingerprint only.
     let path = request.uri().path().to_owned();
-    let form = match read_upload(state.settings().media_max_bytes, request).await {
+    let convertible = state.settings().media_converter.is_some();
+    let form = match read_upload(state.settings().media_max_bytes, convertible, request).await {
         Ok(form) => form,
         Err(error) => return error.into_response(),
     };
@@ -454,9 +531,27 @@ pub(crate) async fn upload_media(
     // method, its path as sent and its body: matched too, for one TTL
     // after the upgrade (the legacy fingerprint goes after the first
     // release). A claim stores the new one.
-    let fingerprint = Fingerprint::upload_media(owned.phone_number_id(), &form)
-        .or_legacy(Fingerprint::legacy_v1_upload(&Method::POST, &path, &form));
-    let response = idempotency::run(&state, &caller, key, fingerprint, upload(&media, &form)).await;
+    let fingerprint = match &form {
+        Form::Ready(ready) => Fingerprint::upload_media(owned.phone_number_id(), ready)
+            .or_legacy(Fingerprint::legacy_v1_upload(&Method::POST, &path, ready)),
+        // A file to convert has no legacy fingerprint (it is new), and its
+        // input is the source file: the conversion runs after the claim.
+        Form::Convert(conversion) => {
+            Fingerprint::upload_converted_media(owned.phone_number_id(), conversion)
+        }
+    };
+    let operation = async {
+        match &form {
+            Form::Ready(ready) => upload(&media, ready).await,
+            // The converted bytes are what is uploaded; a conversion that
+            // fails sent nothing, so its key is released.
+            Form::Convert(conversion) => {
+                let converted = media.convert(conversion).await?;
+                upload(&media, &converted).await
+            }
+        }
+    };
+    let response = idempotency::run(&state, &caller, key, fingerprint, operation).await;
     drop(permit);
     response
 }

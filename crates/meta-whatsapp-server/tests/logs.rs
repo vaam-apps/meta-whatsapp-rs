@@ -19,7 +19,7 @@ async fn every_route_logs_no_secret_key_message_text_phone_number_or_contact() {
     // so that their routes run through.
     let h = Harness::with_settings(meta_whatsapp_server::state::Settings {
         webhooks_out: Some(common::capture::webhooks_out()),
-        ..signup::settings(signup::tech_provider())
+        ..common::capture::with_uploads(signup::settings(signup::tech_provider()))
     });
     let secrets = exercise(&h).await;
     check(&captured.text(), &secrets);
@@ -64,7 +64,9 @@ async fn the_request_span_names_the_tenant_and_the_key() {
 async fn every_line_keeps_its_target_from_before_the_crate_split() {
     let captured = Captured::default();
     let _guard = tracing::subscriber::set_default(subscriber(&captured));
-    let h = Harness::with_settings(signup::settings(signup::tech_provider()));
+    let h = Harness::with_settings(common::capture::with_uploads(signup::settings(
+        signup::tech_provider(),
+    )));
     exercise(&h).await;
     let targets: std::collections::BTreeSet<String> = captured
         .text()

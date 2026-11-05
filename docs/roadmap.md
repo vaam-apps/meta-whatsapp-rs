@@ -6323,12 +6323,51 @@ or WABA fails the family's own cross-tenant test).
     WABA's templates past the walk's 1,000 for a bulk operation (D116);
     a comparison of more than two templates (Meta's limit); no call of
     these routes was run against Meta live.
-- [ ] **M5c1. Media: resumable upload and conversion** (rows 47, 48):
+- [x] **M5c1. Media: resumable upload and conversion** (rows 47, 48):
   resumable upload; conversion on upload only when the deployment
   configures a converter (L19).
   - **After:** S7, L19.
   - **Decisive:** M5.1, M5.2; with no converter configured, an upload
     that needs conversion is refused as today, with zero requests.
+  - **Landed:** scope `media`: `POST /v1/numbers/{pn}/media-uploads`
+    (the file's name, length and type; an `Idempotency-Key`), `POST
+    …/media-uploads/{upload_id}?file_offset=N` (a raw chunk) and `GET
+    …/media-uploads/{upload_id}` (status), the library's three calls of
+    Meta's Resumable Upload API through `server_core::uploads::Uploads`.
+    The id is the service's, over a record on the `KvStore` (tenant,
+    number, Meta's session, declared file, the handle once complete): a
+    session of another tenant, another number or an expired one is `404`
+    with nothing asked (M5.2). The handle is answered by the chunk that
+    completes the file and by the status after it, for M5c2's profile
+    picture and a template's `header_handle`. Bounds: the five file
+    types, the media table's limits per kind and
+    `WA_SERVER_MEDIA_MAX_BYTES`, a chunk within the declared file, an
+    upload slot held while it is read and sent. `convert` on `POST
+    …/media` (`ogg_opus`, `static_sticker`, `animated_sticker`, `jpeg`,
+    `png`) with `WA_SERVER_MEDIA_CONVERTER=ffmpeg` (the server crate's
+    feature `ffmpeg`): the converted bytes are uploaded; without a
+    converter the form is unchanged. New codes `resumable_upload_not_configured`
+    and `media_conversion_failed`; the OpenAPI document is additive
+    (three operations; `type` no longer required). Tests:
+    `tests/media_uploads.rs` (the guide's three calls with exact
+    requests, resume after a timeout, every bound with zero requests,
+    another tenant's number and another number's upload `404`, scope,
+    Meta's answers, conversion with a scripted converter, zero requests
+    without one, a real `ffmpeg` and hostile input), `tests/authz.rs`
+    (M5.1 over the new routes), `tests/logs.rs` (M1.7 over them), the
+    config and error tables.
+  - **Proposed** (design D125–D131, pending the coordinator's decision):
+    the session record and the service's id (D125), the routes (D126),
+    the bounds (D127), `WA_APP_ID` and a new code (D128), an explicit
+    `convert` field (D129), the setting and the feature (D130), the
+    conversion's errors (D131). Every new name is pending the owner's
+    confirmation before the first release.
+  - **Not done here:** Meta's pages state no chunk or total size, no
+    session or handle lifetime, and whether a WABA token (not "a User
+    access token") opens a session: the limits are the service's, and no
+    call was run against Meta live; a final chunk whose answer Meta
+    never delivered leaves no handle to read back (upload again); the
+    docs image carries no `ffmpeg`.
 - [ ] **M5c2. Profile and display name** (rows 64, 65): the profile
   picture (through a resumable upload handle), the display name change.
   - **After:** M5c1.

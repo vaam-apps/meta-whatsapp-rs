@@ -28,7 +28,7 @@
 
 use std::fmt;
 
-use meta_whatsapp_rs::core::error::{StorageError, TransportError};
+use meta_whatsapp_rs::core::error::{ConversionError, StorageError, TransportError};
 use meta_whatsapp_rs::{Error, ErrorKind, GraphApiError};
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
@@ -111,6 +111,7 @@ codes! {
     SIGNUP_NOT_CONFIGURED = ("signup_not_configured", 409, "Embedded Signup is not set up for this deployment: the operator sets WA_APP_ID and WA_ES_CONFIG_ID (and, for a Solution Partner, its credit line)."),
     ERASURE_NOT_CONFIGURED = ("erasure_not_configured", 409, "Erasure is not set up for this deployment: the operator sets WA_SERVER_ERASURE_KEY."),
     ERASURE_CROSSES_BINDING = ("erasure_crosses_binding", 409, "This number holds records from before it came under the tenant, which an erasure on it would reach: the service refuses it, and the operator erases on it instead."),
+    RESUMABLE_UPLOAD_NOT_CONFIGURED = ("resumable_upload_not_configured", 409, "Resumable uploads are not set up for this deployment: the operator sets WA_APP_ID."),
     WEBHOOKS_NOT_CONFIGURED = ("webhooks_not_configured", 409, "Webhooks out are not set up for this deployment: the operator sets WA_SERVER_DATA_KEY."),
     WEBHOOK_ENDPOINT_LIMIT_REACHED = ("webhook_endpoint_limit_reached", 409, "The tenant has as many webhook endpoints as allowed: delete one first."),
     // 403: not allowed, by Meta or the service.
@@ -147,6 +148,7 @@ codes! {
     MEDIA_DOWNLOAD_FAILED = ("media_download_failed", 502, "The media could not be downloaded."),
     MEDIA_UPLOAD_FAILED = ("media_upload_failed", 502, "The media could not be uploaded."),
     ONBOARDING_FAILED = ("onboarding_failed", 502, "Onboarding stopped at `step`."),
+    MEDIA_CONVERSION_FAILED = ("media_conversion_failed", 502, "The media could not be converted: nothing was sent to Meta."),
     // 504
     TIMEOUT = ("timeout", 504, "Meta did not answer in time: the request may have taken effect."),
     // 503, 500
@@ -556,6 +558,14 @@ impl ServiceError {
             Error::Credit(credit) => {
                 Self::new(ErrorCode::of(kind_code(credit.kind())).unwrap_or(ErrorCode::INTERNAL))
             }
+            // A media converter (roadmap M5c1, design D131): an input it
+            // refuses is the caller's file (`422` on `file`), anything else
+            // the converter's own (missing, no encoder, past its time, a
+            // wrong output, killed): `502 media_conversion_failed`,
+            // retryable after a timeout only. The kind is logged; the
+            // converter's diagnostics are in no message.
+            Error::Conversion(ConversionError::InputRejected(_)) => Self::invalid("file"),
+            Error::Conversion(_) => Self::new(ErrorCode::MEDIA_CONVERSION_FAILED),
             // Configuration, an undecryptable vault record, a sink,
             // anything else.
             _ => Self::internal(),
