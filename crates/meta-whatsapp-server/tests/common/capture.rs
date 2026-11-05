@@ -328,6 +328,10 @@ pub async fn exercise(h: &Harness) -> Secrets {
     // Payments (roadmap P2): the OAuth links are credentials.
     secrets.section("payments");
     secrets.extend(payments(h, &admin).await);
+    // Groups (roadmap M5f): neither a participant, nor a join request's
+    // id, nor an invite link, nor a group's id is logged.
+    secrets.section("groups");
+    secrets.extend(groups(h, &admin).await);
     // Flows (roadmap M5d): the Flow key, a user's answers, tokens and the
     // preview link are secrets.
     secrets.section("flows");
@@ -1925,6 +1929,232 @@ async fn template_lifecycle(h: &Harness, key: &str, waba: &str) {
     assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
 }
 
+/// A group's id (`groups/webhooks`: it embeds the business number) is in no
+/// line of the service's own, and in the library's `graph request` debug
+/// line only (it names the path it calls: [`check`] says so); a group's
+/// invite links (credentials), a join request's id (it embeds a number) and
+/// the participants are in no log line.
+const GROUP_ID: &str = "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD";
+const GROUP_LINK: &str = "https://chat.whatsapp.com/BjCg8D2zYrE7kS1uFp0xQa";
+const GROUP_LINK_CODE: &str = "BjCg8D2zYrE7kS1uFp0xQa";
+const GROUP_NEW_LINK_CODE: &str = "ResetLinkCodeForTheLogs9xQ";
+const GROUP_JOIN_ID: &str = "MTY0NjcwNDM1OTU6MTIwMzYzNDA0Njk0MjMzODIw";
+const GROUP_JOIN_ID_2: &str = "MTY0NjcwNDM1OTU6MTIwMzYzNDA0Njk0MjMzODIx";
+const GROUP_PHONE: &str = "+16315557777";
+const GROUP_WA_ID: &str = "16315558888";
+const GROUP_BSUID: &str = "US.4021998877665544";
+const GROUP_USERNAME: &str = "@group-member-for-the-logs";
+
+/// The group routes (roadmap M5f), each exercised on the tenant's
+/// attached number: a creation asked and reported (Meta's event makes the
+/// group the number's), the listing, the read, a change, the invite link
+/// read and reset (once cut by a timeout), the participants listed and
+/// removed (the answer Meta's `206`, a refusal quoting a number), the join
+/// requests listed, approved (one refused) and rejected, the analytics and
+/// the deletion, then Meta's deletion event. Returns what must not be
+/// logged.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn groups(h: &Harness, admin: &str) -> Vec<String> {
+    const WABA: &str = "102290129340398";
+    const PN: &str = "1972385232742141";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["groups"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let base = format!("/v1/numbers/{PN}/groups");
+    let one = format!("{base}/{GROUP_ID}");
+    let call = |method: Method, path: &str| Call::new(method, path).key(&key);
+    // A creation, asked under a key and repeated.
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "request_id": "6f1c2d3e-4a5b-4c6d-8e7f-9a0b1c2d3e4f"}),
+    );
+    let create = || {
+        call(Method::POST, &base)
+            .header("idempotency-key", "group-log-1")
+            .json(&json!({"subject": "New Purchase Inquiry", "join_approval_mode": "approval_required"}))
+    };
+    let created = h.call(create()).await;
+    assert_eq!(created.status.as_u16(), 202, "{}", created.text);
+    let replayed = h.call(create()).await;
+    assert_eq!(replayed.status.as_u16(), 202, "{}", replayed.text);
+    // Meta's event (the invite link in it) makes it the number's.
+    let reported = h
+        .webhook(&super::meta::group_created(WABA, PN, GROUP_ID))
+        .await;
+    assert_eq!(reported.status.as_u16(), 200, "{}", reported.text);
+    h.graph.push_json(
+        200,
+        json!({"data": {"groups": [{"id": GROUP_ID, "subject": "New Purchase Inquiry", "created_at": "1683731200"}]},
+               "paging": {"cursors": {"after": "AFTER", "before": "BEFORE"}}}),
+    );
+    let listed = h.call(Call::get(&base).key(&key)).await;
+    assert_eq!(listed.status.as_u16(), 200, "{}", listed.text);
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "id": GROUP_ID, "subject": "New Purchase Inquiry",
+               "suspended": false, "total_participant_count": 2}),
+    );
+    let read = h.call(Call::get(&one).key(&key)).await;
+    assert_eq!(read.status.as_u16(), 200, "{}", read.text);
+    h.graph.push_json(200, json!({"success": true}));
+    let changed = h
+        .call(call(Method::PATCH, &one).json(&json!({"description": "Jim's purchase options."})))
+        .await;
+    assert_eq!(changed.status.as_u16(), 204, "{}", changed.text);
+    // The invite link: read, reset, reset again with the call cut.
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "invite_link": GROUP_LINK}),
+    );
+    let link = h
+        .call(Call::get(format!("{one}/invite-link")).key(&key))
+        .await;
+    assert_eq!(link.status.as_u16(), 200, "{}", link.text);
+    assert!(link.text.contains(GROUP_LINK_CODE), "the caller gets it");
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp",
+               "invite_link": format!("https://chat.whatsapp.com/{GROUP_NEW_LINK_CODE}")}),
+    );
+    let reset = h
+        .call(call(Method::POST, &format!("{one}/invite-link")))
+        .await;
+    assert_eq!(reset.status.as_u16(), 200, "{}", reset.text);
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let cut = h
+        .call(call(Method::POST, &format!("{one}/invite-link")))
+        .await;
+    assert_eq!(cut.status.as_u16(), 504, "{}", cut.text);
+    // The participants, listed and removed.
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "id": GROUP_ID, "total_participant_count": 3,
+               "participants": [{"wa_id": GROUP_WA_ID}, {"user_id": GROUP_BSUID, "username": GROUP_USERNAME}]}),
+    );
+    let participants = h
+        .call(Call::get(format!("{one}/participants")).key(&key))
+        .await;
+    assert_eq!(participants.status.as_u16(), 200, "{}", participants.text);
+    assert!(
+        participants.text.contains(GROUP_WA_ID),
+        "the caller gets it"
+    );
+    let remove = |users: serde_json::Value| {
+        call(Method::POST, &format!("{one}/participants/remove")).json(&json!({"users": users}))
+    };
+    h.graph.push_json(200, json!({"success": true}));
+    let removed = h
+        .call(remove(
+            json!([{"phone": GROUP_PHONE}, {"wa_id": GROUP_WA_ID}, {"user_id": GROUP_BSUID}]),
+        ))
+        .await;
+    assert_eq!(removed.status.as_u16(), 200, "{}", removed.text);
+    h.graph.push_json(206, json!({"success": true}));
+    let partial = h.call(remove(json!([{"phone": GROUP_PHONE}]))).await;
+    assert_eq!(partial.status.as_u16(), 200, "{}", partial.text);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#131203) Recipient {GROUP_PHONE} has not accepted"),
+                         "type": "OAuthException", "code": 131_203,
+                         "error_data": {"messaging_product": "whatsapp",
+                                        "details": format!("{GROUP_PHONE} {GROUP_USERNAME}")}}}),
+    );
+    let refused = h.call(remove(json!([{"phone": GROUP_PHONE}]))).await;
+    assert_eq!(refused.status.as_u16(), 502, "{}", refused.text);
+    // The join requests.
+    h.graph.push_json(
+        200,
+        json!({"data": [{"join_request_id": GROUP_JOIN_ID, "wa_id": GROUP_WA_ID, "creation_timestamp": 1_755_548_877}],
+               "paging": {"cursors": {"before": "B", "after": "A"}}}),
+    );
+    let requests = h
+        .call(Call::get(format!("{one}/join-requests")).key(&key))
+        .await;
+    assert_eq!(requests.status.as_u16(), 200, "{}", requests.text);
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "approved_join_requests": [GROUP_JOIN_ID],
+               "failed_join_requests": [{"join_request_id": GROUP_JOIN_ID_2, "errors": [{
+                   "code": 131_203, "message": format!("{GROUP_PHONE} has not accepted"),
+                   "title": "Unable to add participant to group",
+                   "error_data": {"details": GROUP_USERNAME}}]}]}),
+    );
+    let approved = h
+        .call(
+            call(Method::POST, &format!("{one}/join-requests/approve"))
+                .json(&json!({"join_request_ids": [GROUP_JOIN_ID, GROUP_JOIN_ID_2]})),
+        )
+        .await;
+    assert_eq!(approved.status.as_u16(), 200, "{}", approved.text);
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "rejected_join_requests": [GROUP_JOIN_ID_2]}),
+    );
+    let rejected = h
+        .call(
+            call(Method::POST, &format!("{one}/join-requests/reject"))
+                .json(&json!({"join_request_ids": [GROUP_JOIN_ID_2]})),
+        )
+        .await;
+    assert_eq!(rejected.status.as_u16(), 200, "{}", rejected.text);
+    // The analytics.
+    let now = time::OffsetDateTime::now_utc();
+    let at = |days: i64| {
+        (now - time::Duration::days(days))
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+    };
+    h.graph.push_json(
+        200,
+        json!({"data": [{"granularity": "DAILY", "data_points": [
+            {"group_id": GROUP_ID, "start": 1_685_548_801, "end": 1_685_635_200, "sent": 100}]}]}),
+    );
+    let analytics = h
+        .call(
+            Call::get(format!(
+                "{one}/analytics?start={}&end={}&metrics=SENT",
+                at(3),
+                at(1)
+            ))
+            .key(&key),
+        )
+        .await;
+    assert_eq!(analytics.status.as_u16(), 200, "{}", analytics.text);
+    // The deletion, and Meta's event that says it is done.
+    h.graph.push_json(200, json!({"success": true}));
+    let deleted = h.call(call(Method::DELETE, &one)).await;
+    assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
+    let mut gone = super::meta::with_ids(
+        serde_json::from_str(include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/groups.webhooks__delete_group_succeed.json"
+        ))
+        .unwrap(),
+        WABA,
+        PN,
+    );
+    gone["entry"][0]["changes"][0]["value"]["groups"][0]["group_id"] = json!(GROUP_ID);
+    let gone = h.webhook(&bytes(&gone)).await;
+    assert_eq!(gone.status.as_u16(), 200, "{}", gone.text);
+    vec![
+        GROUP_LINK_CODE.to_owned(),
+        GROUP_NEW_LINK_CODE.to_owned(),
+        GROUP_JOIN_ID.to_owned(),
+        GROUP_JOIN_ID_2.to_owned(),
+        GROUP_PHONE.to_owned(),
+        "16315557777".to_owned(),
+        GROUP_WA_ID.to_owned(),
+        GROUP_BSUID.to_owned(),
+        GROUP_USERNAME.to_owned(),
+    ]
+}
+
 /// The signature a Meta session id carries (`?sig=`) and the handle it
 /// answers: in no log line (roadmap M5c1).
 const UPLOAD_SIGNATURE: &str = "SIG-LOG-SECRET-9QZ";
@@ -2272,10 +2502,15 @@ fn check_audit(logs: &str) {
     );
     assert!(onboarded[0]["key_id"].is_string(), "{}", onboarded[0]);
     check_erasure_audit(&events, &changes);
+    check_group_audit(&changes);
     let deletions: Vec<&serde_json::Value> = changes
         .into_iter()
         .filter(|fields| {
-            fields["action"] != "signup_resumed" && fields["action"] != "customer_erased"
+            fields["action"] != "signup_resumed"
+                && fields["action"] != "customer_erased"
+                && !fields["action"]
+                    .as_str()
+                    .is_some_and(|action| action.starts_with("group_"))
         })
         .collect();
     let actions: Vec<&str> = deletions
@@ -2372,6 +2607,81 @@ fn check_erasure_audit(events: &[serde_json::Value], changes: &[&serde_json::Val
     assert!(audit["key_id"].is_string(), "{audit}");
     assert_eq!(audit["identities"], 2, "{audit}");
     assert!(audit["messages"].as_u64().unwrap() > 0, "{audit}");
+}
+
+/// The group changes' audit events (roadmap M5f; docs/design/server.md,
+/// D155) of the scenario `groups`: in order, each with its outcome and its
+/// counts (the participants and join requests a request named, those Meta
+/// answered done and refused), the number by id, the tenant, the WABA and
+/// the key; and nothing else: no group, no participant, no join request.
+fn check_group_audit(changes: &[&serde_json::Value]) {
+    let groups: Vec<&serde_json::Value> = changes
+        .iter()
+        .copied()
+        .filter(|fields| {
+            fields["action"]
+                .as_str()
+                .is_some_and(|action| action.starts_with("group_"))
+        })
+        .collect();
+    let seen: Vec<(&str, &str, u64, u64, u64)> = groups
+        .iter()
+        .map(|fields| {
+            (
+                fields["action"].as_str().unwrap_or_default(),
+                fields["outcome"].as_str().unwrap_or_default(),
+                fields["users"].as_u64().unwrap_or(u64::MAX),
+                fields["done"].as_u64().unwrap_or(u64::MAX),
+                fields["failed"].as_u64().unwrap_or(u64::MAX),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            ("group_creation_requested", "answered", 0, 0, 0),
+            ("group_settings_updated", "answered", 0, 0, 0),
+            ("group_invite_link_reset", "answered", 0, 0, 0),
+            ("group_invite_link_reset", "unknown", 0, 0, 0),
+            ("group_participants_removed", "answered", 3, 0, 0),
+            ("group_participants_removed", "unknown", 1, 0, 0),
+            ("group_join_requests_approved", "answered", 2, 1, 1),
+            ("group_join_requests_rejected", "answered", 1, 1, 0),
+            ("group_deleted", "answered", 0, 0, 0),
+        ],
+        "the group changes' audit events, with their counts"
+    );
+    for fields in groups {
+        assert!(fields["key_id"].is_string(), "{fields}");
+        assert_eq!(fields["tenant"], "merchant-42", "{fields}");
+        assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
+        assert_eq!(fields["phone_number_id"], "1972385232742141", "{fields}");
+        // Counts and outcomes only: never a group, a person or a link.
+        let names: Vec<&str> = fields
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        for name in names {
+            assert!(
+                matches!(
+                    name,
+                    "message"
+                        | "action"
+                        | "key_id"
+                        | "tenant"
+                        | "waba_id"
+                        | "phone_number_id"
+                        | "users"
+                        | "done"
+                        | "failed"
+                        | "outcome"
+                ),
+                "an unexpected field `{name}`: {fields}"
+            );
+        }
+    }
 }
 
 /// The payment changes' audit events (of the tenant changes `changes`)
@@ -2508,6 +2818,19 @@ pub fn check(logs: &str, secrets: &Secrets) {
         logs.contains("graph request"),
         "the library's events are captured"
     );
+    // A group's id (roadmap M5f) is in the library's debug line for the
+    // Graph request that names it, and in no line of the service's own,
+    // its audit events included.
+    let mut requests_naming_groups = 0;
+    for line in logs.lines().filter(|l| l.contains(GROUP_ID)) {
+        assert!(
+            line.contains("\"target\":\"meta_whatsapp_client::request\"")
+                && line.contains("\"message\":\"graph request\""),
+            "a group's id was logged by the service: {line}"
+        );
+        requests_naming_groups += 1;
+    }
+    assert!(requests_naming_groups > 0, "the group routes ran");
     if let Some(leak) = secrets.leaks(logs) {
         panic!("{leak}");
     }

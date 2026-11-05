@@ -158,6 +158,44 @@ pub struct PaymentFacts<'a> {
     pub refund_status: Option<&'a str>,
 }
 
+/// A tenant's change to a group (roadmap M5f; docs/design/server.md,
+/// D155), logged like [`tenant_audit`] (target `audit`, message `tenant
+/// change`) with `outcome` and the counts of [`GroupFacts`]. Never who
+/// (the participants are in no log) and never which group (its id embeds
+/// the business number): the number's id, the counts and the outcome.
+pub fn groups_audit(
+    action: &'static str,
+    key_id: &str,
+    subject: &Subject<'_>,
+    facts: GroupFacts,
+    outcome: Outcome,
+) {
+    tracing::info!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
+        users = facts.users,
+        done = facts.done,
+        failed = facts.failed,
+        outcome = outcome.as_str(),
+        "tenant change"
+    );
+}
+
+/// What a [`groups_audit`] event names besides its [`Subject`]: counts.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct GroupFacts {
+    /// How many participants or join requests the request named.
+    pub users: u64,
+    /// How many Meta answered as done; `0` when it did not answer.
+    pub done: u64,
+    /// How many Meta refused, one by one.
+    pub failed: u64,
+}
+
 /// What an [`audit`] event touched.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Subject<'a> {

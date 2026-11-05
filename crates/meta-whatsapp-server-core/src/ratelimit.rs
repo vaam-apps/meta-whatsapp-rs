@@ -99,7 +99,13 @@ impl RouteClass {
             | Operation::ListSignupAttempts
             | Operation::ListWebhookEndpoints
             | Operation::GetWebhookEndpoint
-            | Operation::ListWebhookDeliveries => Self::Read,
+            | Operation::ListWebhookDeliveries
+            | Operation::ListGroups
+            | Operation::GetGroup
+            | Operation::GetGroupInviteLink
+            | Operation::ListGroupParticipants
+            | Operation::ListGroupJoinRequests
+            | Operation::GetGroupAnalytics => Self::Read,
             Operation::UpdateProfile
             | Operation::DisconnectWaba
             | Operation::SendMessage
@@ -128,7 +134,14 @@ impl RouteClass {
             | Operation::DeleteWebhookEndpoint
             | Operation::RotateWebhookSecret
             | Operation::TestWebhookEndpoint
-            | Operation::RetryWebhookDelivery => Self::Send,
+            | Operation::RetryWebhookDelivery
+            | Operation::CreateGroup
+            | Operation::UpdateGroup
+            | Operation::DeleteGroup
+            | Operation::ResetGroupInviteLink
+            | Operation::RemoveGroupParticipants
+            | Operation::ApproveGroupJoinRequests
+            | Operation::RejectGroupJoinRequests => Self::Send,
             Operation::ListTemplates
             | Operation::CreateTemplate
             | Operation::DeleteTemplates
@@ -469,6 +482,7 @@ mod tests {
     /// apart from writes, template management apart from both (its scope's
     /// operations, and only they). Decisive: each arm of `RouteClass::of`.
     #[test]
+    #[allow(clippy::too_many_lines)] // one row per operation
     fn an_operations_class_is_the_tables() {
         use crate::model::Scope;
         let table = [
@@ -541,6 +555,19 @@ mod tests {
             ("get_template_group", RouteClass::Templates),
             ("update_template_group", RouteClass::Templates),
             ("delete_template_group", RouteClass::Templates),
+            ("create_group", RouteClass::Send),
+            ("list_groups", RouteClass::Read),
+            ("get_group", RouteClass::Read),
+            ("update_group", RouteClass::Send),
+            ("delete_group", RouteClass::Send),
+            ("get_group_invite_link", RouteClass::Read),
+            ("reset_group_invite_link", RouteClass::Send),
+            ("list_group_participants", RouteClass::Read),
+            ("remove_group_participants", RouteClass::Send),
+            ("list_group_join_requests", RouteClass::Read),
+            ("approve_group_join_requests", RouteClass::Send),
+            ("reject_group_join_requests", RouteClass::Send),
+            ("get_group_analytics", RouteClass::Read),
             ("create_flow", RouteClass::Templates),
             ("list_flows", RouteClass::Templates),
             ("get_flow", RouteClass::Templates),

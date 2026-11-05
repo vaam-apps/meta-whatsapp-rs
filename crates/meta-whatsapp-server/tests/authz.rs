@@ -177,6 +177,41 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         ),
         (Method::DELETE, "/v1/wabas/{waba_id}/flows/{flow_id}"),
         (Method::POST, "/v1/numbers/{pn}/payments/refunds"),
+        // Roadmap M5f (the design's M5.1): a number's groups.
+        (Method::POST, "/v1/numbers/{pn}/groups"),
+        (Method::GET, "/v1/numbers/{pn}/groups"),
+        (Method::GET, "/v1/numbers/{pn}/groups/{group_id}"),
+        (Method::PATCH, "/v1/numbers/{pn}/groups/{group_id}"),
+        (Method::DELETE, "/v1/numbers/{pn}/groups/{group_id}"),
+        (
+            Method::GET,
+            "/v1/numbers/{pn}/groups/{group_id}/invite-link",
+        ),
+        (
+            Method::POST,
+            "/v1/numbers/{pn}/groups/{group_id}/invite-link",
+        ),
+        (
+            Method::GET,
+            "/v1/numbers/{pn}/groups/{group_id}/participants",
+        ),
+        (
+            Method::POST,
+            "/v1/numbers/{pn}/groups/{group_id}/participants/remove",
+        ),
+        (
+            Method::GET,
+            "/v1/numbers/{pn}/groups/{group_id}/join-requests",
+        ),
+        (
+            Method::POST,
+            "/v1/numbers/{pn}/groups/{group_id}/join-requests/approve",
+        ),
+        (
+            Method::POST,
+            "/v1/numbers/{pn}/groups/{group_id}/join-requests/reject",
+        ),
+        (Method::GET, "/v1/numbers/{pn}/groups/{group_id}/analytics"),
     ] {
         assert!(
             routes
@@ -212,7 +247,7 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
             checked += 1;
         }
     }
-    assert!(checked >= 42, "only {checked} calls");
+    assert!(checked >= 42 + 2 * 13, "only {checked} calls");
     assert!(h.graph.requests().is_empty(), "no call reached Meta");
     assert_eq!(h.graph.remaining(), 0);
     // Nothing of A's changed.
@@ -237,6 +272,87 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
             .unwrap()
             .is_some()
     );
+}
+
+/// The design's M5.2 for every route of the document that names a group of
+/// a number (roadmap M5f), each with A's own key on A's own number: the
+/// sample's group is none the number holds (nobody reported it), so it is
+/// `404 not_found` with **zero vault reads** and nothing asked of Meta;
+/// once Meta's creation event makes it the number's, the same call reads
+/// the vault and asks Meta. A group route that opened the token before
+/// the group fails the first half; one that skipped the group fails
+/// neither (the document's own M5.1 table is the other tenants').
+/// Decisive: `GroupRecords::owned` before `owned_number` in the
+/// `OwnedGroup` extractor.
+#[tokio::test]
+async fn a_group_the_number_does_not_hold_is_not_found_before_the_vault_on_every_group_route() {
+    let h = two_tenants().await;
+    let a_key = h.tenant_key(A, &ALL_SCOPES).await;
+    let routes: Vec<_> = owned_routes()
+        .into_iter()
+        .filter(|o| o.template.contains("{pn}") && o.template.contains("{group_id}"))
+        .collect();
+    assert!(routes.len() >= 11, "{} group routes", routes.len());
+    for operation in &routes {
+        let label = operation.label();
+        let before = h.kv.vault_reads();
+        let reply = h.call(call(operation, &a_key, None)).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::NOT_FOUND, "not_found"),
+            "{label}: {}",
+            reply.text
+        );
+        assert_eq!(h.kv.vault_reads(), before, "{label} read the vault");
+    }
+    assert!(h.graph.requests().is_empty(), "Meta was never asked");
+    // Another tenant's number holds that group; it is still not A's.
+    let held = h
+        .webhook(&common::meta::group_created(
+            WABA_B,
+            PN_B,
+            common::SAMPLE_TEMPLATE_GROUP_ID,
+        ))
+        .await;
+    assert_eq!(held.status, StatusCode::OK, "{}", held.text);
+    for operation in &routes {
+        let label = operation.label();
+        let before = h.kv.vault_reads();
+        let reply = h.call(call(operation, &a_key, None)).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::NOT_FOUND,
+            "{label}: {}",
+            reply.text
+        );
+        assert_eq!(h.kv.vault_reads(), before, "{label} read the vault");
+    }
+    assert!(h.graph.requests().is_empty());
+    // A's own number reported it: now the token is opened and Meta asked.
+    let held = h
+        .webhook(&common::meta::group_created(
+            WABA_A,
+            PN_A,
+            common::SAMPLE_TEMPLATE_GROUP_ID,
+        ))
+        .await;
+    assert_eq!(held.status, StatusCode::OK, "{}", held.text);
+    for operation in &routes {
+        let label = operation.label();
+        let before = h.kv.vault_reads();
+        h.graph.push_json(
+            500,
+            json!({"error": {"message": "x", "type": "OAuthException", "code": 2}}),
+        );
+        let asked = h.graph.requests().len();
+        let _ = h.call(call(operation, &a_key, None)).await;
+        assert!(
+            h.kv.vault_reads() > before,
+            "{label}: the vault was not read"
+        );
+        assert_eq!(h.graph.requests().len(), asked + 1, "{label}");
+    }
+    assert_eq!(h.graph.remaining(), 0);
 }
 
 /// Roadmap L20c: a `{pn}` or `{waba_id}` that is not a numeric id names
@@ -348,6 +464,16 @@ const ASK_META_NOTHING: [(Method, &str, StatusCode); 8] = [
 async fn the_owner_reads_the_vault_on_every_owned_route() {
     let h = two_tenants().await;
     let a_key = h.tenant_key(A, &ALL_SCOPES).await;
+    // The sample's group is A's number's (Meta's creation event), as a
+    // group route needs it to reach the vault (roadmap M5f).
+    let held = h
+        .webhook(&common::meta::group_created(
+            WABA_A,
+            PN_A,
+            common::SAMPLE_TEMPLATE_GROUP_ID,
+        ))
+        .await;
+    assert_eq!(held.status, StatusCode::OK, "{}", held.text);
     for operation in owned_routes() {
         if operation.admin() {
             continue;

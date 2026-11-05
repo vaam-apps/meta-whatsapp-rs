@@ -59,6 +59,22 @@ pub fn fixture(name: &str) -> Value {
     serde_json::from_str(text).unwrap()
 }
 
+/// Meta's "Group create succeed" webhook (`groups/webhooks`), for `pn` of
+/// `waba`, its group `group`, dated [`sent_now`]: what makes `group` the
+/// number's (roadmap M5f).
+pub fn group_created(waba: &str, pn: &str, group: &str) -> Vec<u8> {
+    let mut payload = with_ids(
+        serde_json::from_str(include_str!(
+            "../../../meta-whatsapp-webhooks/tests/fixtures/pages/groups.webhooks__group_create_succeed.json"
+        ))
+        .unwrap(),
+        waba,
+        pn,
+    );
+    payload["entry"][0]["changes"][0]["value"]["groups"][0]["group_id"] = json!(group);
+    bytes(&payload)
+}
+
 /// Now, in Unix seconds.
 pub fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
