@@ -1,6 +1,6 @@
 //! The token-expiry event ([`crate::token_expiry`], roadmap M3e) over a
 //! backend's bundle: a round walks the bindings and the vault the bundle
-//! shares, records `token_expiring` through [`NumberEvents`] into the
+//! shares, records `token_expiring` through [`NumberEvents`](crate::number_events::NumberEvents) into the
 //! bundle's outbox for the token's tenant only, once per token and expiry
 //! (a second round, and a round on another replica, record nothing), again
 //! for a token stored anew, never for a token outside the lead time, one
