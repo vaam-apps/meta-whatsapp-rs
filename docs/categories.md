@@ -46,7 +46,7 @@ the capability-level comparison with Zaileys is in [parity.md](parity.md)
 | 40 categories | done | partial | gap |
 | --- | --- | --- | --- |
 | Library | 34 | 6 | 0 |
-| Service | 9 | 21 | 10 |
+| Service | 10 | 20 | 10 |
 
 35 categories follow Meta's grouping, 2 are APIs Meta documents
 by reference only (36, 37), and 3 are our own (38–40).

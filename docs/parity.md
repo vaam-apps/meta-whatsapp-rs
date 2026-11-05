@@ -91,13 +91,13 @@ per-feature list is [coverage.md](coverage.md).
 
 ## Where we stand
 
-**66 of the 132 counted rows are done on both sides.** Parity is not
+**68 of the 132 counted rows are done on both sides.** Parity is not
 reached.
 
 | 132 counted rows | done | partial | gap | n/a (that side does not carry it) |
 | --- | --- | --- | --- | --- |
 | Library | 128 | 3 | 0 | 1 |
-| Service | 67 | 13 | 51 | 1 |
+| Service | 69 | 13 | 49 | 1 |
 
 - The table has 156 rows. 24 of them are not counted: they work only
   over WhatsApp Web ("n/a — unofficial protocol"). The counted rows'
@@ -105,9 +105,9 @@ reached.
   library for row 115 (packaging), the service for row 63 (a Flow JSON
   builder).
 - Each of the library's 3 partial or gap rows is cited by a
-  [roadmap](roadmap.md) item. Each of the service's 64 names, in its
+  [roadmap](roadmap.md) item. Each of the service's 62 names, in its
   status, the roadmap items that bring it; by family (a row can name
-  two): M3 7, M4 2, M5 54, P 1 (payments: P2b).
+  two): M3 7, M4 2, M5 52, P 1 (payments: P2b).
 - The largest gaps: the service routes for the modules the design once
   left "on demand" (M5), the inbox, live events and onboarding over HTTP
   (M2, M3), and the rest of the bot framework (section G: its commands,
