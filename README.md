@@ -251,6 +251,7 @@ coding agents of those apps: the `meta-whatsapp-rs-server` skill.
 | `postgres` | | `PostgresKvStore`, `PostgresConversationStore`, embedded migrations (sqlx) |
 | `sqlite` | | `SqliteKvStore`, `SqliteConversationStore`, embedded migrations (sqlx, SQLite compiled in): one process on one machine |
 | `redis` | | `RedisKvStore`, `RedisConversationStore`, and `RedisTls` for `rediss://` (aws-lc-rs, never the process default) |
+| `mongodb` | | `MongoKvStore`, `MongoConversationStore`, `mongodb::migrate` (the `mongodb` driver, rustls on aws-lc-rs): a replica set |
 | `axum` | | `webhooks::router` (webhook endpoint) and `webhooks::sse` (live inbox stream) |
 | `typst` | | `meta_whatsapp_rs::typst`: invoice, receipt and voucher templates → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto (aws-lc-rs) |
