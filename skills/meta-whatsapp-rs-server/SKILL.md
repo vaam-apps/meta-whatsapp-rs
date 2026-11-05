@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs 0b037d946d4f1b4b520b1420a7f783885370101d (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 473e5534e9497aa0829aca5877d2dd48b5d8c90d (2026-11-05).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -42,7 +42,7 @@ merchants connecting their number (`meta-whatsapp-rs-server-onboarding`), a numb
 One deployment per Meta app. The public listener (default
 `127.0.0.1:8080`) serves only `GET /webhooks/meta` and
 `POST /webhooks/meta` (Meta's subscription check and deliveries: point
-the app's callback URL at it) and `GET /livez`; the internal one (`127.0.0.1:8081`) serves everything else
+the app's callback URL at it), `POST /webhooks/flows/{waba_id}` (Meta's Flows data endpoint, off without a Flow key) and `GET /livez`; the internal one (`127.0.0.1:8081`) serves everything else
 and must stay on your private network. No image yet: build it.
 
 ```bash
