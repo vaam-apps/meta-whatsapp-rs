@@ -422,3 +422,55 @@ fn the_deployment_and_a_call_show_no_secret() {
     );
     assert!(shown.contains("merchant-42") && shown.contains('S'));
 }
+
+/// A replica answers at most 32 requests at once and a body has 15 s to
+/// arrive, however well-formed the signature header looks (it costs an
+/// attacker nothing). With 32 requests whose bodies never come, the next
+/// is `503` at once, each slow one is cut with `408`, and the places are
+/// free again afterwards: a request that is not read to its end, one cut
+/// by the limit and one refused all give theirs back. Decisive:
+/// `FlowsEndpoint::admit`, the place held to the end of `api::flows`'
+/// `answer`, and the body read timeout.
+#[tokio::test(start_paused = true)]
+async fn requests_past_capacity_are_503_and_slow_bodies_408_and_the_places_come_back() {
+    use meta_whatsapp_rs::webhooks::axum::body::Bytes;
+    use meta_whatsapp_server_core::flows_endpoint::MAX_IN_FLIGHT;
+    let stub = Stub::summary();
+    let h = with_handler(stub.clone()).await;
+    let body = kat_body("data_exchange");
+    let slow: Vec<_> = (0..MAX_IN_FLIGHT)
+        .map(|_| {
+            let router = h.public.clone();
+            let request = signed(WABA, &body)
+                .body(Body::from_stream(futures::stream::pending::<
+                    Result<Bytes, std::io::Error>,
+                >()))
+                .build();
+            tokio::spawn(async move { send(&router, request).await.status })
+        })
+        .collect();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let started = tokio::time::Instant::now();
+    let refused = post(&h, signed(WABA, &body)).await;
+    assert_eq!(refused.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(started.elapsed(), Duration::ZERO, "at once");
+    for task in slow {
+        assert_eq!(task.await.unwrap(), StatusCode::REQUEST_TIMEOUT);
+    }
+    assert_eq!(stub.calls(), 0, "no slow body reached the app");
+    // Every place is back: more requests than places, one after the other,
+    // answered or refused for their own reasons (200, 413, 421).
+    for _ in 0..=MAX_IN_FLIGHT {
+        assert_eq!(post(&h, signed(WABA, &body)).await.status, StatusCode::OK);
+        assert_eq!(
+            post(&h, signed(WABA, &vec![b' '; 256 * 1024 + 1]))
+                .await
+                .status,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        assert_eq!(
+            post(&h, signed(WABA, b"not json")).await.status.as_u16(),
+            421
+        );
+    }
+}
