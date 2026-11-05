@@ -99,7 +99,7 @@ impl Probes {
     pub async fn create(&self, ctx: &CratestackContext, probe: Probe) -> Result<Probe, String> {
         self.db
             .wa_probe()
-            .create(generated::CreateWaProbeInput {
+            .create(cratestack_schema::CreateWaProbeInput {
                 id: probe.id,
                 tenantId: probe.tenant_id,
                 label: probe.label,
@@ -126,7 +126,7 @@ impl Probes {
     }
 }
 
-fn into_probe(row: generated::WaProbe) -> Probe {
+fn into_probe(row: cratestack_schema::WaProbe) -> Probe {
     Probe {
         id: row.id,
         tenant_id: row.tenantId,

@@ -1569,7 +1569,7 @@ the defaults stay `api-axum` and `store-postgres`.
     feature `api-cratestack`, the crate name
     `meta-whatsapp-server-api-cratestack`, and the procedure's wire name
     and fields (`/$procs/version`, the four above).
-- [ ] **S11. The system principal, a spike**
+- [x] **S11. The system principal, a spike**
   (`meta-whatsapp-server-store-cratestack`, one model): CrateStack
   applies its policies to in-process calls too (its ADR 0018), so the
   store calls models as the system principal, with
@@ -1579,7 +1579,44 @@ the defaults stay `api-axum` and `store-postgres`.
     returns the rows; the same call under a tenant's context returns
     none; removing `auth().isSystem()` from the model's `@@allow` fails
     the first.
-- [ ] **S12. A CrateStack upgrade cadence** (the workspace manifest, a
+  - **Landed:** `meta-whatsapp-server-store-cratestack` (`publish =
+    false`, a member, not a default one, composed into no binary), on
+    `cratestack-pg` 0.17.2 under the key `cratestack` (without default
+    features, with `postgres`), `schema/store.cstack` with one model,
+    `WaProbe` (`id`, `tenantId`, `label`; table `wa_probes`, which the
+    spike's tests create by hand), `@@allow` on all five actions
+    (`list`, `detail`, `create`, `update`, `delete`) naming only
+    `auth().isSystem()`. `system_context()` is CrateStack's
+    `SystemContext::for_service("meta-whatsapp-server").into_context()`
+    and `tenant_context(id)` an authenticated context carrying `tenantId`;
+    `Probes::find_many` and `create` take the context. Tests
+    (`tests/live_postgres.rs`, a `wa_test_cs_*` database each, dropped
+    when the test ends): `live_postgres_a_system_find_many_returns_the_rows`
+    (two rows of two tenants, both returned) and
+    `live_postgres_the_same_call_under_a_tenant_returns_none` (the
+    tenant the rows name, and another, get none; the tenant's create is
+    refused and leaves no row). Run with `META_WHATSAPP_RS_REQUIRE_LIVE=1`
+    on a throwaway Postgres 16: both pass. *Mutation*: `@@allow("list",
+    auth().isSystem())` replaced by `@@allow("list", tenantId ==
+    auth().tenantId)` fails the first live test (`left: []`), as it
+    should (it fails the second, which then sees its own row, and the
+    schema-text test beside them). `just test-live` runs the new tests;
+    `just features` checks the crate alone. Upstream (CrateStack 0.17.2)
+    has the same ground covered in its `tests/system_principal.rs`:
+    this spike shows it holds in our schema, not that CrateStack
+    lacks anything. New dependencies: `cratestack-pg` and
+    `cratestack-sqlx` 0.17.2 (MIT); the `sqlx-*` crates were already in
+    the tree, and `ring` reaches sqlx-core through `cratestack-pg`'s HTTP
+    client (as S10 noted it would). `just deny` passes with no new
+    exception.
+  - **Decided** (AGENTS.md § Decisions; each swappable): proposed in the
+    PR; the coordinator records them.
+  - **Pending the owner** (names before the first release): the model
+    `WaProbe` and its table `wa_probes` (columns `id`, `tenant_id`,
+    `label`), the audit actor `system:meta-whatsapp-server`
+    (`SYSTEM_SERVICE`; the model has no `@@audit`, so nothing stores it
+    yet), and the crate name.
+- [x] **S12. A CrateStack upgrade cadence** (the workspace manifest, a
   scheduled CI job): the `cratestack*` crates pinned to one minor
   (`~0.17`: S10 pinned `cratestack-api` to `~0.17.2`) and to one
   version between them; a weekly job that opens an
@@ -1589,6 +1626,29 @@ the defaults stay `api-axum` and `store-postgres`.
   - **Decisive:** a workspace test reading `Cargo.toml` fails when a
     `cratestack*` requirement is not pinned to one minor, or when two
     CrateStack crates are pinned to different versions.
+  - **Landed:** every `cratestack*` requirement is `~0.17.2` (the
+    workspace manifest's `cratestack-api`, and `cratestack-pg` in the
+    store crate, which cannot use `workspace = true` with a renamed
+    package). `crates/meta-whatsapp-rs/tests/cratestack_pins.rs`
+    (`every_cratestack_requirement_is_one_minor_and_one_version`) reads the
+    root manifest and every manifest under `crates/` and `tools/` and
+    fails on a requirement that is not `~X.Y[.Z]` or when two differ;
+    `the_lock_resolves_every_cratestack_crate_to_one_version` does the same
+    for `Cargo.lock`; unit tests feed the checker manifests breaking each
+    rule. *Mutations*, on the real manifests: the workspace requirement
+    `0.17.2` (caret) fails it, naming the requirement and the drift; the
+    store crate's `~0.17.1` fails it as a version drift. The weekly job
+    `.github/workflows/cratestack-release.yml` (Mondays 06:23 UTC, and by
+    hand) reads the pinned minor from the manifest and the newest stable
+    `cratestack-api` from crates.io's public API, and, when that is a
+    newer minor and no open issue carries the title, opens one with
+    `gh issue create`; its only credential is the workflow's own
+    `GITHUB_TOKEN` (`issues: write`, `contents: read`), and no secret is
+    stored. It has not run: GitHub runs a schedule from the default branch
+    only, so its first run is after the merge (`workflow_dispatch` runs it
+    at once).
+  - **Decided** (AGENTS.md § Decisions; each swappable): proposed in the
+    PR; the coordinator records them.
 - [ ] **S13. `meta-whatsapp-server-api-cratestack` parity** (one PR per
   resource group: numbers, messages and media, templates, events,
   admin, and each group added before S13): `api.cstack` with

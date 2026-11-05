@@ -1,0 +1,73 @@
+name: CrateStack release watch
+
+# Roadmap S12. The cratestack* crates are pinned to one minor (`~0.17.2`;
+# crates/meta-whatsapp-rs/tests/cratestack_pins.rs keeps them so), and a
+# minor of 0.x may break the generated code, so a new minor is one upgrade
+# pull request through the review pipeline. This job only opens the issue
+# that starts it: weekly, when crates.io has a newer minor than the one the
+# workspace manifest pins, and no open issue already says so.
+#
+# No secret is stored: the only credential is the workflow's own
+# GITHUB_TOKEN, scoped to `issues: write` and `contents: read`, and the job
+# reads one public crates.io endpoint without a credential.
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: cratestack-release
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: A new CrateStack minor opens an issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare crates.io with the pinned minor
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The pinned requirement of the facade the workspace builds on.
+          pinned=$(grep -E '^cratestack = \{ package = "cratestack-api"' Cargo.toml \
+            | sed -E 's/.*version = "~([0-9]+\.[0-9]+)(\.[0-9]+)?".*/\1/')
+          [[ "$pinned" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "no pinned minor found: '$pinned'" >&2; exit 1; }
+
+          latest=$(curl --fail --silent --show-error --location \
+            --header 'User-Agent: meta-whatsapp-rs cratestack-release-watch' \
+            https://crates.io/api/v1/crates/cratestack-api \
+            | jq -r '.crate.max_stable_version')
+          [[ "$latest" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected version: '$latest'" >&2; exit 1; }
+          latest_minor="${latest%.*}"
+          echo "pinned $pinned, latest $latest"
+
+          # Newer by version order, not by difference: a yanked or older
+          # latest must not open an issue.
+          if [ "$latest_minor" = "$pinned" ] || [ "$(printf '%s\n%s\n' "$pinned" "$latest_minor" | sort -V | tail -n1)" = "$pinned" ]; then
+            echo "up to date"
+            exit 0
+          fi
+
+          title="CrateStack $latest_minor is released (workspace pins $pinned)"
+          existing=$(gh issue list --state open --label dependencies --search "in:title \"$title\"" --json number --jq 'length')
+          if [ "$existing" != "0" ]; then
+            echo "an open issue already says so"
+            exit 0
+          fi
+          body="crates.io has \`cratestack-api\` $latest; the workspace pins \`~$pinned\`.
+
+          One upgrade pull request for every \`cratestack*\` requirement (the workspace manifest and \`crates/meta-whatsapp-server-store-cratestack\`), through the review pipeline (docs/roadmap.md, S12): read the release notes for breaking changes to the schema language and the generated code, regenerate, and run \`just ci\` and \`just test-live\`. \`crates/meta-whatsapp-rs/tests/cratestack_pins.rs\` keeps them on one minor and one version."
+          gh label create dependencies --color 0366d6 --description "Dependency upgrades" 2>/dev/null || true
+          gh issue create --title "$title" --label dependencies --body "$body"
