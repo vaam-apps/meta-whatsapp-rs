@@ -387,15 +387,12 @@ fn percent_decoded(text: &str) -> String {
             .get(i + 1..i + 3)
             .and_then(|pair| std::str::from_utf8(pair).ok())
             .and_then(|pair| u8::from_str_radix(pair, 16).ok());
-        match (byte, hex) {
-            (b'%', Some(decoded)) => {
-                out.push(decoded);
-                i += 3;
-            }
-            _ => {
-                out.push(byte);
-                i += 1;
-            }
+        if let (b'%', Some(decoded)) = (byte, hex) {
+            out.push(decoded);
+            i += 3;
+        } else {
+            out.push(byte);
+            i += 1;
         }
     }
     String::from_utf8_lossy(&out).into_owned()
@@ -670,7 +667,7 @@ impl<'a> Flows<'a> {
     /// # Errors
     ///
     /// `422 invalid_request` on `endpoint_uri` when it is this service's
-    /// address for another WABA's Flows (see [`endpoint_names_waba`]),
+    /// address for another WABA's Flows (see `endpoint_names_waba`),
     /// before any request. `404 not_found` for a `clone_flow_id` not the
     /// WABA's, and nothing created. Meta's refusal or failure, with its `details` (a timeout
     /// `may_have_been_sent`).
