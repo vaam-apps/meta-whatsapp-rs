@@ -238,6 +238,37 @@ stored data, the owner's).
   no answer and no log). The OpenAPI document grew by 12 paths, additively.
 
 
+- **Resumable media uploads and conversion on upload, in the service**
+  (roadmap M5c1, parity rows 47 and 48 now done in the service; choices
+  D125-D131, proposed, pending the coordinator's decision; from the
+  Graph API's Resumable Upload guide, which Meta documents outside the
+  WhatsApp pages, and the media table of `business-phone-numbers/media`).
+  - `POST /v1/numbers/{pn}/media-uploads` (the file's name, length and
+    type, with an optional `Idempotency-Key`), `POST
+    /v1/numbers/{pn}/media-uploads/{upload_id}?file_offset=N` (a raw
+    chunk) and `GET /v1/numbers/{pn}/media-uploads/{upload_id}`, scope
+    `media`, over the library's three calls. The id is the service's own,
+    over a record on the `KvStore` (namespace `wa.server.upload`, 24
+    hours); another tenant's or another number's upload is `404` with
+    nothing asked of Meta. The `handle` is answered by the chunk that
+    completes the file and by the status after it: a template's
+    `header_handle`, and M5c2's profile picture. Meta states no chunk
+    size, total size or lifetime: the bounds are the media table's limits
+    per kind, `WA_SERVER_MEDIA_MAX_BYTES` and the declared length.
+  - `convert` on `POST /v1/numbers/{pn}/media` (`ogg_opus`,
+    `static_sticker`, `animated_sticker`, `jpeg`, `png`) with
+    `WA_SERVER_MEDIA_CONVERTER=ffmpeg` (and
+    `WA_SERVER_MEDIA_CONVERTER_PROGRAM`), in a build with the server
+    crate's new feature `ffmpeg`: the converted bytes are uploaded, under
+    the library's converter guards and a 20 s limit. Without a converter
+    nothing changes. New error codes `resumable_upload_not_configured`
+    (409) and `media_conversion_failed` (502); `WA_APP_ID` also opens
+    upload sessions. `Settings` gains `media_converter` and `app_id`.
+  - The OpenAPI document is additive: three operations, and `type` of the
+    upload form no longer required (a form with `convert` has none).
+    New names, pending the owner's confirmation before the first
+    release: the namespace, the operation ids, the codes, the path, the
+    field and its values, the settings and the feature (design D125-D131).
 - **CrateStack enters the workspace** (roadmap S10, design D20 and §8.3;
   coverage row 33; no parity or category row changes status: the
   adapter serves nothing yet).

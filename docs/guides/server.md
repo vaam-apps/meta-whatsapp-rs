@@ -139,6 +139,7 @@ read yet: set, it stops the start.
 | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than the key's one-minute lease) |
 | `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
 | `WA_SERVER_MEDIA_CONCURRENCY` | `4` | uploads and whole downloads held in memory at once on a replica, one tenant holding half of them at most (the next is `429`) |
+| `WA_SERVER_MEDIA_CONVERTER`, `WA_SERVER_MEDIA_CONVERTER_PROGRAM` | `none`; `ffmpeg` from `PATH` | `ffmpeg` turns on conversion on upload (see [Media](#media)): a build with the `ffmpeg` feature (the image has none) and an `ffmpeg` you install; the program is only read with it |
 | `WA_SERVER_MEDIA_STREAMS` | `16` | streamed downloads (`?stream=true`) at once on a replica, one tenant holding half of them at most (the next is `429`) |
 | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | `20`, `40` | requests a second per tenant and replica for writes (sends, read receipts, media, profile) |
 | `WA_SERVER_RATE_READ`, `WA_SERVER_RATE_READ_BURST` | `50`, `50` | the same for reads |
@@ -539,6 +540,68 @@ is answered within 55 s: your file must reach the service, and the
 service's copy reach Meta, within that time, or the answer is `504
 timeout`. A 100 MiB document needs about 15 Mbit/s for your part
 alone.
+
+### Resumable uploads
+
+Meta's Resumable Upload API gives the **handle** a template's
+`header_handle` takes, and (from the profile routes of roadmap M5c2) a
+profile picture's `profile_picture_handle`. It needs `WA_APP_ID`
+(without it, `409 resumable_upload_not_configured`).
+
+```bash
+# 1. open it: the file's name, length and type (pdf, jpeg, jpg, png or mp4)
+curl -sS -X POST http://127.0.0.1:8081/v1/numbers/106540352242922/media-uploads \
+  -H "Authorization: Bearer $KEY" -H "Idempotency-Key: offer-header-1" \
+  -H "Content-Type: application/json" \
+  -d '{"file_name": "offer.png", "file_length": 12, "file_type": "image/png"}'
+# → 201 {"upload_id": "up_…", "file_offset": 0, "complete": false, …}
+
+# 2. send the bytes from file_offset (the whole file in one chunk is usual)
+curl -sS -X POST "http://127.0.0.1:8081/v1/numbers/106540352242922/media-uploads/$UPLOAD_ID?file_offset=0" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/octet-stream" \
+  --data-binary @offer.png
+# → 200 {"file_offset": 12, "complete": true, "handle": "2:…"}
+
+# 3. after a timeout or a lost connection, ask where Meta is, and resume
+curl -sS http://127.0.0.1:8081/v1/numbers/106540352242922/media-uploads/$UPLOAD_ID \
+  -H "Authorization: Bearer $KEY"
+```
+
+The `upload_id` is the service's, for that number only: another
+tenant's, another number's or an expired one is `404` and Meta is not
+asked. Keep the **handle** from the answer that completes the file: the
+service keeps it, for the status to answer again, 24 hours from the
+start. Bounds, all checked before Meta is asked: the length from 1 byte
+to its type's limit in Meta's media table (5 MiB for an image, 16 MiB
+for a video, 100 MiB for a document) and `WA_SERVER_MEDIA_MAX_BYTES`
+(`413 media_too_large`); a chunk of at least a byte, from an offset
+before the end and no further than the declared file's end (`422` on
+`file_offset` or `body`, `413`); each chunk holds one of the tenant's
+media slots (`429` past its share). A chunk is not replayed: after a
+`504 timeout` it may have arrived, so read the status and resume from
+the offset it gives. Meta's pages state no chunk size, no total size and
+no lifetime for a session or a handle: the limits are the service's.
+
+### Converting on upload
+
+With `WA_SERVER_MEDIA_CONVERTER=ffmpeg` (a build with the `ffmpeg`
+feature and an `ffmpeg` installed), an upload may send a `convert` field
+instead of `type`: `ogg_opus` (a voice message), `static_sticker`,
+`animated_sticker`, `jpeg` or `png`. The file is converted and **the
+converted file** is uploaded, as the format's type and named after your
+file with the format's extension:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8081/v1/numbers/106540352242922/media \
+  -H "Authorization: Bearer $KEY" -F convert=ogg_opus -F file=@recording.wav
+```
+
+The file's own bytes say what it is; media the converter does not read
+is `422` on `file`. A converter that is missing, past its 20 s, or
+killed is `502 media_conversion_failed` (retryable only after a
+timeout), and nothing was sent to Meta. Without a converter configured
+nothing changes: `convert` is an unknown field (`422` on `body`), and a
+type Meta does not take is `422` on `type`.
 
 Uploads and whole-file downloads share `WA_SERVER_MEDIA_CONCURRENCY`
 slots on a replica, streamed downloads `WA_SERVER_MEDIA_STREAMS`, and

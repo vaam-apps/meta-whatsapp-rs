@@ -30,6 +30,8 @@
 //! | `WA_SERVER_MEDIA_MAX_BYTES` | 104857600 (100 MiB) | largest upload, and largest streamed download |
 //! | `WA_SERVER_MEDIA_CONCURRENCY` | 4 | uploads and whole-file downloads held in memory at once, per replica (half of them at most for one tenant) |
 //! | `WA_SERVER_MEDIA_STREAMS` | 16 | streamed downloads at once, per replica (half of them at most for one tenant) |
+//! | `WA_SERVER_MEDIA_CONVERTER` | `none` | the converter an upload may ask for (`convert`; roadmap M5c1): `none`, or `ffmpeg` (the library's `FfmpegConverter`, in a build with the `ffmpeg` feature, over an `ffmpeg` the deployment installs); pending the owner's confirmation before the first release |
+//! | `WA_SERVER_MEDIA_CONVERTER_PROGRAM` | `ffmpeg` from `PATH` | with `ffmpeg` only: the program to run (an absolute path is safest); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_STREAMS_PER_TENANT` | 20 | live event streams (`GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream`) one tenant holds open at once, per replica (the next is `429 too_many_streams`) |
 //! | `WA_SERVER_STREAMS_PER_REPLICA` | 1000 | live event streams open at once on a replica, every tenant's |
 //! | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | 20, 40 | per tenant and replica, a second ([`crate::ratelimit`]) |
@@ -76,12 +78,14 @@
 
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
 
 use meta_whatsapp_rs::client::credit_lines::WabaCurrency;
 use meta_whatsapp_rs::client::embedded_signup::{VaultKey, VaultKeys};
 use meta_whatsapp_rs::core::config::{ApiVersion, GraphEndpoint};
 use meta_whatsapp_rs::core::ids::AppId;
+use meta_whatsapp_rs::core::media::MediaConverter;
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, SecretBytes, VerifyToken};
 use meta_whatsapp_rs::core::store::Retention;
 use meta_whatsapp_server_core::erasure::ErasureKey;
@@ -960,6 +964,7 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
             .unwrap_or(defaults.media_max_bytes),
         media_concurrency,
         media_streams,
+        media_converter: media_converter(r)?,
         live,
         registration_attempts: attempt_limits(r)?,
         inbox_reply_checks: match r.plain("WA_SERVER_INBOX_REPLY_CHECKS")? {
@@ -974,6 +979,66 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
             }
         },
         ..defaults
+    })
+}
+
+/// How long the `ffmpeg` converter may run: under the request deadline
+/// (`meta_whatsapp_server_http::api::REQUEST_DEADLINE`, 55 s) with room for
+/// the upload that follows, so that a conversion is stopped by its own
+/// limit (`502 media_conversion_failed`, retryable) and not by the
+/// deadline, which would keep the request's key as a timeout that may have
+/// been sent. Pending the owner's confirmation before the first release.
+#[cfg(feature = "ffmpeg")]
+const FFMPEG_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// `WA_SERVER_MEDIA_CONVERTER` and `WA_SERVER_MEDIA_CONVERTER_PROGRAM`
+/// (roadmap M5c1): the converter an upload may ask for, or none (the
+/// default: an upload that asks for conversion is refused).
+fn media_converter(r: &Reader<'_>) -> Result<Option<Arc<dyn MediaConverter>>, ConfigError> {
+    let program = r.plain("WA_SERVER_MEDIA_CONVERTER_PROGRAM")?;
+    match r
+        .plain("WA_SERVER_MEDIA_CONVERTER")?
+        .as_deref()
+        .map(str::trim)
+    {
+        None | Some("" | "none") => {
+            if program.is_some() {
+                return Err(ConfigError::Invalid {
+                    name: "WA_SERVER_MEDIA_CONVERTER_PROGRAM",
+                    reason: "needs WA_SERVER_MEDIA_CONVERTER=ffmpeg",
+                });
+            }
+            Ok(None)
+        }
+        Some("ffmpeg") => ffmpeg(program),
+        Some(_) => Err(ConfigError::Invalid {
+            name: "WA_SERVER_MEDIA_CONVERTER",
+            reason: "expected `none` or `ffmpeg`",
+        }),
+    }
+}
+
+/// The library's `FfmpegConverter`, bounded by [`FFMPEG_TIMEOUT`], over
+/// `program` or `ffmpeg` from `PATH`.
+#[cfg(feature = "ffmpeg")]
+fn ffmpeg(program: Option<String>) -> Result<Option<Arc<dyn MediaConverter>>, ConfigError> {
+    use meta_whatsapp_rs::adapters::media::FfmpegConverter;
+    let mut converter = FfmpegConverter::new().with_timeout(FFMPEG_TIMEOUT);
+    if let Some(program) = program {
+        if program.trim().is_empty() {
+            return Err(ConfigError::Blank("WA_SERVER_MEDIA_CONVERTER_PROGRAM"));
+        }
+        converter = converter.with_program(program.trim());
+    }
+    Ok(Some(Arc::new(converter)))
+}
+
+/// A build without the `ffmpeg` feature has no converter to run.
+#[cfg(not(feature = "ffmpeg"))]
+fn ffmpeg(_program: Option<String>) -> Result<Option<Arc<dyn MediaConverter>>, ConfigError> {
+    Err(ConfigError::Invalid {
+        name: "WA_SERVER_MEDIA_CONVERTER",
+        reason: "this build has no ffmpeg support (the `ffmpeg` feature)",
     })
 }
 

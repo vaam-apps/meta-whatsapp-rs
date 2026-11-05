@@ -445,6 +445,9 @@ async fn run<S: Future<Output = ()>>(
         webhooks,
         ..
     } = config;
+    // Resumable uploads open their sessions under the Meta app (roadmap
+    // M5c1).
+    settings.app_id.clone_from(&app_id);
     settings.otp = Some(otp_deployment(otp_pepper, otp_default_tenant)?);
     settings.erasure = erasure_deployment(erasure_key, memory)?;
     settings.signup = signup_deployment(

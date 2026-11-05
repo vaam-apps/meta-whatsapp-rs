@@ -1075,6 +1075,8 @@ pub fn sample_query(method: &Method, template: &str) -> Option<String> {
     };
     match (method.as_str(), template) {
         ("DELETE", "/v1/wabas/{waba_id}/templates") => Some("name=order_confirmation".to_owned()),
+        // Roadmap M5c1: a chunk names where it starts.
+        ("POST", "/v1/numbers/{pn}/media-uploads/{upload_id}") => Some("file_offset=0".to_owned()),
         // templates/template-comparison, "Example request" (roadmap M5b).
         ("GET", "/v1/wabas/{waba_id}/templates/{id}/compare") => {
             Some("template_ids=1533406637136032&start=1674844791182&end=1674845395982".to_owned())
@@ -1120,6 +1122,10 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             serde_json::json!({"waba_id": "555000111", "token": "SYSTEM-TOKEN-FOR-SAMPLES"})
         }
         ("PATCH", "/v1/numbers/{pn}/profile") => serde_json::json!({"about": "Open 9 to 5"}),
+        // The Graph guide's file types (roadmap M5c1).
+        ("POST", "/v1/numbers/{pn}/media-uploads") => serde_json::json!({
+            "file_name": "offer.png", "file_length": 12, "file_type": "image/png"
+        }),
         // Roadmap M3c: OTP, its settings and authentication templates.
         ("POST", "/v1/otp/issue") => serde_json::json!({"phone": SAMPLE_TO}),
         ("POST", "/v1/otp/verify") => serde_json::json!({"phone": SAMPLE_TO, "code": "123456"}),

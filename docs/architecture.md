@@ -147,6 +147,7 @@ rewrite them along with the code.
 | `wa.token` | `TOKEN_NAMESPACE`, same file | store namespace of tokens, the phone index and the credit ledger; also in their associated data | both tests above |
 | `wa.otp.key`, `wa.otp.code` | `KEY_DOMAIN`, `CODE_DOMAIN`, `meta-whatsapp-client/src/authentication/otp.rs` | HMAC domains of the challenge's store key and of the code hash | `the_derivations_and_namespaces_are_pinned` (known answers), `the_key_derivation_is_pinned`, `the_code_hash_is_pinned_and_covers_the_key` |
 | `wa.otp`, `wa.otp.rate` | `NAMESPACE`, `ISSUE_LOG_NAMESPACE`, same file | store namespaces of the challenges and of the issue limit | `the_derivations_and_namespaces_are_pinned` |
+| `wa.server.upload` (added by roadmap M5c1; **pending the owner's confirmation before the first release**) | `NAMESPACE`, `meta-whatsapp-server-core/src/uploads.rs` | store namespace of the service's resumable upload sessions (the tenant, the number, Meta's session id, the declared file and, once complete, the handle; a record under the service's `up_<32 hex>` id, 24 hours) | `the_upload_namespace_and_id_are_pinned` |
 | `wa.es.session` | `SESSION_NAMESPACE`, `meta-whatsapp-client/src/embedded_signup/session.rs` | store namespace of signup sessions in flight | `the_session_namespace_is_pinned` |
 | `wa.es.coexistence` (added by roadmap L11d; the namespace and the record layout **pending the owner's confirmation**, roadmap § Owner touchpoints) | `COEXISTENCE_NAMESPACE`, `meta-whatsapp-client/src/embedded_signup/coexistence.rs` | store namespace of the coexistence sync records (key: the phone number id; value: plain JSON, `"v":1`, the WABA id, the stored token record's `created_at` in Unix seconds, and per request, `contacts` and `history`, its `state`, `pending`, `requested` with Meta's `request_id` or `refused` with its code, and `at`). **Not ephemeral**: changing it forgets which requests an onboarding made, and Meta allows each once per number, so a `resume` would post again one that was accepted, or whose answer was lost | `the_sync_record_is_pinned` |
 | `wa.webhook.dedup` | `DEDUP_NAMESPACE`, `meta-whatsapp-webhooks/src/dedup.rs` | store namespace of the dedup markers (key: SHA-256 hex of the event's dedup key) | `the_marker_key_is_pinned` |
@@ -302,7 +303,7 @@ of the examples and the dev container (`WA_TENANTS`, `WA_OTP_NAMESPACE`,
   `input`. A missing binary is this node, not a `ConfigError`, so that a
   caller handles every converter failure in one place. It adds no
   `ErrorKind`, so the service's error codes are unchanged (its
-  `classify` answers it `internal` until a route converts, M5c1). Helper:
+  `classify` answers it `422 invalid_request` on `file` for an input the converter refuses and `502 media_conversion_failed` otherwise, since M5c1). Helper:
   `Error::conversion()` (looks through `Step`).
 - Examples and binaries use `anyhow::Result` at the edge.
 - No module adds a variant to the root for its own convenience; a new leaf
