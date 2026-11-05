@@ -2,7 +2,7 @@
 
 > **Verified against meta-whatsapp-rs 473e5534e9497aa0829aca5877d2dd48b5d8c90d (2026-11-05).** Source: the service's OpenAPI document (`crates/meta-whatsapp-server/openapi/v1.json`, tag flows), `docs/guides/server.md` section "Flows" and [examples/flows.ts](../examples/flows.ts).
 
-Scope `templates`, on a WABA of your tenant, with its token. Every Flow a
+Scope `flows` (a `templates` key does not manage Flows), on a WABA of your tenant, with its token. Every Flow a
 request names must be that WABA's: another WABA's answers `not_found`,
 like one that does not exist, and nothing is done.
 

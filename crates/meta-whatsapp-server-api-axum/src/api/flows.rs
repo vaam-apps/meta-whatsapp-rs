@@ -1,4 +1,4 @@
-//! WhatsApp Flows' management (scope `templates`; roadmap M5d,
+//! WhatsApp Flows' management (scope `flows`; roadmap M5d,
 //! docs/design/server.md section 4.2, parity row 61).
 //!
 //! | Route | Graph calls, with the tenant's WABA token |

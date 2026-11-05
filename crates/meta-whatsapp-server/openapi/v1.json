@@ -17338,6 +17338,7 @@
           "otp",
           "numbers",
           "payments",
+          "flows",
           "erasure"
         ]
       },
@@ -18952,7 +18953,7 @@
     },
     {
       "name": "flows",
-      "description": "WhatsApp Flows (scope `templates`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"
+      "description": "WhatsApp Flows (scope `flows`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"
     },
     {
       "name": "payments",

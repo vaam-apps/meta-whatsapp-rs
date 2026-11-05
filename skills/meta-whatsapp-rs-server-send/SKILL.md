@@ -13,7 +13,7 @@ Reference code: [examples/send.ts](examples/send.ts), [examples/payments.ts](exa
 
 Your backend is not Rust, reaches WhatsApp through meta-whatsapp-server
 (`meta-whatsapp-rs-server`: deploying it, keys, errors) and sends order
-notifications, replies, files, templates or payment orders (scopes `send`, `media`, `templates`, `inbox`, `payments`).
+notifications, replies, files, templates or payment orders (scopes `send`, `media`, `templates`, `flows`, `inbox`, `payments`).
 
 | Route | Does |
 | --- | --- |

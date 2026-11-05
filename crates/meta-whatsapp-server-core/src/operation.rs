@@ -399,8 +399,8 @@ impl Operation {
             | Self::CreateTemplateGroup
             | Self::GetTemplateGroup
             | Self::UpdateTemplateGroup
-            | Self::DeleteTemplateGroup
-            | Self::CreateFlow
+            | Self::DeleteTemplateGroup => Scope::Templates,
+            Self::CreateFlow
             | Self::ListFlows
             | Self::GetFlow
             | Self::UpdateFlow
@@ -408,7 +408,7 @@ impl Operation {
             | Self::PreviewFlow
             | Self::PublishFlow
             | Self::DeprecateFlow
-            | Self::DeleteFlow => Scope::Templates,
+            | Self::DeleteFlow => Scope::Flows,
             Self::ListEvents | Self::GetEvent | Self::StreamEvents | Self::StreamNumberEvents => {
                 Scope::Events
             }

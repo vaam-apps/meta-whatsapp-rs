@@ -1,4 +1,4 @@
-// WhatsApp Flows through meta-whatsapp-server (scope templates): create a
+// WhatsApp Flows through meta-whatsapp-server (scope flows): create a
 // Flow, fill it with its Flow JSON, publish it, preview it, typed from its
 // OpenAPI document; the client is send.ts's. meta-whatsapp-rs's gate
 // type-checks this file against the committed document (`just skills-ts`).

@@ -1,5 +1,5 @@
 //! Roadmap M5d: WhatsApp Flows' management through the service (scope
-//! `templates`; docs/design/server.md, section 4.2): a Flow created,
+//! `flows`; docs/design/server.md, section 4.2): a Flow created,
 //! listed, read, changed, filled with its Flow JSON, previewed, published,
 //! deprecated and deleted.
 //!
@@ -43,7 +43,7 @@ async fn connected() -> (Harness, String) {
     h.tenant(OTHER_TENANT).await;
     h.connect(OTHER_TENANT, OTHER_WABA, &["106540352242924"], "EAAG-other")
         .await;
-    let key = h.tenant_key(TENANT, &[Scope::Templates]).await;
+    let key = h.tenant_key(TENANT, &[Scope::Flows]).await;
     (h, key)
 }
 
@@ -742,22 +742,90 @@ async fn metas_refusals_keep_the_error_model() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
-/// The scope: a key without `templates` reaches none of the routes (`403
-/// forbidden`) and nothing is sent. Decisive: `Operation::scope`.
+/// The scope (design D132): a key without `flows` reaches none of the
+/// routes (`403 forbidden`) and nothing is sent, however many other
+/// scopes it holds, `templates` included: a key that edits templates does
+/// not manage Flows. And a key with `flows` alone is not a templates key.
+/// Decisive: `Operation::scope`.
 #[tokio::test]
 async fn a_key_without_the_scope_is_forbidden() {
     let (h, _) = connected().await;
-    let key = h.tenant_key(TENANT, &[Scope::Send, Scope::Numbers]).await;
+    let others: Vec<Scope> = Scope::ALL
+        .into_iter()
+        .filter(|scope| *scope != Scope::Flows)
+        .collect();
+    let key = h.tenant_key(TENANT, &others).await;
     for (method, path) in [
         (Method::GET, flows_path("")),
         (Method::GET, flows_path(&format!("/{FLOW}"))),
         (Method::DELETE, flows_path(&format!("/{FLOW}"))),
+        (Method::POST, flows_path(&format!("/{FLOW}/publish"))),
     ] {
         let reply = h.call(call(method, &path, &key)).await;
         assert_eq!(
             (reply.status, reply.code().as_str()),
-            (StatusCode::FORBIDDEN, "forbidden")
+            (StatusCode::FORBIDDEN, "forbidden"),
+            "{path}"
         );
     }
+    let flows_only = h.tenant_key(TENANT, &[Scope::Flows]).await;
+    let templates = h
+        .call(call(
+            Method::GET,
+            &format!("/v1/wabas/{WABA}/templates"),
+            &flows_only,
+        ))
+        .await;
+    assert_eq!(
+        templates.status,
+        StatusCode::FORBIDDEN,
+        "{}",
+        templates.text
+    );
     assert!(h.graph.requests().is_empty());
+}
+
+/// A tenant's Flow may not name this service's data endpoint address for
+/// another WABA as its `endpoint_uri` (design D136): Meta's request names
+/// no tenant, so the address routes it, and that Flow's users' answers
+/// would reach another tenant's app. Refused `422` on `endpoint_uri`, on
+/// a creation and on a change, before any request; the WABA's own address
+/// and any other URL are accepted. Decisive: `endpoint_names_waba` in
+/// `Flows::create` and `Flows::update`.
+#[tokio::test]
+async fn a_flows_endpoint_may_not_be_another_wabas_data_endpoint_address() {
+    let (h, key) = connected().await;
+    let other = format!("https://flows.example.com/webhooks/flows/{OTHER_WABA}");
+    let create = call(Method::POST, &flows_path(""), &key)
+        .json(&json!({"name": "n", "categories": ["OTHER"], "endpoint_uri": other}));
+    let reply = h.call(create).await;
+    assert_eq!(
+        reply.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        reply.text
+    );
+    assert_eq!(reply.json()["error"]["field"], "endpoint_uri");
+    let patch = call(Method::PATCH, &flows_path(&format!("/{FLOW}")), &key)
+        .json(&json!({ "endpoint_uri": other }));
+    let reply = h.call(patch).await;
+    assert_eq!(
+        reply.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        reply.text
+    );
+    assert_eq!(reply.json()["error"]["field"], "endpoint_uri");
+    assert!(h.graph.requests().is_empty(), "nothing was asked of Meta");
+
+    // The WABA's own address is the point of the route.
+    h.graph.push_json(200, json!({"id": FLOW, "success": true}));
+    let own = format!("https://flows.example.com/webhooks/flows/{WABA}");
+    let reply = h
+        .call(
+            call(Method::POST, &flows_path(""), &key)
+                .json(&json!({"name": "n", "categories": ["OTHER"], "endpoint_uri": own})),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text);
 }

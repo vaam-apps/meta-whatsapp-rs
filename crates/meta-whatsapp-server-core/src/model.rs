@@ -117,6 +117,12 @@ pub enum Scope {
     /// its refunds (roadmap P2). The payment messages themselves are
     /// sends (`send`).
     Payments,
+    /// WhatsApp Flows' management (roadmap M5d, design D132): a WABA's
+    /// Flows created, read, changed, previewed, published, deprecated and
+    /// deleted. A scope of its own: a key that edits templates does not
+    /// manage Flows (a stored name, pending the owner's confirmation:
+    /// docs/architecture.md, § Stable identifiers).
+    Flows,
     /// Erasing a customer on a number (roadmap M2f): irreversible, so a
     /// scope of its own, which `inbox` does not grant (a stored name,
     /// pending the owner's confirmation: docs/architecture.md, § Stable
@@ -126,7 +132,7 @@ pub enum Scope {
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 11] = [
+    pub const ALL: [Scope; 12] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -137,6 +143,7 @@ impl Scope {
         Self::Otp,
         Self::Numbers,
         Self::Payments,
+        Self::Flows,
         Self::Erasure,
     ];
 
@@ -153,6 +160,7 @@ impl Scope {
             Self::Otp => "otp",
             Self::Numbers => "numbers",
             Self::Payments => "payments",
+            Self::Flows => "flows",
             Self::Erasure => "erasure",
         }
     }
