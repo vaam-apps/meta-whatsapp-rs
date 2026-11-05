@@ -95,7 +95,7 @@ the inbox. It leaves out `Result`: write `meta_whatsapp_rs::Result`.
 | Secrets, logs, limits, several instances, going live | `meta-whatsapp-rs-production` |
 | An app not written in Rust, through the HTTP service meta-whatsapp-server | `meta-whatsapp-rs-server` |
 | Receiving WhatsApp events through meta-whatsapp-server (Meta's webhook, polling) | `meta-whatsapp-rs-server-events` |
-| Sending messages, media and templates through that service; login codes (OTP) and authentication templates; merchants connecting their number (Embedded Signup); registering a number and its two-step PIN | `meta-whatsapp-rs-server-send`; `meta-whatsapp-rs-server-otp`; `meta-whatsapp-rs-server-onboarding`; `meta-whatsapp-rs-server-registration` |
+| Sending messages, media and templates through that service; login codes (OTP) and authentication templates; merchants connecting their number (Embedded Signup); registering a number and its two-step PIN; a number's WhatsApp groups | `meta-whatsapp-rs-server-send`; `meta-whatsapp-rs-server-otp`; `meta-whatsapp-rs-server-onboarding`; `meta-whatsapp-rs-server-registration`; `meta-whatsapp-rs-server-groups` |
 
 Anything else the client wraps: its rustdoc
 (`cargo doc -p meta-whatsapp-rs --all-features --open`), starting at `meta_whatsapp_rs::client`.

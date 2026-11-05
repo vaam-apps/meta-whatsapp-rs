@@ -28,7 +28,7 @@ pub trait Observer: Send + Sync {
     fn webhook_duplicates(&self, stage: &'static str, count: u64);
 
     /// The webhook pipeline failed to record an event at `stage`
-    /// (`routing`, `serialization`, `inbox`, `outbox`, or `outbox_busy`:
+    /// (`routing`, `serialization`, `groups`, `inbox`, `outbox`, or `outbox_busy`:
     /// the outbox reported contention, `StorageError::Busy`); Meta
     /// redelivers it.
     fn webhook_failure(&self, stage: &'static str);

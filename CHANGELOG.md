@@ -238,6 +238,35 @@ stored data, the owner's).
   no answer and no log). The OpenAPI document grew by 12 paths, additively.
 
 
+- **Groups, in the service** (roadmap M5f, parity rows 77, 79 and 81 now
+  done in the service and row 76 partial until the picture, M5f2; choices
+  D150-D156, proposed, pending the coordinator's decision; from Meta's
+  `groups/reference`, `groups/webhooks` and `analytics` pages, read on
+  2026-11-05). A new scope, `groups`, and thirteen operations under
+  `/v1/numbers/{pn}/groups`: create (`202` with Meta's `request_id`; an
+  `Idempotency-Key`), list, read, change the subject and description,
+  delete, the invite link (read, reset), the participants (list, remove),
+  the join requests (list, approve, reject) and the group's analytics.
+  **A group is the number's, or it does not exist**: the service keeps its
+  own records of the groups each number holds (a typed store on the
+  bundle's `KvStore`, namespace `wa.server.group`), written by Meta's
+  `group_lifecycle_update` events and by the listing, and read **before the
+  tenant's token is opened**, so another tenant's group, another number's
+  or an id no group has is `404` with zero vault reads and Meta not asked.
+  Nothing of a participant reaches a log, an error or an audit event: the
+  changes are audited by count and outcome, and a failed call answers
+  Meta's code and the service's kind, never Meta's text. The new scope, the
+  namespace, the operation ids and the audit actions are pending the
+  owner's confirmation before the first release. The OpenAPI document is
+  additive only.
+  - Not offered: the group's picture (M5f2), pinning (a send), adding
+    participants (Meta: they join through the invite link), deleting the
+    invite link, leaving (Meta documents no call).
+  - Gap, in the library: its debug line for a Graph request names the path
+    it calls, so a group's id (which embeds the business number) is in that
+    one line at `debug`; and it classifies none of the groups' error codes
+    (`131201` onward), so Meta's refusals answer `502 unknown` with Meta's
+    code.
 - **Resumable media uploads and conversion on upload, in the service**
   (roadmap M5c1, parity rows 47 and 48 now done in the service; choices
   D125-D131, proposed, pending the coordinator's decision; from the

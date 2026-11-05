@@ -444,6 +444,73 @@ where
     }
 }
 
+/// A group the caller's tenant's number holds (roadmap M5f, the design's
+/// M5.2), with the number and a client acting with its WABA's token.
+/// Extracting it runs steps 4 and 5 for the path's `{pn}` and `{group_id}`
+/// **in two halves, the group between them**: step 4 for the number (no
+/// token), the group among the number's records
+/// ([`GroupRecords::owned`](meta_whatsapp_server_core::groups::GroupRecords::owned)),
+/// and only then step 5, the vault ([`Authorizer::owned_number`]). A group
+/// the number does not hold is `404 not_found` with the vault unread.
+#[derive(Clone)]
+pub struct OwnedGroup {
+    number: OwnedNumber,
+    group: meta_whatsapp_server_core::groups::OwnedGroup,
+}
+
+impl std::fmt::Debug for OwnedGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.group.fmt(f)
+    }
+}
+
+impl OwnedGroup {
+    /// The number the group is held by.
+    pub fn number(&self) -> &OwnedNumber {
+        &self.number
+    }
+
+    /// The core's capability, for the core's group services
+    /// (`meta_whatsapp_server_core::groups::Groups`), to the holder of a
+    /// [`Grant`], as [`OwnedNumber::capability`]: the services refuse one
+    /// made for another number or tenant.
+    pub fn capability(&self, _granted: &Grant) -> &meta_whatsapp_server_core::groups::OwnedGroup {
+        &self.group
+    }
+}
+
+impl<S> FromRequestParts<S> for OwnedGroup
+where
+    S: Send + Sync,
+    AppState: FromRef<S>,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, ApiError> {
+        let state = AppState::from_ref(state);
+        let caller = admitted_caller(parts, &state)?;
+        let params = path_params(parts, &state).await?;
+        let pn = params.get("pn").cloned().ok_or_else(ApiError::internal)?;
+        let group = params
+            .get("group_id")
+            .cloned()
+            .ok_or_else(ApiError::internal)?;
+        // Only a numeric id can be bound (step 4): anything else does not exist.
+        let pn = PhoneNumberId::new(pn).map_err(|_| ApiError::not_found())?;
+        // Step 4, then the group, with the vault unread.
+        let owned = state
+            .group_records()
+            .owned(state.authz(), &caller, &pn, &group)
+            .await?;
+        // Step 5.
+        let number = state.authz().owned_number(&caller, pn).await?;
+        Ok(Self {
+            number: OwnedNumber(number),
+            group: owned,
+        })
+    }
+}
+
 /// A WABA the caller's tenant owns, with a client acting with its token.
 /// Extracting it runs steps 4 and 5 for the path's `{waba_id}`
 /// ([`Authorizer::owned_waba`]).

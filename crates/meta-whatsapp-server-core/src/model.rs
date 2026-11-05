@@ -145,11 +145,15 @@ pub enum Scope {
     /// so a scope of its own, which `send` does not grant (a stored name,
     /// pending the owner's confirmation).
     Contacts,
+    /// Groups: a number's groups, their settings, invite links,
+    /// participants, join requests and analytics (roadmap M5f; a stored
+    /// name, pending the owner's confirmation before the first release).
+    Groups,
 }
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 16] = [
+    pub const ALL: [Scope; 17] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -166,6 +170,7 @@ impl Scope {
         Self::QrCodes,
         Self::Analytics,
         Self::Contacts,
+        Self::Groups,
     ];
 
     /// Stored and API name.
@@ -187,6 +192,7 @@ impl Scope {
             Self::QrCodes => "qr_codes",
             Self::Analytics => "analytics",
             Self::Contacts => "contacts",
+            Self::Groups => "groups",
         }
     }
 

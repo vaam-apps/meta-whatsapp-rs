@@ -495,6 +495,9 @@ pub enum ScopeName {
     Analytics,
     /// Blocking and unblocking people, and the block list (roadmap M5g).
     Contacts,
+    /// A number's groups: settings, invite links, participants, join
+    /// requests and analytics (roadmap M5f).
+    Groups,
 }
 
 impl From<ScopeName> for Scope {
@@ -516,6 +519,7 @@ impl From<ScopeName> for Scope {
             ScopeName::QrCodes => Scope::QrCodes,
             ScopeName::Analytics => Scope::Analytics,
             ScopeName::Contacts => Scope::Contacts,
+            ScopeName::Groups => Scope::Groups,
         }
     }
 }
@@ -539,6 +543,7 @@ impl From<Scope> for ScopeName {
             Scope::QrCodes => ScopeName::QrCodes,
             Scope::Analytics => ScopeName::Analytics,
             Scope::Contacts => ScopeName::Contacts,
+            Scope::Groups => ScopeName::Groups,
         }
     }
 }

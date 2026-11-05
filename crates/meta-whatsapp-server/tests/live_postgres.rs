@@ -455,6 +455,69 @@ async fn live_postgres_a_payments_key_reaches_its_wabas_configurations() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// The design's M5.2 on Postgres (roadmap M5f): the records of the groups a
+/// number holds live in the Postgres key/value store, written by Meta's
+/// creation event, found by the listing, and read before the vault: a
+/// group the number does not hold (another tenant's, another number's, one
+/// never reported) is `404` with zero vault reads, and the owner's own is
+/// found with the token opened after it.
+#[tokio::test]
+async fn live_postgres_a_group_the_number_does_not_hold_is_not_found_before_the_vault() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let h = harness(&db).await;
+    let (a_pn, a_pn_2, b_pn) = ("106540352242922", "106540352242923", "106540352242924");
+    h.tenant("tenant-a").await;
+    h.connect("tenant-a", "102290129340398", &[a_pn, a_pn_2], "TOKEN-OF-A")
+        .await;
+    h.tenant("tenant-b").await;
+    h.connect("tenant-b", "102290129340399", &[b_pn], "TOKEN-OF-B")
+        .await;
+    let a = h.tenant_key("tenant-a", &[Scope::Groups]).await;
+    let b = h.tenant_key("tenant-b", &[Scope::Groups]).await;
+    let group = "Y2FwaV9ncm91cDoxOTUwNTU1MDA3OToxMjAzNjMzOTQzMjAdOTY0MTUZD";
+    let reported = h
+        .webhook(&common::meta::group_created("102290129340398", a_pn, group))
+        .await;
+    assert_eq!(reported.status, StatusCode::OK, "{}", reported.text);
+    for (key, pn) in [(&b, b_pn), (&a, a_pn_2), (&a, a_pn)] {
+        let reads = h.kv.vault_reads();
+        let reply = h
+            .call(Call::get(format!("/v1/numbers/{pn}/groups/{group}")).key(key))
+            .await;
+        if pn == a_pn {
+            // The owner's own: the token is opened, Meta asked.
+            h.graph.push_json(200, json!({"id": group}));
+            let reply = h
+                .call(Call::get(format!("/v1/numbers/{pn}/groups/{group}")).key(key))
+                .await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+            assert!(h.kv.vault_reads() > reads);
+        } else {
+            assert_eq!(reply.status, StatusCode::NOT_FOUND, "{pn}: {}", reply.text);
+            assert_eq!(h.kv.vault_reads(), reads, "{pn} read the vault");
+        }
+    }
+    // Deleted by Meta's event: forgotten.
+    let mut gone = common::meta::with_ids(
+        serde_json::from_slice(&common::meta::group_created("102290129340398", a_pn, group))
+            .unwrap(),
+        "102290129340398",
+        a_pn,
+    );
+    gone["entry"][0]["changes"][0]["value"]["groups"][0]["type"] = json!("group_delete");
+    let reply = h.webhook(&bytes(&gone)).await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    let reads = h.kv.vault_reads();
+    let reply = h
+        .call(Call::get(format!("/v1/numbers/{a_pn}/groups/{group}")).key(&a))
+        .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.text);
+    assert_eq!(h.kv.vault_reads(), reads);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// The value of a metric series of `h`, 0 when absent.
 fn metric(h: &Harness, series: &str) -> u64 {
     h.state

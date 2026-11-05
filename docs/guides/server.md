@@ -259,12 +259,12 @@ immutable. Three kinds of API key, all `wak_<key id>_<secret>`, sent as
 
 Tenant and platform keys carry scopes (`numbers`, `send`, `media`,
 `templates`, `flows`, `inbox`, `events`, `otp`, `signup`, `payments`,
-`erasure`, `commerce`, `qr_codes`, `analytics` and `contacts` today;
+`erasure`, `groups`, `commerce`, `qr_codes`, `analytics` and `contacts` today;
 `webhooks` for the routes to come). `payments` (roadmap P2), `erasure`
-(roadmap M2f), `flows` (roadmap M5d) and the four of roadmap M5g are new:
-a key minted before them does not carry them, so mint one that does for
-those routes. `templates` does not grant `flows`: a key that edits
-templates does not manage Flows. `inbox` does not grant
+(roadmap M2f), `flows` (roadmap M5d), `groups` (roadmap M5f) and the four
+of roadmap M5g are new: a key minted before them does not carry them, so
+mint one that does for those routes. `templates` does not grant `flows`: a
+key that edits templates does not manage Flows. `inbox` does not grant
 `erasure`: give the key that erases to the part of your backend that
 handles privacy requests only. The service keeps only each key's id and the SHA-256 of its
 secret, and shows the key once. Rotate by minting a new one, deploying
@@ -946,6 +946,63 @@ Meta's `payments/payments-in/*` and `payments/payments-br/*` pages).
   `encrypted_payment_gateway_data`) go through the same send (roadmap
   P1d). Not yet (roadmap P2b): linking a configuration's data endpoint.
 
+## Groups
+
+A number's WhatsApp groups (roadmap M5f; Meta's `groups/reference` and
+`groups/webhooks` pages, and `analytics` for the group analytics). Scope
+`groups`, on a number of the key's tenant, with the WABA's token. Sending
+a message *to* a group is a send (`POST /v1/numbers/{pn}/messages` with a
+`group_id` recipient, scope `send`); these routes manage the group.
+
+| Route | Does |
+| --- | --- |
+| `POST /v1/numbers/{pn}/groups` | ask Meta to create a group (`subject`, `description?`, `join_approval_mode?`: `approval_required` or `auto_approve`); **`202` with Meta's `request_id`**; takes an `Idempotency-Key` |
+| `GET /v1/numbers/{pn}/groups` | the number's active groups (`?limit=` 1 to 1,024, `after`, `before`): `{data: [{id, subject, created_at}], next_after, previous_before}` |
+| `GET`, `PATCH`, `DELETE /v1/numbers/{pn}/groups/{group_id}` | read (`?fields=`: the six scalar fields by default), change the `subject` and/or `description` (`204`), delete the group (`204`; the participants and the business are removed: there is no call to leave a group) |
+| `GET`, `POST /v1/numbers/{pn}/groups/{group_id}/invite-link` | the invite link; replace it (every previous link stops working) |
+| `GET /v1/numbers/{pn}/groups/{group_id}/participants` | the participants (`wa_id`, `user_id`, `parent_user_id`, `username`) and their count |
+| `POST /v1/numbers/{pn}/groups/{group_id}/participants/remove` | remove 1 to 8 participants, each by exactly one of `phone` (E.164 with its `+`), `wa_id` (digits, as the list shows it) or `user_id` (a BSUID); `{partial}` is `true` when Meta says some were not removed |
+| `GET /v1/numbers/{pn}/groups/{group_id}/join-requests` | the open join requests (`after`, `before`) |
+| `POST /v1/numbers/{pn}/groups/{group_id}/join-requests/approve`, `…/reject` | `{join_request_ids}`, 1 to 100: `{done, failed: [{join_request_id, reasons}], reasons}`; a partial success is a `200` |
+| `GET /v1/numbers/{pn}/groups/{group_id}/analytics?start=&end=&metrics=` | the group's analytics, a day a point: `start` (RFC 3339) at most 90 days back, `metrics` among `SENT`, `DELIVERED`, `READ`, `PARTICIPANTS_JOINED`, `PARTICIPANTS_LEFT` |
+
+**A group is the number's, or it does not exist** (design D150). Meta
+creates a group asynchronously: the answer to the creation is a
+`request_id`, and the group's id and invite link arrive in a
+`group_lifecycle_update` event (`group_updated` in `/v1/events`, type
+`group_create`, with that `request_id`). The service keeps its own record
+of the groups each number holds, and that event is what writes it (a
+`group_delete` event removes it, and a creation or a deletion that failed
+changes nothing); so does every page of `GET …/groups`, which is how to
+adopt a group created before the service, or whose event was missed.
+Every route on a group id looks it up in those records **before the
+tenant's token is opened**: another tenant's group, another number's, one
+the service has not seen and an id no group has are all `404 not_found`
+(with nothing asked of Meta), so a lookup of a group made by hand for
+another tenant tells nothing. Until its event arrives (or the number is
+listed), a group you just asked for is `404` too; wait for the event, or
+list. A number that moves to another tenant keeps its groups' records
+under the old tenant: list its groups to make them the new one's.
+
+What the service does not do, each a route away: pin and unpin a message,
+the group's picture (a multipart upload), add participants (Meta: they
+join through the invite link), delete the invite link, leave (Meta
+documents no call; `docs/parity.md` row 78).
+
+**What reaches a log.** A participant's phone number, BSUID or username and
+a join request's id are in the answer that returns them and nowhere else:
+an error carries Meta's code and the service's kind, **never Meta's text**
+(it may quote them), and the changes' `audit` events hold counts and
+outcomes only (`group_creation_requested`, `group_settings_updated`,
+`group_deleted`, `group_invite_link_reset`, `group_participants_removed`,
+`group_join_requests_approved`, `group_join_requests_rejected`, with the
+tenant, the WABA, the number's id, the key's id, `users`, `done`,
+`failed` and `outcome`, `unknown` when the call may have gone through
+unanswered). The invite link is a credential: it is in the answer to its
+two routes and in no log. A group's id embeds the business number and is
+in none of the service's own lines; the library's debug line for a Graph
+request names the path it calls, so at `debug` it is in that one.
+
 ## Commerce, QR codes, analytics and the block list
 
 Four scopes, one per family (roadmap M5g, design D140; the names are
@@ -1008,8 +1065,8 @@ not which), is an `unknown` outcome.
 Not routed (roadmap M5g2): a catalog's product sets, one product by its
 id, the products edge's `filter`, template group analytics, and the two
 analytics switches (template insights, button click tracking). Call
-analytics wait for the calling routes (M5e), group analytics for the
-groups' (M5f).
+analytics wait for the calling routes (M5e); a group's analytics are the
+groups' (above).
 
 ## The inbox
 

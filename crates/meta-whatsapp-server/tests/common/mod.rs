@@ -909,7 +909,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 16] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 17] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -1098,6 +1098,17 @@ pub fn sample_query(method: &Method, template: &str) -> Option<String> {
         ("GET", "/v1/wabas/{waba_id}/analytics/templates") => {
             Some(format!("{}&template_ids={SAMPLE_TEMPLATE_ID}", range()))
         }
+        // Roadmap M5f: a group's analytics reach back 90 days at most, so
+        // the sample's range is two days to one day before now.
+        ("GET", "/v1/numbers/{pn}/groups/{group_id}/analytics") => {
+            let now = time::OffsetDateTime::now_utc();
+            let at = |days: i64| {
+                (now - time::Duration::days(days))
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap()
+            };
+            Some(format!("start={}&end={}&metrics=SENT", at(2), at(1)))
+        }
         _ => None,
     }
 }
@@ -1106,6 +1117,7 @@ pub fn sample_query(method: &Method, template: &str) -> Option<String> {
 /// fault; `{}` for a body-taking operation this table does not know yet
 /// (whatever it answers then shows up in the tests iterating the
 /// document).
+#[allow(clippy::too_many_lines)] // one arm per operation that takes a body
 pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
     Some(match (method.as_str(), template) {
         ("POST", "/v1/numbers/{pn}/messages") => serde_json::json!({
@@ -1219,9 +1231,25 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
         ("PATCH", "/v1/numbers/{pn}/qr-codes/{code}") => {
             serde_json::json!({"prefilled_message": "Cyber Monday 2"})
         }
-        ("POST", "/v1/numbers/{pn}/blocked-users" | "/v1/numbers/{pn}/blocked-users/unblock") => {
-            serde_json::json!({"users": [{"phone": SAMPLE_TO}]})
+        (
+            "POST",
+            "/v1/numbers/{pn}/blocked-users"
+            | "/v1/numbers/{pn}/blocked-users/unblock"
+            | "/v1/numbers/{pn}/groups/{group_id}/participants/remove",
+        ) => serde_json::json!({"users": [{"phone": SAMPLE_TO}]}),
+        // Roadmap M5f: a group's creation, a change and the participants
+        // and join requests of one (`groups/reference`).
+        ("POST", "/v1/numbers/{pn}/groups") => {
+            serde_json::json!({"subject": "New Purchase Inquiry"})
         }
+        ("PATCH", "/v1/numbers/{pn}/groups/{group_id}") => {
+            serde_json::json!({"subject": "Watch Enthusiasts"})
+        }
+        (
+            "POST",
+            "/v1/numbers/{pn}/groups/{group_id}/join-requests/approve"
+            | "/v1/numbers/{pn}/groups/{group_id}/join-requests/reject",
+        ) => serde_json::json!({"join_request_ids": ["MTY0NjcwNDM1OTU6MTIwMzYzNDA0Njk0MjMzODIw"]}),
         ("POST" | "PATCH" | "PUT", _) => serde_json::json!({}),
         _ => return None,
     })

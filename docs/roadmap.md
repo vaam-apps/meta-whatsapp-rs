@@ -48,7 +48,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | --- | --- |
 | 0 | this plan (parity, categories, roadmap, decisions) |
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
-| 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L26, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
+| 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L27, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
 | 4 | S10 (D20 (a): the owner's yes of 2026-11-02), S11, S12; M2a–M2m |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3g; B2–B4 |
@@ -4765,6 +4765,23 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `StorageStatus` an open enum, the value kept in `Other`);
     and `CallbackOverride` does not check its URI's scheme, where
     `set_webhook_url` requires `https`.
+- [ ] **L27. Group error codes** (`meta-whatsapp-core`, `ErrorKind`;
+  found reviewing M5f): `groups/error-codes` lists the codes the group
+  calls fail with (`131201`, "not all participant-level operations
+  succeeded", among them, and the `1312xx` refusals of a participant or
+  a join request: a recipient who has not accepted the terms, a group
+  at its limit, a participant already in the group). None has an
+  `ErrorKind`, so each is `Unknown`: the service answers `502 unknown`
+  with Meta's code (and, on the reads and `DELETE …/groups/{id}`, a
+  4xx `Unknown` is taken as Meta refusing the group: `404`).
+  - **Kind:** additive (new `ErrorKind` variants; `ErrorKind::ALL` and
+    the service's error table gain rows, which is a v1 addition to the
+    codes a route may answer).
+  - **After:** nothing.
+  - **Decisive:** each code of Meta's page classifies as its own kind;
+    the service's `every_error_kind_maps_to_a_documented_code_and_status`
+    still passes with the new kinds; a group route's refusal answers the
+    kind and none of Meta's text (the participant it may quote).
 
 ## 4. Service milestones
 
@@ -6248,7 +6265,7 @@ or WABA fails the family's own cross-tenant test).
     (a copy-code OTP button) and mixed URL and reply buttons, which the
     library does not model (its `MessageContent::Raw`, which the service
     refuses); the catalog a template's product cards name (M5b's, done
-    there); a group id checked against the number's groups (M5f's); the comparison
+    there); a group id checked against the number's groups (M5f's, done there); the comparison
     on the types before M5a (D100).
   - **Also, after the first release** (from S7, carried by M2a, P2 and
     now M5a, which landed before it): drop the legacy fingerprint (S6's
@@ -6503,10 +6520,102 @@ or WABA fails the family's own cross-tenant test).
 - [ ] **M5e. Calling** (rows 74, 75, 107, 134, 135): call analytics (row 107) among them.
   - **After:** S7, L14.
   - **Decisive:** M5.1, M5.2.
-- [ ] **M5f. Groups** (rows 76, 77, 79, 81, 107): group analytics (row 107) among them.
+- [x] **M5f. Groups** (rows 76, 77, 79, 81; row 76's picture is M5f2).
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; a group id not in the number's groups is
     `404` with zero vault reads.
+  - **Done** (*PR number to be added when it lands*): a new scope,
+    `groups`, and thirteen routes under `/v1/numbers/{pn}/groups` over
+    the library's `client::groups` and `Analytics::groups`
+    (`server_core::groups`, `server_api_axum::api::groups`): create
+    (`202` with Meta's `request_id`, the group's id arriving in a
+    `group_lifecycle_update` event; an `Idempotency-Key`), list, read
+    (`?fields=`), change the subject and description, delete, the invite
+    link (read, reset), the participants (list, remove: `POST
+    …/participants/remove`, each by `phone`, `wa_id` or `user_id`), the
+    join requests (list, approve, reject) and the group's analytics
+    (`GET …/analytics`, the number's WABA asked for the one group: the
+    group analytics of row 81, which row 107's M5g leaves to this item).
+    The design's M5.2 and the decisive test: **a group is the number's
+    or it does not exist, decided before the token is opened** (D150).
+    The service keeps a record per (number, group), a typed store on the
+    bundle's `KvStore` (`wa.server.group`, keyed by a hash: the group's
+    id is not stored), written by the webhook pipeline when a
+    `group_lifecycle_update` reports a group created for a tenant's
+    number and by each page of the listing, removed by the event that
+    reports it deleted; the `OwnedGroup` extractor runs step 4 for the
+    number (`Authorizer::tenant_number`: no token), looks the group up
+    under the caller's tenant and the number, and only then opens the
+    vault. Another tenant's group, another number's, an unrecorded one
+    and an id no group has are `404 not_found`, with Meta not asked.
+    Nothing of a participant reaches a log, an error or an audit event:
+    the seven change audit events (`group_creation_requested`, …) hold
+    counts and outcomes, and a failed call answers Meta's code and the
+    service's kind, never Meta's text. Tests: `tests/groups.rs` (each
+    route's exact requests from Meta's examples with the tenant's token;
+    `a_group_the_number_does_not_hold_is_not_found_with_zero_vault_reads`
+    over every route and five kinds of id; the creation event's life;
+    the listing's adoption; each refusal before any request),
+    `tests/authz.rs` (M5.1 by construction, and
+    `a_group_the_number_does_not_hold_is_not_found_before_the_vault_on_every_group_route`
+    over every route of the document that names a group), M1.7's capture
+    and audit check (`tests/common/capture.rs`: participants, join
+    request ids, invite links and Meta's texts in no line; the group
+    audit events by count), the core's checks (`groups` tests). The
+    OpenAPI document is additive only (13 operations, 20 schemas, the
+    scope and the tag).
+  - **Decided** (design D150–D156, by the coordinator on 2026-11-05
+    under the owner's delegation; each swappable): the records and where they are written and read
+    (D150), the scope (D151), the routes' shape (D152), the creation
+    alone takes an `Idempotency-Key` (D153), the bounds the service adds
+    (D154), the audit events and the logs (D155), what is not offered
+    (D156). Pending the owner's confirmation before the first release:
+    the namespace `wa.server.group`, the scope `groups`, the thirteen
+    operation ids, the seven audit action names and the paths; no new
+    setting or error code; no legal act.
+  - **Not done here:** the group's picture (M5f2); pinning and unpinning
+    (a send), adding participants (Meta: not manually), deleting the
+    invite link and leaving (no call), which the library wraps or Meta
+    does not offer (D156); a group created before the service is found
+    only after a listing or a lifecycle event (D150); the library's debug
+    line for a Graph request names the path it calls, so a group's id is
+    in that one line at `debug` (the business's own number, no
+    customer's: accepted, D155), and it classifies none of the groups'
+    error codes (`131201` onward: `502 unknown` with Meta's code: L27);
+    no call of these routes was run against Meta live.
+  - **Reviewed** (security, tenant isolation and personal data): a
+    record is keyed `<pn>.<hash>` with `pn` checked to be digits at each
+    writer and at the read (a number that is not a bound number's shape
+    is never keyed); a record is written only for an event the pipeline
+    routed to the number's holder, and read only after step 4 and a
+    tenant comparison, so a record outliving a move is inert (`a_number_that_moves_tenant_takes_no_group_records_with_it`).
+    **Left, recorded:** the records are not purged when a WABA is
+    unbound, a tenant is deleted or a customer is erased. `KvStore` has
+    no listing or prefix delete, so a purge needs a per-number index (or
+    a `KvStore` extension), which is not cheap; a record holds the tenant
+    id, the number and a hash of the group's id (no customer, no group
+    id), is inert once its number is not the tenant's, and the tenant
+    deletion and the erasure of a customer (M2f: customers, not groups)
+    leave nothing a person is named by. A deployment that must not keep
+    even that waits for M5f3.
+- [ ] **M5f2. Group pictures** (row 76): `PUT /v1/numbers/{pn}/groups/{group_id}/picture`
+  over the library's `Group::set_picture` (a multipart upload of a
+  square JPEG of at most 5 MiB; Meta checks the shape and the 192×192
+  minimum), held to the media routes' transfer slots and body bound,
+  asked of the number's own group only.
+  - **After:** M5f.
+  - **Decisive:** M5.1, M5.2; a file that is not a JPEG of at most 5 MiB
+    is refused with no request.
+- [ ] **M5f3. Purging the group records** (D150): the records of a
+  number's groups (`wa.server.group`) go when the number's WABA is
+  unbound, when its tenant is deleted (M3a), and when the operator asks
+  for a number's. Needs a way to find a number's records: a per-number
+  index kept with them, or a prefix delete on `KvStore` (a port change,
+  with the conformance suite). Until then they are inert, not gone.
+  - **After:** M5f.
+  - **Decisive:** after a tenant's deletion and after an unbind, no key
+    of the namespace names the number; a number's records of another
+    number are untouched.
 - [x] **M5g. Commerce, QR codes, analytics, block users** (rows 71,
   102, 103, 106, 107).
   - **After:** S7, L17.
@@ -6538,8 +6647,8 @@ or WABA fails the family's own cross-tenant test).
     offered, and tracked by M5g2: a catalog's product sets and one
     product by id, the products edge's `filter`, template group
     analytics, the two analytics switches (insights, click tracking);
-    call analytics wait for M5e, group analytics for M5f (row 107 is
-    partial until then).
+    call analytics wait for M5e; a group's analytics are M5f's, served
+    (row 107 stays partial for M5e and M5g2).
 - [ ] **M5g2. What M5g did not route** (rows 103, 107): a catalog's
   product sets and one product by id, the products edge's `filter`,
   template group analytics, and the two analytics switches (template
