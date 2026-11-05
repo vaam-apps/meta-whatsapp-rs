@@ -342,6 +342,67 @@ async fn a_catalog_is_the_wabas_or_it_does_not_exist() {
     assert_eq!(h.graph.requests().len(), sent, "refused before any request");
 }
 
+/// A creation or a change Meta refuses answers its code, never its text,
+/// `details` included: Meta's texts may quote the prefilled message. The
+/// change's refusal comes after its lookup found the code. Decisive:
+/// `QrCodes::failed_with_message`, on the creation and on the change.
+#[tokio::test]
+async fn a_refused_creation_or_change_answers_no_text_of_metas() {
+    let (h, key) = connected().await;
+    let refusal = || {
+        json!({"error": {"message": "(#100) Invalid parameter SENTINEL-META-TEXT",
+                         "type": "OAuthException", "code": 100,
+                         "error_data": {"details": "SENTINEL-META-TEXT"},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}})
+    };
+    h.graph.push_json(400, refusal());
+    let created = h
+        .call(
+            call(Method::POST, format!("/v1/numbers/{PN}/qr-codes"), &key)
+                .json(&json!({"prefilled_message": "Cyber Monday"})),
+        )
+        .await;
+    assert!(created.status.is_client_error(), "{}", created.text);
+    assert!(
+        !created.text.contains("SENTINEL-META-TEXT"),
+        "{}",
+        created.text
+    );
+    assert_eq!(error(&created)["graph"]["code"], 100);
+    assert!(
+        error(&created)["graph"]["details"].is_null(),
+        "{}",
+        created.text
+    );
+
+    h.graph
+        .push_json(200, json!({"data": [code_answer("Cyber Monday")]}));
+    h.graph.push_json(400, refusal());
+    let changed = h
+        .call(
+            call(
+                Method::PATCH,
+                format!("/v1/numbers/{PN}/qr-codes/{CODE}"),
+                &key,
+            )
+            .json(&json!({"prefilled_message": "Black Friday"})),
+        )
+        .await;
+    assert!(changed.status.is_client_error(), "{}", changed.text);
+    assert!(
+        !changed.text.contains("SENTINEL-META-TEXT"),
+        "{}",
+        changed.text
+    );
+    assert_eq!(error(&changed)["graph"]["code"], 100);
+    assert!(
+        error(&changed)["graph"]["details"].is_null(),
+        "{}",
+        changed.text
+    );
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 // ─── QR codes ────────────────────────────────────────────────────────────
 
 fn code_answer(message: &str) -> Value {
@@ -653,6 +714,29 @@ async fn a_qr_code_is_the_numbers_or_it_does_not_exist() {
 fn analytics_get(h: &Harness, key: &str, route: &str, query: &str) -> Call {
     let _ = h;
     get(format!("/v1/wabas/{WABA}/analytics/{route}?{query}"), key)
+}
+
+/// A range of 366 days from the look-back's start (a leap year's) is
+/// allowed, so the bound is not narrower than Meta's year. Decisive:
+/// `year_range`'s 366 days.
+#[tokio::test]
+async fn a_leap_years_range_is_allowed() {
+    let (h, key) = connected().await;
+    let now = now(&h);
+    let a_year_back = now.replace_year(now.year() - 1).unwrap();
+    let start = rfc(a_year_back + time::Duration::seconds(1));
+    let end = rfc(a_year_back + time::Duration::days(366));
+    h.graph.push_json(200, json!({"id": WABA}));
+    let reply = h
+        .call(analytics_get(
+            &h,
+            &key,
+            "messaging",
+            &format!("start={start}&end={end}&granularity=MONTH"),
+        ))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    assert_eq!(h.graph.remaining(), 0);
 }
 
 /// analytics, "Messaging analytics" (its example response): the field
@@ -1038,6 +1122,15 @@ async fn analytics_ranges_and_filters_are_bounded_before_any_request() {
             ),
             "end",
         ),
+        // A leap year's 366 days are allowed, one day more is not.
+        (
+            "pricing",
+            format!(
+                "start={year_ago}&end={}&granularity=MONTHLY",
+                rfc(a_year_back + time::Duration::days(367))
+            ),
+            "end",
+        ),
         (
             "pricing",
             "start=1700000000&end=1700003600&granularity=DAILY".to_owned(),
@@ -1066,6 +1159,24 @@ async fn analytics_ranges_and_filters_are_bounded_before_any_request() {
                 ago(1)
             ),
             "phone_numbers",
+        ),
+        (
+            "messaging",
+            format!(
+                "start={}&end={}&granularity=DAY&phone_numbers=165055501111650555011111",
+                ago(2),
+                ago(1)
+            ),
+            "phone_numbers[0]",
+        ),
+        (
+            "messaging",
+            format!(
+                "start={}&end={}&granularity=DAY&country_codes=U1",
+                ago(2),
+                ago(1)
+            ),
+            "country_codes[0]",
         ),
         (
             "messaging",

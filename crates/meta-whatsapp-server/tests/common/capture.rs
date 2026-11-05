@@ -1699,6 +1699,39 @@ async fn commerce_qr_analytics(h: &Harness, admin: &str) -> Vec<String> {
         )
         .await;
     ok(&updated, 200);
+    // A creation and a change Meta refuses with texts quoting the message:
+    // in no answer and no log (the message is a person's text).
+    let quoting = || {
+        json!({"error": {"message": format!("(#100) Invalid parameter {QR_MESSAGE}"),
+                         "type": "OAuthException", "code": 100,
+                         "error_data": {"details": QR_MESSAGE},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}})
+    };
+    h.graph.push_json(400, quoting());
+    let refused_creation = h
+        .call(
+            call(Method::POST, format!("/v1/numbers/{PN}/qr-codes"))
+                .json(&json!({"prefilled_message": QR_MESSAGE})),
+        )
+        .await;
+    assert!(
+        refused_creation.status.is_client_error(),
+        "{}",
+        refused_creation.text
+    );
+    h.graph.push_json(200, json!({"data": [code.clone()]}));
+    h.graph.push_json(400, quoting());
+    let refused_change = h
+        .call(
+            call(Method::PATCH, format!("/v1/numbers/{PN}/qr-codes/{CODE}"))
+                .json(&json!({"prefilled_message": QR_MESSAGE})),
+        )
+        .await;
+    assert!(
+        refused_change.status.is_client_error(),
+        "{}",
+        refused_change.text
+    );
     // Another number's code: refused after the lookup, not audited.
     h.graph.push_json(200, json!({"data": []}));
     let other = h
