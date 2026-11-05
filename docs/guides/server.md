@@ -385,7 +385,8 @@ the WABA's token. Every call checks, in this order: the key (`401`), the
 tenant (`403`), the scope (`403`), that the tenant owns the number or WABA
 in the path (`404` otherwise, exactly as for a number that does not
 exist), and only then reads the token. `GET`/`PATCH
-/v1/numbers/{pn}/profile` reads and changes the business profile, and
+/v1/numbers/{pn}/profile` reads and changes the business profile (its
+picture too: [below](#profile-picture-and-display-name)), and
 `DELETE /v1/wabas/{waba_id}` disconnects a WABA: the service unsubscribes
 the app with the WABA's token, and deletes the token and bindings only if
 Meta agreed.
@@ -469,7 +470,7 @@ concluding the message never went out.
 
 ### Idempotency keys
 
-Sends, uploads and template creation take an `Idempotency-Key` header (1
+Sends, uploads, template creation and a display name's request take an `Idempotency-Key` header (1
 to 255 visible ASCII characters), scoped to the tenant. Derive it from
 your own records (`order:1234:shipped`) and set `callback_data` to the
 same. With one:
@@ -545,8 +546,10 @@ alone.
 ### Resumable uploads
 
 Meta's Resumable Upload API gives the **handle** a template's
-`header_handle` takes, and (from the profile routes of roadmap M5c2) a
-profile picture's `profile_picture_handle`. It needs `WA_APP_ID`
+`header_handle` takes, and a profile picture's `profile_picture_handle`
+(through the profile's route, which names the **upload** and keeps the
+handle in the service: [Profile picture and display
+name](#profile-picture-and-display-name)). It needs `WA_APP_ID`
 (without it, `409 resumable_upload_not_configured`).
 
 ```bash
@@ -1460,6 +1463,85 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/register" \
   Business app (with a code its pages do not list: `502 unknown`,
   `may_have_been_sent: false`, the key freed). The number stays bound to your tenant; its sends fail
   with `409 registration` until it is registered again.
+
+## Profile picture and display name
+
+Scope `numbers` (roadmap M5c2); the picture's upload is scope `media`.
+
+`GET /v1/numbers/{pn}/profile` answers the business profile: `about`,
+`address`, `description`, `email`, `profile_picture_url`, `websites` and
+`vertical`. `PATCH` changes the fields it carries (the others stay) and
+answers the whole profile after the change; an address is at most 256
+characters and a vertical cannot be `UNDEFINED` or `NOT_A_BIZ`
+(`422`, before Meta is asked).
+
+**The picture** is set from a resumable upload of the same number
+([Resumable uploads](#resumable-uploads): open it with a JPEG or PNG
+`file_type`, send the bytes, and the chunk that completes the file
+answers `complete: true`). Pass the **upload's id**, not Meta's handle:
+
+```bash
+curl -sS -X PATCH "$WA_SERVER/v1/numbers/106540352242922/profile" \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"profile_picture_upload_id": "up_0123456789abcdef0123456789abcdef"}'
+```
+
+The service reads the handle from the number's own record of that
+upload and sends it to Meta as `profile_picture_handle`, in the same
+`POST` as the other fields. The records are keyed by the upload's id and
+cannot be searched by a handle, so a handle could not be checked against
+the tenant and number that obtained it: `profile_picture_handle` is not a
+field of the change (`422` on `body`). An upload of another tenant, of
+another number, an expired one (24 hours from its start) and one that
+was never made are all `404 not_found`, and Meta is not asked. An upload
+that is not a JPEG or PNG, or not complete, or an id that is none, is
+`422` on `profile_picture_upload_id`. Meta's pages state no picture
+format or size: the types are the service's own bound, and the size
+bound is the upload's (5 MiB for an image). One upload may set the
+picture again; a handle Meta refuses as invalid or expired is its
+`invalid_parameter`.
+
+**The display name** is the name WhatsApp shows for the number, and a
+change is reviewed by Meta first:
+
+| Route | Body | Does |
+| --- | --- | --- |
+| `POST /v1/numbers/{pn}/display-name` | `{"new_display_name": "Lucky Shrub"}` | asks Meta to review the name (`POST /{pn}?new_display_name=`); `202 {"new_display_name": …}`; takes an `Idempotency-Key` |
+| `GET /v1/numbers/{pn}/display-name` | | `verified_name`, `name_status`, `new_display_name`, `new_name_status`, each `null` when Meta answers none |
+
+```bash
+curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/display-name" \
+  -H "Authorization: Bearer $KEY" -H "Idempotency-Key: rename-106540352242922-1" \
+  -H "Content-Type: application/json" -d '{"new_display_name": "Lucky Shrub"}'
+```
+
+- **What a request does not do.** The name changes only once Meta
+  approves it (`new_name_status` `APPROVED`; the event
+  `phone_number_name_updated` says so) **and** the number is registered
+  again, with its two-step PIN, within 14 days of the approval: call
+  `POST /v1/numbers/{pn}/register` ([Registration](#registration-and-the-two-step-pin)).
+  Registering before the approval has no effect. The service does not
+  register the number for you: it never holds the PIN. `verified_name`
+  does not say a name is approved; `name_status` does.
+- **Meta's limits are Meta's**: 10 changes per 30 days (Meta refuses the
+  eleventh; the service keeps no count), and a number with Official
+  Business Account status changes its name through Meta's support. The
+  name is trimmed, 1 to 256 characters (the service's own bound: Meta's
+  pages state none), with no control character: `422` on
+  `new_display_name`, before Meta is asked. The guidelines Meta reviews
+  against are its Help Center's.
+- **Audited.** Each request is an audit event in the service's logs
+  (action `display_name_change_requested`) with the tenant, the WABA, the
+  number, your key's public id, the name's length and the outcome
+  (`answered`, or `unknown` when the call may have gone through
+  unanswered: read the status). The name itself is not in it.
+- **`Idempotency-Key`**: a repeat under a kept key and body gets the
+  first answer back, never a second review; another body under the key
+  is `422 idempotency_key_reused`. A request cut by a timeout (`504`,
+  `may_have_been_sent: true`) is not replayed, by the library or under
+  its key: read `GET …/display-name` to see whether Meta took it.
+- The picture's handle, Meta's upload session, the picture's URL and the
+  upload ids are in no log line of the service.
 
 ## Rate limits
 

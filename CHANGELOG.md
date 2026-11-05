@@ -286,6 +286,27 @@ stored data, the owner's).
     New names, pending the owner's confirmation before the first
     release: the namespace, the operation ids, the codes, the path, the
     field and its values, the settings and the feature (design D125-D131).
+- **Profile picture and display name, in the service** (roadmap M5c2,
+  parity rows 64 and 65 now done in the service; choices D160-D166,
+  proposed, pending the coordinator's decision; from `business-profiles`,
+  `reference/whatsapp-business-phone-number/whatsapp-business-profile-api`
+  and `display-names`).
+  - `PATCH /v1/numbers/{pn}/profile` takes `profile_picture_upload_id`:
+    one of the number's own completed JPEG or PNG uploads (M5c1), whose
+    handle the service reads from its record and sends as
+    `profile_picture_handle`. Another tenant's or another number's upload
+    is `404` with nothing asked of Meta; a raw handle is not accepted.
+    `GET` and `PATCH` answer `profile_picture_url` too.
+  - `POST /v1/numbers/{pn}/display-name` asks Meta to review a new
+    display name (`202`, an optional `Idempotency-Key`, audited by count
+    and outcome as `display_name_change_requested`, never the name) and
+    `GET` reads `verified_name`, `name_status`, `new_display_name` and
+    `new_name_status`. The name applies only once Meta approves it and the
+    number is registered again (the existing route, with its PIN).
+  - The OpenAPI document is additive (two operations, two fields). Scope
+    `numbers`; no new scope, code, setting or stored name. New names,
+    pending the owner's confirmation before the first release: the
+    operation ids, the path, the field and the audit action.
 - **CrateStack enters the workspace** (roadmap S10, design D20 and §8.3;
   coverage row 33; no parity or category row changes status: the
   adapter serves nothing yet).
