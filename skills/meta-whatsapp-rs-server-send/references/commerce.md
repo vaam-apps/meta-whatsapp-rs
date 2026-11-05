@@ -46,7 +46,7 @@ export async function block(api: WhatsApp, pn: string, request: BlockUsersReques
   analytics.
 - **Ranges are bounded**, before Meta is asked: `invalid_request` with
   the `field` at fault. A year at most (90 days for templates), and
-  `HALF_HOUR` 31 days. Filters hold 50 values at most, each one of
+  31 days at the half-hour granularity. Filters hold 50 values at most, each one of
   Meta's own; `phone_numbers` are digits.
 
 ```ts

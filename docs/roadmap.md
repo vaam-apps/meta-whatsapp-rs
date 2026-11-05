@@ -6455,22 +6455,18 @@ or WABA fails the family's own cross-tenant test).
   (D141, D144), and the names stay pending the owner's confirmation
   before the first release.
   - **After:** M5g.
-  - **Decisive (product sets and one product):** M5.1, M5.2; a set or a
-    product that Meta's pages show no way to tie to the WABA's own
-    catalog stays unrouted: the item lands only with a check whose
-    deletion fails a test (a product set of another WABA's catalog is
-    `404`, with only the check's requests sent).
-  - **Decisive (the products edge's `filter`):** a `filter` is Meta's
-    documented JSON, parsed and bounded before any request (its size and
-    depth), and never written into the query unparsed; a malformed one is
-    `422` with zero requests.
-  - **Decisive (template group analytics):** M5.1, M5.2; a group id not
-    among the WABA's own groups (D118's read) is `404` with the
-    analytics not asked for, and its range is bounded as D145's.
-  - **Decisive (the two switches):** each is an audited change by the
-    caller (`template_insights_enabled`, `click_tracking_changed`; names
-    pending), `Idempotency-Key`ed, answers no text of Meta's, and is off
-    for a key without the `analytics` scope: M5.1, M5.2.
+  - **Decisive:** M5.1, M5.2 for each. A set or a product that Meta's
+    pages show no way to tie to the WABA's own catalog stays unrouted:
+    it lands only with a check whose deletion fails a test (a product
+    set of another WABA's catalog is `404`, with only the check's
+    requests sent). The products edge's `filter` is Meta's documented
+    JSON, parsed and bounded before any request, never written into the
+    query unparsed; a malformed one is `422` with zero requests.
+    Template group analytics: a group id not among the WABA's own groups
+    (D118's read) is `404` with the analytics not asked for, its range
+    bounded as D145's. Each of the two switches is an audited change by
+    the caller (names pending), under an `Idempotency-Key`, answering no
+    text of Meta's, and refused to a key without the `analytics` scope.
 - [ ] **M5h. Marketing Messages API and CTWA** (rows 136–138, 154). The
   max-price agreement is its own admin route: an explicit, audited
   operator action, off until the deployment enables it; no other route

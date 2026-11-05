@@ -506,7 +506,7 @@ mod tests {
                 "sale_price": "8.00 USD", "currency": "USD",
                 "image_url": "https://example.com/m.png", "url": "https://example.com/m",
                 "brand": "Acme", "review_status": "approved", "visibility": "published"}],
-                "next_cursor": "4d6a343d"})
+                "next_cursor": "4d6a513d"})
         );
     }
 }
