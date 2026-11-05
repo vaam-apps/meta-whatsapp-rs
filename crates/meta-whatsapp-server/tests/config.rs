@@ -256,6 +256,79 @@ fn reads_an_erasure_key_of_at_least_32_bytes() {
     }
 }
 
+/// Roadmap M5d (design D131): `WA_SERVER_FLOWS_PRIVATE_KEY` is the
+/// deployment's Flow private key, an unencrypted 2048-bit RSA key in PEM,
+/// directly or from its `_FILE`; unset, the Flows data endpoint is off
+/// (`None`). A key that is not one (a password-protected PEM, which Meta's
+/// own `openssl genrsa -des3` makes, a 1024-bit key, an EC key, text) is
+/// refused at start, naming the variable and never quoting the value; a
+/// blank one is `Blank`. Decisive: the parse at start, the `_FILE`
+/// reading, and the redaction of the key in `Debug`.
+#[test]
+fn reads_a_flow_private_key_in_pem() {
+    const DIR: &str = "../meta-whatsapp-client/src/flows/endpoint/testdata/";
+    let read = |name: &str| std::fs::read_to_string(format!("{DIR}{name}")).unwrap();
+    let pkcs8 = read("test_rsa2048_pkcs8.pem");
+    let pkcs1 = read("test_rsa2048_pkcs1.pem");
+    let off = Config::from_env(&production()).unwrap();
+    assert!(
+        off.flows_private_key.is_none(),
+        "the endpoint is off without a key"
+    );
+    for (pem, how) in [(&pkcs8, "PKCS#8"), (&pkcs1, "PKCS#1")] {
+        let config =
+            Config::from_env(&production().set("WA_SERVER_FLOWS_PRIVATE_KEY", pem)).unwrap();
+        let key = config.flows_private_key.as_ref().expect(how);
+        assert!(
+            key.public_key_pem().unwrap().contains("PUBLIC KEY"),
+            "{how}"
+        );
+        let shown = format!("{key:?} {config:?}");
+        for line in pem.lines().filter(|l| !l.starts_with("-----")) {
+            assert!(!shown.contains(line), "{how}: {shown}");
+        }
+    }
+    let from_file = Config::from_env(
+        &production()
+            .set("WA_SERVER_FLOWS_PRIVATE_KEY_FILE", "/run/secrets/flows")
+            .file("/run/secrets/flows", &pkcs8),
+    )
+    .unwrap();
+    assert!(from_file.flows_private_key.is_some());
+    for (name, bad) in [
+        ("an encrypted PEM", read("test_rsa2048_pkcs8_encrypted.pem")),
+        ("a 1024-bit key", read("test_rsa1024_pkcs8.pem")),
+        ("an EC key", read("test_ec_p256_pkcs8.pem")),
+        ("text", "not-a-key-SECRET-7f3a".to_owned()),
+    ] {
+        let error = refused(&production().set("WA_SERVER_FLOWS_PRIVATE_KEY", &bad));
+        match &error {
+            ConfigError::Invalid { name, .. } => assert_eq!(*name, "WA_SERVER_FLOWS_PRIVATE_KEY"),
+            other => panic!("{name}: {other:?}"),
+        }
+        assert!(
+            !error.to_string().contains("SECRET-7f3a"),
+            "{name}: {error}"
+        );
+        assert!(
+            !format!("{error:?}").contains("SECRET-7f3a"),
+            "{name}: {error:?}"
+        );
+    }
+    assert_eq!(
+        refused(&production().set("WA_SERVER_FLOWS_PRIVATE_KEY", "  ")),
+        ConfigError::Blank("WA_SERVER_FLOWS_PRIVATE_KEY")
+    );
+    assert_eq!(
+        refused(
+            &production()
+                .set("WA_SERVER_FLOWS_PRIVATE_KEY", &pkcs8)
+                .set("WA_SERVER_FLOWS_PRIVATE_KEY_FILE", "/x")
+        ),
+        ConfigError::Ambiguous("WA_SERVER_FLOWS_PRIVATE_KEY")
+    );
+}
+
 #[test]
 fn refuses_memory_storage_outside_development() {
     assert_eq!(

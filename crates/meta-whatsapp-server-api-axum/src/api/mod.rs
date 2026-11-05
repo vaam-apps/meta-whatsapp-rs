@@ -21,6 +21,7 @@
 pub mod admin;
 pub mod erasure;
 pub mod events;
+pub mod flows;
 pub mod inbox;
 pub mod messages;
 pub mod numbers;
@@ -95,6 +96,7 @@ impl Modify for Security {
         (name = "messages", description = "Sending messages and read receipts (scope `send`)"),
         (name = "media", description = "Uploading, downloading and deleting media (scope `media`)"),
         (name = "templates", description = "Message templates (scope `templates`): listing, creating and deleting them; since roadmap M5b editing, unpausing, comparing, archiving and unarchiving them, the Template Library, migrations and template groups"),
+        (name = "flows", description = "WhatsApp Flows (scope `templates`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"),
         (name = "payments", description = "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"),
         (name = "inbox", description = "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"),
         (name = "erasure", description = "Erasing a customer on a number, from the inbox and the event outbox, journaled and audited: irreversible, only when called (scope `erasure`)"),
@@ -225,6 +227,23 @@ fn templates_routes() -> OpenApiRouter<Grant> {
         ))
 }
 
+/// Roadmap M5d: a WABA's Flows. A Flow JSON is far larger than the other
+/// routes' bodies: 2 MiB (`flows::MAX_FLOW_BODY_BYTES`).
+fn flows_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(flows::list_flows, flows::create_flow))
+        .routes(routes!(
+            flows::get_flow,
+            flows::update_flow,
+            flows::delete_flow
+        ))
+        .routes(routes!(flows::upload_flow_json))
+        .routes(routes!(flows::preview_flow))
+        .routes(routes!(flows::publish_flow))
+        .routes(routes!(flows::deprecate_flow))
+        .layer(DefaultBodyLimit::max(flows::MAX_FLOW_BODY_BYTES))
+}
+
 fn webhook_routes() -> OpenApiRouter<Grant> {
     OpenApiRouter::new()
         .routes(routes!(
@@ -298,6 +317,7 @@ fn api_routes(
         .merge(tenant(messages_routes(), Scope::Send))
         .merge(tenant(media::routes(), Scope::Media))
         .merge(tenant(templates_routes(), Scope::Templates))
+        .merge(tenant(flows_routes(), Scope::Templates))
         .merge(tenant(inbox_routes(), Scope::Inbox))
         .merge(tenant(payments_routes(), Scope::Payments))
         .merge(tenant(erasure_routes(), Scope::Erasure))

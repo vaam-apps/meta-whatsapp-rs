@@ -13,6 +13,7 @@
 //! | a missing vault key with Postgres | `VaultKeyRequired` |
 //! | a missing OTP pepper, or one under 32 bytes, with Postgres | `PepperRequired`, `PepperTooShort` |
 //! | an erasure key (`WA_SERVER_ERASURE_KEY`) under 32 bytes | `Invalid` |
+//! | a Flow private key (`WA_SERVER_FLOWS_PRIVATE_KEY`) that is not an unencrypted 2048-bit RSA key in PEM | `Invalid` |
 //! | memory storage (no `DATABASE_URL`) outside `WA_SERVER_ENV=development` | `MemoryOutsideDevelopment` |
 //! | identical public and internal binds | `SameBinds` |
 //! | `WA_ONBOARDING_MODE=solution_partner` without its four settings | `PartnerSettingMissing` |
@@ -41,6 +42,7 @@
 //! | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number, decision D8's default (roadmap M3c); unset, such a tenant's OTP requests are `409 otp_not_configured` |
 //! | `WA_SERVER_REGISTRATION_ATTEMPTS`, `WA_SERVER_REGISTRATION_WINDOW` | 5, `72h` | a number's registrations and deregistrations, per number and fixed window, shared by every replica (roadmap M3d; Meta allows 10 of each in a moving 72 hours and locks the number on the 11th) |
 //! | `WA_SERVER_VERIFICATION_ATTEMPTS`, `WA_SERVER_VERIFICATION_WINDOW` | 10, `1h` | a number's verification codes requested and checked, the same way |
+//! | `WA_SERVER_FLOWS_PRIVATE_KEY` (secret) | unset: the Flows data endpoint off | the deployment's Flow private key, an unencrypted 2048-bit RSA key in PEM (roadmap M5d; design D131); unset, `POST /webhooks/flows/{waba_id}` is `404`. Its public half is what each number's business public key is set to |
 //! | `WA_SERVER_INBOX_REPLY_CHECKS` | none listed: every check on every number | the local checks an inbox reply makes, per number: `<phone_number_id>:<checks>` entries, comma-separated, `<checks>` being `all`, `none` or the checks left on joined by `+` (`window`, `trust_handover`, `thread_owner`; `trust_handover` only with `window`): `106540352242922:window+trust_handover` turns the ownership check off on that number (the core's `inbox::ReplyChecksByNumber`; roadmap M2a) |
 //!
 //! And the inbox's retention, the store's own setting, which housekeeping
@@ -80,6 +82,7 @@ use std::time::Duration;
 
 use meta_whatsapp_rs::client::credit_lines::WabaCurrency;
 use meta_whatsapp_rs::client::embedded_signup::{VaultKey, VaultKeys};
+use meta_whatsapp_rs::client::flows::endpoint::FlowEndpointKey;
 use meta_whatsapp_rs::core::config::{ApiVersion, GraphEndpoint};
 use meta_whatsapp_rs::core::ids::AppId;
 use meta_whatsapp_rs::core::secret::{AccessToken, AppSecret, SecretBytes, VerifyToken};
@@ -295,6 +298,11 @@ pub struct Config {
     /// erasure_not_configured`), except on memory storage, where `serve`
     /// uses a throwaway one.
     pub erasure_key: Option<ErasureKey>,
+    /// `WA_SERVER_FLOWS_PRIVATE_KEY` (roadmap M5d): the deployment's Flow
+    /// private key, a 2048-bit RSA key in PEM, unencrypted. Unset, the
+    /// Flows data endpoint (`POST /webhooks/flows/{waba_id}`) is `404`.
+    /// `Debug` shows its size only.
+    pub flows_private_key: Option<FlowEndpointKey>,
     /// `WA_ONBOARDING_MODE` and its settings.
     pub onboarding: OnboardingMode,
     /// `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` (roadmap M3a, proposed
@@ -549,6 +557,7 @@ impl Config {
                 },
             )?),
         };
+        let flows_private_key = flows_private_key(&r)?;
         let onboarding = onboarding(&r)?;
         let account_update_confirmation =
             match r.plain("WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION")?.as_deref() {
@@ -580,6 +589,7 @@ impl Config {
             otp_pepper,
             otp_default_tenant,
             erasure_key,
+            flows_private_key,
             onboarding,
             account_update_confirmation,
             graph_endpoint,
@@ -594,6 +604,21 @@ impl Config {
             webhooks,
         })
     }
+}
+
+/// `WA_SERVER_FLOWS_PRIVATE_KEY` (roadmap M5d, design D131): the
+/// deployment's Flow private key, parsed at start. The key is never in the
+/// error: its reason names the format.
+fn flows_private_key(r: &Reader<'_>) -> Result<Option<FlowEndpointKey>, ConfigError> {
+    const NAME: &str = "WA_SERVER_FLOWS_PRIVATE_KEY";
+    r.optional_secret(NAME)?
+        .map(|pem| {
+            FlowEndpointKey::from_pem(&pem).map_err(|_| ConfigError::Invalid {
+                name: NAME,
+                reason: "expected an unencrypted 2048-bit RSA private key in PEM",
+            })
+        })
+        .transpose()
 }
 
 /// Webhooks out: the data keys (a throwaway one with memory storage, none

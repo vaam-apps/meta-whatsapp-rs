@@ -36,7 +36,7 @@ your store). It has two listeners:
 
 | Listener | Default bind | Serves | Who reaches it |
 | --- | --- | --- | --- |
-| public | `127.0.0.1:8080` | `GET /webhooks/meta` (Meta's subscription check), `POST /webhooks/meta` (Meta's deliveries), `GET /livez` | Meta, through your HTTPS ingress |
+| public | `127.0.0.1:8080` | `GET /webhooks/meta` (Meta's subscription check), `POST /webhooks/meta` (Meta's deliveries), `POST /webhooks/flows/{waba_id}` (Meta's Flows data endpoint, with `WA_SERVER_FLOWS_PRIVATE_KEY`; [Flows](#flows)), `GET /livez` | Meta, through your HTTPS ingress |
 | internal | `127.0.0.1:8081` | the `/v1` API, `/v1/admin`, `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` | your backends and operators, on the private network only |
 
 Both default to loopback; in a container, set them to `0.0.0.0:…`
@@ -125,6 +125,7 @@ read yet: set, it stops the start.
 | `WA_VAULT_PREVIOUS_KEYS` | — | older keys still read, `<id>:<base64>` comma-separated; every id once, the active one's included |
 | `WA_OTP_PEPPER` | required with Postgres | at least 32 bytes, kept out of the database: it keys every OTP code's and store key's hash, and an OTP issue's idempotency fingerprint; rotating it kills the codes in flight (memory storage in development: a throwaway one) |
 | `WA_SERVER_ERASURE_KEY` | unset: erasure off | at least 32 bytes from your secret manager, kept out of the database and for as long as your backups: the key the erasure journal's HMACs are made with (roadmap M2f). Unset, `POST /v1/numbers/{pn}/erasures` answers `409 erasure_not_configured` (memory storage in development: a throwaway one) |
+| `WA_SERVER_FLOWS_PRIVATE_KEY` | unset: the Flows data endpoint off | the deployment's Flow private key (roadmap M5d): an unencrypted 2048-bit RSA key in PEM, from your secret manager (`_FILE` works too). Unset, `POST /webhooks/flows/{waba_id}` answers `404`. A password-protected PEM (what Meta's `openssl genrsa -des3` writes) or a key of another size refuses the start; [Flows](#flows) says how to remove the password |
 | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number and template (decision D8's default). Unset, a tenant without settings answers `409 otp_not_configured` |
 | `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` also needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` (AUD, EUR, GBP, IDR, INR or USD): your credit line funds every merchant onboarded ([Solution Partner mode](#solution-partner-mode)) |
 | `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` | `graph` | whether an `account_update` webhook that offboards a merchant or revokes their credit line is confirmed with Graph first (`graph`: `debug_token` on the WABA's stored token, which must no longer be valid or granted the WABA) or acted on by its signature alone (`signature`) ([Offboarding](#offboarding)) |
@@ -710,6 +711,78 @@ Each change that succeeded is an `audit` event (`template_edited`,
 `template_group_deleted`). Archiving, unarchiving, migrating and editing
 drop the WABA's cached pages on the replica that made them.
 
+## Flows
+
+WhatsApp Flows' management and their data endpoint (roadmap M5d; Meta's
+`flows/guides/flowsapi`, `flows/guides/lifecycle` and
+`flows/guides/implementingyourflowendpoint`). Sending a Flow is a message
+(`interactive` of type `flow`, or a template's Flow button: [Send
+messages](#send-messages)).
+
+**Managing a WABA's Flows** takes a key with the scope `templates`:
+
+| Route | What |
+| --- | --- |
+| `POST /v1/wabas/{waba_id}/flows` | create a Flow: `{name, categories, clone_flow_id?, endpoint_uri?, flow_json?, publish?}` → `201 {id, validation_errors}`. `flow_json` is the Flow JSON, the object itself or Meta's text. Takes an `Idempotency-Key` |
+| `GET /v1/wabas/{waba_id}/flows?cursor=` | the WABA's Flows (Meta takes no page size: `limit` is `422`) |
+| `GET`, `PATCH`, `DELETE /v1/wabas/{waba_id}/flows/{flow_id}` | read; change `name`, `categories`, `endpoint_uri`; delete (drafts only) |
+| `PUT /v1/wabas/{waba_id}/flows/{flow_id}/json` | replace the Flow JSON: the body is the Flow JSON itself (an object, at most 2 MiB), sent to Meta as it arrived, so the lines of its validation errors are your text's → `{success, validation_errors}` |
+| `POST /v1/wabas/{waba_id}/flows/{flow_id}/preview` | `{invalidate?}` → `{preview_url, expires_at}`: the link opens the Flow without a login, for 30 days; treat it as a secret |
+| `POST …/flows/{flow_id}/publish`, `…/deprecate` | publish (a published Flow can no longer be deleted, only deprecated), deprecate (terminal) |
+
+- **A Flow id is the WABA's, or it does not exist.** A Flow is read first
+  (`GET /{flow_id}`) and acted on only when Meta names the path's WABA as
+  its owner (also for a `clone_flow_id`): another WABA's Flow, an id
+  Meta refuses, or an id that is not a Flow is `404 not_found`, and that
+  read is the only request made (design D133).
+- **Meta validates the Flow JSON.** A creation or an upload with errors
+  is stored all the same and answers `validation_errors` as Meta wrote
+  them; publishing is refused (`422 invalid_parameter`, with Meta's
+  `details`) while any is left or a publishing check fails
+  (`flows/guides/healthmonitoring`: a number with a business public key,
+  the endpoint set and healthy, a connected Meta app).
+- **Not offered**, the library lacking them: connecting a Meta app to a
+  Flow with an endpoint (`application_id` on an update; do it in the
+  Flow Builder), a Flow's `health_status`, and its assets.
+- Each change that succeeded is an `audit` event (`flow_updated`,
+  `flow_json_uploaded`, `flow_published`, `flow_deprecated`,
+  `flow_deleted`); the rate class is `templates`.
+
+**The data endpoint.** A Flow with an endpoint is called by Meta at its
+`endpoint_uri` on every screen that exchanges data. Either host your own
+endpoint and set its URL, or let the service decrypt and answer for
+you: set `WA_SERVER_FLOWS_PRIVATE_KEY`, give the Flow
+`https://<your public host>/webhooks/flows/{waba_id}` as its
+`endpoint_uri`, and set the key's **public half** as the business public
+key of the number the Flow is sent from (Meta signs it on upload; the
+service has no route for that yet, use `POST /{phone_number_id}/
+whatsapp_business_encryption` with the WABA's token):
+
+```sh
+openssl genrsa -out private.pem 2048          # no -des3: no password
+openssl rsa -in private.pem -pubout -out public.pem
+```
+
+(A key made with Meta's `-des3` command: `openssl pkcs8 -topk8 -nocrypt
+-in private.pem -out private_unencrypted_pkcs8.pem`.) The route is on the
+**public listener**, with no API key: Meta's `X-Hub-Signature-256`,
+checked with the app secret (`WA_APP_SECRET`, and the previous one while
+rotating), is its authentication, before anything else is read. It
+answers the health check (`ping`) and an error notification itself; a
+data exchange is decided by the integrating app, a `FlowHandler` the
+embedder plugs in (design D132). **The binary plugs in none**: every data
+exchange is `503` until you embed the service with a handler, so use the
+service's endpoint with the binary only for a Flow whose health check
+matters, or host your own endpoint. Statuses: `432` bad signature, `421`
+cannot decrypt (Meta's client then downloads the public key again), `404`
+no key, an unbound WABA or a suspended tenant, `503` the app unavailable
+or slower than 5 s, `500` it failed, `413` over 256 KiB. Nothing of a
+request's data, token or sealed text is logged;
+`wa_server_flow_endpoint_requests_total{outcome}` counts the answers.
+The request carries no Flow id: a Flow of one WABA can name another
+WABA's address, so the app checks the `flow_token` it put in the message.
+
+
 ## Payments
 
 India's WhatsApp Payments and Brazil's payment messages (roadmap P2;
@@ -1288,8 +1361,8 @@ without that, Meta sends nothing for its numbers.
 Your ingress must pass bodies of 3 MiB untouched (no decompression, no
 rewriting: the signature covers the raw bytes), buffer each request
 before it reaches the service (slow clients stay at the ingress), wait
-longer than the slowest delivery, and **admit to `/webhooks/meta` only
-Meta's webhook IP ranges, or mutual TLS with Meta's client
+longer than the slowest delivery, and **admit to `/webhooks/meta` (and
+`/webhooks/flows/…`) only Meta's webhook IP ranges, or mutual TLS with Meta's client
 certificate**. A signature is only checked once a body is read, and
 anyone can send a well-formed one: without that filter, anyone on the
 internet makes the service read bodies. The app secret signs every

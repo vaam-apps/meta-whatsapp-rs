@@ -13,6 +13,7 @@
 //! | `wa_server_http_request_duration_seconds` | `listener`, `method`, `route` |
 //! | `wa_server_graph_errors_total` | `code` (the API error code of a failed Graph call) |
 //! | `wa_server_webhook_deliveries_total` | `outcome`: Meta's `POST /webhooks/meta` answered `delivered` (200), `unauthenticated` (401), `payload_too_large` (413), `slow_body` (408: the body took over 15 s), `busy` (503: 64 deliveries already in flight on the replica, no turn to record within 10 s, or the outbox busy: `StorageError::Busy`, on Postgres a lock waited for over 2 s), `in_flight` (503: another request holds an event's dedup lease; a run of them means sinks outlast the lease), `failed` (500) |
+//! | `wa_server_flow_endpoint_requests_total` | `outcome`: Meta's `POST /webhooks/flows/{waba_id}` (roadmap M5d) answered `answered` (200, a data exchange), `health_check` (200), `error_notification` (200), `bad_signature` (432), `undecryptable` (421), `not_found` (404: the WABA is not bound to an active tenant, or has no key), `unavailable` (503: no place among the 32 in flight, the handler unavailable or slow, the records down), `failed` (500: the handler failed), `payload_too_large` (413), `slow_body` (408) |
 //! | `wa_server_webhook_events_total` | `event_type` (the event's type), `audience` (`tenant` or `operator`: an operator-only row) |
 //! | `wa_server_webhook_duplicate_events_total` | `stage`: `dedup` (the dedup lease had seen it), `outbox` (the outbox had it) |
 //! | `wa_server_webhook_sink_failures_total` | `stage`: `routing`, `serialization`, `inbox`, `outbox`, `outbox_busy` (the outbox reported contention, `StorageError::Busy`: on Postgres, a lock waited for over 2 s; the delivery is `busy`) |
@@ -109,6 +110,7 @@ pub struct Metrics {
     durations: DurationFamily,
     graph_errors: Family<CodeLabels, Counter>,
     webhook_deliveries: Family<OutcomeLabels, Counter>,
+    flow_endpoint: Family<OutcomeLabels, Counter>,
     webhook_events: Family<EventLabels, Counter>,
     webhook_duplicates: Family<StageLabels, Counter>,
     webhook_failures: Family<StageLabels, Counter>,
@@ -158,6 +160,12 @@ impl Metrics {
             graph_errors.clone(),
         );
         let webhook_deliveries = Family::<OutcomeLabels, Counter>::default();
+        let flow_endpoint = Family::<OutcomeLabels, Counter>::default();
+        registry.register(
+            "flow_endpoint_requests",
+            "Meta's Flows data endpoint requests, by outcome",
+            flow_endpoint.clone(),
+        );
         let webhook_events = Family::<EventLabels, Counter>::default();
         let webhook_duplicates = Family::<StageLabels, Counter>::default();
         let webhook_failures = Family::<StageLabels, Counter>::default();
@@ -211,6 +219,7 @@ impl Metrics {
             durations,
             graph_errors,
             webhook_deliveries,
+            flow_endpoint,
             webhook_events,
             webhook_duplicates,
             webhook_failures,
@@ -265,6 +274,16 @@ impl Metrics {
     /// see the module docs).
     pub fn webhook_delivery(&self, outcome: &'static str) {
         self.webhook_deliveries
+            .get_or_create(&OutcomeLabels {
+                outcome: outcome.to_owned(),
+            })
+            .inc();
+    }
+
+    /// Count one of Meta's Flows data endpoint requests by its outcome (a
+    /// fixed set: see the module docs).
+    pub fn flow_endpoint_request(&self, outcome: &'static str) {
+        self.flow_endpoint
             .get_or_create(&OutcomeLabels {
                 outcome: outcome.to_owned(),
             })

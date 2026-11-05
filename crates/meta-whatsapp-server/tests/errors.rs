@@ -379,6 +379,16 @@ const CALLS_META: &[&str] = &[
     "GET /v1/wabas/{waba_id}/template-groups/{group_id}",
     "PATCH /v1/wabas/{waba_id}/template-groups/{group_id}",
     "DELETE /v1/wabas/{waba_id}/template-groups/{group_id}",
+    // Roadmap M5d.
+    "POST /v1/wabas/{waba_id}/flows",
+    "GET /v1/wabas/{waba_id}/flows",
+    "GET /v1/wabas/{waba_id}/flows/{flow_id}",
+    "PATCH /v1/wabas/{waba_id}/flows/{flow_id}",
+    "PUT /v1/wabas/{waba_id}/flows/{flow_id}/json",
+    "POST /v1/wabas/{waba_id}/flows/{flow_id}/preview",
+    "POST /v1/wabas/{waba_id}/flows/{flow_id}/publish",
+    "POST /v1/wabas/{waba_id}/flows/{flow_id}/deprecate",
+    "DELETE /v1/wabas/{waba_id}/flows/{flow_id}",
 ];
 
 /// Operations whose call to Meta is best effort: whatever Meta answers,
@@ -426,6 +436,16 @@ const DETAILS_KEPT: &[&str] = &[
     "GET /v1/wabas/{waba_id}/template-groups/{group_id}",
     "PATCH /v1/wabas/{waba_id}/template-groups/{group_id}",
     "DELETE /v1/wabas/{waba_id}/template-groups/{group_id}",
+    // Roadmap M5d.
+    "POST /v1/wabas/{waba_id}/flows",
+    "GET /v1/wabas/{waba_id}/flows",
+    "GET /v1/wabas/{waba_id}/flows/{flow_id}",
+    "PATCH /v1/wabas/{waba_id}/flows/{flow_id}",
+    "PUT /v1/wabas/{waba_id}/flows/{flow_id}/json",
+    "POST /v1/wabas/{waba_id}/flows/{flow_id}/preview",
+    "POST /v1/wabas/{waba_id}/flows/{flow_id}/publish",
+    "POST /v1/wabas/{waba_id}/flows/{flow_id}/deprecate",
+    "DELETE /v1/wabas/{waba_id}/flows/{flow_id}",
 ];
 
 /// Operations on an object named by id (a media id, a template id): Meta
@@ -444,6 +464,15 @@ const OBJECT_BY_ID: &[&str] = &[
     "GET /v1/wabas/{waba_id}/template-groups/{group_id}",
     "PATCH /v1/wabas/{waba_id}/template-groups/{group_id}",
     "DELETE /v1/wabas/{waba_id}/template-groups/{group_id}",
+    // Roadmap M5d: a Flow id read for its WABA first (the one request an
+    // id Meta refuses is `404` on).
+    "GET /v1/wabas/{waba_id}/flows/{flow_id}",
+    "PATCH /v1/wabas/{waba_id}/flows/{flow_id}",
+    "PUT /v1/wabas/{waba_id}/flows/{flow_id}/json",
+    "POST /v1/wabas/{waba_id}/flows/{flow_id}/preview",
+    "POST /v1/wabas/{waba_id}/flows/{flow_id}/publish",
+    "POST /v1/wabas/{waba_id}/flows/{flow_id}/deprecate",
+    "DELETE /v1/wabas/{waba_id}/flows/{flow_id}",
     // A configuration named by its name (roadmap P2): in its WABA's path,
     // or looked for there before a lookup or a refund.
     "GET /v1/wabas/{waba_id}/payment-configurations/{configuration_name}",
