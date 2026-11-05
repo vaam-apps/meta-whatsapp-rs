@@ -4777,7 +4777,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
   - **Kind:** additive (new `ErrorKind` variants; `ErrorKind::ALL` and
     the service's error table gain rows, which is a v1 addition to the
     codes a route may answer).
-  - **After:** M5f.
+  - **After:** nothing.
   - **Decisive:** each code of Meta's page classifies as its own kind;
     the service's `every_error_kind_maps_to_a_documented_code_and_status`
     still passes with the new kinds; a group route's refusal answers the
