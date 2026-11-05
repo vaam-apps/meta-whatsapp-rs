@@ -30,6 +30,7 @@ use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
 
 use crate::audit::{Subject, tenant_audit};
 use crate::authz::{Authorizer, Caller, OwnedNumber, OwnedWaba};
+use crate::display_names::is_invisible_or_bidi;
 use crate::error::ServiceError;
 use crate::model::NumberStatus;
 use crate::number_events::{DisconnectReason, NumberEvent};
@@ -142,6 +143,76 @@ pub struct ProfileChange {
     /// The picture: the handle of one of the number's own completed
     /// uploads ([`crate::uploads::Uploads::profile_picture`]).
     pub picture: Option<ProfilePicture>,
+}
+
+// ─── What customers read ─────────────────────────────────────────────────
+
+/// The longest website the service sends, in characters: the service's
+/// own (Meta's pages state only that a website is a URI).
+pub const WEBSITE_MAX_CHARS: usize = 2048;
+
+/// The longest email the service sends: RFC 5321's longest address.
+pub const EMAIL_MAX_CHARS: usize = 254;
+
+/// A profile text (`about`, `address`, `description`) as the customer
+/// reads it: no control character (but a newline in `address` and
+/// `description`, when `newlines`), no bidi override and no zero-width
+/// character ([`is_invisible_or_bidi`]).
+fn profile_text(field: &'static str, text: &str, newlines: bool) -> Result<(), ServiceError> {
+    let refused = |c: char| {
+        (c.is_control() && !(newlines && matches!(c, '\n' | '\r' | '\t')))
+            || is_invisible_or_bidi(c)
+    };
+    if text.chars().any(refused) {
+        return Err(ServiceError::invalid(field));
+    }
+    Ok(())
+}
+
+/// An email: empty (clears it), or one `@` between two non-empty parts,
+/// at most [`EMAIL_MAX_CHARS`] characters, with no whitespace, control,
+/// bidi or zero-width character. Meta judges the rest.
+fn profile_email(email: &str) -> Result<(), ServiceError> {
+    if email.is_empty() {
+        return Ok(());
+    }
+    let shaped = email.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty() && !domain.is_empty() && !domain.contains('@')
+    });
+    if !shaped
+        || email.chars().count() > EMAIL_MAX_CHARS
+        || email
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || is_invisible_or_bidi(c))
+    {
+        return Err(ServiceError::invalid("email"));
+    }
+    Ok(())
+}
+
+/// A website: an `http` or `https` URL with a host and no credentials, at
+/// most [`WEBSITE_MAX_CHARS`] characters, no whitespace, control, bidi or
+/// zero-width character as written (the URL parser would strip some).
+/// Nothing else is sent as a customer-facing link: not `javascript:`,
+/// `data:`, `ftp:` nor `https://good.example@evil.example/`.
+fn profile_website(website: &str) -> Result<(), ServiceError> {
+    let bad = || ServiceError::invalid("websites");
+    if website.chars().count() > WEBSITE_MAX_CHARS
+        || website
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || is_invisible_or_bidi(c))
+    {
+        return Err(bad());
+    }
+    let url = url::Url::parse(website).map_err(|_| bad())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none_or(str::is_empty)
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(bad());
+    }
+    Ok(())
 }
 
 // ─── The operations ──────────────────────────────────────────────────────
@@ -275,6 +346,25 @@ impl<'a> Numbers<'a> {
             vertical,
             picture,
         } = change;
+        // What customers read is checked before anything is asked of Meta
+        // (roadmap M5c2, D165).
+        for (field, text, newlines) in [
+            ("about", about.as_deref(), false),
+            ("address", address.as_deref(), true),
+            ("description", description.as_deref(), true),
+        ] {
+            if let Some(text) = text {
+                profile_text(field, text, newlines)?;
+            }
+        }
+        if let Some(email) = &email {
+            profile_email(email)?;
+        }
+        if let Some(websites) = &websites {
+            for website in websites {
+                profile_website(website)?;
+            }
+        }
         let vertical = vertical
             .map(|v| serde_json::from_value::<Vertical>(serde_json::Value::String(v)))
             .transpose()
@@ -433,5 +523,96 @@ impl<'a> Waba<'a> {
             }
         }
         self.owned.clone().forget_or_busy(self.authz).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A website is an `http` or `https` URL with a host and no
+    /// credentials. Decisive: the scheme, the host, the credentials and the
+    /// character arms of `profile_website`.
+    #[test]
+    fn a_website_is_a_plain_http_or_https_url() {
+        for ok in [
+            "https://www.luckyshrub.com/",
+            "http://luckyshrub.com",
+            "HTTPS://Lucky.example/a?b=c#d",
+            "https://bücher.example/",
+        ] {
+            assert!(profile_website(ok).is_ok(), "{ok}");
+        }
+        let too_long = format!("https://a.example/{}", "a".repeat(WEBSITE_MAX_CHARS));
+        for bad in [
+            "javascript:alert(1)",
+            "data:text/html,x",
+            "ftp://luckyshrub.com/",
+            "file:///etc/passwd",
+            "mailto:a@b.example",
+            "//luckyshrub.com",
+            "luckyshrub.com",
+            "https://",
+            "https://user:pw@luckyshrub.com/",
+            "https://:pw@luckyshrub.com/",
+            "https://good.example@evil.example/",
+            "https://lucky shrub.example/",
+            "https://luckyshrub.example/\n",
+            "https://lucky\u{200B}shrub.example/",
+            "https://luckyshrub.example/\u{202E}",
+            "",
+            too_long.as_str(),
+        ] {
+            let refused = profile_website(bad).expect_err(bad);
+            assert_eq!(refused.field(), Some("websites"), "{bad:?}");
+        }
+    }
+
+    /// An email is one `@` between two parts, short, without whitespace,
+    /// control or invisible characters; empty clears it.
+    #[test]
+    fn an_email_has_the_shape_and_the_bounds() {
+        for ok in ["", "lucky@luckyshrub.com", "a@b"] {
+            assert!(profile_email(ok).is_ok(), "{ok:?}");
+        }
+        let longest = format!("{}@b.example", "a".repeat(EMAIL_MAX_CHARS - 10));
+        assert_eq!(longest.chars().count(), EMAIL_MAX_CHARS);
+        assert!(profile_email(&longest).is_ok());
+        let too_long = format!("a{longest}");
+        for bad in [
+            "lucky",
+            "@luckyshrub.com",
+            "lucky@",
+            "a@b@c",
+            "lucky @luckyshrub.com",
+            "lucky@luckyshrub.com\n",
+            "lucky\u{200B}@luckyshrub.com",
+            "lucky@luckyshrub.com\u{202E}",
+            too_long.as_str(),
+        ] {
+            let refused = profile_email(bad).unwrap_err();
+            assert_eq!(refused.field(), Some("email"), "{bad:?}");
+        }
+    }
+
+    /// A text carries no control, bidi or zero-width character; a newline
+    /// only where the field allows it.
+    #[test]
+    fn a_profile_text_carries_no_control_bidi_or_zero_width_character() {
+        assert!(profile_text("about", "Succulent specialists! 🌵", false).is_ok());
+        assert!(profile_text("about", "שלום\u{200F} Shop", false).is_ok());
+        assert!(profile_text("description", "Line\nTwo\tcolumns", true).is_ok());
+        for (text, newlines) in [
+            ("a\nb", false),
+            ("a\u{0}b", true),
+            ("a\u{7f}b", true),
+            ("a\u{202E}b", true),
+            ("a\u{2067}b", false),
+            ("a\u{200B}b", true),
+            ("a\u{2028}b", true),
+        ] {
+            let refused = profile_text("about", text, newlines).unwrap_err();
+            assert_eq!(refused.field(), Some("about"), "{text:?}");
+        }
     }
 }

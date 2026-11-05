@@ -254,6 +254,38 @@ async fn a_picture_upload_of_another_tenant_or_number_is_not_found_with_zero_req
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// A number that changes hands (unbound, then connected by another
+/// tenant) keeps the old tenant's uploads out of reach: the record names
+/// the tenant as well as the number. Decisive: the tenant arm of
+/// `Uploads::open`'s check.
+#[tokio::test]
+async fn an_upload_of_a_numbers_previous_tenant_is_not_found() {
+    let (h, key) = connected().await;
+    let mine = upload(&h, PN, &key, "image/png", true).await;
+    let waba = meta_whatsapp_rs::core::ids::WabaId::new(WABA).unwrap();
+    assert!(h.store.unbind_waba(&waba).await.unwrap());
+    h.connect(OTHER_TENANT, "102290129340400", &[PN], OTHER_TOKEN)
+        .await;
+    let other_key = h
+        .tenant_key(OTHER_TENANT, &[Scope::Numbers, Scope::Media])
+        .await;
+    let asked = h.graph.requests().len();
+    let reply = h
+        .call(patch(
+            PN,
+            &other_key,
+            &json!({"profile_picture_upload_id": mine}),
+        ))
+        .await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::NOT_FOUND, "not_found"),
+        "{}",
+        reply.text
+    );
+    assert_eq!(h.graph.requests().len(), asked, "nothing was sent");
+}
+
 /// An upload that is not an image, one that is not complete, and a name
 /// that is no upload id are `422` on the field, with zero requests, and a
 /// handle itself is not a field of the change.
@@ -305,6 +337,44 @@ async fn a_picture_that_is_no_complete_image_upload_is_refused_before_meta() {
         assert!(!reply.text.contains(HANDLE), "{body}: {}", reply.text);
     }
     assert_eq!(h.graph.requests().len(), asked, "nothing was sent");
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// What customers read is bounded before any request (roadmap M5c2, D165):
+/// a website is an `http` or `https` URL without credentials, an email has
+/// its shape, and no text carries a control, bidi override or zero-width
+/// character. Decisive: each check of `Numbers::update_profile`.
+#[tokio::test]
+async fn the_profile_fields_are_bounded_before_any_request() {
+    let (h, key) = connected().await;
+    for (body, field) in [
+        (json!({"websites": ["javascript:alert(1)"]}), "websites"),
+        (
+            json!({"websites": ["https://ok.example", "ftp://x.example"]}),
+            "websites",
+        ),
+        (
+            json!({"websites": ["https://good.example@evil.example/"]}),
+            "websites",
+        ),
+        (json!({"email": "not an email"}), "email"),
+        (json!({"email": "a@b@c"}), "email"),
+        (json!({"about": "Hi\u{202E}there"}), "about"),
+        (json!({"about": "Hi\nthere"}), "about"),
+        (json!({"description": "Hi\u{200B}there"}), "description"),
+        (json!({"address": "1 Main St\u{0}"}), "address"),
+    ] {
+        let reply = h.call(patch(PN, &key, &body)).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::UNPROCESSABLE_ENTITY, "invalid_request"),
+            "{body}: {}",
+            reply.text
+        );
+        assert_eq!(reply.json()["error"]["field"], field, "{body}");
+        assert_eq!(reply.json()["error"]["may_have_been_sent"], false);
+    }
+    assert!(h.graph.requests().is_empty(), "nothing was sent");
     assert_eq!(h.graph.remaining(), 0);
 }
 
@@ -419,6 +489,19 @@ async fn a_display_names_bounds_are_checked_before_any_request() {
         ),
         (
             json!({"new_display_name": "Lucky\u{0}"}),
+            "new_display_name",
+        ),
+        // Bidi overrides and zero-width characters spoof a name (D165).
+        (
+            json!({"new_display_name": "Lucky\u{202E}burhS"}),
+            "new_display_name",
+        ),
+        (
+            json!({"new_display_name": "Lucky\u{200B}Shrub"}),
+            "new_display_name",
+        ),
+        (
+            json!({"new_display_name": "\u{FEFF}Lucky Shrub"}),
             "new_display_name",
         ),
         (json!({}), "body"),

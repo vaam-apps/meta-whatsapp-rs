@@ -34,7 +34,7 @@ use crate::state::Grant;
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DisplayNameRequest {
-    /// The name, trimmed: 1 to 256 characters, no control character (the
+    /// The name, trimmed: 1 to 256 characters, no control, bidi override or zero-width character (the
     /// service's own bound: Meta's pages state none).
     pub new_display_name: String,
 }
@@ -116,7 +116,7 @@ fn display_names<'a>(
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `new_display_name` (1 to 256 characters, no control character) or `body`, `idempotency_key_reused`, or Meta's `invalid_parameter`: nothing was asked", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `new_display_name` (1 to 256 characters, no control, bidi override or zero-width character) or `body`, `idempotency_key_reused`, or Meta's `invalid_parameter`: nothing was asked", body = ErrorBody),
         (status = 429, description = "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed: see `may_have_been_sent`", body = ErrorBody),
         (status = 504, description = "`timeout`: the request may have reached Meta (`GET …/display-name` says)", body = ErrorBody),

@@ -1539,8 +1539,10 @@ Scope `numbers` (roadmap M5c2); the picture's upload is scope `media`.
 `address`, `description`, `email`, `profile_picture_url`, `websites` and
 `vertical`. `PATCH` changes the fields it carries (the others stay) and
 answers the whole profile after the change; an address is at most 256
-characters and a vertical cannot be `UNDEFINED` or `NOT_A_BIZ`
-(`422`, before Meta is asked).
+characters and a vertical cannot be `UNDEFINED` or `NOT_A_BIZ`; a
+website is an `http` or `https` URL without credentials, an email has
+the shape `name@host`, and no text carries a control, bidi override or
+zero-width character (`422` on the field, before Meta is asked).
 
 **The picture** is set from a resumable upload of the same number
 ([Resumable uploads](#resumable-uploads): open it with a JPEG or PNG
@@ -1594,8 +1596,10 @@ curl -sS -X POST "$WA_SERVER/v1/numbers/106540352242922/display-name" \
   eleventh; the service keeps no count), and a number with Official
   Business Account status changes its name through Meta's support. The
   name is trimmed, 1 to 256 characters (the service's own bound: Meta's
-  pages state none), with no control character: `422` on
-  `new_display_name`, before Meta is asked. The guidelines Meta reviews
+  pages state none), with no control character and no bidi override or
+  zero-width character (the ones that spoof a name; the joiners and
+  direction marks that Persian, Indic and mixed-direction names need are
+  kept): `422` on `new_display_name`, before Meta is asked. The guidelines Meta reviews
   against are its Help Center's.
 - **Audited.** Each request is an audit event in the service's logs
   (action `display_name_change_requested`) with the tenant, the WABA, the

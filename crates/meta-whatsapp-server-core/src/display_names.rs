@@ -27,7 +27,8 @@
 //! key and the length of the name; never the name.
 //!
 //! **Bounds**, before any request ([`new_display_name`]): the name trimmed,
-//! not empty, at most [`NAME_MAX_CHARS`] characters, no control characters.
+//! not empty, at most [`NAME_MAX_CHARS`] characters, no control characters and
+//! no bidi override or zero-width character ([`is_invisible_or_bidi`]).
 //! Meta's pages state no length for a display name (the guidelines are a
 //! Help Center article); the limit is the service's own, the one length
 //! Meta documents for a display name anywhere (the in-app signup's).
@@ -38,6 +39,7 @@
 //! kept.
 
 use meta_whatsapp_rs::Error;
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 use crate::audit::{Outcome, Subject, display_name_audit};
 use crate::authz::{Authorizer, Caller, OwnedNumber};
@@ -78,8 +80,33 @@ pub struct DisplayNameStatus {
     pub new_name_status: Option<String>,
 }
 
+/// The format characters a text may keep (roadmap M5c2, D165): the
+/// joiners the Persian and Indic scripts and emoji sequences need (U+200C,
+/// U+200D) and the direction *marks* mixed-direction text needs (U+200E,
+/// U+200F, U+061C). Every other format character is refused, and so are
+/// the line and paragraph separators: they are how a name is spoofed
+/// (bidi overrides, embeddings and isolates reorder what a customer reads;
+/// zero-width spaces, the word joiner, the byte-order mark, the soft
+/// hyphen, the invisible operators and the tag characters make two names
+/// that look equal differ).
+pub const ALLOWED_FORMAT_CHARS: [char; 5] =
+    ['\u{200C}', '\u{200D}', '\u{200E}', '\u{200F}', '\u{061C}'];
+
+/// Whether `c` is a character a customer-facing text must not carry: a
+/// format, line separator or paragraph separator character that is not in
+/// [`ALLOWED_FORMAT_CHARS`].
+pub fn is_invisible_or_bidi(c: char) -> bool {
+    matches!(
+        c.general_category(),
+        GeneralCategory::Format
+            | GeneralCategory::LineSeparator
+            | GeneralCategory::ParagraphSeparator
+    ) && !ALLOWED_FORMAT_CHARS.contains(&c)
+}
+
 /// The name a request asks for, checked: trimmed, not empty, at most
-/// [`NAME_MAX_CHARS`] characters, no control character.
+/// [`NAME_MAX_CHARS`] characters, no control character, and no character
+/// of [`is_invisible_or_bidi`].
 ///
 /// # Errors
 ///
@@ -87,8 +114,14 @@ pub struct DisplayNameStatus {
 pub fn new_display_name(name: &str) -> Result<String, ServiceError> {
     let name = name.trim();
     if name.is_empty()
+        // Nothing to read: only joiners and direction marks.
+        || name
+            .chars()
+            .all(|c| c.is_whitespace() || ALLOWED_FORMAT_CHARS.contains(&c))
         || name.chars().count() > NAME_MAX_CHARS
-        || name.chars().any(char::is_control)
+        || name
+            .chars()
+            .any(|c| c.is_control() || is_invisible_or_bidi(c))
     {
         return Err(ServiceError::invalid("new_display_name"));
     }
@@ -235,6 +268,14 @@ mod tests {
     fn a_name_is_trimmed_and_bounded() {
         assert_eq!(new_display_name("  Lucky Shrub ").unwrap(), "Lucky Shrub");
         assert_eq!(new_display_name("é").unwrap(), "é");
+        // The joiners and direction marks scripts need are kept.
+        for kept in [
+            "می\u{200C}خواهم",
+            "שלום\u{200F} Shop",
+            "Lucky \u{200E}Shrub",
+        ] {
+            assert_eq!(new_display_name(kept).unwrap(), kept);
+        }
         let longest = "é".repeat(NAME_MAX_CHARS);
         assert_eq!(new_display_name(&longest).unwrap(), longest);
         for bad in [
@@ -244,6 +285,22 @@ mod tests {
             "Lucky\nShrub".to_owned(),
             "Lucky\u{0}Shrub".to_owned(),
             "\tLucky\u{7f}".to_owned(),
+            // Bidi overrides, embeddings and isolates; zero-width and
+            // invisible characters; the separators.
+            "Lucky\u{202E}Shrub".to_owned(),
+            "\u{202A}Lucky".to_owned(),
+            "Lucky\u{2066}Shrub\u{2069}".to_owned(),
+            "Lucky\u{200B}Shrub".to_owned(),
+            "Lucky\u{2060}Shrub".to_owned(),
+            "Lucky\u{FEFF}Shrub".to_owned(),
+            "Lucky\u{00AD}Shrub".to_owned(),
+            "Lucky\u{2062}Shrub".to_owned(),
+            "Lucky\u{E0041}Shrub".to_owned(),
+            "Lucky\u{2028}Shrub".to_owned(),
+            "Lucky\u{2029}Shrub".to_owned(),
+            // Only invisible: nothing is left of the name to read.
+            "\u{200B}".to_owned(),
+            "\u{200F}\u{200D}".to_owned(),
         ] {
             let refused = new_display_name(&bad).unwrap_err();
             assert_eq!(refused.code(), "invalid_request", "{bad:?}");

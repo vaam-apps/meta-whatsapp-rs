@@ -65,8 +65,9 @@ export async function requestDisplayName(api: WhatsApp, pn: string, name: string
   });
 ```
 
-The name is trimmed, 1 to 256 characters, with no control character
-(`422` on `new_display_name`, before Meta is asked). The answer is `202`:
+The name is trimmed, 1 to 256 characters, with no control character and
+no bidi override or zero-width character (`422` on `new_display_name`,
+before Meta is asked). The answer is `202`:
 Meta reviews the name, and the number's name does **not** change yet.
 
 ```ts

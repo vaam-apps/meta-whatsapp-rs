@@ -4317,7 +4317,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `new_display_name` (1 to 256 characters, no control character) or `body`, `idempotency_key_reused`, or Meta's `invalid_parameter`: nothing was asked",
+            "description": "`invalid_request` on `new_display_name` (1 to 256 characters, no control, bidi override or zero-width character) or `body`, `idempotency_key_reused`, or Meta's `invalid_parameter`: nothing was asked",
             "content": {
               "application/json": {
                 "schema": {
@@ -8691,7 +8691,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` (`address` over 256 characters, a vertical that cannot be set, `profile_picture_upload_id` that is no id, not an image or not complete), or Meta's `invalid_parameter`",
+            "description": "`invalid_request` (`address` over 256 characters, a vertical that cannot be set, a website that is not an `http` or `https` URL without credentials, an email without the shape `name@host`, a text with a control, bidi override or zero-width character, `profile_picture_upload_id` that is no id, not an image or not complete), or Meta's `invalid_parameter`",
             "content": {
               "application/json": {
                 "schema": {
@@ -19923,7 +19923,7 @@
         "properties": {
           "new_display_name": {
             "type": "string",
-            "description": "The name, trimmed: 1 to 256 characters, no control character (the\nservice's own bound: Meta's pages state none)."
+            "description": "The name, trimmed: 1 to 256 characters, no control, bidi override or zero-width character (the\nservice's own bound: Meta's pages state none)."
           }
         },
         "additionalProperties": false

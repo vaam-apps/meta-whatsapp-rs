@@ -430,7 +430,7 @@ pub(crate) async fn get_profile(
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such upload of this number (another tenant's, another number's, expired): nothing asked of Meta", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` (`address` over 256 characters, a vertical that cannot be set, `profile_picture_upload_id` that is no id, not an image or not complete), or Meta's `invalid_parameter`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (`address` over 256 characters, a vertical that cannot be set, a website that is not an `http` or `https` URL without credentials, an email without the shape `name@host`, a text with a control, bidi override or zero-width character, `profile_picture_upload_id` that is no id, not an image or not complete), or Meta's `invalid_parameter`", body = ErrorBody),
         (status = 429, description = "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),

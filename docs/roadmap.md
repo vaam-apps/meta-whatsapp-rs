@@ -6405,7 +6405,9 @@ or WABA fails the family's own cross-tenant test).
     `name_status`, `new_display_name`, `new_name_status`), through the
     library's `request_display_name_change` and `get`. Bounds: an address
     of at most 256 characters and the vertical's refusals (the library's),
-    a name of 1 to 256 characters without a control character and a
+    a name of 1 to 256 characters without a control, bidi override or
+    zero-width character, the profile's websites (`http` or `https`, no
+    credentials), email shape and texts (D165), and a
     picture of a JPEG or PNG upload (the service's own: Meta's pages state
     none). Tests: `tests/profile.rs` (the exact requests, every bound with
     zero requests, another tenant's and another number's upload `404`,
@@ -6414,8 +6416,8 @@ or WABA fails the family's own cross-tenant test).
     handle, session, picture URL and upload ids planted, the audit events
     checked), the profile's conformance case. The OpenAPI document is
     additive (two operations, two fields).
-  - **Proposed** (design D160–D166, pending the coordinator's decision):
-    the upload named, not the handle (D160), no new scope (D161), the two
+  - **Decided** (design D160–D166, by the coordinator on 2026-11-05 under
+    the owner's delegation, swappable): the upload named, not the handle (D160), no new scope (D161), the two
     display name routes (D162), the optional key (D163), the audit event
     (D164), the bounds (D165), what is not offered (D166). Every new name
     (the operation ids `request_display_name_change` and
