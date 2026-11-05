@@ -47,6 +47,7 @@ use meta_whatsapp_server_core::flows_endpoint::{DeploymentKey, FlowsDeployment, 
 use meta_whatsapp_server_core::housekeeping;
 use meta_whatsapp_server_core::otp::{OtpDeployment, OtpKeys};
 use meta_whatsapp_server_core::signup::{AccountUpdateConfirmation, SignupDeployment};
+use meta_whatsapp_server_core::token_expiry::TOKEN_EXPIRY_INTERVAL;
 use meta_whatsapp_server_core::webhooks_out::DELIVERY_TIMEOUT;
 use meta_whatsapp_server_core::webhooks_out::dispatch::{Dispatcher, WebhooksOut};
 use meta_whatsapp_server_http::api::public_router;
@@ -453,6 +454,7 @@ async fn run<S: Future<Output = ()>>(
         internal_bind,
         shutdown_grace,
         outbox_retention,
+        token_expiry_lead,
         mut settings,
         move_rules,
         otp_pepper,
@@ -515,6 +517,16 @@ async fn run<S: Future<Output = ()>>(
         HOUSEKEEPING_INTERVAL,
         stop_signal(stopped.clone()),
     ));
+    // The token-expiry event (roadmap M3e): off with `off`.
+    let token_expiry = token_expiry_lead.map(|lead| {
+        let (state, backend) = (state.clone(), backend.clone());
+        let stop = stop_signal(stopped.clone());
+        tokio::spawn(async move {
+            state
+                .run_token_expiry(backend, lead, TOKEN_EXPIRY_INTERVAL, stop)
+                .await;
+        })
+    });
     let public_task = tokio::spawn(listen::serve(
         public,
         public_router(&state),
@@ -537,6 +549,9 @@ async fn run<S: Future<Output = ()>>(
     )
     .await;
     housekeeping.abort();
+    if let Some(token_expiry) = token_expiry {
+        token_expiry.abort();
+    }
     end_dispatcher(dispatcher).await;
     backend.close().await;
     served

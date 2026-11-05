@@ -42,6 +42,15 @@ pub trait Observer: Send + Sync {
     fn otp(&self, operation: &'static str, outcome: &'static str) {
         let _ = (operation, outcome);
     }
+
+    /// A token-expiry round ([`crate::token_expiry`], roadmap M3e) told a
+    /// tenant a stored token nears its expiry (`recorded`: one event, once
+    /// per token and expiry), or could not read a record or record an event
+    /// (`failed`). A fixed set: never an id, a tenant or a token. Observes
+    /// nothing by default, so an observer written before it still builds.
+    fn token_expiry(&self, outcome: &'static str) {
+        let _ = outcome;
+    }
 }
 
 /// Observes nothing.

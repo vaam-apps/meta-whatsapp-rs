@@ -85,6 +85,18 @@ async fn live_postgres_m3_5_a_code_verifies_at_no_other_tenant_on_the_same_numbe
     assert!(!dump.contains("6505551234"), "a phone number is stored");
 }
 
+/// Roadmap M3e's decisive case on Postgres (`common::token_expiry`): the
+/// task's turn is Postgres' advisory lock, the event's key the outbox's
+/// unique index.
+#[tokio::test]
+async fn live_postgres_a_token_inside_the_lead_is_told_to_its_tenant_once() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    common::token_expiry::a_token_inside_the_lead_is_told_to_its_tenant_once(&harness(&db).await)
+        .await;
+}
+
 #[tokio::test]
 async fn live_postgres_m2_1_an_inbound_message_is_listed_read_and_answered() {
     let Some(db) = TestDb::new().await else {

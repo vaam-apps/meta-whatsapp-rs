@@ -55,7 +55,7 @@ use crate::store::StoreResult;
 const LOG_TARGET: &str = "meta_whatsapp_server::number_events";
 
 /// The service's own event types, in [`crate::events::TENANT_EVENT_TYPES`]
-/// too (its last three). No webhook of Meta's has them.
+/// too (the three before the last). No webhook of Meta's has them.
 pub const NUMBER_EVENT_TYPES: [&str; 3] = [
     "number_connected",
     "number_disconnected",
@@ -246,31 +246,51 @@ impl NumberEvents {
                 tracing::warn!(target: LOG_TARGET, "no id for a number event");
                 continue;
             };
-            let Some(sequence) = self.outbox.insert(&row).await? else {
-                continue;
-            };
-            recorded += 1;
-            tracing::debug!(
-                target: LOG_TARGET,
-                event_type = event.kind(),
-                sequence,
-                tenant = epoch.tenant_id.as_str(),
-                "number event recorded"
-            );
-            let wakeup = Wakeup {
-                tenant: epoch.tenant_id.clone(),
-                sequence,
-            };
-            if let Err(error) = self.notifier.notify(&wakeup).await {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    event_type = event.kind(),
-                    error = %error,
-                    "the live streams were not notified of a number event (their re-poll will find it)"
-                );
+            if self.record_row(&row, &epoch.tenant_id).await?.is_some() {
+                recorded += 1;
             }
         }
         Ok(recorded)
+    }
+
+    /// The key the ids of this recorder's events derive from.
+    pub(crate) fn ids(&self) -> &EventIdKey {
+        &self.ids
+    }
+
+    /// Insert `row` for `tenant` and wake the tenant's streams: its
+    /// sequence, or `None` when the outbox already held its key. A row the
+    /// outbox kept operator-only counts as recorded, and wakes nobody's
+    /// stream. A failed wake-up is logged only (the streams' re-poll finds
+    /// the row). Shared with [`crate::token_expiry`].
+    pub(crate) async fn record_row(
+        &self,
+        row: &NewEvent,
+        tenant: &crate::model::TenantId,
+    ) -> StoreResult<Option<i64>> {
+        let Some(sequence) = self.outbox.insert(row).await? else {
+            return Ok(None);
+        };
+        tracing::debug!(
+            target: LOG_TARGET,
+            event_type = row.event_type.as_str(),
+            sequence,
+            tenant = tenant.as_str(),
+            "service event recorded"
+        );
+        let wakeup = Wakeup {
+            tenant: tenant.clone(),
+            sequence,
+        };
+        if let Err(error) = self.notifier.notify(&wakeup).await {
+            tracing::warn!(
+                target: LOG_TARGET,
+                event_type = row.event_type.as_str(),
+                error = %error,
+                "the live streams were not notified of a service event (their re-poll will find it)"
+            );
+        }
+        Ok(Some(sequence))
     }
 }
 
@@ -384,10 +404,8 @@ mod tests {
         for kind in NUMBER_EVENT_TYPES {
             assert!(crate::events::tenant_visible(kind), "{kind}");
         }
-        assert_eq!(
-            crate::events::TENANT_EVENT_TYPES[crate::events::TENANT_EVENT_TYPES.len() - 3..],
-            NUMBER_EVENT_TYPES
-        );
+        let types = crate::events::TENANT_EVENT_TYPES;
+        assert_eq!(types[types.len() - 4..types.len() - 1], NUMBER_EVENT_TYPES);
     }
 
     /// The key is stored (`wa_server_events.dedup_key`) and the id derived

@@ -94,7 +94,9 @@
 use std::sync::Arc;
 
 use meta_whatsapp_rs::Client;
-use meta_whatsapp_rs::client::embedded_signup::{StoredBusinessToken, TokenVault, TokenVersion};
+use meta_whatsapp_rs::client::embedded_signup::{
+    StoredBusinessToken, TokenExpiry, TokenVault, TokenVersion,
+};
 use meta_whatsapp_rs::core::clock::{Clock, SystemClock};
 use meta_whatsapp_rs::core::error::{ConfigError, StorageError};
 use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
@@ -465,6 +467,63 @@ impl Authorizer {
             .collect();
         events.record(event, epoch, &numbers).await?;
         Ok(())
+    }
+
+    /// The service's number events recorder, when it has one (the
+    /// token-expiry event is recorded through it: [`crate::token_expiry`]).
+    pub(crate) fn number_events(&self) -> Option<&NumberEvents> {
+        self.number_events.as_ref()
+    }
+
+    /// Walk every bound WABA and find the stored tokens that expire within
+    /// `lead` of now, on the service's clock (roadmap M3e): the vault's
+    /// `token_expiry`, which reads the record's clear `expires_at` and
+    /// decrypts nothing and writes nothing. Each is read under the port
+    /// rule of [`crate::store`]: the binding, then the vault, then the
+    /// binding again, and a token counts only if the binding held
+    /// throughout (a WABA unbound, or bound to another tenant, meanwhile is
+    /// skipped: its token is not the holder's). A record that cannot be
+    /// read is counted and logged (its WABA's id and the error's kind:
+    /// never its content) and the walk goes on; only the service's own
+    /// storage failing stops it. Crate-private: nothing else leaves it.
+    pub(crate) async fn tokens_expiring(
+        &self,
+        lead: std::time::Duration,
+    ) -> Result<crate::token_expiry::Walk, Error> {
+        let mut walk = crate::token_expiry::Walk::default();
+        let mut page = PageRequest {
+            after: None,
+            limit: MAX_PAGE_SIZE,
+        };
+        loop {
+            let listing = self.records.all_wabas(&page).await?;
+            for binding in &listing.items {
+                walk.wabas += 1;
+                let epoch = binding.epoch();
+                match self.tokens.vault.token_expiry(&binding.waba_id, lead).await {
+                    Ok(Some(TokenExpiry::ExpiresSoon { expires_at, .. })) => {
+                        let held = self.records.waba(&binding.waba_id).await?;
+                        if held.is_some_and(|now| now.epoch() == epoch) {
+                            walk.due
+                                .push(crate::token_expiry::Due { epoch, expires_at });
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            kind = error.kind().as_str(),
+                            waba_id = binding.waba_id.as_str(),
+                            "a stored token's expiry could not be read"
+                        );
+                        walk.unreadable += 1;
+                    }
+                }
+            }
+            let Some(after) = listing.next_after else {
+                return Ok(walk);
+            };
+            page.after = Some(after);
+        }
     }
 
     /// The numbers of `waba_id` bound to `tenant` that a `190` would mark
