@@ -310,8 +310,13 @@ mod tests {
                     .unwrap();
                 let status = router.clone().oneshot(request).await.unwrap().status();
                 if PUBLIC_OPERATIONS.contains(&(method, path)) {
+                    // The Flows data endpoint is `404` while the state has no
+                    // Flow key (this one has none): the route exists when it
+                    // is not `405`, and its other methods are.
+                    let unconfigured = path.starts_with("/webhooks/flows/");
                     assert!(
-                        status != StatusCode::NOT_FOUND && status != StatusCode::METHOD_NOT_ALLOWED,
+                        (unconfigured || status != StatusCode::NOT_FOUND)
+                            && status != StatusCode::METHOD_NOT_ALLOWED,
                         "{method} {path}: {status}"
                     );
                 } else {
