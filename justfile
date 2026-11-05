@@ -63,6 +63,7 @@ test-live:
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-bot --all-features live_postgres_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server-store-postgres --all-features live_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server-store-mongodb --all-features live_ -- --test-threads=4
+    META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server-store-cratestack --all-features live_ -- --test-threads=4
     META_WHATSAPP_RS_REQUIRE_LIVE=1 cargo test -p meta-whatsapp-server --all-features live_ -- --test-threads=4
 
 # Stop the compose.test.yaml services
@@ -260,6 +261,7 @@ features:
     cargo check -p meta-whatsapp-server --no-default-features --features api-axum,store-memory
     cargo check -p meta-whatsapp-server --no-default-features --features api-axum,store-postgres
     cargo check -p meta-whatsapp-server-api-cratestack --all-targets
+    cargo check -p meta-whatsapp-server-store-cratestack --all-targets
     cargo check -p meta-whatsapp-server --no-default-features --features api-axum,api-cratestack,store-memory
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --exclude meta-whatsapp-server --exclude meta-whatsapp-server-http --exclude meta-whatsapp-server-api-axum --exclude meta-whatsapp-server-api-cratestack --exclude meta-whatsapp-server-store-memory --exclude meta-whatsapp-server-store-postgres --no-default-features --no-deps
 

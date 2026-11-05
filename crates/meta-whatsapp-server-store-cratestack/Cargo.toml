@@ -1,0 +1,40 @@
+[package]
+name = "meta-whatsapp-server-store-cratestack"
+description = "The meta-whatsapp-rs service's CrateStack models on Postgres, a spike: one model, called as the system principal (roadmap S11)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# Part of the service, never a library dependency: no crate of the library
+# depends on it. A spike (roadmap S11): the binary does not compose it, and
+# it is no default member of the workspace. Roadmap S14 builds the real
+# store on what it shows.
+publish = false
+
+[lib]
+name = "meta_whatsapp_server_store_cratestack"
+
+[dependencies]
+# CrateStack's Postgres facade (`cratestack-pg`), under the key `cratestack`
+# because the code its macros generate names `::cratestack::` paths. Not a
+# workspace dependency: the workspace's `cratestack` key is `cratestack-api`
+# (`db = None`), and Cargo cannot rename a package through
+# `workspace = true`. Pinned as the workspace pins its sibling, to one
+# minor (`~0.17.2`); `crates/meta-whatsapp-rs/tests/cratestack_pins.rs`
+# keeps every `cratestack*` requirement in the repository to one minor and
+# one version (roadmap S12). Without default features: `postgres` brings
+# sqlx (and with it `ring`, beside the aws-lc-rs the rest of the tree uses,
+# D20 (b)); `decimal-rust-decimal` serves `Decimal` fields, and the schema
+# has none; no JSON codec, as nothing here is served over HTTP.
+cratestack = { package = "cratestack-pg", version = "~0.17.2", default-features = false, features = ["postgres"] }
+# The code `include_server_schema!` generates derives serde's traits by the
+# crate's own name.
+serde.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+
+[lints]
+workspace = true
