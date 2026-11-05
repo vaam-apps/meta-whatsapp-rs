@@ -171,7 +171,9 @@ impl Templates<'_> {
             .whatsapp_business_account
             .as_ref()
             .map(|waba| &waba.id);
-        if owner == Some(self.waba.waba_id()) {
+        // The node answered is the one asked for: an id Meta resolves to
+        // another node (an alias, a redirect) is not acted on as the group.
+        if group.id == *id && owner == Some(self.waba.waba_id()) {
             Ok(group)
         } else {
             tracing::warn!("refused a template group that is not the WABA's");

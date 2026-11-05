@@ -1475,6 +1475,38 @@ mod tests {
         assert_ne!(png("a.png", b"x"), Fingerprint::upload_media(&one, &jpeg));
     }
 
+    /// Roadmap M5b's keyed creations are scoped to the WABA, the body and
+    /// the operation: the same key and body in another WABA, with another
+    /// body, or on another of the three, is another request (so a reused
+    /// key is `idempotency_key_reused`, never a replay of another WABA's
+    /// answer). Decisive: the `waba_id` parameter and the operation of
+    /// each constructor, and the body's canonical form.
+    #[test]
+    fn the_template_lifecycle_fingerprints_are_per_waba_body_and_operation() {
+        let body = serde_json::json!({"source_waba_id": "1", "name": "x"});
+        let other = serde_json::json!({"source_waba_id": "2", "name": "x"});
+        let reordered = serde_json::json!({"name": "x", "source_waba_id": "1"});
+        let constructors: [fn(&WabaId, &serde_json::Value) -> Fingerprint; 3] = [
+            Fingerprint::create_library_template,
+            Fingerprint::migrate_templates,
+            Fingerprint::create_template_group,
+        ];
+        for build in constructors {
+            assert_eq!(build(&waba("1"), &body), build(&waba("1"), &reordered));
+            assert_ne!(build(&waba("1"), &body), build(&waba("2"), &body));
+            assert_ne!(build(&waba("1"), &body), build(&waba("1"), &other));
+            assert_ne!(
+                build(&waba("1"), &body),
+                Fingerprint::create_template(&waba("1"), &body)
+            );
+        }
+        for (i, one) in constructors.iter().enumerate() {
+            for other_op in &constructors[i + 1..] {
+                assert_ne!(one(&waba("1"), &body), other_op(&waba("1"), &body));
+            }
+        }
+    }
+
     /// The canonical input is the JSON as parsed (D27: the request's JSON
     /// as it came, canonicalized), so two bodies share a fingerprint only
     /// when they parse to one value, which is what the operation then

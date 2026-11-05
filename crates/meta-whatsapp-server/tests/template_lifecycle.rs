@@ -879,6 +879,12 @@ async fn template_groups_are_the_wabas_own() {
         group_example(OTHER_WABA),
         group_example(WABA_2),
         json!({"id": group, "name": "Lucky Shrub"}),
+        // The WABA's own, but not the node asked for.
+        {
+            let mut other_node = group_example(WABA);
+            other_node["id"] = json!("9020555671393376");
+            other_node
+        },
     ] {
         for (method, body) in [
             (Method::GET, None),
@@ -900,7 +906,7 @@ async fn template_groups_are_the_wabas_own() {
     }
     assert_eq!(
         h.graph.requests().len(),
-        before + 9,
+        before + 12,
         "only the reads reached Meta"
     );
     // Meta refusing the id.
@@ -917,7 +923,7 @@ async fn template_groups_are_the_wabas_own() {
     h.graph.push_json(200, json!({"data": []}));
     let reply = h.call(at(Method::PATCH, &one).json(&update)).await;
     assert_eq!(reply.code(), "not_found");
-    assert_eq!(h.graph.requests().len(), before + 13, "nothing acted");
+    assert_eq!(h.graph.requests().len(), before + 16, "nothing acted");
     // Refused before any request.
     for (method, path, body, field) in [
         (Method::POST, &groups, json!({"name": "x"}), "body"),
@@ -965,7 +971,7 @@ async fn template_groups_are_the_wabas_own() {
         let reply = h.call(at(method, &format!("{groups}/..%2Fx"))).await;
         assert_eq!(reply.json()["error"]["field"], "group_id");
     }
-    assert_eq!(h.graph.requests().len(), before + 13);
+    assert_eq!(h.graph.requests().len(), before + 16);
     // A creation's `Idempotency-Key` never creates twice.
     let keyed = || {
         at(Method::POST, &groups)
@@ -981,7 +987,7 @@ async fn template_groups_are_the_wabas_own() {
     let again = h.call(keyed()).await;
     assert_eq!(again.headers["idempotent-replayed"], "true");
     assert_eq!(again.text, first.text);
-    assert_eq!(h.graph.requests().len(), before + 15);
+    assert_eq!(h.graph.requests().len(), before + 18);
     assert_eq!(h.graph.remaining(), 0);
 }
 

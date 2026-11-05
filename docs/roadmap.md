@@ -6082,7 +6082,7 @@ or WABA fails the family's own cross-tenant test).
     (`a_flow_buttons_token_is_redacted_from_debug`,
     `a_templates_flow_token_never_reaches_debug`,
     `a_templates_flow_token_never_reaches_the_requests_debug`).
-  - **Proposed** (design D115–D122, pending the coordinator's decision
+  - **Decided** (design D115–D122, by the coordinator on 2026-11-05
     under the owner's delegation, each swappable): the routes (D115), the
     walk for a bulk operation's ids (D116), a migration's source a WABA
     of the caller's own tenant (D117), a group read for its WABA first

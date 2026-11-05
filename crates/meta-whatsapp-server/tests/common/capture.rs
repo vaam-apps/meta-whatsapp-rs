@@ -1026,6 +1026,12 @@ pub const CALLBACK_DATA: &str = "order:1234:shipped";
 pub const IDEMPOTENCY_KEY: &str = "order-1234-shipped-notice";
 /// A Flow's token (roadmap M5a, design D103): in no log line.
 pub const FLOW_TOKEN: &str = "CAPTURE-FLOW-TOKEN-AQAAAAACS5FpgQ";
+/// A template Flow button's token and a template's body text (roadmap
+/// M5b, design D121): a one-time passcode in a parameter, a customer's
+/// words in an edit; in no log line either.
+pub const TEMPLATE_FLOW_TOKEN: &str = "CAPTURE-TEMPLATE-FLOW-TOKEN-ZQ81";
+pub const TEMPLATE_PASSCODE: &str = "CAPTURE-PASSCODE-482913";
+pub const TEMPLATE_BODY: &str = "CAPTURE-TEMPLATE-BODY-Echeveria-sale";
 
 /// The registration routes (roadmap M3d), each with a PIN or a code in
 /// its body, and a refusal whose texts quote the PIN: the PIN and the code
@@ -1168,6 +1174,40 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
                          "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
     );
     let failed = h.call(flow(parameters)).await;
+    assert_eq!(failed.status.as_u16(), 422, "{}", failed.text);
+    // A template with a Flow button (its token) and a passcode parameter:
+    // sent, refused locally (a misspelt key), refused by Meta.
+    let template_flow = |action: serde_json::Value| {
+        Call::new(Method::POST, format!("/v1/numbers/{pn}/messages"))
+            .key(&key)
+            .json(
+                &json!({"to": {"phone": RECIPIENT}, "type": "template", "template": {
+                "name": "book_table", "language": {"code": "en_US"},
+                "components": [
+                    {"type": "body", "parameters": [{"type": "text", "text": TEMPLATE_PASSCODE}]},
+                    {"type": "button", "sub_type": "flow", "index": "0",
+                     "parameters": [{"type": "action", "action": action}]}]}}),
+            )
+    };
+    h.graph
+        .push_json(200, sent_response(RECIPIENT, "wa_id", RECIPIENT_DIGITS));
+    let sent = h
+        .call(template_flow(json!({"flow_token": TEMPLATE_FLOW_TOKEN})))
+        .await;
+    assert_eq!(sent.status.as_u16(), 202, "{}", sent.text);
+    let misspelt = h
+        .call(template_flow(json!({"flow_tokn": TEMPLATE_FLOW_TOKEN})))
+        .await;
+    assert_eq!(misspelt.status.as_u16(), 422, "{}", misspelt.text);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": "(#131009) Parameter value is not valid", "type": "OAuthException",
+                         "code": 131009, "error_data": {"details": "Flow token is invalid"},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let failed = h
+        .call(template_flow(json!({"flow_token": TEMPLATE_FLOW_TOKEN})))
+        .await;
     assert_eq!(failed.status.as_u16(), 422, "{}", failed.text);
     // Refusals: a number without its `+` (before any request), and Meta's
     // closed window.
@@ -1349,6 +1389,9 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
         CALLBACK_DATA.to_owned(),
         IDEMPOTENCY_KEY.to_owned(),
         FLOW_TOKEN.to_owned(),
+        TEMPLATE_FLOW_TOKEN.to_owned(),
+        TEMPLATE_PASSCODE.to_owned(),
+        TEMPLATE_BODY.to_owned(),
     ]
 }
 
@@ -1374,7 +1417,8 @@ async fn template_lifecycle(h: &Harness, key: &str, waba: &str) {
     let edited = h
         .call(
             call(Method::PATCH, format!("/v1/wabas/{waba}/templates/{ID}"))
-                .json(&json!({"category": "MARKETING"})),
+                .json(&json!({"category": "MARKETING", "components": [
+                    {"type": "BODY", "text": TEMPLATE_BODY}]})),
         )
         .await;
     assert_eq!(edited.status.as_u16(), 204, "{}", edited.text);
