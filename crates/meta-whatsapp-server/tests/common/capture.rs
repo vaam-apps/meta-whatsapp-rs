@@ -485,6 +485,11 @@ pub async fn exercise(h: &Harness) -> Secrets {
         .call(Call::new(Method::POST, "/v1/admin/vault/rotate").key(&admin))
         .await;
     assert_eq!(rotated.status.as_u16(), 200, "{}", rotated.text);
+    // The token-expiry task (roadmap M3e): a round that tells a tenant of a
+    // token near its expiry, and logs one it could not read. No token, no
+    // part of one, no tenant's record reaches a log line.
+    secrets.section("token_expiry");
+    secrets.extend(token_expiry(h).await);
     // Operations, keyless.
     for path in [
         "/livez",
@@ -497,6 +502,81 @@ pub async fn exercise(h: &Harness) -> Secrets {
     }
     assert_eq!(h.graph.remaining(), 0);
     secrets
+}
+
+/// The token-expiry task (roadmap M3e) over two WABAs of a tenant of its
+/// own: one whose token expires in two days (told: an event recorded, a line
+/// logged) and one whose record is garbage (not readable: a warning logged,
+/// counted `failed`). Returns what must not be logged: both tokens and the
+/// garbage.
+async fn token_expiry(h: &Harness) -> Vec<String> {
+    use meta_whatsapp_rs::client::embedded_signup::StoredBusinessToken;
+    use meta_whatsapp_rs::core::clock::Clock;
+    use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
+    use meta_whatsapp_rs::core::secret::AccessToken;
+    use meta_whatsapp_rs::core::store::{Expiry, KvStore as _, StoreKey};
+    use meta_whatsapp_server_core::backend::Backend as _;
+
+    const TOKEN: &str = "EAAG-token-near-its-expiry-SENTINEL-for-the-log-test";
+    const OTHER: &str = "EAAG-token-of-the-unreadable-record-SENTINEL-for-the-log-test";
+    const GARBAGE: &str = "garbage-stored-as-a-token-record-SENTINEL-for-the-log-test";
+    const WABA: &str = "102290129349101";
+    const BAD_WABA: &str = "102290129349102";
+    h.tenant("merchant-expiry").await;
+    for (waba, pn, token) in [
+        (WABA, "106540352249101", TOKEN),
+        (BAD_WABA, "106540352249102", OTHER),
+    ] {
+        h.connect("merchant-expiry", waba, &[pn], token).await;
+    }
+    h.vault
+        .store(
+            &StoredBusinessToken::new(WabaId::new(WABA).unwrap(), AccessToken::new(TOKEN))
+                .phone_number_ids([PhoneNumberId::new("106540352249101").unwrap()])
+                .expires_at(h.clock.now() + time::Duration::days(2)),
+        )
+        .await
+        .unwrap();
+    h.backend
+        .kv()
+        .put(
+            &StoreKey::new("wa.token", format!("waba/{BAD_WABA}")),
+            GARBAGE.as_bytes().to_vec(),
+            Expiry::Never,
+        )
+        .await
+        .unwrap();
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+    let task = {
+        let (state, backend, stop) = (h.state.clone(), h.backend.clone(), stop.clone());
+        tokio::spawn(async move {
+            state
+                .run_token_expiry(
+                    backend,
+                    std::time::Duration::from_hours(7 * 24),
+                    std::time::Duration::from_millis(20),
+                    async move { stop.notified().await },
+                )
+                .await;
+        })
+    };
+    let start = std::time::Instant::now();
+    loop {
+        let metrics = h.call(Call::get("/metrics")).await.text;
+        if metrics.contains("wa_server_token_expiry_events_total{outcome=\"recorded\"}")
+            && metrics.contains("wa_server_token_expiry_events_total{outcome=\"failed\"}")
+        {
+            break;
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "no round ran"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    stop.notify_one();
+    task.await.unwrap();
+    vec![TOKEN.to_owned(), OTHER.to_owned(), GARBAGE.to_owned()]
 }
 
 const ECHO_TEXT: &str = "An echo the logs must not hold";

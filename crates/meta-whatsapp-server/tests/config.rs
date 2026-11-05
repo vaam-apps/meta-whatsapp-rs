@@ -124,6 +124,15 @@ fn the_token_expiry_lead_is_a_duration_within_the_retention_or_off() {
         Some(Duration::from_hours(7 * 24))
     );
     assert!(lead("169h").is_err());
+    // Unset, the default yields to a shorter retention (a deployment that
+    // set it before the lead existed still starts); set, the lead may not
+    // pass it.
+    let shorter = production().set("WA_SERVER_OUTBOX_RETENTION", "3d");
+    assert_eq!(
+        Config::from_env(&shorter).unwrap().token_expiry_lead,
+        Some(Duration::from_hours(72))
+    );
+    assert!(Config::from_env(&shorter.set("WA_SERVER_TOKEN_EXPIRY_LEAD", "4d")).is_err());
     let longer = production()
         .set("WA_SERVER_OUTBOX_RETENTION", "30d")
         .set("WA_SERVER_TOKEN_EXPIRY_LEAD", "30d");

@@ -6152,8 +6152,9 @@ design's (§9).
     told). The lead may not exceed the outbox retention (refused at
     start), or a purge would free the key while the token is still due.
     `wa_server_token_expiry_events_total{outcome=recorded|failed}` counts
-    it. The state's vault now reads the service's one clock. Proposals
-    D180 to D183 (the type, setting, metric, key label and lock name are
+    it. The state's vault now reads the service's one clock. Decisions
+    D180 to D183 (the coordinator's, under the owner's delegation,
+    swappable; the type, setting, metric, key label and lock name are
     pending the owner's confirmation before the first release). The
     decisive tests: the core's `conformance::token_expiry` on every
     backend (memory and Postgres) and the HTTP case
