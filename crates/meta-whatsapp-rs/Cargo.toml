@@ -20,6 +20,9 @@ sinks = ["meta-whatsapp-adapters/sinks"]
 postgres = ["meta-whatsapp-adapters/postgres"]
 sqlite = ["meta-whatsapp-adapters/sqlite"]
 redis = ["meta-whatsapp-adapters/redis"]
+# `adapters::store::{MongoKvStore, MongoConversationStore}` and
+# `adapters::store::mongodb::migrate` (roadmap S17): MongoDB, on a replica set.
+mongodb = ["meta-whatsapp-adapters/mongodb"]
 axum = ["meta-whatsapp-webhooks/axum"]
 typst = ["dep:meta-whatsapp-typst"]
 # The bot framework (`meta_whatsapp_rs::bot`): commands, middleware,
@@ -34,7 +37,7 @@ ffmpeg = ["meta-whatsapp-adapters/ffmpeg"]
 # Test doubles for your own tests (`meta_whatsapp_rs::core::testing::ScriptedTransport`),
 # so you don't need a second dependency pinned to the same revision.
 testing = ["meta-whatsapp-core/testing"]
-full = ["reqwest", "memory", "sinks", "postgres", "sqlite", "redis", "axum", "typst", "flows-endpoint", "ffmpeg", "bot"]
+full = ["reqwest", "memory", "sinks", "postgres", "sqlite", "redis", "mongodb", "axum", "typst", "flows-endpoint", "ffmpeg", "bot"]
 
 [dependencies]
 anyhow.workspace = true

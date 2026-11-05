@@ -1268,6 +1268,37 @@ stored data, the owner's).
   `tiny-keccak`'s CC0-1.0 licence (reached through the driver's
   `macro_magic`): the owner allowed CC0-1.0 on 2026-11-02, see
   "Licences decided by the owner" below.
+- **MongoDB library adapters** (roadmap S17): the feature `mongodb` of
+  meta-whatsapp-adapters and of the facade (in `full`), with
+  `adapters::store::MongoKvStore` and `MongoConversationStore` on a
+  replica set, `store::mongodb::migrate` creating their collections and
+  indexes, and the driver (`mongodb` 3.9, `rustls-tls-aws-lc`, no `ring`)
+  re-exported as `store::mongodb::mongodb`. `MongoKvStore` makes each
+  operation one document's atomic update, computed by an aggregation
+  pipeline against the server's clock (`$$NOW`), its upserts filtered on
+  the `_id` alone and `put_if_absent` told by a per-call claim in the
+  stored document (`claim`); compare-and-swap
+  filters on the expected version; a delete leaves a tombstone that keeps
+  the version, which a TTL index removes ten minutes later, and a
+  version is the larger of the stored one plus one and the server's
+  milliseconds times 2^20, so a key's versions keep increasing once its
+  document is gone. `MongoConversationStore` writes what touches several
+  documents in one multi-document transaction, tried again after a write
+  conflict for 10 seconds (`with_busy_after`) and then
+  `StorageError::Busy`; every append writes its conversation's summary
+  (an `appends` counter), so an erasure and an append of one conversation
+  never leave a message without its summary. Message content is kept as
+  BSON strings, U+0000 included, and payloads as their JSON text.
+  Instants are milliseconds. Both library conformance suites run live
+  against the S8 replica set in `just test-live` (`live_mongodb_*`);
+  they were written without a MongoDB to run on, and CI's run is their
+  first. The collections (`wa_kv`, `wa_messages`, `wa_conversations`,
+  `wa_window_events`, `wa_thread_owners`, `wa_synced_contacts`,
+  `wa_identity_links`), their fields, their index names and the
+  version's encoding are new stored names, **pending the owner's
+  confirmation before the first release** (docs/architecture.md § Stable
+  identifiers); the key/value namespaces stored under them are the
+  library's, unchanged. `just features` checks the feature alone.
 - **Licences decided by the owner, 2026-11-02** ("Yes, upgrade deny";
   roadmap § Owner touchpoints): CC0-1.0 is allowed, added to
   `deny.toml`'s `allow` list with the decision beside it, for

@@ -76,8 +76,12 @@ commits a transaction across two collections, checks that nothing of it is
 visible outside it before the commit, and that an aborted one leaves
 nothing. Its driver, the `mongodb` crate (Apache-2.0), is a dev-dependency
 only, with `rustls-tls-aws-lc` (an explicit aws-lc-rs provider) as the TLS
-feature the driver requires; no library build links it until S17's
-`mongodb` feature. The server is MongoDB's, under the SSPL: it runs here as
+feature the driver requires. Since roadmap S17 it is also the optional
+dependency of meta-whatsapp-adapters' `mongodb` feature (`MongoKvStore`,
+`MongoConversationStore`), whose live tests (`live_mongodb_*`: both
+library conformance suites, the stored layout, what an erasure leaves)
+are in the same file, behind that feature; no library build links the
+driver without it. The server is MongoDB's, under the SSPL: it runs here as
 a test sidecar only, and nothing links or ships it.
 
 The service's MongoDB outbox spike (roadmap S9,

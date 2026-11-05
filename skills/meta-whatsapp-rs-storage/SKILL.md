@@ -1,6 +1,6 @@
 ---
 name: meta-whatsapp-rs-storage
-description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token vault, OTP challenges, webhook dedup, signup sessions) and ConversationStore (inbox history) ports, MemoryKvStore and MemoryConversationStore for tests, PostgresKvStore and PostgresConversationStore (migrate at startup, table prefixes, purge_expired, U+0000 kept in message content and refused in ids and keys, the lossless-content upgrade, inbox retention and erasure with with_retention, apply_retention, identities and erase_all), RedisKvStore (noeviction, persistence, prefixes, bring your own TLS connection), server clocks, and writing your own adapter that passes the conformance suites. Load when wiring databases for meta-whatsapp-rs, deploying Postgres or Redis for it, or implementing a custom KvStore or ConversationStore."
+description: "Choosing and running meta-whatsapp-rs storage - the KvStore (token vault, OTP challenges, webhook dedup, signup sessions) and ConversationStore (inbox history) ports, MemoryKvStore and MemoryConversationStore for tests, PostgresKvStore and PostgresConversationStore (migrate at startup, table prefixes, purge_expired, U+0000 kept in message content and refused in ids and keys, the lossless-content upgrade, inbox retention and erasure with with_retention, apply_retention, identities and erase_all), RedisKvStore (noeviction, persistence, prefixes, bring your own TLS connection), MongoKvStore and MongoConversationStore (a replica set, mongodb::migrate), server clocks, and writing your own adapter that passes the conformance suites. Load when wiring databases for meta-whatsapp-rs, deploying Postgres or Redis for it, or implementing a custom KvStore or ConversationStore."
 ---
 
 # meta-whatsapp-rs-storage
@@ -26,12 +26,12 @@ stores (vault, OTP, dedup, dead letters, sessions, bot cooldowns and jobs) are b
 | bot jobs (`KvJobs`; names pending the owner) | `KvStore` | `wa.bot.jobs`, `wa.bot.jobs.due`, `.sent`, `.message`, `.limited` | scheduled jobs; resumed ones resend |
 | inbox history (`InboxSink`, `Inbox`) | `ConversationStore` | tables `wa_*` | the history |
 
-| | Memory (`memory`) | Postgres (`postgres`) | SQLite (`sqlite`) | Redis (`redis`) |
-| --- | --- | --- | --- | --- |
-| `KvStore` | `MemoryKvStore` | `PostgresKvStore` | `SqliteKvStore` | `RedisKvStore` |
-| `ConversationStore` | `MemoryConversationStore` | `PostgresConversationStore` | `SqliteConversationStore` | `RedisConversationStore` |
-| shared, survives restarts | no | yes | survives; one machine | yes, with persistence on |
-| expiry clock | the process (`with_clock`) | the database server | the process (`with_clock`) | the Redis server |
+| | Memory (`memory`) | Postgres (`postgres`) | SQLite (`sqlite`) | Redis (`redis`) | MongoDB (`mongodb`) |
+| --- | --- | --- | --- | --- | --- |
+| `KvStore` | `MemoryKvStore` | `PostgresKvStore` | `SqliteKvStore` | `RedisKvStore` | `MongoKvStore` |
+| `ConversationStore` | `MemoryConversationStore` | `PostgresConversationStore` | `SqliteConversationStore` | `RedisConversationStore` | `MongoConversationStore` (a replica set; `mongodb::migrate` at startup) |
+| shared, survives restarts | no | yes | survives; one machine | yes, with persistence on | yes |
+| expiry clock | the process (`with_clock`) | the database server | the process (`with_clock`) | the Redis server | the database server |
 
 ## Postgres: the simple choice
 
