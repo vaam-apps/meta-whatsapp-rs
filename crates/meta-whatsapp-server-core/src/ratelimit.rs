@@ -482,6 +482,7 @@ mod tests {
     /// apart from writes, template management apart from both (its scope's
     /// operations, and only they). Decisive: each arm of `RouteClass::of`.
     #[test]
+    #[allow(clippy::too_many_lines)] // one row per operation
     fn an_operations_class_is_the_tables() {
         use crate::model::Scope;
         let table = [
