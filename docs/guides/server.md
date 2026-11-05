@@ -856,6 +856,18 @@ The request carries no Flow id, so a handler tells Flows apart by the
 replayed signed request is answered again (Meta states no validity window
 for a request; design D136).
 
+**Check the `flow_token` against the tenant.** The `422` above stops
+a Flow made *through the service* from naming another WABA's data
+endpoint, but a merchant who manages a Flow on Meta directly (Flow
+Builder, or the Graph API with its own token) can still point it at
+`…/webhooks/flows/<another WABA>`. The signature names the app, not the
+WABA, and with one deployment key (D133) the request decrypts either
+way. So a handler must treat the WABA in the path as a routing hint
+only: accept a data exchange only when its `flow_token` is one the app
+itself issued for that WABA's tenant, and answer an unknown token with
+an error screen. A key per tenant (roadmap M5d2) closes this in the
+service.
+
 
 ## Payments
 
