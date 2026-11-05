@@ -156,6 +156,14 @@ fn group_id(raw: &str) -> Option<GroupId> {
         .then(|| GroupId::new(raw))
 }
 
+/// A number's id as a record key may hold it: digits only (a bound number's
+/// is; one that arrives as a plain string may not be), so that the key's
+/// `.` always separates the number from the hash, whatever reaches the
+/// writers.
+fn keyable(number: &PhoneNumberId) -> bool {
+    !number.as_str().is_empty() && number.as_str().bytes().all(|b| b.is_ascii_digit())
+}
+
 impl GroupRecords {
     /// The records in `kv`.
     pub fn new(kv: Arc<dyn KvStore>) -> Self {
@@ -184,6 +192,9 @@ impl GroupRecords {
         number: &PhoneNumberId,
         group: &GroupId,
     ) -> Result<(), StorageError> {
+        if !keyable(number) {
+            return Ok(());
+        }
         let key = Self::key(number, group);
         if let Some((held, _, _)) = self.store.get(&key).await?
             && held.tenant == tenant.as_str()
@@ -205,6 +216,9 @@ impl GroupRecords {
         number: &PhoneNumberId,
         group: &GroupId,
     ) -> Result<(), StorageError> {
+        if !keyable(number) {
+            return Ok(());
+        }
         self.store.delete(&Self::key(number, group)).await?;
         Ok(())
     }
@@ -262,7 +276,7 @@ impl GroupRecords {
     ) -> Result<OwnedGroup, ServiceError> {
         authz.admit(caller)?;
         authz.tenant_number(caller, pn).await?;
-        let Some(group) = group_id(group) else {
+        let Some(group) = group_id(group).filter(|_| keyable(pn)) else {
             return Err(ServiceError::not_found());
         };
         let held = self.store.get(&Self::key(pn, &group)).await?;
@@ -1642,6 +1656,25 @@ mod tests {
                 .unwrap();
             assert_eq!(held(&records).await, then, "{kind} (errors: {errors})");
         }
+        // A number that is not a bound number's shape (an id a key's `.`
+        // could be part of) is never keyed: nothing written or removed.
+        let odd = PhoneNumberId::new_unchecked("106540352242922.abc");
+        let mut forged = event("group_create", false);
+        if let WebhookEvent::GroupUpdated {
+            phone_number_id, ..
+        } = &mut forged
+        {
+            *phone_number_id = odd.clone();
+        }
+        records.on_event(&tenant, &forged).await.unwrap();
+        assert!(
+            records
+                .store
+                .get(&GroupRecords::key(&odd, &group))
+                .await
+                .unwrap()
+                .is_none()
+        );
         // The record names the tenant and the number it was made for.
         records
             .on_event(&tenant, &event("group_create", false))

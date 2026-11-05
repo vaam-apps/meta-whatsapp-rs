@@ -10,7 +10,7 @@
 //! (D150). M5.1 (another tenant's number, zero vault reads) is
 //! `tests/authz.rs`, which iterates every route of the document, these
 //! included; the logs and the audit events are `tests/logs.rs`'s capture
-//! (`tests/groups_logs.rs`).
+//! (`tests/logs.rs` runs the groups' routes at `TRACE`).
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 
 mod common;
@@ -416,6 +416,66 @@ async fn listing_the_numbers_groups_makes_them_its_own() {
         );
     }
     assert_eq!(h.graph.requests().len(), before);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// A number that moves tenant leaves its groups' records behind, and they
+/// are inert: the previous tenant no longer holds the number (step 4), the
+/// new one finds a record naming the previous tenant as no record, with the
+/// vault unread and Meta not asked, until its own listing adopts the group;
+/// and back again the record names the tenant that adopted it. Decisive: the
+/// tenant comparison of `GroupRecords::owned` (the key holds the number, so
+/// only a moved number reaches it) and `Authorizer::tenant_number`.
+#[tokio::test]
+async fn a_number_that_moves_tenant_takes_no_group_records_with_it() {
+    use meta_whatsapp_rs::core::ids::WabaId;
+
+    let (h, key) = connected().await;
+    let other = h.tenant_key(OTHER_TENANT, &[Scope::Groups]).await;
+    let waba = WabaId::new(WABA).unwrap();
+    hold(&h, PN, GROUP).await;
+    let one = |key: &str| Call::get(format!("/v1/numbers/{PN}/groups/{GROUP}")).key(key);
+    let refused = |reply: &common::Reply, what: &str| {
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::NOT_FOUND, "not_found"),
+            "{what}: {}",
+            reply.text
+        );
+    };
+    h.graph.push_json(200, json!({"id": GROUP}));
+    assert_eq!(h.call(one(&key)).await.status, StatusCode::OK);
+    // Moved to the second tenant.
+    assert!(h.store.unbind_waba(&waba).await.unwrap());
+    h.connect(OTHER_TENANT, WABA, &[PN, PN_2], OTHER_TOKEN)
+        .await;
+    let reads = h.kv.vault_reads();
+    refused(&h.call(one(&key)).await, "the previous tenant");
+    refused(
+        &h.call(one(&other)).await,
+        "the new tenant, before its listing",
+    );
+    assert_eq!(h.kv.vault_reads(), reads, "no token was opened");
+    assert_eq!(h.graph.remaining(), 0);
+    // The new tenant's listing adopts it; the previous tenant still finds nothing.
+    h.graph.push_json(
+        200,
+        json!({"data": {"groups": [{"id": GROUP, "subject": "S", "created_at": "1683731200"}]}}),
+    );
+    let listed = h
+        .call(Call::get(format!("/v1/numbers/{PN}/groups")).key(&other))
+        .await;
+    assert_eq!(listed.status, StatusCode::OK, "{}", listed.text);
+    h.graph.push_json(200, json!({"id": GROUP}));
+    assert_eq!(h.call(one(&other)).await.status, StatusCode::OK);
+    refused(&h.call(one(&key)).await, "the previous tenant, after");
+    // Moved back: the record names the tenant that adopted the group.
+    assert!(h.store.unbind_waba(&waba).await.unwrap());
+    h.connect(TENANT, WABA, &[PN, PN_2], TOKEN).await;
+    let reads = h.kv.vault_reads();
+    refused(&h.call(one(&key)).await, "back again, before a listing");
+    refused(&h.call(one(&other)).await, "the tenant that left");
+    assert_eq!(h.kv.vault_reads(), reads, "no token was opened");
     assert_eq!(h.graph.remaining(), 0);
 }
 
