@@ -566,6 +566,158 @@ async fn another_tenants_number_and_upload_are_not_found_with_no_request() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// A session's record expires 24 hours from the session's start, and the
+/// chunk that keeps the handle does not extend it (the store's expiry then
+/// reads the id as `404`: its conformance suite's `born_expired_is_invisible`
+/// and the `CAS` of a dead record). The harness's store runs on the real
+/// clock, so the deadline itself is what is pinned here. Decisive:
+/// `SESSION_TTL` in `Uploads::start`, `Expiry::Keep` in `keep_handle`.
+#[tokio::test]
+async fn a_sessions_record_expires_a_day_from_its_start_and_the_handle_keeps_that() {
+    use meta_whatsapp_rs::core::store::JsonStore;
+    let (h, key) = connected().await;
+    let store = JsonStore::<Value>::new(h.kv.clone(), "wa.server.upload");
+    let before = time::OffsetDateTime::now_utc();
+    let upload_id = open(&h, PN, &key, SESSION, 12).await;
+    let (record, _, expires) = store.get(&upload_id).await.unwrap().unwrap();
+    let expires = expires.expect("a session's record expires");
+    let day = time::Duration::hours(24);
+    assert!(
+        expires >= before + day && expires <= time::OffsetDateTime::now_utc() + day,
+        "{expires}"
+    );
+    assert_eq!(record["tenant"], TENANT);
+    assert_eq!(record["phone_number_id"], PN);
+    // Meta's session id is in the record alone.
+    h.clock.advance(Duration::from_secs(3600));
+    h.graph.push_json(200, json!({"h": HANDLE}));
+    let done = h
+        .call(chunk_call(
+            PN,
+            &key,
+            &upload_id,
+            "?file_offset=0",
+            b"png bytes...",
+        ))
+        .await;
+    assert_eq!(done.status, StatusCode::OK, "{}", done.text);
+    let (kept, _, expires_after) = store.get(&upload_id).await.unwrap().unwrap();
+    assert_eq!(kept["handle"], HANDLE);
+    assert_eq!(expires_after, Some(expires));
+}
+
+/// A chunk holds one of its tenant's transfer slots: with the share busy
+/// it is `429` before its body is read or Meta asked, and a chunk that
+/// fails (Meta refuses it) gives its slot back. Decisive: `transfer_slot`
+/// in the route; the slot's drop on the error path.
+#[tokio::test]
+async fn a_chunk_holds_a_slot_and_gives_it_back_on_every_path() {
+    use meta_whatsapp_server::model::TenantId;
+    let (h, key) = connected_with(Settings {
+        media_concurrency: 1,
+        ..settings()
+    })
+    .await;
+    let upload_id = open(&h, PN, &key, SESSION, 12).await;
+    let asked = h.graph.requests().len();
+    let held = h
+        .state
+        .media_slots()
+        .try_acquire(&TenantId::parse(TENANT).unwrap())
+        .unwrap();
+    let busy = h
+        .call(chunk_call(
+            PN,
+            &key,
+            &upload_id,
+            "?file_offset=0",
+            b"png bytes...",
+        ))
+        .await;
+    assert_eq!(
+        (busy.status, busy.code().as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
+        "{}",
+        busy.text
+    );
+    assert_eq!(h.graph.requests().len(), asked);
+    drop(held);
+    // Refused by this service (past the declared file) after the slot
+    // is taken, then refused by Meta: neither keeps it.
+    let over = h
+        .call(chunk_call(
+            PN,
+            &key,
+            &upload_id,
+            "?file_offset=0",
+            &[7u8; 13],
+        ))
+        .await;
+    assert_eq!(over.status, StatusCode::PAYLOAD_TOO_LARGE, "{}", over.text);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": "Invalid offset", "type": "OAuthException", "code": 100}}),
+    );
+    let refused = h
+        .call(chunk_call(
+            PN,
+            &key,
+            &upload_id,
+            "?file_offset=0",
+            b"png bytes...",
+        ))
+        .await;
+    assert!(refused.status.is_client_error(), "{}", refused.text);
+    h.graph.push_json(200, json!({"h": HANDLE}));
+    let ok = h
+        .call(chunk_call(
+            PN,
+            &key,
+            &upload_id,
+            "?file_offset=0",
+            b"png bytes...",
+        ))
+        .await;
+    assert_eq!(ok.status, StatusCode::OK, "{}", ok.text);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// A number that comes under another tenant (its WABA disconnected, then
+/// connected by the other) does not hand over the sessions the first
+/// tenant opened on it: the record names the tenant as well as the
+/// number. Decisive: the tenant comparison in `Uploads::open`.
+#[tokio::test]
+async fn a_number_that_changes_tenant_does_not_hand_over_its_sessions() {
+    let (h, key) = connected().await;
+    h.tenant(OTHER_TENANT).await;
+    let upload_id = open(&h, PN, &key, SESSION, 12).await;
+    let waba = meta_whatsapp_rs::core::ids::WabaId::new(WABA).unwrap();
+    h.store.unbind_waba(&waba).await.unwrap();
+    h.connect(OTHER_TENANT, OTHER_WABA, &[PN], OTHER_TOKEN)
+        .await;
+    let other_key = h.tenant_key(OTHER_TENANT, &[Scope::Media]).await;
+    let asked = h.graph.requests().len();
+    for call in [
+        status_call(PN, &other_key, &upload_id),
+        chunk_call(
+            PN,
+            &other_key,
+            &upload_id,
+            "?file_offset=0",
+            b"png bytes...",
+        ),
+    ] {
+        let reply = h.call(call).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::NOT_FOUND, "not_found"),
+            "{}",
+            reply.text
+        );
+    }
+    assert_eq!(h.graph.requests().len(), asked);
+}
+
 /// A key without the `media` scope is `403 forbidden` on each route, and
 /// none without a key `401`: nothing is asked of Meta.
 #[tokio::test]
