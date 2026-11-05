@@ -32,7 +32,12 @@ fn tenant(id: &str) -> TenantId {
 
 /// Two tenants, each with a WABA, a number and a token in the vault.
 async fn two_tenants() -> Harness {
-    let h = Harness::new();
+    // The Meta app resumable uploads open their sessions under (roadmap
+    // M5c1): without one, the route asks Meta nothing.
+    let h = Harness::with_settings(meta_whatsapp_server::state::Settings {
+        app_id: Some(meta_whatsapp_rs::core::ids::AppId::new("634974688087057").unwrap()),
+        ..common::test_settings()
+    });
     h.tenant(A).await;
     h.tenant(B).await;
     h.connect(A, WABA_A, &[PN_A], "TOKEN-OF-A").await;
@@ -296,7 +301,19 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
 /// authorization order, the vault included, as every owned route does. A
 /// message by id A's inbox does not hold is `404`, after the vault. An
 /// erasure (roadmap M2f) too: it asks Meta nothing.
-const ASK_META_NOTHING: [(Method, &str, StatusCode); 6] = [
+const ASK_META_NOTHING: [(Method, &str, StatusCode); 8] = [
+    // A resumable upload's chunk and status name an upload the sample
+    // does not hold: refused after the vault, before Meta (roadmap M5c1).
+    (
+        Method::POST,
+        "/v1/numbers/{pn}/media-uploads/{upload_id}",
+        StatusCode::UNPROCESSABLE_ENTITY,
+    ),
+    (
+        Method::GET,
+        "/v1/numbers/{pn}/media-uploads/{upload_id}",
+        StatusCode::UNPROCESSABLE_ENTITY,
+    ),
     (
         Method::GET,
         "/v1/numbers/{pn}/conversations",
@@ -377,7 +394,14 @@ async fn the_owner_reads_the_vault_on_every_owned_route() {
             "{label}: Meta was not asked"
         );
         let request = h.graph.last_request().unwrap();
-        assert_eq!(request.bearer(), Some("TOKEN-OF-A"), "{label}");
+        // A resumable upload's session is opened with `Authorization: OAuth`
+        // (the Graph guide's header), every other route with `Bearer`.
+        let token = request.bearer().or_else(|| {
+            request
+                .header("authorization")
+                .and_then(|value| value.strip_prefix("OAuth "))
+        });
+        assert_eq!(token, Some("TOKEN-OF-A"), "{label}");
     }
     assert_eq!(h.graph.remaining(), 0);
 }

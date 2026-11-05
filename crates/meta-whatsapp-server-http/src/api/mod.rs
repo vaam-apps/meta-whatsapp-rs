@@ -17,6 +17,7 @@ pub mod events;
 pub mod flows;
 pub mod media;
 pub mod ops;
+pub mod uploads;
 pub mod webhooks;
 
 use std::panic::AssertUnwindSafe;

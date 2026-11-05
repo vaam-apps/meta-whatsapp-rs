@@ -922,3 +922,62 @@ fn webhooks_out_read_a_data_key_an_allow_list_and_a_window() {
         );
     }
 }
+
+/// Roadmap M5c1: `WA_SERVER_MEDIA_CONVERTER`. Unset or `none`, no
+/// converter (an upload that asks for one is refused); `ffmpeg` sets the
+/// library's converter in a build with the `ffmpeg` feature and is refused
+/// in one without; another value, a blank program, and a program without
+/// `ffmpeg` are refused, naming the variable. Decisive: each arm of
+/// `media_converter`.
+#[test]
+fn the_media_converter_is_none_unless_the_deployment_sets_ffmpeg() {
+    assert!(
+        Config::from_env(&production())
+            .unwrap()
+            .settings
+            .media_converter
+            .is_none()
+    );
+    assert!(
+        Config::from_env(&production().set("WA_SERVER_MEDIA_CONVERTER", "none"))
+            .unwrap()
+            .settings
+            .media_converter
+            .is_none()
+    );
+    for (vars, name) in [
+        (
+            production().set("WA_SERVER_MEDIA_CONVERTER", "sox"),
+            "WA_SERVER_MEDIA_CONVERTER",
+        ),
+        (
+            production().set("WA_SERVER_MEDIA_CONVERTER_PROGRAM", "/usr/bin/ffmpeg"),
+            "WA_SERVER_MEDIA_CONVERTER_PROGRAM",
+        ),
+    ] {
+        match refused(&vars) {
+            ConfigError::Invalid { name: named, .. } => assert_eq!(named, name),
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+    let ffmpeg = Config::from_env(&production().set("WA_SERVER_MEDIA_CONVERTER", "ffmpeg"));
+    if cfg!(feature = "ffmpeg") {
+        assert!(ffmpeg.unwrap().settings.media_converter.is_some());
+        assert!(matches!(
+            refused(
+                &production()
+                    .set("WA_SERVER_MEDIA_CONVERTER", "ffmpeg")
+                    .set("WA_SERVER_MEDIA_CONVERTER_PROGRAM", " ")
+            ),
+            ConfigError::Blank("WA_SERVER_MEDIA_CONVERTER_PROGRAM")
+        ));
+    } else {
+        assert!(matches!(
+            ffmpeg.map(|_| ()).unwrap_err(),
+            ConfigError::Invalid {
+                name: "WA_SERVER_MEDIA_CONVERTER",
+                ..
+            }
+        ));
+    }
+}

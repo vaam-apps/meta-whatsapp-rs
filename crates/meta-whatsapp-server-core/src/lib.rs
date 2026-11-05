@@ -101,6 +101,7 @@ pub mod request;
 pub mod signup;
 pub mod store;
 pub mod templates;
+pub mod uploads;
 pub mod webhooks_out;
 
 pub use error::ServiceError;

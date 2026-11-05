@@ -49,7 +49,7 @@ use sha2::{Digest, Sha256};
 
 use crate::authz::{Authorizer, Caller};
 use crate::error::{ErrorCode, ServiceError};
-use crate::media::Upload;
+use crate::media::{Conversion, Upload, convert_name};
 use crate::model::{
     IdempotencyClaim, IdempotencyKey, IdempotencyRecord, IdempotencyState, TenantId,
 };
@@ -57,6 +57,7 @@ use crate::observe::Observer;
 use crate::operation::Operation;
 use crate::otp::OtpKeys;
 use crate::store::IdempotencyRecords;
+use crate::uploads::NewUpload;
 
 /// SHA-256 of what a request asks: its operation ([`Operation`], by id)
 /// and its **canonical input**, never the request's method or path
@@ -68,6 +69,8 @@ use crate::store::IdempotencyRecords;
 /// | --- | --- |
 /// | `send_message` ([`Self::send_message`]) | the number's id, as a [`PhoneNumberId`] (the path parameter decoded: `%31` and `1` are one number); the JSON body as the request carried it, parsed (an escape is the character it spells; of a key given twice, the last, as the operation reads it), its object keys sorted and its whitespace ignored; nothing else is folded (`1` and `1.0` are two bodies) |
 /// | `upload_media` ([`Self::upload_media`]) | the number's id; the checked [`Upload`]'s MIME type, the file name sent to Meta, and the file's SHA-256 |
+/// | `upload_media`, converted ([`Self::upload_converted_media`], roadmap M5c1) | the number's id; the format wanted, the file name that will be sent and the **source** file's SHA-256: the conversion runs after the key is claimed, so a repeat never converts again |
+/// | `start_media_upload` ([`Self::start_media_upload`], roadmap M5c1) | the number's id; the file name sent to Meta, the declared length and the declared MIME type, as a JSON object, canonical as above |
 /// | `create_template` ([`Self::create_template`]) | the WABA's id, as a [`WabaId`]; the JSON body, canonical as above |
 /// | `reply_to_conversation` ([`Self::reply_to_conversation`]) | the number's id; the conversation's contact, as the path named it decoded; the JSON body, canonical as above |
 /// | `mark_conversation_read` ([`Self::mark_conversation_read`]) | the number's id; the conversation's contact, as the path named it decoded; the JSON body, canonical as above (`null` for an empty one) |
@@ -122,6 +125,37 @@ impl Fingerprint {
                 ("filename", upload.filename().as_bytes()),
                 ("file", digest.as_slice()),
             ],
+        )
+    }
+
+    /// `upload_media` of `conversion` on `number` (roadmap M5c1): the
+    /// format wanted, the file name that will be sent and the SHA-256 of
+    /// the **source** file. The converted bytes are not an input: the
+    /// conversion runs after the key is claimed.
+    pub fn upload_converted_media(number: &PhoneNumberId, conversion: &Conversion) -> Self {
+        let digest = Sha256::digest(conversion.data());
+        Self::parts(
+            Operation::UploadMedia,
+            &[("pn", number.as_str())],
+            &[
+                ("convert", convert_name(conversion.target()).as_bytes()),
+                ("filename", conversion.file_name().as_bytes()),
+                ("file", digest.as_slice()),
+            ],
+        )
+    }
+
+    /// `start_media_upload` on `number` for `upload` (roadmap M5c1): the
+    /// file name that will be sent to Meta, the declared length and type.
+    pub fn start_media_upload(number: &PhoneNumberId, upload: &NewUpload) -> Self {
+        Self::json(
+            Operation::StartMediaUpload,
+            &[("pn", number.as_str())],
+            &serde_json::json!({
+                "file_name": upload.file_name(),
+                "file_length": upload.file_length(),
+                "file_type": upload.file_type(),
+            }),
         )
     }
 

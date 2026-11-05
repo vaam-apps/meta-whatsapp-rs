@@ -43,6 +43,13 @@ pub enum Operation {
     UploadMedia,
     /// `download_media`: a media file downloaded.
     DownloadMedia,
+    /// `start_media_upload`: a resumable upload session opened (roadmap
+    /// M5c1; pending the owner's confirmation before the first release).
+    StartMediaUpload,
+    /// `upload_media_chunk`: a chunk of a resumable upload sent (M5c1).
+    UploadMediaChunk,
+    /// `get_media_upload`: a resumable upload's progress (M5c1).
+    GetMediaUpload,
     /// `delete_media`: a media file deleted.
     DeleteMedia,
     /// `list_templates`: a WABA's templates.
@@ -203,7 +210,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 75] = [
+    pub const ALL: [Self; 78] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -214,6 +221,9 @@ impl Operation {
         Self::MarkRead,
         Self::UploadMedia,
         Self::DownloadMedia,
+        Self::StartMediaUpload,
+        Self::UploadMediaChunk,
+        Self::GetMediaUpload,
         Self::DeleteMedia,
         Self::ListTemplates,
         Self::CreateTemplate,
@@ -294,6 +304,9 @@ impl Operation {
             Self::MarkRead => "mark_read",
             Self::UploadMedia => "upload_media",
             Self::DownloadMedia => "download_media",
+            Self::StartMediaUpload => "start_media_upload",
+            Self::UploadMediaChunk => "upload_media_chunk",
+            Self::GetMediaUpload => "get_media_upload",
             Self::DeleteMedia => "delete_media",
             Self::ListTemplates => "list_templates",
             Self::CreateTemplate => "create_template",
@@ -382,7 +395,12 @@ impl Operation {
             | Self::DeregisterNumber
             | Self::SetTwoStepPin => Scope::Numbers,
             Self::SendMessage | Self::MarkRead => Scope::Send,
-            Self::UploadMedia | Self::DownloadMedia | Self::DeleteMedia => Scope::Media,
+            Self::UploadMedia
+            | Self::DownloadMedia
+            | Self::DeleteMedia
+            | Self::StartMediaUpload
+            | Self::UploadMediaChunk
+            | Self::GetMediaUpload => Scope::Media,
             Self::ListTemplates
             | Self::CreateTemplate
             | Self::DeleteTemplates

@@ -14,6 +14,8 @@ use meta_whatsapp_rs::client::DEFAULT_TIMEOUT;
 use meta_whatsapp_rs::client::embedded_signup::{TokenVault, VaultKeys};
 use meta_whatsapp_rs::core::clock::Clock;
 use meta_whatsapp_rs::core::config::ApiVersion;
+use meta_whatsapp_rs::core::ids::AppId;
+use meta_whatsapp_rs::core::media::MediaConverter;
 use meta_whatsapp_rs::core::secret::VerifyToken;
 use meta_whatsapp_rs::core::store::ConversationStore;
 use meta_whatsapp_rs::webhooks::axum::extract::FromRef;
@@ -26,6 +28,7 @@ use meta_whatsapp_server_core::otp::{OtpCodes, OtpDeployment};
 use meta_whatsapp_server_core::registration::{AttemptLimits, RegistrationAttempts};
 use meta_whatsapp_server_core::signup::{SignupDeployment, Signups};
 use meta_whatsapp_server_core::templates::TemplateCache;
+use meta_whatsapp_server_core::uploads::UploadSessions;
 use meta_whatsapp_server_core::webhooks_out::dispatch::WebhooksOut;
 use meta_whatsapp_server_core::webhooks_out::endpoints::WebhookEndpoints;
 
@@ -73,6 +76,18 @@ pub struct Settings {
     pub media_concurrency: usize,
     /// `WA_SERVER_MEDIA_STREAMS`.
     pub media_streams: usize,
+    /// `WA_SERVER_MEDIA_CONVERTER` (roadmap M5c1, pending the owner's
+    /// confirmation before the first release): the converter an upload
+    /// may ask for (`convert`). `None`, an upload that asks for one is
+    /// `422 invalid_request` on `body`, as before M5c1 (the default, for
+    /// tests; `serve` sets it from the setting).
+    pub media_converter: Option<Arc<dyn MediaConverter>>,
+    /// `WA_APP_ID` (roadmap M5c1): the Meta app a resumable upload
+    /// session is opened under (`POST /{app_id}/uploads`). `None`, every
+    /// route that opens or asks for one is `409
+    /// resumable_upload_not_configured` (the default, for tests; `serve`
+    /// sets it from the configuration).
+    pub app_id: Option<AppId>,
     /// [`TEMPLATE_CACHE_TTL`].
     pub template_cache_ttl: Duration,
     /// The live event streams' bounds (`WA_SERVER_STREAMS_PER_TENANT`,
@@ -132,6 +147,8 @@ impl Default for Settings {
             media_max_bytes: DEFAULT_MEDIA_MAX_BYTES,
             media_concurrency: DEFAULT_MEDIA_CONCURRENCY,
             media_streams: DEFAULT_MEDIA_STREAMS,
+            media_converter: None,
+            app_id: None,
             template_cache_ttl: TEMPLATE_CACHE_TTL,
             live: LiveSettings::default(),
             inbox_reply_checks: ReplyChecksByNumber::new(),
@@ -170,6 +187,7 @@ struct Inner {
     media_slots: Slots,
     stream_slots: Slots,
     templates: TemplateCache,
+    uploads: UploadSessions,
     otp: OtpCodes,
     signups: Signups,
     streams: Streams,
@@ -261,6 +279,9 @@ impl AppState {
             .flows
             .clone()
             .map(|deployment| FlowsEndpoint::new(deployment, store.clone()));
+        // Resumable upload sessions in the bundle's key/value store, on
+        // the service's one clock (roadmap M5c1).
+        let uploads = UploadSessions::new(backend.kv(), clock.clone());
         let state = Self {
             inner: Arc::new(Inner {
                 idempotency: backend.idempotency(),
@@ -275,6 +296,7 @@ impl AppState {
                 media_slots: Slots::new(settings.media_concurrency),
                 stream_slots: Slots::new(settings.media_streams),
                 templates: TemplateCache::new(settings.template_cache_ttl),
+                uploads,
                 otp,
                 signups,
                 streams,
@@ -353,6 +375,11 @@ impl AppState {
     /// half of them at most for one tenant.
     pub fn stream_slots(&self) -> &Slots {
         &self.inner.stream_slots
+    }
+
+    /// The resumable upload sessions (roadmap M5c1).
+    pub(crate) fn upload_sessions(&self) -> &UploadSessions {
+        &self.inner.uploads
     }
 
     /// The template lists cached per WABA.
