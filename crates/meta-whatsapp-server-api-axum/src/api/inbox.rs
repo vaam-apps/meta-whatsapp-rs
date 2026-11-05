@@ -290,7 +290,8 @@ fn next_cursor<T>(listing: &Listing<T>) -> Option<String> {
 /// A reply to a conversation: a message's content as `POST
 /// /v1/numbers/{pn}/messages` takes it, without `to` (the conversation's
 /// contact receives it). `type` names the one content object present.
-#[derive(Debug, Deserialize, ToSchema)]
+// Its `Debug` shows `template`'s keys only, as a send's does.
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReplyMessage {
     /// Which content object follows.
@@ -336,6 +337,52 @@ pub struct ReplyMessage {
     pub ttl_seconds: Option<u32>,
     /// Direct Send's business-named template (`utility` only).
     pub direct_send_config: Option<DirectSendConfig>,
+}
+
+impl std::fmt::Debug for ReplyMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Every field named, so that a new one fails to compile here.
+        let Self {
+            kind,
+            text,
+            image,
+            video,
+            audio,
+            document,
+            sticker,
+            location,
+            contacts,
+            reaction,
+            template,
+            interactive,
+            pin,
+            reply_to,
+            callback_data,
+            category,
+            ttl_seconds,
+            direct_send_config,
+        } = self;
+        f.debug_struct("ReplyMessage")
+            .field("kind", kind)
+            .field("text", text)
+            .field("image", image)
+            .field("video", video)
+            .field("audio", audio)
+            .field("document", document)
+            .field("sticker", sticker)
+            .field("location", location)
+            .field("contacts", contacts)
+            .field("reaction", reaction)
+            .field("template", &domain::KeysOnly(template))
+            .field("interactive", interactive)
+            .field("pin", pin)
+            .field("reply_to", reply_to)
+            .field("callback_data", callback_data)
+            .field("category", category)
+            .field("ttl_seconds", ttl_seconds)
+            .field("direct_send_config", direct_send_config)
+            .finish()
+    }
 }
 
 impl From<ReplyMessage> for domain::ReplyMessage {

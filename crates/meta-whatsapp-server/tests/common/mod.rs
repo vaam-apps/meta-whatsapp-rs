@@ -979,6 +979,7 @@ impl Sample {
                 "media_id" => SAMPLE_MEDIA_ID,
                 "configuration_name" => SAMPLE_PAYMENT_CONFIGURATION,
                 "reference_id" => SAMPLE_REFERENCE_ID,
+                "group_id" => SAMPLE_TEMPLATE_GROUP_ID,
                 _ => "placeholder",
             });
             rest = &rest[end + 1..];
@@ -999,6 +1000,9 @@ pub const SAMPLE_MEDIA_ID: &str = "1037543291543636";
 
 /// A template id (`templates/template-management`).
 pub const SAMPLE_TEMPLATE_ID: &str = "1407680676729941";
+
+/// A template group's id (`templates/template-groups`).
+pub const SAMPLE_TEMPLATE_GROUP_ID: &str = "9020555671393375";
 
 /// A payment configuration's name (`payments/payments-in/onboarding-apis`).
 pub const SAMPLE_PAYMENT_CONFIGURATION: &str = "test-payment-configuration";
@@ -1031,11 +1035,30 @@ pub fn sample_template_definition() -> Value {
     })
 }
 
+/// A creation from the Template Library (`templates/template-library`,
+/// "Example request", its button inputs as the array of objects the
+/// reference types them; roadmap M5b).
+pub fn sample_library_template() -> Value {
+    serde_json::json!({
+        "name": "my_delivery_update",
+        "language": "en_US",
+        "category": "UTILITY",
+        "library_template_name": "delivery_update_1",
+        "library_template_button_inputs": [{"type": "URL", "url": {
+            "base_url": "https://www.example.com/{{1}}",
+            "url_suffix_example": "https://www.example.com/order_update"}}]
+    })
+}
+
 /// The query string an operation needs, so that a refusal is never the
 /// query's fault.
 pub fn sample_query(method: &Method, template: &str) -> Option<&'static str> {
     match (method.as_str(), template) {
         ("DELETE", "/v1/wabas/{waba_id}/templates") => Some("name=order_confirmation"),
+        // templates/template-comparison, "Example request" (roadmap M5b).
+        ("GET", "/v1/wabas/{waba_id}/templates/{id}/compare") => {
+            Some("template_ids=1533406637136032&start=1674844791182&end=1674845395982")
+        }
         _ => None,
     }
 }
@@ -1104,6 +1127,35 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "speed": "normal",
             "payment_config_id": SAMPLE_PAYMENT_CONFIGURATION,
             "amount": {"currency": "INR", "value": "100", "offset": "100"}
+        }),
+        // Roadmap M5b: each route's example from Meta's page.
+        // templates/template-management, "Edit template category".
+        ("PATCH", "/v1/wabas/{waba_id}/templates/{id}") => {
+            serde_json::json!({"category": "MARKETING"})
+        }
+        // templates/template-archival, "Request syntax".
+        (
+            "POST",
+            "/v1/wabas/{waba_id}/templates/archive" | "/v1/wabas/{waba_id}/templates/unarchive",
+        ) => serde_json::json!({"hsm_ids": [SAMPLE_TEMPLATE_ID]}),
+        // templates/template-library, "Example request", its button inputs
+        // as the array of objects the reference types them.
+        ("POST", "/v1/wabas/{waba_id}/templates/library") => sample_library_template(),
+        // templates/template-migration: from the path's own WABA, which
+        // every sample's tenant holds (a source the tenant does not hold is
+        // `404` before anything is read).
+        ("POST", "/v1/wabas/{waba_id}/templates/migrations") => {
+            serde_json::json!({"source_waba_id": "102290129340398", "page_number": 0})
+        }
+        // templates/template-groups, the examples.
+        ("POST", "/v1/wabas/{waba_id}/template-groups") => serde_json::json!({
+            "name": "Black Friday 2024",
+            "description": "US-based Black Friday sale 2024 templates.",
+            "whatsapp_business_templates": [278_077_987_957_091_u64, 1_945_418_102_598_215_u64]
+        }),
+        ("PATCH", "/v1/wabas/{waba_id}/template-groups/{group_id}") => serde_json::json!({
+            "add_templates": [844_006_344_365_270_u64, 1_188_657_612_184_382_u64],
+            "remove_templates": [1_035_843_174_854_974_u64]
         }),
         ("POST" | "PATCH" | "PUT", _) => serde_json::json!({}),
         _ => return None,

@@ -1,13 +1,13 @@
 ---
 name: meta-whatsapp-rs-server-send
-description: "Sending WhatsApp messages, media and templates, and replying from the inbox, through meta-whatsapp-server over HTTP from an app not written in Rust (a Medusa store, a CMS backend) - the message body (to, type, the object Meta documents), E.164 recipients and BSUIDs, Flows, call buttons, carousels, product messages, pins and Direct Send, templates outside the 24-hour window, read receipts, the Idempotency-Key header and what may_have_been_sent means for a job queue, media uploads and verified downloads, listing and creating templates, and the service's 429 rate limits. Load when a non-Rust backend sends WhatsApp messages or media, or manages templates, through the service."
+description: "Sending WhatsApp messages, media and templates, and replying from the inbox, through meta-whatsapp-server over HTTP from an app not written in Rust (a Medusa store, a CMS backend) - the message body (to, type, the object Meta documents), E.164 recipients and BSUIDs, Flows, call buttons, carousels, product messages, pins and Direct Send, templates outside the 24-hour window, read receipts, the Idempotency-Key header and what may_have_been_sent means for a job queue, media uploads and verified downloads, managing templates (create, edit, archive, the Template Library, migrations, groups), and the service's 429 rate limits. Load when a non-Rust backend sends WhatsApp messages or media, or manages templates, through the service."
 ---
 
 # meta-whatsapp-rs-server-send
 
-> **Verified against meta-whatsapp-rs 497029b011b58cfa1628f28deac9aa442f140751 (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 4edbbe7ee97ff56b587e367cf10fc4f618c6ee79 (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
-Reference code: [examples/send.ts](examples/send.ts), [examples/payments.ts](examples/payments.ts) and [examples/interactive.ts](examples/interactive.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
+Reference code: [examples/send.ts](examples/send.ts), [examples/payments.ts](examples/payments.ts), [examples/interactive.ts](examples/interactive.ts) and [examples/templates.ts](examples/templates.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
 ## When to use
 
@@ -21,7 +21,7 @@ notifications, replies, files, templates or payment orders (scopes `send`, `medi
 | `POST /v1/numbers/{pn}/messages/{message_id}/read` | blue ticks; `typing_indicator` only when a reply follows |
 | `POST /v1/numbers/{pn}/media` | upload (a multipart form: `type`, then `file`); `201` with `media_id` |
 | `GET /v1/numbers/{pn}/media/{media_id}`, `DELETE /v1/numbers/{pn}/media/{media_id}` | download, verified; delete |
-| `GET /v1/wabas/{waba_id}/templates`, `GET /v1/wabas/{waba_id}/templates/{id}`, `POST /v1/wabas/{waba_id}/templates`, `DELETE /v1/wabas/{waba_id}/templates` | list (cached 60 s per WABA), one, create, delete by `name` (and `id`) |
+| `GET /v1/wabas/{waba_id}/templates`, `GET /v1/wabas/{waba_id}/templates/{id}`, `POST /v1/wabas/{waba_id}/templates`, `DELETE /v1/wabas/{waba_id}/templates` | list (cached 60 s per WABA), one, create, delete by `name` (and `id`); edits, unpausing, comparing, archiving, the Template Library, migrations and template groups: [references/templates.md](references/templates.md) |
 | `GET /v1/numbers/{pn}/conversations`, `GET` and `POST /v1/numbers/{pn}/conversations/{contact}/messages`, `GET /v1/numbers/{pn}/conversations/{contact}/window`, `POST /v1/numbers/{pn}/conversations/{contact}/read`, `GET /v1/numbers/{pn}/messages/{message_id}` | the inbox (scope `inbox`): conversations, a history, a reply checked against the 24-hour window and the thread's owner, the window itself, marking read, a message by id: [references/inbox.md](references/inbox.md) |
 | `GET /v1/wabas/{waba_id}/payment-configurations`, `POST /v1/numbers/{pn}/payments/refunds`, … | payments (scope `payments`): configurations, a payment's lookup, refunds: [references/payments.md](references/payments.md) |
 

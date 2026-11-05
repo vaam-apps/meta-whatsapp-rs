@@ -409,8 +409,9 @@ async fn every_rate_limited_operation_declares_its_429() {
 /// section 5.4; marking a conversation read, whose receipt is a request
 /// to Meta: roadmap M2g; since roadmap M3d a verification code's request,
 /// a registration and a deregistration; and since roadmap P2 a payment
-/// configuration's creation, a new OAuth link and a refund), and the
-/// upload is a multipart form.
+/// configuration's creation, a new OAuth link and a refund; since roadmap
+/// M5b a template created from the library, a migration and a template
+/// group's creation), and the upload is a multipart form.
 #[test]
 fn idempotent_operations_declare_their_key() {
     let spec: Value = serde_json::from_str(COMMITTED).unwrap();
@@ -440,8 +441,11 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/otp/issue",
             "POST /v1/wabas/{waba_id}/payment-configurations",
             "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
+            "POST /v1/wabas/{waba_id}/template-groups",
             "POST /v1/wabas/{waba_id}/templates",
             "POST /v1/wabas/{waba_id}/templates/authentication",
+            "POST /v1/wabas/{waba_id}/templates/library",
+            "POST /v1/wabas/{waba_id}/templates/migrations",
         ]
     );
     let upload = &spec["paths"]["/v1/numbers/{pn}/media"]["post"]["requestBody"]["content"];

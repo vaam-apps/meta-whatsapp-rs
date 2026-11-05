@@ -7643,6 +7643,603 @@
         ]
       }
     },
+    "/v1/wabas/{waba_id}/template-groups": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/template-groups`: create a template group.",
+        "operationId": "create_template_group",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never create twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateGroupCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateGroupCreated"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or a template not in this WABA (among its first 1,000); nothing created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `name`, `description`, `whatsapp_business_templates[i]`, `body` or a key the service would not send to Meta; `invalid_parameter` (a name in use, a template in another group), `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the group may have been created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/template-groups/{group_id}": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/template-groups/{group_id}`: one group, with\nthe first page of its templates.",
+        "operationId": "get_template_group",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Template group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateGroup"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such group in this WABA (another WABA's group looks like a missing one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `group_id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`DELETE /v1/wabas/{waba_id}/template-groups/{group_id}`: delete a group\n(its templates stay).",
+        "operationId": "delete_template_group",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Template group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted; its templates stay"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such group in this WABA; nothing deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `group_id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the group may have been deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`PATCH /v1/wabas/{waba_id}/template-groups/{group_id}`: rename a group,\ndescribe it, add or remove templates.",
+        "operationId": "update_template_group",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "Template group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateGroupUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Changed"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, no such group in this WABA, or a template added not in this WABA; nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `group_id`, `update` (nothing to change), `name`, `description`, `add_templates[i]`, `remove_templates[i]`, `body` or a key the service would not send to Meta; `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the group may have been changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/wabas/{waba_id}/templates": {
       "get": {
         "tags": [
@@ -8130,6 +8727,155 @@
         ]
       }
     },
+    "/v1/wabas/{waba_id}/templates/archive": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/templates/archive`: archive templates.",
+        "operationId": "archive_templates",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Meta's answer: the templates archived, and why each other one was not; each arrives as a `template_status_updated` event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplatesArchived"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or a template not in this WABA (among its first 1,000); nothing archived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `hsm_ids` (none, or more than 100), `hsm_ids[i]` or `body`; `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: templates may have been archived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/wabas/{waba_id}/templates/authentication": {
       "post": {
         "tags": [
@@ -8291,6 +9037,668 @@
         ]
       }
     },
+    "/v1/wabas/{waba_id}/templates/library": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/templates/library`: browse the Template\nLibrary, with the WABA's token.",
+        "operationId": "list_library_templates",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "A substring of a library template's content, name, header, body or\nfooter.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "query",
+            "description": "Its topic: `ACCOUNT_UPDATE`, `CUSTOMER_FEEDBACK`,\n`ORDER_MANAGEMENT`, `PAYMENTS`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "usecase",
+            "in": "query",
+            "description": "Its use case (`SHIPMENT_CONFIRMATION`, `DELIVERY_FAILED`, …).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "industry",
+            "in": "query",
+            "description": "Its industry: `E_COMMERCE`, `FINANCIAL_SERVICES`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "in": "query",
+            "description": "Its language (`en_US`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Its exact name (`delivery_update_1`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The library's entries matching the filters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryTemplateList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `search`, `topic`, `usecase`, `industry`, `language`, `name` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/templates/library`: create a template from a\nTemplate Library entry.",
+        "operationId": "create_library_template",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never create twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LibraryTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created (a library template unchanged is usually `APPROVED` at once)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateCreated"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`template_limit_reached`, `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (with `field`: `name`, `language`, `library_template_name`, a key the service would not send to Meta, or `zero_tap_terms_accepted: true`), `template_rejected`, `invalid_parameter`, `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the template may have been created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/templates/migrations": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/templates/migrations`: recreate another of the\ntenant's WABAs' templates in this one.",
+        "operationId": "migrate_templates",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "The destination WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never migrate twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateMigration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Meta's answer: the templates recreated, and why each other one was not",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateMigrationResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA (destination or source) for this tenant, or a template id not the source's; nothing migrated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required` (either WABA), `template_limit_reached`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `source_waba_id`, `count`, `template_ids`, `template_ids[i]` or `body`; `invalid_parameter`, `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: templates may have been migrated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/templates/unarchive": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/templates/unarchive`: unarchive templates\nwithin 28 days of their archive.",
+        "operationId": "unarchive_templates",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateIds"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Meta's answer: the templates unarchived, and why each other one was not; each arrives as a `template_status_updated` event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplatesUnarchived"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or a template not among this WABA's archived ones (its first 1,000); nothing unarchived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `hsm_ids` (none, or more than 100), `hsm_ids[i]` or `body`; `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: templates may have been unarchived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/wabas/{waba_id}/templates/{id}": {
       "get": {
         "tags": [
@@ -8413,6 +9821,473 @@
           },
           "504": {
             "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`PATCH /v1/wabas/{waba_id}/templates/{id}`: edit a template.",
+        "operationId": "edit_template",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateEdit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Edited: Meta reviews it again; the result arrives as a `template_status_updated` event"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such template in this WABA (another WABA's template id looks like a missing one); nothing edited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`id`, or with `field`: the edit breaks a documented limit, holds a key the service would not send to Meta, changes nothing, or accepts Meta's zero-tap terms), `template_rejected`, `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the template may have been edited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/templates/{id}/compare": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/templates/{id}/compare`: compare two of the\nWABA's templates.",
+        "operationId": "compare_templates",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "template_ids",
+            "in": "query",
+            "description": "The other template's id (Meta's `template_ids`, one id): of the same\nWABA, sent 1,000 times or more in the window.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "description": "The window's start, a UNIX timestamp (7, 30, 60 or 90 days before\n`end`).",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "The window's end, a UNIX timestamp (now).",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The block rate, sends and top block reason of both",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateComparison"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or either template not in this WABA",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `id`, `template_ids` (not an id, or `id` itself) or `query`; `invalid_parameter` (too few sends in the window is Meta's)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/templates/{id}/unpause": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/templates/{id}/unpause`: unpause a template\npaused for its quality or by pacing.",
+        "operationId": "unpause_template",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Unpaused; the new status arrives as a `template_status_updated` event"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such template in this WABA; nothing unpaused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `id`, `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the template may have been unpaused",
             "content": {
               "application/json": {
                 "schema": {
@@ -9912,6 +11787,94 @@
           }
         },
         "additionalProperties": false
+      },
+      "ComparisonMetric": {
+        "type": "object",
+        "description": "One metric of a comparison, as Meta answered it.",
+        "required": [
+          "metric",
+          "type"
+        ],
+        "properties": {
+          "metric": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`BLOCK_RATE`, `MESSAGE_SENDS` or `TOP_BLOCK_REASON`, as Meta names\nit."
+          },
+          "number_values": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ComparisonNumberValue"
+            },
+            "description": "`MESSAGE_SENDS`: each template's sends."
+          },
+          "order_by_relative_metric": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "`BLOCK_RATE`: the template ids, lowest block rate first."
+          },
+          "string_values": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ComparisonStringValue"
+            },
+            "description": "`TOP_BLOCK_REASON`: each template's top block reason."
+          },
+          "type": {
+            "type": "string",
+            "description": "`RELATIVE`, `NUMBER_VALUES` or `STRING_VALUES`."
+          }
+        }
+      },
+      "ComparisonNumberValue": {
+        "type": "object",
+        "description": "A template's value in a comparison metric.",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The template's id."
+          },
+          "value": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number (`MESSAGE_SENDS`: its sends)."
+          }
+        }
+      },
+      "ComparisonStringValue": {
+        "type": "object",
+        "description": "A template's value in a comparison metric.",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The template's id."
+          },
+          "value": {
+            "type": "string",
+            "description": "The value (`TOP_BLOCK_REASON`: `SPAM`, `NO_LONGER_NEEDED`, …)."
+          }
+        }
       },
       "CompleteSignup": {
         "type": "object",
@@ -11544,6 +13507,284 @@
           "number_disconnected",
           "number_reconnect_required"
         ]
+      },
+      "LibraryBodyInputs": {
+        "type": "object",
+        "description": "A library template's optional additions (`library_template_body_inputs`).",
+        "properties": {
+          "add_contact_number": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Mention calling the business."
+          },
+          "add_learn_more_link": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Add a learn-more link (not widely available)."
+          },
+          "add_security_recommendation": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Add \"do not share this code\"."
+          },
+          "add_track_package_link": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Add a package-tracking link (not widely available)."
+          },
+          "code_expiration_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "When the code expires, in minutes.",
+            "minimum": 0
+          }
+        }
+      },
+      "LibraryButtonInput": {
+        "type": "object",
+        "description": "A library template's button input (`library_template_button_inputs`).",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "otp_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`COPY_CODE` or `ONE_TAP` (`ZERO_TAP` accepts Meta's zero-tap terms,\nwhich the service does not do for a tenant:\n`zero_tap_terms_accepted: true` is refused)."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The business's phone number."
+          },
+          "supported_apps": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SupportedApp"
+            },
+            "description": "A one-tap button's Android apps."
+          },
+          "type": {
+            "type": "string",
+            "description": "`QUICK_REPLY`, `URL`, `PHONE_NUMBER`, `OTP`, `MPM`, `CATALOG`,\n`FLOW`, `VOICE_CALL` or `APP`."
+          },
+          "url": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LibraryUrlInput",
+                "description": "The business's website."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "LibraryTemplate": {
+        "type": "object",
+        "description": "A Template Library entry, as Meta describes it.",
+        "required": [
+          "id",
+          "name",
+          "language",
+          "category",
+          "topic",
+          "usecase",
+          "industry",
+          "header",
+          "body",
+          "body_params",
+          "body_param_types",
+          "buttons"
+        ],
+        "properties": {
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its body, with positional placeholders."
+          },
+          "body_param_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Their types (`TEXT`, `AMOUNT`, `DATE`, …), checked by Meta when the\ntemplate is sent."
+          },
+          "body_params": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Example values of the body's placeholders."
+          },
+          "buttons": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "description": "Its buttons, in Meta's JSON."
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its category, as Meta names it (`UTILITY`, `AUTHENTICATION`)."
+          },
+          "header": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its header text."
+          },
+          "id": {
+            "type": "string",
+            "description": "The entry's id."
+          },
+          "industry": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its industries."
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its language."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name: a creation's `library_template_name`."
+          },
+          "topic": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its topic."
+          },
+          "usecase": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its use case."
+          }
+        }
+      },
+      "LibraryTemplateList": {
+        "type": "object",
+        "description": "The Template Library's entries.",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LibraryTemplate"
+            },
+            "description": "Meta's first page (the library documents no cursor)."
+          }
+        }
+      },
+      "LibraryTemplateRequest": {
+        "type": "object",
+        "description": "A template created from a Template Library entry, in Meta's JSON\n(`templates/template-library`, \"Creating templates\"): the button inputs\nare an array of objects. Read as Meta's object: a key the service\nwould not pass on is refused on its path.",
+        "required": [
+          "name",
+          "language",
+          "category",
+          "library_template_name"
+        ],
+        "properties": {
+          "category": {
+            "type": "string",
+            "description": "`UTILITY` (or `AUTHENTICATION` for an authentication entry)."
+          },
+          "language": {
+            "type": "string",
+            "description": "Its language (`en_US`)."
+          },
+          "library_template_body_inputs": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LibraryBodyInputs",
+                "description": "Optional additions."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "library_template_button_inputs": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LibraryButtonInput"
+            },
+            "description": "The business's website or phone number, for an entry with buttons\n(then required)."
+          },
+          "library_template_name": {
+            "type": "string",
+            "description": "The library entry's exact name (`delivery_update_1`)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Your template's name (lowercase letters, digits and `_`)."
+          }
+        }
+      },
+      "LibraryUrlInput": {
+        "type": "object",
+        "description": "A library button's URL.",
+        "required": [
+          "base_url"
+        ],
+        "properties": {
+          "base_url": {
+            "type": "string",
+            "description": "The URL, with an optional `{{1}}` suffix placeholder."
+          },
+          "url_suffix_example": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The full URL with its suffix filled in."
+          }
+        }
       },
       "ListRow": {
         "type": "object",
@@ -13823,6 +16064,22 @@
           }
         }
       },
+      "TemplateComparison": {
+        "type": "object",
+        "description": "A comparison's metrics.",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComparisonMetric"
+            },
+            "description": "The metrics, as Meta answered them."
+          }
+        }
+      },
       "TemplateCreated": {
         "type": "object",
         "description": "A created template, as Meta answered.",
@@ -13860,6 +16117,234 @@
           "type": "string"
         }
       },
+      "TemplateEdit": {
+        "type": "object",
+        "description": "What to change in a template, in Meta's JSON (`POST /{TEMPLATE_ID}`,\n`templates/template-management` § Edit templates): only `APPROVED`,\n`REJECTED` or `PAUSED` templates can be edited; `components` replaces\nall of them; an approved template's category cannot change, and it can\nbe edited 10 times in 30 days (once in 24 hours). Read as Meta's object:\na key the service would not pass on is refused on its path.",
+        "properties": {
+          "allow_category_change": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Let Meta assign another category."
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`MARKETING`, `UTILITY` or `AUTHENTICATION`."
+          },
+          "components": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object",
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "description": "Every component of the template, replaced (`templates/components`)."
+          },
+          "cta_url_link_tracking_opted_out": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Opt out of Meta's link tracking for URL buttons."
+          },
+          "display_format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Meta's display format."
+          },
+          "is_primary_device_delivery_only": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Deliver to the user's primary device only."
+          },
+          "message_send_ttl_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The message's time to live, in seconds (`templates/time-to-live`)."
+          },
+          "parameter_format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`POSITIONAL` or `NAMED`."
+          },
+          "sub_category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Meta's sub-category."
+          }
+        }
+      },
+      "TemplateGroup": {
+        "type": "object",
+        "description": "A template group, as Meta describes it.",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "creation_time",
+          "update_time",
+          "templates"
+        ],
+        "properties": {
+          "creation_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was created, as Meta writes it (`2025-01-06T23:05:12+0000`)."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its description."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Template"
+            },
+            "description": "The first page of its templates (Meta's\n`whatsapp_business_templates`), with their components."
+          },
+          "update_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was last updated, in the same format."
+          }
+        }
+      },
+      "TemplateGroupCreate": {
+        "type": "object",
+        "description": "A new template group, in Meta's JSON (`templates/template-groups`). Read\nas Meta's object: a key the service would not pass on is refused on its\npath.",
+        "required": [
+          "name",
+          "whatsapp_business_templates"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its description, at most 512 characters."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name: unique, at most 256 characters."
+          },
+          "whatsapp_business_templates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Its templates' ids (strings, or Meta's integers), each the WABA's\nand in no other group."
+          }
+        }
+      },
+      "TemplateGroupCreated": {
+        "type": "object",
+        "description": "A created group.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Its id."
+          }
+        }
+      },
+      "TemplateGroupUpdate": {
+        "type": "object",
+        "description": "What to change in a template group, in Meta's JSON: every field\noptional, at least one set.",
+        "properties": {
+          "add_templates": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Templates to add (each the WABA's)."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new description, at most 512 characters."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new name: unique, at most 256 characters."
+          },
+          "remove_templates": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Templates to remove (the metrics they gave the group stay)."
+          }
+        }
+      },
+      "TemplateIds": {
+        "type": "object",
+        "description": "The templates to archive or unarchive (Meta's body,\n`templates/template-archival`).",
+        "required": [
+          "hsm_ids"
+        ],
+        "properties": {
+          "hsm_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "1 to 100 template ids, each the WABA's."
+          }
+        },
+        "additionalProperties": false
+      },
       "TemplateList": {
         "type": "object",
         "description": "A page of templates.",
@@ -13881,6 +16366,129 @@
               "null"
             ],
             "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      },
+      "TemplateMigration": {
+        "type": "object",
+        "description": "A migration into the path's WABA (`templates/template-migration`):\nMeta recreates the source's `APPROVED` templates of `GREEN` or\n`UNKNOWN` quality; both WABAs must be the same business's, and the\nsource the same tenant's.",
+        "required": [
+          "source_waba_id"
+        ],
+        "properties": {
+          "count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The batch's size, 1 to 500 (lower it if Meta times out).",
+            "minimum": 0
+          },
+          "page_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The zero-based batch of 500 templates.",
+            "minimum": 0
+          },
+          "source_waba_id": {
+            "type": "string",
+            "description": "The source WABA: one of the tenant's."
+          },
+          "template_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Only these templates of the source (retrying failures, say), at\nmost 500."
+          }
+        },
+        "additionalProperties": false
+      },
+      "TemplateMigrationResult": {
+        "type": "object",
+        "description": "The templates migrated, and why each other one was not.",
+        "required": [
+          "migrated_templates",
+          "failed_templates"
+        ],
+        "properties": {
+          "failed_templates": {
+            "type": "object",
+            "description": "Source template id → Meta's reason (\"Incorrect category\").",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "migrated_templates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The ids of the templates recreated in the destination."
+          }
+        }
+      },
+      "TemplatesArchived": {
+        "type": "object",
+        "description": "The templates archived, and why each other one was not.",
+        "required": [
+          "archived_templates",
+          "failed_templates"
+        ],
+        "properties": {
+          "archived_templates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The ids archived: each is deleted 28 days later, unless unarchived\nfirst."
+          },
+          "failed_templates": {
+            "type": "object",
+            "description": "Template id → Meta's reason it was not archived (\"Only approved or\nrejected templates can be archived\").",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TemplatesUnarchived": {
+        "type": "object",
+        "description": "The templates unarchived, and why each other one was not.",
+        "required": [
+          "unarchived_templates",
+          "failed_templates"
+        ],
+        "properties": {
+          "failed_templates": {
+            "type": "object",
+            "description": "Template id → Meta's reason it was not unarchived (\"Template is not\narchived\").",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "unarchived_templates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The ids unarchived: back to their status before the archive\n(`APPROVED` when there was none)."
           }
         }
       },
@@ -14595,7 +17203,7 @@
     },
     {
       "name": "templates",
-      "description": "Listing, creating and deleting message templates (scope `templates`)"
+      "description": "Message templates (scope `templates`): listing, creating and deleting them; since roadmap M5b editing, unpausing, comparing, archiving and unarchiving them, the Template Library, migrations and template groups"
     },
     {
       "name": "payments",

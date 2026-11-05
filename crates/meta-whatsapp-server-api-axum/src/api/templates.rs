@@ -9,7 +9,11 @@
 //! | `DELETE /v1/wabas/{waba_id}/templates?name=[&id=]` | `DELETE /{waba_id}/message_templates?name=…`; with an id, `GET /{waba_id}/message_templates?fields=name&name=…` first (the id must be among them), then `…&hsm_id=…` |
 //!
 //! Pages: `templates/template-management`, `templates/overview`,
-//! `reference/whatsapp-business-account/message-template-api`.
+//! `reference/whatsapp-business-account/message-template-api`. A
+//! template's life after its creation (an edit, an unpause, a comparison,
+//! archiving, the Template Library, migrations; roadmap M5b) is
+//! [`super::template_lifecycle`]'s, template groups
+//! [`super::template_groups`]'.
 //!
 //! **A template id is the WABA's, or it does not exist.** The WABA is the
 //! tenant's (step 4 of the authorization order); a template id is Meta's,
@@ -187,7 +191,7 @@ impl From<TemplateFilter> for domain::TemplateFilter {
 /// `state`'s cache and counted in its metrics (`caller` and `owned` are
 /// the state's own: the extractors made them with `state.authz()`, which
 /// admits them).
-fn templates<'a>(
+pub(super) fn templates<'a>(
     state: &'a Grant,
     caller: &'a Caller,
     owned: &'a OwnedWaba,
