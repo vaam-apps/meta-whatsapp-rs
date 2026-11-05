@@ -1,0 +1,30 @@
+// The service's CrateStack models (docs/design/server.md, section 8.4),
+// a spike (roadmap S11): one model, to show that the store can call models
+// as the system principal. Every name below is pending the owner's
+// confirmation before the first release.
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+// What a tenant's request carries, once the HTTP layer authenticates one.
+auth Principal {
+  tenantId String
+}
+
+// A row only the service itself may read or write: CrateStack applies a
+// model's policies to in-process calls too (its ADR 0018), so the store
+// names the system principal in every `@@allow`, and a tenant's context
+// (which never is one) gets nothing.
+model WaProbe {
+  id Int @id
+  tenantId String
+  label String
+
+  @@allow("list", auth().isSystem())
+  @@allow("detail", auth().isSystem())
+  @@allow("create", auth().isSystem())
+  @@allow("update", auth().isSystem())
+  @@allow("delete", auth().isSystem())
+}

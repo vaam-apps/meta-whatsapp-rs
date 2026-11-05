@@ -17,6 +17,7 @@ members = [
   "crates/meta-whatsapp-server-http",
   "crates/meta-whatsapp-server-api-axum",
   "crates/meta-whatsapp-server-api-cratestack",
+  "crates/meta-whatsapp-server-store-cratestack",
   "crates/meta-whatsapp-server",
   # The docs MCP server (roadmap L22b): a tool, a binary only, on
   # serde_json alone. Not a default member, and no crate depends on it.
