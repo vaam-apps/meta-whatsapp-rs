@@ -64,6 +64,7 @@ capability table) and `docs/categories.md` (Meta's platform categories).
   its `tests/live_mongodb.rs` runs the conformance suites live with its
   outbox (the in-flight case needs the feature `test-hooks`, which
   `--all-features` turns on).
+- The CrateStack system-principal spike (roadmap S11): `cargo test -p meta-whatsapp-server-store-cratestack --all-features` (its `live_postgres_*` need a Postgres).
 - Event data snapshots (after a webhook change in the library):
   `META_WHATSAPP_SERVER_UPDATE_SNAPSHOTS=1 cargo test -p meta-whatsapp-server --all-features --test event_data`,
   then review what it wrote under `crates/meta-whatsapp-server/tests/snapshots/event_data/`.
