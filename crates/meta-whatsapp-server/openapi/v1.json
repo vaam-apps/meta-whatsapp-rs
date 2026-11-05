@@ -21573,7 +21573,8 @@
           "user_action_reported",
           "number_connected",
           "number_disconnected",
-          "number_reconnect_required"
+          "number_reconnect_required",
+          "token_expiring"
         ]
       },
       "LibraryBodyInputs": {

@@ -4,6 +4,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test crate: a panic is the report
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use meta_whatsapp_server::config::{
     Config, ConfigError, Env, Environment, LogFormat, MigrateMode, NotUnicode, OnboardingMode,
@@ -105,6 +106,33 @@ fn the_inbox_settings_read_a_retention_and_each_numbers_reply_checks() {
     assert_eq!(checks.of(&number("106540352242924")), ReplyChecks::ALL);
 }
 
+/// `WA_SERVER_TOKEN_EXPIRY_LEAD` (roadmap M3e): a positive duration up to
+/// the outbox's retention, or `off`; the retention's own setting moves the
+/// bound. Decisive: each of the lead's three states, and the bound (a
+/// lead past the retention refused, one equal to it kept).
+#[test]
+fn the_token_expiry_lead_is_a_duration_within_the_retention_or_off() {
+    let lead =
+        |lead: &str| Config::from_env(&production().set("WA_SERVER_TOKEN_EXPIRY_LEAD", lead));
+    assert_eq!(
+        lead("3d").unwrap().token_expiry_lead,
+        Some(Duration::from_hours(72))
+    );
+    assert_eq!(lead("off").unwrap().token_expiry_lead, None);
+    assert_eq!(
+        lead("7d").unwrap().token_expiry_lead,
+        Some(Duration::from_hours(7 * 24))
+    );
+    assert!(lead("169h").is_err());
+    let longer = production()
+        .set("WA_SERVER_OUTBOX_RETENTION", "30d")
+        .set("WA_SERVER_TOKEN_EXPIRY_LEAD", "30d");
+    assert_eq!(
+        Config::from_env(&longer).unwrap().token_expiry_lead,
+        Some(Duration::from_hours(30 * 24))
+    );
+}
+
 #[test]
 fn a_valid_production_configuration_starts_with_safe_defaults() {
     let config = Config::from_env(&production()).unwrap();
@@ -118,6 +146,8 @@ fn a_valid_production_configuration_starts_with_safe_defaults() {
     // Retention is the owner's decision D10, still open: the design's
     // proposal until then.
     assert_eq!(config.outbox_retention.as_secs(), 7 * 24 * 3600);
+    // The token-expiry event's lead (roadmap M3e): a week.
+    assert_eq!(config.token_expiry_lead, Some(Duration::from_hours(7 * 24)));
     assert_eq!(config.app_secrets.len(), 1);
     assert_eq!(config.graph_endpoint.version().to_string(), "v25.0");
     assert!(matches!(config.onboarding, OnboardingMode::TechProvider));
@@ -437,6 +467,11 @@ fn refuses_what_it_cannot_parse_without_quoting_it() {
         // Zero would purge every event at the next housekeeping round.
         ("WA_SERVER_OUTBOX_RETENTION", "0"),
         ("WA_SERVER_OUTBOX_RETENTION", "0d"),
+        // Zero would warn of every token at once; a lead past the outbox's
+        // retention would let a purge tell a token twice (roadmap M3e).
+        ("WA_SERVER_TOKEN_EXPIRY_LEAD", "0d"),
+        ("WA_SERVER_TOKEN_EXPIRY_LEAD", "a week"),
+        ("WA_SERVER_TOKEN_EXPIRY_LEAD", "8d"),
         // Zero would purge the whole inbox (roadmap M2a).
         ("WA_SERVER_INBOX_RETENTION", "0d"),
         ("WA_SERVER_INBOX_RETENTION", "forever"),

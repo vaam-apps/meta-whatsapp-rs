@@ -6132,11 +6132,39 @@ design's (§9).
     each replica's clock, so a skew between replicas shortens one by the
     skew; the settings accept budgets past Meta's limit without a
     warning; a verification code has no length bound but the body's.
-- [ ] **M3e. The token-expiry event** (row 6; OPEN_QUESTIONS #8): an
+- [x] **M3e. The token-expiry event** (row 6; OPEN_QUESTIONS #8): an
   event and a metric ahead of a stored token's lapse.
   - **After:** M3a, L11e.
   - **Decisive:** a token inside the lead time yields one event for its
     tenant and none for another; the metric counts it.
+  - **Landed:** row 6 done for the service. `token_expiry::run`, a task
+    of `serve` (off with `WA_SERVER_TOKEN_EXPIRY_LEAD=off`), takes a
+    `LeaderLock` turn named `token_expiry` every 10 minutes, walks the
+    bound WABAs as the vault rotation does and asks the vault's
+    `token_expiry` (L11e) for each, the binding read before and after.
+    A token due (`ExpiresSoon`: within the lead, 7 days by default, and
+    not yet expired) is recorded as `token_expiring`
+    (`{event, waba_id, expires_at}`: ids and the expiry, never a token) in
+    the outbox for the WABA's tenant only, under a key of the type, WABA,
+    tenant and expiry: once per token and expiry, with no marker stored
+    (a second round or replica records nothing; a token stored anew has a
+    new expiry and is told again; a token found already expired is not
+    told). The lead may not exceed the outbox retention (refused at
+    start), or a purge would free the key while the token is still due.
+    `wa_server_token_expiry_events_total{outcome=recorded|failed}` counts
+    it. The state's vault now reads the service's one clock. Proposals
+    D180 to D183 (the type, setting, metric, key label and lock name are
+    pending the owner's confirmation before the first release). The
+    decisive tests: the core's `conformance::token_expiry` on every
+    backend (memory and Postgres) and the HTTP case
+    `common::token_expiry` (`tests/token_expiry.rs`,
+    `live_postgres_a_token_inside_the_lead_is_told_to_its_tenant_once`),
+    on a fake clock: the first round tells the token inside the lead to
+    its tenant (the exact data), the other tenant polls nothing, a second
+    round and a day on tell nobody, the counter holds one, 25 days later
+    the second tenant's token is told and the first's, expired, is not;
+    plus `the_key_is_pinned` and `the_events_data_is_ids_and_the_expiry_only`.
+    Treating `Fresh` as due, and a `None` dedup key, each fail them.
 - [ ] **M3f. Hosted signup, several WABAs, pre-verified numbers** (rows
   121–123).
   - **After:** M3a, L11a, L11b, L11c.
