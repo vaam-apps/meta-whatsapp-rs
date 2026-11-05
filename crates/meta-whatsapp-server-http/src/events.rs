@@ -91,6 +91,10 @@ pub(crate) enum Rejection {
     Busy = 4,
     /// The body broke off before it all arrived (a reset connection).
     Broken = 5,
+    /// A Flows data endpoint request no app secret signed (roadmap M5d): `432`.
+    FlowForged = 6,
+    /// A signed Flows data endpoint request that did not decrypt: `421`.
+    FlowUndecryptable = 7,
 }
 
 /// Warnings about refused deliveries, at most one a minute for each
@@ -103,7 +107,7 @@ pub(crate) struct RejectionLog {
     started: std::time::Instant,
     /// Per rejection: the millisecond (since `started`) from which the next
     /// line may be written, and the refusals not written since the last.
-    slots: [(AtomicU64, AtomicU64); 6],
+    slots: [(AtomicU64, AtomicU64); 8],
 }
 
 impl RejectionLog {

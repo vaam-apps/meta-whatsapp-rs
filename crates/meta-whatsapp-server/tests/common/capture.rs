@@ -158,6 +158,9 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
     secrets.extend(registration(h, &tenant_key).await);
     // Payments (roadmap P2): the OAuth links are credentials.
     secrets.extend(payments(h, &admin).await);
+    // Flows (roadmap M5d): the Flow key, a user's answers, tokens and the
+    // preview link are secrets.
+    secrets.extend(flows(h, &admin).await);
     secrets.extend(webhook_endpoints(h, &admin).await);
     // Embedded Signup (roadmap M3a): neither the merchant's token, nor the
     // PIN, the code or the state is logged.
@@ -1064,6 +1067,176 @@ pub const TEMPLATE_FLOW_TOKEN: &str = "CAPTURE-TEMPLATE-FLOW-TOKEN-ZQ81";
 pub const TEMPLATE_PASSCODE: &str = "CAPTURE-PASSCODE-482913";
 pub const TEMPLATE_BODY: &str = "CAPTURE-TEMPLATE-BODY-Echeveria-sale";
 
+/// A Flow's preview token (roadmap M5d): the link opens the Flow for
+/// whoever holds it; in no log line.
+pub const FLOW_PREVIEW_TOKEN: &str = "CAPTURE-FLOW-PREVIEW-TOKEN-b9d6c7";
+/// What a user typed into a Flow screen (the KAT's `data_exchange`
+/// request, `tests/flows_data/kat_endpoint.mjs`) and the Flow token the
+/// request carries: in no log line.
+const FLOW_ANSWER: &str = "shopping";
+const FLOW_ENDPOINT_TOKEN: &str = "flowtoken-1234";
+/// A Flow JSON's text: the caller's, not logged either.
+const FLOW_JSON_TEXT: &str = "CAPTURE-FLOW-JSON-TEXT-Heading-Hello-World";
+
+/// The Flows routes (roadmap M5d): each management route once with Meta's
+/// documented answer (a creation with the Flow JSON, the preview link
+/// whose token is a secret, the changes audited), and Meta's data endpoint
+/// requests: a health check, an error notification, a data exchange
+/// (a user's answer and the Flow token in it), a forged signature and an
+/// unsigned request. Neither the Flow private key, a user's answer, a
+/// token, the Flow JSON nor a sealed body is logged.
+#[allow(clippy::too_many_lines)] // eleven routes and the endpoint, each with its scripted answer
+async fn flows(h: &Harness, admin: &str) -> Vec<String> {
+    const WABA: &str = "102290129340398";
+    const FLOW: &str = "1234567890123456";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["flows"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let call = |method: Method, rest: &str| {
+        Call::new(method, format!("/v1/wabas/{WABA}/flows{rest}")).key(&key)
+    };
+    let read = || {
+        h.graph.push_json(
+            200,
+            json!({"id": FLOW, "name": "My first flow", "status": "DRAFT",
+                   "categories": ["OTHER"], "validation_errors": [],
+                   "whatsapp_business_account": {"id": WABA}}),
+        );
+    };
+    h.graph.push_json(200, json!({"id": FLOW, "success": true}));
+    let created = h
+        .call(
+            call(Method::POST, "").json(&json!({"name": "My first flow", "categories": ["OTHER"],
+            "flow_json": format!("{{\"version\":\"5.0\",\"text\":\"{FLOW_JSON_TEXT}\"}}")})),
+        )
+        .await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text);
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": FLOW, "name": "My first flow", "status": "DRAFT",
+                         "categories": ["OTHER"], "validation_errors": []}],
+               "paging": {"cursors": {"before": "a", "after": "b"}}}),
+    );
+    let listed = h.call(call(Method::GET, "")).await;
+    assert_eq!(listed.status.as_u16(), 200, "{}", listed.text);
+    read();
+    let got = h.call(call(Method::GET, &format!("/{FLOW}"))).await;
+    assert_eq!(got.status.as_u16(), 200, "{}", got.text);
+    read();
+    h.graph.push_json(200, json!({"success": true}));
+    let updated = h
+        .call(call(Method::PATCH, &format!("/{FLOW}")).json(&json!({"name": "New flow name"})))
+        .await;
+    assert_eq!(updated.status.as_u16(), 204, "{}", updated.text);
+    read();
+    h.graph
+        .push_json(200, json!({"success": true, "validation_errors": []}));
+    let uploaded = h
+        .call(
+            call(Method::PUT, &format!("/{FLOW}/json"))
+                .header("content-type", "application/json")
+                .body(meta_whatsapp_rs::webhooks::axum::body::Body::from(format!(
+                    "{{\"version\":\"5.0\",\"text\":\"{FLOW_JSON_TEXT}\"}}"
+                ))),
+        )
+        .await;
+    assert_eq!(uploaded.status.as_u16(), 200, "{}", uploaded.text);
+    read();
+    h.graph.push_json(
+        200,
+        json!({"preview": {"preview_url": format!(
+            "https://business.facebook.com/wa/manage/flows/{FLOW}/preview/?token={FLOW_PREVIEW_TOKEN}"),
+            "expires_at": "2023-05-21T11:18:09+0000"}, "id": FLOW}),
+    );
+    let previewed = h
+        .call(call(Method::POST, &format!("/{FLOW}/preview")).json(&json!({})))
+        .await;
+    assert_eq!(previewed.status.as_u16(), 200, "{}", previewed.text);
+    assert!(
+        previewed.text.contains(FLOW_PREVIEW_TOKEN),
+        "the answer has the link"
+    );
+    for rest in ["/publish", "/deprecate"] {
+        read();
+        h.graph.push_json(200, json!({"success": true}));
+        let done = h.call(call(Method::POST, &format!("/{FLOW}{rest}"))).await;
+        assert_eq!(done.status.as_u16(), 204, "{rest}: {}", done.text);
+    }
+    read();
+    h.graph.push_json(200, json!({"success": true}));
+    let deleted = h.call(call(Method::DELETE, &format!("/{FLOW}"))).await;
+    assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
+
+    // Meta's data endpoint (the public listener): the three payloads, a
+    // forged signature, and no signature at all.
+    for name in ["ping", "error_notification", "data_exchange"] {
+        let reply = send(
+            &h.public,
+            super::flows::signed("102290129340398", &super::flows::kat_body(name)).build(),
+        )
+        .await;
+        assert_eq!(reply.status.as_u16(), 200, "{name}: {}", reply.text);
+    }
+    let forged = send(
+        &h.public,
+        super::flows::signed_with(
+            "102290129340398",
+            &super::flows::kat_body("ping"),
+            "not-the-apps-secret",
+        )
+        .build(),
+    )
+    .await;
+    assert_eq!(forged.status.as_u16(), 432, "{}", forged.text);
+    let unsigned = send(
+        &h.public,
+        Call::new(Method::POST, "/webhooks/flows/102290129340398")
+            .body(meta_whatsapp_rs::webhooks::axum::body::Body::from("{}"))
+            .build(),
+    )
+    .await;
+    assert_eq!(unsigned.status.as_u16(), 432, "{}", unsigned.text);
+
+    let mut secrets = vec![
+        key.clone(),
+        key.rsplit('_').next().unwrap().to_owned(),
+        FLOW_PREVIEW_TOKEN.to_owned(),
+        FLOW_ANSWER.to_owned(),
+        FLOW_ENDPOINT_TOKEN.to_owned(),
+        FLOW_JSON_TEXT.to_owned(),
+    ];
+    // The Flow private key: every line of its body, and the sealed texts.
+    secrets.extend(
+        super::flows::KEY_PEM
+            .lines()
+            .filter(|line| !line.starts_with("-----"))
+            .map(str::to_owned),
+    );
+    for name in ["ping", "error_notification", "data_exchange"] {
+        let scenario = super::flows::kat(name);
+        secrets.push(scenario["sealed_response"].as_str().unwrap().to_owned());
+        secrets.push(
+            scenario["request"]["encrypted_flow_data"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+        secrets.push(
+            scenario["request"]["encrypted_aes_key"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    secrets
+}
+
 /// The registration routes (roadmap M3d), each with a PIN or a code in
 /// its body, and a refusal whose texts quote the PIN: the PIN and the code
 /// are secrets, looked for as a leaked string, JSON value or Meta text
@@ -1949,7 +2122,13 @@ fn check_audit(logs: &str) {
             "payment_oauth_link_regenerated",
             "payment_configuration_deleted",
             "payment_refunded",
-            "payment_refunded"
+            "payment_refunded",
+            // Roadmap M5d.
+            "flow_updated",
+            "flow_json_uploaded",
+            "flow_published",
+            "flow_deprecated",
+            "flow_deleted"
         ],
         "the template changes', the PIN change's, the deregistration's and the payment changes' audit events"
     );
@@ -2132,6 +2311,8 @@ pub fn check(logs: &str, secrets: &[String]) {
     }
     assert!(logged.contains(&("GET".to_owned(), "/webhooks/meta".to_owned())));
     assert!(logged.contains(&("POST".to_owned(), "/webhooks/meta".to_owned())));
+    // Roadmap M5d: the Flows data endpoint is exercised too.
+    assert!(logged.contains(&("POST".to_owned(), "/webhooks/flows/{waba_id}".to_owned())));
     assert!(
         logs.lines()
             .any(|l| l.contains("operator-only event recorded") && l.contains("data_sha256")),

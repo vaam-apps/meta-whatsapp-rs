@@ -335,6 +335,48 @@ stored data, the owner's).
     M2f's 8), `wa_server_webhook_endpoints` and
     `wa_server_webhook_deliveries`; every name pending the owner's
     confirmation (docs/architecture.md § Stable identifiers).
+- **WhatsApp Flows in the service** (roadmap M5d, parity rows 61 and 62
+  now partial in the service, the rest in M5d2; choices D132–D136,
+  decided by the coordinator on 2026-11-05 after an adversarial review;
+  from Meta's
+  `flows/guides/flowsapi`, `lifecycle`, `implementingyourflowendpoint`,
+  `healthmonitoring` and `whatsapp-business-encryption` pages, read on
+  2026-11-05). **Management**: a new scope, `flows` (one scope per family: a key
+  that edits templates does not manage Flows), on a WABA of the
+  tenant, each route the library's call: `POST` and `GET
+  /v1/wabas/{waba_id}/flows`, `GET`, `PATCH`, `DELETE
+  …/flows/{flow_id}`, `PUT …/flows/{flow_id}/json` (the Flow JSON as the
+  body, at most 2 MiB, uploaded byte for byte; Meta's validation errors
+  are the answer), `POST …/preview`, `…/publish`, `…/deprecate`. The
+  design's M5.2: a Flow id is read first (`GET /{flow_id}`) and acted on
+  only when Meta names the path's WABA as its owner (a creation's
+  `clone_flow_id` too), else `404` with nothing acted on and that read
+  the only request (D135); a creation takes an `Idempotency-Key`; the
+  changes are audited (`flow_updated`, `flow_json_uploaded`,
+  `flow_published`, `flow_deprecated`, `flow_deleted`). The OpenAPI
+  document is additive only (6 paths, 10 schemas, the `flows` tag, `flows`
+  in `Scope`). A Flow's `endpoint_uri` may not be this service's address
+  for another WABA (`422`): the signature binds the app, not the path.
+  **The data endpoint**: `POST /webhooks/flows/{waba_id}` on the public
+  listener, no API key: Meta's `X-Hub-Signature-256` checked in constant
+  time against every app secret before any record is read, key loaded or
+  byte parsed (`432`), the WABA's tenant (`404`), decryption with the
+  deployment's Flow private key (new setting `WA_SERVER_FLOWS_PRIVATE_KEY`,
+  an unencrypted 2048-bit RSA key in PEM; unset, the route is `404`; every
+  failure `421`), the health check and the error notification answered
+  by the service, a data exchange by the integrating app through the new
+  port `FlowHandler` (the binary plugs in none: `503`), the answer sealed
+  with the flipped IV; 256 KiB, 32 at once, 5 s for the app; the metric
+  `wa_server_flow_endpoint_requests_total`. Nothing of a request's data,
+  its token, the Flow JSON, the preview link or the key is logged
+  (`tests/common/capture.rs`). Tested with requests and answers made by
+  Meta's own Node.js sample code (`tests/flows_data/kat_endpoint.mjs`),
+  byte for byte. Not done: the app over HTTP, a key per tenant, the
+  number's business public key, the Flow's assets, `health_status` and
+  `application_id` (M5d2); the replay guard on a request's IV (Meta states
+  no validity window for a request: design D136). The new setting, scope
+  name, route, metric, operation ids and audit actions are pending the
+  owner's confirmation before the first release.
 - **A template's life after its creation, in the service** (roadmap
   M5b, parity rows 95, 96, 101 and 153 now done in the service, rows 99
   and 100 verified through it; choices D115–D122, proposed, pending the

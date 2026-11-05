@@ -19,6 +19,8 @@
 //! | [`erasure`] | erasing a customer on a number (roadmap M2f): every identity the inbox connects to the ones named, journaled (an HMAC of each, never in clear) before the outbox's rows naming them and their inbox records are deleted, audited; only when a caller with the scope `erasure` asks |
 //! | [`payments`] | the payment operations as services (roadmap P2): a WABA's payment configurations (list, get, create, a new OAuth link, delete), a payment's lookup and its refund on a number, each configuration named looked for in the number's own WABA first |
 //! | [`templates`] | the template operations as services: the list (cached per WABA, [`templates::TemplateCache`]), the lookup of an id in a WABA, creation (the definition checked first), authentication templates in one or more languages, deletion |
+//! | [`flows`] | WhatsApp Flows' management as services (roadmap M5d): a WABA's Flows created, listed, read, changed, filled with their Flow JSON, previewed, published, deprecated and deleted, each Flow id read for its WABA first |
+//! | [`flows_endpoint`] | the Flows data endpoint (roadmap M5d), with no HTTP framework: Meta's signed request verified in constant time before anything is read, decrypted with the Flow private key ([`flows_endpoint::FlowKeys`]), a health check and an error notification answered by the service, a data exchange by the integrating app ([`flows_endpoint::FlowHandler`]), the answer sealed |
 //! | [`otp`] | one-time passcodes as services, through the library's `OtpService`: a code sent from the tenant's sending number (its own, or the deployment's default OTP tenant's: decision D8), under the tenant's namespace, and a typed code checked |
 //! | [`signup`] | Embedded Signup as services, over the library's `EmbeddedSignup`: an attempt bound to the tenant, its completion (decision D4 on the claimed WABA, then in the library's approval, before anything is stored, subscribed or shared), the kept attempts and their resumption, in both partner modes; offboarding (a tenant's disconnection and `account_update` webhooks, the credit line revoked first), and the operator's explicit re-funding of a revoked business |
 //! | [`request`] | what the requests share: a Meta object read into the library's type, no key dropped; a Meta object id checked before it reaches a Graph path |
@@ -74,6 +76,8 @@ pub mod conformance;
 pub mod erasure;
 pub mod error;
 pub mod events;
+pub mod flows;
+pub mod flows_endpoint;
 pub mod housekeeping;
 pub mod idempotency;
 pub mod inbound;

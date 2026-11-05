@@ -99,7 +99,7 @@ async fn every_line_keeps_its_target_from_before_the_crate_split() {
 /// Each module roadmap S7 moved that logs, under the crates' directory,
 /// and the target its lines had before the split: the module path it had
 /// in `meta-whatsapp-server` (dda06c9).
-const MOVED_LOG_TARGETS: [(&str, &str); 9] = [
+const MOVED_LOG_TARGETS: [(&str, &str); 10] = [
     (
         "meta-whatsapp-server-http/src/api/mod.rs",
         "meta_whatsapp_server::api",
@@ -107,6 +107,11 @@ const MOVED_LOG_TARGETS: [(&str, &str); 9] = [
     (
         "meta-whatsapp-server-http/src/api/webhooks.rs",
         "meta_whatsapp_server::api::webhooks",
+    ),
+    // The Flows data endpoint (roadmap M5d), a new module that logs.
+    (
+        "meta-whatsapp-server-http/src/api/flows.rs",
+        "meta_whatsapp_server::api::flows",
     ),
     (
         "meta-whatsapp-server-http/src/auth.rs",

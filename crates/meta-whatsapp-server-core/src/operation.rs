@@ -188,11 +188,29 @@ pub enum Operation {
     UpdateTemplateGroup,
     /// `delete_template_group`: a template group deleted, its templates kept (roadmap M5b).
     DeleteTemplateGroup,
+    /// `create_flow`: a Flow created in a WABA (roadmap M5d).
+    CreateFlow,
+    /// `list_flows`: a WABA's Flows (roadmap M5d).
+    ListFlows,
+    /// `get_flow`: a Flow, by id (roadmap M5d).
+    GetFlow,
+    /// `update_flow`: a Flow's name, categories or endpoint changed (roadmap M5d).
+    UpdateFlow,
+    /// `upload_flow_json`: a Flow's Flow JSON replaced (roadmap M5d).
+    UploadFlowJson,
+    /// `preview_flow`: a Flow's web preview link (roadmap M5d).
+    PreviewFlow,
+    /// `publish_flow`: a Flow published (roadmap M5d).
+    PublishFlow,
+    /// `deprecate_flow`: a published Flow deprecated (roadmap M5d).
+    DeprecateFlow,
+    /// `delete_flow`: a draft Flow deleted (roadmap M5d).
+    DeleteFlow,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 69] = [
+    pub const ALL: [Self; 78] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -262,6 +280,15 @@ impl Operation {
         Self::GetTemplateGroup,
         Self::UpdateTemplateGroup,
         Self::DeleteTemplateGroup,
+        Self::CreateFlow,
+        Self::ListFlows,
+        Self::GetFlow,
+        Self::UpdateFlow,
+        Self::UploadFlowJson,
+        Self::PreviewFlow,
+        Self::PublishFlow,
+        Self::DeprecateFlow,
+        Self::DeleteFlow,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -336,6 +363,15 @@ impl Operation {
             Self::GetTemplateGroup => "get_template_group",
             Self::UpdateTemplateGroup => "update_template_group",
             Self::DeleteTemplateGroup => "delete_template_group",
+            Self::CreateFlow => "create_flow",
+            Self::ListFlows => "list_flows",
+            Self::GetFlow => "get_flow",
+            Self::UpdateFlow => "update_flow",
+            Self::UploadFlowJson => "upload_flow_json",
+            Self::PreviewFlow => "preview_flow",
+            Self::PublishFlow => "publish_flow",
+            Self::DeprecateFlow => "deprecate_flow",
+            Self::DeleteFlow => "delete_flow",
         }
     }
 
@@ -382,6 +418,15 @@ impl Operation {
             | Self::GetTemplateGroup
             | Self::UpdateTemplateGroup
             | Self::DeleteTemplateGroup => Scope::Templates,
+            Self::CreateFlow
+            | Self::ListFlows
+            | Self::GetFlow
+            | Self::UpdateFlow
+            | Self::UploadFlowJson
+            | Self::PreviewFlow
+            | Self::PublishFlow
+            | Self::DeprecateFlow
+            | Self::DeleteFlow => Scope::Flows,
             Self::ListEvents | Self::GetEvent | Self::StreamEvents | Self::StreamNumberEvents => {
                 Scope::Events
             }

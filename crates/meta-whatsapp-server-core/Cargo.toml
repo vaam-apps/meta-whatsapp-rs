@@ -29,7 +29,9 @@ conformance = ["meta-whatsapp-rs/testing", "tokio/macros"]
 # framework (axum), no database driver (sqlx), no HTTP client (reqwest)
 # (docs/architecture.md, § Service). What a backend or an API adapter
 # needs beyond it, it brings itself.
-meta-whatsapp-rs.workspace = true
+# The Flows data endpoint's crypto (RSA-OAEP, AES-GCM; roadmap M5d) is the
+# library's `flows-endpoint` feature.
+meta-whatsapp-rs = { workspace = true, features = ["flows-endpoint"] }
 
 # The library's `SinkError::Delivery` carries an `anyhow::Error`: the webhook
 # pipeline's sink wraps a storage failure in one (src/inbound.rs). Already

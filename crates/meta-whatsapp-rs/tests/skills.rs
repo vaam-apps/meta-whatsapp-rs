@@ -2896,6 +2896,7 @@ const SERVER_ROUTERS: &str = "crates/meta-whatsapp-server-http/src/api/mod.rs";
 const SERVER_PUBLIC_ROUTES: &[(&str, &str)] = &[
     ("GET", "/webhooks/meta"),
     ("POST", "/webhooks/meta"),
+    ("POST", "/webhooks/flows/{waba_id}"),
     ("GET", "/livez"),
 ];
 
