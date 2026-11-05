@@ -252,9 +252,21 @@ stored data, the owner's).
     invite link, leaving (Meta documents no call).
   - Gap, in the library: its debug line for a Graph request names the path
     it calls, so a group's id (which embeds the business number) is in that
-    one line at `debug`; and it classifies none of the groups' error codes
-    (`131201` onward), so Meta's refusals answer `502 unknown` with Meta's
-    code.
+    one line at `debug` (the groups' error codes were a second gap, closed
+    by the next entry).
+- **Group error codes** (roadmap L27, design D170-D172, proposed, pending
+  the coordinator's decision; from Meta's `groups/error-codes` page and
+  `groups/reference`, read on 2026-11-05). `ErrorKind::from_code`
+  classifies `131020`, `131041`, `131059`, `131201`-`131215` (existing
+  kinds where one fits, nine new ones: `invalid_cursor`,
+  `group_participant_not_found`, `join_request_not_found`,
+  `group_limit_reached`, `group_creation_disabled`,
+  `group_partially_applied`, `recipient_terms_not_accepted`,
+  `group_suspended`, `group_rate_limited`). None is retryable, and none
+  is resent automatically. The service answers each new kind's code
+  (`422`, `409`, `403`, `429`) with Meta's code and none of its text; the
+  OpenAPI document gains the nine codes and nothing else. The nine names
+  are pending the owner's confirmation before the first release.
 - **Resumable media uploads and conversion on upload, in the service**
   (roadmap M5c1, parity rows 47 and 48 now done in the service; choices
   D125-D131, proposed, pending the coordinator's decision; from the

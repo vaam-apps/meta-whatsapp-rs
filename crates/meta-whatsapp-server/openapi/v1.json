@@ -3728,7 +3728,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3748,7 +3748,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3758,7 +3758,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `limit`, `after`, `before` or `query`",
+            "description": "`invalid_request` on `limit`, `after`, `before` or `query`; `invalid_cursor` (Meta's cursor expired: start again)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3768,7 +3768,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3887,7 +3887,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3907,7 +3907,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3927,7 +3927,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4044,7 +4044,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4064,7 +4064,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4084,7 +4084,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4183,7 +4183,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4203,7 +4203,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4213,7 +4213,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4322,7 +4322,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4342,7 +4342,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4362,7 +4362,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4506,7 +4506,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4526,7 +4526,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4546,7 +4546,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4654,7 +4654,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4674,7 +4674,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4684,7 +4684,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4790,7 +4790,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4810,7 +4810,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4820,7 +4820,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4946,7 +4946,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4966,7 +4966,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4976,7 +4976,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `after`, `before` or `query`",
+            "description": "`invalid_request` on `after`, `before` or `query`; `invalid_cursor` (Meta's cursor expired: start again)",
             "content": {
               "application/json": {
                 "schema": {
@@ -4986,7 +4986,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5104,7 +5104,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5124,7 +5124,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5134,7 +5134,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `join_request_ids`, `join_request_ids[i]` or `body`: never quoted",
+            "description": "`invalid_request` on `join_request_ids`, `join_request_ids[i]` or `body`: never quoted; `join_request_not_found`",
             "content": {
               "application/json": {
                 "schema": {
@@ -5144,7 +5144,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5262,7 +5262,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5282,7 +5282,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5292,7 +5292,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `join_request_ids`, `join_request_ids[i]` or `body`: never quoted",
+            "description": "`invalid_request` on `join_request_ids`, `join_request_ids[i]` or `body`: never quoted; `join_request_not_found`",
             "content": {
               "application/json": {
                 "schema": {
@@ -5302,7 +5302,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5410,7 +5410,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5430,7 +5430,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5440,7 +5440,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5558,7 +5558,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5578,7 +5578,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5588,7 +5588,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` on `users`, `users[i]`, `users[i].phone`, `users[i].wa_id`, `users[i].user_id` or `body`: never quoted",
+            "description": "`invalid_request` on `users`, `users[i]`, `users[i].phone`, `users[i].wa_id`, `users[i].user_id` or `body`: never quoted; `group_participant_not_found`",
             "content": {
               "application/json": {
                 "schema": {
@@ -5598,7 +5598,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -18229,6 +18229,9 @@
           "template_rejected",
           "sample_template_not_allowed",
           "idempotency_key_reused",
+          "invalid_cursor",
+          "group_participant_not_found",
+          "join_request_not_found",
           "customer_service_window_closed",
           "thread_owned_elsewhere",
           "marketing_opted_out",
@@ -18240,6 +18243,10 @@
           "template_unavailable",
           "template_limit_reached",
           "flow_unavailable",
+          "group_limit_reached",
+          "group_creation_disabled",
+          "group_partially_applied",
+          "recipient_terms_not_accepted",
           "registration",
           "two_step_verification",
           "sync_not_allowed",
@@ -18262,6 +18269,7 @@
           "country_restricted",
           "payment",
           "feature_not_available",
+          "group_suspended",
           "marketing_not_allowed",
           "forbidden",
           "tenant_suspended",
@@ -18271,6 +18279,7 @@
           "spam_rate_limited",
           "ecosystem_engagement_limit",
           "classification_limit_reached",
+          "group_rate_limited",
           "too_many_requests",
           "too_many_streams",
           "idempotency_key_required",

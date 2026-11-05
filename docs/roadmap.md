@@ -4765,7 +4765,7 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     `StorageStatus` an open enum, the value kept in `Other`);
     and `CallbackOverride` does not check its URI's scheme, where
     `set_webhook_url` requires `https`.
-- [ ] **L27. Group error codes** (`meta-whatsapp-core`, `ErrorKind`;
+- [x] **L27. Group error codes** (`meta-whatsapp-core`, `ErrorKind`;
   found reviewing M5f): `groups/error-codes` lists the codes the group
   calls fail with (`131201`, "not all participant-level operations
   succeeded", among them, and the `1312xx` refusals of a participant or
@@ -4782,6 +4782,27 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     the service's `every_error_kind_maps_to_a_documented_code_and_status`
     still passes with the new kinds; a group route's refusal answers the
     kind and none of Meta's text (the participant it may quote).
+  - **Done:** `groups/error-codes` (`131020`, `131041`, `131059`,
+    `131201`, `131202`, `131204`, `131207`–`131215`; `131203` from
+    `groups/reference`) is classified in `ErrorKind::from_code` (design
+    D170): existing kinds for `131041` (`not_found`), `131202`, `131209`,
+    `131210` (`invalid_parameter`), `131215` (`feature_not_available`) and
+    `131020` (`undeliverable`); nine new ones (`invalid_cursor`,
+    `group_participant_not_found`, `join_request_not_found`,
+    `group_limit_reached`, `group_creation_disabled`,
+    `group_partially_applied`, `recipient_terms_not_accepted`,
+    `group_suspended`, `group_rate_limited`), each a code of the service
+    (422, 409 or 403, 429; §5.2, the OpenAPI document), **pending the
+    owner's confirmation before the first release**. None is retryable or
+    resendable, `131208` included (D171). The groups' 4xx-`unknown`-is-404
+    rule is kept and documented (D172); what changed is that a code the
+    page documents no longer falls into it. Decisive:
+    `the_group_error_codes_classify_as_their_pages_say` (core) and
+    `meta_group_error_codes_answer_their_kinds_code_and_none_of_its_text`
+    (service). **Left:** the page lists no code for "a recipient who has
+    not accepted the terms" (only `groups/reference` names `131203`, as an
+    example) nor for "a participant already in the group"; `131200`,
+    `131205`, `131206` and the rest of the range stay `unknown`.
 
 ## 4. Service milestones
 
@@ -6581,7 +6602,8 @@ or WABA fails the family's own cross-tenant test).
     line for a Graph request names the path it calls, so a group's id is
     in that one line at `debug` (the business's own number, no
     customer's: accepted, D155), and it classifies none of the groups'
-    error codes (`131201` onward: `502 unknown` with Meta's code: L27);
+    error codes (`131201` onward: `502 unknown` with Meta's code; L27
+    classified them, D170);
     no call of these routes was run against Meta live.
   - **Reviewed** (security, tenant isolation and personal data): a
     record is keyed `<pn>.<hash>` with `pn` checked to be digits at each
