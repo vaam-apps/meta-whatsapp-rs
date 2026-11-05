@@ -79,6 +79,7 @@ use crate::uploads::NewUpload;
 /// | `request_verification_code` ([`Self::request_verification_code`]) | the number's id; the delivery method and the language, as a JSON object, canonical as above |
 /// | `register_number` ([`Self::register_number`]) | the number's id; the data localization region, or none: **never the PIN** (roadmap M3d, decisions D6 and D67), so no record holds anything derived from it |
 /// | `deregister_number` ([`Self::deregister_number`]) | the number's id (the body's confirmation is that id again) |
+/// | `create_library_template`, `migrate_templates`, `create_template_group` ([`Self::create_library_template`], [`Self::migrate_templates`], [`Self::create_template_group`]; roadmap M5b) | the WABA's id; the JSON body, canonical as above |
 ///
 /// The same request always has the same fingerprint; another operation,
 /// another number or WABA, or another body has another. Fingerprints are
@@ -290,6 +291,36 @@ impl Fingerprint {
     /// (roadmap P2).
     pub fn refund_payment(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
         Self::json(Operation::RefundPayment, &[("pn", number.as_str())], body)
+    }
+
+    /// `create_library_template` in `waba`, with the JSON body the request
+    /// carried (roadmap M5b; no legacy fingerprint).
+    pub fn create_library_template(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreateLibraryTemplate,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `migrate_templates` into `waba`, with the JSON body the request
+    /// carried (roadmap M5b; no legacy fingerprint).
+    pub fn migrate_templates(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::MigrateTemplates,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `create_template_group` in `waba`, with the JSON body the request
+    /// carried (roadmap M5b; no legacy fingerprint).
+    pub fn create_template_group(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreateTemplateGroup,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
     }
 
     /// `operation` with its named parameters `params` (in any order: they
@@ -1476,6 +1507,38 @@ mod tests {
         assert_ne!(png("a.png", b"x"), png("a.png", b"y"));
         let jpeg = Upload::new("image/jpeg", Some("a.png"), b"x".to_vec().into()).unwrap();
         assert_ne!(png("a.png", b"x"), Fingerprint::upload_media(&one, &jpeg));
+    }
+
+    /// Roadmap M5b's keyed creations are scoped to the WABA, the body and
+    /// the operation: the same key and body in another WABA, with another
+    /// body, or on another of the three, is another request (so a reused
+    /// key is `idempotency_key_reused`, never a replay of another WABA's
+    /// answer). Decisive: the `waba_id` parameter and the operation of
+    /// each constructor, and the body's canonical form.
+    #[test]
+    fn the_template_lifecycle_fingerprints_are_per_waba_body_and_operation() {
+        let body = serde_json::json!({"source_waba_id": "1", "name": "x"});
+        let other = serde_json::json!({"source_waba_id": "2", "name": "x"});
+        let reordered = serde_json::json!({"name": "x", "source_waba_id": "1"});
+        let constructors: [fn(&WabaId, &serde_json::Value) -> Fingerprint; 3] = [
+            Fingerprint::create_library_template,
+            Fingerprint::migrate_templates,
+            Fingerprint::create_template_group,
+        ];
+        for build in constructors {
+            assert_eq!(build(&waba("1"), &body), build(&waba("1"), &reordered));
+            assert_ne!(build(&waba("1"), &body), build(&waba("2"), &body));
+            assert_ne!(build(&waba("1"), &body), build(&waba("1"), &other));
+            assert_ne!(
+                build(&waba("1"), &body),
+                Fingerprint::create_template(&waba("1"), &body)
+            );
+        }
+        for (i, one) in constructors.iter().enumerate() {
+            for other_op in &constructors[i + 1..] {
+                assert_ne!(one(&waba("1"), &body), other_op(&waba("1"), &body));
+            }
+        }
     }
 
     /// The canonical input is the JSON as parsed (D27: the request's JSON
