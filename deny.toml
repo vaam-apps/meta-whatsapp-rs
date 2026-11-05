@@ -47,6 +47,19 @@ allow = [
   "CC0-1.0",
 ]
 
+# BlueOak-1.0.0 for these two crates only, never in `allow`: the owner's
+# decision of 2026-11-02 (design D20 (a): yes), roadmap S10. Both are
+# non-optional dependencies of CrateStack's crates (cratestack-axum,
+# cratestack-codec-cbor, cratestack-client-rust), which the service's
+# CrateStack API adapter, meta-whatsapp-server-api-cratestack, brings in.
+[[licenses.exceptions]]
+crate = "minicbor"
+allow = ["BlueOak-1.0.0"]
+
+[[licenses.exceptions]]
+crate = "minicbor-serde"
+allow = ["BlueOak-1.0.0"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

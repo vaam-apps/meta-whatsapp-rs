@@ -10,3 +10,6 @@ tools/skills-ts/node_modules
 **/.env.*
 deploy/compose/.env
 deploy/compose/certs
+# The test-only TLS material of tools/test-tls/generate.sh (world-readable
+# private keys): never in a build context.
+.test-tls

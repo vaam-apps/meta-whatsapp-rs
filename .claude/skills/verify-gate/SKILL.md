@@ -33,7 +33,8 @@ cat /tmp/ci.exit   # 0 or it is not verified
   tests of its have `live_` in their names.
 - **`just features`' rustdoc line leaves the service's crates that turn
   on adapter features out** (`meta-whatsapp-server` and, since roadmap
-  S7, `-http`, `-api-axum`, `-store-memory`, `-store-postgres`) on
+  S7, `-http`, `-api-axum`, `-store-memory`, `-store-postgres`; since
+  S10, `-api-cratestack`) on
   purpose: they turn on the facade's features, and in one `--workspace`
   build they would hide an ungated doc link.
 - **Don't reconstruct the gate.** `cargo test` is not `just test`

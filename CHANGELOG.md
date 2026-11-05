@@ -226,6 +226,48 @@ stored data, the owner's).
 
 ### Added
 
+- **CrateStack enters the workspace** (roadmap S10, design D20 and §8.3;
+  coverage row 33; no parity or category row changes status: the
+  adapter serves nothing yet).
+  - `deny.toml`: BlueOak-1.0.0 allowed for `minicbor` and
+    `minicbor-serde` only, as two `[[licenses.exceptions]]` entries, not
+    in `allow` (D20 (a), the owner's yes of 2026-11-02). `just deny`
+    passes, and fails on those two crates when the entries are removed;
+    the adapter's `tests/licence_scope.rs` fails when the licence is
+    widened (into `allow`, to a third crate, or beside another licence),
+    which `just deny` would pass.
+  - The workspace manifest: `cratestack-api` 0.17 (`~0.17.2`, under the
+    key `cratestack`, no default features but `codec-json`), CrateStack's
+    facade for `db = None` schemas, which brings no sqlx.
+  - A new crate, `meta-whatsapp-server-api-cratestack`: `schema/api.cstack`
+    (procedures only) with one procedure, `version`
+    (`POST /$procs/version`, no key, JSON only, a 1 KiB body bound),
+    answering `GET /v1/version`'s four fields; `router(ApiVersion)` and
+    `SCHEMA`.
+  - `meta-whatsapp-server`: the feature `api-cratestack` (not a default)
+    compiles the adapter in and re-exports it as `api_cratestack`; the
+    internal listener still serves `api-axum` alone, and
+    `openapi/v1.json` is unchanged. `tls::install_default_provider`
+    installs aws-lc-rs as rustls' process-default crypto provider unless
+    one is installed, and `cli::run_with` calls it before every command
+    (D20 (b)): with CrateStack, rustls has both providers compiled in
+    (`ring` through CrateStack's HTTP client), and `ClientConfig::builder()`
+    would panic. `tests/tls.rs` proves the panic before start-up and the
+    build after it, and Postgres with `sslmode=require` in the same
+    binary (live). sqlx builds its `sslmode=verify-ca` verifier from the
+    process default, so without the install that mode panics in such a
+    build: `tests/tls_verify_ca.rs` (live) proves the panic and the
+    verified, encrypted connection after the install. The `serve::serve*`
+    functions and `serve::connect` say in their rustdoc to call the
+    install first when the command line does not.
+  - The deploy image's build context leaves out `.test-tls/`, the
+    test-only TLS material (`deploy/compose/Dockerfile.dockerignore`).
+  - The test Postgres (`compose.test.yaml`, the devcontainer) speaks
+    TLS on the test-only certificate of `tools/test-tls/generate.sh`.
+  - Pending the owner's confirmation before the first release: the
+    feature `api-cratestack`, the crate's name, and the procedure's wire
+    name and fields.
+
 - **Webhooks out** (roadmap M2c, acceptance test M2.4; parity row 10 now
   done in the service; categories 19 and 39; coverage row 33; design
   §4.4's *as built*; D105–D113, decided by the coordinator under the
@@ -1231,8 +1273,8 @@ stored data, the owner's).
   `deny.toml`'s `allow` list with the decision beside it, for
   `tiny-keccak` through the `mongodb` driver (roadmap S9, S17); and
   design D20 (a) is a yes, BlueOak-1.0.0 allowed for `minicbor` and
-  `minicbor-serde` only, an exception roadmap S10 adds to `deny.toml`
-  when CrateStack enters the workspace (none is added before it).
+  `minicbor-serde` only, an exception roadmap S10 added to `deny.toml`
+  when CrateStack entered the workspace (none was added before it).
 - **The coexistence sync inside onboarding**
   (`meta_whatsapp_client::embedded_signup`, roadmap L11d, parity rows
   124 and 69; OPEN_QUESTIONS #7; the service's side is M3b). After a
@@ -4154,7 +4196,8 @@ stored data, the owner's).
   - The service becomes modular (design §8, D26): a framework-free core,
     swappable backend bundles and API adapters. CrateStack for the API
     and the models is the default once the owner accepts its licence
-    (D20 (a)); `api-axum`, today's `/v1` and `openapi/v1.json`, stays
+    (D20 (a), decided by the owner on 2026-11-02: yes); `api-axum`,
+    today's `/v1` and `openapi/v1.json`, stays
     permanently as the swap target.
   - M4 is re-scoped to packaging (the image, the TypeScript client, the
     documents route): the move onto CrateStack is the modular split's

@@ -145,11 +145,16 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 
 /// Run `cli`, every command that stores on the backend `backends` opens.
 ///
+/// First, before any TLS configuration is built, it installs aws-lc-rs as
+/// rustls' process-default crypto provider unless one is installed
+/// already ([`crate::tls`], design D20 (b)).
+///
 /// # Errors
 ///
 /// The command's: a refused configuration, a backend that fails to open
 /// or migrate, a failed step.
 pub async fn run_with(cli: Cli, backends: &dyn BackendFactory) -> anyhow::Result<()> {
+    crate::tls::install_default_provider();
     match cli.command {
         Command::Serve => {
             let config = Config::from_process_env().context("refusing to start")?;

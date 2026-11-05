@@ -9,7 +9,8 @@
 //! | --- | --- | --- |
 //! | `meta-whatsapp-server-core` | the domain, the authorization order, the error model as data, the ports a backend implements | always |
 //! | `meta-whatsapp-server-http` | the listeners, authentication before the body, the §5 renderer, `/webhooks/meta`, media, operations | always |
-//! | `meta-whatsapp-server-api-axum` | the `/v1` routes and `openapi/v1.json` | `api-axum` (default; the only API adapter, so required) |
+//! | `meta-whatsapp-server-api-axum` | the `/v1` routes and `openapi/v1.json` | `api-axum` (default; the API adapter the internal listener serves, so required) |
+//! | `meta-whatsapp-server-api-cratestack` | the CrateStack API adapter: one procedure, `version` (roadmap S10), compiled in and re-exported as `api_cratestack`, not served until S13 | `api-cratestack` (not a default) |
 //! | `meta-whatsapp-server-store-postgres` | the Postgres backend and its migrations | `store-postgres` (default) |
 //! | `meta-whatsapp-server-store-memory` | the memory backend (development) | `store-memory` (default) |
 //!
@@ -37,12 +38,14 @@
 //! | [`telemetry`], [`metrics`] | request logs and Prometheus metrics (the HTTP crate's) |
 //! | [`state`] | what every route shares (the HTTP crate's) |
 //! | [`serve`], [`listen`], [`cli`] | the process, its listeners' accept loop, the command line |
+//! | [`tls`] | rustls' process-default crypto provider, aws-lc-rs, installed at start |
 //! | [`doctor`] | `meta-whatsapp-server doctor`: the configuration, the database, Meta's webhook subscription and the tokens' reach, checked read-only |
 
 #[cfg(not(feature = "api-axum"))]
 compile_error!(
     "meta-whatsapp-server needs an API adapter for its internal listener: enable the \
-     `api-axum` feature (the only one today)"
+     `api-axum` feature (the only one it serves today; `api-cratestack` is compiled in beside it, \
+     not served)"
 );
 
 pub mod cli;
@@ -50,9 +53,15 @@ pub mod config;
 pub mod doctor;
 pub mod serve;
 pub mod store;
+pub mod tls;
 
 #[cfg(feature = "api-axum")]
 pub use meta_whatsapp_server_api_axum::api;
+/// The CrateStack API adapter (`meta-whatsapp-server-api-cratestack`,
+/// roadmap S10): compiled in with the `api-cratestack` feature, not served
+/// by the internal listener until roadmap S13.
+#[cfg(feature = "api-cratestack")]
+pub use meta_whatsapp_server_api_cratestack as api_cratestack;
 pub use meta_whatsapp_server_http::{
     auth, error, events, idempotency, keys, listen, metrics, model, ratelimit, state, telemetry,
 };
