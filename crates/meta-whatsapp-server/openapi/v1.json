@@ -3337,6 +3337,294 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/display-name": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/display-name`: the number's display name and the\nreview of a requested one.",
+        "operationId": "get_display_name",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The display name and the review of the requested one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisplayName"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/display-name`: ask Meta to review a new display\nname. The name changes only once approved and the number registered\nagain.",
+        "operationId": "request_display_name_change",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never ask for the review twice (a repeat gets the kept answer, with `Idempotent-Replayed: true`)",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisplayNameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Meta accepted the request and reviews the name (`GET …/display-name` for `new_name_status`; the event `phone_number_name_updated` for the decision). Once approved, register the number again (`POST /v1/numbers/{pn}/register`) within the 14 days Meta allows, or the name is reviewed again. Meta allows 10 changes per 30 days",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisplayNameRequested"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `new_display_name` (1 to 256 characters, no control character) or `body`, `idempotency_key_reused`, or Meta's `invalid_parameter`: nothing was asked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the request may have reached Meta (`GET …/display-name` says)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/erasures": {
       "post": {
         "tags": [
@@ -7634,7 +7922,7 @@
             }
           },
           "404": {
-            "description": "`not_found`: no such number for this tenant",
+            "description": "`not_found`: no such number for this tenant, or no such upload of this number (another tenant's, another number's, expired): nothing asked of Meta",
             "content": {
               "application/json": {
                 "schema": {
@@ -7654,7 +7942,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` (`address` over 256 characters, a vertical that cannot be set), or Meta's `invalid_parameter`",
+            "description": "`invalid_request` (`address` over 256 characters, a vertical that cannot be set, `profile_picture_upload_id` that is no id, not an image or not complete), or Meta's `invalid_parameter`",
             "content": {
               "application/json": {
                 "schema": {
@@ -16343,6 +16631,73 @@
         },
         "additionalProperties": false
       },
+      "DisplayName": {
+        "type": "object",
+        "description": "A number's display name and the review of the one requested, as Meta\nnames each value (`null` when Meta answers none).",
+        "required": [
+          "verified_name",
+          "name_status",
+          "new_display_name",
+          "new_name_status"
+        ],
+        "properties": {
+          "name_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`APPROVED`, `AVAILABLE_WITHOUT_REVIEW`, `DECLINED`, `EXPIRED`,\n`PENDING_REVIEW` or `NONE`."
+          },
+          "new_display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The display name last requested."
+          },
+          "new_name_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The review of `new_display_name`, with the same values."
+          },
+          "verified_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The display name WhatsApp holds. It does not say the name is\napproved: `name_status` does."
+          }
+        }
+      },
+      "DisplayNameRequest": {
+        "type": "object",
+        "description": "A new display name to ask Meta to review.",
+        "required": [
+          "new_display_name"
+        ],
+        "properties": {
+          "new_display_name": {
+            "type": "string",
+            "description": "The name, trimmed: 1 to 256 characters, no control character (the\nservice's own bound: Meta's pages state none)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DisplayNameRequested": {
+        "type": "object",
+        "description": "What was asked: Meta reviews the name, and answers by the\n`phone_number_name_updated` event.",
+        "required": [
+          "new_display_name"
+        ],
+        "properties": {
+          "new_display_name": {
+            "type": "string",
+            "description": "The name sent to Meta, as trimmed."
+          }
+        }
+      },
       "DocumentContent": {
         "type": "object",
         "description": "`document` (`messages/document-messages`).",
@@ -19943,6 +20298,7 @@
           "address",
           "description",
           "email",
+          "profile_picture_url",
           "websites",
           "vertical"
         ],
@@ -19974,6 +20330,13 @@
               "null"
             ],
             "description": "Contact email."
+          },
+          "profile_picture_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The profile picture's URL, as Meta answers it (roadmap M5c2)."
           },
           "vertical": {
             "type": [
@@ -20022,6 +20385,13 @@
               "null"
             ],
             "description": "Contact email."
+          },
+          "profile_picture_upload_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The picture: the `upload_id` of one of this number's completed\nresumable uploads (`POST /v1/numbers/{pn}/media-uploads`), a JPEG\nor PNG. The service sends the upload's handle as\n`profile_picture_handle`; a handle itself is never taken (it cannot\nbe checked against the tenant and number that obtained it), and an\nupload of another tenant or number is `404`, with nothing asked of\nMeta (roadmap M5c2)."
           },
           "vertical": {
             "type": [

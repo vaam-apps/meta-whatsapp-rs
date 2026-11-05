@@ -5,8 +5,8 @@
 //! | Operation | Graph calls |
 //! | --- | --- |
 //! | [`Numbers::details`] | `GET /{pn}?fields=display_phone_number,verified_name,quality_rating,name_status,throughput` ([`NUMBER_FIELDS`]) |
-//! | [`Numbers::profile`] | `GET /{pn}/whatsapp_business_profile?fields=about,address,description,email,websites,vertical` ([`PROFILE_FIELDS`]) |
-//! | [`Numbers::update_profile`] | `POST /{pn}/whatsapp_business_profile` (none for an empty change), then the `GET` above |
+//! | [`Numbers::profile`] | `GET /{pn}/whatsapp_business_profile?fields=about,address,description,email,profile_picture_url,websites,vertical` ([`PROFILE_FIELDS`]) |
+//! | [`Numbers::update_profile`] | `POST /{pn}/whatsapp_business_profile` (none for an empty change; a picture's `profile_picture_handle` from [`ProfilePicture`], roadmap M5c2), then the `GET` above |
 //! | [`Waba::disconnect`] | `DELETE /{waba_id}/subscribed_apps`; then `number_disconnected` for each of its numbers ([`crate::number_events`]), then the token and bindings are deleted |
 //!
 //! Pages: `business-profiles`, `solution-providers/manage-phone-numbers`,
@@ -35,6 +35,7 @@ use crate::model::NumberStatus;
 use crate::number_events::{DisconnectReason, NumberEvent};
 use crate::observe::Observer;
 use crate::request::wire;
+use crate::uploads::ProfilePicture;
 
 /// The fields [`Numbers::details`] asks Meta for.
 pub const NUMBER_FIELDS: [&str; 5] = [
@@ -46,11 +47,12 @@ pub const NUMBER_FIELDS: [&str; 5] = [
 ];
 
 /// The profile fields the service reads and writes.
-pub const PROFILE_FIELDS: [ProfileField; 6] = [
+pub const PROFILE_FIELDS: [ProfileField; 7] = [
     ProfileField::About,
     ProfileField::Address,
     ProfileField::Description,
     ProfileField::Email,
+    ProfileField::ProfilePictureUrl,
     ProfileField::Websites,
     ProfileField::Vertical,
 ];
@@ -97,6 +99,8 @@ pub struct BusinessProfile {
     pub description: Option<String>,
     /// Contact email.
     pub email: Option<String>,
+    /// The picture's URL, as Meta answers it (roadmap M5c2).
+    pub profile_picture_url: Option<String>,
     /// Websites.
     pub websites: Vec<String>,
     /// Industry, as Meta names it (`RETAIL`, `OTHER`, …).
@@ -111,6 +115,7 @@ impl From<Profile> for BusinessProfile {
             address: profile.address,
             description: profile.description,
             email: profile.email,
+            profile_picture_url: profile.profile_picture_url,
             websites: profile.websites,
         }
     }
@@ -134,6 +139,9 @@ pub struct ProfileChange {
     pub websites: Option<Vec<String>>,
     /// Industry, as Meta names it.
     pub vertical: Option<String>,
+    /// The picture: the handle of one of the number's own completed
+    /// uploads ([`crate::uploads::Uploads::profile_picture`]).
+    pub picture: Option<ProfilePicture>,
 }
 
 // ─── The operations ──────────────────────────────────────────────────────
@@ -252,7 +260,8 @@ impl<'a> Numbers<'a> {
     /// (an address over 256 characters, a vertical that can be read but
     /// not set, `NOT_A_BIZ` or `UNDEFINED`: `invalid_request` on its
     /// field), before any request; Meta's refusal or failure, with its
-    /// `details`.
+    /// `details`. The picture's handle is already checked
+    /// ([`ProfilePicture`]): nothing here reads an upload.
     pub async fn update_profile(
         &self,
         change: ProfileChange,
@@ -264,6 +273,7 @@ impl<'a> Numbers<'a> {
             email,
             websites,
             vertical,
+            picture,
         } = change;
         let vertical = vertical
             .map(|v| serde_json::from_value::<Vertical>(serde_json::Value::String(v)))
@@ -276,7 +286,7 @@ impl<'a> Numbers<'a> {
             email,
             websites,
             vertical,
-            ..ProfileUpdate::default()
+            profile_picture_handle: picture.map(ProfilePicture::into_handle),
         };
         // Nothing to change: no write, just the profile.
         if update != ProfileUpdate::default() {

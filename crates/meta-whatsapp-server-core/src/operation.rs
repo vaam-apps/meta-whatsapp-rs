@@ -30,8 +30,12 @@ pub enum Operation {
     GetNumber,
     /// `get_profile`: a number's business profile.
     GetProfile,
-    /// `update_profile`: a number's business profile changed.
+    /// `update_profile`: a number's business profile changed (since roadmap M5c2, its picture too).
     UpdateProfile,
+    /// `request_display_name_change`: a new display name asked of Meta, which reviews it (roadmap M5c2; pending the owner's confirmation before the first release).
+    RequestDisplayNameChange,
+    /// `get_display_name`: a number's display name and the review of a requested one (roadmap M5c2; pending the owner's confirmation before the first release).
+    GetDisplayName,
     /// `disconnect_waba`: a WABA disconnected (unsubscribed, its token
     /// and bindings deleted).
     DisconnectWaba,
@@ -236,12 +240,14 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 91] = [
+    pub const ALL: [Self; 93] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
         Self::GetProfile,
         Self::UpdateProfile,
+        Self::RequestDisplayNameChange,
+        Self::GetDisplayName,
         Self::DisconnectWaba,
         Self::SendMessage,
         Self::MarkRead,
@@ -338,6 +344,8 @@ impl Operation {
             Self::GetNumber => "get_number",
             Self::GetProfile => "get_profile",
             Self::UpdateProfile => "update_profile",
+            Self::RequestDisplayNameChange => "request_display_name_change",
+            Self::GetDisplayName => "get_display_name",
             Self::DisconnectWaba => "disconnect_waba",
             Self::SendMessage => "send_message",
             Self::MarkRead => "mark_read",
@@ -440,6 +448,8 @@ impl Operation {
             | Self::GetNumber
             | Self::GetProfile
             | Self::UpdateProfile
+            | Self::RequestDisplayNameChange
+            | Self::GetDisplayName
             | Self::DisconnectWaba
             | Self::RequestVerificationCode
             | Self::VerifyCode

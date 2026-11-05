@@ -19,6 +19,7 @@
 //! | [`erasure`] | erasing a customer on a number (roadmap M2f): every identity the inbox connects to the ones named, journaled (an HMAC of each, never in clear) before the outbox's rows naming them and their inbox records are deleted, audited; only when a caller with the scope `erasure` asks |
 //! | [`payments`] | the payment operations as services (roadmap P2): a WABA's payment configurations (list, get, create, a new OAuth link, delete), a payment's lookup and its refund on a number, each configuration named looked for in the number's own WABA first |
 //! | [`groups`] | a number's groups as services (roadmap M5f), over the library's `client::groups` and group analytics: create, list, read, change, delete, the invite link, the participants, the join requests; **a group is the number's or it does not exist**, decided by [`groups::GroupRecords`] (written by Meta's lifecycle events and the listing) before the token is opened ([`groups::GroupRecords::owned`]); no participant in any log, error or audit event |
+//! | [`display_names`] | a number's display name (roadmap M5c2): the request for a new one, which Meta reviews and which shows only once approved and the number registered again, audited by count and outcome, and the status of the name and of the request; the profile picture's handle is the number's own upload's ([`uploads::Uploads::profile_picture`]) |
 //! | [`templates`] | the template operations as services: the list (cached per WABA, [`templates::TemplateCache`]), the lookup of an id in a WABA, creation (the definition checked first), authentication templates in one or more languages, deletion |
 //! | [`flows`] | WhatsApp Flows' management as services (roadmap M5d): a WABA's Flows created, listed, read, changed, filled with their Flow JSON, previewed, published, deprecated and deleted, each Flow id read for its WABA first |
 //! | [`flows_endpoint`] | the Flows data endpoint (roadmap M5d), with no HTTP framework: Meta's signed request verified in constant time before anything is read, decrypted with the Flow private key ([`flows_endpoint::FlowKeys`]), a health check and an error notification answered by the service, a data exchange by the integrating app ([`flows_endpoint::FlowHandler`]), the answer sealed |
@@ -74,6 +75,7 @@ pub mod authz;
 pub mod backend;
 #[cfg(feature = "conformance")]
 pub mod conformance;
+pub mod display_names;
 pub mod erasure;
 pub mod error;
 pub mod events;

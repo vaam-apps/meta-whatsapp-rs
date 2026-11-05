@@ -366,6 +366,9 @@ const CALLS_META: &[&str] = &[
     "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
     "GET /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
     "POST /v1/numbers/{pn}/payments/refunds",
+    // Roadmap M5c2: the display name's request and status.
+    "POST /v1/numbers/{pn}/display-name",
+    "GET /v1/numbers/{pn}/display-name",
     // Roadmap M5f: the group routes, on a group the number holds.
     "POST /v1/numbers/{pn}/groups",
     "GET /v1/numbers/{pn}/groups",
@@ -437,6 +440,9 @@ const DETAILS_KEPT: &[&str] = &[
     "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
     "GET /v1/numbers/{pn}/payments/{configuration_name}/{reference_id}",
     "POST /v1/numbers/{pn}/payments/refunds",
+    // Roadmap M5c2.
+    "POST /v1/numbers/{pn}/display-name",
+    "GET /v1/numbers/{pn}/display-name",
     // Roadmap M5b.
     "PATCH /v1/wabas/{waba_id}/templates/{id}",
     "POST /v1/wabas/{waba_id}/templates/{id}/unpause",

@@ -5,8 +5,8 @@
 //! | --- | --- |
 //! | `GET /v1/wabas`, `GET /v1/numbers` | none: the service's bindings |
 //! | `GET /v1/numbers/{pn}` | `GET /{pn}?fields=display_phone_number,verified_name,quality_rating,name_status,throughput` |
-//! | `GET /v1/numbers/{pn}/profile` | `GET /{pn}/whatsapp_business_profile?fields=about,address,description,email,websites,vertical` |
-//! | `PATCH /v1/numbers/{pn}/profile` | `POST /{pn}/whatsapp_business_profile`, then the `GET` above |
+//! | `GET /v1/numbers/{pn}/profile` | `GET /{pn}/whatsapp_business_profile?fields=about,address,description,email,profile_picture_url,websites,vertical` |
+//! | `PATCH /v1/numbers/{pn}/profile` | `POST /{pn}/whatsapp_business_profile` (a picture's `profile_picture_handle` read from the number's own completed upload, roadmap M5c2), then the `GET` above |
 //! | `DELETE /v1/wabas/{waba_id}` | `DELETE /{waba_id}/subscribed_apps`; in Solution Partner mode, the credit line revoked (the library's `EmbeddedSignup::offboard`, with the partner's system token); then the token and bindings are deleted |
 //!
 //! Since roadmap S5c a number's details, its profile's read and change,
@@ -22,6 +22,7 @@ use meta_whatsapp_rs::webhooks::axum::extract::State;
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
 use meta_whatsapp_server_core::numbers::{self as domain, Numbers, Waba};
 pub use meta_whatsapp_server_core::numbers::{NUMBER_FIELDS, PROFILE_FIELDS};
+use meta_whatsapp_server_core::uploads::{ProfilePicture, Uploads};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -172,6 +173,9 @@ pub struct ProfileView {
     /// Contact email.
     #[schema(required = true)]
     pub email: Option<String>,
+    /// The profile picture's URL, as Meta answers it (roadmap M5c2).
+    #[schema(required = true)]
+    pub profile_picture_url: Option<String>,
     /// Websites.
     pub websites: Vec<String>,
     /// Industry, as Meta names it (`RETAIL`, `OTHER`, …).
@@ -196,6 +200,14 @@ pub struct ProfilePatch {
     /// Industry, as Meta names it (`UNDEFINED` and `NOT_A_BIZ` cannot be
     /// set).
     pub vertical: Option<String>,
+    /// The picture: the `upload_id` of one of this number's completed
+    /// resumable uploads (`POST /v1/numbers/{pn}/media-uploads`), a JPEG
+    /// or PNG. The service sends the upload's handle as
+    /// `profile_picture_handle`; a handle itself is never taken (it cannot
+    /// be checked against the tenant and number that obtained it), and an
+    /// upload of another tenant or number is `404`, with nothing asked of
+    /// Meta (roadmap M5c2).
+    pub profile_picture_upload_id: Option<String>,
 }
 
 // ─── To and from the core's types ────────────────────────────────────────
@@ -232,6 +244,7 @@ impl From<domain::BusinessProfile> for ProfileView {
             address,
             description,
             email,
+            profile_picture_url,
             websites,
             vertical,
         } = profile;
@@ -240,29 +253,34 @@ impl From<domain::BusinessProfile> for ProfileView {
             address,
             description,
             email,
+            profile_picture_url,
             websites,
             vertical,
         }
     }
 }
 
-impl From<ProfilePatch> for domain::ProfileChange {
-    fn from(patch: ProfilePatch) -> Self {
-        let ProfilePatch {
+impl ProfilePatch {
+    /// The core's change, with the picture's handle read from the upload
+    /// the patch names (`picture`: [`Uploads::profile_picture`]'s answer).
+    fn into_change(self, picture: Option<ProfilePicture>) -> domain::ProfileChange {
+        let Self {
             about,
             address,
             description,
             email,
             websites,
             vertical,
-        } = patch;
-        Self {
+            profile_picture_upload_id: _,
+        } = self;
+        domain::ProfileChange {
             about,
             address,
             description,
             email,
             websites,
             vertical,
+            picture,
         }
     }
 }
@@ -410,9 +428,9 @@ pub(crate) async fn get_profile(
         (status = 200, description = "The profile after the change", body = ProfileView),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
-        (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such number for this tenant, or no such upload of this number (another tenant's, another number's, expired): nothing asked of Meta", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` (`address` over 256 characters, a vertical that cannot be set), or Meta's `invalid_parameter`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (`address` over 256 characters, a vertical that cannot be set, `profile_picture_upload_id` that is no id, not an image or not complete), or Meta's `invalid_parameter`", body = ErrorBody),
         (status = 429, description = "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
@@ -423,8 +441,25 @@ pub(crate) async fn update_profile(
     owned: OwnedNumber,
     ApiJson(patch): ApiJson<ProfilePatch>,
 ) -> Result<Json<ProfileView>, ApiError> {
+    // The picture's handle is the number's own completed upload's, read
+    // before anything is sent to Meta: another tenant's or another number's
+    // upload is `404`, as an unknown one is (roadmap M5c2).
+    let picture = match &patch.profile_picture_upload_id {
+        Some(id) => Some(
+            Uploads::new(
+                state.authz(),
+                owned.capability(&state),
+                state.upload_sessions(),
+                state.settings().app_id.as_ref(),
+                state.media_slots(),
+            )?
+            .profile_picture(id)
+            .await?,
+        ),
+        None => None,
+    };
     let profile = numbers(&state, &owned)?
-        .update_profile(patch.into())
+        .update_profile(patch.into_change(picture))
         .await?;
     Ok(Json(ProfileView::from(profile)))
 }
@@ -519,6 +554,7 @@ mod tests {
             address: Some("1 Hacker Way, Menlo Park, CA 94025".to_owned()),
             description: Some("At Lucky Shrub, we specialize in providing a...".to_owned()),
             email: Some("lucky@luckyshrub.com".to_owned()),
+            profile_picture_url: Some("https://pps.whatsapp.net/v/t61.24...".to_owned()),
             websites: vec!["https://www.luckyshrub.com/".to_owned()],
             vertical: Some("RETAIL".to_owned()),
         };
@@ -529,17 +565,19 @@ mod tests {
                 "address": "1 Hacker Way, Menlo Park, CA 94025",
                 "description": "At Lucky Shrub, we specialize in providing a...",
                 "email": "lucky@luckyshrub.com",
+                "profile_picture_url": "https://pps.whatsapp.net/v/t61.24...",
                 "websites": ["https://www.luckyshrub.com/"],
                 "vertical": "RETAIL"
             })
         );
         let patch: ProfilePatch = serde_json::from_value(json!({
             "about": "a", "address": "b", "description": "c", "email": "d@e.f",
-            "websites": ["https://g.example/"], "vertical": "RETAIL"
+            "websites": ["https://g.example/"], "vertical": "RETAIL",
+            "profile_picture_upload_id": "up_0123456789abcdef0123456789abcdef"
         }))
         .unwrap();
         assert_eq!(
-            domain::ProfileChange::from(patch),
+            patch.into_change(None),
             domain::ProfileChange {
                 about: Some("a".to_owned()),
                 address: Some("b".to_owned()),
@@ -547,6 +585,7 @@ mod tests {
                 email: Some("d@e.f".to_owned()),
                 websites: Some(vec!["https://g.example/".to_owned()]),
                 vertical: Some("RETAIL".to_owned()),
+                picture: None,
             }
         );
     }
