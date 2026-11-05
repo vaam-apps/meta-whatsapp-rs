@@ -532,9 +532,8 @@ pub(crate) async fn upload_media(
     // after the upgrade (the legacy fingerprint goes after the first
     // release). A claim stores the new one.
     let fingerprint = match &form {
-        Form::Ready(ready) => Fingerprint::upload_media(owned.phone_number_id(), ready).or_legacy(
-            Fingerprint::legacy_v1_upload(&Method::POST, &path, ready),
-        ),
+        Form::Ready(ready) => Fingerprint::upload_media(owned.phone_number_id(), ready)
+            .or_legacy(Fingerprint::legacy_v1_upload(&Method::POST, &path, ready)),
         // A file to convert has no legacy fingerprint (it is new), and its
         // input is the source file: the conversion runs after the claim.
         Form::Convert(conversion) => {

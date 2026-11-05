@@ -578,6 +578,37 @@ async fn webhooks(h: &Harness, tenant_key: &str) -> Vec<String> {
 /// its deletion. The secrets are what the logs must not hold. On a harness
 /// without webhooks out, every route answers `409 webhooks_not_configured`,
 /// and is exercised all the same.
+/// A converter that answers a fixed file in the format asked for, for the
+/// log test's converted upload (roadmap M5c1).
+#[derive(Debug)]
+struct StubConverter;
+
+#[async_trait::async_trait]
+impl meta_whatsapp_rs::core::media::MediaConverter for StubConverter {
+    async fn convert(
+        &self,
+        _input: meta_whatsapp_rs::core::media::MediaInput,
+        target: meta_whatsapp_rs::core::media::TargetFormat,
+    ) -> meta_whatsapp_rs::Result<meta_whatsapp_rs::core::media::ConvertedMedia> {
+        Ok(meta_whatsapp_rs::core::media::ConvertedMedia::new(
+            &b"OggS-converted"[..],
+            target,
+        ))
+    }
+}
+
+/// `settings` with what the resumable upload and conversion routes need to
+/// run through (roadmap M5c1): the Meta app, and a converter.
+pub fn with_uploads(
+    settings: meta_whatsapp_server::state::Settings,
+) -> meta_whatsapp_server::state::Settings {
+    meta_whatsapp_server::state::Settings {
+        app_id: Some(meta_whatsapp_rs::core::ids::AppId::new("634974688087057").unwrap()),
+        media_converter: Some(Arc::new(StubConverter)),
+        ..settings
+    }
+}
+
 /// Webhooks out for a log test: a throwaway data key, loopback listed,
 /// plain `http`; no dispatcher runs, so nothing is sent.
 pub fn webhooks_out() -> meta_whatsapp_server_core::webhooks_out::dispatch::WebhooksOut {
@@ -1301,6 +1332,7 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
         )
         .await;
     assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
+    let mut uploads = resumable_uploads(h, &key, pn).await;
     // Templates: list, one, create, delete.
     let waba = "102290129340398";
     h.graph.push_json(
@@ -1377,7 +1409,7 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
         .await;
     assert_eq!(refused.status.as_u16(), 404, "{}", refused.text);
     template_lifecycle(h, &key, waba).await;
-    vec![
+    uploads.extend([
         key.clone(),
         key.rsplit('_').next().unwrap().to_owned(),
         MESSAGE_TEXT.to_owned(),
@@ -1392,7 +1424,8 @@ async fn send_media_and_templates(h: &Harness, admin: &str) -> Vec<String> {
         TEMPLATE_FLOW_TOKEN.to_owned(),
         TEMPLATE_PASSCODE.to_owned(),
         TEMPLATE_BODY.to_owned(),
-    ]
+    ]);
+    uploads
 }
 
 /// Roadmap M5b's template routes, each once with Meta's documented answer:
@@ -1543,6 +1576,83 @@ async fn template_lifecycle(h: &Harness, key: &str, waba: &str) {
         ))
         .await;
     assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text);
+}
+
+/// The signature a Meta session id carries (`?sig=`) and the handle it
+/// answers: in no log line (roadmap M5c1).
+const UPLOAD_SIGNATURE: &str = "SIG-LOG-SECRET-9QZ";
+const UPLOAD_HANDLE: &str = "2:HANDLE-LOG-SECRET-9QZ";
+
+/// The resumable upload routes and a converted upload (roadmap M5c1), each
+/// exercised: what they must keep out of the logs is Meta's session id
+/// (its signature), the handle, and the service's own upload ids.
+async fn resumable_uploads(h: &Harness, key: &str, pn: &str) -> Vec<String> {
+    let base = format!("/v1/numbers/{pn}/media-uploads");
+    let start = |len: u64| {
+        Call::new(Method::POST, base.clone())
+            .key(key)
+            .header("idempotency-key", "log-upload-1")
+            .json(&json!({"file_name": "offer.png", "file_length": len, "file_type": "image/png"}))
+    };
+    h.graph.push_json(
+        200,
+        json!({"id": format!("upload:LOGSESSION?sig={UPLOAD_SIGNATURE}")}),
+    );
+    let started = h.call(start(12)).await;
+    assert_eq!(started.status.as_u16(), 201, "{}", started.text);
+    let first = started.json()["upload_id"].as_str().unwrap().to_owned();
+    // The kept answer of the same key.
+    let replayed = h.call(start(12)).await;
+    assert_eq!(replayed.status.as_u16(), 201, "{}", replayed.text);
+    h.graph.push_json(200, json!({"h": UPLOAD_HANDLE}));
+    let chunk = h
+        .call(
+            Call::new(Method::POST, format!("{base}/{first}?file_offset=0"))
+                .key(key)
+                .header("content-type", "application/octet-stream")
+                .body(meta_whatsapp_rs::webhooks::axum::body::Body::from(
+                    b"png bytes...".to_vec(),
+                )),
+        )
+        .await;
+    assert_eq!(chunk.status.as_u16(), 200, "{}", chunk.text);
+    let done = h.call(Call::get(format!("{base}/{first}")).key(key)).await;
+    assert_eq!(done.status.as_u16(), 200, "{}", done.text);
+    // One that is asked of Meta.
+    h.graph.push_json(200, json!({"id": "upload:LOGSESSION-2"}));
+    let second = h
+        .call(
+            Call::new(Method::POST, base.clone()).key(key).json(
+                &json!({"file_name": "offer.png", "file_length": 12, "file_type": "image/png"}),
+            ),
+        )
+        .await;
+    let second = second.json()["upload_id"].as_str().unwrap().to_owned();
+    h.graph.push_json(
+        200,
+        json!({"id": "upload:LOGSESSION-2", "file_offset": "0"}),
+    );
+    let status = h.call(Call::get(format!("{base}/{second}")).key(key)).await;
+    assert_eq!(status.status.as_u16(), 200, "{}", status.text);
+    // A converted upload.
+    h.graph.push_json(200, json!({"id": "1037543291543636"}));
+    let converted = h
+        .call(
+            Call::new(Method::POST, format!("/v1/numbers/{pn}/media"))
+                .key(key)
+                .multipart(&[
+                    ("convert", None, b"ogg_opus"),
+                    ("file", Some("voice.wav"), b"RIFF-recording"),
+                ]),
+        )
+        .await;
+    assert_eq!(converted.status.as_u16(), 201, "{}", converted.text);
+    vec![
+        UPLOAD_SIGNATURE.to_owned(),
+        UPLOAD_HANDLE.to_owned(),
+        first,
+        second,
+    ]
 }
 
 /// An OTP recipient: in no log line.

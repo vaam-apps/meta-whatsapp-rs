@@ -776,7 +776,7 @@ impl<'a> Media<'a> {
         let Some(converter) = self.converter else {
             return Err(ServiceError::invalid("convert"));
         };
-        let converted = converter
+        let output = converter
             .convert(MediaInput::new(conversion.data.clone()), conversion.target)
             .await
             .map_err(|error| match &error {
@@ -786,7 +786,7 @@ impl<'a> Media<'a> {
             })?;
         // The port's promise: the format asked for, never another one
         // passed off as it.
-        if converted.format != conversion.target {
+        if output.format != conversion.target {
             tracing::warn!(
                 target: LOG_TARGET,
                 "a media converter answered another format than the one asked for"
@@ -796,7 +796,7 @@ impl<'a> Media<'a> {
         Upload::new(
             conversion.target.mime_type(),
             Some(&conversion.file_name),
-            converted.data,
+            output.data,
         )
     }
 

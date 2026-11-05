@@ -92,7 +92,7 @@ pub const NAMESPACE: &str = "wa.server.upload";
 /// service's own is a day, which a resumed upload of a file within its
 /// size limits needs, and after which the id is `404 not_found`. Pending
 /// the owner's confirmation before the first release.
-pub const SESSION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+pub const SESSION_TTL: Duration = Duration::from_hours(24);
 
 /// The longest file name sent to Meta.
 const MAX_FILE_NAME_CHARS: usize = 128;
@@ -187,6 +187,7 @@ fn is_upload_id(id: &str) -> bool {
 
 /// A checked request to start a session. Only [`Self::new`] makes one.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_field_names)] // Meta's own parameter names
 pub struct NewUpload {
     file_name: String,
     file_length: u64,
@@ -431,7 +432,9 @@ impl<'a> Uploads<'a> {
     /// record, after Meta opened the session).
     pub async fn start(&self, new: &NewUpload) -> Result<Progress, ServiceError> {
         let Some(app_id) = self.app_id else {
-            return Err(ServiceError::new(ErrorCode::RESUMABLE_UPLOAD_NOT_CONFIGURED));
+            return Err(ServiceError::new(
+                ErrorCode::RESUMABLE_UPLOAD_NOT_CONFIGURED,
+            ));
         };
         let session = match self
             .library()
@@ -598,12 +601,58 @@ impl<'a> Uploads<'a> {
             ));
         }
         if self.app_id.is_none() {
-            return Err(ServiceError::new(ErrorCode::RESUMABLE_UPLOAD_NOT_CONFIGURED));
+            return Err(ServiceError::new(
+                ErrorCode::RESUMABLE_UPLOAD_NOT_CONFIGURED,
+            ));
         }
         let session = UploadSessionId::new(open.record.session.as_str());
         match self.library().upload_session_status(&session).await {
             Ok(offset) => Ok(open.progress(offset.min(open.record.file_length), None)),
             Err(error) => Err(self.failed(&error).await),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The namespace and the shape of an upload id are stored: changing
+    /// either strands the sessions a deployment holds (architecture.md,
+    /// Stable identifiers). Decisive: each assertion.
+    #[test]
+    fn the_upload_namespace_and_id_are_pinned() {
+        assert_eq!(NAMESPACE, "wa.server.upload");
+        assert_eq!(SESSION_TTL, Duration::from_hours(24));
+        let id = new_id().unwrap();
+        assert!(is_upload_id(&id), "{id}");
+        assert_eq!(id.len(), 35);
+        assert_ne!(id, new_id().unwrap());
+        for bad in [
+            "",
+            "up_",
+            "UP_0123456789abcdef0123456789abcdef",
+            "up_0123456789abcdef0123456789abcde",
+            "up_0123456789abcdef0123456789abcdeg",
+        ] {
+            assert!(!is_upload_id(bad), "{bad}");
+        }
+    }
+
+    /// The limits are the media table's, per kind, and never above the
+    /// deployment's cap; a type outside the guide's five has none.
+    #[test]
+    fn a_files_limit_is_its_kinds_within_the_deployments_cap() {
+        let mib = 1024 * 1024;
+        let cap = 1000 * mib;
+        assert_eq!(file_limit("image/png", cap), Some(5 * mib));
+        assert_eq!(file_limit("image/jpg", cap), Some(5 * mib));
+        assert_eq!(file_limit("image/jpeg", cap), Some(5 * mib));
+        assert_eq!(file_limit("video/mp4", cap), Some(16 * mib));
+        assert_eq!(file_limit("application/pdf", cap), Some(100 * mib));
+        assert_eq!(file_limit("application/pdf", 10), Some(10));
+        for other in ["image/gif", "audio/ogg", "image/webp", "", "IMAGE/PNG"] {
+            assert_eq!(file_limit(other, cap), None, "{other}");
         }
     }
 }
