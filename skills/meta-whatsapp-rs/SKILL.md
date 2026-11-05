@@ -53,7 +53,7 @@ anyhow = "1"
 | `memory` | yes | `MemoryKvStore`, `MemoryConversationStore` (tests, one instance) |
 | `sinks` | yes | channel, broadcast, fan-out, filter, fn and tracing sinks |
 | `postgres`, `sqlite` | | `PostgresKvStore`, `PostgresConversationStore`; `SqliteKvStore`, `SqliteConversationStore`; migrations |
-| `redis` | | `RedisKvStore`, `RedisConversationStore` |
+| `redis`, `mongodb` | | `RedisKvStore`, `RedisConversationStore`; `MongoKvStore`, `MongoConversationStore` (a replica set) |
 | `axum` | | `webhooks::router` (the endpoint) and `webhooks::sse` (live stream) |
 | `typst` | | `meta_whatsapp_rs::typst`: invoices, receipts, vouchers → PDF/PNG |
 | `flows-endpoint` | | WhatsApp Flows data-endpoint crypto |

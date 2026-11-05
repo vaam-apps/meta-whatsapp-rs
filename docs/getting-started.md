@@ -39,6 +39,7 @@ ports, and the inbox.
 | `sinks`          | yes     | channel, broadcast, fan-out, filter, fn and tracing sinks                                                                                 |
 | `postgres`       |         | `PostgresKvStore`, `PostgresConversationStore`, embedded migrations (sqlx)                                                                |
 | `redis`          |         | `RedisKvStore`                                                                                                                            |
+| `mongodb`        |         | `MongoKvStore`, `MongoConversationStore`, `mongodb::migrate` (a replica set)                                                              |
 | `axum`           |         | `webhooks::router` (webhook endpoint) and `webhooks::sse` (live inbox stream)                                                             |
 | `typst`          |         | `meta_whatsapp_rs::typst`: invoice, receipt and voucher templates to PDF/PNG                                                              |
 | `flows-endpoint` |         | WhatsApp Flows data-endpoint crypto (aws-lc-rs)                                                                                           |
