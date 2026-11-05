@@ -162,7 +162,16 @@ impl RouteClass {
             | Operation::CreateTemplateGroup
             | Operation::GetTemplateGroup
             | Operation::UpdateTemplateGroup
-            | Operation::DeleteTemplateGroup => Self::Templates,
+            | Operation::DeleteTemplateGroup
+            | Operation::CreateFlow
+            | Operation::ListFlows
+            | Operation::GetFlow
+            | Operation::UpdateFlow
+            | Operation::UploadFlowJson
+            | Operation::PreviewFlow
+            | Operation::PublishFlow
+            | Operation::DeprecateFlow
+            | Operation::DeleteFlow => Self::Templates,
             Operation::IssueOtp => Self::OtpIssue,
             Operation::VerifyOtp => Self::OtpVerify,
         }
@@ -477,6 +486,7 @@ mod tests {
     /// apart from writes, template management apart from both (its scope's
     /// operations, and only they). Decisive: each arm of `RouteClass::of`.
     #[test]
+    #[allow(clippy::too_many_lines)] // one row per operation, read top to bottom
     fn an_operations_class_is_the_tables() {
         use crate::model::Scope;
         let table = [
@@ -549,6 +559,15 @@ mod tests {
             ("get_template_group", RouteClass::Templates),
             ("update_template_group", RouteClass::Templates),
             ("delete_template_group", RouteClass::Templates),
+            ("create_flow", RouteClass::Templates),
+            ("list_flows", RouteClass::Templates),
+            ("get_flow", RouteClass::Templates),
+            ("update_flow", RouteClass::Templates),
+            ("upload_flow_json", RouteClass::Templates),
+            ("preview_flow", RouteClass::Templates),
+            ("publish_flow", RouteClass::Templates),
+            ("deprecate_flow", RouteClass::Templates),
+            ("delete_flow", RouteClass::Templates),
             ("get_commerce_settings", RouteClass::Read),
             ("update_commerce_settings", RouteClass::Send),
             ("list_catalogs", RouteClass::Read),
@@ -573,7 +592,9 @@ mod tests {
             assert_eq!(RouteClass::of(operation), class, "{id}");
             assert_eq!(
                 class == RouteClass::Templates,
-                operation.scope() == Scope::Templates,
+                // Meta's management calls of a WABA are one budget: Flows
+                // (scope `flows`, design D132) share the templates' class.
+                matches!(operation.scope(), Scope::Templates | Scope::Flows),
                 "{id}"
             );
         }
