@@ -791,12 +791,15 @@ impl<'a> Analytics<'a> {
     pub async fn messaging(&self, request: &MessagingRequest) -> Result<Messaging, ServiceError> {
         let query = messaging_query(self.authz.now(), request)?;
         match self.client().messaging(&query).await {
-            Ok(analytics) => Ok(analytics.map(Messaging::from).unwrap_or_else(|| Messaging {
-                phone_numbers: Vec::new(),
-                country_codes: Vec::new(),
-                granularity: None,
-                data_points: Vec::new(),
-            })),
+            Ok(analytics) => Ok(analytics.map_or_else(
+                || Messaging {
+                    phone_numbers: Vec::new(),
+                    country_codes: Vec::new(),
+                    granularity: None,
+                    data_points: Vec::new(),
+                },
+                Messaging::from,
+            )),
             Err(error) => Err(self.failed(&error).await),
         }
     }

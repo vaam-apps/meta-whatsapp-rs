@@ -36,6 +36,7 @@ fn call(method: Method, path: String, key: &str) -> Call {
 /// Never who: the event and every other line hold no phone number and no
 /// BSUID. Decisive: `BlockedUsers::block` and `change_failed`.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one scenario: block, refuse, fail, unblock, then every line
 async fn blocking_is_audited_by_count_and_never_by_person() {
     let captured = Captured::default();
     let _guard = tracing::subscriber::set_default(subscriber(&captured));

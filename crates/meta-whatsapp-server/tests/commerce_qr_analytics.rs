@@ -412,15 +412,15 @@ async fn a_qr_code_is_created_under_a_key_and_its_limits_are_metas() {
         (json!({"prefilled_message": "hi", "image": "PNG"}), "body"),
         (json!({}), "body"),
     ] {
-        let refused = h
+        let invalid = h
             .call(
                 call(Method::POST, format!("/v1/numbers/{PN}/qr-codes"), &key)
-                    .header("idempotency-key", "qr-refused")
+                    .header("idempotency-key", "qr-invalid")
                     .json(&body),
             )
             .await;
-        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
-        assert_eq!(error(&refused)["field"], field, "{body}");
+        assert_eq!(invalid.status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(error(&invalid)["field"], field, "{body}");
     }
     // 140 characters are Meta's maximum.
     h.graph.push_json(200, code_answer(&"é".repeat(140)));
@@ -1327,9 +1327,9 @@ async fn blocking_and_unblocking_are_metas_bodies_with_outcomes_by_person() {
         Some(json!({"messaging_product": "whatsapp", "block_users": [
             {"user": BLOCKED}, {"user_id": BLOCKED_USER_ID}, {"user": BLOCKED_2}]}))
     );
-    let replay = h.call(block(&key, "block-1", &body)).await;
-    assert_eq!(replay.status, StatusCode::OK, "{}", replay.text);
-    assert_eq!(replay.json(), reply.json());
+    let again = h.call(block(&key, "block-1", &body)).await;
+    assert_eq!(again.status, StatusCode::OK, "{}", again.text);
+    assert_eq!(again.json(), reply.json());
     assert_eq!(h.graph.requests().len(), 1, "the key replayed it");
 
     // A phone with its BSUID: both are sent (Meta then uses the phone).
