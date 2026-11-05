@@ -34,6 +34,166 @@ impl Captured {
     }
 }
 
+/// What the capture planted and the logs must not hold, each under the
+/// section of the scenario that planted it, so that a failure names it
+/// without printing it.
+///
+/// Every planted value is a distinctive fixed text, or a random one of at
+/// least 256 bits (the API keys: 43 base62 characters; the `whsec_`
+/// secrets: 32 bytes), so none can occur in a log line by chance. The
+/// exception is a PIN or a code of six digits: no format lets it be longer,
+/// so a value of only digits is matched as a whole token, not inside a
+/// longer run of digits or letters, nor as the fraction of a number (see
+/// [`Secrets::leaks`]), and each shape a log line would print it in is
+/// planted too, as a text that matches anywhere.
+#[derive(Default)] // no `Debug`: the values never reach a message
+pub struct Secrets {
+    /// `(section, value)`, in the order planted.
+    entries: Vec<(String, String)>,
+    section: String,
+}
+
+impl Secrets {
+    pub fn new(section: &str, values: Vec<String>) -> Self {
+        let mut secrets = Self::default();
+        secrets.section(section);
+        secrets.extend(values);
+        secrets
+    }
+
+    /// Values planted from now on belong to `name`.
+    pub fn section(&mut self, name: &str) {
+        name.clone_into(&mut self.section);
+    }
+
+    pub fn push(&mut self, value: String) {
+        self.entries.push((self.section.clone(), value));
+    }
+
+    pub fn extend(&mut self, values: impl IntoIterator<Item = String>) {
+        for value in values {
+            self.push(value);
+        }
+    }
+
+    /// The label of entry `index`: its section and its place in it, with its
+    /// length and the first bytes of its SHA-256 (to tell two apart),
+    /// never the value.
+    fn label(&self, index: usize) -> String {
+        let (section, value) = &self.entries[index];
+        let place = self.entries[..index]
+            .iter()
+            .filter(|(s, _)| s == section)
+            .count();
+        let digest = sha256_hex(value.as_bytes());
+        format!(
+            "planted secret {section}#{place} ({} bytes, sha256 {})",
+            value.len(),
+            &digest[..8]
+        )
+    }
+
+    /// The first planted secret found in `logs`, as a message naming its
+    /// label, the log line's number, target and the field it is in, never
+    /// the value or the line.
+    ///
+    /// A line's `timestamp` is not searched: its microseconds are six
+    /// digits drawn from the clock, which a six-digit PIN equals once in
+    /// a million lines (this failed `live_logs.rs` once in 200 runs). Nor is
+    /// a value of only digits found inside a longer token, or as the
+    /// fraction of a number, as in `elapsed_secs: 0.000835164`.
+    pub fn leaks(&self, logs: &str) -> Option<String> {
+        for (n, line) in logs.lines().enumerate() {
+            let line = without_timestamp(line);
+            for (index, (_, secret)) in self.entries.iter().enumerate() {
+                if !occurs(&line, secret) {
+                    continue;
+                }
+                let (target, field) = locate(&line, secret);
+                return Some(format!(
+                    "a secret was logged: {} on log line {} (target {target}, field {field})",
+                    self.label(index),
+                    n + 1
+                ));
+            }
+        }
+        None
+    }
+}
+
+/// `line` without the value of its leading `timestamp`.
+fn without_timestamp(line: &str) -> String {
+    const HEAD: &str = "{\"timestamp\":\"";
+    if let Some(rest) = line.strip_prefix(HEAD)
+        && let Some(end) = rest.find('"')
+    {
+        return format!("{HEAD}{}", &rest[end..]);
+    }
+    line.to_owned()
+}
+
+/// Whether `secret` is in `text`: anywhere, unless it is only digits, then
+/// as a whole token.
+fn occurs(text: &str, secret: &str) -> bool {
+    if secret.is_empty() {
+        return false;
+    }
+    if !secret.bytes().all(|b| b.is_ascii_digit()) {
+        return text.contains(secret);
+    }
+    text.match_indices(secret).any(|(at, _)| {
+        !continues(text[..at].chars().rev()) && !continues(text[at + secret.len()..].chars())
+    })
+}
+
+/// Whether the characters going outward from a match go on with the same
+/// token: a letter or digit, or a point followed by a digit.
+fn continues(mut outward: impl Iterator<Item = char>) -> bool {
+    match outward.next() {
+        Some(c) if c.is_ascii_alphanumeric() => true,
+        Some('.') => outward.next().is_some_and(|c| c.is_ascii_digit()),
+        _ => false,
+    }
+}
+
+/// The target and the field of a JSON log line that `secret` is in, as
+/// `(target, field)`; `"?"` where the line has no such place.
+fn locate(line: &str, secret: &str) -> (String, String) {
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+        return ("?".to_owned(), "(a line that is not JSON)".to_owned());
+    };
+    let target = event["target"].as_str().unwrap_or("?").to_owned();
+    let mut places = Vec::new();
+    for group in ["fields", "span"] {
+        if let Some(object) = event[group].as_object() {
+            places.extend(object.iter().map(|(k, v)| (format!("{group}.{k}"), v)));
+        }
+    }
+    if let Some(spans) = event["spans"].as_array() {
+        for span in spans {
+            let name = span["name"].as_str().unwrap_or("?");
+            if let Some(object) = span.as_object() {
+                places.extend(
+                    object
+                        .iter()
+                        .map(|(k, v)| (format!("spans[{name}].{k}"), v)),
+                );
+            }
+        }
+    }
+    places.push(("target".to_owned(), &event["target"]));
+    for (field, value) in places {
+        let text = value
+            .as_str()
+            .map_or_else(|| value.to_string(), str::to_owned);
+        // Plain, and as it is escaped in the line (the quoted shapes).
+        if occurs(&text, secret) || occurs(&value.to_string(), secret) {
+            return (target, field);
+        }
+    }
+    (target, "(none of fields, span, spans)".to_owned())
+}
+
 const SYSTEM_TOKEN: &str = "EAAG-system-user-token-for-the-log-test";
 pub const PHONE_1: &str = "+1 631-555-1111";
 pub const PHONE_2: &str = "+1 631-555-2222";
@@ -42,15 +202,18 @@ pub const PHONE_3: &str = "+1 631-555-3333";
 /// Runs admin and numbers calls carrying secrets and phone numbers, and
 /// returns every secret they carried and what was logged.
 #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
-pub async fn exercise(h: &Harness) -> Vec<String> {
+pub async fn exercise(h: &Harness) -> Secrets {
     let admin = h.admin_key().await;
-    let mut secrets = vec![
-        admin.clone(),
-        SYSTEM_TOKEN.to_owned(),
-        VERIFY_TOKEN.to_owned(),
-        APP_SECRET.to_owned(),
-        PREVIOUS_APP_SECRET.to_owned(),
-    ];
+    let mut secrets = Secrets::new(
+        "harness",
+        vec![
+            admin.clone(),
+            SYSTEM_TOKEN.to_owned(),
+            VERIFY_TOKEN.to_owned(),
+            APP_SECRET.to_owned(),
+            PREVIOUS_APP_SECRET.to_owned(),
+        ],
+    );
     let post = |path: &str, key: &str, body: serde_json::Value| {
         Call::new(Method::POST, path).key(key).json(&body)
     };
@@ -83,6 +246,7 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
         .await
         .json();
     let platform_key = platform["key"].as_str().unwrap().to_owned();
+    secrets.section("keys");
     secrets.push(tenant_key.clone());
     secrets.push(platform_key.clone());
     // Each key's secret part alone, too.
@@ -108,7 +272,9 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
         .await;
     assert_eq!(attached.status.as_u16(), 201, "{}", attached.text);
 
+    secrets.section("webhooks");
     secrets.extend(webhooks(h, &tenant_key).await);
+    secrets.section("inbox");
     secrets.extend(inbox(h, &admin).await);
 
     // Numbers calls, by both keys, with Meta answering phone numbers.
@@ -151,19 +317,26 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
 
     // Sends, media and templates (M1b), with what M1.7 keeps out of the
     // logs: message text, recipients, contacts.
+    secrets.section("send_media_and_templates");
     secrets.extend(send_media_and_templates(h, &admin).await);
     // OTP and authentication templates (roadmap M3c): the recipient's
     // number is not logged (the code's own case is `tests/otp_logs.rs`).
+    secrets.section("otp");
     secrets.extend(otp(h, &admin).await);
+    secrets.section("registration");
     secrets.extend(registration(h, &tenant_key).await);
     // Payments (roadmap P2): the OAuth links are credentials.
+    secrets.section("payments");
     secrets.extend(payments(h, &admin).await);
     // Flows (roadmap M5d): the Flow key, a user's answers, tokens and the
     // preview link are secrets.
+    secrets.section("flows");
     secrets.extend(flows(h, &admin).await);
+    secrets.section("webhook_endpoints");
     secrets.extend(webhook_endpoints(h, &admin).await);
     // Embedded Signup (roadmap M3a): neither the merchant's token, nor the
     // PIN, the code or the state is logged.
+    secrets.section("signup");
     secrets.extend(signup(h, &admin).await);
     // Failures log too: a refused key, and Meta refusing a token.
     let refused = h
@@ -237,6 +410,7 @@ pub async fn exercise(h: &Harness) -> Vec<String> {
         ))
         .await
         .json();
+    secrets.section("spare-keys");
     for minted in [&spare, &spare_platform] {
         secrets.push(minted["key"].as_str().unwrap().to_owned());
     }
@@ -1983,14 +2157,20 @@ async fn signup(h: &Harness, admin: &str) -> Vec<String> {
         )
         .await;
     assert_eq!(reshare.code(), "signup_not_configured", "{}", reshare.text);
-    vec![
-        key,
-        TOKEN.to_owned(),
-        CODE.to_owned(),
-        PIN.to_owned(),
-        NEW_PIN.to_owned(),
-        state,
-    ]
+    let mut secrets = vec![key, TOKEN.to_owned(), CODE.to_owned(), state];
+    // A PIN is six digits, so it cannot be made distinctive: it is matched
+    // as a whole token (`Secrets::leaks`), and also in each shape a log
+    // line would print it in, which are substrings whatever surrounds them.
+    for pin in [PIN, NEW_PIN] {
+        secrets.push(pin.to_owned());
+        secrets.push(format!("\"{pin}\""));
+        secrets.push(format!("{pin}\\\""));
+        secrets.push(format!("PIN {pin}"));
+        secrets.push(format!("pin {pin}"));
+        secrets.push(format!("pin={pin}"));
+        secrets.push(format!("pin\":{pin}"));
+    }
+    secrets
 }
 
 /// SHA-256 of `data`, hex.
@@ -2295,7 +2475,7 @@ fn check_declared_statuses(logs: &str) {
 }
 
 /// What M1.7 asks of the captured logs.
-pub fn check(logs: &str, secrets: &[String]) {
+pub fn check(logs: &str, secrets: &Secrets) {
     check_audit(logs);
     check_declared_statuses(logs);
     // The capture works, and covers every operation of the committed
@@ -2328,11 +2508,8 @@ pub fn check(logs: &str, secrets: &[String]) {
         logs.contains("graph request"),
         "the library's events are captured"
     );
-    for secret in secrets {
-        assert!(
-            !logs.contains(secret.as_str()),
-            "a secret was logged:\n{logs}"
-        );
+    if let Some(leak) = secrets.leaks(logs) {
+        panic!("{leak}");
     }
     for phone in [
         PHONE_1,

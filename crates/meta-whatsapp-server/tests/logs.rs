@@ -252,3 +252,56 @@ fn every_moved_log_line_names_its_target_from_before_the_crate_split() {
     }
     assert!(problems.is_empty(), "{problems:#?}");
 }
+
+/// The log check names what it found, and is not fooled by a six-digit PIN
+/// that a clock or a counter happens to print. Decisive: matching the
+/// timestamp, or a digit run inside a number, fails the first assertion;
+/// naming nothing, or the value, the rest.
+#[test]
+fn the_secret_check_names_a_leak_and_ignores_a_pin_in_a_timestamp_or_number() {
+    use common::capture::Secrets;
+    let mut secrets = Secrets::new("harness", vec!["wak_tok-LONG-planted-value".to_owned()]);
+    secrets.section("signup");
+    secrets.extend(["835164".to_owned(), "pin=835164".to_owned()]);
+    let line = |timestamp: &str, fields: &str| {
+        format!(
+            r#"{{"timestamp":"{timestamp}","level":"DEBUG","fields":{fields},"target":"sqlx::query"}}"#
+        )
+    };
+    // The PIN as the microseconds of a timestamp, as the fraction of a
+    // number, and inside a longer run of digits or a hex id.
+    let harmless = [
+        line("2026-11-05T19:15:52.835164Z", r#"{"message":"x"}"#),
+        line(
+            "2026-11-05T19:15:52.000001Z",
+            r#"{"elapsed_secs":0.000835164}"#,
+        ),
+        line("2026-11-05T19:15:52.000001Z", r#"{"elapsed":"835.164ms"}"#),
+        line("2026-11-05T19:15:52.000001Z", r#"{"rows":"18351645"}"#),
+        line("2026-11-05T19:15:52.000001Z", r#"{"id":"e8351645-ab"}"#),
+    ]
+    .join("\n");
+    assert_eq!(secrets.leaks(&harmless), None);
+    // The PIN on its own, as a JSON number: found, by label, line, target
+    // and field.
+    let leaked = format!(
+        "{harmless}\n{}",
+        line("2026-11-05T19:15:52.000002Z", r#"{"pin":835164}"#)
+    );
+    let found = secrets.leaks(&leaked).unwrap();
+    assert!(found.contains("signup#0"), "{found}");
+    assert!(found.contains("log line 6"), "{found}");
+    assert!(found.contains("target sqlx::query"), "{found}");
+    assert!(found.contains("fields.pin"), "{found}");
+    assert!(!found.contains("835164"), "{found}");
+    // A planted long value, anywhere in a line.
+    let found = secrets
+        .leaks(&line(
+            "2026-11-05T19:15:52.000002Z",
+            r#"{"message":"a wak_tok-LONG-planted-value b"}"#,
+        ))
+        .unwrap();
+    assert!(found.contains("harness#0"), "{found}");
+    assert!(found.contains("fields.message"), "{found}");
+    assert!(!found.contains("LONG"), "{found}");
+}
