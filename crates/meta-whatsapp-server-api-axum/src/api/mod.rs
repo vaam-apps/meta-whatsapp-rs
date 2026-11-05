@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`; erasing a customer `erasure`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`; erasing a customer `erasure`; groups `groups`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -22,6 +22,7 @@ pub mod admin;
 pub mod erasure;
 pub mod events;
 pub mod flows;
+pub mod groups;
 pub mod inbox;
 pub mod messages;
 pub mod numbers;
@@ -96,6 +97,7 @@ impl Modify for Security {
         (name = "messages", description = "Sending messages and read receipts (scope `send`)"),
         (name = "media", description = "Uploading, downloading and deleting media (scope `media`)"),
         (name = "templates", description = "Message templates (scope `templates`): listing, creating and deleting them; since roadmap M5b editing, unpausing, comparing, archiving and unarchiving them, the Template Library, migrations and template groups"),
+        (name = "groups", description = "A number's WhatsApp groups: creating, listing, reading, changing and deleting them, invite links, participants, join requests and analytics; a group is the number's or it does not exist (scope `groups`, roadmap M5f)"),
         (name = "flows", description = "WhatsApp Flows (scope `flows`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"),
         (name = "payments", description = "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"),
         (name = "inbox", description = "Conversations, their history and replies, checked against the 24-hour window and the thread's owner (scope `inbox`)"),
@@ -176,6 +178,26 @@ fn inbox_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(inbox::get_conversation_window))
         .routes(routes!(inbox::mark_conversation_read))
         .routes(routes!(inbox::get_inbox_message))
+}
+
+fn groups_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(groups::list_groups, groups::create_group))
+        .routes(routes!(
+            groups::get_group,
+            groups::update_group,
+            groups::delete_group
+        ))
+        .routes(routes!(
+            groups::get_group_invite_link,
+            groups::reset_group_invite_link
+        ))
+        .routes(routes!(groups::list_group_participants))
+        .routes(routes!(groups::remove_group_participants))
+        .routes(routes!(groups::list_group_join_requests))
+        .routes(routes!(groups::approve_group_join_requests))
+        .routes(routes!(groups::reject_group_join_requests))
+        .routes(routes!(groups::get_group_analytics))
 }
 
 fn erasure_routes() -> OpenApiRouter<Grant> {
@@ -321,6 +343,7 @@ fn api_routes(
         .merge(tenant(inbox_routes(), Scope::Inbox))
         .merge(tenant(payments_routes(), Scope::Payments))
         .merge(tenant(erasure_routes(), Scope::Erasure))
+        .merge(tenant(groups_routes(), Scope::Groups))
         .merge(tenant(events_routes(), Scope::Events))
         .merge(tenant(webhook_routes(), Scope::Webhooks))
         .merge(tenant(otp_routes(), Scope::Otp))
@@ -482,6 +505,7 @@ mod tests {
             ("numbers.rs", include_str!("numbers.rs")),
             ("registration.rs", include_str!("registration.rs")),
             ("events.rs", include_str!("events.rs")),
+            ("groups.rs", include_str!("groups.rs")),
             ("inbox.rs", include_str!("inbox.rs")),
             ("messages.rs", include_str!("messages.rs")),
             ("payments.rs", include_str!("payments.rs")),

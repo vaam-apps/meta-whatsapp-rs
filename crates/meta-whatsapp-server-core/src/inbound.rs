@@ -88,6 +88,7 @@ use tokio::sync::Semaphore;
 
 use crate::backend::Backend;
 use crate::events::{EventIdKey, EventKey, MoveRules, Routing, outbox_row, route};
+use crate::groups::GroupRecords;
 use crate::notify::{EventNotifier, Wakeup};
 use crate::number_events::NumberEvents;
 use crate::observe::Observer;
@@ -354,6 +355,7 @@ impl Pipeline {
             clock: inbound.clock,
             moves: inbound.moves,
             actions: None,
+            groups: GroupRecords::new(backend.kv()),
         };
         Self {
             verifier: inbound.verifier,
@@ -514,6 +516,10 @@ struct ServiceSink {
     /// What is done about an `account_updated` event once it is recorded
     /// (roadmap M3a).
     actions: Option<Arc<dyn AccountActions>>,
+    /// The groups each number holds (roadmap M5f): a group created for a
+    /// tenant's number is kept, a group deleted forgotten, so that the
+    /// group routes decide ownership before any token is opened.
+    groups: GroupRecords,
 }
 
 impl ServiceSink {
@@ -591,6 +597,16 @@ impl ServiceSink {
                 SinkError::Delivery(anyhow::Error::msg(e.to_string())),
             )
         })?;
+        // Before the inbox moves the event: a group's record is written
+        // before the event is recorded, so a failure here is Meta's
+        // redelivery (the write is idempotent), and no tenant sees a group
+        // event for a group the service cannot act on.
+        if let Some(tenant) = &route.tenant {
+            self.groups
+                .on_event(tenant, &event)
+                .await
+                .map_err(|e| self.failed("groups", kind, storage(e)))?;
+        }
         if route.owner.is_some() {
             self.inbox
                 .deliver(event)
