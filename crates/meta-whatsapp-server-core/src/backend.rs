@@ -23,6 +23,7 @@ use meta_whatsapp_rs::core::store::{ConversationStore, KvStore};
 use crate::notify::EventNotifier;
 use crate::outbox::Outbox;
 use crate::store::{IdempotencyRecords, Janitor, LeaderLock, RecordStore, SchemaMigrator};
+use crate::webhooks_out::store::WebhookStore;
 
 /// What a backend is, for what the service does differently on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,7 +58,7 @@ impl BackendKind {
 
 /// Every port the service stores through, over one database: its own
 /// ([`RecordStore`], [`IdempotencyRecords`], [`Outbox`], [`EventNotifier`],
-/// [`LeaderLock`], [`Janitor`], [`SchemaMigrator`]) and the library's ([`KvStore`]: the
+/// [`WebhookStore`], [`LeaderLock`], [`Janitor`], [`SchemaMigrator`]) and the library's ([`KvStore`]: the
 /// token vault and webhook dedup; [`ConversationStore`]: the inbox).
 ///
 /// **Every accessor returns a handle to the same data on every call**:
@@ -87,6 +88,12 @@ pub trait Backend: Send + Sync + 'static {
     /// and shared, as every accessor's handle is); one shared by several
     /// replicas needs its database's own (Postgres: `LISTEN`/`NOTIFY`).
     fn notifier(&self) -> Arc<dyn EventNotifier>;
+
+    /// The webhooks-out records (roadmap M2c): endpoints, their cursors
+    /// and their deliveries, gone with their tenant
+    /// ([`RecordStore::delete_tenant`]). Required, with no default: a
+    /// backend of its own adds one (and runs `conformance::webhooks_out`).
+    fn webhooks(&self) -> Arc<dyn WebhookStore>;
 
     /// Leader election for housekeeping.
     fn leader_lock(&self) -> Arc<dyn LeaderLock>;

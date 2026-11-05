@@ -18,13 +18,14 @@ use meta_whatsapp_server_core::store::{
     Turn, listing,
 };
 
-use crate::MemoryEventStore;
+use crate::{MemoryEventStore, MemoryWebhookStore};
 use meta_whatsapp_server_core::model::{
     AllowedTenants, ApiKeyRecord, BindOutcome, BindingEpoch, DeleteTenantOutcome, IdempotencyClaim,
     IdempotencyKey, IdempotencyRecord, IdempotencyState, KeyOwner, KeyScope, Listing, NewApiKey,
     NewSignupAttempt, NumberBinding, NumberStatus, NumberTombstone, OtpSettings, PageRequest,
     SignupAttempt, Tenant, TenantId, TenantStatus, VaultEntry, WabaBinding, WabaTombstone,
 };
+use meta_whatsapp_server_core::webhooks_out::store::WebhookStore;
 
 /// In-memory [`RecordStore`] and [`IdempotencyRecords`]. Its event outbox is [`MemoryStore::outbox`]: one
 /// process's database, so that deleting a tenant reaches its events as it
@@ -37,6 +38,7 @@ pub struct MemoryStore {
     /// serialize on it, and the outbox's check holds it too.
     state: Arc<Mutex<State>>,
     outbox: Arc<MemoryEventStore>,
+    webhooks: Arc<MemoryWebhookStore>,
 }
 
 impl Default for MemoryStore {
@@ -44,6 +46,7 @@ impl Default for MemoryStore {
         let state = Arc::new(Mutex::new(State::default()));
         Self {
             outbox: Arc::new(MemoryEventStore::of(state.clone())),
+            webhooks: Arc::new(MemoryWebhookStore::of(state.clone())),
             state,
         }
     }
@@ -81,7 +84,7 @@ impl std::fmt::Debug for MemoryStore {
 /// byte order (`String`'s `Ord`), which listings follow.
 #[derive(Default)]
 pub(super) struct State {
-    tenants: BTreeMap<String, Tenant>,
+    pub(super) tenants: BTreeMap<String, Tenant>,
     keys: BTreeMap<String, ApiKeyRecord>,
     pub(super) wabas: BTreeMap<String, WabaBinding>,
     pub(super) numbers: BTreeMap<String, NumberBinding>,
@@ -137,6 +140,12 @@ impl MemoryStore {
     /// events there, and records its stream purged.
     pub fn outbox(&self) -> Arc<MemoryEventStore> {
         self.outbox.clone()
+    }
+
+    /// The webhooks-out records of this store (roadmap M2c): deleting a
+    /// tenant here deletes its endpoints and deliveries there.
+    pub fn webhooks(&self) -> Arc<MemoryWebhookStore> {
+        self.webhooks.clone()
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -297,6 +306,9 @@ impl RecordStore for MemoryStore {
         // Its events: under the store's lock, as Postgres does it in the
         // deleting transaction.
         self.outbox.forget_tenant(id);
+        // Its webhook endpoints and deliveries, likewise (Postgres: ON
+        // DELETE CASCADE).
+        self.webhooks.forget_tenant(id);
         Ok(DeleteTenantOutcome::Deleted)
     }
 
@@ -893,6 +905,7 @@ impl SchemaMigrator for Nothing {
 pub struct MemoryBackend {
     store: Arc<MemoryStore>,
     outbox: Arc<MemoryEventStore>,
+    webhooks: Arc<MemoryWebhookStore>,
     notifier: Arc<LocalNotifier>,
     leader: Arc<MemoryLeaderLock>,
     kv: Arc<MemoryKvStore>,
@@ -911,6 +924,7 @@ impl MemoryBackend {
         let store = MemoryStore::new();
         Self {
             outbox: store.outbox(),
+            webhooks: store.webhooks(),
             store: Arc::new(store),
             notifier: Arc::new(LocalNotifier::new()),
             leader: Arc::new(MemoryLeaderLock::new()),
@@ -951,6 +965,10 @@ impl Backend for MemoryBackend {
 
     fn notifier(&self) -> Arc<dyn EventNotifier> {
         self.notifier.clone()
+    }
+
+    fn webhooks(&self) -> Arc<dyn WebhookStore> {
+        self.webhooks.clone()
     }
 
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {

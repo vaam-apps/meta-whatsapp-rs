@@ -314,6 +314,14 @@ fn checked() -> BTreeMap<&'static str, bool> {
 /// so the list cannot outlive what it excuses.
 const NOT_OPEN: &[(&str, &str)] = &[
     (
+        "meta_whatsapp_server_core::webhooks_out::DisabledReason",
+        "why the service turned a webhook endpoint off, stored by the service itself (roadmap M2c), never a value of Meta's; `Other` keeps what a later release stored",
+    ),
+    (
+        "meta_whatsapp_server_core::webhooks_out::AttemptError",
+        "why a webhook delivery's attempt failed, the service's own classification (roadmap M2c), never a value of Meta's; `Other` keeps what a later release stored",
+    ),
+    (
         "meta_whatsapp_core::error::graph::ErrorKind",
         "this crate's classification of a failure, never read from or written to Meta; `Unknown` is a kind",
     ),

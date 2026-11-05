@@ -2201,6 +2201,10 @@ impl Backend for Watched {
         self.notifier.clone()
     }
 
+    fn webhooks(&self) -> Arc<dyn crate::webhooks_out::store::WebhookStore> {
+        unreachable!("the webhook pipeline delivers nothing out")
+    }
+
     fn leader_lock(&self) -> Arc<dyn LeaderLock> {
         unreachable!("the webhook pipeline takes no lock")
     }
