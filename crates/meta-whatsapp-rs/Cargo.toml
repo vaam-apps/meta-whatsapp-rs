@@ -43,6 +43,8 @@ full = ["reqwest", "memory", "sinks", "postgres", "sqlite", "redis", "mongodb", 
 anyhow.workspace = true
 async-trait.workspace = true
 serde_json.workspace = true
+# Reads the manifests and lock of the CrateStack pin test (roadmap S12).
+toml = "1"
 time.workspace = true
 tracing.workspace = true
 meta-whatsapp-core.workspace = true

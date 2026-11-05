@@ -124,6 +124,65 @@ impl Probes {
             .map(|rows| rows.into_iter().map(into_probe).collect())
             .map_err(|e| e.to_string())
     }
+
+    /// One row by key, as `ctx`: `None` when there is none or `ctx` may not
+    /// read it.
+    ///
+    /// # Errors
+    ///
+    /// CrateStack's refusal or the database's failure, as its text.
+    pub async fn find_one(
+        &self,
+        ctx: &CratestackContext,
+        id: i64,
+    ) -> Result<Option<Probe>, String> {
+        self.db
+            .wa_probe()
+            .find_unique(id)
+            .run(ctx)
+            .await
+            .map(|row| row.map(into_probe))
+            .map_err(|e| e.to_string())
+    }
+
+    /// Replace a row's label, as `ctx`.
+    ///
+    /// # Errors
+    ///
+    /// CrateStack's refusal or the database's failure, as its text.
+    pub async fn set_label(
+        &self,
+        ctx: &CratestackContext,
+        id: i64,
+        label: &str,
+    ) -> Result<Probe, String> {
+        self.db
+            .wa_probe()
+            .update(id)
+            .set(cratestack_schema::UpdateWaProbeInput {
+                label: Some(label.to_owned()),
+                ..Default::default()
+            })
+            .run(ctx)
+            .await
+            .map(into_probe)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Delete a row, as `ctx`.
+    ///
+    /// # Errors
+    ///
+    /// CrateStack's refusal or the database's failure, as its text.
+    pub async fn delete(&self, ctx: &CratestackContext, id: i64) -> Result<Probe, String> {
+        self.db
+            .wa_probe()
+            .delete(id)
+            .run(ctx)
+            .await
+            .map(into_probe)
+            .map_err(|e| e.to_string())
+    }
 }
 
 fn into_probe(row: cratestack_schema::WaProbe) -> Probe {

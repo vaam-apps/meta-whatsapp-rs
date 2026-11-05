@@ -11,8 +11,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cratestack::sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use cratestack::sqlx::{AssertSqlSafe, Connection, PgConnection, PgPool, query};
+use cratestack::{CratestackContext, Value};
 use meta_whatsapp_server_store_cratestack::{
-    Probe, Probes, SCHEMA, system_context, tenant_context,
+    Probe, Probes, SCHEMA, SYSTEM_SERVICE, system_context, tenant_context,
 };
 
 /// The test server's URL, or `None` (after saying so) when it is unset.
@@ -110,7 +111,42 @@ fn the_model_names_the_system_principal_in_every_allow() {
         .filter(|l| l.trim_start().starts_with("@@allow"))
         .collect();
     assert_eq!(allows.len(), 5, "{allows:?}");
-    assert!(allows.iter().all(|l| l.contains("auth().isSystem()")));
+    for action in ["list", "detail", "create", "update", "delete"] {
+        let mine: Vec<&&str> = allows
+            .iter()
+            .filter(|l| l.contains(&format!("(\"{action}\",")))
+            .collect();
+        assert_eq!(mine.len(), 1, "{action}: {allows:?}");
+        assert!(
+            mine[0].trim_end().ends_with(", auth().isSystem())"),
+            "{action}: {mine:?}"
+        );
+    }
+}
+
+#[test]
+fn only_the_system_context_is_the_system_principal() {
+    assert!(system_context().is_system());
+    let forged = CratestackContext::authenticated([
+        (
+            "service".to_owned(),
+            Value::String(SYSTEM_SERVICE.to_owned()),
+        ),
+        (
+            "id".to_owned(),
+            Value::String(format!("system:{SYSTEM_SERVICE}")),
+        ),
+        ("system".to_owned(), Value::Bool(true)),
+        ("isSystem".to_owned(), Value::Bool(true)),
+    ]);
+    for ctx in [
+        tenant_context("tenant-a"),
+        forged,
+        CratestackContext::default(),
+        CratestackContext::anonymous(),
+    ] {
+        assert!(!ctx.is_system(), "{ctx:?}");
+    }
 }
 
 #[tokio::test]
@@ -154,4 +190,78 @@ async fn live_postgres_the_same_call_under_a_tenant_returns_none() {
     assert!(denied.is_err(), "{denied:?}");
     // The row the tenant tried to add is not there.
     assert_eq!(probes.find_many(&system_context()).await.unwrap().len(), 1);
+}
+
+/// Every context that is not the system principal, forged claims included.
+fn non_system_contexts() -> Vec<CratestackContext> {
+    vec![
+        tenant_context("tenant-a"),
+        tenant_context("tenant-b"),
+        CratestackContext::authenticated([
+            (
+                "service".to_owned(),
+                Value::String(SYSTEM_SERVICE.to_owned()),
+            ),
+            (
+                "id".to_owned(),
+                Value::String(format!("system:{SYSTEM_SERVICE}")),
+            ),
+        ]),
+        CratestackContext::default(),
+        CratestackContext::anonymous(),
+    ]
+}
+
+#[tokio::test]
+async fn live_postgres_a_system_reads_updates_and_deletes_one_row() {
+    let Some(url) = postgres_url() else { return };
+    let db = TestDb::create(&url).await;
+    let probes = Probes::new(db.pool.clone());
+    let system = system_context();
+    probes.create(&system, probe(1, "tenant-a")).await.unwrap();
+
+    assert_eq!(
+        probes.find_one(&system, 1).await.unwrap(),
+        Some(probe(1, "tenant-a"))
+    );
+    let updated = probes.set_label(&system, 1, "renamed").await.unwrap();
+    assert_eq!(updated.label, "renamed");
+    assert_eq!(probes.delete(&system, 1).await.unwrap().id, 1);
+    assert_eq!(probes.find_one(&system, 1).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn live_postgres_no_other_context_may_detail_update_or_delete() {
+    let Some(url) = postgres_url() else { return };
+    let db = TestDb::create(&url).await;
+    let probes = Probes::new(db.pool.clone());
+    probes
+        .create(&system_context(), probe(1, "tenant-a"))
+        .await
+        .unwrap();
+
+    for ctx in non_system_contexts() {
+        // list
+        let listed = probes.find_many(&ctx).await;
+        assert!(listed.as_ref().map_or(true, Vec::is_empty), "{listed:?}");
+        // detail: refused, or nothing found
+        let found = probes.find_one(&ctx, 1).await;
+        assert!(found.as_ref().map_or(true, Option::is_none), "{found:?}");
+        // create
+        let created = probes.create(&ctx, probe(2, "tenant-a")).await;
+        assert!(created.is_err(), "{created:?}");
+        // update
+        let updated = probes.set_label(&ctx, 1, "hijacked").await;
+        assert!(updated.is_err(), "{updated:?}");
+        // delete
+        let deleted = probes.delete(&ctx, 1).await;
+        assert!(deleted.is_err(), "{deleted:?}");
+    }
+
+    // Nothing changed: one row, its own label.
+    let system = system_context();
+    assert_eq!(
+        probes.find_many(&system).await.unwrap(),
+        vec![probe(1, "tenant-a")]
+    );
 }
