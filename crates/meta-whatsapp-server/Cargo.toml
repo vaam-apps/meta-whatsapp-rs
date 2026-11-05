@@ -41,6 +41,11 @@ store-memory = ["dep:meta-whatsapp-server-store-memory"]
 # `DATABASE_URL` (meta-whatsapp-server-store-postgres, with the pool this
 # crate opens on sqlx through the facade).
 store-postgres = ["dep:meta-whatsapp-server-store-postgres", "meta-whatsapp-rs/postgres"]
+# `WA_SERVER_MEDIA_CONVERTER=ffmpeg` (roadmap M5c1): the library's
+# `FfmpegConverter`, over an `ffmpeg` the deployment installs; links
+# nothing. Off by default: the image carries no `ffmpeg`. The feature's
+# name is pending the owner's confirmation before the first release.
+ffmpeg = ["meta-whatsapp-rs/ffmpeg"]
 
 [dependencies]
 # The library, through the facade alone (docs/architecture.md, § Service):

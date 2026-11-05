@@ -124,6 +124,7 @@ use meta_whatsapp_rs::client::media::{
 };
 use meta_whatsapp_rs::core::error::TransportError;
 use meta_whatsapp_rs::core::ids::{MediaId, PhoneNumberId};
+use meta_whatsapp_rs::core::media::{MediaConverter, MediaInput, TargetFormat};
 use time::OffsetDateTime;
 
 use crate::authz::{Authorizer, OwnedNumber, object_failed};
@@ -304,6 +305,101 @@ pub struct Uploaded {
     /// Its media id (kept by Meta for 30 days): what a message's `id`
     /// sends.
     pub media_id: MediaId,
+}
+
+// ─── Conversion ──────────────────────────────────────────────────────────
+
+/// The formats an upload may be converted into, by the name a request
+/// gives (`convert`): `ogg_opus` (a voice message), `static_sticker`,
+/// `animated_sticker`, `jpeg` and `png`: the library's
+/// [`TargetFormat`]s. The names are pending the owner's confirmation
+/// before the first release.
+pub const CONVERT_TARGETS: [(&str, TargetFormat); 5] = [
+    ("ogg_opus", TargetFormat::OggOpus),
+    ("static_sticker", TargetFormat::StaticSticker),
+    ("animated_sticker", TargetFormat::AnimatedSticker),
+    ("jpeg", TargetFormat::Jpeg),
+    ("png", TargetFormat::Png),
+];
+
+/// The format a request named (`convert`).
+///
+/// # Errors
+///
+/// `422 invalid_request` on `convert`.
+pub fn convert_target(name: &str) -> Result<TargetFormat, ServiceError> {
+    CONVERT_TARGETS
+        .iter()
+        .find(|(n, _)| *n == name.trim())
+        .map(|(_, target)| *target)
+        .ok_or_else(|| ServiceError::invalid("convert"))
+}
+
+/// The name of `target` in a request, the inverse of [`convert_target`].
+pub fn convert_name(target: TargetFormat) -> &'static str {
+    CONVERT_TARGETS
+        .iter()
+        .find(|(_, t)| *t == target)
+        .map_or("unknown", |(name, _)| name)
+}
+
+/// A file to convert before it is uploaded (roadmap M5c1): its bytes in
+/// whatever format the deployment's converter reads (the converter
+/// detects it from the bytes; the caller's `type`, if any, is not trusted
+/// and not read), the format wanted, and the name the caller gave.
+/// Nothing the caller sends becomes a converter option.
+pub struct Conversion {
+    target: TargetFormat,
+    file_name: String,
+    data: Bytes,
+}
+
+impl fmt::Debug for Conversion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Conversion")
+            .field("target", &self.target)
+            .field("file_name", &self.file_name)
+            .field("len", &self.data.len())
+            .finish()
+    }
+}
+
+impl Conversion {
+    /// Convert `data` into `target`, named after `given` (made inert by
+    /// [`filename`], its extension replaced by the target's: Meta warns
+    /// that a name whose extension does not match the type is a common
+    /// cause of `131053`).
+    pub fn new(target: TargetFormat, given: Option<&str>, data: Bytes) -> Self {
+        let cleaned = filename(given, target.mime_type());
+        let stem = cleaned
+            .rsplit_once('.')
+            .map_or(cleaned.as_str(), |(stem, _)| stem);
+        let stem = if stem.trim_matches(['.', '_']).is_empty() {
+            "upload"
+        } else {
+            stem
+        };
+        Self {
+            target,
+            file_name: format!("{stem}.{}", target.extension()),
+            data,
+        }
+    }
+
+    /// The format wanted.
+    pub fn target(&self) -> TargetFormat {
+        self.target
+    }
+
+    /// The file name that will be sent to Meta.
+    pub fn file_name(&self) -> &str {
+        &self.file_name
+    }
+
+    /// The file to convert.
+    pub fn data(&self) -> &Bytes {
+        &self.data
+    }
 }
 
 // ─── Download ────────────────────────────────────────────────────────────
@@ -572,6 +668,7 @@ pub struct Media<'a> {
     slots: MediaSlots<'a>,
     received: &'a dyn Outbox,
     observer: &'a dyn Observer,
+    converter: Option<&'a dyn MediaConverter>,
 }
 
 /// Where the service recorded a media id as received, for the caller's
@@ -647,7 +744,60 @@ impl<'a> Media<'a> {
             slots,
             received,
             observer: &(),
+            converter: None,
         })
+    }
+
+    /// Convert uploads that ask for it with `converter` (the deployment's,
+    /// `WA_SERVER_MEDIA_CONVERTER`): without one, [`Self::convert`] is
+    /// `422` on `convert` and no request is made.
+    #[must_use]
+    pub fn converting_with(mut self, converter: Option<&'a dyn MediaConverter>) -> Self {
+        self.converter = converter;
+        self
+    }
+
+    /// Convert `conversion` into the upload it asks for, checked as any
+    /// upload is ([`Upload::new`]): the converted bytes are what
+    /// [`Self::upload`] sends. Nothing is sent to Meta, and the converter
+    /// runs under its own guards (the library's `FfmpegConverter`:
+    /// input, pixel, frame, length, output and time bounds; its
+    /// protocols and formats restricted).
+    ///
+    /// # Errors
+    ///
+    /// `422 invalid_request` on `convert` (no converter is configured), or
+    /// on `file` (empty, too large for the converter, or not media it
+    /// reads); `502 media_conversion_failed` (the converter is missing,
+    /// lacks an encoder, timed out (retryable), answered the wrong format
+    /// or was killed); `413 media_too_large` (the result passes its
+    /// limit). None of them was sent: `may_have_been_sent` is false.
+    pub async fn convert(&self, conversion: &Conversion) -> Result<Upload, ServiceError> {
+        let Some(converter) = self.converter else {
+            return Err(ServiceError::invalid("convert"));
+        };
+        let converted = converter
+            .convert(MediaInput::new(conversion.data.clone()), conversion.target)
+            .await
+            .map_err(|error| match &error {
+                // An empty input, or one too large: the caller's file.
+                Error::Validation(_) => ServiceError::invalid("file"),
+                _ => ServiceError::from_library(&error),
+            })?;
+        // The port's promise: the format asked for, never another one
+        // passed off as it.
+        if converted.format != conversion.target {
+            tracing::warn!(
+                target: LOG_TARGET,
+                "a media converter answered another format than the one asked for"
+            );
+            return Err(ServiceError::new(ErrorCode::MEDIA_CONVERSION_FAILED));
+        }
+        Upload::new(
+            conversion.target.mime_type(),
+            Some(&conversion.file_name),
+            converted.data,
+        )
     }
 
     /// Report failed Graph calls to `observer` (the adapter's metrics).
