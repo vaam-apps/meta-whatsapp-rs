@@ -5,7 +5,7 @@ description: "Using WhatsApp through meta-whatsapp-server, the meta-whatsapp-rs 
 
 # meta-whatsapp-rs-server
 
-> **Verified against meta-whatsapp-rs 0b037d946d4f1b4b520b1420a7f783885370101d (2026-11-02).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs e6cebefa7240233b0411f806092759c506d581fd (2026-11-05).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/client.ts](examples/client.ts) (type-checked against the service's OpenAPI document). Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md).
 
@@ -28,6 +28,7 @@ merchants connecting their number (`meta-whatsapp-rs-server-onboarding`), a numb
 | `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `websites`, `vertical`) |
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
 | `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, `GET /v1/numbers/{pn}/conversations`, `GET /v1/wabas/{waba_id}/payment-configurations`, … | scopes `send`, `media`, `templates`, `inbox`, `payments` | sends, media, templates, the inbox, payments: `meta-whatsapp-rs-server-send` |
+| `GET /v1/numbers/{pn}/commerce-settings`, `POST /v1/numbers/{pn}/qr-codes`, `GET /v1/wabas/{waba_id}/analytics/messaging`, `POST /v1/numbers/{pn}/blocked-users`, … | scopes `commerce`, `qr_codes`, `analytics`, `contacts` (one each; `send` grants none, a key minted before them has none) | commerce settings and catalogs, QR codes, analytics, the block list: `meta-whatsapp-rs-server-send` |
 | `GET /v1/events`, `GET /v1/events/{id}`, `GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream` | scope `events` | Meta's webhook events for the tenant, after a cursor, by id or live (Server-Sent Events): `meta-whatsapp-rs-server-events` |
 | `POST /v1/numbers/{pn}/request-code`, `POST /v1/numbers/{pn}/register`, … | scope `numbers` | the number's verification code, registration, PIN, deregistration: `meta-whatsapp-rs-server-registration` |
 | `POST /v1/otp/issue`, `POST /v1/otp/verify` | scope `otp` | login codes over WhatsApp: `meta-whatsapp-rs-server-otp` |

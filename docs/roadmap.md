@@ -6442,10 +6442,35 @@ or WABA fails the family's own cross-tenant test).
     edges), `tests/commerce_logs.rs` (the audit events), M5.1 by
     construction (`tests/authz.rs`), M1.5 (`tests/errors.rs`), M1.7's
     capture over every new route (`tests/common/capture.rs`). Not
-    offered, and tracked by no row: a catalog's product sets and one
-    product by id, template group analytics, the two analytics switches
-    (insights, click tracking); call analytics wait for M5e, group
-    analytics for M5f (row 107 is partial until then).
+    offered, and tracked by M5g2: a catalog's product sets and one
+    product by id, the products edge's `filter`, template group
+    analytics, the two analytics switches (insights, click tracking);
+    call analytics wait for M5e, group analytics for M5f (row 107 is
+    partial until then).
+- [ ] **M5g2. What M5g did not route** (rows 103, 107): a catalog's
+  product sets and one product by id, the products edge's `filter`,
+  template group analytics, and the two analytics switches (template
+  insights, button click tracking). Each keeps the rule M5g set: an
+  object named by id is checked against its owner before it is read
+  (D141, D144), and the names stay pending the owner's confirmation
+  before the first release.
+  - **After:** M5g.
+  - **Decisive (product sets and one product):** M5.1, M5.2; a set or a
+    product that Meta's pages show no way to tie to the WABA's own
+    catalog stays unrouted: the item lands only with a check whose
+    deletion fails a test (a product set of another WABA's catalog is
+    `404`, with only the check's requests sent).
+  - **Decisive (the products edge's `filter`):** a `filter` is Meta's
+    documented JSON, parsed and bounded before any request (its size and
+    depth), and never written into the query unparsed; a malformed one is
+    `422` with zero requests.
+  - **Decisive (template group analytics):** M5.1, M5.2; a group id not
+    among the WABA's own groups (D118's read) is `404` with the
+    analytics not asked for, and its range is bounded as D145's.
+  - **Decisive (the two switches):** each is an audited change by the
+    caller (`template_insights_enabled`, `click_tracking_changed`; names
+    pending), `Idempotency-Key`ed, answers no text of Meta's, and is off
+    for a key without the `analytics` scope: M5.1, M5.2.
 - [ ] **M5h. Marketing Messages API and CTWA** (rows 136–138, 154). The
   max-price agreement is its own admin route: an explicit, audited
   operator action, off until the deployment enables it; no other route
