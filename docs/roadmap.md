@@ -6248,7 +6248,7 @@ or WABA fails the family's own cross-tenant test).
     (a copy-code OTP button) and mixed URL and reply buttons, which the
     library does not model (its `MessageContent::Raw`, which the service
     refuses); the catalog a template's product cards name (M5b's, done
-    there); a group id checked against the number's groups (M5f's); the comparison
+    there); a group id checked against the number's groups (M5f's, done there); the comparison
     on the types before M5a (D100).
   - **Also, after the first release** (from S7, carried by M2a, P2 and
     now M5a, which landed before it): drop the legacy fingerprint (S6's
@@ -6410,10 +6410,76 @@ or WABA fails the family's own cross-tenant test).
 - [ ] **M5e. Calling** (rows 74, 75, 134, 135).
   - **After:** S7, L14.
   - **Decisive:** M5.1, M5.2.
-- [ ] **M5f. Groups** (rows 76, 77, 79, 81).
+- [x] **M5f. Groups** (rows 76, 77, 79, 81; row 76's picture is M5f2).
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; a group id not in the number's groups is
     `404` with zero vault reads.
+  - **Done** (*PR number to be added when it lands*): a new scope,
+    `groups`, and thirteen routes under `/v1/numbers/{pn}/groups` over
+    the library's `client::groups` and `Analytics::groups`
+    (`server_core::groups`, `server_api_axum::api::groups`): create
+    (`202` with Meta's `request_id`, the group's id arriving in a
+    `group_lifecycle_update` event; an `Idempotency-Key`), list, read
+    (`?fields=`), change the subject and description, delete, the invite
+    link (read, reset), the participants (list, remove: `POST
+    …/participants/remove`, each by `phone`, `wa_id` or `user_id`), the
+    join requests (list, approve, reject) and the group's analytics
+    (`GET …/analytics`, the number's WABA asked for the one group: the
+    group analytics of row 81, which row 107's M5g leaves to this item).
+    The design's M5.2 and the decisive test: **a group is the number's
+    or it does not exist, decided before the token is opened** (D150).
+    The service keeps a record per (number, group), a typed store on the
+    bundle's `KvStore` (`wa.server.group`, keyed by a hash: the group's
+    id is not stored), written by the webhook pipeline when a
+    `group_lifecycle_update` reports a group created for a tenant's
+    number and by each page of the listing, removed by the event that
+    reports it deleted; the `OwnedGroup` extractor runs step 4 for the
+    number (`Authorizer::tenant_number`: no token), looks the group up
+    under the caller's tenant and the number, and only then opens the
+    vault. Another tenant's group, another number's, an unrecorded one
+    and an id no group has are `404 not_found`, with Meta not asked.
+    Nothing of a participant reaches a log, an error or an audit event:
+    the seven change audit events (`group_creation_requested`, …) hold
+    counts and outcomes, and a failed call answers Meta's code and the
+    service's kind, never Meta's text. Tests: `tests/groups.rs` (each
+    route's exact requests from Meta's examples with the tenant's token;
+    `a_group_the_number_does_not_hold_is_not_found_with_zero_vault_reads`
+    over every route and five kinds of id; the creation event's life;
+    the listing's adoption; each refusal before any request),
+    `tests/authz.rs` (M5.1 by construction, and
+    `a_group_the_number_does_not_hold_is_not_found_before_the_vault_on_every_group_route`
+    over every route of the document that names a group), M1.7's capture
+    and audit check (`tests/common/capture.rs`: participants, join
+    request ids, invite links and Meta's texts in no line; the group
+    audit events by count), the core's checks (`groups` tests). The
+    OpenAPI document is additive only (13 operations, 20 schemas, the
+    scope and the tag).
+  - **Proposed** (design D150–D156, pending the coordinator's decision;
+    each swappable): the records and where they are written and read
+    (D150), the scope (D151), the routes' shape (D152), the creation
+    alone takes an `Idempotency-Key` (D153), the bounds the service adds
+    (D154), the audit events and the logs (D155), what is not offered
+    (D156). Pending the owner's confirmation before the first release:
+    the namespace `wa.server.group`, the scope `groups`, the thirteen
+    operation ids, the seven audit action names and the paths; no new
+    setting or error code; no legal act.
+  - **Not done here:** the group's picture (M5f2); pinning and unpinning
+    (a send), adding participants (Meta: not manually), deleting the
+    invite link and leaving (no call), which the library wraps or Meta
+    does not offer (D156); a group created before the service is found
+    only after a listing or a lifecycle event (D150); the library's debug
+    line for a Graph request names the path it calls, so a group's id is
+    in that one line at `debug`, and it classifies none of the groups'
+    error codes (`131201` onward: `502 unknown` with Meta's code); no
+    call of these routes was run against Meta live.
+- [ ] **M5f2. Group pictures** (row 76): `PUT /v1/numbers/{pn}/groups/{group_id}/picture`
+  over the library's `Group::set_picture` (a multipart upload of a
+  square JPEG of at most 5 MiB; Meta checks the shape and the 192×192
+  minimum), held to the media routes' transfer slots and body bound,
+  asked of the number's own group only.
+  - **After:** M5f.
+  - **Decisive:** M5.1, M5.2; a file that is not a JPEG of at most 5 MiB
+    is refused with no request.
 - [ ] **M5g. Commerce, QR codes, analytics, block users** (rows 71,
   102, 103, 106, 107).
   - **After:** S7, L17.
