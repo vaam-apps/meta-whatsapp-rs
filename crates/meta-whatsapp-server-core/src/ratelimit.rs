@@ -557,7 +557,9 @@ mod tests {
             assert_eq!(RouteClass::of(operation), class, "{id}");
             assert_eq!(
                 class == RouteClass::Templates,
-                operation.scope() == Scope::Templates,
+                // Meta's management calls of a WABA are one budget: Flows
+                // (scope `flows`, design D132) share the templates' class.
+                matches!(operation.scope(), Scope::Templates | Scope::Flows),
                 "{id}"
             );
         }

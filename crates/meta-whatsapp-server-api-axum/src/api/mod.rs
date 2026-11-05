@@ -456,7 +456,8 @@ mod tests {
                 assert_eq!(RouteClass::of(*operation), class, "{method} {template}");
                 continue;
             }
-            let before = if operation.scope() == Scope::Templates {
+            // Flows (scope `flows`, roadmap M5d) share the templates' budget.
+            let before = if matches!(operation.scope(), Scope::Templates | Scope::Flows) {
                 RouteClass::Templates
             } else if method == "GET" {
                 RouteClass::Read

@@ -1093,7 +1093,7 @@ async fn flows(h: &Harness, admin: &str) -> Vec<String> {
         .call(
             Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
                 .key(admin)
-                .json(&json!({"scopes": ["templates"]})),
+                .json(&json!({"scopes": ["flows"]})),
         )
         .await
         .json();
