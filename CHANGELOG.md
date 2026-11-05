@@ -1199,7 +1199,9 @@ stored data, the owner's).
   indexes, and the driver (`mongodb` 3.9, `rustls-tls-aws-lc`, no `ring`)
   re-exported as `store::mongodb::mongodb`. `MongoKvStore` makes each
   operation one document's atomic update, computed by an aggregation
-  pipeline against the server's clock (`$$NOW`); compare-and-swap
+  pipeline against the server's clock (`$$NOW`), its upserts filtered on
+  the `_id` alone and `put_if_absent` told by a per-call claim in the
+  stored document (`claim`); compare-and-swap
   filters on the expected version; a delete leaves a tombstone that keeps
   the version, which a TTL index removes ten minutes later, and a
   version is the larger of the stored one plus one and the server's

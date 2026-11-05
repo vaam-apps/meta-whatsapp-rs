@@ -50,6 +50,10 @@ pub const KV_VALUE: &str = "value";
 pub const KV_VERSION: &str = "version";
 /// When it stops being visible (the server's clock); absent: never.
 pub const KV_EXPIRES_AT: &str = "expires_at";
+/// The claim of the `put_if_absent` that last wrote the record, an
+/// `ObjectId` unique to the call: how the call learns its write took effect.
+/// The next `put`, swap or delete removes it.
+pub const KV_CLAIM: &str = "claim";
 /// When the TTL index may remove the document: its expiry, or its
 /// deletion, plus a grace period; absent for a live record that never
 /// expires.
@@ -196,6 +200,7 @@ mod tests {
             (KV_VERSION, "version"),
             (KV_EXPIRES_AT, "expires_at"),
             (KV_PURGE_AFTER, "purge_after"),
+            (KV_CLAIM, "claim"),
             (PHONE_NUMBER_ID, "phone_number_id"),
             (CONTACT, "contact"),
             (MESSAGE_DIRECTION, "direction"),

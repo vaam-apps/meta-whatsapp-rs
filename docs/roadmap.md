@@ -1510,11 +1510,14 @@ and `store-postgres`.
     as `adapters::store::mongodb::mongodb`. `store::mongodb::migrate`
     creates the collections and indexes (`store::mongodb::schema`).
     `MongoKvStore` makes every operation one document's atomic update:
-    an aggregation-pipeline upsert computes the version, value and expiry
-    from the document as it was, against the server's `$$NOW`;
-    `put_if_absent` filters on the record being dead (a live one makes
-    the upsert's insert collide, read back to tell it from a racer);
-    compare-and-swap filters on the expected version of a live record; a
+    an aggregation-pipeline upsert, filtered on the `_id` alone (MongoDB
+    refuses `$expr` in an upsert's filter: the first live run failed on
+    it), computes the version, value and expiry from the document as it
+    was, against the server's `$$NOW`; `put_if_absent`'s pipeline writes
+    only where the record is dead, under a per-call `claim` (an
+    `ObjectId`, stored in the field `claim`) that the command returns
+    with the document, so the call learns from one write whether it took
+    effect; compare-and-swap filters on the expected version of a live record; a
     delete unsets the value and keeps the version (a tombstone), and a TTL
     index (`wa_kv_purge_idx` on `purge_after`) removes dead documents
     ten minutes after they died or were last written. A version is the
@@ -1556,13 +1559,43 @@ and `store-postgres`.
     before the first release): the collections, fields, index names and
     the version's encoding (docs/architecture.md § Stable identifiers);
     the KV namespaces stored under them are the library's, unchanged.
-  - **Proposed, not decided** (the coordinator's, each swappable by a
-    setting or a constant): one collection per Postgres table, under the
-    same names and no prefix setting (a database per deployment); a TTL
-    index rather than an explicit purge for dead KV records; the
-    clock-floored version rather than a counter document (which would
-    make every write of a namespace conflict); the 10-second
-    write-conflict budget; purges and trims without a transaction.
+  - **Decided** (each swappable, per AGENTS.md § Decisions; the first
+    live run found the upsert filter, fixed in this PR). Stored names stay
+    pending the owner's confirmation before the first release, with one
+    addition to the list: the KV field `claim` (an `ObjectId`; present
+    only after a `put_if_absent` that wrote, removed by the next write).
+    1. **Coordinator's decision 2026-11-05 under the owner's delegation,
+       swappable**: one collection per table, under the Postgres names and
+       no prefix. Swap: a per-deployment database (the adapters take a
+       `Database`).
+    2. **Coordinator's decision 2026-11-05 under the owner's delegation,
+       swappable**: liveness at read time against `$$NOW`, the TTL index
+       for cleanup only. Swap: an explicit `purge_expired`.
+    3. **Coordinator's decision 2026-11-05 under the owner's delegation,
+       swappable**: per-document versions with tombstones and a clock
+       floor (the primary's clock never goes back by more than the ten
+       minutes' grace, stated in the rustdoc of `store::mongodb` KV and in
+       docs/guides/production.md). Swap: a counter document per namespace
+       (which would make every write of a namespace conflict).
+    4. **Coordinator's decision 2026-11-05 under the owner's delegation,
+       swappable**: a 10-second write-conflict budget. Swap:
+       `MongoConversationStore::with_busy_after`.
+    5. **Coordinator's decision 2026-11-05 under the owner's delegation,
+       swappable**: the `appends` counter, a write on every append so that
+       an erasure conflicts with it. Swap: a version field per
+       conversation, or an erasure that locks the summary first.
+    6. **Coordinator's decision 2026-11-05 under the owner's delegation,
+       swappable**: purges and trims without a transaction (a sequence of
+       deletes; a crash leaves a prefix purged). Swap: batches inside the
+       transaction runner.
+    7. **Coordinator's decision 2026-11-05 under the owner's delegation,
+       swappable**: milliseconds, and U+0000 kept in identifiers and KV
+       keys (the port allows keeping or refusing, consistently; memory and
+       Redis keep, Postgres and SQLite refuse). Swap: a refusal in the
+       store's constructor, as SQLite's.
+    8. **Coordinator's decision 2026-11-05 under the owner's delegation,
+       swappable**: `w: majority` on every collection handle. Swap: the
+       `WriteConcern` in `store::mongodb::collection`.
 - [ ] **S18. `meta-whatsapp-server-store-mongodb`**, the whole bundle.
   - **After:** S9, S17, M2a–M2h.
   - **Decisive:** the core conformance suite passes live; the service's

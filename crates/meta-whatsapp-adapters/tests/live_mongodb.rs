@@ -283,6 +283,61 @@ mod adapters {
         assert_eq!(found, expected);
     }
 
+    /// `put_if_absent` learns from its one write whether it took effect
+    /// (the claim it stores where the record was dead): a live record is
+    /// left as it was, a tombstone is written over with the version going
+    /// on, and the claim is gone after the next write.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn live_mongodb_put_if_absent_claims_only_a_dead_record() {
+        let Some((database, _cleanup)) = migrated().await else {
+            return;
+        };
+        let store = MongoKvStore::new(database.clone());
+        let records = database.collection::<Document>(schema::KV);
+        let key = StoreKey::new("wa.otp", "claimed");
+        let id = doc! { "namespace": "wa.otp", "key": "claimed" };
+        let v1 = store
+            .put_if_absent(&key, b"one".to_vec(), Expiry::Never)
+            .await
+            .unwrap()
+            .expect("a new key is written");
+        let raw = records
+            .find_one(doc! { "_id": id.clone() })
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(raw.get_object_id("claim").is_ok());
+        assert_eq!(
+            store
+                .put_if_absent(&key, b"two".to_vec(), Expiry::Never)
+                .await
+                .unwrap(),
+            None
+        );
+        let after = records
+            .find_one(doc! { "_id": id.clone() })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after, raw, "a live record is left exactly as it was");
+        assert!(store.delete(&key).await.unwrap());
+        let v2 = store
+            .put_if_absent(&key, b"three".to_vec(), Expiry::Never)
+            .await
+            .unwrap()
+            .expect("a tombstone is dead");
+        assert!(v2 > v1);
+        store
+            .put(&key, b"four".to_vec(), Expiry::Never)
+            .await
+            .unwrap();
+        let raw = records.find_one(doc! { "_id": id }).await.unwrap().unwrap();
+        assert!(
+            !raw.contains_key("claim"),
+            "the next write removes the claim"
+        );
+    }
+
     /// The documented layout of a key/value record: `_id` the namespace
     /// then the key, the value as bytes, the version, the expiry and the
     /// TTL index's deadline; a delete keeps the document, without its value,

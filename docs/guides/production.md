@@ -29,7 +29,7 @@ Everything stateful sits on two ports. The typed stores are built on
 | survives restarts, shared by instances | no | yes | survives restarts; the processes of one machine | yes, with persistence on | yes |
 | expiry clock | the process | the database server | the process | the Redis server | the database server |
 | maintenance | `apply_retention` (or a bot `RetentionSweeper`: by age and a cap per chat) on a schedule, when a retention is set | `migrate` at startup; `purge_expired()` every few minutes to hourly; `apply_retention` (or a bot `RetentionSweeper`) on a schedule, when a retention is set | `migrate` at startup; `purge_expired()` now and then; `apply_retention` (or a bot `RetentionSweeper`) on a schedule, when a retention is set | eviction policy `noeviction`, on an instance of its own; `apply_retention` (one script per number) or a bot `RetentionSweeper` (one script per conversation) in quiet hours | `migrate` at startup (dead key/value records go by a TTL index); `apply_retention` (or a bot `RetentionSweeper`) on a schedule, when a retention is set |
-| limits | one instance | refuses U+0000 in ids and keys (message content keeps it, as bytes and `json`: search on bytes, no payload indexes) | one machine, never a network file system; refuses U+0000 in message ids, contacts and phone number ids; writes one at a time | a conversation store's inbox on one shard (one hash tag); TLS through `RedisTls` | a replica set (its writes are transactions); milliseconds; an erasure or a history batch fits one transaction |
+| limits | one instance | refuses U+0000 in ids and keys (message content keeps it, as bytes and `json`: search on bytes, no payload indexes) | one machine, never a network file system; refuses U+0000 in message ids, contacts and phone number ids; writes one at a time | a conversation store's inbox on one shard (one hash tag); TLS through `RedisTls` | a replica set (its writes are transactions); keeps U+0000 in ids and keys; milliseconds; an erasure or a history batch fits one transaction |
 
 Postgres alone covers everything and is the simplest choice. Put the vault
 on Redis only with persistence (AOF or RDB): a Redis that forgets on
@@ -341,8 +341,12 @@ notification queue on top must be idempotent itself: tag each message with
 
 - **Shared stores** for everything in section 1; the memory stores give each
   instance its own dedup, limits and vault.
-- **Clocks:** Postgres and Redis decide expiry by their own clock; keep all
-  hosts on NTP.
+- **Clocks:** Postgres, Redis and MongoDB decide expiry by their own clock;
+  keep all hosts on NTP. On MongoDB the clock also orders a key's versions
+  once its tombstone is gone (ten minutes after a delete or an expiry): keep
+  every replica-set member on NTP, so that a primary's clock, a failover
+  included, never goes back by more than ten minutes, or a compare-and-swap
+  could meet a version it had before.
 - **One `Client` per process**, cloned; `with_token` per merchant. Each
   `meta_whatsapp_rs::client()` call creates a new connection pool.
 - **Live inbox:** the broadcast channel behind SSE is per process. Relay
