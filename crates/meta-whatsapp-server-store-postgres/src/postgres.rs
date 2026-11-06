@@ -1118,27 +1118,27 @@ impl IdempotencyRecords for PgStore {
         for _ in 0..3 {
             let insert = "INSERT INTO wa_server_idempotency (tenant_id, idempotency_key, request_sha256,                  claim, state, lease_until, expires_at)                  VALUES ($1, $2, $3, $4, 'in_progress', now() + make_interval(secs => $5),                  now() + make_interval(secs => $6))                  ON CONFLICT (tenant_id, idempotency_key) DO UPDATE SET                  request_sha256 = EXCLUDED.request_sha256, claim = EXCLUDED.claim,                  state = 'in_progress', lease_until = EXCLUDED.lease_until,                  response_status = NULL, response_body = NULL, created_at = now(),                  expires_at = EXCLUDED.expires_at                  WHERE wa_server_idempotency.expires_at <= now()                  RETURNING claim"
                 .replace("wa_server_idempotency", table);
-            let claimed = sqlx::query(&insert)
-            .bind(tenant.as_str())
-            .bind(key.as_str())
-            .bind(fingerprint.as_slice())
-            .bind(claim)
-            .bind(lease.as_secs_f64())
-            .bind(ttl.as_secs_f64())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(backend)?;
+            let claimed = sqlx::query(sqlx::AssertSqlSafe(insert))
+                .bind(tenant.as_str())
+                .bind(key.as_str())
+                .bind(fingerprint.as_slice())
+                .bind(claim)
+                .bind(lease.as_secs_f64())
+                .bind(ttl.as_secs_f64())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(backend)?;
             if claimed.is_some() {
                 return Ok(IdempotencyClaim::Claimed);
             }
             let select = "SELECT request_sha256, state, lease_until <= now() AS lease_expired,                  response_status, response_body FROM wa_server_idempotency                  WHERE tenant_id = $1 AND idempotency_key = $2 AND expires_at > now()"
                 .replace("wa_server_idempotency", table);
-            let row = sqlx::query(&select)
-            .bind(tenant.as_str())
-            .bind(key.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(backend)?;
+            let row = sqlx::query(sqlx::AssertSqlSafe(select))
+                .bind(tenant.as_str())
+                .bind(key.as_str())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(backend)?;
             let Some(row) = row else { continue };
             let digest: Vec<u8> = get(&row, "request_sha256")?;
             let fingerprint: [u8; 32] = digest.try_into().map_err(|_| corrupt("request_sha256"))?;
@@ -1175,15 +1175,15 @@ impl IdempotencyRecords for PgStore {
     ) -> StoreResult<bool> {
         let update = "UPDATE wa_server_idempotency SET state = 'completed', response_status = $4,              response_body = $5 WHERE tenant_id = $1 AND idempotency_key = $2 AND claim = $3"
             .replace("wa_server_idempotency", idempotency_table(tenant));
-        let done = sqlx::query(&update)
-        .bind(tenant.as_str())
-        .bind(key.as_str())
-        .bind(claim)
-        .bind(i32::from(status))
-        .bind(body)
-        .execute(&self.pool)
-        .await
-        .map_err(backend)?;
+        let done = sqlx::query(sqlx::AssertSqlSafe(update))
+            .bind(tenant.as_str())
+            .bind(key.as_str())
+            .bind(claim)
+            .bind(i32::from(status))
+            .bind(body)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
         Ok(done.rows_affected() > 0)
     }
 
@@ -1195,13 +1195,13 @@ impl IdempotencyRecords for PgStore {
     ) -> StoreResult<bool> {
         let delete = "DELETE FROM wa_server_idempotency              WHERE tenant_id = $1 AND idempotency_key = $2 AND claim = $3"
             .replace("wa_server_idempotency", idempotency_table(tenant));
-        let done = sqlx::query(&delete)
-        .bind(tenant.as_str())
-        .bind(key.as_str())
-        .bind(claim)
-        .execute(&self.pool)
-        .await
-        .map_err(backend)?;
+        let done = sqlx::query(sqlx::AssertSqlSafe(delete))
+            .bind(tenant.as_str())
+            .bind(key.as_str())
+            .bind(claim)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
         Ok(done.rows_affected() > 0)
     }
 
@@ -1210,10 +1210,12 @@ impl IdempotencyRecords for PgStore {
         // delete a record once.
         let mut purged = 0;
         for table in [IDEMPOTENCY_TABLE, ADMIN_IDEMPOTENCY_TABLE] {
-            let done = sqlx::query(&format!("DELETE FROM {table} WHERE expires_at <= now()"))
-                .execute(&self.pool)
-                .await
-                .map_err(busy_or_backend)?;
+            let done = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {table} WHERE expires_at <= now()"
+            )))
+            .execute(&self.pool)
+            .await
+            .map_err(busy_or_backend)?;
             purged += done.rows_affected();
         }
         Ok(purged)
