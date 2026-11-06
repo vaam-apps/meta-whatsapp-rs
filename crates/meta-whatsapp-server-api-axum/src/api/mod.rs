@@ -6,7 +6,7 @@
 //! | Listener | Routes |
 //! | --- | --- |
 //! | public (`WA_SERVER_PUBLIC_BIND`) | `GET` and `POST /webhooks/meta` (Meta's subscription check and deliveries, bodies up to 3 MiB), `GET /livez`, nothing else ([`public_router`], the HTTP crate's) |
-//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`; erasing a customer `erasure`; groups `groups`; calling `calls`; commerce settings and catalogs `commerce`; QR codes `qr_codes`; analytics `analytics`; the block list `contacts`; routing roles and thread control `routing`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
+//! | internal (`WA_SERVER_INTERNAL_BIND`, loopback by default) | `/v1/admin/…` (admin key), `/v1/wabas`, `/v1/numbers/…` (tenant or platform key: scope `numbers`, registration and the two-step PIN included; messages `send`; media `media`; templates `templates`; conversations `inbox`; payment configurations, lookups and refunds `payments`; erasing a customer `erasure`; groups `groups`; calling `calls`; partner acts on a WABA `partners`; commerce settings and catalogs `commerce`; QR codes `qr_codes`; analytics `analytics`; the block list `contacts`; routing roles and thread control `routing`), `/v1/events` (scope `events`), `/v1/webhook-endpoints` (scope `webhooks`), `/v1/otp/…` (scope `otp`), `/v1/signup/…` (scope `signup`), `/livez`, `/readyz`, `/metrics`, `/v1/openapi.json`, `/v1/version` |
 //!
 //! Every API route is registered through utoipa-axum's `routes!`, which
 //! adds the handler and its `#[utoipa::path]` documentation at once: a
@@ -35,6 +35,7 @@ pub mod messages;
 pub mod number_settings;
 pub mod numbers;
 pub mod otp;
+pub mod partners;
 pub mod payments;
 pub mod pre_verified;
 pub mod qr_codes;
@@ -124,6 +125,7 @@ impl Modify for Security {
         (name = "webhooks", description = "Webhook endpoints: the tenant's events pushed to its URLs, signed the Standard Webhooks way, retried for 72 hours; their secrets, pings and deliveries (scope `webhooks`)"),
         (name = "otp", description = "One-time passcodes sent with the tenant's authentication template, and checked (scope `otp`)"),
         (name = "signup", description = "Embedded Signup: an attempt bound to the tenant, its completion (the business onboarded, the WABA and its numbers bound to the tenant), and the attempts to resume (scope `signup`)"),
+        (name = "partners", description = "Partner APIs (roadmap M5j): the operator's business verification submissions, Multi-Partner Solutions and assigned WABAs (admin key), and a tenant's WABA business verification status, solution migration intents and billing migrations (scope `partners`). Seven calls are legal or irreversible acts, off until the deployment sets `WA_SERVER_LEGAL_ACTS=on`, and audited. The solution token is never served"),
         (name = "pre_verified", description = "The deployment's pool of pre-verified numbers: adding, verifying, listing and deleting them, and reserving one for a tenant's signup (admin key; roadmap M3f)"),
         (name = "operations", description = "Health, metrics, this document, versions (no key)"),
     )
@@ -169,6 +171,41 @@ fn admin_routes() -> OpenApiRouter<Grant> {
             pre_verified::reserve_pre_verified_number,
             pre_verified::release_pre_verified_number
         ))
+}
+
+/// Roadmap M5j: the operator's partner routes (admin key). A business
+/// verification submission carries up to three documents.
+fn partners_admin_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(
+            partners::submit_business_verification,
+            partners::list_business_verifications
+        ))
+        .routes(routes!(
+            partners::create_partner_solution,
+            partners::list_partner_solutions
+        ))
+        .routes(routes!(partners::get_partner_solution))
+        .routes(routes!(partners::list_partner_solution_partners))
+        .routes(routes!(partners::list_client_businesses))
+        .routes(routes!(partners::accept_partner_solution))
+        .routes(routes!(partners::reject_partner_solution))
+        .routes(routes!(partners::request_partner_solution_deactivation))
+        .routes(routes!(partners::accept_partner_solution_deactivation))
+        .routes(routes!(partners::reject_partner_solution_deactivation))
+        .routes(routes!(partners::list_assigned_wabas))
+        .layer(DefaultBodyLimit::max(partners::MAX_VERIFICATION_BODY_BYTES))
+}
+
+/// Roadmap M5j: a tenant's partner acts on its own WABA (scope `partners`).
+fn partners_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(partners::get_business_verification))
+        .routes(routes!(partners::create_solution_migration_intent))
+        .routes(routes!(partners::get_solution_migration_intent))
+        .routes(routes!(partners::create_billing_migration))
+        .routes(routes!(partners::get_billing_migration))
+        .routes(routes!(partners::resume_billing_migration))
 }
 
 fn numbers_routes() -> OpenApiRouter<Grant> {
@@ -494,7 +531,7 @@ fn api_routes(
     tenant: impl Fn(OpenApiRouter<Grant>, Scope) -> OpenApiRouter<Grant>,
 ) -> OpenApiRouter<Grant> {
     OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .merge(admin(admin_routes()))
+        .merge(admin(admin_routes().merge(partners_admin_routes())))
         .merge(tenant(numbers_routes(), Scope::Numbers))
         .merge(tenant(registration_routes(), Scope::Numbers))
         .merge(tenant(messages_routes(), Scope::Send))
@@ -512,6 +549,7 @@ fn api_routes(
         .merge(tenant(marketing_routes(), Scope::Marketing))
         .merge(tenant(routing_routes(), Scope::Routing))
         .merge(tenant(calls_routes(), Scope::Calls))
+        .merge(tenant(partners_routes(), Scope::Partners))
         .merge(tenant(events_routes(), Scope::Events))
         .merge(tenant(webhook_routes(), Scope::Webhooks))
         .merge(tenant(otp_routes(), Scope::Otp))
@@ -696,6 +734,7 @@ mod tests {
             ("otp.rs", include_str!("otp.rs")),
             ("signup.rs", include_str!("signup.rs")),
             ("pre_verified.rs", include_str!("pre_verified.rs")),
+            ("partners.rs", include_str!("partners.rs")),
             ("webhook_endpoints.rs", include_str!("webhook_endpoints.rs")),
         ];
         let mut plain = Vec::new();

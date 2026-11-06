@@ -7149,9 +7149,40 @@ or WABA fails the family's own cross-tenant test).
     accept the terms is refused with zero requests; with it on, the
     acceptance is audited; no request carries the acceptance unless the
     caller asked for it.
-- [ ] **M5j. Partner APIs** (rows 143–147).
+- [x] **M5j. Partner APIs** (rows 143–147).
   - **After:** S7, L10b, L12.
-  - **Decisive:** M5.1, M5.2.
+  - **Decisive:** M5.1, M5.2; with `WA_SERVER_LEGAL_ACTS` off, each of the
+    seven legal or irreversible acts is `403 feature_not_available` and
+    nothing is asked of Meta; the operator's routes follow the
+    authorization order.
+  - **Landed:** the operator's routes (admin key; the deployment's
+    partner business and system token, `WA_PARTNER_BUSINESS_ID`, as the
+    pool of pre-verified numbers uses them): `/v1/admin/partners/` business
+    verification submissions (`POST`, `GET`), Multi-Partner Solutions
+    (create, list, read, partners, accept, reject, the three deactivation
+    calls), the app's client businesses and a user's assigned WABAs
+    (`server_core::partners::Partners`); the tenant's (scope `partners`,
+    a WABA of its own): its business verification status, solution
+    migration intents (create with an `Idempotency-Key`, read back only
+    when they name the WABA) and billing migrations (start with an
+    `Idempotency-Key`, read and resume only the WABA's own, remembered
+    under `wa.server.billing_migration`)
+    (`server_core::partners::WabaPartners`). The legal acts, with the
+    evidence of each in the design's D250: submitting a business's
+    documents, accepting, rejecting and accepting the deactivation of a
+    solution, a solution migration intent, a billing migration's start
+    and its resumption; the three of a tenant's WABA are arms of
+    `number_settings::is_legal_act`, the four of the operator
+    `number_settings::is_legal_admin_act`, with M5h's agreement. Not offered: the solution token (a
+    credential: never in an answer), moving a number between partners
+    (Meta: unsupported on the new account model), and a WABA's solutions.
+- [ ] **M5j2. Idempotency on the operator's creating POSTs** (design D255).
+  - **After:** M5j.
+  - **Decisive:** the same `Idempotency-Key` and body on a business
+    verification submission, after a `504`, is one request to Meta (a
+    submission is capped at three per customer, so a client's retry can
+    burn one); a different body with the key is `idempotency_key_reused`.
+    Starts with the verification submission and the solution creation.
 - [ ] **M5k. The bot and broadcast APIs** (rows 17, 85–92), over B1–B4.
   - **After:** B1, B2, B2b (the replicas' shared budget), B3, B4.
   - **Decisive:** M5.1, M5.2; a broadcast over HTTP never exceeds its

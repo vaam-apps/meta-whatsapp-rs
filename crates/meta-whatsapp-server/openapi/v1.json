@@ -233,6 +233,1378 @@
         ]
       }
     },
+    "/v1/admin/partners/business-verifications": {
+      "get": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`GET /v1/admin/partners/business-verifications`: one page of the\nsubmissions the deployment made.",
+        "operationId": "list_business_verifications",
+        "parameters": [
+          {
+            "name": "client_business_id",
+            "in": "query",
+            "description": "Only this customer's submissions.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of submissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessVerificationSubmissionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `client_business_id`, `cursor` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`POST /v1/admin/partners/business-verifications`: submit a customer\nbusiness for partner-led verification, with its documents. **A legal\nact** (a statement of the business's legal identity): off until the\ndeployment sets `WA_SERVER_LEGAL_ACTS=on`. Each submission counts\ntowards the customer's three, so it is never replayed.",
+        "operationId": "submit_business_verification",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitBusinessVerification"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Meta received it; audited `business_verification_submitted` (by count: never a document). The outcome comes by the `account_update` webhook",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessVerificationReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta) or `forbidden` (not an admin key)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`: no partner business (`WA_PARTNER_BUSINESS_ID`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `client_business_id`, `documents` (one to three, PDF, JPEG or PNG, 5 MiB each, content of the type its name says) or `body`: nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused or failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: list the submissions before submitting again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/partners/client-businesses": {
+      "get": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`GET /v1/admin/partners/client-businesses`: one page of the businesses\nonboarded through the deployment's app.",
+        "operationId": "list_client_businesses",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 100.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of client businesses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientBusinessList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `limit`, `cursor` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/partners/solutions": {
+      "get": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`GET /v1/admin/partners/solutions`: one page of the deployment's\napp's solutions.",
+        "operationId": "list_partner_solutions",
+        "parameters": [
+          {
+            "name": "role",
+            "in": "query",
+            "description": "`OWNER` or `PARTNER`: only the solutions the app owns, or is a\npartner of.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 100.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of solutions (id, name and status)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolutionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `role`, `limit`, `cursor` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`POST /v1/admin/partners/solutions`: create a Multi-Partner Solution\nowned by the deployment's app, inviting another. Not a legal act (it\nbinds nobody until the partner accepts); audited, never replayed.",
+        "operationId": "create_partner_solution",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSolution"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created `INITIATED`; audited `partner_solution_created`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedSolution"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `name`, `partner_app_id`, `owner_permissions`, `partner_permissions` or `body`: nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused or failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: list the solutions before creating again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/partners/solutions/{id}": {
+      "get": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`GET /v1/admin/partners/solutions/{id}`: a solution with its owner,\npermissions and partners: what to read before accepting it.",
+        "operationId": "get_partner_solution",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The solution's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The solution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Solution"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/partners/solutions/{id}/accept": {
+      "post": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`POST /v1/admin/partners/solutions/{id}/accept`: accept a solution's\ninvitation. **A legal act, and it cannot be undone**: a solution cannot\nbe declined once accepted, so read it first. Off until the deployment\nsets `WA_SERVER_LEGAL_ACTS=on`; audited; never replayed.",
+        "operationId": "accept_partner_solution",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The solution's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Accepted; audited `partner_solution_accepted`"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`feature_not_available` (the legal acts are off: nothing was asked of Meta) or `forbidden`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `id`, or Meta's refusal (not `INITIATED`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the solution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/partners/solutions/{id}/deactivation-request": {
+      "post": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`POST /v1/admin/partners/solutions/{id}/deactivation-request`: ask the\npartner to deactivate a solution. The solution stays usable until the\npartner accepts. Not a legal act; audited; never replayed.",
+        "operationId": "request_partner_solution_deactivation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The solution's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Asked; audited `partner_solution_deactivation_requested`"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `id`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the solution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/partners/solutions/{id}/deactivation-request/accept": {
+      "post": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`POST /v1/admin/partners/solutions/{id}/deactivation-request/accept`:\naccept a pending deactivation request: the solution becomes\n`DEACTIVATED` and onboards no client. **A legal act**: off until the\ndeployment sets `WA_SERVER_LEGAL_ACTS=on`; audited; never replayed.",
+        "operationId": "accept_partner_solution_deactivation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The solution's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Accepted; audited `partner_solution_deactivation_accepted`"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`feature_not_available` (the legal acts are off: nothing was asked of Meta) or `forbidden`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `id`, or Meta's refusal (outstanding payments, no pending request)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the solution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/partners/solutions/{id}/deactivation-request/reject": {
+      "post": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`POST /v1/admin/partners/solutions/{id}/deactivation-request/reject`:\nreject a pending deactivation request; the solution stays `ACTIVE`.\nNot a legal act; audited; never replayed.",
+        "operationId": "reject_partner_solution_deactivation",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The solution's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Rejected; audited `partner_solution_deactivation_rejected`"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `id`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the solution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/partners/solutions/{id}/partners": {
+      "get": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`GET /v1/admin/partners/solutions/{id}/partners`: one page of a\nsolution's partners.",
+        "operationId": "list_partner_solution_partners",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The solution's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of partners",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolutionPartnerList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `id`, `cursor` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/partners/solutions/{id}/reject": {
+      "post": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`POST /v1/admin/partners/solutions/{id}/reject`: decline a solution's\ninvitation. **A legal act, and permanent**: the other partner has to\nsend a new solution. Off until the deployment sets\n`WA_SERVER_LEGAL_ACTS=on`; audited; never replayed.",
+        "operationId": "reject_partner_solution",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The solution's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Rejected; audited `partner_solution_rejected`"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`feature_not_available` (the legal acts are off: nothing was asked of Meta) or `forbidden`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `id`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the solution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/partners/users/{user_id}/wabas": {
+      "get": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`GET /v1/admin/partners/users/{user_id}/wabas`: one page of the WABAs\nassigned to a system user of the deployment's business.",
+        "operationId": "list_assigned_wabas",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "The system user's id (digits)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, 1 to 100.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of WABAs (id and name)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignedWabaList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `user_id`, `limit`, `cursor` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused or failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/admin/platform-keys": {
       "get": {
         "tags": [
@@ -17514,6 +18886,572 @@
         ]
       }
     },
+    "/v1/wabas/{waba_id}/billing-migrations": {
+      "post": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/billing-migrations`: start moving the WABA to\nanother billing currency or payment method: Meta clones it with its\ntemplates. **A legal act** (financial): off until the deployment sets\n`WA_SERVER_LEGAL_ACTS=on`; audited; takes an `Idempotency-Key`.",
+        "operationId": "create_billing_migration",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never create twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBillingMigration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Started; audited `billing_migration_started`. Poll it until `READY_TO_COMPLETE`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingMigration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`feature_not_available` (the legal acts are off: nothing was asked of Meta), `forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `currency`, `extended_credit_id` or `body`: nothing was sent; `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the migration may have started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/billing-migrations/{migration_id}": {
+      "get": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/billing-migrations/{migration_id}`: where a\nbilling migration of the WABA stands. A migration the WABA did not\nstart through this service is `404`, and Meta is not asked.",
+        "operationId": "get_billing_migration",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "migration_id",
+            "in": "path",
+            "description": "The migration's id (`mig_…`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The migration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingMigration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such migration of it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/billing-migrations/{migration_id}/resume": {
+      "post": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/billing-migrations/{migration_id}/resume`:\ncomplete a billing migration: the clone becomes the billing account of\nthe numbers, and the old WABA can no longer send. **A legal act**\n(financial, not undone by the API): off until the deployment sets\n`WA_SERVER_LEGAL_ACTS=on`; audited; never replayed.",
+        "operationId": "resume_billing_migration",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "migration_id",
+            "in": "path",
+            "description": "The migration's id (`mig_…`)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed or completing; audited `billing_migration_resumed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingMigration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`feature_not_available` (the legal acts are off: nothing was asked of Meta), `forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such migration of it; Meta was not asked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the migration before resuming again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/business-verification": {
+      "get": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/business-verification`: the WABA's business\nverification status.",
+        "operationId": "get_business_verification",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessVerification"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/wabas/{waba_id}/catalogs": {
       "get": {
         "tags": [
@@ -21223,6 +23161,305 @@
           },
           "504": {
             "description": "`timeout`: a link may have been issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/solution-migration-intents": {
+      "post": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/solution-migration-intents`: tag the WABA for\nmigration to a Multi-Partner Solution; Meta asks the WABA's client to\naccept in Meta Business Suite (and accepts for them after 90 days).\n**A legal act**: off until the deployment sets\n`WA_SERVER_LEGAL_ACTS=on`; audited; takes an `Idempotency-Key`.",
+        "operationId": "create_solution_migration_intent",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never create twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSolutionMigrationIntent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created; audited `solution_migration_intent_created`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedSolutionMigrationIntent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`feature_not_available` (the legal acts are off: nothing was asked of Meta), `forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `solution_id` or `body`; `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the intent may have been created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/solution-migration-intents/{intent_id}": {
+      "get": {
+        "tags": [
+          "partners"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/solution-migration-intents/{intent_id}`: a\nmigration intent of the WABA. An intent that does not name this WABA is\n`404`, and nothing of it is answered.",
+        "operationId": "get_solution_migration_intent",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "intent_id",
+            "in": "path",
+            "description": "The intent's id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The intent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolutionMigrationIntent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such intent of it (another WABA's looks like a missing one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
             "content": {
               "application/json": {
                 "schema": {
@@ -25855,6 +28092,51 @@
           }
         }
       },
+      "AssignedWaba": {
+        "type": "object",
+        "description": "A WABA assigned to a user.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The WABA's id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          }
+        }
+      },
+      "AssignedWabaList": {
+        "type": "object",
+        "description": "A page of the WABAs assigned to a user.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssignedWaba"
+            },
+            "description": "The items."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      },
       "AttachWaba": {
         "type": "object",
         "description": "`POST /v1/admin/tenants/{id}/wabas`: the platform's own WABA and a\nsystem user token with access to it.",
@@ -26063,6 +28345,40 @@
           }
         },
         "additionalProperties": false
+      },
+      "BillingMigration": {
+        "type": "object",
+        "description": "A billing currency or payment method migration.",
+        "required": [
+          "id",
+          "status",
+          "destination_waba_id",
+          "destination_currency"
+        ],
+        "properties": {
+          "destination_currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The clone's currency, once Meta said."
+          },
+          "destination_waba_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The clone Meta created, once it said."
+          },
+          "id": {
+            "type": "string",
+            "description": "The migration's id."
+          },
+          "status": {
+            "type": "string",
+            "description": "`INITIATED`, `ACCEPTED`, `IN_PROGRESS`, `READY_TO_COMPLETE`,\n`COMPLETED`, `FAILED`, `FAILED_TO_COMPLETE`, `REJECTED`, or another\nvalue as Meta sent it."
+          }
+        }
       },
       "BlockUser": {
         "type": "object",
@@ -26303,6 +28619,151 @@
               "null"
             ],
             "description": "The username; `null` when the number has none."
+          }
+        }
+      },
+      "BusinessVerification": {
+        "type": "object",
+        "description": "A WABA's business verification status.",
+        "required": [
+          "status",
+          "verified"
+        ],
+        "properties": {
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Meta's `business_verification_status`, as sent (`verified`,\n`pending`, …); `null` when Meta did not say."
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "Whether it is `verified`."
+          }
+        }
+      },
+      "BusinessVerificationDocument": {
+        "type": "object",
+        "description": "One document of a submission.",
+        "required": [
+          "file_name",
+          "content_base64"
+        ],
+        "properties": {
+          "content_base64": {
+            "type": "string",
+            "description": "The content in base64 (standard alphabet), at most 5 MiB decoded,\nand a file of the type its name says."
+          },
+          "file_name": {
+            "type": "string",
+            "description": "The file name; its extension is its type: `.pdf`, `.jpeg`, `.jpg`\nor `.png`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "BusinessVerificationReceipt": {
+        "type": "object",
+        "description": "What Meta counted for a submission.",
+        "required": [
+          "verification_attempts",
+          "attempts_left"
+        ],
+        "properties": {
+          "attempts_left": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "What is left of the three (after three rejections the customer\nverifies on their own).",
+            "minimum": 0
+          },
+          "verification_attempts": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Submissions made for this customer, this one included.",
+            "minimum": 0
+          }
+        }
+      },
+      "BusinessVerificationSubmission": {
+        "type": "object",
+        "description": "A submission of business documents for partner-led verification.",
+        "required": [
+          "id",
+          "status",
+          "rejection_reasons",
+          "submitted_time",
+          "update_time",
+          "client_business_id"
+        ],
+        "properties": {
+          "client_business_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The customer's business portfolio."
+          },
+          "id": {
+            "type": "string",
+            "description": "The submission's id."
+          },
+          "rejection_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Why it was rejected, as Meta's `rejection_reasons`."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`APPROVED`, `DISCARDED`, `FAILED`, `PENDING`, `REVOKED`, or another\nvalue as Meta sent it."
+          },
+          "submitted_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was submitted, as Meta sent it."
+          },
+          "update_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it last changed, as Meta sent it."
+          }
+        }
+      },
+      "BusinessVerificationSubmissionList": {
+        "type": "object",
+        "description": "A page of business verification submissions.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BusinessVerificationSubmission"
+            },
+            "description": "The items."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
           }
         }
       },
@@ -27106,6 +29567,51 @@
               "null"
             ],
             "description": "The product whose image is the thumbnail (Meta's default: the\ncatalog's first)."
+          }
+        }
+      },
+      "ClientBusiness": {
+        "type": "object",
+        "description": "A business onboarded through the deployment's app.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Its business portfolio id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          }
+        }
+      },
+      "ClientBusinessList": {
+        "type": "object",
+        "description": "A page of the businesses onboarded through the deployment's app.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClientBusiness"
+            },
+            "description": "The items."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
           }
         }
       },
@@ -28108,6 +30614,27 @@
         ],
         "description": "A coordinate in decimal degrees: Meta's pages write it as a string\n(`\"37.44216251868683\"`); a JSON number is accepted too."
       },
+      "CreateBillingMigration": {
+        "type": "object",
+        "description": "`POST /v1/wabas/{waba_id}/billing-migrations`.",
+        "required": [
+          "currency"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string",
+            "description": "The new WABA's billing currency, an ISO 4217 code (`INR`)."
+          },
+          "extended_credit_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Line of Credit to attach to the new WABA; only when moving to\nLine of Credit billing."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateGroupRequest": {
         "type": "object",
         "description": "A group to create.",
@@ -28204,6 +30731,53 @@
         },
         "additionalProperties": false
       },
+      "CreateSolution": {
+        "type": "object",
+        "description": "`POST /v1/admin/partners/solutions`.",
+        "required": [
+          "name",
+          "partner_app_id"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The solution's name, 2 to 75 characters, as both partners see it in\nthe App Dashboard."
+          },
+          "owner_permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What clients grant the deployment's app: `MESSAGING` or nothing\n(Meta's reference allows no other)."
+          },
+          "partner_app_id": {
+            "type": "string",
+            "description": "The invited partner's app."
+          },
+          "partner_permissions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What clients grant the partner's app: Meta's task names\n(`MESSAGING`, `MANAGE_TEMPLATES`, …). `MESSAGING` must be granted\nto one of the two."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateSolutionMigrationIntent": {
+        "type": "object",
+        "description": "`POST /v1/wabas/{waba_id}/solution-migration-intents`.",
+        "required": [
+          "solution_id"
+        ],
+        "properties": {
+          "solution_id": {
+            "type": "string",
+            "description": "The destination solution (active), whose partner will read the\nintent once the client accepted it."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateTenant": {
         "type": "object",
         "description": "`POST /v1/admin/tenants`.",
@@ -28280,6 +30854,32 @@
           "id": {
             "type": "string",
             "description": "Its id: request its code next."
+          }
+        }
+      },
+      "CreatedSolution": {
+        "type": "object",
+        "description": "A solution just created.",
+        "required": [
+          "solution_id"
+        ],
+        "properties": {
+          "solution_id": {
+            "type": "string",
+            "description": "The new solution, `INITIATED` until the partner accepts it."
+          }
+        }
+      },
+      "CreatedSolutionMigrationIntent": {
+        "type": "object",
+        "description": "A solution migration intent just created.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The intent's id: send it to the destination solution's partner."
           }
         }
       },
@@ -33891,7 +36491,8 @@
           "groups",
           "marketing",
           "routing",
-          "calls"
+          "calls",
+          "partners"
         ]
       },
       "SendMarketingMessage": {
@@ -34485,6 +37086,225 @@
           "failed"
         ]
       },
+      "Solution": {
+        "type": "object",
+        "description": "A Multi-Partner Solution.",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "status_for_pending_request",
+          "owner_app_id",
+          "owner_permissions",
+          "partners"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The solution's id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          },
+          "owner_app_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owner's app (a single solution's read only)."
+          },
+          "owner_permissions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "What clients grant the owner's app (a single solution's read only)."
+          },
+          "partners": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SolutionPartner"
+            },
+            "description": "The partners (a single solution's read only)."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`INITIATED`, `ACTIVE`, `DEACTIVATED`, … as Meta sent it."
+          },
+          "status_for_pending_request": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The transition waiting for the other partner, if any."
+          }
+        }
+      },
+      "SolutionList": {
+        "type": "object",
+        "description": "A page of the deployment's app's solutions.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Solution"
+            },
+            "description": "The items."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      },
+      "SolutionMigrationIntent": {
+        "type": "object",
+        "description": "A migration intent of the WABA.",
+        "required": [
+          "id",
+          "status",
+          "solution_id",
+          "solution_name",
+          "destination_waba_id",
+          "waba_id"
+        ],
+        "properties": {
+          "destination_waba_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The WABA the migration lands on."
+          },
+          "id": {
+            "type": "string",
+            "description": "The intent's id."
+          },
+          "solution_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The destination solution."
+          },
+          "solution_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The destination solution's name."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`INITIATED`, `ACCEPTED`, `REJECTED`, … as Meta sent it. The client\naccepts in Meta Business Suite."
+          },
+          "waba_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The source WABA."
+          }
+        }
+      },
+      "SolutionPartner": {
+        "type": "object",
+        "description": "A partner of a solution.",
+        "required": [
+          "id",
+          "partner_app_id",
+          "partner_app_name",
+          "status",
+          "partner_permissions"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The partner record's id (not an app id)."
+          },
+          "partner_app_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The partner's app."
+          },
+          "partner_app_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The partner's app name."
+          },
+          "partner_permissions": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "What clients grant the partner's app (`MESSAGING`, …)."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`NOTIFICATION_SENT` or `ACCEPTED`, as Meta sent it."
+          }
+        }
+      },
+      "SolutionPartnerList": {
+        "type": "object",
+        "description": "A page of a solution's partners.",
+        "required": [
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SolutionPartner"
+            },
+            "description": "The items."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; `null` on the last one."
+          }
+        }
+      },
       "StartSignup": {
         "type": "object",
         "description": "`POST /v1/signup/sessions`.",
@@ -34520,6 +37340,28 @@
               "null"
             ],
             "description": "`https://` URL Meta fetches."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SubmitBusinessVerification": {
+        "type": "object",
+        "description": "`POST /v1/admin/partners/business-verifications`. No `Debug`: it holds\nthe documents.",
+        "required": [
+          "client_business_id",
+          "documents"
+        ],
+        "properties": {
+          "client_business_id": {
+            "type": "string",
+            "description": "The customer's business portfolio, onboarded through the\ndeployment's app."
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BusinessVerificationDocument"
+            },
+            "description": "One to three documents."
           }
         },
         "additionalProperties": false
@@ -36294,6 +39136,10 @@
     {
       "name": "signup",
       "description": "Embedded Signup: an attempt bound to the tenant, its completion (the business onboarded, the WABA and its numbers bound to the tenant), and the attempts to resume (scope `signup`)"
+    },
+    {
+      "name": "partners",
+      "description": "Partner APIs (roadmap M5j): the operator's business verification submissions, Multi-Partner Solutions and assigned WABAs (admin key), and a tenant's WABA business verification status, solution migration intents and billing migrations (scope `partners`). Seven calls are legal or irreversible acts, off until the deployment sets `WA_SERVER_LEGAL_ACTS=on`, and audited. The solution token is never served"
     },
     {
       "name": "pre_verified",

@@ -59,6 +59,37 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   `number_settings::is_legal_admin_act`, the audit actions; the names are
   pending the owner's confirmation before the first release.
 
+### Added (roadmap M5j)
+
+- **Partner APIs, in the service** (roadmap M5j, parity rows 143 to 147
+  now done in the service; choices D250-D257, decided by the coordinator on
+  2026-11-06 under the owner's delegation, swappable; from Meta's `solution-providers/partner-led-business-verification`,
+  `solution-providers/multi-partner-solutions`, `solution-providers/support/adding-waba-to-mps`,
+  `reference/user/assigned-whatsapp-business-accounts-api` and
+  `pricing/change-billing-currency`, read on 2026-11-06). The operator's
+  routes under `/v1/admin/partners` (the deployment's partner business and
+  system token): business verification submissions and their list,
+  Multi-Partner Solutions (create, list, read, partners, accept, reject,
+  deactivation request, accept, reject), the app's client businesses and a
+  system user's assigned WABAs (a submission's body is bounded at 21 MiB; the
+  gate is answered before the body is read). A tenant's, in a new scope, `partners`
+  (a stored name, pending the owner's confirmation before the first
+  release): a WABA's business verification status, solution migration
+  intents (create with an `Idempotency-Key`, read back only when they name
+  the WABA) and billing currency or payment method migrations (start,
+  read, resume; the service remembers each migration's WABA and tenant
+  under `wa.server.billing_migration`, so another WABA's is `404` with Meta
+  not asked). **Seven calls are legal or irreversible acts** (a business
+  verification submission, accepting, rejecting and accepting the
+  deactivation of a solution, a solution migration intent, a billing
+  migration's start and its resumption): off until the deployment sets
+  `WA_SERVER_LEGAL_ACTS=on`, `403 feature_not_available` before any
+  request to Meta otherwise, audited, never taken by another route. The
+  solution token is never served; documents, names, tokens and Meta's
+  texts are in no log, error or audit event. Not offered: moving a number
+  between partners (Meta: unsupported on the new account model). A new
+  skill, `meta-whatsapp-rs-server-partners`.
+
 ### Added (roadmap M5e)
 
 - **Calling, in the service** (roadmap M5e, parity rows 74, 75, 134 and 135

@@ -584,6 +584,90 @@ async fn live_postgres_a_call_the_number_does_not_hold_is_not_found_before_the_v
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// The design's M5.2 on Postgres (roadmap M5j): the record of a billing
+/// migration (which tenant's WABA started it) lives in the Postgres
+/// key/value store: the owner's WABA reads it and sees Meta's answer;
+/// another WABA of the tenant and another tenant's are `404` with no
+/// request to Meta.
+#[tokio::test]
+async fn live_postgres_a_billing_migration_is_its_wabas_own() {
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(10).await;
+    migrate(&pool).await.unwrap();
+    let h = Harness::with_stores_and_settings(
+        Stores::postgres(&pool),
+        meta_whatsapp_server::state::Settings {
+            legal_acts: true,
+            ..common::test_settings()
+        },
+    );
+    let mig = "mig_01HZYK3ABCDEF4567890";
+    h.tenant("tenant-a").await;
+    h.connect(
+        "tenant-a",
+        "102290129340398",
+        &["106540352242922"],
+        "TOKEN-OF-A",
+    )
+    .await;
+    h.connect(
+        "tenant-a",
+        "102290129340400",
+        &["106540352242925"],
+        "TOKEN-OF-A2",
+    )
+    .await;
+    h.tenant("tenant-b").await;
+    h.connect(
+        "tenant-b",
+        "102290129340399",
+        &["106540352242924"],
+        "TOKEN-OF-B",
+    )
+    .await;
+    let a = h.tenant_key("tenant-a", &[Scope::Partners]).await;
+    let b = h.tenant_key("tenant-b", &[Scope::Partners]).await;
+    h.graph.push_json(
+        200,
+        json!({"migration_id": mig, "migration_status": "INITIATED"}),
+    );
+    let started = h
+        .call(
+            Call::new(Method::POST, "/v1/wabas/102290129340398/billing-migrations")
+                .key(&a)
+                .json(&json!({"currency": "INR"})),
+        )
+        .await;
+    assert_eq!(started.status, StatusCode::CREATED, "{}", started.text);
+    let asked = h.graph.requests().len();
+    for (key, waba) in [(&a, "102290129340400"), (&b, "102290129340399")] {
+        let reply = h
+            .call(Call::get(format!("/v1/wabas/{waba}/billing-migrations/{mig}")).key(key))
+            .await;
+        assert_eq!(
+            reply.status,
+            StatusCode::NOT_FOUND,
+            "{waba}: {}",
+            reply.text
+        );
+    }
+    assert_eq!(h.graph.requests().len(), asked, "Meta was never asked");
+    h.graph
+        .push_json(200, json!({"status": "READY_TO_COMPLETE", "id": mig}));
+    let own = h
+        .call(
+            Call::get(format!(
+                "/v1/wabas/102290129340398/billing-migrations/{mig}"
+            ))
+            .key(&a),
+        )
+        .await;
+    assert_eq!(own.status, StatusCode::OK, "{}", own.text);
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 /// The design's M5.1 and M5.2 on Postgres (roadmap M5c2): a resumable
 /// upload's record lives in the Postgres key/value store, and a profile
 /// picture is set from the handle in the number's own record only: another

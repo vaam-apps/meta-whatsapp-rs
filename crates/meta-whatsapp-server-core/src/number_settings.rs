@@ -77,16 +77,31 @@ use crate::request::wire;
 /// operation to the gate is one more arm here.
 #[must_use]
 pub fn is_legal_act(operation: Operation) -> bool {
-    matches!(operation, Operation::SetComplianceInfo)
+    matches!(
+        operation,
+        Operation::SetComplianceInfo
+            | Operation::CreateSolutionMigrationIntent
+            | Operation::CreateBillingMigration
+            | Operation::ResumeBillingMigration
+    )
 }
 
 /// [`is_legal_act`] for an operator's operations
-/// ([`AdminOperation`]; roadmap M5h, design D231): the max price beta
-/// agreement. The same setting gates it, and adding an admin act to the
-/// gate is one more arm here.
+/// ([`AdminOperation`]; roadmap M5h, design D231 and M5j, design D250): the
+/// max price beta agreement and the four partner acts of the operator (a
+/// business verification submission; accepting or rejecting a solution;
+/// accepting a deactivation). The same setting gates them, and adding an
+/// admin act to the gate is one more arm here.
 #[must_use]
 pub fn is_legal_admin_act(operation: AdminOperation) -> bool {
-    matches!(operation, AdminOperation::SignMaxPriceAgreement)
+    matches!(
+        operation,
+        AdminOperation::SignMaxPriceAgreement
+            | AdminOperation::SubmitBusinessVerification
+            | AdminOperation::AcceptPartnerSolution
+            | AdminOperation::RejectPartnerSolution
+            | AdminOperation::AcceptPartnerSolutionDeactivation
+    )
 }
 
 /// The audit action of [`NumberSettings::change`]: a stored name in the
@@ -846,28 +861,53 @@ mod tests {
 
     use super::*;
 
-    /// D192: the compliance declaration is the one legal act among the
+    /// D192 and D250: the compliance declaration and the three partner acts
+    /// of roadmap M5j (a migration intent to a solution, a billing
+    /// migration and its resumption) are the legal acts among the
     /// operations; the application and the erasure are not.
     #[test]
-    fn only_the_compliance_declaration_is_a_legal_act() {
+    fn only_the_declaration_and_the_partner_acts_are_legal_acts() {
         let gated: Vec<_> = Operation::ALL
             .into_iter()
             .filter(|operation| is_legal_act(*operation))
             .collect();
-        assert_eq!(gated, [Operation::SetComplianceInfo]);
+        assert_eq!(
+            gated,
+            [
+                Operation::SetComplianceInfo,
+                Operation::CreateSolutionMigrationIntent,
+                Operation::CreateBillingMigration,
+                Operation::ResumeBillingMigration,
+            ]
+        );
     }
 
-    /// D231: the max price agreement is the one admin legal act, and no
+    /// D231 and D250: the max price agreement and the four partner acts of
+    /// the operator are the admin legal acts, and no
     /// tenant operation of the marketing family is a legal act of either
     /// kind. Decisive: the arm of `is_legal_admin_act`, and a marketing
     /// operation added to `is_legal_act`.
     #[test]
-    fn the_agreement_is_the_one_admin_legal_act_and_no_marketing_operation_is_one() {
+    fn the_admin_legal_acts_are_the_agreement_and_the_partner_acts_and_no_marketing_operation_is_one()
+     {
         let gated: Vec<_> = AdminOperation::ALL
             .into_iter()
             .filter(|operation| is_legal_admin_act(*operation))
             .collect();
-        assert_eq!(gated, [AdminOperation::SignMaxPriceAgreement]);
+        assert_eq!(gated, AdminOperation::ALL);
+        assert_eq!(
+            gated
+                .iter()
+                .map(|operation| operation.id())
+                .collect::<Vec<_>>(),
+            [
+                "sign_max_price_agreement",
+                "submit_business_verification",
+                "accept_partner_solution",
+                "reject_partner_solution",
+                "accept_partner_solution_deactivation",
+            ]
+        );
         assert_eq!(
             AdminOperation::SignMaxPriceAgreement.id(),
             "sign_max_price_agreement"
