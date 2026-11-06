@@ -534,12 +534,8 @@ async fn the_pending_deliveries_are_a_gauge_that_falls_when_they_are_delivered()
         (3, 90),
         "{metrics}"
     );
-    // Delivered one by one (an endpoint has one attempt at a time).
-    assert_eq!(round(&dispatcher).await, 1);
-    let metrics = h.call(Call::get("/metrics")).await.text;
-    assert_eq!(gauge(&metrics, PENDING), 2, "{metrics}");
-    assert_eq!(round(&dispatcher).await, 1);
-    assert_eq!(round(&dispatcher).await, 1);
+    // One round delivers them all (an endpoint has attempts in parallel).
+    assert_eq!(round(&dispatcher).await, 3);
     assert_eq!(got.lock().unwrap().len(), 3);
     let metrics = h.call(Call::get("/metrics")).await.text;
     assert_eq!(
