@@ -140,6 +140,105 @@ async fn connect_is_never_replayed() {
     assert_eq!(ts.remaining(), 0);
 }
 
+/// L28: Meta's calling errors never make the client replay a call. A
+/// connect that meets one of them under a retrying policy sends exactly
+/// one request, a `500` (`138004`, `138007`) and a `429` limit (`138002`)
+/// included: the first may have connected, the second is not a throttle to
+/// wait out. Decisive: make `CallConnectionFailed` or `CallLimitReached`
+/// retryable or rejected-before-processing and a case sends twice.
+#[tokio::test]
+async fn connect_meeting_a_calling_error_code_is_sent_once() {
+    for (status, code, kind) in [
+        (500, 138_004, ErrorKind::CallConnectionFailed),
+        (500, 138_007, ErrorKind::CallConnectionFailed),
+        (429, 138_002, ErrorKind::CallLimitReached),
+        (429, 138_005, ErrorKind::CallLimitReached),
+        (400, 138_012, ErrorKind::CallLimitReached),
+        (400, 138_003, ErrorKind::CallAlreadyOngoing),
+        (400, 138_021, ErrorKind::CallMediaTimeout),
+        (400, 138_014, ErrorKind::CallingTemporarilyDisabled),
+    ] {
+        let ts = ScriptedTransport::new();
+        ts.push_json(
+            status,
+            json!({"error": {"message": "x", "type": "OAuthException", "code": code}}),
+        );
+        // A second answer a replay would consume.
+        ts.push_json(
+            200,
+            json!({"messaging_product": "whatsapp", "calls": [{"id": CALL}]}),
+        );
+        let c = Client::builder()
+            .transport(ts.clone())
+            .access_token("TOKEN")
+            .retry(RetryPolicy {
+                max_retries: 2,
+                base_delay: Duration::ZERO,
+                max_delay: Duration::ZERO,
+            })
+            .build()
+            .unwrap();
+        let err = c
+            .calling(PhoneNumberId::new(PHONE).unwrap())
+            .connect(&ConnectCall::new(Recipient::phone("1"), SDP))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), kind, "{code}");
+        assert_eq!(ts.requests().len(), 1, "{code}: a replay rings twice");
+        assert_eq!(ts.remaining(), 1, "{code}");
+    }
+}
+
+/// L28: `613`, the call-permission read's limit, is a throttle: the read
+/// (a GET) waits and asks again, as for any `rate_limited`; a `138004`
+/// on the same read is not (no kind of the calling family is retryable).
+#[tokio::test]
+async fn the_permission_read_retries_a_613_and_not_a_call_error() {
+    let policy = RetryPolicy {
+        max_retries: 2,
+        base_delay: Duration::ZERO,
+        max_delay: Duration::ZERO,
+    };
+    let build = |ts: &ScriptedTransport| {
+        Client::builder()
+            .transport(ts.clone())
+            .access_token("TOKEN")
+            .retry(policy.clone())
+            .build()
+            .unwrap()
+    };
+    let ts = ScriptedTransport::new();
+    ts.push_json(
+        429,
+        json!({"error": {"message": "x", "type": "OAuthException", "code": 613}}),
+    );
+    ts.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "permission": {"status": "no_permission"}, "actions": []}),
+    );
+    build(&ts)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
+        .permissions(&Recipient::phone("13057765456"))
+        .await
+        .unwrap();
+    assert_eq!(ts.requests().len(), 2);
+    assert_eq!(ts.remaining(), 0);
+
+    let ts = ScriptedTransport::new();
+    ts.push_json(
+        500,
+        json!({"error": {"message": "x", "type": "OAuthException", "code": 138004}}),
+    );
+    ts.push_json(200, json!({"messaging_product": "whatsapp", "permission": {"status": "no_permission"}, "actions": []}));
+    let err = build(&ts)
+        .calling(PhoneNumberId::new(PHONE).unwrap())
+        .permissions(&Recipient::phone("13057765456"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::CallConnectionFailed);
+    assert_eq!(ts.requests().len(), 1);
+}
+
 #[tokio::test]
 async fn pre_accept_matches_docs_example() {
     let ts = ScriptedTransport::new();
