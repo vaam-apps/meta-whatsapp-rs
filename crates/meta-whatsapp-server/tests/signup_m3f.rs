@@ -829,13 +829,17 @@ fn the_m3f_settings_are_off_by_default_and_need_their_token() {
         );
     }
     // Hosted signup and the pool need a token.
-    for name in ["WA_HOSTED_SIGNUP"] {
-        let refused = Config::from_env(&base.clone().set(name, "on")).err();
-        assert!(
-            matches!(&refused, Some(ConfigError::Invalid { name: n, .. }) if *n == name),
-            "{refused:?}"
-        );
-    }
+    let refused = Config::from_env(&base.clone().set("WA_HOSTED_SIGNUP", "on")).err();
+    assert!(
+        matches!(
+            &refused,
+            Some(ConfigError::Invalid {
+                name: "WA_HOSTED_SIGNUP",
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
     let refused =
         Config::from_env(&base.clone().set("WA_PARTNER_BUSINESS_ID", POOL_BUSINESS)).err();
     assert!(
