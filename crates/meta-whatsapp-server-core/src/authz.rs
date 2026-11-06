@@ -1452,6 +1452,22 @@ impl OwnedWaba {
         authz.graph_failed_at(&self.epoch, error).await
     }
 
+    /// [`Self::failed`], with Meta's texts in no log
+    /// ([`ServiceError::from_library_withholding_texts`]): for a call
+    /// whose Graph error may quote what the caller wrote (a welcome
+    /// message's text; roadmap M5h).
+    pub async fn failed_withholding_texts(
+        &self,
+        authz: &Authorizer,
+        error: &Error,
+    ) -> ServiceError {
+        if let Err(refused) = authz.check(&self.issuer, "OwnedWaba::failed") {
+            return refused;
+        }
+        authz.mark_failed_at(&self.epoch, error).await;
+        ServiceError::from_library_withholding_texts(error)
+    }
+
     /// Whether the WABA is still bound as it was when this was made (the
     /// same [`BindingEpoch`]), read now: what a caller asks just before it
     /// acts at Meta with this token on the WABA as a whole, unsubscribing

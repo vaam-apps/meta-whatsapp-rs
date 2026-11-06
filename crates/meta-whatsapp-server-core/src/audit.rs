@@ -363,6 +363,73 @@ pub fn number_setting_audit(
     );
 }
 
+/// A tenant's marketing change (roadmap M5h; docs/design/server.md, D232):
+/// a template duplicated at another max price or its max price set or
+/// cleared, the Cloud API marketing switch, a welcome message sequence
+/// created, changed or deleted. Logged like [`tenant_audit`] (target
+/// `audit`, message `tenant change`) with `outcome` and what reconciles it
+/// ([`MarketingFacts`]): ids, a price, a flag. Never a welcome message's
+/// text, a name, a template's parameters or a recipient.
+pub fn marketing_audit(
+    action: &'static str,
+    key_id: &str,
+    subject: &Subject<'_>,
+    facts: &MarketingFacts<'_>,
+    outcome: Outcome,
+) {
+    tracing::info!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        template_id = facts.template_id,
+        new_template_id = facts.new_template_id,
+        sequence_id = facts.sequence_id,
+        bid_amount = facts.bid_amount,
+        disabled = facts.disabled,
+        outcome = outcome.as_str(),
+        "tenant change"
+    );
+}
+
+/// What a [`marketing_audit`] event names besides its [`Subject`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MarketingFacts<'a> {
+    /// The template changed or duplicated (the source).
+    pub template_id: Option<&'a str>,
+    /// The duplicate Meta made.
+    pub new_template_id: Option<&'a str>,
+    /// The welcome message sequence.
+    pub sequence_id: Option<&'a str>,
+    /// The max price set, per 1,000 deliveries in the currency's smallest
+    /// unit.
+    pub bid_amount: Option<u32>,
+    /// The Cloud API marketing switch's new value (`true`: blocked).
+    pub disabled: Option<bool>,
+}
+
+/// The operator's signing of Meta's max price beta agreement (roadmap
+/// M5h; docs/design/server.md, D231; `OPEN_QUESTIONS.md` #45): a legal act,
+/// logged like [`audit`] (target `audit`, message `admin change`) with the
+/// admin key's public id, the business portfolio's id and `outcome`. The
+/// signer's name and email are personal data and in no event.
+pub fn max_price_agreement_audit(
+    action: &'static str,
+    admin_key_id: &str,
+    business_id: &str,
+    outcome: Outcome,
+) {
+    tracing::info!(
+        target: "audit",
+        action,
+        admin_key_id,
+        business_id,
+        outcome = outcome.as_str(),
+        "admin change"
+    );
+}
+
 /// What an [`audit`] event touched.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Subject<'a> {

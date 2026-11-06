@@ -6702,7 +6702,8 @@ or WABA fails the family's own cross-tenant test).
     refused body. No stored name, route or OpenAPI change.
   - **Not done here:** the calling actions (Meta's `calling` pages accept
     the field; the library's calls do not carry it): L29, then the
-    service. The marketing send (M5h) must name it when it lands. Several bindings per number
+    service. The marketing send (M5h, landed) names none: Meta's pages
+    for `/marketing_messages` document no such field; pinned by the walk. Several bindings per number
     wait for OPEN_QUESTIONS #46.
 - [ ] **M5c6. Number settings: what M5c3 left** (rows 128, 132, 133,
   156): the per-number webhook override, the `connection_status` and
@@ -7050,7 +7051,7 @@ or WABA fails the family's own cross-tenant test).
     bounded as D145's. Each of the two switches is an audited change by
     the caller (names pending), under an `Idempotency-Key`, answering no
     text of Meta's, and refused to a key without the `analytics` scope.
-- [ ] **M5h. Marketing Messages API and CTWA** (rows 136–138, 154). The
+- [x] **M5h. Marketing Messages API and CTWA** (rows 136–138, 154). The
   max-price agreement is its own admin route: an explicit, audited
   operator action, off until the deployment enables it; no other route
   signs it (OPEN_QUESTIONS #45).
@@ -7059,6 +7060,86 @@ or WABA fails the family's own cross-tenant test).
     answers without a request to Meta; with it on, one request and one
     audit event naming the admin key; no other route sends the
     agreement.
+  - **Landed:** one new scope, `marketing` (D230, names pending the
+    owner's confirmation before the first release); fourteen tenant
+    operations on eight paths (OpenAPI additive only: nine new paths
+    and 23 new schemas, `Scope`'s enum the only one
+    changed) and one admin route. `POST /v1/numbers/{pn}/marketing-messages`
+    (the template as Meta's object, `product_policy`,
+    `message_activity_sharing`, `bid_spec.per_message_bid_multiplier`; an
+    `Idempotency-Key`, never replayed after a timeout, Meta's texts
+    withheld, a catalog the template names checked to be the WABA's as the
+    send union checks it); `GET /v1/wabas/{waba_id}/marketing/onboarding`
+    (the status and the owner's terms state, two reads);
+    `GET`, `PUT …/marketing/cloud-api-marketing`; `POST
+    …/marketing/template-duplicates`; `GET …/marketing/reach-estimates`;
+    `GET`, `PUT`, `DELETE …/marketing/templates/{template_id}/max-price`;
+    `POST`, `GET /v1/wabas/{waba_id}/welcome-sequences` and `GET`,
+    `PATCH`, `DELETE …/{sequence_id}`. The core's services:
+    `server_core::marketing::{MarketingSends, Marketing,
+    MaxPriceAgreements}`. A template is looked for as every template
+    operation looks for one (its name, then the WABA's own templates of
+    that name), a sequence through the WABA's own edge (the `sequence_id`
+    filter, which must answer that very sequence); another WABA's is `404`
+    and only the lookup is sent (D233). **The agreement**:
+    `POST /v1/admin/businesses/{business_id}/max-price-agreement` with
+    `signer_name`, `signer_email` and the operator's own `token` (used for
+    the one call, stored nowhere), the library's only signer
+    (`MarketingBusiness::sign_max_price_agreement`) called from this
+    route alone, through `number_settings::is_legal_admin_act` (the admin
+    twin of `is_legal_act`: `AdminOperation` has no scope or rate class,
+    which a tenant `Operation` has): off, `403 feature_not_available`
+    before the body is read; on, one request, never replayed, one audit
+    event (`max_price_agreement_signed`: the admin key, the business, the
+    outcome), and the signer in no log, error, `Debug`, audit event or
+    answer. Seven tenant audit actions (D232). Tests:
+    `tests/marketing.rs` (each route's exact requests from Meta's pages
+    with the tenant's token; `a_template_is_duplicated_at_another_price_only_when_the_wabas_own`,
+    `a_templates_max_price_is_read_set_and_cleared_only_for_the_wabas_own`
+    and `a_sequence_the_waba_does_not_hold_is_not_found_and_nothing_is_changed`
+    for M5.2; `with_the_legal_acts_off_the_agreement_is_refused_without_a_request_to_meta`,
+    `with_the_legal_acts_on_the_agreement_is_one_request_and_never_replayed`,
+    `no_other_route_ever_sends_the_agreement` (every route naming a number or
+    a WABA, called with a key of every scope, the setting on: no request
+    to `/max_price_agreements`) and `only_the_marketing_core_names_the_agreement`
+    for M5.3; `a_gif_header_passes_through_template_creation` for row 154),
+    `tests/authz.rs` (M5.1 over every new route), `tests/common/capture.rs`
+    (`marketing`: a recipient, a parameter, a welcome message, a sequence's
+    name and the signer's name, email and token in no line; the audit
+    events by ids and flags), the core's checks (`marketing` tests).
+  - **Decided:** D230–D235, by the coordinator on 2026-11-06 under the
+    owner's delegation (the scope, the agreement's route and gate, the audit and logs, the
+    ownership lookups, the bounds, what is not offered); each ships
+    swappable. Pending the owner's confirmation before the first release:
+    the scope `marketing`, the fourteen operation ids, the paths, the audit
+    actions (`cloud_api_marketing_set`, `marketing_template_duplicated`,
+    `template_max_price_set`, `template_max_price_cleared`,
+    `welcome_sequence_created`, `welcome_sequence_updated`,
+    `welcome_sequence_deleted`, `max_price_agreement_signed`).
+  - **Legal findings:** the one call on Meta's pages that signs for a
+    business is the agreement, gated as above. The Marketing Messages API's
+    Terms of Service are accepted by a person in WhatsApp Manager (no
+    call), and the partner Intent API only emails a business's admins an
+    invitation to accept them: it is not routed (M5h2), and when it is
+    it is an admin action like the agreement. Automatic events need no
+    route (a tenant event since M2d).
+  - **Not done here:** see M5h2. No call of these routes was run against
+    Meta live.
+- [ ] **M5h2. What M5h did not route** (rows 136, 137, 154): the max price
+  agreement's state read (`GET /{business}/max_price_agreements` answers
+  the signer, so it is the operator's, with the token in the request, and
+  its answer keeps the signer out), the partner Intent API
+  (`request_onboarding`, an admin action: it emails a business's admins
+  an invitation to accept the terms), the client WABAs listing by
+  onboarding status (`client_wabas_with_status`), and a GIF header's
+  send-time parameter once a page of Meta's shows it (typed in the
+  library first). The click tracking opt-out is M5g2's.
+  - **After:** M5h.
+  - **Decisive:** every route that takes a business id or a token in its
+    body is an admin route whose body and answer hold no signer (a test
+    plants one and finds it in no line), refused with nothing sent when the
+    setting is off if it acts for a business; no other route calls it.
+
 - [ ] **M5i. In-App Signup** (row 125): accepting Meta's terms on a
   business's first signup is an explicit, audited operator action, off
   until the deployment enables it, never taken automatically

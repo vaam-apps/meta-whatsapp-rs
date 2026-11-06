@@ -33,11 +33,21 @@ const TO: &str = "+16505551234";
 /// below finds them in the committed document; this list is what it must
 /// find, so a route that starts to send fails there until it is named
 /// here (and made to name the account).
-const SENDING: [&str; 3] = [
+const SENDING: [&str; 4] = [
     "POST /v1/numbers/{pn}/messages",
     "POST /v1/numbers/{pn}/conversations/{contact}/messages",
     "POST /v1/otp/issue",
+    "POST /v1/numbers/{pn}/marketing-messages",
 ];
+
+/// The sending routes that name no account: the marketing send. Meta's
+/// pages for `/{pn}/marketing_messages` (`marketing-messages/send-marketing-messages`
+/// and the endpoint's reference) document no `messaging_account_id` for
+/// it (the account model page shows it on `/{pn}/messages` and the
+/// calling actions only), so none is sent: a field name is never guessed.
+/// When Meta documents it, the library's `Marketing::send` gains it, the
+/// route names it, and this list is emptied (the walk fails until then).
+const NAMING_NONE: [&str; 1] = ["POST /v1/numbers/{pn}/marketing-messages"];
 
 fn accepted() -> Value {
     json!({
@@ -94,7 +104,7 @@ fn sent(h: &Harness) -> Vec<Value> {
     h.graph
         .requests()
         .into_iter()
-        .filter(|r| r.method == Method::POST && r.path().ends_with("/messages"))
+        .filter(|r| r.method == Method::POST && (r.path().ends_with("/messages") || r.path().ends_with("/marketing_messages")))
         .map(|r| r.json().expect("a JSON body"))
         // A read receipt (`status: read`) posts to the same edge and is
         // not a message.
@@ -156,7 +166,11 @@ async fn every_send_route_names_the_bindings_account() {
     assert_eq!(routes, BTreeSet::from(SENDING));
     for (label, bodies) in &found {
         for body in bodies {
-            assert_eq!(body["messaging_account_id"], WABA, "{label}: {body}");
+            if NAMING_NONE.contains(&label.as_str()) {
+                assert_eq!(body.get("messaging_account_id"), None, "{label}: {body}");
+            } else {
+                assert_eq!(body["messaging_account_id"], WABA, "{label}: {body}");
+            }
         }
     }
 }
@@ -184,7 +198,12 @@ async fn with_the_setting_off_no_send_route_names_an_account() {
 /// the inbox).
 #[test]
 fn only_the_known_files_reach_the_librarys_send() {
-    const SENDING_CALLS: [&str; 3] = [".messages(", "inbox.send(", "OtpService::new("];
+    const SENDING_CALLS: [&str; 4] = [
+        ".messages(",
+        "inbox.send(",
+        "OtpService::new(",
+        ".marketing(",
+    ];
     // The files that reach the library's send, and why.
     let known: BTreeSet<&str> = BTreeSet::from([
         // `Messages::send`, the one place that names the account
@@ -195,6 +214,8 @@ fn only_the_known_files_reach_the_librarys_send() {
         // The OTP issue, which names it through the library's
         // `OtpService::messaging_account_id`.
         "meta-whatsapp-server-core/src/otp.rs",
+        // The marketing send (`NAMING_NONE`).
+        "meta-whatsapp-server-core/src/marketing.rs",
     ]);
     let root = std::fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("..")).unwrap();
     let prefix = format!("{}/", root.display());
