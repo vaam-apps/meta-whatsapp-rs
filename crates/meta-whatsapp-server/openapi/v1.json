@@ -3402,7 +3402,7 @@
         "tags": [
           "erasure"
         ],
-        "summary": "`DELETE /v1/numbers/{pn}/contact-book/{bsuid}`: **erase** one user's\nentry from the business portfolio's contact book, at Meta. Irreversible.\n**A legal act**: scope `erasure`, off until the deployment sets\n`WA_SERVER_LEGAL_ACTS=on`; audited, never the BSUID.",
+        "summary": "`DELETE /v1/numbers/{pn}/contact-book/{bsuid}`: **erase** one user's\nentry from the business portfolio's contact book, at Meta. Irreversible.\nA data-subject erasure the tenant performs explicitly, so scope\n`erasure`; audited, never the BSUID, and not gated by\n`WA_SERVER_LEGAL_ACTS`.",
         "operationId": "delete_contact_book_entry",
         "parameters": [
           {
@@ -3458,7 +3458,7 @@
             }
           },
           "403": {
-            "description": "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), `forbidden` (no scope `erasure`), `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden` (no scope `erasure`), `tenant_suspended`, or Meta's refusal",
             "content": {
               "application/json": {
                 "schema": {
@@ -9094,7 +9094,7 @@
         "tags": [
           "numbers"
         ],
-        "summary": "`POST /v1/numbers/{pn}/official-business-account`: apply for Official\nBusiness Account status. **A legal act**: off until the deployment sets\n`WA_SERVER_LEGAL_ACTS=on`; audited.",
+        "summary": "`POST /v1/numbers/{pn}/official-business-account`: apply for Official\nBusiness Account status. Not a legal act (an application for Meta's\nreview): audited, and it reaches Meta whatever `WA_SERVER_LEGAL_ACTS` says.",
         "operationId": "request_official_business_account",
         "parameters": [
           {
@@ -9163,7 +9163,7 @@
             }
           },
           "403": {
-            "description": "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), `forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
             "content": {
               "application/json": {
                 "schema": {
