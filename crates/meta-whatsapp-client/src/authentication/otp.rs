@@ -65,7 +65,7 @@ use std::time::Duration;
 use hmac::{Hmac, Mac};
 use meta_whatsapp_core::clock::Clock;
 use meta_whatsapp_core::error::{ConfigError, CryptoError, StorageError, ValidationError};
-use meta_whatsapp_core::ids::{MessageId, PhoneNumberId};
+use meta_whatsapp_core::ids::{MessageId, PhoneNumberId, WabaId};
 use meta_whatsapp_core::recipient::Recipient;
 use meta_whatsapp_core::secret::SecretBytes;
 use meta_whatsapp_core::store::{Expiry, JsonStore, KvStore};
@@ -541,6 +541,8 @@ pub struct OtpService {
     clock: Arc<dyn Clock>,
     pepper: OtpPepper,
     config: OtpConfig,
+    /// [`Self::messaging_account_id`].
+    messaging_account_id: Option<WabaId>,
 }
 
 impl fmt::Debug for OtpService {
@@ -594,7 +596,22 @@ impl OtpService {
             clock,
             pepper,
             config,
+            messaging_account_id: None,
         })
+    }
+
+    /// Name the Messaging Account billed for the code's message, as
+    /// [`OutboundMessage::messaging_account_id`] does for any send
+    /// (`account-model-evolution/messaging`): Meta requires it when the
+    /// access token can send from several Messaging Accounts on the
+    /// number, from its phase 2. Optional; the id is checked as digits
+    /// when the code is sent, like every send's. Not part of the
+    /// challenge's scope: the codes of a service with and without it are
+    /// the same codes.
+    #[must_use]
+    pub fn messaging_account_id(mut self, id: impl Into<WabaId>) -> Self {
+        self.messaging_account_id = Some(id.into());
+        self
     }
 
     /// The settings.
@@ -834,7 +851,10 @@ impl OtpService {
     /// [`OutboundMessage::validate`], and a decode error that never quotes
     /// the response (it names the recipient).
     async fn send(&self, phone: &Phone, template: TemplateMessage) -> Result<MessageId> {
-        let message = OutboundMessage::template(Recipient::Phone(phone.e164()), template);
+        let mut message = OutboundMessage::template(Recipient::Phone(phone.e164()), template);
+        message
+            .messaging_account_id
+            .clone_from(&self.messaging_account_id);
         let sent = self
             .client
             .messages(self.phone_number_id.clone())
