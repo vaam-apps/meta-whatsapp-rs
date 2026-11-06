@@ -3008,14 +3008,24 @@ fn check_audit(logs: &str) {
     assert!(onboarded[0]["key_id"].is_string(), "{}", onboarded[0]);
     // Roadmap M3f: the completions of `signup_m3f`, each audited once with
     // its tenant, the WABA and the key's id, and no token in them.
-    for (action, tenant, waba) in [
-        (
-            "hosted_signup_completed",
-            "merchant-78",
-            super::signup::WABA_2,
-        ),
-        ("signup_completed", "merchant-79", "524126980791431"),
-    ] {
+    let operator: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e["target"] == "audit" && e["fields"]["action"] == "hosted_signup_completed")
+        .map(|e| &e["fields"])
+        .collect();
+    // The hosted claim is the operator's (decision D202): an admin change
+    // with the admin key's id, the tenant it named and the WABA.
+    assert_eq!(operator.len(), 1, "the hosted claim's audit event");
+    assert_eq!(operator[0]["message"], "admin change", "{}", operator[0]);
+    assert_eq!(operator[0]["tenant"], "merchant-78", "{}", operator[0]);
+    assert_eq!(
+        operator[0]["waba_id"],
+        super::signup::WABA_2,
+        "{}",
+        operator[0]
+    );
+    assert!(operator[0]["admin_key_id"].is_string(), "{}", operator[0]);
+    for (action, tenant, waba) in [("signup_completed", "merchant-79", "524126980791431")] {
         let found: Vec<&&serde_json::Value> = changes
             .iter()
             .filter(|fields| fields["action"] == action)
@@ -3032,7 +3042,6 @@ fn check_audit(logs: &str) {
         .into_iter()
         .filter(|fields| {
             fields["action"] != "signup_resumed"
-                && fields["action"] != "hosted_signup_completed"
                 && fields["action"] != "signup_completed"
                 && fields["action"] != "customer_erased"
                 && fields["action"] != "display_name_change_requested"
@@ -3487,9 +3496,10 @@ async fn signup_m3f(h: &Harness, admin: &str) -> Vec<String> {
     let arrived = h.webhook(&partner_added(WABA_2, BUSINESS)).await;
     assert_eq!(arrived.status.as_u16(), 200, "{}", arrived.text);
     let claim = |pin: &str| {
-        Call::new(Method::POST, "/v1/signup/hosted")
-            .key(&keys[0])
-            .json(&json!({"waba_id": WABA_2, "owner_business_id": BUSINESS, "pin": pin}))
+        Call::new(Method::POST, "/v1/admin/signup/hosted").key(admin).json(&json!({
+            "tenant_id": "merchant-78", "waba_id": WABA_2,
+            "owner_business_id": BUSINESS, "pin": pin
+        }))
     };
     h.graph.push_json(
         400,

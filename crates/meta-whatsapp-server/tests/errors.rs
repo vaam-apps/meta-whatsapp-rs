@@ -737,7 +737,7 @@ fn the_m3f_routes_use_only_the_designs_codes() {
     }
     let spec: Value = serde_json::from_str(include_str!("../openapi/v1.json")).unwrap();
     for (path, method) in [
-        ("/v1/signup/hosted", "post"),
+        ("/v1/admin/signup/hosted", "post"),
         ("/v1/admin/pre-verified-numbers", "post"),
         ("/v1/admin/pre-verified-numbers/{id}/verify", "post"),
         ("/v1/admin/pre-verified-numbers/{id}/reservation", "put"),

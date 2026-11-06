@@ -145,6 +145,7 @@ fn admin_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(admin::unbind_waba))
         .routes(routes!(admin::rotate_vault))
         .routes(routes!(signup::reshare_credit_line))
+        .routes(routes!(signup::complete_hosted_signup))
         .routes(routes!(
             pre_verified::add_pre_verified_number,
             pre_verified::list_pre_verified_numbers
@@ -365,7 +366,6 @@ fn signup_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(signup::complete_signup))
         .routes(routes!(signup::list_signup_attempts))
         .routes(routes!(signup::resume_signup))
-        .routes(routes!(signup::complete_hosted_signup))
         .layer(DefaultBodyLimit::max(signup::MAX_SIGNUP_BODY_BYTES))
 }
 

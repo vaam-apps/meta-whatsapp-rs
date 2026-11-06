@@ -1123,6 +1123,122 @@
         ]
       }
     },
+    "/v1/admin/signup/hosted": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`POST /v1/admin/signup/hosted`: claim a hosted Embedded Signup the\nservice saw arrive (`PARTNER_ADDED`) and onboard it for the tenant the\noperator names. The operator's explicit, audited decision (D202): the\nwebhook names no tenant and its ids are no secret, so no tenant key\nclaims.",
+        "operationId": "complete_hosted_signup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteHostedSignup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "`connected`: the WABA and its numbers bound to the named tenant, the token fetched with the deployment's system token and stored in the vault, never answered; audited `hosted_signup_completed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key; `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such tenant, or no `PARTNER_ADDED` for that WABA and business is waiting (none arrived, it lapsed after 7 days, another call claimed it, or the business differs)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`waba_owned_by_another_tenant` (decision D4, before anything is claimed or read from Meta), `signup_not_configured` (hosted signup is off: `WA_HOSTED_SIGNUP`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`tenant_id`, `waba_id`, `owner_business_id`, `pin`: 6 digits, `body`), before the arrival is claimed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`onboarding_failed`: stopped at `step`; `resumable: true` when the token was stored (the tenant resumes it: `POST /v1/signup/resume`), `false` when it was not (the arrival is put back: claim it again)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable` (the WABA moved while it was onboarded: its token taken back)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/admin/tenants": {
       "get": {
         "tags": [
@@ -11486,156 +11602,6 @@
         ]
       }
     },
-    "/v1/signup/hosted": {
-      "post": {
-        "tags": [
-          "signup"
-        ],
-        "summary": "`POST /v1/signup/hosted`: claim a hosted Embedded Signup the service\nsaw arrive (`PARTNER_ADDED`) and onboard it for the calling tenant.",
-        "operationId": "complete_hosted_signup",
-        "parameters": [
-          {
-            "name": "WA-Tenant",
-            "in": "header",
-            "description": "The tenant a platform key acts as: the WABA becomes its own",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CompleteHostedSignup"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "`connected`: the WABA and its numbers bound to the tenant, the token fetched with the deployment's system token and stored in the vault, never answered",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SignupResult"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No valid key",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "`forbidden`, `tenant_suspended`",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "`not_found`: no `PARTNER_ADDED` for that WABA and business is waiting (none arrived, it lapsed after 7 days, another call claimed it, or the business differs)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "`waba_owned_by_another_tenant` (decision D4, before anything is claimed or read from Meta), `signup_not_configured` (hosted signup is off: `WA_HOSTED_SIGNUP`)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "`payload_too_large`: over 16 KiB",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "`invalid_request` (`waba_id`, `owner_business_id`, `pin`: 6 digits, `body`), before the arrival is claimed; also a WABA the vault already holds (`waba_id`)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "`onboarding_failed`: stopped at `step`; `resumable: true` when the token was stored (`POST /v1/signup/resume`), `false` when it was not (the arrival is put back: claim it again)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "`storage_unavailable` (the WABA moved while it was onboarded: its token taken back)",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Any other error: branch on `error.code`",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "api_key": []
-          }
-        ]
-      }
-    },
     "/v1/signup/resume": {
       "post": {
         "tags": [
@@ -20127,8 +20093,9 @@
       },
       "CompleteHostedSignup": {
         "type": "object",
-        "description": "`POST /v1/signup/hosted`. No `Debug`: it holds the PIN.",
+        "description": "`POST /v1/admin/signup/hosted`. No `Debug`: it holds the PIN.",
         "required": [
+          "tenant_id",
           "waba_id",
           "owner_business_id"
         ],
@@ -20142,7 +20109,11 @@
               "string",
               "null"
             ],
-            "description": "The number's two-step verification PIN, 6 digits, chosen by the\ntenant (Meta's hosted page asks for none): it becomes the number's\nPIN. Never stored. Without it, the number is left unregistered."
+            "description": "The number's two-step verification PIN, 6 digits, chosen for the\ntenant (Meta's hosted page asks for none): it becomes the number's\nPIN. Never stored. Without it, the number is left unregistered."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the WABA becomes: the operator names it, as only the\noperator knows which tenant sent the merchant to Meta's page."
           },
           "waba_id": {
             "type": "string",

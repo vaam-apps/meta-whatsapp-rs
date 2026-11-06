@@ -9,7 +9,7 @@
 //!   (`409 waba_owned_by_another_tenant`) with nothing bound, and never
 //!   taken.
 //! - **Hosted signup** (`WA_HOSTED_SIGNUP`): a signed `PARTNER_ADDED` is
-//!   remembered, a tenant claims it, the business token is fetched with
+//!   remembered, the operator claims it for a tenant (admin key, D202), the business token is fetched with
 //!   the deployment's system token and its `appsecret_proof`.
 //! - **Pre-verified numbers**: the pool's routes (admin key), the pool's
 //!   token on every call, a tenant's launch offering only its own
@@ -320,15 +320,18 @@ async fn a_second_wabas_failure_leaves_the_first_and_is_resumable() {
 
 // ─── Hosted signup ───────────────────────────────────────────────────────
 
-fn hosted_body(pin: Option<&str>) -> Value {
+fn hosted_body(tenant: &str, pin: Option<&str>) -> Value {
     match pin {
-        Some(pin) => json!({"waba_id": WABA, "owner_business_id": BUSINESS, "pin": pin}),
-        None => json!({"waba_id": WABA, "owner_business_id": BUSINESS}),
+        Some(pin) => json!({
+            "tenant_id": tenant, "waba_id": WABA, "owner_business_id": BUSINESS, "pin": pin
+        }),
+        None => json!({"tenant_id": tenant, "waba_id": WABA, "owner_business_id": BUSINESS}),
     }
 }
 
+/// The operator's claim (decision D202): `key` should be an admin key.
 fn claim(key: &str, body: &Value) -> Call {
-    Call::new(Method::POST, "/v1/signup/hosted")
+    Call::new(Method::POST, "/v1/admin/signup/hosted")
         .key(key)
         .json(body)
 }
@@ -351,20 +354,21 @@ fn script_hosted(h: &Harness) {
 }
 
 /// A signed `PARTNER_ADDED` is remembered and asks Meta nothing; the
-/// tenant that claims it gets the WABA bound, its business token fetched
+/// tenant the operator names gets the WABA bound, its business token fetched
 /// with the system token and the `appsecret_proof` of the app secret (the
 /// hosted page's step 5), stored in the vault, never answered. Decisive:
 /// the proof (a wrong secret changes it), the token in the vault, the
 /// binding in the approval.
 #[tokio::test]
-async fn a_partner_added_is_claimed_by_a_tenant_and_onboarded() {
-    a_partner_added_is_claimed_by_a_tenant_and_onboarded_on(hosted()).await;
+async fn a_partner_added_is_claimed_by_the_operator_for_a_tenant_and_onboarded() {
+    a_partner_added_is_claimed_by_the_operator_for_a_tenant_and_onboarded_on(hosted()).await;
 }
 
-/// The scenario of [`a_partner_added_is_claimed_by_a_tenant_and_onboarded`], on any backend.
+/// The scenario of [`a_partner_added_is_claimed_by_the_operator_for_a_tenant_and_onboarded`], on any backend.
 #[allow(clippy::too_many_lines)] // one scenario, read top to bottom
-async fn a_partner_added_is_claimed_by_a_tenant_and_onboarded_on(h: Harness) {
+async fn a_partner_added_is_claimed_by_the_operator_for_a_tenant_and_onboarded_on(h: Harness) {
     let (a, _) = tenants(&h).await;
+    let admin = h.admin_key().await;
     let arrived = h.webhook(&partner_added(WABA, BUSINESS)).await;
     assert_eq!(arrived.status, StatusCode::OK);
     assert!(
@@ -372,8 +376,14 @@ async fn a_partner_added_is_claimed_by_a_tenant_and_onboarded_on(h: Harness) {
         "the arrival asks Meta nothing"
     );
     assert_eq!(holder(&h, WABA).await, None, "nothing bound by a webhook");
+    // No tenant key claims: the route is the operator's, and the arrival
+    // stays claimable (nothing read from Meta, nothing bound).
+    let refused = h.call(claim(&a, &hosted_body(A, Some(PIN)))).await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN, "{}", refused.text);
+    assert!(h.graph.requests().is_empty());
+    assert_eq!(holder(&h, WABA).await, None);
     script_hosted(&h);
-    let done = h.call(claim(&a, &hosted_body(Some(PIN)))).await;
+    let done = h.call(claim(&admin, &hosted_body(A, Some(PIN)))).await;
     assert_eq!(done.status, StatusCode::OK, "{}", done.text);
     let answer = done.json();
     assert_eq!(answer["status"], "connected");
@@ -412,50 +422,101 @@ async fn a_partner_added_is_claimed_by_a_tenant_and_onboarded_on(h: Harness) {
     assert!(stored(&h, WABA).await);
     assert_eq!(h.graph.remaining(), 0);
     // Claimed once: the arrival is gone.
-    let again = h.call(claim(&a, &hosted_body(Some(PIN)))).await;
+    let again = h.call(claim(&admin, &hosted_body(A, Some(PIN)))).await;
     assert_eq!(again.code(), "not_found", "{}", again.text);
     assert_eq!(h.graph.requests().len(), requests.len());
 }
 
 /// Nothing is claimable without an arrival, or under another business;
 /// the same `404` as no WABA. Another tenant's WABA is `409` before
-/// anything is read; a deployment without hosted signup remembers nothing
-/// and answers `409 signup_not_configured`.
+/// anything is read; the tenant the operator names must exist and not be
+/// suspended; a deployment without hosted signup remembers nothing and
+/// answers `409 signup_not_configured`. No tenant key claims anything
+/// (decision D202: the ids are no secret, so a tenant naming both would
+/// take another tenant's merchant), and the tenant route of the first
+/// draft is gone.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
 async fn a_claim_needs_an_arrival_and_respects_ownership() {
     let h = hosted();
     let (a, b) = tenants(&h).await;
-    let none = h.call(claim(&a, &hosted_body(Some(PIN)))).await;
+    let admin = h.admin_key().await;
+    let none = h.call(claim(&admin, &hosted_body(A, Some(PIN)))).await;
     assert_eq!(none.code(), "not_found", "{}", none.text);
     h.webhook(&partner_added(WABA, BUSINESS)).await;
-    let other_business = json!({"waba_id": WABA, "owner_business_id": "1972555232742222"});
-    let wrong = h.call(claim(&a, &other_business)).await;
+    let other_business = json!({
+        "tenant_id": A, "waba_id": WABA, "owner_business_id": "1972555232742222"
+    });
+    let wrong = h.call(claim(&admin, &other_business)).await;
     assert_eq!(wrong.code(), "not_found", "{}", wrong.text);
     // Inputs first, before the arrival is touched.
-    let bad_pin = h.call(claim(&a, &hosted_body(Some("12")))).await;
+    let bad_pin = h.call(claim(&admin, &hosted_body(A, Some("12")))).await;
     assert_eq!(bad_pin.code(), "invalid_request");
     assert_eq!(bad_pin.json()["error"]["field"], "pin");
     let bad_id = h
         .call(claim(
-            &a,
-            &json!({"waba_id": "x/y", "owner_business_id": BUSINESS}),
+            &admin,
+            &json!({"tenant_id": A, "waba_id": "x/y", "owner_business_id": BUSINESS}),
         ))
         .await;
     assert_eq!(bad_id.code(), "invalid_request");
+    let bad_tenant = h
+        .call(claim(&admin, &hosted_body("Not A Tenant!", Some(PIN))))
+        .await;
+    assert_eq!(bad_tenant.code(), "invalid_request");
+    assert_eq!(bad_tenant.json()["error"]["field"], "tenant_id");
+    // A tenant that does not exist: the arrival is left claimable.
+    let unknown = h
+        .call(claim(&admin, &hosted_body("no-such-tenant", Some(PIN))))
+        .await;
+    assert_eq!(unknown.code(), "not_found", "{}", unknown.text);
+    let suspended = h
+        .call(
+            Call::new(Method::PATCH, format!("/v1/admin/tenants/{B}"))
+                .key(&admin)
+                .json(&json!({"status": "suspended"})),
+        )
+        .await;
+    assert_eq!(suspended.status, StatusCode::OK, "{}", suspended.text);
+    let refused = h.call(claim(&admin, &hosted_body(B, Some(PIN)))).await;
+    assert_eq!(refused.code(), "tenant_suspended", "{}", refused.text);
+    assert!(h.graph.requests().is_empty(), "nothing read from Meta");
+
+    // No tenant key claims: not the one that would be named, not another's,
+    // and the first draft's tenant route does not exist.
+    for (key, tenant) in [(&a, A), (&b, B), (&a, B)] {
+        let denied = h.call(claim(key, &hosted_body(tenant, Some(PIN)))).await;
+        assert_eq!(denied.status, StatusCode::FORBIDDEN, "{}", denied.text);
+    }
+    let gone = h
+        .call(
+            Call::new(Method::POST, "/v1/signup/hosted")
+                .key(&a)
+                .json(&hosted_body(A, Some(PIN))),
+        )
+        .await;
+    assert!(
+        matches!(gone.status, StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED),
+        "{}",
+        gone.text
+    );
     assert!(h.graph.requests().is_empty());
-    // B holds the WABA: A is refused before the arrival is claimed.
+    assert_eq!(holder(&h, WABA).await, None, "the arrival was never bound");
+
+    // B holds the WABA: a claim for A is refused before the arrival is
+    // claimed.
     h.connect(B, WABA, &[PN_B], "TOKEN-OF-B").await;
-    let refused = h.call(claim(&a, &hosted_body(Some(PIN)))).await;
+    let refused = h.call(claim(&admin, &hosted_body(A, Some(PIN)))).await;
     assert_eq!(refused.code(), "waba_owned_by_another_tenant");
     assert!(h.graph.requests().is_empty());
     assert_eq!(holder(&h, WABA).await.as_deref(), Some(B));
-    let _ = b;
 
     // Off: the webhook is not remembered, the route is not configured.
     let off = harness(tech_provider());
-    let (a, _) = tenants(&off).await;
+    let _ = tenants(&off).await;
+    let admin = off.admin_key().await;
     off.webhook(&partner_added(WABA, BUSINESS)).await;
-    let unconfigured = off.call(claim(&a, &hosted_body(Some(PIN)))).await;
+    let unconfigured = off.call(claim(&admin, &hosted_body(A, Some(PIN)))).await;
     assert_eq!(unconfigured.code(), "signup_not_configured");
 }
 
@@ -465,14 +526,16 @@ async fn a_claim_needs_an_arrival_and_respects_ownership() {
 #[tokio::test]
 async fn a_held_waba_is_not_remembered_and_a_failed_claim_is_put_back() {
     let h = hosted();
-    let (a, _) = tenants(&h).await;
+    let _ = tenants(&h).await;
+    let admin = h.admin_key().await;
     h.connect(A, WABA, &[PHONE], "TOKEN-OF-A").await;
     h.webhook(&partner_added(WABA, BUSINESS)).await;
-    let held = h.call(claim(&a, &hosted_body(None))).await;
+    let held = h.call(claim(&admin, &hosted_body(A, None))).await;
     assert_eq!(held.code(), "not_found", "{}", held.text);
 
     let h = hosted();
-    let (a, _) = tenants(&h).await;
+    let _ = tenants(&h).await;
+    let admin = h.admin_key().await;
     h.webhook(&partner_added(WABA, BUSINESS)).await;
     h.webhook(&partner_added(WABA, BUSINESS)).await;
     // The fetch fails: nothing stored, the arrival is claimable again.
@@ -480,13 +543,13 @@ async fn a_held_waba_is_not_remembered_and_a_failed_claim_is_put_back() {
         400,
         json!({"error": {"message": "x", "type": "OAuthException", "code": 100, "fbtrace_id": "T"}}),
     );
-    let failed = h.call(claim(&a, &hosted_body(Some(PIN)))).await;
+    let failed = h.call(claim(&admin, &hosted_body(A, Some(PIN)))).await;
     assert_eq!(failed.status, StatusCode::BAD_GATEWAY, "{}", failed.text);
     assert_eq!(failed.code(), "onboarding_failed");
     assert_eq!(failed.json()["error"]["resumable"], false);
     assert_eq!(holder(&h, WABA).await, None);
     script_hosted(&h);
-    let done = h.call(claim(&a, &hosted_body(Some(PIN)))).await;
+    let done = h.call(claim(&admin, &hosted_body(A, Some(PIN)))).await;
     assert_eq!(done.status, StatusCode::OK, "{}", done.text);
 }
 
@@ -769,7 +832,7 @@ async fn live_postgres_m3f_several_wabas_the_refusal_and_a_hosted_claim() {
     meta_whatsapp_server::store::migrate(&pool).await.unwrap();
     let h =
         Harness::with_stores_and_settings(Stores::postgres(&pool), settings(hosted_deployment()));
-    a_partner_added_is_claimed_by_a_tenant_and_onboarded_on(h).await;
+    a_partner_added_is_claimed_by_the_operator_for_a_tenant_and_onboarded_on(h).await;
 }
 
 // ─── Configuration ───────────────────────────────────────────────────────

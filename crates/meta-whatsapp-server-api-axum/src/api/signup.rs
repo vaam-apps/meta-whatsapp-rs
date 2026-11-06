@@ -8,6 +8,7 @@
 //! | `POST /v1/signup/complete` | the attempt redeemed for the calling tenant, then the library's onboarding: `GET oauth/access_token` (the code), `GET debug_token`, `GET /{waba_id}?fields=owner_business_info`, `GET /{waba_id}/phone_numbers`, the token stored, `POST /{waba_id}/subscribed_apps`, a Solution Partner's `POST /{waba_id}/assigned_users` and credit line (`GET …/owning_credit_allocation_configs`, `POST /{extended_credit_line_id}/whatsapp_credit_sharing_and_attach`, with the partner's system token), `POST /{pn}/register` (with the merchant's PIN), a coexistence number's `POST /{pn}/smb_app_data` twice |
 //! | `GET /v1/signup/attempts` | the tenant's attempts that stopped after their token was stored |
 //! | `POST /v1/signup/resume` | an attempt's steps after the stored token, again (a corrected PIN) |
+//! | `POST /v1/admin/signup/hosted` | the operator claims a hosted Embedded Signup the service saw arrive (`PARTNER_ADDED`) for the tenant it names (roadmap M3f, D202): the business token fetched with the system token, then the library's hosted onboarding for that tenant |
 //! | `POST /v1/admin/wabas/{waba_id}/credit-line/reshare` | the operator funds again a business whose credit line was revoked: the same steps, from the stored token, sharing the line again (`reshare_after_revocation`) |
 //!
 //! The rules are the core's ([`meta_whatsapp_server_core::signup`]): the
@@ -84,17 +85,20 @@ pub struct CompleteSignupBody {
     pub pin: Option<String>,
 }
 
-/// `POST /v1/signup/hosted`. No `Debug`: it holds the PIN.
+/// `POST /v1/admin/signup/hosted`. No `Debug`: it holds the PIN.
 #[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(as = CompleteHostedSignup)]
 pub struct CompleteHostedBody {
+    /// The tenant the WABA becomes: the operator names it, as only the
+    /// operator knows which tenant sent the merchant to Meta's page.
+    pub tenant_id: String,
     /// The WABA Meta's `PARTNER_ADDED` named (`waba_info.waba_id`).
     pub waba_id: String,
     /// Its business portfolio, as the webhook named it
     /// (`waba_info.owner_business_id`).
     pub owner_business_id: String,
-    /// The number's two-step verification PIN, 6 digits, chosen by the
+    /// The number's two-step verification PIN, 6 digits, chosen for the
     /// tenant (Meta's hosted page asks for none): it becomes the number's
     /// PIN. Never stored. Without it, the number is left unregistered.
     pub pin: Option<String>,
@@ -451,51 +455,50 @@ pub(crate) async fn complete_signup(
     Ok(Json(completed.into()))
 }
 
-/// `POST /v1/signup/hosted`: claim a hosted Embedded Signup the service
-/// saw arrive (`PARTNER_ADDED`) and onboard it for the calling tenant.
+/// `POST /v1/admin/signup/hosted`: claim a hosted Embedded Signup the
+/// service saw arrive (`PARTNER_ADDED`) and onboard it for the tenant the
+/// operator names. The operator's explicit, audited decision (D202): the
+/// webhook names no tenant and its ids are no secret, so no tenant key
+/// claims.
 #[utoipa::path(
     post,
-    path = "/v1/signup/hosted",
-    tag = "signup",
+    path = "/v1/admin/signup/hosted",
+    tag = "admin",
     security(("api_key" = [])),
-    params(
-        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as: the WABA becomes its own"),
-    ),
     request_body = CompleteHostedBody,
     responses(
-        (status = 200, description = "`connected`: the WABA and its numbers bound to the tenant, the token fetched with the deployment's system token and stored in the vault, never answered", body = SignupResultView),
+        (status = 200, description = "`connected`: the WABA and its numbers bound to the named tenant, the token fetched with the deployment's system token and stored in the vault, never answered; audited `hosted_signup_completed`", body = SignupResultView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`", body = ErrorBody),
-        (status = 404, description = "`not_found`: no `PARTNER_ADDED` for that WABA and business is waiting (none arrived, it lapsed after 7 days, another call claimed it, or the business differs)", body = ErrorBody),
+        (status = 403, description = "Not an admin key; `tenant_suspended`", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such tenant, or no `PARTNER_ADDED` for that WABA and business is waiting (none arrived, it lapsed after 7 days, another call claimed it, or the business differs)", body = ErrorBody),
         (status = 409, description = "`waba_owned_by_another_tenant` (decision D4, before anything is claimed or read from Meta), `signup_not_configured` (hosted signup is off: `WA_HOSTED_SIGNUP`)", body = ErrorBody),
-        (status = 413, description = "`payload_too_large`: over 16 KiB", body = ErrorBody),
-        (status = 422, description = "`invalid_request` (`waba_id`, `owner_business_id`, `pin`: 6 digits, `body`), before the arrival is claimed; also a WABA the vault already holds (`waba_id`)", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`: the tenant's `send` budget (`Retry-After`)", body = ErrorBody),
-        (status = 502, description = "`onboarding_failed`: stopped at `step`; `resumable: true` when the token was stored (`POST /v1/signup/resume`), `false` when it was not (the arrival is put back: claim it again)", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (`tenant_id`, `waba_id`, `owner_business_id`, `pin`: 6 digits, `body`), before the arrival is claimed", body = ErrorBody),
+        (status = 502, description = "`onboarding_failed`: stopped at `step`; `resumable: true` when the token was stored (the tenant resumes it: `POST /v1/signup/resume`), `false` when it was not (the arrival is put back: claim it again)", body = ErrorBody),
         (status = 503, description = "`storage_unavailable` (the WABA moved while it was onboarded: its token taken back)", body = ErrorBody),
     )
 )]
 pub(crate) async fn complete_hosted_signup(
     State(state): State<Grant>,
-    caller: Caller,
+    admin: AdminCaller,
     ApiJson(body): ApiJson<CompleteHostedBody>,
 ) -> Result<Json<SignupResultView>, ApiError> {
     let CompleteHostedBody {
+        tenant_id,
         waba_id,
         owner_business_id,
         pin,
     } = body;
-    let completed = Box::pin(
-        state
-            .signups()
-            .open(state.authz(), &caller)?
-            .observed_by(state.metrics())
-            .complete_hosted(HostedCompletion {
-                waba_id,
-                owner_business_id,
-                pin,
-            }),
-    )
+    let completed = Box::pin(state.signups().complete_hosted(
+        state.authz(),
+        &admin,
+        HostedCompletion {
+            tenant_id,
+            waba_id,
+            owner_business_id,
+            pin,
+        },
+        state.metrics(),
+    ))
     .await?;
     Ok(Json(completed.into()))
 }

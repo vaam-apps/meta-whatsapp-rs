@@ -509,7 +509,9 @@ impl Signups {
             signups: self,
             deployment,
             authz,
-            caller,
+            tenant: caller.tenant(),
+            key_id: caller.key_id(),
+            by_admin: false,
             observer: &(),
         })
     }
@@ -685,14 +687,20 @@ pub struct Signup<'a> {
     signups: &'a Signups,
     deployment: &'a SignupDeployment,
     authz: &'a Authorizer,
-    caller: &'a Caller,
+    /// The tenant it acts for: its caller's, or the one an operator named.
+    tenant: &'a TenantId,
+    /// The public id of the key that asked.
+    key_id: &'a str,
+    /// Whether the key is an admin's (audited as an operator's change).
+    by_admin: bool,
     observer: &'a dyn Observer,
 }
 
 impl std::fmt::Debug for Signup<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Signup")
-            .field("caller", self.caller)
+            .field("tenant", &self.tenant)
+            .field("key_id", &self.key_id)
             .finish_non_exhaustive()
     }
 }
@@ -710,7 +718,7 @@ impl<'a> Signup<'a> {
     }
 
     fn tenant(&self) -> &'a TenantId {
-        self.caller.tenant()
+        self.tenant
     }
 
     /// Start an attempt for the caller's tenant: a single-use state bound
@@ -1129,15 +1137,16 @@ impl<'a> Signup<'a> {
             .await?;
         records.delete_signup_attempt(tenant, &waba_id).await?;
         record_allocation(records, tenant, &connected).await?;
-        tenant_audit(
-            action,
-            self.caller.key_id(),
-            &Subject {
-                tenant: Some(tenant.as_str()),
-                waba_id: Some(waba_id.as_str()),
-                ..Subject::default()
-            },
-        );
+        let subject = Subject {
+            tenant: Some(tenant.as_str()),
+            waba_id: Some(waba_id.as_str()),
+            ..Subject::default()
+        };
+        if self.by_admin {
+            audit(action, self.key_id, &subject);
+        } else {
+            tenant_audit(action, self.key_id, &subject);
+        }
         Ok(Completed::Connected(connected))
     }
 
