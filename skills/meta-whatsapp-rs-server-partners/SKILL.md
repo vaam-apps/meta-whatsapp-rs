@@ -5,7 +5,7 @@ description: "Partner APIs through meta-whatsapp-server, the meta-whatsapp-rs HT
 
 # meta-whatsapp-rs-server-partners
 
-> **Verified against meta-whatsapp-rs 81bf9e80b5160bd28344c5040ba34e640d7354a3 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 44beb0da5b25e82c5a425c69612e4af20bc593fb (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/partners.ts](examples/partners.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#partner-apis).
 
