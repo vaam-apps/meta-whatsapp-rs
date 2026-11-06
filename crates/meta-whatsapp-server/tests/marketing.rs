@@ -406,6 +406,13 @@ async fn a_template_is_duplicated_at_another_price_only_when_the_wabas_own() {
     }
     assert_eq!(h.graph.requests().len(), 5);
     assert_eq!(h.graph.remaining(), 0);
+    // A tenant's key, whatever its scopes, is not an admin's even with the
+    // legal acts on: nothing is asked of Meta.
+    let tenant = h.tenant_key(TENANT, &common::ALL_SCOPES).await;
+    let reply = h.call(sign(BUSINESS, &tenant)).await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.text);
+    assert_eq!(reply.code(), "forbidden");
+    assert_eq!(h.graph.requests().len(), 5);
 }
 
 /// A template's max price: read (Meta's list shape of the overrides),

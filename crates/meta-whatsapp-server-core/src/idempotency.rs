@@ -1721,6 +1721,52 @@ mod tests {
         }
     }
 
+    /// Roadmap M5h's three keyed creations are scoped to the number or the
+    /// WABA, the body and the operation: the same key and body on another
+    /// number or WABA, with another body, or as another operation (a
+    /// duplicate is never a sequence's creation) is another request.
+    /// Decisive: the parameter and the operation of each constructor, and
+    /// the body's canonical form.
+    #[test]
+    fn the_marketing_fingerprints_are_per_number_or_waba_body_and_operation() {
+        let body = serde_json::json!({"name": "x", "template": {"a": 1}});
+        let other = serde_json::json!({"name": "y", "template": {"a": 1}});
+        let reordered = serde_json::json!({"template": {"a": 1}, "name": "x"});
+        assert_eq!(
+            Fingerprint::send_marketing_message(&pn("1"), &body),
+            Fingerprint::send_marketing_message(&pn("1"), &reordered)
+        );
+        assert_ne!(
+            Fingerprint::send_marketing_message(&pn("1"), &body),
+            Fingerprint::send_marketing_message(&pn("2"), &body)
+        );
+        assert_ne!(
+            Fingerprint::send_marketing_message(&pn("1"), &body),
+            Fingerprint::send_marketing_message(&pn("1"), &other)
+        );
+        assert_ne!(
+            Fingerprint::send_marketing_message(&pn("1"), &body),
+            Fingerprint::send_message(&pn("1"), &body)
+        );
+        let wabas: [fn(&WabaId, &serde_json::Value) -> Fingerprint; 2] = [
+            Fingerprint::duplicate_marketing_template,
+            Fingerprint::create_welcome_sequence,
+        ];
+        for build in wabas {
+            assert_eq!(build(&waba("1"), &body), build(&waba("1"), &reordered));
+            assert_ne!(build(&waba("1"), &body), build(&waba("2"), &body));
+            assert_ne!(build(&waba("1"), &body), build(&waba("1"), &other));
+            assert_ne!(
+                build(&waba("1"), &body),
+                Fingerprint::create_flow(&waba("1"), &body)
+            );
+        }
+        assert_ne!(
+            Fingerprint::duplicate_marketing_template(&waba("1"), &body),
+            Fingerprint::create_welcome_sequence(&waba("1"), &body)
+        );
+    }
+
     /// Roadmap M5f's keyed creation is scoped to the number, the body and
     /// the operation: the same key and body on another number, with another
     /// body, or as another operation, is another request. Decisive: the
