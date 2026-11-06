@@ -1279,8 +1279,8 @@ impl<'a> Analytics<'a> {
     /// (roadmap M5g2): `POST /{template_id}?cta_url_link_tracking_opted_out=…
     /// &category=…`. Meta wants the template's *current* category in the
     /// call (another moves the template to `PENDING` review), so the
-    /// service reads it with the lookup and sends it back, in the case the
-    /// page's example writes it (lowercase); the caller names none. Audited
+    /// service reads it with the lookup and sends it back exactly
+    /// as Meta returned it (no change of case: D284); the caller names none. Audited
     /// as [`TEMPLATE_CLICK_TRACKING_SET`].
     ///
     /// # Errors
@@ -1306,7 +1306,7 @@ impl<'a> Analytics<'a> {
         };
         let set = self
             .client()
-            .set_button_click_tracking(&id, opted_out, &category.to_ascii_lowercase())
+            .set_button_click_tracking(&id, opted_out, &category)
             .await;
         match set {
             Ok(()) => {

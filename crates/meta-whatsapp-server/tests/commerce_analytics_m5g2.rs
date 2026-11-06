@@ -730,8 +730,8 @@ fn script_template(h: &Harness, id: &str, in_waba: bool) {
 
 /// analytics, "Disabling button click analytics": the template is found
 /// among the WABA's own (its name, then the WABA's templates of that
-/// name), its current category read and sent back as the page's example
-/// writes it, and the opt-out set with the page's parameters; `204`, a
+/// name), its current category read and sent back exactly as Meta
+/// returned it, and the opt-out set with the page's parameters; `204`, a
 /// repeat under the same key replayed. A template of another WABA is `404`
 /// with the two lookups only. Refused before any request: a body that is
 /// not `{"opted_out": bool}`, an id that is no Meta id. Meta's refusal
@@ -762,7 +762,7 @@ async fn click_tracking_is_set_only_on_the_wabas_own_template_with_its_category(
         query(post),
         pairs(&[
             ("cta_url_link_tracking_opted_out", "true"),
-            ("category", "marketing")
+            ("category", "MARKETING")
         ])
     );
     assert_eq!(post.bearer(), Some(TOKEN));
@@ -772,18 +772,27 @@ async fn click_tracking_is_set_only_on_the_wabas_own_template_with_its_category(
     assert_eq!(again.status, StatusCode::NO_CONTENT);
     assert_eq!(h.graph.requests().len(), 3, "replayed, not sent twice");
 
-    // Opting back in.
-    script_template(&h, TEMPLATE, true);
+    // Opting back in, on a template of another category: the category the
+    // lookup returned goes back as it came (no change of case, no fixed
+    // value), so that a comparison at Meta never moves the template to
+    // review. Decisive: the category argument of `set_button_click_tracking`.
+    h.graph
+        .push_json(200, json!({"name": "seasonal_sale_promo", "id": TEMPLATE}));
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": TEMPLATE, "category": "UTILITY"}]}),
+    );
     h.graph.push_json(200, json!({"success": true}));
     let back = h.call(tracking(TEMPLATE, &key, &json!(false))).await;
     assert_eq!(back.status, StatusCode::NO_CONTENT, "{}", back.text);
+    let post = h.graph.last_request().unwrap();
+    assert_eq!(post.method, Method::POST);
     assert_eq!(
-        h.graph
-            .last_request()
-            .unwrap()
-            .query("cta_url_link_tracking_opted_out")
-            .as_deref(),
-        Some("false")
+        query(&post),
+        pairs(&[
+            ("cta_url_link_tracking_opted_out", "false"),
+            ("category", "UTILITY")
+        ])
     );
 
     // Another WABA's template: the two lookups, no change.
@@ -904,4 +913,105 @@ async fn each_new_route_takes_its_own_scope() {
         }
     }
     assert!(h.graph.requests().is_empty());
+}
+
+// ─── No other route confirms the insights ────────────────────────────────
+
+/// **No other route confirms template insights**, with the legal acts on:
+/// every route of the document that names a number or a WABA, but the
+/// insights route itself, is called with a key of every scope, Meta
+/// answering each request it gets, and no request ever carries
+/// `is_enabled_for_insights`. Decisive: any other operation calling the
+/// library's `enable_template_insights`.
+#[tokio::test]
+async fn no_other_route_ever_confirms_template_insights() {
+    let (h, _) = connected(true).await;
+    let key = h.tenant_key(TENANT, &common::ALL_SCOPES).await;
+    let sample = common::Sample {
+        tenant: TENANT.to_owned(),
+        waba: WABA.to_owned(),
+        pn: PN.to_owned(),
+        key_id: "placeholder".to_owned(),
+    };
+    let mut walked = 0;
+    for operation in common::spec_operations() {
+        let numbered =
+            operation.template.contains("{pn}") || operation.template.contains("{waba_id}");
+        if operation.admin()
+            || !numbered
+            || operation.template.contains("stream")
+            || operation.template.ends_with("/analytics/template-insights")
+        {
+            continue;
+        }
+        for _ in 0..8 {
+            h.graph.push_json(200, json!({}));
+        }
+        let _ = h
+            .call(common::sample_call(&operation, &sample, Some(&key)))
+            .await;
+        walked += 1;
+    }
+    assert!(walked >= 100, "{walked} routes walked");
+    let asked = h.graph.requests();
+    assert!(asked.len() > 50, "Meta was asked {} times", asked.len());
+    assert!(
+        asked
+            .iter()
+            .all(|r| r.query("is_enabled_for_insights").is_none()),
+        "{:?}",
+        asked
+            .iter()
+            .filter(|r| r.query("is_enabled_for_insights").is_some())
+            .map(|r| r.path())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// The confirmation's call is made once by the core's `analytics` (the
+/// library's) and once by the insights route's handler (the core's), and
+/// by no other source of the service's crates. Decisive: a second caller.
+#[test]
+fn only_the_analytics_core_names_the_insights_confirmation() {
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let mut found = Vec::new();
+    let mut stack = vec![crates.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                let service = path
+                    .parent()
+                    .is_some_and(|p| p == crates)
+                    .then(|| name.starts_with("meta-whatsapp-server"));
+                if service == Some(false) || name == "target" || name == "tests" {
+                    continue;
+                }
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                let code: String = source
+                    .lines()
+                    .filter(|line| !line.trim_start().starts_with("//"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                // Once the service's `Analytics` call in the core (the
+                // library's), once the handler's (the service's).
+                for _ in 0..code.matches(".enable_template_insights(").count() {
+                    found.push(path.strip_prefix(crates).unwrap().display().to_string());
+                }
+            }
+        }
+    }
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            "meta-whatsapp-server-api-axum/src/api/analytics.rs".to_owned(),
+            "meta-whatsapp-server-core/src/analytics.rs".to_owned(),
+        ]
+    );
 }

@@ -7111,15 +7111,17 @@ or WABA fails the family's own cross-tenant test).
     cross-object `404`s with only the checks sent, every refusal before any
     request), `tests/analytics_switches_logs.rs` (the audit events),
     M5.1 by construction (`tests/authz.rs`), M1.5 (`tests/errors.rs`).
-  - **Decided:** nothing yet: D280–D287 are the implementer's proposals,
-    for the coordinator. Pending the owner's confirmation before the first
+  - **Decided:** D280–D287, by the coordinator on 2026-11-06 under the
+    owner's delegation, swappable: as proposed, template insights gated as
+    a legal act (D285), and the click tracking category sent back exactly
+    as Meta returned it, with no change of case (D284). Pending the owner's confirmation before the first
     release: the six operation ids, the paths, the body's `opted_out`, and
     the audit actions `template_insights_enabled` and
     `template_click_tracking_set`.
   - **Not done here:** a set's own products edge, the sets' filters
     (`ancestor_id`, `has_children`, `parent_id`), the products edge's
     `error_type`, `error_priority` and `bulk_pagination`. Unverified
-    against Meta: the case of the category the opt-out sends (D284), the
+    against Meta: whether Meta compares the category's case (D284), the
     value type of `product_item_id` in a filter (D281). No call was run
     against Meta live.
 - [x] **M5h. Marketing Messages API and CTWA** (rows 136–138, 154). The

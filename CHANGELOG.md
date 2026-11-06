@@ -14,8 +14,8 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
 ### Added (roadmap M5g2)
 
-- What M5g did not route (design D280 to D287, **the implementer's
-  proposals, not decided**; names pending the owner's confirmation before
+- What M5g did not route (design D280 to D287, decided by the
+  coordinator under the owner's delegation, swappable; names pending the owner's confirmation before
   the first release): `GET /v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets`,
   `…/product-sets/{set_id}` and `…/products/{product_id}` (a set or a
   product of another catalog is `404`, with only the checks sent), the
