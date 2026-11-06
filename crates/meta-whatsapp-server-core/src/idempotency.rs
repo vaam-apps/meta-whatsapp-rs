@@ -81,6 +81,7 @@ use crate::uploads::NewUpload;
 /// | `deregister_number` ([`Self::deregister_number`]) | the number's id (the body's confirmation is that id again) |
 /// | `create_group` ([`Self::create_group`]; roadmap M5f) | the number's id; the JSON body, canonical as above |
 /// | `create_library_template`, `migrate_templates`, `create_template_group` ([`Self::create_library_template`], [`Self::migrate_templates`], [`Self::create_template_group`]; roadmap M5b) | the WABA's id; the JSON body, canonical as above |
+/// | `request_display_name_change` ([`Self::request_display_name_change`]; roadmap M5c2) | the number's id; the JSON body, canonical as above |
 /// | `create_qr_code`, `block_users`, `unblock_users` ([`Self::create_qr_code`], [`Self::block_users`], [`Self::unblock_users`]; roadmap M5g) | the number's id; the JSON body, canonical as above |
 /// | `create_flow` ([`Self::create_flow`]; roadmap M5d) | the WABA's id; the JSON body, canonical as above |
 ///
@@ -348,6 +349,16 @@ impl Fingerprint {
     /// (roadmap M5f; no legacy fingerprint).
     pub fn create_group(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
         Self::json(Operation::CreateGroup, &[("pn", number.as_str())], body)
+    }
+
+    /// `request_display_name_change` on `number`, with the JSON body the
+    /// request carried (roadmap M5c2; no legacy fingerprint).
+    pub fn request_display_name_change(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::RequestDisplayNameChange,
+            &[("pn", number.as_str())],
+            body,
+        )
     }
 
     /// `create_flow` in `waba`, with the JSON body the request carried
@@ -1623,6 +1634,25 @@ mod tests {
         assert_ne!(
             build(&pn("1"), &body),
             Fingerprint::send_message(&pn("1"), &body)
+        );
+    }
+
+    /// Roadmap M5c2's keyed display name request is scoped to the number,
+    /// the body and the operation. Decisive: the `pn` parameter and the
+    /// operation of `Fingerprint::request_display_name_change`, and the
+    /// body's canonical form.
+    #[test]
+    fn the_display_name_request_fingerprint_is_per_number_body_and_operation() {
+        let body = serde_json::json!({"new_display_name": "Lucky Shrub", "x": 1});
+        let other = serde_json::json!({"new_display_name": "Lucky Shrubs", "x": 1});
+        let reordered = serde_json::json!({"x": 1, "new_display_name": "Lucky Shrub"});
+        let build = Fingerprint::request_display_name_change;
+        assert_eq!(build(&pn("1"), &body), build(&pn("1"), &reordered));
+        assert_ne!(build(&pn("1"), &body), build(&pn("2"), &body));
+        assert_ne!(build(&pn("1"), &body), build(&pn("1"), &other));
+        assert_ne!(
+            build(&pn("1"), &body),
+            Fingerprint::create_group(&pn("1"), &body)
         );
     }
 

@@ -6385,10 +6385,49 @@ or WABA fails the family's own cross-tenant test).
     call was run against Meta live; a final chunk whose answer Meta
     never delivered leaves no handle to read back (upload again); the
     docs image carries no `ffmpeg`.
-- [ ] **M5c2. Profile and display name** (rows 64, 65): the profile
+- [x] **M5c2. Profile and display name** (rows 64, 65): the profile
   picture (through a resumable upload handle), the display name change.
   - **After:** M5c1.
   - **Decisive:** M5.1, M5.2.
+  - **Landed:** scope `numbers`, no new scope. `PATCH
+    /v1/numbers/{pn}/profile` takes `profile_picture_upload_id`, the id of
+    one of the number's own completed image uploads (M5c1): the service
+    reads the handle from the upload's record (`Uploads::profile_picture`)
+    and sends it as `profile_picture_handle` in the change's one `POST`.
+    A handle of another tenant's or another number's upload, an expired
+    one and an unknown one are one `404 not_found` with zero requests to
+    Meta; a raw `profile_picture_handle` is not a field (`422`), as the
+    records cannot be searched by a handle. `GET` answers
+    `profile_picture_url` too. `POST /v1/numbers/{pn}/display-name`
+    (`{new_display_name}`, an optional `Idempotency-Key`, `202`; audited
+    `display_name_change_requested` by the name's length and the outcome,
+    never the name) and `GET …/display-name` (`verified_name`,
+    `name_status`, `new_display_name`, `new_name_status`), through the
+    library's `request_display_name_change` and `get`. Bounds: an address
+    of at most 256 characters and the vertical's refusals (the library's),
+    a name of 1 to 256 characters without a control, bidi override or
+    zero-width character, the profile's websites (`http` or `https`, no
+    credentials), email shape and texts (D165), and a
+    picture of a JPEG or PNG upload (the service's own: Meta's pages state
+    none). Tests: `tests/profile.rs` (the exact requests, every bound with
+    zero requests, another tenant's and another number's upload `404`,
+    the number's holders only, Meta's refusal and a timeout), `tests/authz.rs`
+    and `tests/errors.rs` (the new routes), `tests/logs.rs` (M1.7: the
+    handle, session, picture URL and upload ids planted, the audit events
+    checked), the profile's conformance case. The OpenAPI document is
+    additive (two operations, two fields).
+  - **Decided** (design D160–D166, by the coordinator on 2026-11-05 under
+    the owner's delegation, swappable): the upload named, not the handle (D160), no new scope (D161), the two
+    display name routes (D162), the optional key (D163), the audit event
+    (D164), the bounds (D165), what is not offered (D166). Every new name
+    (the operation ids `request_display_name_change` and
+    `get_display_name`, the path, the field and the audit action) is
+    pending the owner's confirmation before the first release.
+  - **Not done here:** the profile-node API; registering the number again
+    after an approval (the PIN is the caller's); a count of Meta's 10
+    changes per 30 days; a display name change of an Official Business
+    Account (Meta: through support); a picture in the same call as its
+    upload; no call was run against Meta live.
 - [ ] **M5c3. Number settings** (rows 66, 109, 128, 129–133, 151, 156):
   the settings (payload encryption among them, after L26), the username, the messaging limit tier on
   `GET /v1/numbers/{pn}`, the Official Business Account, compliance

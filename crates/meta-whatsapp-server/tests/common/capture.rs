@@ -325,6 +325,9 @@ pub async fn exercise(h: &Harness) -> Secrets {
     secrets.extend(otp(h, &admin).await);
     secrets.section("registration");
     secrets.extend(registration(h, &tenant_key).await);
+    // The profile picture's upload and the display name (roadmap M5c2).
+    secrets.section("profile");
+    secrets.extend(picture_and_display_name(h, &admin).await);
     // Payments (roadmap P2): the OAuth links are credentials.
     secrets.section("payments");
     secrets.extend(payments(h, &admin).await);
@@ -2534,6 +2537,122 @@ async fn resumable_uploads(h: &Harness, key: &str, pn: &str) -> Vec<String> {
     ]
 }
 
+const PICTURE_HANDLE: &str = "4::PICTURE-HANDLE-LOG-SECRET-7XK";
+const OTHER_PICTURE_HANDLE: &str = "4::OTHER-PICTURE-HANDLE-LOG-SECRET-7XK";
+const PICTURE_SIGNATURE: &str = "SIG-PICTURE-LOG-SECRET-7XK";
+const PICTURE_URL_SIGNATURE: &str = "oh=PICTURE-URL-LOG-SECRET-7XK";
+/// A display name: audited by its length alone (design D164).
+pub const DISPLAY_NAME: &str = "Log Test Shrub Display Name";
+
+/// The profile picture and the display name (roadmap M5c2), each
+/// exercised: a picture set from the number's own completed upload (its
+/// handle, Meta's session, the picture's URL and the upload ids are
+/// secrets), another number's upload refused, a display name requested
+/// under a key, repeated, read, and requested with the call cut. Returns
+/// what must not be logged.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn picture_and_display_name(h: &Harness, admin: &str) -> Vec<String> {
+    const PN: &str = "1972385232742141";
+    const OTHER_PN: &str = "1972385232742142";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["numbers", "media"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    // A completed PNG upload on `pn`, with Meta's session and handle.
+    let upload = |pn: &'static str, session: &'static str, handle: &'static str| {
+        let key = key.clone();
+        async move {
+            h.graph.push_json(
+                200,
+                json!({"id": format!("upload:{session}?sig={PICTURE_SIGNATURE}")}),
+            );
+            let started = h
+                .call(
+                    Call::new(Method::POST, format!("/v1/numbers/{pn}/media-uploads"))
+                        .key(&key)
+                        .json(&json!({"file_name": "logo.png", "file_length": 12, "file_type": "image/png"})),
+                )
+                .await;
+            assert_eq!(started.status.as_u16(), 201, "{}", started.text);
+            let id = started.json()["upload_id"].as_str().unwrap().to_owned();
+            h.graph.push_json(200, json!({"h": handle}));
+            let chunk = h
+                .call(
+                    Call::new(
+                        Method::POST,
+                        format!("/v1/numbers/{pn}/media-uploads/{id}?file_offset=0"),
+                    )
+                    .key(&key)
+                    .header("content-type", "application/octet-stream")
+                    .body(meta_whatsapp_rs::webhooks::axum::body::Body::from(
+                        b"png bytes...".to_vec(),
+                    )),
+                )
+                .await;
+            assert_eq!(chunk.status.as_u16(), 200, "{}", chunk.text);
+            id
+        }
+    };
+    let mine = upload(PN, "PICSESSION", PICTURE_HANDLE).await;
+    let other = upload(OTHER_PN, "OTHERPICSESSION", OTHER_PICTURE_HANDLE).await;
+    let patch = |id: &str| {
+        Call::new(Method::PATCH, format!("/v1/numbers/{PN}/profile"))
+            .key(&key)
+            .json(&json!({"profile_picture_upload_id": id}))
+    };
+    h.graph.push_json(200, json!({"success": true}));
+    h.graph.push_json(
+        200,
+        json!({"data": [{"about": "Hi",
+                "profile_picture_url": format!("https://pps.whatsapp.net/v/t61.24/pic.jpg?{PICTURE_URL_SIGNATURE}")}]}),
+    );
+    let set = h.call(patch(&mine)).await;
+    assert_eq!(set.status.as_u16(), 200, "{}", set.text);
+    // Another number's upload: not found, nothing asked of Meta.
+    let refused = h.call(patch(&other)).await;
+    assert_eq!(refused.status.as_u16(), 404, "{}", refused.text);
+    // The display name: asked under a key and repeated, read, then asked
+    // with the call cut.
+    let request = |key_header: &str| {
+        Call::new(Method::POST, format!("/v1/numbers/{PN}/display-name"))
+            .key(&key)
+            .header("idempotency-key", key_header)
+            .json(&json!({"new_display_name": DISPLAY_NAME}))
+    };
+    h.graph.push_json(200, json!({"success": true}));
+    let asked = h.call(request("display-name-log-1")).await;
+    assert_eq!(asked.status.as_u16(), 202, "{}", asked.text);
+    let replayed = h.call(request("display-name-log-1")).await;
+    assert_eq!(replayed.status.as_u16(), 202, "{}", replayed.text);
+    h.graph.push_json(
+        200,
+        json!({"verified_name": "Lucky Shrub", "name_status": "APPROVED",
+               "new_display_name": DISPLAY_NAME, "new_name_status": "PENDING_REVIEW", "id": PN}),
+    );
+    let status = h
+        .call(Call::get(format!("/v1/numbers/{PN}/display-name")).key(&key))
+        .await;
+    assert_eq!(status.status.as_u16(), 200, "{}", status.text);
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let cut = h.call(request("display-name-log-2")).await;
+    assert_eq!(cut.status.as_u16(), 504, "{}", cut.text);
+    vec![
+        PICTURE_HANDLE.to_owned(),
+        OTHER_PICTURE_HANDLE.to_owned(),
+        PICTURE_SIGNATURE.to_owned(),
+        PICTURE_URL_SIGNATURE.to_owned(),
+        DISPLAY_NAME.to_owned(),
+        mine,
+        other,
+    ]
+}
+
 /// An OTP recipient: in no log line.
 pub const OTP_PHONE: &str = "+16315554444";
 
@@ -2805,11 +2924,13 @@ fn check_audit(logs: &str) {
     assert!(onboarded[0]["key_id"].is_string(), "{}", onboarded[0]);
     check_erasure_audit(&events, &changes);
     check_group_audit(&changes);
+    check_display_name_audit(&changes);
     let deletions: Vec<&serde_json::Value> = changes
         .into_iter()
         .filter(|fields| {
             fields["action"] != "signup_resumed"
                 && fields["action"] != "customer_erased"
+                && fields["action"] != "display_name_change_requested"
                 && !fields["action"]
                     .as_str()
                     .is_some_and(|action| action.starts_with("group_"))
@@ -2914,6 +3035,61 @@ fn check_erasure_audit(events: &[serde_json::Value], changes: &[&serde_json::Val
     assert!(audit["key_id"].is_string(), "{audit}");
     assert_eq!(audit["identities"], 2, "{audit}");
     assert!(audit["messages"].as_u64().unwrap() > 0, "{audit}");
+}
+
+/// The display name requests' audit events (roadmap M5c2; design D164) of
+/// the scenario `profile`: one answered, one that may have gone through
+/// unanswered, each with the tenant, the WABA, the number by id, the key
+/// and the length of the name; never the name.
+fn check_display_name_audit(changes: &[&serde_json::Value]) {
+    let requests: Vec<&serde_json::Value> = changes
+        .iter()
+        .copied()
+        .filter(|fields| fields["action"] == "display_name_change_requested")
+        .collect();
+    let seen: Vec<(&str, u64)> = requests
+        .iter()
+        .map(|fields| {
+            (
+                fields["outcome"].as_str().unwrap_or_default(),
+                fields["name_chars"].as_u64().unwrap_or(u64::MAX),
+            )
+        })
+        .collect();
+    let chars = DISPLAY_NAME.chars().count() as u64;
+    assert_eq!(
+        seen,
+        [("answered", chars), ("unknown", chars)],
+        "the display name requests' audit events"
+    );
+    for fields in requests {
+        assert!(fields["key_id"].is_string(), "{fields}");
+        assert_eq!(fields["tenant"], "merchant-42", "{fields}");
+        assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
+        assert_eq!(fields["phone_number_id"], "1972385232742141", "{fields}");
+        let names: Vec<&str> = fields
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        for name in names {
+            assert!(
+                matches!(
+                    name,
+                    "message"
+                        | "action"
+                        | "key_id"
+                        | "tenant"
+                        | "waba_id"
+                        | "phone_number_id"
+                        | "name_chars"
+                        | "outcome"
+                ),
+                "an unexpected field `{name}`: {fields}"
+            );
+        }
+    }
 }
 
 /// The group changes' audit events (roadmap M5f; docs/design/server.md,
