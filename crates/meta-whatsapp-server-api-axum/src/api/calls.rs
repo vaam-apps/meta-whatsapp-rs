@@ -468,11 +468,11 @@ fn settings_doc(settings: &domain::Settings) -> Result<SettingsDoc, ApiError> {
     responses(
         (status = 200, description = "The settings; a SIP server's password is never in it", body = SettingsView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
-        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)", body = ErrorBody),
+        (status = 502, description = "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
@@ -512,12 +512,12 @@ pub(crate) async fn get_call_settings(
     responses(
         (status = 204, description = "Changed; users' apps may take up to 7 days to show it. Audited by section name"),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or a voicemail announcement that is not this number's media (only the lookup was sent)", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `update` (nothing to change), `body`, or the field at fault (`call_hours.status`, `sip.servers`, `voicemail.triggers`, …)", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
-        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)", body = ErrorBody),
+        (status = 502, description = "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)", body = ErrorBody),
         (status = 504, description = "`timeout`: the settings may have been changed", body = ErrorBody),
     )
 )]
@@ -549,12 +549,12 @@ pub(crate) async fn update_call_settings(
     responses(
         (status = 200, description = "The user's permission", body = PermissionsView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `phone`, `user_id`, `user` (neither given) or `query`: nothing asked of Meta", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
-        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)", body = ErrorBody),
+        (status = 502, description = "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
 )]
@@ -624,12 +624,12 @@ async fn connect(service: &Calls<'_>, request: &ConnectRequest) -> Result<Succes
     responses(
         (status = 201, description = "Placed: the user's phone rings. The call's events arrive as `call_updated` and `call_status_updated` events, and the call is the number's here from now on", body = StartedView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, or Meta's refusal", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `to`, `sdp_offer`, `biz_opaque_callback_data`, `recording`, `transcription` or `body`; `idempotency_key_reused`: nothing sent", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
-        (status = 502, description = "Meta failed (code 138006 is a missing call permission: read it with the permissions route)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)", body = ErrorBody),
+        (status = 502, description = "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)", body = ErrorBody),
         (status = 504, description = "`timeout`: the call may have been placed", body = ErrorBody),
     )
 )]
@@ -683,12 +683,12 @@ pub(crate) async fn connect_call(
     responses(
         (status = 204, description = "Pre-accepted. Audited"),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such call among the number's (the call's last event is older than 24 hours, or none arrived); nothing sent", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `sdp_answer` or `body`: nothing sent", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
-        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)", body = ErrorBody),
+        (status = 502, description = "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)", body = ErrorBody),
         (status = 504, description = "`timeout`: not repeated; read the call's events", body = ErrorBody),
     )
 )]
@@ -719,12 +719,12 @@ pub(crate) async fn pre_accept_call(
     responses(
         (status = 204, description = "Accepted: start sending media. Audited, with whether recording or transcription was enabled"),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such call among the number's; nothing sent", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `sdp_answer`, `biz_opaque_callback_data`, `recording`, `transcription` or `body`: nothing sent", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
-        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)", body = ErrorBody),
+        (status = 502, description = "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)", body = ErrorBody),
         (status = 504, description = "`timeout`: not repeated; read the call's events", body = ErrorBody),
     )
 )]
@@ -760,11 +760,11 @@ pub(crate) async fn accept_call(
     responses(
         (status = 204, description = "Rejected. Audited"),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such call among the number's; nothing sent", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
-        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)", body = ErrorBody),
+        (status = 502, description = "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)", body = ErrorBody),
         (status = 504, description = "`timeout`: not repeated; read the call's events", body = ErrorBody),
     )
 )]
@@ -794,11 +794,11 @@ pub(crate) async fn reject_call(
     responses(
         (status = 204, description = "Ended. Audited; do it also after the media ended, for an accurate price"),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such call among the number's; nothing sent", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
-        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)", body = ErrorBody),
+        (status = 502, description = "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)", body = ErrorBody),
         (status = 504, description = "`timeout`: not repeated; read the call's events", body = ErrorBody),
     )
 )]

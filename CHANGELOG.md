@@ -393,6 +393,28 @@ stored data, the owner's).
   are pending the owner's confirmation before the first release. The
   classification is the library's, whatever endpoint answered: see
   Changed, for the three codes a send or a media call may also see.
+- **Calling error codes** (roadmap L28, design D240-D243, the
+  coordinator's decision under the owner's delegation, swappable; from Meta's `calling/troubleshooting`
+  page, read on 2026-11-06). `ErrorKind::from_code` classifies `138000` to
+  `138007`, `138009`, `138012` to `138015` and `138017` to `138023`
+  (existing kinds where one fits: `138001` `undeliverable`, `138013`
+  `feature_not_available`; eight new ones: `calling_not_enabled`,
+  `calling_temporarily_disabled`, `call_permission_missing`,
+  `call_permission_already_granted`, `call_already_ongoing`,
+  `call_limit_reached`, `call_connection_failed`, `call_media_timeout`).
+  None of the eight is retryable, and none is resent automatically (a
+  call that may have connected is never replayed). The service answers
+  `409` (`calling_not_enabled`, `call_permission_missing`,
+  `call_permission_already_granted`, `call_already_ongoing`), `403`
+  (`calling_temporarily_disabled`), `429` (`call_limit_reached`) or `502`
+  (`call_connection_failed`, `call_media_timeout`) with Meta's code and
+  none of its text, where it answered `502 unknown`; the OpenAPI
+  document gains the eight codes and the routes' status descriptions,
+  nothing else. The eight names are pending the owner's confirmation
+  before the first release. `131055` (a Graph call to a SIP number) stays
+  the messages page's `marketing_not_allowed`: a code cannot tell them
+  apart. The classification is the library's, whatever endpoint answered:
+  see Changed.
 - **Resumable media uploads and conversion on upload, in the service**
   (roadmap M5c1, parity rows 47 and 48 now done in the service; choices
   D125-D131, proposed, pending the coordinator's decision; from the
@@ -3281,6 +3303,18 @@ stored data, the owner's).
 
 ### Changed
 
+- **Three more Graph codes are classified now, whichever call they answer**
+  (roadmap L28, design D241): `131030` (a recipient outside a public test
+  number's allowed list) is `ErrorKind::Undeliverable`, `131044` (no valid
+  payment method) is `ErrorKind::Payment`, and `613` (a rate limit) is
+  `ErrorKind::RateLimited`; all three were `ErrorKind::Unknown`. A send
+  route answers `422 undeliverable`, `403 payment` or `429 rate_limited`
+  where it answered `502 unknown`, and `613` is now retryable, and
+  resendable for a non-idempotent request, as every `rate_limited` is.
+  Code that branched on `Unknown` for them has to branch on the new
+  kind. The calling page documents them for calls; the messages page
+  (`support/error-codes`, read 2026-11-06) lists none of the three, so the
+  calling page's meaning is the only one on record.
 - **Three Graph codes are classified now, whichever call they answer**
   (roadmap L27, design D170): `131020` ("Cannot send messages to single
   member groups", a group message) is `ErrorKind::Undeliverable`, `131041`
