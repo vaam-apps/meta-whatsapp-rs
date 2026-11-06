@@ -112,6 +112,39 @@ pub struct ContactFacts {
     pub failed: u64,
 }
 
+/// A tenant's thread action on a number (roadmap M5l; docs/design/server.md,
+/// D221), logged like [`tenant_audit`] (target `audit`, message `tenant
+/// change`) with `outcome` and [`RoutingFacts`]. Never who: the user whose
+/// thread it is (a phone number, a BSUID) and the `metadata` forwarded to
+/// the new owner are in no log of the service.
+pub fn routing_audit(
+    action: &'static str,
+    key_id: &str,
+    subject: &Subject<'_>,
+    routing: &RoutingFacts<'_>,
+    outcome: Outcome,
+) {
+    tracing::info!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
+        target_role = routing.target_role,
+        outcome = outcome.as_str(),
+        "tenant change"
+    );
+}
+
+/// What a [`routing_audit`] event names besides its [`Subject`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RoutingFacts<'a> {
+    /// The role a pass named (one of `routing::TARGET_ROLES`); `None` for
+    /// an untargeted pass and for a take or a release.
+    pub target_role: Option<&'a str>,
+}
+
 /// A customer erased on a number (roadmap M2f: `crate::erasure`), logged
 /// like [`tenant_audit`] (target `audit`, message `tenant change`, action
 /// `customer_erased`) with the erasure's id (its journal entry's) and

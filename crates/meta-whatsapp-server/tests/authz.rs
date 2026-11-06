@@ -222,6 +222,11 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::GET, "/v1/numbers/{pn}/blocked-users"),
         (Method::POST, "/v1/numbers/{pn}/blocked-users"),
         (Method::POST, "/v1/numbers/{pn}/blocked-users/unblock"),
+        // Roadmap M5l (the design's M5.1): conversation routing.
+        (Method::GET, "/v1/numbers/{pn}/routing-roles"),
+        (Method::POST, "/v1/numbers/{pn}/thread-control/pass"),
+        (Method::POST, "/v1/numbers/{pn}/thread-control/take"),
+        (Method::POST, "/v1/numbers/{pn}/thread-control/release"),
         // Roadmap M5f (the design's M5.1): a number's groups.
         (Method::POST, "/v1/numbers/{pn}/groups"),
         (Method::GET, "/v1/numbers/{pn}/groups"),

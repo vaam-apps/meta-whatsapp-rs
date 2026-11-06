@@ -7039,9 +7039,63 @@ or WABA fails the family's own cross-tenant test).
   - **After:** B1, B2, B2b (the replicas' shared budget), B3, B4.
   - **Decisive:** M5.1, M5.2; a broadcast over HTTP never exceeds its
     tenant's configured rate under a fake clock.
-- [ ] **M5l. Conversation routing** (row 139): the thread control API.
+- [x] **M5l. Conversation routing** (row 139): the thread control API.
   - **After:** S7, L15.
   - **Decisive:** M5.1, M5.2.
+  - **Landed** (*PR number to be added when it lands*): a new scope,
+    `routing`, and four routes under `/v1/numbers/{pn}` over the
+    library's `client::thread_control` (`server_core::routing`,
+    `server_api_axum::api::routing`): `GET …/routing-roles` (the roles the
+    business holds and its standby grant) and `POST
+    …/thread-control/pass`, `…/take` and `…/release`, the user addressed
+    by exactly one of `phone`, `wa_id` and `user_id` (a BSUID, Meta's
+    preferred identifier), a pass naming a **role** of Meta's six (or
+    none: the escalation partner), `metadata` at most 2,000 characters.
+    **M5.2 here:** no request field of the thread control API names an
+    app (roles are the identity, the business that owns the number
+    configures who holds one), so there is no app id to check and a pass
+    cannot name another tenant's; the user is no object of Meta's to
+    compare with the number, so after M5.1 (another tenant's number is
+    `404` before the vault is read) there is nothing left to look for
+    (D222). The three actions take an `Idempotency-Key`, are never
+    replayed after a timeout (`504` with `may_have_been_sent`), are audit
+    events by number and role (`thread_passed`, `thread_taken`,
+    `thread_released`) and carry neither the user nor the `metadata` in
+    any answer, log or event; Meta's texts are withheld from them (D221,
+    D223). No call accepts terms: thread control needs the business to have
+    accepted Meta's Business Agents and Platform Terms of Service in Meta
+    Business Suite, which only it can do. Tests: `tests/routing.rs` (the
+    pages' exact bodies per action and per way of naming the user, the
+    key's replay and the timeout, Meta's refusals as codes, every refusal
+    before any request, the scope and the other tenant's number),
+    `tests/routing_logs.rs` (the audit events), M5.1 by construction
+    (`tests/authz.rs`), M1.5 (`tests/errors.rs`), M1.7's capture
+    (`tests/common/capture.rs`, section `routing`). The OpenAPI document
+    is additive only (4 operations, 6 schemas, the scope and the tag).
+  - **Decided** (coordinator, 2026-11-06, under the owner's delegation,
+    all swappable): D220 to D225 in the design's section 10 (the scope,
+    the audit events and Meta's texts, a role and never an app, the keys,
+    the record in the inbox left to M5l2, the routes' shape). Pending the
+    owner's confirmation before the first release: the scope `routing`,
+    the four operation ids (`get_routing_roles`, `pass_thread`,
+    `take_thread`, `release_thread`), the three audit actions, the paths
+    and the schema names; no new setting or error code; no legal act.
+  - **Not done here:** the caller's own pass, take and release are not
+    recorded in the inbox's thread owner state (M5l2, D224); no call
+    reports who owns a thread (Meta offers none); no call of these routes
+    was run against Meta live.
+- [ ] **M5l2. Recording the service's own thread actions** (row 139): the
+  inbox's reply guard reads this app as the owner after the service passed
+  the thread, because Meta tells the caller nothing of its own pass, take
+  or release and the service does not record them (D224).
+  - **After:** M5l.
+  - **Decisive:** after a successful pass, a free-form reply to that
+    user is `409 thread_owned_elsewhere` with no request to Meta; after a
+    release it is let through to Meta's window check; a pass for a user
+    named by a phone number that the inbox has linked to a BSUID is
+    recorded under the conversation the inbox sink would record a handover
+    under. Needs the sink's key resolution (`follow_phone`) shared with the
+    service, or a library method that takes the user as `Recipient`.
 
 ## 5. Payments (last)
 

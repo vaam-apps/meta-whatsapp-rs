@@ -19,6 +19,7 @@
 //! | [`erasure`] | erasing a customer on a number (roadmap M2f): every identity the inbox connects to the ones named, journaled (an HMAC of each, never in clear) before the outbox's rows naming them and their inbox records are deleted, audited; only when a caller with the scope `erasure` asks |
 //! | [`payments`] | the payment operations as services (roadmap P2): a WABA's payment configurations (list, get, create, a new OAuth link, delete), a payment's lookup and its refund on a number, each configuration named looked for in the number's own WABA first |
 //! | [`commerce`], [`qr_codes`], [`analytics`], [`blocked_users`] | roadmap M5g, each over the library's module of the same name: a number's commerce settings and the catalog its WABA connects (a catalog looked for in the WABA's own list); a number's QR codes (a code looked for in the number's own list); a WABA's messaging, conversation, pricing and template analytics (look-back windows and half-hour ranges bounded, template ids found among the WABA's); a number's block list, blocks and unblocks audited by count, never by person |
+//! | [`routing`] | conversation routing as services (roadmap M5l), over the library's `client::thread_control`: the routing roles a number's business holds, and a user's thread passed, taken and released; the user addressed by phone, `wa_id` or BSUID (exactly one), the target of a pass a role of the page's six (no request names an app), each action audited without the user or the `metadata` and never replayed |
 //! | [`groups`] | a number's groups as services (roadmap M5f), over the library's `client::groups` and group analytics: create, list, read, change, delete, the invite link, the participants, the join requests; **a group is the number's or it does not exist**, decided by [`groups::GroupRecords`] (written by Meta's lifecycle events and the listing) before the token is opened ([`groups::GroupRecords::owned`]); no participant in any log, error or audit event |
 //! | [`display_names`] | a number's display name (roadmap M5c2): the request for a new one, which Meta reviews and which shows only once approved and the number registered again, audited by count and outcome, and the status of the name and of the request; the profile picture's handle is the number's own upload's ([`uploads::Uploads::profile_picture`]) |
 //! | [`number_settings`] | a number's settings (roadmap M5c3): its settings (payload encryption's key never answered), username, Official Business Account status and application, compliance information, health status, contact book entry and conversational components; the legal acts (the application, the declaration, the erasure) off until the deployment enables them, each audited |
@@ -111,6 +112,7 @@ pub mod qr_codes;
 pub mod ratelimit;
 pub mod registration;
 pub mod request;
+pub mod routing;
 pub mod signup;
 pub mod store;
 pub mod templates;

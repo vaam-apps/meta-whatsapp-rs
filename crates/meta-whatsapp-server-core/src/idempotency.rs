@@ -84,6 +84,7 @@ use crate::uploads::NewUpload;
 /// | `request_display_name_change` ([`Self::request_display_name_change`]; roadmap M5c2) | the number's id; the JSON body, canonical as above |
 /// | `request_official_business_account` ([`Self::request_official_business_account`]; roadmap M5c3) | the number's id; the JSON body, canonical as above |
 /// | `create_qr_code`, `block_users`, `unblock_users` ([`Self::create_qr_code`], [`Self::block_users`], [`Self::unblock_users`]; roadmap M5g) | the number's id; the JSON body, canonical as above |
+/// | `pass_thread`, `take_thread`, `release_thread` ([`Self::pass_thread`], [`Self::take_thread`], [`Self::release_thread`]; roadmap M5l) | the number's id; the JSON body, canonical as above |
 /// | `create_flow` ([`Self::create_flow`]; roadmap M5d) | the WABA's id; the JSON body, canonical as above |
 ///
 /// The same request always has the same fingerprint; another operation,
@@ -344,6 +345,24 @@ impl Fingerprint {
     /// (roadmap M5g; no legacy fingerprint).
     pub fn unblock_users(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
         Self::json(Operation::UnblockUsers, &[("pn", number.as_str())], body)
+    }
+
+    /// `pass_thread` on `number`, with the JSON body the request carried
+    /// (roadmap M5l; no legacy fingerprint).
+    pub fn pass_thread(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::PassThread, &[("pn", number.as_str())], body)
+    }
+
+    /// `take_thread` on `number`, with the JSON body the request carried
+    /// (roadmap M5l; no legacy fingerprint).
+    pub fn take_thread(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::TakeThread, &[("pn", number.as_str())], body)
+    }
+
+    /// `release_thread` on `number`, with the JSON body the request carried
+    /// (roadmap M5l; no legacy fingerprint).
+    pub fn release_thread(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::ReleaseThread, &[("pn", number.as_str())], body)
     }
 
     /// `create_group` on `number`, with the JSON body the request carried
@@ -1622,6 +1641,37 @@ mod tests {
             Fingerprint::create_qr_code,
             Fingerprint::block_users,
             Fingerprint::unblock_users,
+        ];
+        for build in constructors {
+            assert_eq!(build(&pn("1"), &body), build(&pn("1"), &reordered));
+            assert_ne!(build(&pn("1"), &body), build(&pn("2"), &body));
+            assert_ne!(build(&pn("1"), &body), build(&pn("1"), &other));
+            assert_ne!(
+                build(&pn("1"), &body),
+                Fingerprint::send_message(&pn("1"), &body)
+            );
+        }
+        for (i, one) in constructors.iter().enumerate() {
+            for other_op in &constructors[i + 1..] {
+                assert_ne!(one(&pn("1"), &body), other_op(&pn("1"), &body));
+            }
+        }
+    }
+
+    /// Roadmap M5l's keyed thread actions are scoped to the number, the body
+    /// and the operation: the same key and body on another number, with
+    /// another body, or as another action, is another request (a pass is
+    /// never replayed as a release). Decisive: the `pn` parameter and the
+    /// operation of each constructor, and the body's canonical form.
+    #[test]
+    fn the_thread_action_fingerprints_are_per_number_body_and_operation() {
+        let body = serde_json::json!({"user": {"phone": "+1"}, "target_role": "ctwa"});
+        let other = serde_json::json!({"user": {"phone": "+2"}, "target_role": "ctwa"});
+        let reordered = serde_json::json!({"target_role": "ctwa", "user": {"phone": "+1"}});
+        let constructors: [fn(&PhoneNumberId, &serde_json::Value) -> Fingerprint; 3] = [
+            Fingerprint::pass_thread,
+            Fingerprint::take_thread,
+            Fingerprint::release_thread,
         ];
         for build in constructors {
             assert_eq!(build(&pn("1"), &body), build(&pn("1"), &reordered));

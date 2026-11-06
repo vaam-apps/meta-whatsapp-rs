@@ -320,11 +320,19 @@ pub enum Operation {
     BlockUsers,
     /// `unblock_users`: people unblocked on a number (roadmap M5g).
     UnblockUsers,
+    /// `get_routing_roles`: the routing roles a number's business holds (roadmap M5l).
+    GetRoutingRoles,
+    /// `pass_thread`: a user's thread passed to another responder (roadmap M5l).
+    PassThread,
+    /// `take_thread`: a user's thread taken by the escalation partner (roadmap M5l).
+    TakeThread,
+    /// `release_thread`: a user's thread released to idle (roadmap M5l).
+    ReleaseThread,
 }
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 135] = [
+    pub const ALL: [Self; 139] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -460,6 +468,10 @@ impl Operation {
         Self::ListBlockedUsers,
         Self::BlockUsers,
         Self::UnblockUsers,
+        Self::GetRoutingRoles,
+        Self::PassThread,
+        Self::TakeThread,
+        Self::ReleaseThread,
     ];
 
     /// Its id: the HTTP adapter's `operationId`, e.g. `send_message`.
@@ -601,6 +613,10 @@ impl Operation {
             Self::ListBlockedUsers => "list_blocked_users",
             Self::BlockUsers => "block_users",
             Self::UnblockUsers => "unblock_users",
+            Self::GetRoutingRoles => "get_routing_roles",
+            Self::PassThread => "pass_thread",
+            Self::TakeThread => "take_thread",
+            Self::ReleaseThread => "release_thread",
         }
     }
 
@@ -734,6 +750,9 @@ impl Operation {
             | Self::ApproveGroupJoinRequests
             | Self::RejectGroupJoinRequests
             | Self::GetGroupAnalytics => Scope::Groups,
+            Self::GetRoutingRoles | Self::PassThread | Self::TakeThread | Self::ReleaseThread => {
+                Scope::Routing
+            }
             Self::GetCallSettings
             | Self::UpdateCallSettings
             | Self::GetCallPermissions
@@ -772,5 +791,19 @@ mod tests {
         }
         assert_eq!(Operation::from_id("create_tenant"), None, "an admin's");
         assert_eq!(Operation::from_id("Send_Message"), None);
+    }
+
+    /// The four routing operations take the scope `routing` and no other
+    /// (D220). Decisive: `Operation::scope` giving one of them another.
+    #[test]
+    fn the_routing_operations_take_the_routing_scope() {
+        for operation in [
+            Operation::GetRoutingRoles,
+            Operation::PassThread,
+            Operation::TakeThread,
+            Operation::ReleaseThread,
+        ] {
+            assert_eq!(operation.scope(), Scope::Routing, "{operation}");
+        }
     }
 }
