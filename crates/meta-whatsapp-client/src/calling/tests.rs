@@ -203,7 +203,7 @@ async fn the_permission_read_retries_a_613_and_not_a_call_error() {
         Client::builder()
             .transport(ts.clone())
             .access_token("TOKEN")
-            .retry(policy.clone())
+            .retry(policy)
             .build()
             .unwrap()
     };
