@@ -1,6 +1,6 @@
 # The marketing routes
 
-> **Verified against meta-whatsapp-rs 1474437216b078be1fc45ae3e1ce391420f75a60 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 6d04bc39f00f89642a97cd34719cffc5dd6f8321 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 | Route | Does |
 | --- | --- |

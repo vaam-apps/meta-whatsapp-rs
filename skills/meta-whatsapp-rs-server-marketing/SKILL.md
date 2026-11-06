@@ -5,7 +5,7 @@ description: "Sending marketing messages and managing max price and Click-to-Wha
 
 # meta-whatsapp-rs-server-marketing
 
-> **Verified against meta-whatsapp-rs 1474437216b078be1fc45ae3e1ce391420f75a60 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 6d04bc39f00f89642a97cd34719cffc5dd6f8321 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/marketing.ts](examples/marketing.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#marketing-messages-api-max-price-and-welcome-message-sequences).
 
