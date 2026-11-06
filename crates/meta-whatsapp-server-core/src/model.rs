@@ -158,6 +158,12 @@ pub enum Scope {
     /// or edits templates does not hold it (a stored name, pending the
     /// owner's confirmation before the first release).
     Marketing,
+    /// Conversation routing (roadmap M5l): the routing roles of a number
+    /// and the thread control actions (pass, take, release). A thread
+    /// action hands a customer's conversation to another responder, so a
+    /// scope of its own, which `send` and `inbox` do not grant (a stored
+    /// name, pending the owner's confirmation before the first release).
+    Routing,
     /// Calling (roadmap M5e): a number's calling settings, a user's call
     /// permission, the call a business places and the actions on a call
     /// (pre-accept, accept, reject, terminate). Calls carry SDP and may be
@@ -169,7 +175,7 @@ pub enum Scope {
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 19] = [
+    pub const ALL: [Scope; 20] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -188,6 +194,7 @@ impl Scope {
         Self::Contacts,
         Self::Groups,
         Self::Marketing,
+        Self::Routing,
         Self::Calls,
     ];
 
@@ -212,6 +219,7 @@ impl Scope {
             Self::Contacts => "contacts",
             Self::Groups => "groups",
             Self::Marketing => "marketing",
+            Self::Routing => "routing",
             Self::Calls => "calls",
         }
     }

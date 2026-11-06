@@ -478,8 +478,8 @@ of its own, after an HTML comment; keep that when you add one.
     Roadmap L13 (landed) and M5h.
 
     **Landed with roadmap M5h (2026-11-06), the service's side, its
-    choices the implementer's proposals (design D231), pending the
-    coordinator's decision:** the agreement is the admin route
+    choices decided by the coordinator the same day under the owner's
+    delegation, swappable (design D231):** the agreement is the admin route
     `POST /v1/admin/businesses/{business_id}/max-price-agreement`, the
     operator's explicit act, off until `WA_SERVER_LEGAL_ACTS=on` (`403
     feature_not_available`, nothing asked of Meta), then one request with

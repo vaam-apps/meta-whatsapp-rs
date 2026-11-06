@@ -501,6 +501,9 @@ pub enum ScopeName {
     /// Marketing sends, max price and welcome message sequences (roadmap
     /// M5h).
     Marketing,
+    /// A number's routing roles and the thread control actions: pass,
+    /// take, release (roadmap M5l).
+    Routing,
     /// A number's calling: settings, call permissions, the call a
     /// business places and the actions on a call (roadmap M5e).
     Calls,
@@ -527,6 +530,7 @@ impl From<ScopeName> for Scope {
             ScopeName::Contacts => Scope::Contacts,
             ScopeName::Groups => Scope::Groups,
             ScopeName::Marketing => Scope::Marketing,
+            ScopeName::Routing => Scope::Routing,
             ScopeName::Calls => Scope::Calls,
         }
     }
@@ -553,6 +557,7 @@ impl From<Scope> for ScopeName {
             Scope::Contacts => ScopeName::Contacts,
             Scope::Groups => ScopeName::Groups,
             Scope::Marketing => ScopeName::Marketing,
+            Scope::Routing => ScopeName::Routing,
             Scope::Calls => ScopeName::Calls,
         }
     }

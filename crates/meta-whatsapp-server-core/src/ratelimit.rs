@@ -118,6 +118,7 @@ impl RouteClass {
             | Operation::ListGroupParticipants
             | Operation::ListGroupJoinRequests
             | Operation::GetGroupAnalytics
+            | Operation::GetRoutingRoles
             | Operation::GetDisplayName
             | Operation::GetCallSettings
             | Operation::GetCallPermissions
@@ -180,6 +181,9 @@ impl RouteClass {
             | Operation::DeleteQrCode
             | Operation::BlockUsers
             | Operation::UnblockUsers
+            | Operation::PassThread
+            | Operation::TakeThread
+            | Operation::ReleaseThread
             | Operation::CreateGroup
             | Operation::UpdateGroup
             | Operation::DeleteGroup
@@ -694,6 +698,10 @@ mod tests {
             ("get_welcome_sequence", RouteClass::Read),
             ("update_welcome_sequence", RouteClass::Send),
             ("delete_welcome_sequence", RouteClass::Send),
+            ("get_routing_roles", RouteClass::Read),
+            ("pass_thread", RouteClass::Send),
+            ("take_thread", RouteClass::Send),
+            ("release_thread", RouteClass::Send),
         ];
         assert_eq!(table.len(), Operation::ALL.len(), "every operation");
         for (id, class) in table {
