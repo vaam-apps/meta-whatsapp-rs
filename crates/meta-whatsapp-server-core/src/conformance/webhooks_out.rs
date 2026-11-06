@@ -1020,6 +1020,32 @@ pub async fn the_pending_backlog_is_counted(backend: &dyn Backend) {
     assert_eq!((before.count, before.oldest_due), (3, None));
     let first = store.pending(at + secs(15)).await.unwrap();
     assert_eq!((first.count, first.oldest_due), (3, Some(at)));
+    // A suspended tenant's and a disabled endpoint's deliveries wait, and
+    // the backlog is what waits: they count, and they age.
+    records
+        .update_tenant(&tenant(&a), None, Some(TenantStatus::Suspended))
+        .await
+        .unwrap();
+    let suspended = store.pending(at + secs(15)).await.unwrap();
+    assert_eq!((suspended.count, suspended.oldest_due), (3, Some(at)));
+    records
+        .update_tenant(&tenant(&a), None, Some(TenantStatus::Active))
+        .await
+        .unwrap();
+    let toggle = |enabled| EndpointChange {
+        enabled: Some(enabled),
+        ..EndpointChange::default()
+    };
+    store
+        .update_endpoint(&tenant(&a), &endpoint.id, &toggle(false), at)
+        .await
+        .unwrap();
+    let disabled = store.pending(at + secs(15)).await.unwrap();
+    assert_eq!((disabled.count, disabled.oldest_due), (3, Some(at)));
+    store
+        .update_endpoint(&tenant(&a), &endpoint.id, &toggle(true), at)
+        .await
+        .unwrap();
     // Claimed, still pending: it counts until it is settled.
     let one = take(store.as_ref(), &endpoint.id, at + secs(15)).await;
     assert_eq!(store.pending(at + secs(15)).await.unwrap().count, 3);

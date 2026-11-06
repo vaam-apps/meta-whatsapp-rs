@@ -551,3 +551,350 @@ async fn the_pending_deliveries_are_a_gauge_that_falls_when_they_are_delivered()
         assert!(!metrics.contains(secret), "{secret}: {metrics}");
     }
 }
+
+/// What [`Gate`]'s `pending` does.
+#[derive(Clone, Copy)]
+enum Pending {
+    Read,
+    Hang,
+    Fail,
+}
+
+/// The harness's webhooks store, its `pending` made to hang or fail on
+/// demand and counted.
+struct Gate {
+    inner: Arc<dyn meta_whatsapp_server::store::WebhookStore>,
+    mode: Mutex<Pending>,
+    reads: std::sync::atomic::AtomicUsize,
+}
+
+impl Gate {
+    fn set(&self, mode: Pending) {
+        *self.mode.lock().unwrap() = mode;
+    }
+    fn reads(&self) -> usize {
+        self.reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl meta_whatsapp_server::store::WebhookStore for Gate {
+    async fn pending(
+        &self,
+        now: time::OffsetDateTime,
+    ) -> meta_whatsapp_server::store::StoreResult<
+        meta_whatsapp_server_core::webhooks_out::store::PendingDeliveries,
+    > {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mode = *self.mode.lock().unwrap();
+        match mode {
+            Pending::Read => self.inner.pending(now).await,
+            Pending::Hang => std::future::pending().await,
+            Pending::Fail => Err(meta_whatsapp_rs::core::error::StorageError::Busy),
+        }
+    }
+    async fn create_endpoint(
+        &self,
+        e: &meta_whatsapp_server_core::webhooks_out::store::NewEndpoint,
+        max: usize,
+    ) -> meta_whatsapp_server::store::StoreResult<
+        meta_whatsapp_server_core::webhooks_out::store::CreateOutcome,
+    > {
+        self.inner.create_endpoint(e, max).await
+    }
+    async fn endpoint(
+        &self,
+        t: &meta_whatsapp_server::model::TenantId,
+        id: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+    ) -> meta_whatsapp_server::store::StoreResult<
+        Option<meta_whatsapp_server_core::webhooks_out::Endpoint>,
+    > {
+        self.inner.endpoint(t, id).await
+    }
+    async fn endpoints(
+        &self,
+        t: &meta_whatsapp_server::model::TenantId,
+        page: &meta_whatsapp_server::model::PageRequest,
+    ) -> meta_whatsapp_server::store::StoreResult<
+        meta_whatsapp_server::model::Listing<meta_whatsapp_server_core::webhooks_out::Endpoint>,
+    > {
+        self.inner.endpoints(t, page).await
+    }
+    async fn update_endpoint(
+        &self,
+        t: &meta_whatsapp_server::model::TenantId,
+        id: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+        change: &meta_whatsapp_server_core::webhooks_out::store::EndpointChange,
+        now: time::OffsetDateTime,
+    ) -> meta_whatsapp_server::store::StoreResult<
+        Option<meta_whatsapp_server_core::webhooks_out::Endpoint>,
+    > {
+        self.inner.update_endpoint(t, id, change, now).await
+    }
+    async fn rotate_secret(
+        &self,
+        t: &meta_whatsapp_server::model::TenantId,
+        id: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+        secret: &meta_whatsapp_server_core::webhooks_out::SealedSecret,
+        previous_until: time::OffsetDateTime,
+        now: time::OffsetDateTime,
+    ) -> meta_whatsapp_server::store::StoreResult<
+        Option<meta_whatsapp_server_core::webhooks_out::Endpoint>,
+    > {
+        self.inner
+            .rotate_secret(t, id, secret, previous_until, now)
+            .await
+    }
+    async fn delete_endpoint(
+        &self,
+        t: &meta_whatsapp_server::model::TenantId,
+        id: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+    ) -> meta_whatsapp_server::store::StoreResult<bool> {
+        self.inner.delete_endpoint(t, id).await
+    }
+    async fn active_endpoints(
+        &self,
+    ) -> meta_whatsapp_server::store::StoreResult<
+        Vec<meta_whatsapp_server_core::webhooks_out::Endpoint>,
+    > {
+        self.inner.active_endpoints().await
+    }
+    async fn fan_out(
+        &self,
+        endpoint: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+        from: i64,
+        to: i64,
+        deliveries: &[meta_whatsapp_server_core::webhooks_out::store::NewDelivery],
+    ) -> meta_whatsapp_server::store::StoreResult<bool> {
+        self.inner.fan_out(endpoint, from, to, deliveries).await
+    }
+    async fn insert_delivery(
+        &self,
+        t: &meta_whatsapp_server::model::TenantId,
+        endpoint: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+        delivery: &meta_whatsapp_server_core::webhooks_out::store::NewDelivery,
+    ) -> meta_whatsapp_server::store::StoreResult<
+        Option<meta_whatsapp_server_core::webhooks_out::Delivery>,
+    > {
+        self.inner.insert_delivery(t, endpoint, delivery).await
+    }
+    async fn claim(
+        &self,
+        request: &meta_whatsapp_server_core::webhooks_out::store::ClaimRequest,
+    ) -> meta_whatsapp_server::store::StoreResult<
+        Vec<meta_whatsapp_server_core::webhooks_out::store::Claimed>,
+    > {
+        self.inner.claim(request).await
+    }
+    async fn settle(
+        &self,
+        attempt: &meta_whatsapp_server_core::webhooks_out::store::Attempt,
+        now: time::OffsetDateTime,
+    ) -> meta_whatsapp_server::store::StoreResult<bool> {
+        self.inner.settle(attempt, now).await
+    }
+    async fn deliveries(
+        &self,
+        t: &meta_whatsapp_server::model::TenantId,
+        endpoint: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+        page: &meta_whatsapp_server::model::PageRequest,
+    ) -> meta_whatsapp_server::store::StoreResult<
+        Option<
+            meta_whatsapp_server::model::Listing<meta_whatsapp_server_core::webhooks_out::Delivery>,
+        >,
+    > {
+        self.inner.deliveries(t, endpoint, page).await
+    }
+    async fn retry_delivery(
+        &self,
+        t: &meta_whatsapp_server::model::TenantId,
+        endpoint: &meta_whatsapp_server_core::webhooks_out::EndpointId,
+        id: &meta_whatsapp_server_core::webhooks_out::DeliveryId,
+        now: time::OffsetDateTime,
+        give_up_at: time::OffsetDateTime,
+    ) -> meta_whatsapp_server::store::StoreResult<
+        Option<meta_whatsapp_server_core::webhooks_out::Delivery>,
+    > {
+        self.inner
+            .retry_delivery(t, endpoint, id, now, give_up_at)
+            .await
+    }
+    async fn purge_deliveries(
+        &self,
+        before: time::OffsetDateTime,
+    ) -> meta_whatsapp_server::store::StoreResult<u64> {
+        self.inner.purge_deliveries(before).await
+    }
+}
+
+/// A harness whose webhooks store is a [`Gate`], with `n` deliveries held
+/// (recorded, none attempted) for tenant A.
+async fn gated(n: usize) -> (Harness, Arc<Gate>) {
+    let base = common::Stores::memory();
+    let gate = Arc::new(Gate {
+        inner: base.webhooks.clone(),
+        mode: Mutex::new(Pending::Read),
+        reads: 0.into(),
+    });
+    let out = webhooks_out();
+    let h = Harness::with_stores_and_settings(
+        common::Stores {
+            webhooks: gate.clone(),
+            ..base
+        },
+        meta_whatsapp_server::state::Settings {
+            webhooks_out: Some(out.clone()),
+            ..test_settings()
+        },
+    );
+    h.tenant(A).await;
+    let key = h.tenant_key(A, &[Scope::Webhooks]).await;
+    let (addr, _got) = receiver().await;
+    create(
+        &h,
+        &key,
+        &format!("http://{addr}/hook"),
+        &["history_synced"],
+    )
+    .await;
+    let pn = "106540352242999";
+    let waba = meta_whatsapp_rs::core::ids::WabaId::new(waba_of(pn)).unwrap();
+    h.store
+        .bind_waba(
+            &meta_whatsapp_server::model::TenantId::parse(A).unwrap(),
+            &waba,
+            &[meta_whatsapp_rs::core::ids::PhoneNumberId::new(pn).unwrap()],
+        )
+        .await
+        .unwrap();
+    for i in 0..n {
+        let event = row(Some(A), "history_synced", pn, Some(&format!("gate-{i}")));
+        h.outbox.insert(&event).await.unwrap().unwrap();
+    }
+    let dispatcher = Dispatcher::new(h.backend.as_ref(), h.state.clock(), webhooks_out());
+    dispatcher.fan_out().await.unwrap();
+    (h, gate)
+}
+
+/// A scrape of `/metrics`, and how long it took (it must return).
+async fn scrape(h: &Harness) -> (common::Reply, std::time::Duration) {
+    let started = std::time::Instant::now();
+    let reply = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        h.call(Call::get("/metrics")),
+    )
+    .await
+    .expect("the scrape returned");
+    (reply, started.elapsed())
+}
+
+/// Roadmap M2k: a store that hangs or fails never holds or fails a scrape:
+/// `/metrics` answers within the 2 s bound, with the values read last and
+/// every other metric still served; a scrape meanwhile asks for no second
+/// read.
+#[tokio::test]
+async fn a_hung_or_failing_store_never_holds_the_scrape() {
+    const PENDING: &str = "wa_server_webhooks_out_pending_deliveries";
+    const AGE: &str = "wa_server_webhooks_out_oldest_due_age_seconds";
+    use std::time::Duration;
+    let (h, gate) = gated(2).await;
+    h.clock.advance(Duration::from_secs(30));
+    let (reply, _) = scrape(&h).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(
+        (gauge(&reply.text, PENDING), gauge(&reply.text, AGE)),
+        (2, 30)
+    );
+    // A failing read: instant, the last values kept.
+    gate.set(Pending::Fail);
+    let (reply, took) = scrape(&h).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(
+        (gauge(&reply.text, PENDING), gauge(&reply.text, AGE)),
+        (2, 30)
+    );
+    assert!(took < Duration::from_secs(1), "{took:?}");
+    assert!(reply.text.contains("wa_server_event_streams_open"));
+    // A hung one: answered within the bound, the last values kept.
+    gate.set(Pending::Hang);
+    let reads = gate.reads();
+    let (reply, took) = scrape(&h).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(
+        (gauge(&reply.text, PENDING), gauge(&reply.text, AGE)),
+        (2, 30)
+    );
+    assert!(reply.text.contains("wa_server_event_streams_open"));
+    assert!(
+        took >= Duration::from_secs(1),
+        "{took:?}: the read was bounded"
+    );
+    assert!(took < Duration::from_secs(4), "{took:?}");
+    assert_eq!(gate.reads(), reads + 1);
+    // Two scrapes while a read hangs: one waits for the bound, the other
+    // is served at once, without a read of its own.
+    let reads = gate.reads();
+    let slow = tokio::spawn({
+        let h = h.internal.clone();
+        async move { common::send(&h, Call::get("/metrics").build()).await }
+    });
+    while gate.reads() == reads {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let (reply, took) = scrape(&h).await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert!(took < Duration::from_millis(500), "{took:?}");
+    assert_eq!(gate.reads(), reads + 1);
+    assert_eq!(slow.await.unwrap().status, StatusCode::OK);
+}
+
+/// Roadmap M2k: the age is since the delivery fell *due*, not since it was
+/// recorded: a delivery whose attempt failed waits out its backoff
+/// (pending, not due: age 0), then ages from the end of that wait.
+#[tokio::test]
+async fn a_retry_in_backoff_does_not_age_the_backlog() {
+    const PENDING: &str = "wa_server_webhooks_out_pending_deliveries";
+    const AGE: &str = "wa_server_webhooks_out_oldest_due_age_seconds";
+    let (h, dispatcher) = harness().await;
+    let key = h.tenant_key(A, &[Scope::Webhooks]).await;
+    // An address nothing listens on: the attempt is refused.
+    let dead = {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        listener.local_addr().unwrap()
+    };
+    create(
+        &h,
+        &key,
+        &format!("http://{dead}/hook"),
+        &["history_synced"],
+    )
+    .await;
+    let pn = "106540352242999";
+    let waba = meta_whatsapp_rs::core::ids::WabaId::new(waba_of(pn)).unwrap();
+    h.store
+        .bind_waba(
+            &meta_whatsapp_server::model::TenantId::parse(A).unwrap(),
+            &waba,
+            &[meta_whatsapp_rs::core::ids::PhoneNumberId::new(pn).unwrap()],
+        )
+        .await
+        .unwrap();
+    let event = row(Some(A), "history_synced", pn, Some("backoff-1"));
+    h.outbox.insert(&event).await.unwrap().unwrap();
+    // Recorded a day ago, attempted now: failed, retried later.
+    dispatcher.fan_out().await.unwrap();
+    h.clock.advance(std::time::Duration::from_hours(24));
+    assert_eq!(dispatcher.dispatch_due().await, 1);
+    let metrics = h.call(Call::get("/metrics")).await.text;
+    assert_eq!(
+        (gauge(&metrics, PENDING), gauge(&metrics, AGE)),
+        (1, 0),
+        "{metrics}"
+    );
+    // An hour on, it is overdue by less than that hour, and by some.
+    h.clock.advance(std::time::Duration::from_hours(1));
+    let metrics = h.call(Call::get("/metrics")).await.text;
+    let age = gauge(&metrics, AGE);
+    assert_eq!(gauge(&metrics, PENDING), 1);
+    assert!((1..3_600).contains(&age), "{age}: {metrics}");
+}
