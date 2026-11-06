@@ -462,7 +462,7 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
 /// authorization order, the vault included, as every owned route does. A
 /// message by id A's inbox does not hold is `404`, after the vault. An
 /// erasure (roadmap M2f) too: it asks Meta nothing.
-const ASK_META_NOTHING: [(Method, &str, StatusCode); 11] = [
+const ASK_META_NOTHING: [(Method, &str, StatusCode); 9] = [
     // A resumable upload's chunk and status name an upload the sample
     // does not hold: refused after the vault, before Meta (roadmap M5c1).
     (
@@ -501,21 +501,13 @@ const ASK_META_NOTHING: [(Method, &str, StatusCode); 11] = [
         StatusCode::NOT_FOUND,
     ),
     (Method::POST, "/v1/numbers/{pn}/erasures", StatusCode::OK),
-    // Roadmap M5c3: the legal acts, off in this harness (the vault is read
-    // for the owner's token; the gate then refuses before Meta is asked).
-    (
-        Method::POST,
-        "/v1/numbers/{pn}/official-business-account",
-        StatusCode::FORBIDDEN,
-    ),
+    // Roadmap M5c3 (D192): the one legal act, off in this harness (the
+    // vault is read for the owner's token; the gate then refuses before
+    // Meta is asked). The application and the contact book erasure are not
+    // gated and are asked of Meta like any route.
     (
         Method::PUT,
         "/v1/numbers/{pn}/compliance-info",
-        StatusCode::FORBIDDEN,
-    ),
-    (
-        Method::DELETE,
-        "/v1/numbers/{pn}/contact-book/{bsuid}",
         StatusCode::FORBIDDEN,
     ),
 ];
