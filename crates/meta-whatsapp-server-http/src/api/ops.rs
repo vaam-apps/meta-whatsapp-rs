@@ -91,6 +91,7 @@ pub async fn readyz(State(state): State<AppState>) -> Result<Json<Health>, ApiEr
 )]
 pub async fn metrics(State(state): State<AppState>) -> Response {
     state.metrics().streams_open(state.open_streams());
+    state.read_backlog().await;
     let mut response = state.metrics().render().into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,

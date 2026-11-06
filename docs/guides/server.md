@@ -2521,7 +2521,14 @@ SKIP token.wabas: the configuration is refused
   and checks by outcome (`wa_server_otp_outcomes_total`), token-expiry
   events by outcome (`wa_server_token_expiry_events_total`: `recorded`,
   `failed`), and the live
-  event streams open on the replica (`wa_server_event_streams_open`);
+  event streams open on the replica (`wa_server_event_streams_open`),
+  and the webhooks-out backlog: `wa_server_webhooks_out_pending_deliveries`
+  (deliveries pending, every endpoint's) and
+  `wa_server_webhooks_out_oldest_due_age_seconds` (how long the oldest due
+  one has waited, `0` when none is), two gauges with no label, read from the
+  store when scraped (at most 2 s; a slow store leaves the last values). A
+  silent receiver shows as the first rising and the second growing: alert
+  on the age;
   never an id, a number, a code or a key.
 - Expired idempotency records are purged every 10 minutes by one replica
   at a time, with the outbox's housekeeping.

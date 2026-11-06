@@ -480,3 +480,78 @@ async fn without_a_data_key_the_routes_are_not_configured() {
     let listed = h.call(Call::get("/v1/webhook-endpoints").key(&key)).await;
     assert_eq!(listed.code(), "webhooks_not_configured");
 }
+
+/// The value of the unlabelled gauge `name` on `/metrics`.
+fn gauge(metrics: &str, name: &str) -> i64 {
+    let prefix = format!("\n{name} ");
+    let at = metrics.find(&prefix).unwrap_or_else(|| panic!("{metrics}"));
+    metrics[at + prefix.len()..]
+        .lines()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+/// Roadmap M2k: the deliveries held while nothing delivers them are a
+/// gauge (`wa_server_webhooks_out_pending_deliveries`), the age of the
+/// oldest due one another (`..._oldest_due_age_seconds`, read on the
+/// harness's fake clock), both falling to 0 once they are delivered; neither
+/// carries a label, and nothing on `/metrics` names an endpoint, a URL or a
+/// tenant.
+#[tokio::test]
+async fn the_pending_deliveries_are_a_gauge_that_falls_when_they_are_delivered() {
+    const PENDING: &str = "wa_server_webhooks_out_pending_deliveries";
+    const AGE: &str = "wa_server_webhooks_out_oldest_due_age_seconds";
+    let (h, dispatcher) = harness().await;
+    let key = h.tenant_key(A, &[Scope::Webhooks]).await;
+    let (addr, got) = receiver().await;
+    let url = format!("http://{addr}/secret-path");
+    let created = create(&h, &key, &url, &["history_synced"]).await;
+    let endpoint_id = created["id"].as_str().unwrap().to_owned();
+    let pn = "106540352242999";
+    let waba = meta_whatsapp_rs::core::ids::WabaId::new(waba_of(pn)).unwrap();
+    h.store
+        .bind_waba(
+            &meta_whatsapp_server::model::TenantId::parse(A).unwrap(),
+            &waba,
+            &[meta_whatsapp_rs::core::ids::PhoneNumberId::new(pn).unwrap()],
+        )
+        .await
+        .unwrap();
+    let metrics = h.call(Call::get("/metrics")).await.text;
+    assert_eq!((gauge(&metrics, PENDING), gauge(&metrics, AGE)), (0, 0));
+    for n in 0..3 {
+        let event = row(Some(A), "history_synced", pn, Some(&format!("held-{n}")));
+        h.outbox.insert(&event).await.unwrap().unwrap();
+    }
+    // Recorded as deliveries, none attempted: they are held.
+    dispatcher.fan_out().await.unwrap();
+    h.clock.advance(std::time::Duration::from_secs(90));
+    let metrics = h.call(Call::get("/metrics")).await.text;
+    assert_eq!(
+        (gauge(&metrics, PENDING), gauge(&metrics, AGE)),
+        (3, 90),
+        "{metrics}"
+    );
+    // Delivered one by one (an endpoint has one attempt at a time).
+    assert_eq!(round(&dispatcher).await, 1);
+    let metrics = h.call(Call::get("/metrics")).await.text;
+    assert_eq!(gauge(&metrics, PENDING), 2, "{metrics}");
+    assert_eq!(round(&dispatcher).await, 1);
+    assert_eq!(round(&dispatcher).await, 1);
+    assert_eq!(got.lock().unwrap().len(), 3);
+    let metrics = h.call(Call::get("/metrics")).await.text;
+    assert_eq!(
+        (gauge(&metrics, PENDING), gauge(&metrics, AGE)),
+        (0, 0),
+        "{metrics}"
+    );
+    // No label, and nothing that names an endpoint, a URL or a tenant.
+    for line in metrics.lines().filter(|l| l.contains("webhooks_out")) {
+        assert!(!line.contains('{'), "{line}");
+    }
+    for secret in [endpoint_id.as_str(), "secret-path", "127.0.0.1", A] {
+        assert!(!metrics.contains(secret), "{secret}: {metrics}");
+    }
+}

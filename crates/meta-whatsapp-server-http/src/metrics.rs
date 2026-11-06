@@ -22,6 +22,8 @@
 //! | `wa_server_otp_outcomes_total` | `operation` (`issue`, `verify`), `outcome` (an issue's `sent`, `cooling_down`, `rate_limited`, `failed`; a check's `verified`, `invalid`, `expired`, `too_many_attempts`, `not_found`, `failed`): the OTP outcomes (roadmap M3c), never a number or a code |
 //! | `wa_server_token_expiry_events_total` | `outcome`: `recorded` (a `token_expiring` event recorded: once per stored token and expiry; roadmap M3e), `failed` (a stored token's record could not be read, or its event not recorded; retried next round): never an id, a tenant or a token |
 //! | `wa_server_event_streams_open` | none: the live event streams open on the replica, read when scraped (a gauge; roadmap M2b) |
+//! | `wa_server_webhooks_out_pending_deliveries` | none: the webhook deliveries pending, every endpoint's and tenant's, read from the store when scraped (a gauge; roadmap M2k) |
+//! | `wa_server_webhooks_out_oldest_due_age_seconds` | none: whole seconds since the oldest pending delivery that is due fell due, `0` when none is (a gauge, read with the one above; roadmap M2k) |
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -33,6 +35,8 @@ use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::metrics::histogram::{Histogram, exponential_buckets};
 use prometheus_client::registry::Registry;
+
+use meta_whatsapp_server_core::webhooks_out::endpoints::Backlog;
 
 use crate::telemetry::Listener;
 
@@ -120,6 +124,8 @@ pub struct Metrics {
     otp: Family<OtpLabels, Counter>,
     token_expiry: Family<OutcomeLabels, Counter>,
     streams_open: Gauge,
+    webhooks_out_pending: Gauge,
+    webhooks_out_oldest_due_age: Gauge,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -221,6 +227,18 @@ impl Metrics {
             "Live event streams open on this replica",
             streams_open.clone(),
         );
+        let webhooks_out_pending = Gauge::default();
+        registry.register(
+            "webhooks_out_pending_deliveries",
+            "Webhook deliveries pending (webhooks out), all endpoints",
+            webhooks_out_pending.clone(),
+        );
+        let webhooks_out_oldest_due_age = Gauge::default();
+        registry.register(
+            "webhooks_out_oldest_due_age_seconds",
+            "Seconds since the oldest pending webhook delivery that is due fell due (0: none due)",
+            webhooks_out_oldest_due_age.clone(),
+        );
         Self {
             registry: Arc::new(Mutex::new(registry)),
             requests,
@@ -236,6 +254,8 @@ impl Metrics {
             otp,
             token_expiry,
             streams_open,
+            webhooks_out_pending,
+            webhooks_out_oldest_due_age,
         }
     }
 
@@ -378,6 +398,15 @@ impl Metrics {
     pub fn streams_open(&self, open: usize) {
         self.streams_open
             .set(i64::try_from(open).unwrap_or(i64::MAX));
+    }
+
+    /// Set the webhooks-out gauges (roadmap M2k) from a backlog read when
+    /// scraped.
+    pub fn webhooks_out_backlog(&self, backlog: Backlog) {
+        self.webhooks_out_pending
+            .set(i64::try_from(backlog.pending).unwrap_or(i64::MAX));
+        self.webhooks_out_oldest_due_age
+            .set(i64::try_from(backlog.oldest_due_age_seconds).unwrap_or(i64::MAX));
     }
 
     /// The Prometheus text exposition.

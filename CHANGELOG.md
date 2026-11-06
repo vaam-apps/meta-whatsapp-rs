@@ -12,6 +12,16 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added (roadmap M2k)
+
+- The webhooks-out backlog on `/metrics`: the gauges
+  `wa_server_webhooks_out_pending_deliveries` and
+  `wa_server_webhooks_out_oldest_due_age_seconds`, with no label (design D300
+  to D302, implementer's proposals, names pending the owner's confirmation),
+  read when scraped through a new `WebhookStore::pending` (a port method:
+  **upgrade:** a `WebhookStore` implemented outside this repository adds it;
+  memory and Postgres have it, no migration) and `WebhookEndpoints::backlog`.
+
 ### Added (roadmap M5h)
 
 - The service's Marketing Messages API, max price and Click-to-WhatsApp
