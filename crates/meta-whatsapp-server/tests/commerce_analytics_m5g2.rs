@@ -254,6 +254,21 @@ async fn a_product_set_is_its_catalogs_or_it_does_not_exist() {
         assert_eq!(error(&reply)["code"], "not_found");
         assert_eq!(h.graph.requests().len(), before + 2, "{answer}");
     }
+    // The full read answers another node than the one asked for: `404`,
+    // after the three requests. Decisive: the id comparison on the full
+    // read in `Catalogs::product_set`.
+    let before = h.graph.requests().len();
+    h.graph.push_json(200, catalog_answer());
+    h.graph
+        .push_json(200, json!({"id": SET, "product_catalog": {"id": CATALOG}}));
+    h.graph.push_json(
+        200,
+        json!({"id": "5000000000000999", "name": "Other", "filter": "{}"}),
+    );
+    let swapped = h.call(get(path.clone(), &key)).await;
+    assert_eq!(swapped.status, StatusCode::NOT_FOUND, "{}", swapped.text);
+    assert_eq!(error(&swapped)["code"], "not_found");
+    assert_eq!(h.graph.requests().len(), before + 3);
     // Meta refusing the set's id: not found, no text of Meta's.
     let before = h.graph.requests().len();
     h.graph.push_json(200, catalog_answer());
@@ -404,7 +419,34 @@ async fn the_products_filter_is_parsed_and_bounded_before_any_request() {
     );
     assert_eq!(h.graph.remaining(), 0);
 
+    // The value is URL-encoded once: a `&`, an `=`, a `%` and non-ASCII text
+    // in a value reach Meta as one `filter` pair, decoded to the compact
+    // JSON, and no other pair (no parameter can be added through it).
+    h.graph.push_json(200, catalog_answer());
+    h.graph.push_json(200, json!({"data": []}));
+    let tricky = enc(r#"{"name": {"eq": "a&limit=100&access_token=x=%41 é中"}}"#);
+    let reply = h
+        .call(get(format!("{base}?filter={tricky}&limit=3"), &key))
+        .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.text);
+    let edge = h.graph.last_request().unwrap();
+    assert_eq!(
+        query(&edge),
+        pairs(&[
+            ("fields", PRODUCT_FIELDS),
+            (
+                "filter",
+                "{\"name\":{\"eq\":\"a&limit=100&access_token=x=%41 \u{e9}\u{4e2d}\"}}"
+            ),
+            ("limit", "3"),
+        ])
+    );
+    let raw = edge.url.query().unwrap();
+    assert!(raw.contains("%2541") && !raw.contains("%252541"), "{raw}");
+    assert_eq!(h.graph.remaining(), 0);
+
     let sent = h.graph.requests().len();
+    let deep = format!(r#"{{"name":{{"eq":{}1{}}}}}"#, "[".repeat(300), "]".repeat(300));
     let long = format!(r#"{{"name":{{"eq":"{}"}}}}"#, "a".repeat(2048));
     for bad in [
         "x",
@@ -414,6 +456,12 @@ async fn the_products_filter_is_parsed_and_bounded_before_any_request() {
         r#"{"unknown":{"eq":"a"}}"#,
         r#"{"name":{"matches":"a"}}"#,
         r#"{"name":{"eq":null}}"#,
+        r#"{"name":{"i_lt":1}}"#,
+        r#"{"price":{"lt":1e999}}"#,
+        r#"{"name":{"eq":[["a"]]}}"#,
+        r#"{"name":{"eq":"a"}} {"x":1}"#,
+        "\u{feff}{\"name\":{\"eq\":1}}",
+        deep.as_str(),
         long.as_str(),
     ] {
         let refused = h
