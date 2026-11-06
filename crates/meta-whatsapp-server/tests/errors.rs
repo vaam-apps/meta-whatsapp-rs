@@ -409,6 +409,7 @@ const CALLS_META: &[&str] = &[
     "GET /v1/numbers/{pn}/groups",
     "GET /v1/numbers/{pn}/groups/{group_id}",
     "PATCH /v1/numbers/{pn}/groups/{group_id}",
+    "PUT /v1/numbers/{pn}/groups/{group_id}/picture",
     "DELETE /v1/numbers/{pn}/groups/{group_id}",
     "GET /v1/numbers/{pn}/groups/{group_id}/invite-link",
     "POST /v1/numbers/{pn}/groups/{group_id}/invite-link",
@@ -617,6 +618,7 @@ const OBJECT_BY_ID: &[&str] = &[
 /// for them: it is `2xx`, and answers no Meta text.
 const SUCCESS_ON_ANY_200: &[&str] = &[
     "PATCH /v1/numbers/{pn}/groups/{group_id}",
+    "PUT /v1/numbers/{pn}/groups/{group_id}/picture",
     "POST /v1/numbers/{pn}/groups/{group_id}/participants/remove",
 ];
 
