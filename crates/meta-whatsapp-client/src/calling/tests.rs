@@ -242,7 +242,9 @@ async fn missing_permission_error_is_decoded() {
         .await
         .unwrap_err();
     assert_eq!(err.graph().map(|g| g.code), Some(138006));
-    assert_eq!(err.kind(), ErrorKind::Unknown);
+    // Classified since roadmap L28; a call is never replayed on it.
+    assert_eq!(err.kind(), ErrorKind::CallPermissionMissing);
+    assert!(!err.may_resend());
     assert_eq!(ts.remaining(), 0);
 }
 

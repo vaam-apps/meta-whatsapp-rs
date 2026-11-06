@@ -932,7 +932,8 @@ impl<'a> Calls<'a> {
     ///
     /// `422 invalid_request` on `to`, `sdp_offer`, `biz_opaque_callback_data`,
     /// `recording` or `transcription`, before any request; Meta's refusal or
-    /// failure (`138006`, no call permission, among them).
+    /// failure, answered as its kind (`call_permission_missing` for `138006`,
+    /// `call_limit_reached` for the limits, ...), never with Meta's text.
     pub async fn connect(&self, request: &ConnectRequest) -> Result<Started, ServiceError> {
         let to = callee(request.to.clone(), "to.", "to")?;
         sdp("sdp_offer", &request.sdp_offer)?;
