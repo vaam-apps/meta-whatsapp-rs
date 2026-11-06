@@ -313,6 +313,38 @@ async fn issue_sends_the_documented_payload_then_verifies_once() {
     assert!(stored(&f).await.is_none());
 }
 
+/// The Messaging Account option rides on the code's message (the
+/// messaging page's request example, with the docs' sample WABA id), and
+/// only there: without it the body has no such key; a malformed id never
+/// reaches the transport, and the code is not left usable.
+#[tokio::test]
+async fn the_messaging_account_is_named_in_the_codes_message_when_set() {
+    let mut f = fixture(OtpConfig::new(TENANT));
+    f.otp = f
+        .otp
+        .clone()
+        .messaging_account_id(WabaId::new("102290129340398").unwrap());
+    let (_, code) = issue(&f).await;
+    let body = f.transport.last_request().unwrap().json().unwrap();
+    assert_eq!(body["messaging_account_id"], "102290129340398");
+    assert_eq!(body["to"], PHONE);
+    assert_eq!(body["template"]["components"][0]["parameters"][0]["text"], code);
+    assert_eq!(body.get("paid_messaging_account_id"), None);
+    assert_eq!(f.transport.remaining(), 0);
+
+    let plain = fixture(OtpConfig::new(TENANT));
+    issue(&plain).await;
+    let body = plain.transport.last_request().unwrap().json().unwrap();
+    assert_eq!(body.get("messaging_account_id"), None);
+
+    let mut bad = fixture(OtpConfig::new(TENANT));
+    bad.otp = bad.otp.clone().messaging_account_id(WabaId::new_unchecked("+49"));
+    accept(&bad.transport);
+    let err = bad.otp.issue(&user(), "login").await.unwrap_err();
+    assert!(matches!(&err, Error::Validation(v) if v.field == "messaging_account_id"));
+    assert!(bad.transport.requests().is_empty());
+}
+
 #[tokio::test]
 async fn the_code_goes_to_exactly_the_number_it_is_bound_to() {
     let f = fixture(OtpConfig::new(TENANT));
