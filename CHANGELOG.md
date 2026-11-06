@@ -12,6 +12,22 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added (roadmap L29)
+
+- **The Messaging Account on the calling actions** (roadmap L29, parity row
+  140; from Meta's `account-model-evolution/messaging#calling-api` and the
+  `calling` pages, read on 2026-11-06). Library:
+  `Client::calling(..).messaging_account_id(WabaId)` names the Messaging
+  Account in the body of `connect`, `pre_accept`, `accept`, `reject` and
+  `terminate` (a JSON string, as the pages' examples show), checked as
+  digits before any request; unset, no key is sent. Additive (no struct
+  gained a field). Service (choices D310-D313, the implementer's proposals,
+  not decided): the call routes name the number's binding's WABA id on every
+  action under `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (the sends' setting, on);
+  a body naming the field, or the deprecated alias, is `422 invalid_request`.
+  No new setting, scope, route, error code or stored name; the OpenAPI
+  document is unchanged.
+
 ### Added (roadmap M5c5)
 
 - **The Messaging Account a send bills, in the service** (roadmap M5c5,
@@ -29,8 +45,8 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   Accounts is held: one binding, the latest same-tenant attach is the one
   billed, another tenant's is `409 waba_owned_by_another_tenant`. The OTP
   issue names it too, through a new option of the library's `OtpService`
-  (`messaging_account_id`, additive). Not named yet: the calling actions,
-  for want of an option in the library (roadmap L29), and the marketing
+  (`messaging_account_id`, additive). Not named yet: the calling actions
+  (named since roadmap L29, above), and the marketing
   send, whose Meta pages document no such field. Several bindings per number stay OPEN_QUESTIONS #46
   (the owner's). No new scope, route, error code or stored name; the
   OpenAPI document is unchanged.
