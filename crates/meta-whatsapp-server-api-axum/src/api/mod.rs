@@ -397,6 +397,9 @@ fn commerce_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(commerce::list_catalogs))
         .routes(routes!(commerce::get_catalog))
         .routes(routes!(commerce::list_catalog_products))
+        .routes(routes!(commerce::get_catalog_product))
+        .routes(routes!(commerce::list_catalog_product_sets))
+        .routes(routes!(commerce::get_catalog_product_set))
 }
 
 fn qr_codes_routes() -> OpenApiRouter<Grant> {
@@ -416,6 +419,9 @@ fn analytics_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(analytics::get_pricing_analytics))
         .routes(routes!(analytics::get_call_analytics))
         .routes(routes!(analytics::get_template_analytics))
+        .routes(routes!(analytics::get_template_group_analytics))
+        .routes(routes!(analytics::enable_template_insights))
+        .routes(routes!(analytics::set_template_click_tracking))
 }
 
 fn contacts_routes() -> OpenApiRouter<Grant> {

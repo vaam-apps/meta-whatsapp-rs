@@ -109,6 +109,7 @@ const LOG_TARGET: &str = "meta_whatsapp_server::api::templates";
 mod groups;
 mod lifecycle;
 
+pub(crate) use groups::all_groups_in_waba;
 pub use groups::{TemplateGroupDetails, group_creation, group_update};
 pub use lifecycle::{
     LibraryFilter, MAX_BULK_IDS, MAX_MIGRATION_IDS, Migration, MigrationRequest, bulk_ids, edit,
@@ -763,6 +764,22 @@ impl<'a> Templates<'a> {
     /// its `details`.
     pub(crate) async fn require_owned(&self, id: &TemplateId) -> Result<(), ServiceError> {
         self.owned_template(id, &["id"]).await.map(|_| ())
+    }
+
+    /// The category of the template `id`, if it is the WABA's, as Meta
+    /// names it (`MARKETING`, ...): what the click tracking opt-out sends
+    /// back (roadmap M5g2: Meta moves a template to `PENDING` review when
+    /// the call names another category than its current one), read after
+    /// the template is found among the WABA's own.
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found`, without Meta's code or text: Meta refusing the id,
+    /// a template not among the WABA's, or one with no category in the
+    /// answer. Meta's failure otherwise, with its `details`.
+    pub(crate) async fn category_of(&self, id: &TemplateId) -> Result<String, ServiceError> {
+        let info = self.owned_template(id, &["category"]).await?;
+        wire(info.category.as_ref()).ok_or_else(ServiceError::not_found)
     }
 
     /// The template `id`, with `fields`, if it is the WABA's: its name

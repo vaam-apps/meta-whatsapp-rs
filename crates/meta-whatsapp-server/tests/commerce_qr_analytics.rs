@@ -318,6 +318,10 @@ async fn a_catalog_is_the_wabas_or_it_does_not_exist() {
             "limit",
         ),
         (
+            format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/products?error_type=x"),
+            "query",
+        ),
+        (
             format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/products?limit=101"),
             "limit",
         ),
@@ -327,7 +331,7 @@ async fn a_catalog_is_the_wabas_or_it_does_not_exist() {
         ),
         (
             format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/products?filter=x"),
-            "query",
+            "filter",
         ),
     ] {
         let refused = h.call(get(path.clone(), &key)).await;

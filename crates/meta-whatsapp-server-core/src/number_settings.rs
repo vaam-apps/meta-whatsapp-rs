@@ -74,12 +74,17 @@ use crate::request::wire;
 
 /// Whether `operation` is a legal act: off until the deployment sets
 /// `WA_SERVER_LEGAL_ACTS=on` (design D192). The one predicate; adding an
-/// operation to the gate is one more arm here.
+/// operation to the gate is one more arm here. The second is the
+/// confirmation of template insights (roadmap M5g2, design D285), by which
+/// the business directs Meta to add link tracking and to collect and
+/// anonymize data from its chats, and which Meta's page says cannot be
+/// undone.
 #[must_use]
 pub fn is_legal_act(operation: Operation) -> bool {
     matches!(
         operation,
         Operation::SetComplianceInfo
+            | Operation::EnableTemplateInsights
             | Operation::CreateSolutionMigrationIntent
             | Operation::CreateBillingMigration
             | Operation::ResumeBillingMigration
@@ -861,12 +866,14 @@ mod tests {
 
     use super::*;
 
-    /// D192 and D250: the compliance declaration and the three partner acts
-    /// of roadmap M5j (a migration intent to a solution, a billing
-    /// migration and its resumption) are the legal acts among the
-    /// operations; the application and the erasure are not.
+    /// D192, D250 and D285: the compliance declaration, the confirmation of
+    /// template insights and the three partner acts of roadmap M5j (a
+    /// migration intent to a solution, a billing migration and its
+    /// resumption) are the legal acts among the operations; the
+    /// application, the erasure and the click tracking opt-out are not.
+    /// Decisive: each arm of `is_legal_act`.
     #[test]
-    fn only_the_declaration_and_the_partner_acts_are_legal_acts() {
+    fn only_the_declaration_the_insights_and_the_partner_acts_are_legal_acts() {
         let gated: Vec<_> = Operation::ALL
             .into_iter()
             .filter(|operation| is_legal_act(*operation))
@@ -878,8 +885,10 @@ mod tests {
                 Operation::CreateSolutionMigrationIntent,
                 Operation::CreateBillingMigration,
                 Operation::ResumeBillingMigration,
+                Operation::EnableTemplateInsights,
             ]
         );
+        assert!(!is_legal_act(Operation::SetTemplateClickTracking));
     }
 
     /// D231 and D250: the max price agreement and the four partner acts of

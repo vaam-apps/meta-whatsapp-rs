@@ -219,6 +219,29 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::GET, "/v1/wabas/{waba_id}/analytics/conversations"),
         (Method::GET, "/v1/wabas/{waba_id}/analytics/pricing"),
         (Method::GET, "/v1/wabas/{waba_id}/analytics/templates"),
+        // Roadmap M5g2 (the design's M5.1): a catalog's sets and products,
+        // template group analytics and the two switches.
+        (
+            Method::GET,
+            "/v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets",
+        ),
+        (
+            Method::GET,
+            "/v1/wabas/{waba_id}/catalogs/{catalog_id}/product-sets/{set_id}",
+        ),
+        (
+            Method::GET,
+            "/v1/wabas/{waba_id}/catalogs/{catalog_id}/products/{product_id}",
+        ),
+        (Method::GET, "/v1/wabas/{waba_id}/analytics/template-groups"),
+        (
+            Method::POST,
+            "/v1/wabas/{waba_id}/analytics/template-insights",
+        ),
+        (
+            Method::PUT,
+            "/v1/wabas/{waba_id}/analytics/templates/{template_id}/click-tracking",
+        ),
         (Method::GET, "/v1/numbers/{pn}/blocked-users"),
         (Method::POST, "/v1/numbers/{pn}/blocked-users"),
         (Method::POST, "/v1/numbers/{pn}/blocked-users/unblock"),
@@ -603,7 +626,7 @@ async fn a_path_id_that_is_not_numeric_is_not_found() {
 /// authorization order, the vault included, as every owned route does. A
 /// message by id A's inbox does not hold is `404`, after the vault. An
 /// erasure (roadmap M2f) too: it asks Meta nothing.
-const ASK_META_NOTHING: [(Method, &str, StatusCode); 13] = [
+const ASK_META_NOTHING: [(Method, &str, StatusCode); 14] = [
     // A resumable upload's chunk and status name an upload the sample
     // does not hold: refused after the vault, before Meta (roadmap M5c1).
     (
@@ -662,6 +685,13 @@ const ASK_META_NOTHING: [(Method, &str, StatusCode); 13] = [
     (
         Method::POST,
         "/v1/wabas/{waba_id}/billing-migrations",
+        StatusCode::FORBIDDEN,
+    ),
+    // Roadmap M5g2 (D285): the confirmation of template insights is a
+    // legal act, off in this harness.
+    (
+        Method::POST,
+        "/v1/wabas/{waba_id}/analytics/template-insights",
         StatusCode::FORBIDDEN,
     ),
     (
