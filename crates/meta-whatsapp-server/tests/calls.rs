@@ -977,6 +977,47 @@ async fn a_call_the_number_does_not_hold_is_not_found_with_zero_vault_reads() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// A number that moves to another tenant brings none of the previous
+/// holder's calls: the record names the tenant it was written for, and the
+/// new holder's `404` is the same as for a call never heard of, with the
+/// vault unread and Meta not asked. Decisive: the tenant comparison in
+/// `CallRecords::owned` (delete it and the new holder terminates the
+/// previous one's call).
+#[tokio::test]
+async fn a_moved_numbers_calls_are_not_its_new_holders() {
+    use meta_whatsapp_rs::core::ids::WabaId;
+    let (h, key) = connected().await;
+    hold(&h, PN, CALL).await;
+    // The move: the WABA is unbound and connected again for a third tenant.
+    assert!(
+        h.store
+            .unbind_waba(&WabaId::new(WABA).unwrap())
+            .await
+            .unwrap()
+    );
+    h.tenant("merchant-44").await;
+    h.connect("merchant-44", WABA, &[PN, PN_2], "EAAG-moved-token")
+        .await;
+    let new_key = h.tenant_key("merchant-44", &[Scope::Calls]).await;
+    let reads = h.kv.vault_reads();
+    let reply = h
+        .call(on(
+            Method::POST,
+            &format!("/v1/numbers/{PN}/calls/{CALL}/terminate"),
+            &new_key,
+        ))
+        .await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::NOT_FOUND, "not_found"),
+        "{}",
+        reply.text
+    );
+    assert_eq!(h.kv.vault_reads(), reads, "the vault was read");
+    assert!(h.graph.requests().is_empty(), "Meta was never asked");
+    drop(key);
+}
+
 /// What makes a call the number's: Meta's connect event of a user's call,
 /// and a business-initiated call's status event, each for the tenant's own
 /// number; not an event of another tenant's number, and nothing else. The
