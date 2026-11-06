@@ -245,7 +245,12 @@ async fn a_product_set_is_its_catalogs_or_it_does_not_exist() {
         h.graph.push_json(200, catalog_answer());
         h.graph.push_json(200, answer.clone());
         let reply = h.call(get(path.clone(), &key)).await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{answer}: {}", reply.text);
+        assert_eq!(
+            reply.status,
+            StatusCode::NOT_FOUND,
+            "{answer}: {}",
+            reply.text
+        );
         assert_eq!(error(&reply)["code"], "not_found");
         assert_eq!(h.graph.requests().len(), before + 2, "{answer}");
     }
@@ -319,7 +324,10 @@ async fn a_product_is_found_only_through_its_catalogs_own_edge() {
         query(edge),
         pairs(&[
             ("fields", PRODUCT_FIELDS),
-            ("filter", &format!("{{\"product_item_id\":{{\"eq\":{PRODUCT}}}}}")),
+            (
+                "filter",
+                &format!("{{\"product_item_id\":{{\"eq\":{PRODUCT}}}}}")
+            ),
         ])
     );
     assert_eq!(edge.bearer(), Some(TOKEN));
@@ -333,7 +341,12 @@ async fn a_product_is_found_only_through_its_catalogs_own_edge() {
         h.graph.push_json(200, catalog_answer());
         h.graph.push_json(200, json!({ "data": data }));
         let reply = h.call(get(path.clone(), &key)).await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{data}: {}", reply.text);
+        assert_eq!(
+            reply.status,
+            StatusCode::NOT_FOUND,
+            "{data}: {}",
+            reply.text
+        );
         assert_eq!(error(&reply)["code"], "not_found");
     }
     // Another WABA's catalog: the list only.
@@ -373,7 +386,9 @@ async fn the_products_filter_is_parsed_and_bounded_before_any_request() {
     let base = format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/products");
     h.graph.push_json(200, catalog_answer());
     h.graph.push_json(200, json!({"data": []}));
-    let filter = enc(r#"{ "product_type" : {"i_contains":"shirt"}, "product_type": {"i_contains": "mug"} }"#);
+    let filter = enc(
+        r#"{ "product_type" : {"i_contains":"shirt"}, "product_type": {"i_contains": "mug"} }"#,
+    );
     let reply = h
         .call(get(format!("{base}?filter={filter}&limit=3"), &key))
         .await;
@@ -515,7 +530,10 @@ async fn template_group_analytics_ask_only_for_the_wabas_own_groups() {
             .all(|r| !r.path().contains("template_group_analytics"))
     );
     // A node that names no WABA, and one with another id: not groups.
-    for answer in [json!({"id": GROUP}), json!({"id": "1", "whatsapp_business_account": {"id": WABA}})] {
+    for answer in [
+        json!({"id": GROUP}),
+        json!({"id": "1", "whatsapp_business_account": {"id": WABA}}),
+    ] {
         let before = h.graph.requests().len();
         h.graph.push_json(200, answer);
         let reply = h.call(groups_get(&q, &key)).await;
@@ -539,7 +557,10 @@ async fn template_group_analytics_ask_only_for_the_wabas_own_groups() {
         .await;
     assert_eq!(dated.status, StatusCode::OK, "{}", dated.text);
     let last = h.graph.last_request().unwrap();
-    assert_eq!(last.query("start").as_deref(), Some(d0.to_string().as_str()));
+    assert_eq!(
+        last.query("start").as_deref(),
+        Some(d0.to_string().as_str())
+    );
     assert_eq!(last.query("use_waba_timezone").as_deref(), Some("true"));
     assert_eq!(last.query("after").as_deref(), Some("MjQZD"));
     assert_eq!(h.graph.remaining(), 0);
@@ -555,24 +576,52 @@ async fn template_group_ranges_and_lists_are_bounded_before_any_request() {
     let at = |days: i64| rfc(now - time::Duration::days(days));
     let ids = vec!["1"; 11].join(",");
     let cases = [
-        (format!("start={}&end={}&group_ids=1", at(91), at(0)), "start"),
-        (format!("start={}&end={}&group_ids=1", at(2), at(2)), "end"),
-        (format!("start={}&end={}&group_ids=1", at(89), at(-2)), "end"),
-        (format!("start={}&end={}&group_ids={ids}", at(2), at(1)), "group_ids"),
-        (format!("start={}&end={}&group_ids=1,01", at(2), at(1)), "group_ids[1]"),
         (
-            format!("start={}&end={}&group_ids=1&metric_types=SENT", at(2), at(1)),
+            format!("start={}&end={}&group_ids=1", at(91), at(0)),
+            "start",
+        ),
+        (format!("start={}&end={}&group_ids=1", at(2), at(2)), "end"),
+        (
+            format!("start={}&end={}&group_ids=1", at(89), at(-2)),
+            "end",
+        ),
+        (
+            format!("start={}&end={}&group_ids={ids}", at(2), at(1)),
+            "group_ids",
+        ),
+        (
+            format!("start={}&end={}&group_ids=1,01", at(2), at(1)),
+            "group_ids[1]",
+        ),
+        (
+            format!(
+                "start={}&end={}&group_ids=1&metric_types=SENT",
+                at(2),
+                at(1)
+            ),
             "metric_types[0]",
         ),
         (
-            format!("start={}&end={}&group_ids=1&use_waba_timezone=true", at(2), at(1)),
+            format!(
+                "start={}&end={}&group_ids=1&use_waba_timezone=true",
+                at(2),
+                at(1)
+            ),
             "start",
         ),
-        (format!("start={}&end={}&group_ids=1&x=1", at(2), at(1)), "query"),
+        (
+            format!("start={}&end={}&group_ids=1&x=1", at(2), at(1)),
+            "query",
+        ),
     ];
     for (q, field) in cases {
         let refused = h.call(groups_get(&q, &key)).await;
-        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY, "{q}: {}", refused.text);
+        assert_eq!(
+            refused.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{q}: {}",
+            refused.text
+        );
         assert_eq!(error(&refused)["field"], field, "{q}");
     }
     assert!(h.graph.requests().is_empty(), "{:?}", h.graph.requests());
@@ -597,7 +646,10 @@ fn insights(key: &str) -> Call {
 #[tokio::test]
 async fn with_the_legal_acts_off_the_insights_are_refused_without_a_request_to_meta() {
     let (h, key) = connected(false).await;
-    for call in [insights(&key), insights(&key).header("idempotency-key", "ti-1")] {
+    for call in [
+        insights(&key),
+        insights(&key).header("idempotency-key", "ti-1"),
+    ] {
         let reply = h.call(call).await;
         assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.text);
         assert_eq!(reply.code(), "feature_not_available");
@@ -615,16 +667,24 @@ async fn with_the_legal_acts_off_the_insights_are_refused_without_a_request_to_m
 #[tokio::test]
 async fn with_the_legal_acts_on_the_insights_are_one_request_under_a_key() {
     let (h, key) = connected(true).await;
-    h.graph.push_json(200, json!({"id": 102_290_129_340_398_u64}));
-    let first = h.call(insights(&key).header("idempotency-key", "ti-1")).await;
+    h.graph
+        .push_json(200, json!({"id": 102_290_129_340_398_u64}));
+    let first = h
+        .call(insights(&key).header("idempotency-key", "ti-1"))
+        .await;
     assert_eq!(first.status, StatusCode::NO_CONTENT, "{}", first.text);
     assert!(first.text.is_empty());
     let request = h.graph.last_request().unwrap();
     assert_eq!(request.method, Method::POST);
     assert_eq!(request.path(), format!("/v25.0/{WABA}"));
-    assert_eq!(query(&request), pairs(&[("is_enabled_for_insights", "true")]));
+    assert_eq!(
+        query(&request),
+        pairs(&[("is_enabled_for_insights", "true")])
+    );
     assert_eq!(request.bearer(), Some(TOKEN));
-    let again = h.call(insights(&key).header("idempotency-key", "ti-1")).await;
+    let again = h
+        .call(insights(&key).header("idempotency-key", "ti-1"))
+        .await;
     assert_eq!(again.status, StatusCode::NO_CONTENT);
     assert_eq!(h.graph.requests().len(), 1, "replayed, not sent twice");
 
@@ -753,7 +813,12 @@ async fn click_tracking_is_set_only_on_the_wabas_own_template_with_its_category(
         ),
     ] {
         let refused = h.call(call).await;
-        assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", refused.text);
+        assert_eq!(
+            refused.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            refused.text
+        );
         assert_eq!(error(&refused)["field"], field);
     }
     assert_eq!(h.graph.requests().len(), before);
@@ -782,15 +847,39 @@ async fn click_tracking_is_set_only_on_the_wabas_own_template_with_its_category(
 async fn each_new_route_takes_its_own_scope() {
     let (h, _) = connected(true).await;
     let now = h.clock.now();
-    let q = format!("start={}&end={}&group_ids={GROUP}", rfc(now - time::Duration::days(2)), rfc(now - time::Duration::days(1)));
+    let q = format!(
+        "start={}&end={}&group_ids={GROUP}",
+        rfc(now - time::Duration::days(2)),
+        rfc(now - time::Duration::days(1))
+    );
     let commerce: Vec<(Method, String, Option<Value>)> = vec![
-        (Method::GET, format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/product-sets"), None),
-        (Method::GET, format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/product-sets/{SET}"), None),
-        (Method::GET, format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/products/{PRODUCT}"), None),
+        (
+            Method::GET,
+            format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/product-sets"),
+            None,
+        ),
+        (
+            Method::GET,
+            format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/product-sets/{SET}"),
+            None,
+        ),
+        (
+            Method::GET,
+            format!("/v1/wabas/{WABA}/catalogs/{CATALOG}/products/{PRODUCT}"),
+            None,
+        ),
     ];
     let analytics: Vec<(Method, String, Option<Value>)> = vec![
-        (Method::GET, format!("/v1/wabas/{WABA}/analytics/template-groups?{q}"), None),
-        (Method::POST, format!("/v1/wabas/{WABA}/analytics/template-insights"), None),
+        (
+            Method::GET,
+            format!("/v1/wabas/{WABA}/analytics/template-groups?{q}"),
+            None,
+        ),
+        (
+            Method::POST,
+            format!("/v1/wabas/{WABA}/analytics/template-insights"),
+            None,
+        ),
         (
             Method::PUT,
             format!("/v1/wabas/{WABA}/analytics/templates/{TEMPLATE}/click-tracking"),

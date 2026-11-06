@@ -2340,7 +2340,8 @@ async fn commerce_qr_analytics(h: &Harness, admin: &str) -> Vec<String> {
         ))
         .await;
     ok(&groups, 200);
-    h.graph.push_json(200, json!({"id": 102_290_129_340_398_u64}));
+    h.graph
+        .push_json(200, json!({"id": 102_290_129_340_398_u64}));
     let insights = h
         .call(call(
             Method::POST,

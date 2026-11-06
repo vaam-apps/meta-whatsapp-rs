@@ -521,12 +521,7 @@ pub fn template_query(
     now: OffsetDateTime,
     request: &TemplateRequest,
 ) -> Result<TemplateAnalyticsQuery, ServiceError> {
-    template_range(
-        now,
-        request.start,
-        request.end,
-        request.use_waba_timezone,
-    )?;
+    template_range(now, request.start, request.end, request.use_waba_timezone)?;
     if request.template_ids.is_empty() || request.template_ids.len() > MAX_TEMPLATE_IDS {
         return Err(invalid("template_ids"));
     }
@@ -584,12 +579,7 @@ pub fn template_group_query(
     now: OffsetDateTime,
     request: &TemplateGroupRequest,
 ) -> Result<TemplateGroupAnalyticsQuery, ServiceError> {
-    template_range(
-        now,
-        request.start,
-        request.end,
-        request.use_waba_timezone,
-    )?;
+    template_range(now, request.start, request.end, request.use_waba_timezone)?;
     if request.group_ids.is_empty() || request.group_ids.len() > MAX_TEMPLATE_GROUP_IDS {
         return Err(invalid("group_ids"));
     }
@@ -1212,11 +1202,7 @@ impl<'a> Analytics<'a> {
             Ok(page) => {
                 let next_after = page.next_cursor().map(str::to_owned);
                 Ok(TemplateGroupPage {
-                    sets: page
-                        .data
-                        .into_iter()
-                        .map(TemplateGroupSet::from)
-                        .collect(),
+                    sets: page.data.into_iter().map(TemplateGroupSet::from).collect(),
                     next_after,
                 })
             }
@@ -1248,10 +1234,7 @@ impl<'a> Analytics<'a> {
         facts: &AnalyticsFacts<'_>,
         error: &Error,
     ) -> ServiceError {
-        let api = self
-            .waba
-            .failed_withholding_texts(self.authz, error)
-            .await;
+        let api = self.waba.failed_withholding_texts(self.authz, error).await;
         if error.graph().is_some() {
             self.observer.graph_error(api.code());
         }

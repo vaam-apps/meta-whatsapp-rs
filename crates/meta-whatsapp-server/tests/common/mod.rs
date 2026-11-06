@@ -1296,10 +1296,9 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "amount": {"currency": "INR", "value": "100", "offset": "100"}
         }),
         // Roadmap M5g2: analytics, "Disabling button click analytics".
-        (
-            "PUT",
-            "/v1/wabas/{waba_id}/analytics/templates/{template_id}/click-tracking",
-        ) => serde_json::json!({"opted_out": true}),
+        ("PUT", "/v1/wabas/{waba_id}/analytics/templates/{template_id}/click-tracking") => {
+            serde_json::json!({"opted_out": true})
+        }
         // Roadmap M5d: a Flow created from the page's example, and changed
         // (`flows/guides/flowsapi`).
         ("POST", "/v1/wabas/{waba_id}/flows") => {

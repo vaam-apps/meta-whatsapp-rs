@@ -260,7 +260,13 @@ fn is_filter_operator(operator: &str) -> bool {
         || operator.strip_prefix("i_").is_some_and(|base| {
             matches!(
                 base,
-                "contains" | "not_contains" | "is_any" | "is_not_any" | "eq" | "neq" | "starts_with"
+                "contains"
+                    | "not_contains"
+                    | "is_any"
+                    | "is_not_any"
+                    | "eq"
+                    | "neq"
+                    | "starts_with"
             )
         })
 }
@@ -929,8 +935,8 @@ impl<'a> Catalogs<'a> {
     pub async fn product(&self, id: &str, product_id: &str) -> Result<Product, ServiceError> {
         graph_id("catalog_id", id)?;
         graph_id("product_id", product_id)?;
-        let product_id = ProductItemId::new(product_id)
-            .map_err(|_| ServiceError::invalid("product_id"))?;
+        let product_id =
+            ProductItemId::new(product_id).map_err(|_| ServiceError::invalid("product_id"))?;
         let filter = ProductFilter::product_item(&product_id)
             .ok_or_else(|| ServiceError::invalid("product_id"))?;
         let catalog = self.get(id).await?;

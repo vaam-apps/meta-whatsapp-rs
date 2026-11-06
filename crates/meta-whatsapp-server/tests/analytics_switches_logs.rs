@@ -32,7 +32,8 @@ fn refusal() -> Value {
 }
 
 fn lookup(h: &Harness) {
-    h.graph.push_json(200, json!({"name": NAME, "id": TEMPLATE}));
+    h.graph
+        .push_json(200, json!({"name": NAME, "id": TEMPLATE}));
     h.graph.push_json(
         200,
         json!({"data": [{"id": TEMPLATE, "category": "MARKETING"}]}),
@@ -73,7 +74,8 @@ async fn the_switches_are_audited_by_ids_and_never_with_metas_texts() {
         .json(&json!({ "opted_out": opted_out }))
     };
 
-    h.graph.push_json(200, json!({"id": 102_290_129_340_398_u64}));
+    h.graph
+        .push_json(200, json!({"id": 102_290_129_340_398_u64}));
     assert_eq!(h.call(insights()).await.status, StatusCode::NO_CONTENT);
     lookup(&h);
     h.graph.push_json(200, json!({"success": true}));
@@ -143,7 +145,10 @@ async fn the_switches_are_audited_by_ids_and_never_with_metas_texts() {
         assert_eq!(fields["message"], "tenant change");
     }
     assert!(!logs.contains(SENTINEL), "Meta's text was logged:\n{logs}");
-    assert!(!logs.contains(NAME), "a template's name was logged:\n{logs}");
+    assert!(
+        !logs.contains(NAME),
+        "a template's name was logged:\n{logs}"
+    );
     assert!(!logs.contains(TOKEN), "the token was logged:\n{logs}");
 }
 
