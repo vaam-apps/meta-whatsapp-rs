@@ -263,6 +263,49 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
             "/v1/numbers/{pn}/groups/{group_id}/join-requests/reject",
         ),
         (Method::GET, "/v1/numbers/{pn}/groups/{group_id}/analytics"),
+        // Roadmap M5h (the design's M5.1): marketing sends, max price and
+        // welcome message sequences.
+        (Method::POST, "/v1/numbers/{pn}/marketing-messages"),
+        (Method::GET, "/v1/wabas/{waba_id}/marketing/onboarding"),
+        (
+            Method::GET,
+            "/v1/wabas/{waba_id}/marketing/cloud-api-marketing",
+        ),
+        (
+            Method::PUT,
+            "/v1/wabas/{waba_id}/marketing/cloud-api-marketing",
+        ),
+        (
+            Method::POST,
+            "/v1/wabas/{waba_id}/marketing/template-duplicates",
+        ),
+        (Method::GET, "/v1/wabas/{waba_id}/marketing/reach-estimates"),
+        (
+            Method::GET,
+            "/v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price",
+        ),
+        (
+            Method::PUT,
+            "/v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price",
+        ),
+        (
+            Method::DELETE,
+            "/v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price",
+        ),
+        (Method::POST, "/v1/wabas/{waba_id}/welcome-sequences"),
+        (Method::GET, "/v1/wabas/{waba_id}/welcome-sequences"),
+        (
+            Method::GET,
+            "/v1/wabas/{waba_id}/welcome-sequences/{sequence_id}",
+        ),
+        (
+            Method::PATCH,
+            "/v1/wabas/{waba_id}/welcome-sequences/{sequence_id}",
+        ),
+        (
+            Method::DELETE,
+            "/v1/wabas/{waba_id}/welcome-sequences/{sequence_id}",
+        ),
         // Roadmap M5e (the design's M5.1): a number's calling.
         (Method::GET, "/v1/numbers/{pn}/call-settings"),
         (Method::PATCH, "/v1/numbers/{pn}/call-settings"),

@@ -418,8 +418,10 @@ async fn every_rate_limited_operation_declares_its_429() {
 /// roadmap M5d a Flow's creation; since roadmap M5f a group's creation; since
 /// roadmap M5g a QR code's creation, a block and an unblock; since roadmap
 /// M5c2 a display name's request; since roadmap M5c3 an Official Business
-/// Account application; since roadmap M5e the call a business places; since roadmap M5l a
-/// thread's pass, take and release), and the upload is a multipart form.
+/// Account application; since roadmap M5h a marketing send, a template
+/// duplicate and a welcome message sequence; since roadmap M5e the call a
+/// business places; since roadmap M5l a thread's pass, take and release),
+/// and the upload is a multipart form.
 #[test]
 fn idempotent_operations_declare_their_key() {
     let spec: Value = serde_json::from_str(COMMITTED).unwrap();
@@ -446,6 +448,7 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/numbers/{pn}/deregister",
             "POST /v1/numbers/{pn}/display-name",
             "POST /v1/numbers/{pn}/groups",
+            "POST /v1/numbers/{pn}/marketing-messages",
             "POST /v1/numbers/{pn}/media",
             "POST /v1/numbers/{pn}/media-uploads",
             "POST /v1/numbers/{pn}/messages",
@@ -459,6 +462,7 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/numbers/{pn}/thread-control/take",
             "POST /v1/otp/issue",
             "POST /v1/wabas/{waba_id}/flows",
+            "POST /v1/wabas/{waba_id}/marketing/template-duplicates",
             "POST /v1/wabas/{waba_id}/payment-configurations",
             "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
             "POST /v1/wabas/{waba_id}/template-groups",
@@ -466,6 +470,7 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/wabas/{waba_id}/templates/authentication",
             "POST /v1/wabas/{waba_id}/templates/library",
             "POST /v1/wabas/{waba_id}/templates/migrations",
+            "POST /v1/wabas/{waba_id}/welcome-sequences",
         ]
     );
     let upload = &spec["paths"]["/v1/numbers/{pn}/media"]["post"]["requestBody"]["content"];

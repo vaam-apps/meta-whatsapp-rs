@@ -470,6 +470,21 @@ const CALLS_META: &[&str] = &[
     "GET /v1/numbers/{pn}/blocked-users",
     "POST /v1/numbers/{pn}/blocked-users",
     "POST /v1/numbers/{pn}/blocked-users/unblock",
+    // Roadmap M5h: marketing sends, max price and welcome message sequences.
+    "POST /v1/numbers/{pn}/marketing-messages",
+    "GET /v1/wabas/{waba_id}/marketing/onboarding",
+    "GET /v1/wabas/{waba_id}/marketing/cloud-api-marketing",
+    "PUT /v1/wabas/{waba_id}/marketing/cloud-api-marketing",
+    "POST /v1/wabas/{waba_id}/marketing/template-duplicates",
+    "GET /v1/wabas/{waba_id}/marketing/reach-estimates",
+    "GET /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price",
+    "PUT /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price",
+    "DELETE /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price",
+    "POST /v1/wabas/{waba_id}/welcome-sequences",
+    "GET /v1/wabas/{waba_id}/welcome-sequences",
+    "GET /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}",
+    "PATCH /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}",
+    "DELETE /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}",
     // Roadmap M5l: the three actions are not in `DETAILS_KEPT` (Meta's
     // texts may quote the user, D221).
     "GET /v1/numbers/{pn}/routing-roles",
@@ -571,6 +586,19 @@ const DETAILS_KEPT: &[&str] = &[
     // analytics do; the calling routes of a number do not (an SDP line
     // may be quoted by a refusal).
     "GET /v1/wabas/{waba_id}/analytics/calls",
+    // Roadmap M5h: not a send and not a sequence's creation (Meta's texts may quote a parameter or the welcome message).
+    "GET /v1/wabas/{waba_id}/marketing/onboarding",
+    "GET /v1/wabas/{waba_id}/marketing/cloud-api-marketing",
+    "PUT /v1/wabas/{waba_id}/marketing/cloud-api-marketing",
+    "POST /v1/wabas/{waba_id}/marketing/template-duplicates",
+    "GET /v1/wabas/{waba_id}/marketing/reach-estimates",
+    "GET /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price",
+    "PUT /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price",
+    "DELETE /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price",
+    "GET /v1/wabas/{waba_id}/welcome-sequences",
+    "GET /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}",
+    "PATCH /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}",
+    "DELETE /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}",
 ];
 
 /// Operations on an object named by id (a media id, a template id): Meta
@@ -610,6 +638,14 @@ const OBJECT_BY_ID: &[&str] = &[
     "GET /v1/numbers/{pn}/groups/{group_id}/participants",
     "GET /v1/numbers/{pn}/groups/{group_id}/join-requests",
     "GET /v1/numbers/{pn}/groups/{group_id}/analytics",
+    // Roadmap M5h: a template or a sequence looked for in its WABA first.
+    "POST /v1/wabas/{waba_id}/marketing/template-duplicates",
+    "GET /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price",
+    "PUT /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price",
+    "DELETE /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price",
+    "GET /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}",
+    "PATCH /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}",
+    "DELETE /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}",
 ];
 
 /// Operations whose answer is success for any 2xx Meta sends (the library:

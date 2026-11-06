@@ -935,7 +935,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 19] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 20] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -1012,6 +1012,9 @@ impl Sample {
                 "group_id" => SAMPLE_TEMPLATE_GROUP_ID,
                 "flow_id" => SAMPLE_FLOW_ID,
                 "catalog_id" => SAMPLE_CATALOG_ID,
+                "template_id" => SAMPLE_TEMPLATE_ID,
+                "sequence_id" => SAMPLE_SEQUENCE_ID,
+                "business_id" => SAMPLE_BUSINESS_ID,
                 "code" => SAMPLE_QR_CODE,
                 "call_id" => SAMPLE_CALL_ID,
                 _ => "placeholder",
@@ -1040,6 +1043,10 @@ pub const SAMPLE_TEMPLATE_GROUP_ID: &str = "9020555671393375";
 
 /// A Flow's id (`flows/guides/flowsapi`: the page's ids are placeholders).
 pub const SAMPLE_FLOW_ID: &str = "1234567890123456";
+/// A welcome message sequence's id (`ctwa/welcome-message-sequences`).
+pub const SAMPLE_SEQUENCE_ID: &str = "186473890";
+/// A business portfolio's id (`marketing-messages/pricing/enroll-max-price`).
+pub const SAMPLE_BUSINESS_ID: &str = "529216684107530";
 /// A catalog's id (Meta's Catalog API).
 pub const SAMPLE_CATALOG_ID: &str = "194836987003835";
 
@@ -1175,6 +1182,10 @@ pub fn sample_query(method: &Method, template: &str) -> Option<String> {
                     .unwrap()
             };
             Some(format!("start={}&end={}&metrics=SENT", at(2), at(1)))
+        }
+        // Roadmap M5h: a reach estimate names countries and a history.
+        ("GET", "/v1/wabas/{waba_id}/marketing/reach-estimates") => {
+            Some("countries=IN,US&date_interval=L7D".to_owned())
         }
         // Roadmap M5e: a user, by phone number (the `+` is encoded), and
         // the calls' ranges as the other analytics'.
@@ -1349,6 +1360,37 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             "/v1/numbers/{pn}/groups/{group_id}/join-requests/approve"
             | "/v1/numbers/{pn}/groups/{group_id}/join-requests/reject",
         ) => serde_json::json!({"join_request_ids": ["MTY0NjcwNDM1OTU6MTIwMzYzNDA0Njk0MjMzODIw"]}),
+        // Roadmap M5h: the examples of the pages
+        // (`marketing-messages/send-marketing-messages`,
+        // `marketing-messages/pricing`, `ctwa/welcome-message-sequences`,
+        // `marketing-messages/pricing/enroll-max-price`).
+        ("POST", "/v1/numbers/{pn}/marketing-messages") => serde_json::json!({
+            "to": {"phone": SAMPLE_TO},
+            "template": {"name": "seasonal_sale_promo", "language": {"code": "en_US"}}
+        }),
+        ("PUT", "/v1/wabas/{waba_id}/marketing/cloud-api-marketing") => {
+            serde_json::json!({"disabled": true})
+        }
+        ("POST", "/v1/wabas/{waba_id}/marketing/template-duplicates") => serde_json::json!({
+            "source_template_id": SAMPLE_TEMPLATE_ID,
+            "name": "seasonal_sale_promo_cheaper",
+            "optimization_spec": {"bid_amount": 5000}
+        }),
+        ("PUT", "/v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price") => {
+            serde_json::json!({"bid_amount": 5000})
+        }
+        ("POST", "/v1/wabas/{waba_id}/welcome-sequences") => serde_json::json!({
+            "name": "Driver sign-up",
+            "welcome_message_sequence": {"text": "Welcome", "ice_breakers": [{"title": "Quick reply 1"}]}
+        }),
+        ("PATCH", "/v1/wabas/{waba_id}/welcome-sequences/{sequence_id}") => {
+            serde_json::json!({"name": "Driver sign-up updated name"})
+        }
+        ("POST", "/v1/admin/businesses/{business_id}/max-price-agreement") => serde_json::json!({
+            "signer_name": "Jane Doe",
+            "signer_email": "jane.doe@example.com",
+            "token": "EAAA-sample-business-token"
+        }),
         // Roadmap M5e: the calling settings (`calling/call-settings`), a
         // call to a user, and the answers to a user's call.
         ("PATCH", "/v1/numbers/{pn}/call-settings") => {
