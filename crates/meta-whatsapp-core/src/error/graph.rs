@@ -201,7 +201,9 @@ pub enum ErrorKind {
     // ── Request shape ─────────────────────────────────────────────────────
     /// `100`, `131008`, `131009`, `131021`, `135000`, `33`, and the In-App
     /// Signup request errors `2494166`–`2494179`: missing, misspelled or
-    /// invalid parameter.
+    /// invalid parameter. The Groups API's `131202` (duplicate participants
+    /// in the input), `131209` (a profile picture that is not square) and
+    /// `131210` (one of 192px or less).
     InvalidParameter,
     /// `131051`: message type not supported.
     UnsupportedMessageType,
@@ -233,6 +235,7 @@ pub enum ErrorKind {
     /// marketing templates allowed on this API (MM API for WhatsApp).
     MarketingNotAllowed,
     /// `131026`: undeliverable (not on WhatsApp, old client, ToS pending…).
+    /// `131020`: a message to a group of a single member.
     Undeliverable,
     /// `130403`: this business blocked the user. Unblock first.
     BlockedByBusiness,
@@ -301,13 +304,50 @@ pub enum ErrorKind {
 
     // ── Resources ─────────────────────────────────────────────────────────
     /// `2494164`: the referenced object (e.g. an In-App Signup) does not
-    /// exist.
+    /// exist. `131041`: the group does not exist, or the number is not a
+    /// member of it.
     NotFound,
     /// `2494165`: the API is not enabled for this account (e.g. In-App
     /// Signup on this WABA). Also a media converter this deployment lacks
     /// (`ConversionError::BinaryMissing`, `EncoderMissing`): not Meta's
     /// answer, as [`Error::graph`](crate::Error::graph) being `None` tells.
+    /// `131215`: the number is not eligible for the Groups API.
     FeatureNotAvailable,
+
+    // ── Groups (`groups/error-codes`) ─────────────────────────────────────
+    /// `131201`: not all participant-level operations of a group request
+    /// succeeded. Meta answers it with HTTP `206`, which the client
+    /// reports as a success with `partial` set, so this kind is for an
+    /// answer that carries the code as an error. Some participants were
+    /// processed: read the group before acting again; never replay the
+    /// request blindly.
+    GroupPartiallyApplied,
+    /// `131203`: the recipient has not accepted WhatsApp's new Terms of Service
+    /// and Privacy Policy (`groups/reference`: the reason a join request or
+    /// participant could not be approved). The person has to accept first;
+    /// retrying does not help.
+    RecipientTermsNotAccepted,
+    /// `131207`: the group violates platform policies (HTTP `403`).
+    GroupSuspended,
+    /// `131208`: too many group operations from this phone number in a short
+    /// period (HTTP `429`). Deliberately not [`ErrorKind::RateLimited`], whose
+    /// kind makes a send replayable: a group operation is never resent
+    /// automatically, and it is not [`ErrorKind::is_retryable`] either.
+    GroupRateLimited,
+    /// `131204` (the group's participant count exceeds the limit), `131211` (the
+    /// number reached the maximum number of groups it may create).
+    GroupLimitReached,
+    /// `131214`: creating groups is temporarily disabled for the number, because
+    /// of excessive marketing messages sent in the customer service window over
+    /// the past 7 days.
+    GroupCreationDisabled,
+    /// `131212`: a participant the request names is not part of the group.
+    GroupParticipantNotFound,
+    /// `131213`: a join request the request names does not exist.
+    JoinRequestNotFound,
+    /// `131059`: the pagination cursor expired or is corrupted (Groups API):
+    /// start the pagination again from the beginning.
+    InvalidCursor,
 
     // ── Billing ───────────────────────────────────────────────────────────
     /// `131042`, `134011`: payment method or payments ToS problem.
@@ -381,6 +421,15 @@ impl ErrorKind {
         Self::DuplicateOnboarding,
         Self::NotFound,
         Self::FeatureNotAvailable,
+        Self::GroupPartiallyApplied,
+        Self::RecipientTermsNotAccepted,
+        Self::GroupSuspended,
+        Self::GroupRateLimited,
+        Self::GroupLimitReached,
+        Self::GroupCreationDisabled,
+        Self::GroupParticipantNotFound,
+        Self::JoinRequestNotFound,
+        Self::InvalidCursor,
         Self::Payment,
         Self::ServiceUnavailable,
         Self::Unknown,
@@ -434,6 +483,15 @@ impl ErrorKind {
             Self::DuplicateOnboarding => "duplicate_onboarding",
             Self::NotFound => "not_found",
             Self::FeatureNotAvailable => "feature_not_available",
+            Self::GroupPartiallyApplied => "group_partially_applied",
+            Self::RecipientTermsNotAccepted => "recipient_terms_not_accepted",
+            Self::GroupSuspended => "group_suspended",
+            Self::GroupRateLimited => "group_rate_limited",
+            Self::GroupLimitReached => "group_limit_reached",
+            Self::GroupCreationDisabled => "group_creation_disabled",
+            Self::GroupParticipantNotFound => "group_participant_not_found",
+            Self::JoinRequestNotFound => "join_request_not_found",
+            Self::InvalidCursor => "invalid_cursor",
             Self::Payment => "payment",
             Self::ServiceUnavailable => "service_unavailable",
             Self::Unknown => "unknown",
@@ -465,14 +523,21 @@ impl ErrorKind {
             | 2494166..=2494168
             | 2494176
             | 2494177
-            | 2494179 => Self::InvalidParameter,
+            | 2494179
+            // groups/error-codes: duplicate participants in the input,
+            // a profile picture that is not square or not above 192px.
+            | 131202
+            | 131209
+            | 131210 => Self::InvalidParameter,
             131051 => Self::UnsupportedMessageType,
             131047 => Self::CustomerServiceWindowClosed,
             131070 => Self::ThreadOwnedElsewhere,
             131049 => Self::EcosystemEngagementLimit,
             131050 => Self::MarketingOptedOut,
             131055 | 131063 | 134100 => Self::MarketingNotAllowed,
-            131026 => Self::Undeliverable,
+            // 131020 (groups/error-codes): messages cannot go to a group
+            // of a single member.
+            131020 | 131026 => Self::Undeliverable,
             130403 => Self::BlockedByBusiness,
             130472 => Self::ExperimentHoldout,
             131062 => Self::RecipientNotSupported,
@@ -498,8 +563,21 @@ impl ErrorKind {
             133005 | 133008 | 133009 => Self::TwoStepVerification,
             2593107..=2593109 => Self::SyncNotAllowed,
             1752041 => Self::DuplicateOnboarding,
-            2494164 => Self::NotFound,
-            2494165 => Self::FeatureNotAvailable,
+            // 131041 (groups/error-codes): the group does not exist, or the
+            // number is not a member.
+            131041 | 2494164 => Self::NotFound,
+            // 131215 (groups/error-codes): the number is not eligible for
+            // the Groups API.
+            2494165 | 131215 => Self::FeatureNotAvailable,
+            131059 => Self::InvalidCursor,
+            131201 => Self::GroupPartiallyApplied,
+            131203 => Self::RecipientTermsNotAccepted,
+            131204 | 131211 => Self::GroupLimitReached,
+            131207 => Self::GroupSuspended,
+            131208 => Self::GroupRateLimited,
+            131212 => Self::GroupParticipantNotFound,
+            131213 => Self::JoinRequestNotFound,
+            131214 => Self::GroupCreationDisabled,
             131042 | 134011 => Self::Payment,
             1 | 2 | 131000 | 131016 | 131057 | 133004 | 2494100 => Self::ServiceUnavailable,
             _ => Self::Unknown,
@@ -646,6 +724,74 @@ mod tests {
         assert!(e.is_retryable());
     }
 
+    /// Every code of `groups/error-codes` (fetched 2026-11-05) with its
+    /// kind, plus `131203`, which `groups/reference` documents as a reason
+    /// a join request cannot be approved. Decisive: delete a `from_code`
+    /// arm and its row fails; so does a kind that becomes retryable.
+    #[test]
+    fn the_group_error_codes_classify_as_their_pages_say() {
+        use ErrorKind as K;
+        // (code, kind, the page's HTTP status)
+        let table = [
+            (131_020, K::Undeliverable, 400),
+            (131_041, K::NotFound, 400),
+            (131_059, K::InvalidCursor, 400),
+            (131_201, K::GroupPartiallyApplied, 206),
+            (131_202, K::InvalidParameter, 400),
+            (131_203, K::RecipientTermsNotAccepted, 400),
+            (131_204, K::GroupLimitReached, 400),
+            (131_207, K::GroupSuspended, 403),
+            (131_208, K::GroupRateLimited, 429),
+            (131_209, K::InvalidParameter, 400),
+            (131_210, K::InvalidParameter, 400),
+            (131_211, K::GroupLimitReached, 400),
+            (131_212, K::GroupParticipantNotFound, 400),
+            (131_213, K::JoinRequestNotFound, 400),
+            (131_214, K::GroupCreationDisabled, 400),
+            (131_215, K::FeatureNotAvailable, 400),
+        ];
+        for (code, kind, status) in table {
+            assert_eq!(ErrorKind::from_code(code), kind, "code {code}");
+            let mut graph = GraphApiError::new(code, "x");
+            graph.http_status = Some(status);
+            let error = crate::Error::from(graph);
+            // None may be replayed: a group call is a POST or a DELETE, and
+            // Meta's answer does not prove it did nothing. Not retryable
+            // either, so a GET is not looped on them.
+            assert!(!kind.is_retryable(), "{code}");
+            assert!(!kind.is_rejected_before_processing(), "{code}");
+            assert!(!error.is_retryable(), "{code}");
+            assert!(!error.may_resend(), "{code}");
+        }
+        // Each new kind is the answer to exactly its codes.
+        for kind in [
+            K::InvalidCursor,
+            K::GroupPartiallyApplied,
+            K::RecipientTermsNotAccepted,
+            K::GroupLimitReached,
+            K::GroupSuspended,
+            K::GroupRateLimited,
+            K::GroupParticipantNotFound,
+            K::JoinRequestNotFound,
+            K::GroupCreationDisabled,
+        ] {
+            let codes: Vec<i64> = (131_000..131_300)
+                .filter(|c| ErrorKind::from_code(*c) == kind)
+                .collect();
+            let expected: Vec<i64> = table
+                .iter()
+                .filter(|(_, k, _)| *k == kind)
+                .map(|(c, _, _)| *c)
+                .collect();
+            assert_eq!(codes, expected, "{kind:?}");
+        }
+        // The codes of the neighbouring range this page does not document
+        // stay unclassified.
+        for code in [131_200, 131_205, 131_206, 131_216] {
+            assert_eq!(ErrorKind::from_code(code), K::Unknown, "code {code}");
+        }
+    }
+
     #[test]
     fn classification_table_spot_checks() {
         use ErrorKind as K;
@@ -768,6 +914,21 @@ mod tests {
         (ErrorKind::DuplicateOnboarding, "duplicate_onboarding"),
         (ErrorKind::NotFound, "not_found"),
         (ErrorKind::FeatureNotAvailable, "feature_not_available"),
+        (ErrorKind::GroupPartiallyApplied, "group_partially_applied"),
+        (
+            ErrorKind::RecipientTermsNotAccepted,
+            "recipient_terms_not_accepted",
+        ),
+        (ErrorKind::GroupSuspended, "group_suspended"),
+        (ErrorKind::GroupRateLimited, "group_rate_limited"),
+        (ErrorKind::GroupLimitReached, "group_limit_reached"),
+        (ErrorKind::GroupCreationDisabled, "group_creation_disabled"),
+        (
+            ErrorKind::GroupParticipantNotFound,
+            "group_participant_not_found",
+        ),
+        (ErrorKind::JoinRequestNotFound, "join_request_not_found"),
+        (ErrorKind::InvalidCursor, "invalid_cursor"),
         (ErrorKind::Payment, "payment"),
         (ErrorKind::ServiceUnavailable, "service_unavailable"),
         (ErrorKind::Unknown, "unknown"),

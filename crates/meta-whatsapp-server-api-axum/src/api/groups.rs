@@ -487,11 +487,11 @@ async fn create(
     responses(
         (status = 202, description = "Asked: Meta creates the group asynchronously. Its id and invite link come in a `group_lifecycle_update` event (type `group_create`, with this `request_id`), which also makes the group the number's here", body = CreatedView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `subject`, `description`, `join_approval_mode` or `body`; `idempotency_key_reused`: nothing sent", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`: the group may have been created", body = ErrorBody),
     )
@@ -539,11 +539,11 @@ pub(crate) async fn create_group(
     responses(
         (status = 200, description = "A page of the number's active groups; each is recorded as the number's, so the routes on a group id find it (the way to adopt a group created before the service, or whose creation event was missed)", body = GroupList),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `limit`, `after`, `before` or `query`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `limit`, `after`, `before` or `query`; `invalid_cursor` (Meta's cursor expired: start again)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
@@ -589,11 +589,11 @@ pub(crate) async fn list_groups(
     responses(
         (status = 200, description = "The group", body = DetailsView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such group among the number's (another tenant's looks like a missing one: decided before the token is opened, Meta not asked); or Meta no longer has it", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `fields` or `query`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
@@ -635,11 +635,11 @@ pub(crate) async fn get_group(
     responses(
         (status = 204, description = "Asked: Meta tells the outcome of each field in a `group_settings_update` event"),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such group among the number's; nothing changed", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `update` (nothing to change), `subject`, `description` or `body`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`: the group may have been changed", body = ErrorBody),
     )
@@ -672,10 +672,10 @@ pub(crate) async fn update_group(
     responses(
         (status = 204, description = "Asked: the group's `group_lifecycle_update` event (type `group_delete`) tells whether it is gone, and forgets it here. There is no call to leave a group other than this one"),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such group among the number's; nothing deleted", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`: the group may have been deleted", body = ErrorBody),
     )
@@ -706,10 +706,10 @@ pub(crate) async fn delete_group(
     responses(
         (status = 200, description = "The invite link", body = InviteLinkView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such group among the number's", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
@@ -742,10 +742,10 @@ pub(crate) async fn get_group_invite_link(
     responses(
         (status = 200, description = "The new invite link", body = InviteLinkView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such group among the number's; nothing changed", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`: the link may have been replaced; read it again", body = ErrorBody),
     )
@@ -778,10 +778,10 @@ pub(crate) async fn reset_group_invite_link(
     responses(
         (status = 200, description = "The participants, the business excluded", body = ParticipantsView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such group among the number's", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
@@ -825,11 +825,11 @@ pub(crate) async fn list_group_participants(
     responses(
         (status = 200, description = "Asked: Meta tells each participant's outcome in a `group_participants_update` event; `partial` says it did not remove everyone", body = RemovalView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such group among the number's; nothing removed", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `users`, `users[i]`, `users[i].phone`, `users[i].wa_id`, `users[i].user_id` or `body`: never quoted", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `users`, `users[i]`, `users[i].phone`, `users[i].wa_id`, `users[i].user_id` or `body`: never quoted; `group_participant_not_found`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`: they may have been removed", body = ErrorBody),
     )
@@ -865,11 +865,11 @@ pub(crate) async fn remove_group_participants(
     responses(
         (status = 200, description = "A page of open join requests", body = JoinRequestList),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such group among the number's", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `after`, `before` or `query`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `after`, `before` or `query`; `invalid_cursor` (Meta's cursor expired: start again)", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )
@@ -919,11 +919,11 @@ pub(crate) async fn list_group_join_requests(
     responses(
         (status = 200, description = "Request by request: which Meta approved and which it did not, and why (a partial success is still a `200`)", body = JoinOutcomeView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such group among the number's; nothing approved", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `join_request_ids`, `join_request_ids[i]` or `body`: never quoted", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `join_request_ids`, `join_request_ids[i]` or `body`: never quoted; `join_request_not_found`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`: they may have been approved", body = ErrorBody),
     )
@@ -957,11 +957,11 @@ pub(crate) async fn approve_group_join_requests(
     responses(
         (status = 200, description = "Request by request: which Meta rejected and which it did not, and why (a partial success is still a `200`)", body = JoinOutcomeView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such group among the number's; nothing rejected", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `join_request_ids`, `join_request_ids[i]` or `body`: never quoted", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `join_request_ids`, `join_request_ids[i]` or `body`: never quoted; `join_request_not_found`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`: they may have been rejected", body = ErrorBody),
     )
@@ -995,11 +995,11 @@ pub(crate) async fn reject_group_join_requests(
     responses(
         (status = 200, description = "A page of the group's days (Meta: daily granularity, a look-back of up to 90 days). Asked of the number's WABA, for this one group", body = AnalyticsView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`forbidden`, `tenant_suspended`", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal (`group_suspended`, `feature_not_available`)", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant, or no such group among the number's", body = ErrorBody),
-        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`, or Meta's refusal (`group_limit_reached`, `group_creation_disabled`, `group_partially_applied`, `recipient_terms_not_accepted`)", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `start` (not RFC 3339, or more than 90 days ago), `end` (not after `start`), `metrics`, `after` or `query`", body = ErrorBody),
-        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling (`rate_limited`, `group_rate_limited`)", body = ErrorBody),
         (status = 502, description = "Meta failed", body = ErrorBody),
         (status = 504, description = "`timeout`", body = ErrorBody),
     )

@@ -275,9 +275,23 @@ stored data, the owner's).
     invite link, leaving (Meta documents no call).
   - Gap, in the library: its debug line for a Graph request names the path
     it calls, so a group's id (which embeds the business number) is in that
-    one line at `debug`; and it classifies none of the groups' error codes
-    (`131201` onward), so Meta's refusals answer `502 unknown` with Meta's
-    code.
+    one line at `debug` (the groups' error codes were a second gap, closed
+    by the next entry).
+- **Group error codes** (roadmap L27, design D170-D172, decided by the
+  coordinator on 2026-11-05 under the owner's delegation, swappable; from Meta's `groups/error-codes` page and
+  `groups/reference`, read on 2026-11-05). `ErrorKind::from_code`
+  classifies `131020`, `131041`, `131059`, `131201`-`131215` (existing
+  kinds where one fits, nine new ones: `invalid_cursor`,
+  `group_participant_not_found`, `join_request_not_found`,
+  `group_limit_reached`, `group_creation_disabled`,
+  `group_partially_applied`, `recipient_terms_not_accepted`,
+  `group_suspended`, `group_rate_limited`). None is retryable, and none
+  is resent automatically. The service answers each new kind's code
+  (`422`, `409`, `403`, `429`) with Meta's code and none of its text; the
+  OpenAPI document gains the nine codes and nothing else. The nine names
+  are pending the owner's confirmation before the first release. The
+  classification is the library's, whatever endpoint answered: see
+  Changed, for the three codes a send or a media call may also see.
 - **Resumable media uploads and conversion on upload, in the service**
   (roadmap M5c1, parity rows 47 and 48 now done in the service; choices
   D125-D131, proposed, pending the coordinator's decision; from the
@@ -3145,6 +3159,21 @@ stored data, the owner's).
 
 ### Changed
 
+- **Three Graph codes are classified now, whichever call they answer**
+  (roadmap L27, design D170): `131020` ("Cannot send messages to single
+  member groups", a group message) is `ErrorKind::Undeliverable`, `131041`
+  ("the group was not found") is `ErrorKind::NotFound`, and `131059` (an
+  expired or corrupted pagination cursor) is the new
+  `ErrorKind::InvalidCursor`; all three were `ErrorKind::Unknown`. Code
+  that branched on `Unknown` for them has to branch on the new kind;
+  none is retryable or resendable (as `Unknown` was not). In the service, a
+  send route answers `422 undeliverable` for `131020` and `404 not_found`
+  for `131041` where it answered `502 unknown` (Meta's code is still in
+  the answer), and a listing answers `422 invalid_cursor`. Meta's
+  general error-codes page documents none of the three with another
+  meaning (read on 2026-11-05). The other codes of the Groups API
+  (`131201`-`131215`) were `Unknown` too and are classified by the entry in
+  Added.
 - **Breaking for a backend built outside this repository** (roadmap
   M2c): `meta_whatsapp_server_core::backend::Backend` gains a required
   `webhooks()` (the new port `webhooks_out::store::WebhookStore`; the
