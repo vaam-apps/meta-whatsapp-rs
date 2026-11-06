@@ -1039,20 +1039,20 @@ mod tests {
             r#"{{"color": {{"is_any": [{}]}}}}"#,
             vec![r#""a""#; FILTER_MAX_VALUES + 1].join(",")
         );
-        let at_the_values_edge = format!(
+        let list_at_its_edge = format!(
             r#"{{"color": {{"is_any": [{}]}}}}"#,
             vec![r#""a""#; FILTER_MAX_VALUES].join(",")
         );
-        assert!(ProductFilter::parse(&at_the_values_edge).is_ok());
+        assert!(ProductFilter::parse(&list_at_its_edge).is_ok());
         let long_value = format!(
             r#"{{"name": {{"eq": "{}"}}}}"#,
             "a".repeat(FILTER_MAX_VALUE_CHARS + 1)
         );
-        let at_the_value_edge = format!(
+        let one_text_at_its_edge = format!(
             r#"{{"name": {{"eq": "{}"}}}}"#,
             "a".repeat(FILTER_MAX_VALUE_CHARS)
         );
-        assert!(ProductFilter::parse(&at_the_value_edge).is_ok());
+        assert!(ProductFilter::parse(&one_text_at_its_edge).is_ok());
         let long_text = format!(
             r#"{{"name": {{"eq": "{}"}}}}"#,
             "a".repeat(FILTER_MAX_BYTES)

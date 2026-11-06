@@ -574,7 +574,7 @@ async fn template_group_ranges_and_lists_are_bounded_before_any_request() {
     let (h, key) = connected(false).await;
     let now = h.clock.now().replace_nanosecond(0).unwrap();
     let at = |days: i64| rfc(now - time::Duration::days(days));
-    let ids = vec!["1"; 11].join(",");
+    let ids = ["1"; 11].join(",");
     let cases = [
         (
             format!("start={}&end={}&group_ids=1", at(91), at(0)),

@@ -2065,6 +2065,9 @@ async fn commerce_qr_analytics(h: &Harness, admin: &str) -> Vec<String> {
     const PN: &str = "1972385232742141";
     const CATALOG: &str = "194836987003835";
     const CODE: &str = "4O4YGZEG3RIVE1";
+    const SET: &str = "5000000000000101";
+    const GROUP: &str = "1044106240855852";
+    const TEMPLATE: &str = "245435364965041";
     let minted = h
         .call(
             Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
@@ -2273,9 +2276,6 @@ async fn commerce_qr_analytics(h: &Harness, admin: &str) -> Vec<String> {
     // M5g2: a catalog's product sets and one product, template group
     // analytics and the two switches (the insights, a legal act, are on in
     // this harness). Meta's texts of a refusal are in no line.
-    const SET: &str = "5000000000000101";
-    const GROUP: &str = "1044106240855852";
-    const TEMPLATE: &str = "245435364965041";
     let one_catalog = json!({"data": [{"id": CATALOG, "name": "Lucky Shrub", "product_count": 1, "vertical": "commerce"}]});
     h.graph.push_json(200, one_catalog.clone());
     h.graph.push_json(

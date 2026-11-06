@@ -1068,14 +1068,13 @@ pub(crate) async fn set_template_click_tracking(
         Ok(service) => service,
         Err(error) => return error.into_response(),
     };
-    state
-        .idempotent(
-            &caller,
-            key,
-            fingerprint,
-            set_click_tracking(&service, &template_id, opted_out),
-        )
-        .await
+    Box::pin(state.idempotent(
+        &caller,
+        key,
+        fingerprint,
+        set_click_tracking(&service, &template_id, opted_out),
+    ))
+    .await
 }
 
 #[cfg(test)]
