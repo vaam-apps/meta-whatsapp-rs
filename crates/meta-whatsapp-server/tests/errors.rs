@@ -410,6 +410,16 @@ const CALLS_META: &[&str] = &[
     "POST /v1/numbers/{pn}/groups/{group_id}/join-requests/approve",
     "POST /v1/numbers/{pn}/groups/{group_id}/join-requests/reject",
     "GET /v1/numbers/{pn}/groups/{group_id}/analytics",
+    // Roadmap M5e: the calling routes, on a call the number holds.
+    "GET /v1/numbers/{pn}/call-settings",
+    "PATCH /v1/numbers/{pn}/call-settings",
+    "GET /v1/numbers/{pn}/call-permissions",
+    "POST /v1/numbers/{pn}/calls",
+    "POST /v1/numbers/{pn}/calls/{call_id}/pre-accept",
+    "POST /v1/numbers/{pn}/calls/{call_id}/accept",
+    "POST /v1/numbers/{pn}/calls/{call_id}/reject",
+    "POST /v1/numbers/{pn}/calls/{call_id}/terminate",
+    "GET /v1/wabas/{waba_id}/analytics/calls",
     // Roadmap M5b.
     "PATCH /v1/wabas/{waba_id}/templates/{id}",
     "POST /v1/wabas/{waba_id}/templates/{id}/unpause",
@@ -548,6 +558,10 @@ const DETAILS_KEPT: &[&str] = &[
     "GET /v1/wabas/{waba_id}/analytics/templates",
     // Roadmap M5l: the roles read names no user.
     "GET /v1/numbers/{pn}/routing-roles",
+    // Roadmap M5e: the call analytics keep Meta's details as the other
+    // analytics do; the calling routes of a number do not (an SDP line
+    // may be quoted by a refusal).
+    "GET /v1/wabas/{waba_id}/analytics/calls",
 ];
 
 /// Operations on an object named by id (a media id, a template id): Meta
@@ -664,6 +678,16 @@ async fn a_sentinel_in_metas_answer_reaches_no_response() {
                     WABA,
                     PN,
                     common::SAMPLE_TEMPLATE_GROUP_ID,
+                ))
+                .await;
+            assert_eq!(held.status, StatusCode::OK, "{}", held.text);
+            // And the sample's call (roadmap M5e), as a call route needs
+            // it to ask Meta anything.
+            let held = h
+                .webhook(&common::meta::call_connected(
+                    WABA,
+                    PN,
+                    common::SAMPLE_CALL_ID,
                 ))
                 .await;
             assert_eq!(held.status, StatusCode::OK, "{}", held.text);

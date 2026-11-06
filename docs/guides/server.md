@@ -265,10 +265,10 @@ immutable. Three kinds of API key, all `wak_<key id>_<secret>`, sent as
 
 Tenant and platform keys carry scopes (`numbers`, `send`, `media`,
 `templates`, `flows`, `inbox`, `events`, `otp`, `signup`, `payments`,
-`erasure`, `groups`, `commerce`, `qr_codes`, `analytics`, `contacts` and
-`routing` today; `webhooks` for the routes to come). `payments` (roadmap
-P2), `erasure` (roadmap M2f), `flows` (roadmap M5d), `groups` (roadmap
-M5f), the four of roadmap M5g and `routing` (roadmap M5l) are new: a key minted before them does not carry them, so
+`erasure`, `groups`, `calls`, `commerce`, `qr_codes`, `analytics`, `contacts` and
+`routing` today; `webhooks` for the routes to come). `payments` (roadmap P2),
+`erasure` (roadmap M2f), `flows` (roadmap M5d), `groups` (roadmap M5f), `calls`
+(roadmap M5e), the four of roadmap M5g and `routing` (roadmap M5l) are new: a key minted before them does not carry them, so
 mint one that does for those routes. `templates` does not grant `flows`: a
 key that edits templates does not manage Flows. `inbox` does not grant
 `erasure`: give the key that erases to the part of your backend that
@@ -1011,6 +1011,73 @@ unanswered). The invite link is a credential: it is in the answer to its
 two routes and in no log. A group's id embeds the business number and is
 in none of the service's own lines; the library's debug line for a Graph
 request names the path it calls, so at `debug` it is in that one.
+
+## Calling
+
+A number's calling (roadmap M5e; Meta's `calling` pages and
+`reference/whatsapp-business-phone-number/calling-api`). Scope `calls` (the
+name is **pending the owner's confirmation before the first release**, and
+`send` does not grant it), on a number of the key's tenant, with the WABA's
+token. The service does **signalling only**: the SDP offers and answers are
+yours, produced and consumed by your own WebRTC stack, and are passed to
+Meta unparsed. A user's call reaches you as a `call_updated` event (the
+`connect` event carries the user's SDP offer) in `/v1/events` and your
+webhook endpoints, as before.
+
+| Route | Does |
+| --- | --- |
+| `GET`, `PATCH /v1/numbers/{pn}/call-settings` | the `calling` object: `status`, `call_icon_visibility`, `call_icons`, `call_hours`, `callback_permission_status`, `sip`, `audio`, `voicemail`; the read adds Meta's `restrictions`. A change sets the fields it names (at least one), **`call_hours` as a whole** (a `holiday_schedule` left out clears it), `204`; users' apps may take up to 7 days to show it |
+| `GET /v1/numbers/{pn}/call-permissions?phone=&user_id=` | whether the number may call a user and what it may do next: `{status, expiration_time, actions: [{action_name, can_perform_action, limits}]}`. The user is a phone number (E.164 with its `+`, encoded `%2B`), a BSUID or a parent BSUID; with both Meta uses the phone. **Name the user by `user_id` (the BSUID) first**: a phone number may be absent from a webhook (BSUIDs are mandatory), and no record of the service is keyed by either |
+| `POST /v1/numbers/{pn}/calls` | place a call: `{to: {phone?, user_id?}, sdp_offer, biz_opaque_callback_data?, recording?, transcription?}` → **`201 {call_id}`**; takes an `Idempotency-Key`; needs the user's permission first (Meta's `138006` otherwise) |
+| `POST /v1/numbers/{pn}/calls/{call_id}/pre-accept`, `…/accept` | answer a user's call with `{sdp_answer}` (`accept` also takes `biz_opaque_callback_data`, `recording`, `transcription`); `204`. Accept within 30 to 60 seconds of the `connect` event, and start sending media only after it |
+| `POST /v1/numbers/{pn}/calls/{call_id}/reject`, `…/terminate` | reject a user's call; end a call in either direction (`204`; do it also after the media ended, for an accurate price) |
+| `GET /v1/wabas/{waba_id}/analytics/calls` | call analytics, scope `analytics`: `start`, `end`, `granularity` (`HALF_HOUR`, `DAILY`, `MONTHLY`), `phone_numbers`, `country_codes`, `directions` (`USER_INITIATED`, `BUSINESS_INITIATED`), `dimensions` (`phone`, `direction`, `country`), `metric_types` (`COUNT`, `COST`, `AVERAGE_DURATION`) |
+
+**A call is the number's, or it does not exist** (design D210). Meta
+documents no way to read a call by its id, so the service keeps a record
+of the calls each number holds, and a call action looks the call up there
+**before the tenant's token is opened**: another tenant's call, another
+number's, one the service has not seen and an id no call has are all `404
+not_found`, with nothing asked of Meta. Two things write the record: a
+`calls` event for the number (a user's call ringing, a status, a hang-up),
+and the call you place yourself. It lives 24 hours since the call's last
+event (so a call action a day after the call is `404`). A call signalled
+over SIP is not these routes' to answer, and Meta delivers its webhooks only
+with `sip.webhook_delivery` enabled: without an event the service holds no
+record of it.
+
+**Recording and transcription are your choice for each call.** The
+service sends `recording` and `transcription` (`{status: ENABLED, purpose,
+announcement_language}`; `DISABLED` opts out) only when the request carries
+them, and never by default. When enabled, Meta plays an announcement of the
+purpose to both participants first, and a participant who does not consent
+ends the call: the consent is Meta's announcement and your policy, and the
+service decides nothing about it. The result arrives as a
+`call_recording_available` or `call_transcription_available` event with a
+media id (downloaded within 7 days through the media route; whether Meta
+serves a recording to `?phone_number_id={pn}` has not been run against
+Meta).
+
+**Secrets.** An SDP offer or answer holds addresses and ICE credentials; it
+is in the request that carries it and in no log, error or audit event. A
+SIP server's password is **never read from Meta and never answered**
+(`include_sip_credentials` is never sent); read it in WhatsApp Manager. A
+failed call answers Meta's code and the service's kind (`502 unknown` for
+the 138xxx codes the library does not classify, with `error.graph.code`),
+never Meta's text. The changes' `audit` events (`call_settings_updated`,
+`call_connect_requested`, `call_pre_accepted`, `call_accepted`,
+`call_rejected`, `call_terminated`) hold the tenant, the WABA, the number's
+id, the key's id, the outcome (`unknown` when the call may have gone
+through unanswered), the settings' **section names** and whether recording
+or transcription was enabled; never who was called, which call, an SDP or
+a SIP host.
+
+Not offered: the SIP password, uploading a voicemail announcement (Meta
+wants `use_case=call_voicemail_announcement`, which the media routes do
+not send: upload it elsewhere, then name its media id, which the service
+looks up as the number's own before it changes the settings), sending the
+call permission request (a message: a send), call buttons and deep links.
+Actions are never repeated after a timeout: read the call's events.
 
 ## Commerce, QR codes, analytics and the block list
 

@@ -12,6 +12,39 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added (roadmap M5e)
+
+- **Calling, in the service** (roadmap M5e, parity rows 74, 75, 134 and 135
+  now done in the service, row 107 partial until M5g2; choices D210-D219,
+  proposed by the implementer, not decided, swappable; from Meta's
+  `calling`, `calling/call-settings`, `calling/user-initiated-calls`,
+  `calling/business-initiated-calls`, `calling/user-call-permissions`,
+  `calling/call-recording`, `calling/call-transcription` and `analytics`
+  pages, read on 2026-11-06). A new scope, `calls`, and eight operations
+  under `/v1/numbers/{pn}`: `call-settings` (read, change), `call-permissions`
+  (by phone number and/or BSUID), `calls` (place a call with the caller's
+  SDP offer: `201` with the call's id, an `Idempotency-Key`, never repeated
+  after a timeout) and `calls/{call_id}/pre-accept`, `accept`, `reject`,
+  `terminate`; the call analytics are a ninth operation in the scope
+  `analytics`, `GET /v1/wabas/{waba_id}/analytics/calls`. **A call is the
+  number's, or it does not exist**: the service keeps its own records of the
+  calls each number holds (a typed store on the bundle's `KvStore`,
+  namespace `wa.server.call`, expiring 24 hours after a call's last event),
+  written by the `calls` events and by the call placed, and read **before
+  the tenant's token is opened**, so another tenant's call, another
+  number's or an id no call has is `404` with zero vault reads and Meta not
+  asked. A voicemail announcement's media is looked up as the number's own
+  before the settings change. An SDP is in no log, error, audit event or
+  `Debug`; a SIP server's password is never asked of Meta nor answered;
+  recording and transcription are the caller's choice for each call, never
+  a default, and the audit event says whether either was enabled. The new
+  scope, namespace, operation ids and audit actions are pending the owner's
+  confirmation before the first release. The OpenAPI document is additive
+  only. No legal act and no consent decision in code.
+  - Not offered (M5e2): the SIP password, a voicemail announcement upload
+    with Meta's `use_case`, classifying Meta's calling error codes, the
+    permission request message (a send).
+
 ### Added (roadmap M5l)
 
 - The service's conversation routing (`meta_whatsapp_server_core::routing`,

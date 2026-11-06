@@ -267,6 +267,48 @@ pub struct GroupFacts {
     pub failed: u64,
 }
 
+/// A tenant's calling change or call action (roadmap M5e; docs/design/server.md,
+/// D216), logged like [`tenant_audit`] (target `audit`, message `tenant
+/// change`) with `outcome` and the facts of [`CallFacts`]. Never who is
+/// called, never which call (its id is Meta's and names the number's
+/// traffic), never an SDP, a SIP host or a SIP password: the number's id,
+/// whether the call is recorded or transcribed (the consent the other
+/// participant is asked for), the settings' section names and the outcome.
+pub fn calls_audit(
+    action: &'static str,
+    key_id: &str,
+    subject: &Subject<'_>,
+    facts: CallFacts<'_>,
+    outcome: Outcome,
+) {
+    tracing::info!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
+        recording = facts.recording,
+        transcription = facts.transcription,
+        sections = facts.sections,
+        outcome = outcome.as_str(),
+        "tenant change"
+    );
+}
+
+/// What a [`calls_audit`] event names besides its [`Subject`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CallFacts<'a> {
+    /// The call was asked to be recorded (`recording.status` `ENABLED`).
+    pub recording: bool,
+    /// The call was asked to be transcribed (`transcription.status`
+    /// `ENABLED`).
+    pub transcription: bool,
+    /// The names of the calling settings' sections a change set, comma
+    /// separated (`call_hours,sip`); never their values.
+    pub sections: Option<&'a str>,
+}
+
 /// A tenant's request to change a number's display name (roadmap M5c2;
 /// docs/design/server.md, D164), logged like [`tenant_audit`] (target
 /// `audit`, message `tenant change`) with `outcome` and the length of the

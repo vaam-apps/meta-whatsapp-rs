@@ -6,6 +6,7 @@
 //! | --- | --- |
 //! | `GET /v1/wabas/{waba_id}/analytics/messaging` | `GET /{waba_id}?fields=analytics.start(…).end(…).granularity(…)…` |
 //! | `GET /v1/wabas/{waba_id}/analytics/conversations` | `GET /{waba_id}?fields=conversation_analytics.start(…).end(…).granularity(…)…` |
+//! | `GET /v1/wabas/{waba_id}/analytics/calls` | `GET /{waba_id}?fields=call_analytics.start(…).end(…).granularity(…)…` (roadmap M5e) |
 //! | `GET /v1/wabas/{waba_id}/analytics/pricing` | `GET /{waba_id}?fields=pricing_analytics.start(…).end(…).granularity(…)…` |
 //! | `GET /v1/wabas/{waba_id}/analytics/templates` | the walk of the WABA's templates (every `template_ids` among them), then `GET /{waba_id}/template_analytics?…` |
 //!
@@ -20,7 +21,7 @@
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::State;
 use meta_whatsapp_server_core::analytics::{
-    self as domain, Analytics, Bound, ConversationRequest, MessagingRequest, Moment,
+    self as domain, Analytics, Bound, CallRequest, ConversationRequest, MessagingRequest, Moment,
     PricingRequest, TemplateRequest, parse_day,
 };
 use serde::{Deserialize, Serialize};
@@ -119,6 +120,30 @@ pub struct PricingQuery {
     /// Comma-separated breakdowns: `COUNTRY`, `PHONE`, `PRICING_CATEGORY`,
     /// `PRICING_TYPE`, `TIER`.
     pub dimensions: Option<String>,
+}
+
+/// The query of call analytics.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+#[serde(deny_unknown_fields)]
+pub struct CallQuery {
+    /// Range start (RFC 3339): at most a year before now.
+    pub start: String,
+    /// Range end (RFC 3339): after `start`, at most a year later.
+    pub end: String,
+    /// `HALF_HOUR` (a range of 31 days at most), `DAILY` or `MONTHLY`.
+    pub granularity: String,
+    /// Comma-separated business phone numbers, digits only.
+    pub phone_numbers: Option<String>,
+    /// Comma-separated two-letter country codes.
+    pub country_codes: Option<String>,
+    /// Comma-separated: `USER_INITIATED`, `BUSINESS_INITIATED`.
+    pub directions: Option<String>,
+    /// Comma-separated breakdowns, lowercase as Meta writes them: `phone`,
+    /// `direction`, `country`.
+    pub dimensions: Option<String>,
+    /// Comma-separated: `COUNT`, `COST`, `AVERAGE_DURATION`.
+    pub metric_types: Option<String>,
 }
 
 /// The query of template analytics.
@@ -311,6 +336,60 @@ impl From<domain::PricingPoint> for PricingPointView {
 pub struct PricingView {
     /// The data points (none when Meta has no data for the range).
     pub data_points: Vec<PricingPointView>,
+}
+
+/// A call analytics interval.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = CallDataPoint)]
+pub struct CallPointView {
+    /// Interval start (RFC 3339).
+    #[schema(format = DateTime)]
+    pub start: String,
+    /// Interval end (RFC 3339).
+    #[schema(format = DateTime)]
+    pub end: String,
+    /// Calls.
+    #[schema(required = true)]
+    pub count: Option<u64>,
+    /// Approximate cost, in the WABA's currency.
+    #[schema(required = true)]
+    pub cost: Option<f64>,
+    /// Average duration, in seconds.
+    #[schema(required = true)]
+    pub average_duration: Option<f64>,
+    /// The business phone number (the `phone` breakdown).
+    #[schema(required = true)]
+    pub phone_number: Option<String>,
+    /// The country (the `country` breakdown).
+    #[schema(required = true)]
+    pub country: Option<String>,
+    /// `USER_INITIATED` or `BUSINESS_INITIATED` (the `direction`
+    /// breakdown).
+    #[schema(required = true)]
+    pub direction: Option<String>,
+}
+
+impl From<domain::CallPoint> for CallPointView {
+    fn from(p: domain::CallPoint) -> Self {
+        Self {
+            start: rfc3339(p.start),
+            end: rfc3339(p.end),
+            count: p.count,
+            cost: p.cost,
+            average_duration: p.average_duration,
+            phone_number: p.phone_number,
+            country: p.country,
+            direction: p.direction,
+        }
+    }
+}
+
+/// Call analytics.
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = CallAnalytics)]
+pub struct CallsView {
+    /// The data points (none when Meta has no data for the range).
+    pub data_points: Vec<CallPointView>,
 }
 
 /// A button's clicks.
@@ -606,6 +685,51 @@ pub(crate) async fn get_pricing_analytics(
         .await?;
     Ok(Json(PricingView {
         data_points: points.into_iter().map(PricingPointView::from).collect(),
+    }))
+}
+
+/// `GET /v1/wabas/{waba_id}/analytics/calls`: calls made and received.
+#[utoipa::path(
+    get,
+    path = "/v1/wabas/{waba_id}/analytics/calls",
+    tag = "analytics",
+    security(("api_key" = [])),
+    params(
+        ("waba_id" = String, Path, description = "WhatsApp Business Account id"),
+        ("WA-Tenant" = Option<String>, Header, description = "The tenant a platform key acts as"),
+        CallQuery,
+    ),
+    responses(
+        (status = 200, description = "The analytics", body = CallsView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such WABA for this tenant", body = ErrorBody),
+        (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `start`, `end`, `granularity`, a filter (`name[i]` for a value) or `query`: nothing asked of Meta", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`, or Meta's throttling", body = ErrorBody),
+        (status = 502, description = "Meta failed", body = ErrorBody),
+        (status = 504, description = "`timeout`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn get_call_analytics(
+    State(state): State<Grant>,
+    caller: Caller,
+    owned: OwnedWaba,
+    ApiQuery(query): ApiQuery<CallQuery>,
+) -> Result<Json<CallsView>, ApiError> {
+    let request = CallRequest {
+        start: time_of("start", &query.start)?,
+        end: time_of("end", &query.end)?,
+        granularity: query.granularity,
+        phone_numbers: csv(query.phone_numbers.as_deref()),
+        country_codes: csv(query.country_codes.as_deref()),
+        directions: csv(query.directions.as_deref()),
+        dimensions: csv(query.dimensions.as_deref()),
+        metric_types: csv(query.metric_types.as_deref()),
+    };
+    let points = analytics(&state, &caller, &owned)?.calls(&request).await?;
+    Ok(Json(CallsView {
+        data_points: points.into_iter().map(CallPointView::from).collect(),
     }))
 }
 

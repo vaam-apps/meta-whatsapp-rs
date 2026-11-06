@@ -371,6 +371,14 @@ impl Fingerprint {
         Self::json(Operation::CreateGroup, &[("pn", number.as_str())], body)
     }
 
+    /// `connect_call` on `number`, with the JSON body the request carried
+    /// (roadmap M5e; no legacy fingerprint). The body holds the SDP offer:
+    /// the fingerprint is a hash of it, as every body's, and the offer is
+    /// stored nowhere.
+    pub fn connect_call(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(Operation::ConnectCall, &[("pn", number.as_str())], body)
+    }
+
     /// `request_display_name_change` on `number`, with the JSON body the
     /// request carried (roadmap M5c2; no legacy fingerprint).
     pub fn request_display_name_change(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
@@ -1698,6 +1706,27 @@ mod tests {
         assert_ne!(
             build(&pn("1"), &body),
             Fingerprint::send_message(&pn("1"), &body)
+        );
+    }
+
+    /// Roadmap M5e's keyed call is scoped to the number, the body and the
+    /// operation: the same key and offer on another number, with another
+    /// body, or as another operation, is another request (never a second
+    /// ring from a replayed key). Decisive: the `pn` parameter and the
+    /// operation of `Fingerprint::connect_call`, and the body's canonical
+    /// form.
+    #[test]
+    fn the_call_fingerprint_is_per_number_body_and_operation() {
+        let body = serde_json::json!({"to": {"phone": "+1"}, "sdp_offer": "v=0"});
+        let other = serde_json::json!({"to": {"phone": "+2"}, "sdp_offer": "v=0"});
+        let reordered = serde_json::json!({"sdp_offer": "v=0", "to": {"phone": "+1"}});
+        let build = Fingerprint::connect_call;
+        assert_eq!(build(&pn("1"), &body), build(&pn("1"), &reordered));
+        assert_ne!(build(&pn("1"), &body), build(&pn("2"), &body));
+        assert_ne!(build(&pn("1"), &body), build(&pn("1"), &other));
+        assert_ne!(
+            build(&pn("1"), &body),
+            Fingerprint::create_group(&pn("1"), &body)
         );
     }
 

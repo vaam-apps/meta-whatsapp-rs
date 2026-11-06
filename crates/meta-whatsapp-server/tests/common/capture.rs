@@ -339,6 +339,10 @@ pub async fn exercise(h: &Harness) -> Secrets {
     // id, nor an invite link, nor a group's id is logged.
     secrets.section("groups");
     secrets.extend(groups(h, &admin).await);
+    // Calling (roadmap M5e): an SDP (addresses, ICE credentials), a SIP
+    // password and host, the callee and the call's id are not logged.
+    secrets.section("calling");
+    secrets.extend(calling(h, &admin).await);
     // Flows (roadmap M5d): the Flow key, a user's answers, tokens and the
     // preview link are secrets.
     secrets.section("flows");
@@ -2657,6 +2661,219 @@ async fn groups(h: &Harness, admin: &str) -> Vec<String> {
     ]
 }
 
+/// What the calling scenario plants: an SDP offer and answer with their
+/// ICE credentials and addresses, a SIP server's host and password, the
+/// callee and the call's id, and a text Meta quotes in a refusal.
+const CALL_ICE_PWD_OFFER: &str = "IcePwdOfTheOfferForTheLogs9Q";
+const CALL_ICE_PWD_ANSWER: &str = "IcePwdOfTheAnswerForTheLogs9Q";
+const CALL_ADDRESS: &str = "203.0.113.77";
+const CALL_SIP_PASSWORD: &str = "SipPasswordForTheLogs-7Zk2";
+const CALL_SIP_HOST: &str = "sip.calling-logs.example";
+const CALL_PHONE: &str = "+16315559090";
+const CALL_BSUID: &str = "US.4021998800112233";
+const CALL_ID: &str = "wacid.CallIdForTheLogsABGGFjFVU2";
+const CALL_ID_USER: &str = "wacid.UserCallIdForTheLogsHBgLMTIx";
+const CALL_META_TEXT: &str = "MetaQuotedSdpLineForTheLogs=a-candidate-9Q";
+
+/// The calling routes (roadmap M5e), each exercised on the tenant's
+/// attached number: the settings read (Meta sends the SIP password) and
+/// changed (the SIP server, a voicemail announcement looked up), the
+/// permission read by phone and by BSUID, a call placed under a key (and
+/// repeated) with a recording, a user's call reported by Meta's event then
+/// pre-accepted, accepted with a transcription, rejected, ended (once cut
+/// by a timeout, once refused with a text of Meta's quoting an SDP line)
+/// and the call analytics. Returns what must not be logged.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn calling(h: &Harness, admin: &str) -> Vec<String> {
+    const WABA: &str = "102290129340398";
+    const PN: &str = "1972385232742141";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["calls", "analytics"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let call = |method: Method, path: &str| Call::new(method, path).key(&key);
+    let offer = format!(
+        "v=0\r\no=- 1 2 IN IP4 {CALL_ADDRESS}\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=ice-pwd:{CALL_ICE_PWD_OFFER}\r\n"
+    );
+    let answer = format!(
+        "v=0\r\no=- 3 4 IN IP4 {CALL_ADDRESS}\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=ice-pwd:{CALL_ICE_PWD_ANSWER}\r\n"
+    );
+    // The settings, with the SIP password Meta sends.
+    h.graph.push_json(
+        200,
+        json!({"calling": {"status": "ENABLED", "sip": {"status": "ENABLED", "servers": [
+            {"hostname": CALL_SIP_HOST, "sip_user_password": CALL_SIP_PASSWORD}]}}}),
+    );
+    let read = h
+        .call(Call::get(format!("/v1/numbers/{PN}/call-settings")).key(&key))
+        .await;
+    assert_eq!(read.status.as_u16(), 200, "{}", read.text);
+    assert!(!read.text.contains(CALL_SIP_PASSWORD), "{}", read.text);
+    h.graph.push_json(200, json!({"success": true}));
+    let changed = h
+        .call(
+            call(Method::PATCH, &format!("/v1/numbers/{PN}/call-settings")).json(&json!({
+                "call_hours": {"status": "ENABLED", "timezone_id": "America/Manaus",
+                    "weekly_operating_hours": [
+                        {"day_of_week": "MONDAY", "open_time": "0900", "close_time": "1700"}]},
+                "sip": {"status": "ENABLED", "servers": [{"hostname": CALL_SIP_HOST}]}
+            })),
+        )
+        .await;
+    assert_eq!(changed.status.as_u16(), 204, "{}", changed.text);
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "url": "https://lookaside.fbsbx.com/x",
+               "mime_type": "audio/ogg", "sha256": "abc", "file_size": 1, "id": "1037543291543636"}),
+    );
+    h.graph.push_json(200, json!({"success": true}));
+    let voicemail = h
+        .call(
+            call(Method::PATCH, &format!("/v1/numbers/{PN}/call-settings")).json(&json!({
+                "voicemail": {"status": "ENABLED", "triggers": ["REJECT"],
+                    "audio": {"default": {"announcement_media_id": "1037543291543636"}}}
+            })),
+        )
+        .await;
+    assert_eq!(voicemail.status.as_u16(), 204, "{}", voicemail.text);
+    // The permission, by phone number and by BSUID.
+    for query in [
+        format!("phone={}", CALL_PHONE.replace('+', "%2B")),
+        format!("user_id={CALL_BSUID}"),
+    ] {
+        h.graph.push_json(
+            200,
+            json!({"messaging_product": "whatsapp", "permission": {"status": "permanent"},
+                   "actions": []}),
+        );
+        let permission = h
+            .call(Call::get(format!("/v1/numbers/{PN}/call-permissions?{query}")).key(&key))
+            .await;
+        assert_eq!(permission.status.as_u16(), 200, "{}", permission.text);
+    }
+    // A call placed under a key and repeated, with a recording.
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "calls": [{"id": CALL_ID}]}),
+    );
+    let place = || {
+        call(Method::POST, &format!("/v1/numbers/{PN}/calls"))
+            .header("idempotency-key", "call-log-1")
+            .json(
+                &json!({"to": {"phone": CALL_PHONE, "user_id": CALL_BSUID}, "sdp_offer": offer,
+                "recording": {"status": "ENABLED", "purpose": "quality assurance",
+                              "announcement_language": "en_US"}}),
+            )
+    };
+    let placed = h.call(place()).await;
+    assert_eq!(placed.status.as_u16(), 201, "{}", placed.text);
+    let replayed = h.call(place()).await;
+    assert_eq!(replayed.status.as_u16(), 201, "{}", replayed.text);
+    // A refused placement logs nothing of its SDP either.
+    let bad = h
+        .call(
+            call(Method::POST, &format!("/v1/numbers/{PN}/calls"))
+                .json(&json!({"to": {"phone": "16315559090"}, "sdp_offer": offer})),
+        )
+        .await;
+    assert_eq!(bad.status.as_u16(), 422, "{}", bad.text);
+    // A user's call, reported by Meta's event (the user's offer in it),
+    // then answered.
+    let reported = h
+        .webhook(&super::meta::call_connected(WABA, PN, CALL_ID_USER))
+        .await;
+    assert_eq!(reported.status.as_u16(), 200, "{}", reported.text);
+    let one = format!("/v1/numbers/{PN}/calls/{CALL_ID_USER}");
+    for (action, body) in [
+        ("pre-accept", json!({"sdp_answer": answer})),
+        (
+            "accept",
+            json!({"sdp_answer": answer, "biz_opaque_callback_data": "random_string",
+                   "transcription": {"status": "ENABLED", "purpose": "notes",
+                                     "announcement_language": "en_US"}}),
+        ),
+    ] {
+        h.graph.push_json(200, json!({"success": true}));
+        let reply = h
+            .call(call(Method::POST, &format!("{one}/{action}")).json(&body))
+            .await;
+        assert_eq!(reply.status.as_u16(), 204, "{action}: {}", reply.text);
+    }
+    h.graph.push_json(200, json!({"success": true}));
+    let rejected = h.call(call(Method::POST, &format!("{one}/reject"))).await;
+    assert_eq!(rejected.status.as_u16(), 204, "{}", rejected.text);
+    h.graph.push_json(200, json!({"success": true}));
+    let ended = h
+        .call(call(Method::POST, &format!("{one}/terminate")))
+        .await;
+    assert_eq!(ended.status.as_u16(), 204, "{}", ended.text);
+    // An ending cut by a timeout (audited as unknown), and one Meta
+    // refuses quoting an SDP line (audited by nothing: it did not go
+    // through).
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let cut = h
+        .call(call(Method::POST, &format!("{one}/terminate")))
+        .await;
+    assert_eq!(cut.status.as_u16(), 504, "{}", cut.text);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#138000) {CALL_META_TEXT}"),
+                         "type": "OAuthException", "code": 138_000,
+                         "error_data": {"messaging_product": "whatsapp",
+                                        "details": CALL_META_TEXT}}}),
+    );
+    let refused = h
+        .call(call(Method::POST, &format!("{one}/accept")).json(&json!({"sdp_answer": answer})))
+        .await;
+    assert_eq!(refused.status.as_u16(), 502, "{}", refused.text);
+    assert!(!refused.text.contains(CALL_META_TEXT), "{}", refused.text);
+    // The call analytics.
+    let now = time::OffsetDateTime::now_utc();
+    let at = |days: i64| {
+        (now - time::Duration::days(days))
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+            .replace('+', "%2B")
+    };
+    h.graph.push_json(
+        200,
+        json!({"call_analytics": {"granularity": "DAILY", "data_points": [
+            {"start": 1_765_958_400, "end": 1_766_044_800, "count": 35, "average_duration": 106}]}}),
+    );
+    let analytics = h
+        .call(
+            Call::get(format!(
+                "/v1/wabas/{WABA}/analytics/calls?start={}&end={}&granularity=DAILY",
+                at(3),
+                at(1)
+            ))
+            .key(&key),
+        )
+        .await;
+    assert_eq!(analytics.status.as_u16(), 200, "{}", analytics.text);
+    vec![
+        CALL_ICE_PWD_OFFER.to_owned(),
+        CALL_ICE_PWD_ANSWER.to_owned(),
+        CALL_ADDRESS.to_owned(),
+        CALL_SIP_PASSWORD.to_owned(),
+        CALL_SIP_HOST.to_owned(),
+        CALL_PHONE.to_owned(),
+        "16315559090".to_owned(),
+        CALL_BSUID.to_owned(),
+        CALL_ID.to_owned(),
+        CALL_ID_USER.to_owned(),
+        CALL_META_TEXT.to_owned(),
+        // The user's own offer in Meta's connect event (its ICE password).
+        "UApvJw3NcwFRDvIMKdM0vWCdlXah25E9".to_owned(),
+    ]
+}
+
 /// The signature a Meta session id carries (`?sig=`) and the handle it
 /// answers: in no log line (roadmap M5c1).
 const UPLOAD_SIGNATURE: &str = "SIG-LOG-SECRET-9QZ";
@@ -3472,6 +3689,7 @@ fn check_audit(logs: &str) {
     assert!(found[0]["key_id"].is_string(), "{}", found[0]);
     check_erasure_audit(&events, &changes);
     check_group_audit(&changes);
+    check_call_audit(&changes);
     check_display_name_audit(&changes);
     check_settings_audit(&changes);
     let deletions: Vec<&serde_json::Value> = changes
@@ -3487,6 +3705,9 @@ fn check_audit(logs: &str) {
                 && !fields["action"]
                     .as_str()
                     .is_some_and(|action| action.starts_with("group_"))
+                && !fields["action"]
+                    .as_str()
+                    .is_some_and(|action| action.starts_with("call_"))
         })
         .collect();
     let actions: Vec<&str> = deletions
@@ -3719,6 +3940,92 @@ fn check_group_audit(changes: &[&serde_json::Value]) {
                         | "users"
                         | "done"
                         | "failed"
+                        | "outcome"
+                ),
+                "an unexpected field `{name}`: {fields}"
+            );
+        }
+    }
+}
+
+/// The calling changes' audit events (roadmap M5e; docs/design/server.md,
+/// D216) of the scenario `calling`: in order, each with its outcome, whether
+/// recording or transcription was enabled (the consent the other
+/// participant is asked for) and, for the settings, the sections changed;
+/// the number by id, the tenant, the WABA and the key; and nothing else:
+/// no SDP, no SIP host or password, no callee, no call.
+fn check_call_audit(changes: &[&serde_json::Value]) {
+    let calls: Vec<&serde_json::Value> = changes
+        .iter()
+        .copied()
+        .filter(|fields| {
+            fields["action"]
+                .as_str()
+                .is_some_and(|action| action.starts_with("call_"))
+        })
+        .collect();
+    let seen: Vec<(&str, &str, bool, bool, Option<&str>)> = calls
+        .iter()
+        .map(|fields| {
+            (
+                fields["action"].as_str().unwrap_or_default(),
+                fields["outcome"].as_str().unwrap_or_default(),
+                fields["recording"].as_bool().unwrap_or(true),
+                fields["transcription"].as_bool().unwrap_or(true),
+                fields["sections"].as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            (
+                "call_settings_updated",
+                "answered",
+                false,
+                false,
+                Some("call_hours,sip")
+            ),
+            (
+                "call_settings_updated",
+                "answered",
+                false,
+                false,
+                Some("voicemail")
+            ),
+            ("call_connect_requested", "answered", true, false, None),
+            ("call_pre_accepted", "answered", false, false, None),
+            ("call_accepted", "answered", false, true, None),
+            ("call_rejected", "answered", false, false, None),
+            ("call_terminated", "answered", false, false, None),
+            ("call_terminated", "unknown", false, false, None),
+        ],
+        "the calling changes' audit events, with what was enabled"
+    );
+    for fields in calls {
+        assert!(fields["key_id"].is_string(), "{fields}");
+        assert_eq!(fields["tenant"], "merchant-42", "{fields}");
+        assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
+        assert_eq!(fields["phone_number_id"], "1972385232742141", "{fields}");
+        let names: Vec<&str> = fields
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        for name in names {
+            assert!(
+                matches!(
+                    name,
+                    "message"
+                        | "action"
+                        | "key_id"
+                        | "tenant"
+                        | "waba_id"
+                        | "phone_number_id"
+                        | "recording"
+                        | "transcription"
+                        | "sections"
                         | "outcome"
                 ),
                 "an unexpected field `{name}`: {fields}"

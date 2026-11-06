@@ -48,7 +48,7 @@ cited by an item below. Written against `main` at b6fc893 (PR #20).
 | --- | --- |
 | 0 | this plan (parity, categories, roadmap, decisions) |
 | 1 | S1 (server core), B1 (bot framework), U4 (upstream issues) |
-| 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L27, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
+| 2 | S2, S2b, S3, S4, S8; U1–U3 in the cratestack repository; L4, L5, L7 (the `ConversationStore` port change and the inbox's use of it, before M2); the library batches L8–L28, which may start here and run alongside every later wave; B1b, B1c (the bot framework's follow-ups) |
 | 3 | S5a–S5e, S6, S7, S9 |
 | 4 | S10 (D20 (a): the owner's yes of 2026-11-02), S11, S12; M2a–M2m |
 | 5 | S13–S16 (S16 last, gated on U1's merge); M3a–M3g; B2–B4 |
@@ -4804,6 +4804,24 @@ JSON from Meta's pages. A batch whose pages are not in the mirror
     example) nor for "a participant already in the group"; `131200`,
     `131205`, `131206` and the rest of the range stay `unknown`.
 
+- [ ] **L28. Calling error codes** (`meta-whatsapp-core`, `ErrorKind`;
+  found reviewing M5e): `calling/troubleshooting` lists the codes the
+  calling API fails with (`138000` to `138023`, among them `138006`, the
+  business has no call permission from the user, which a placed call meets
+  first). None has an `ErrorKind`, so each is `Unknown`: the service
+  answers `502 unknown` with Meta's code, and a client cannot tell "ask
+  for the permission" from "Meta failed" without parsing a number.
+  - **Kind:** additive (new `ErrorKind` variants; `ErrorKind::ALL` and
+    the service's error table gain rows, which is a v1 addition to the
+    codes a route may answer).
+  - **After:** nothing.
+  - **Decisive:** each code of Meta's page classifies as its own kind (or
+    an existing one where it fits), as L27's `the_group_error_codes_classify_as_their_pages_say`;
+    the service's `every_error_kind_maps_to_a_documented_code_and_status`
+    still passes; a calling route's refusal answers the kind and none of
+    Meta's text (it may quote an SDP line); the calling routes' guide and
+    skill name the new codes in place of "`502 unknown` with Meta's code".
+
 ## 4. Service milestones
 
 Re-scoped on the modular architecture (design §8, §9). Each item's
@@ -6740,9 +6758,90 @@ or WABA fails the family's own cross-tenant test).
     the request's key; with no callback configured it is `503` as in
     M5d; the callback's destination is refused as a webhook endpoint's
     is.
-- [ ] **M5e. Calling** (rows 74, 75, 107, 134, 135): call analytics (row 107) among them.
+- [x] **M5e. Calling** (rows 74, 75, 107, 134, 135): call analytics (row 107) among them.
   - **After:** S7, L14.
   - **Decisive:** M5.1, M5.2.
+  - **Done** (*PR number to be added when it lands*): a new scope,
+    `calls`, and eight routes (`server_core::calls`,
+    `server_api_axum::api::calls`) over the library's `client::calling`:
+    `GET`, `PATCH /v1/numbers/{pn}/call-settings` (the `calling` object:
+    hours, icons, callback permission, SIP, audio, voicemail, and Meta's
+    restrictions on the read), `GET /v1/numbers/{pn}/call-permissions`
+    (by phone and/or BSUID), `POST /v1/numbers/{pn}/calls` (`201
+    {call_id}`; an `Idempotency-Key`; never repeated after a timeout) and
+    `POST …/calls/{call_id}/pre-accept`, `…/accept`, `…/reject`,
+    `…/terminate`; the ninth, `GET /v1/wabas/{waba_id}/analytics/calls`
+    (`Analytics::calls`, scope `analytics`), is the call analytics of row
+    107. **A call is the number's or it does not exist** (D210): Meta
+    documents no read of a call by its id, so the service keeps a record
+    per (number, call), a typed store on the bundle's `KvStore`
+    (`wa.server.call`, keyed by a hash: the call's id is not stored),
+    written by the webhook pipeline for each `calls` event routed to a
+    tenant's number and by the connect route, and expiring 24 hours after
+    the call's last event (so, unlike a group's, it needs no purge); the
+    `OwnedCall` extractor runs step 4 for the number (no token), looks the
+    call up under the caller's tenant and the number, and only then opens
+    the vault. A voicemail announcement's media id is looked up as the
+    number's own (`GET /{media_id}?phone_number_id={pn}`) before the
+    settings change (D211): another number's is `404` with only the
+    lookup sent. **Secrets:** an SDP offer or answer is in no log, error,
+    audit event or `Debug`; a SIP server's password is never asked of Meta
+    (`include_sip_credentials` is never sent) and never answered (D214);
+    Meta's texts are withheld from the answer and every log. **Recording
+    and transcription are the caller's per-call choice** (D217): sent
+    only when the request carries them, never defaulted, the audit event
+    (`call_connect_requested`, `call_accepted`) saying whether either was
+    enabled; the code decides nothing about the consent Meta's
+    announcement asks. Tests: `tests/calls.rs` (each route's exact
+    request from Meta's examples; the settings and the SIP password
+    Meta sends; the voicemail media lookup; the connect's key and replay,
+    and its timeout; the four actions' bodies; `a_call_the_number_does_not_hold_is_not_found_with_zero_vault_reads`
+    over every call route and five kinds of id; the events that record a
+    call; the scope; the analytics' expansion and bounds), `tests/authz.rs`
+    (M5.1 by construction, and
+    `a_call_the_number_does_not_hold_is_not_found_before_the_vault_on_every_call_route`),
+    `tests/errors.rs` (M1.5 on every route), M1.7's capture and audit
+    check (`tests/common/capture.rs`: the SDPs with their ICE
+    credentials, the SIP host and password, the callee, the call ids and
+    a Meta text; the audit events (six actions) by section name and by what was
+    enabled), the core's checks (`calls` tests, including the record's
+    expiry on a manual clock) and a Postgres run
+    (`live_postgres_a_call_the_number_does_not_hold_is_not_found_before_the_vault`).
+    The OpenAPI document is additive only (9 operations, 24 schemas, the
+    scope and the tag).
+  - **Decided** (design D210–D219, by the coordinator on 2026-11-06 under
+    the owner's delegation, each swappable with its swap named in the
+    row): the records and where they are written and read (D210), the
+    voicemail media lookup (D211), the record's 24 hours (D212,
+    `calls::RECORD_TTL`), the SDP bound of 32 KiB and the secrets (D213),
+    the SIP password never served (D214), the scope and routes, the
+    callee named by phone and/or BSUID (D215), the audit events and logs
+    (D216), recording and transcription as the caller's choice (D217),
+    idempotency and replays (D218), what is not offered (D219). Pending
+    the owner's confirmation before the first release: the namespace
+    `wa.server.call`, the scope `calls`, the nine operation ids, the six
+    audit action names and the paths; no new setting or error code;
+    **no legal act** (no calling page makes the caller accept terms), and
+    **no consent decision** in code (the announcement and its consent are
+    Meta's and the integrator's).
+  - **Not done here:** see M5e2; Meta's calling error codes (138xxx) are
+    not classified by the library (`502 unknown` with Meta's code; L28); no
+    call of these routes was run against Meta live.
+- [ ] **M5e2. What M5e did not route**: reading a SIP
+  server's password (a route behind a scope and an audit event of its
+  own, `include_sip_credentials` sent only there), uploading a voicemail
+  announcement with Meta's `use_case=call_voicemail_announcement` (the
+  library's `Media::upload` and the media routes do not send it),
+  classifying Meta's calling error codes (L28, the library's error tree),
+  checking that Meta serves a call's recording and transcript media to
+  `?phone_number_id={pn}` (or a route that downloads them another way),
+  and the permission request message (a send). Each keeps M5e's rule: a
+  call or a media object named by id is checked against its owner before
+  anything is acted on, and the names stay pending the owner's
+  confirmation before the first release.
+  - **After:** M5e.
+  - **Decisive:** M5.1, M5.2 for each; a SIP password never reaches a log
+    or an audit event.
 - [x] **M5f. Groups** (rows 76, 77, 79, 81; row 76's picture is M5f2).
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; a group id not in the number's groups is
@@ -6871,8 +6970,8 @@ or WABA fails the family's own cross-tenant test).
     offered, and tracked by M5g2: a catalog's product sets and one
     product by id, the products edge's `filter`, template group
     analytics, the two analytics switches (insights, click tracking);
-    call analytics wait for M5e; a group's analytics are M5f's, served
-    (row 107 stays partial for M5e and M5g2).
+    call analytics are M5e's, served (row 107 stays
+    partial for M5g2); a group's analytics are M5f's, served.
 - [ ] **M5g2. What M5g did not route** (rows 103, 107): a catalog's
   product sets and one product by id, the products edge's `filter`,
   template group analytics, and the two analytics switches (template

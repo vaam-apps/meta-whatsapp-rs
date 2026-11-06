@@ -250,6 +250,24 @@ pub enum Operation {
     RejectGroupJoinRequests,
     /// `get_group_analytics`: a group's analytics, day by day (roadmap M5f; pending the owner's confirmation before the first release).
     GetGroupAnalytics,
+    /// `get_call_settings`: a number's calling settings (roadmap M5e; pending the owner's confirmation before the first release).
+    GetCallSettings,
+    /// `update_call_settings`: a number's calling settings changed (roadmap M5e; pending the owner's confirmation before the first release).
+    UpdateCallSettings,
+    /// `get_call_permissions`: a user's call permission for the number (roadmap M5e; pending the owner's confirmation before the first release).
+    GetCallPermissions,
+    /// `connect_call`: a business-initiated call placed (roadmap M5e; pending the owner's confirmation before the first release).
+    ConnectCall,
+    /// `pre_accept_call`: a user's call pre-accepted (roadmap M5e; pending the owner's confirmation before the first release).
+    PreAcceptCall,
+    /// `accept_call`: a user's call accepted (roadmap M5e; pending the owner's confirmation before the first release).
+    AcceptCall,
+    /// `reject_call`: a user's call rejected (roadmap M5e; pending the owner's confirmation before the first release).
+    RejectCall,
+    /// `terminate_call`: a call ended (roadmap M5e; pending the owner's confirmation before the first release).
+    TerminateCall,
+    /// `get_call_analytics`: a WABA's call analytics (roadmap M5e; pending the owner's confirmation before the first release).
+    GetCallAnalytics,
     /// `create_flow`: a Flow created in a WABA (roadmap M5d).
     CreateFlow,
     /// `list_flows`: a WABA's Flows (roadmap M5d).
@@ -314,7 +332,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 130] = [
+    pub const ALL: [Self; 139] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -415,6 +433,15 @@ impl Operation {
         Self::ApproveGroupJoinRequests,
         Self::RejectGroupJoinRequests,
         Self::GetGroupAnalytics,
+        Self::GetCallSettings,
+        Self::UpdateCallSettings,
+        Self::GetCallPermissions,
+        Self::ConnectCall,
+        Self::PreAcceptCall,
+        Self::AcceptCall,
+        Self::RejectCall,
+        Self::TerminateCall,
+        Self::GetCallAnalytics,
         Self::CreateFlow,
         Self::ListFlows,
         Self::GetFlow,
@@ -551,6 +578,15 @@ impl Operation {
             Self::ApproveGroupJoinRequests => "approve_group_join_requests",
             Self::RejectGroupJoinRequests => "reject_group_join_requests",
             Self::GetGroupAnalytics => "get_group_analytics",
+            Self::GetCallSettings => "get_call_settings",
+            Self::UpdateCallSettings => "update_call_settings",
+            Self::GetCallPermissions => "get_call_permissions",
+            Self::ConnectCall => "connect_call",
+            Self::PreAcceptCall => "pre_accept_call",
+            Self::AcceptCall => "accept_call",
+            Self::RejectCall => "reject_call",
+            Self::TerminateCall => "terminate_call",
+            Self::GetCallAnalytics => "get_call_analytics",
             Self::CreateFlow => "create_flow",
             Self::ListFlows => "list_flows",
             Self::GetFlow => "get_flow",
@@ -689,7 +725,8 @@ impl Operation {
             Self::GetMessagingAnalytics
             | Self::GetConversationAnalytics
             | Self::GetPricingAnalytics
-            | Self::GetTemplateAnalytics => Scope::Analytics,
+            | Self::GetTemplateAnalytics
+            | Self::GetCallAnalytics => Scope::Analytics,
             Self::ListBlockedUsers | Self::BlockUsers | Self::UnblockUsers => Scope::Contacts,
             Self::CreateWebhookEndpoint
             | Self::ListWebhookEndpoints
@@ -716,6 +753,14 @@ impl Operation {
             Self::GetRoutingRoles | Self::PassThread | Self::TakeThread | Self::ReleaseThread => {
                 Scope::Routing
             }
+            Self::GetCallSettings
+            | Self::UpdateCallSettings
+            | Self::GetCallPermissions
+            | Self::ConnectCall
+            | Self::PreAcceptCall
+            | Self::AcceptCall
+            | Self::RejectCall
+            | Self::TerminateCall => Scope::Calls,
         }
     }
 }
