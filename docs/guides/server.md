@@ -145,7 +145,7 @@ read yet: set, it stops the start.
 | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than the key's one-minute lease) |
 | `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
 | `WA_SERVER_MEDIA_CONCURRENCY` | `4` | uploads and whole downloads held in memory at once on a replica, one tenant holding half of them at most (the next is `429`) |
-| `WA_SERVER_LEGAL_ACTS` | `off` | `on` lets tenants take the legal act their keys allow ([Number settings](#number-settings)): the India compliance information declaration. Off, it answers `403 feature_not_available` and asks Meta nothing; the Official Business Account application and the contact book erasure are not gated by it |
+| `WA_SERVER_LEGAL_ACTS` | `off` | `on` lets tenants take the legal act their keys allow ([Number settings](#number-settings)): the India compliance information declaration, and the operator's signing of the max price agreement ([Marketing](#marketing-messages-api-max-price-and-welcome-message-sequences)). Off, each answers `403 feature_not_available` and asks Meta nothing; the Official Business Account application and the contact book erasure are not gated by it |
 | `WA_SERVER_MEDIA_CONVERTER`, `WA_SERVER_MEDIA_CONVERTER_PROGRAM` | `none`; `ffmpeg` from `PATH` | `ffmpeg` turns on conversion on upload (see [Media](#media)): a build with the `ffmpeg` feature (the image has none) and an `ffmpeg` you install; the program is only read with it |
 | `WA_SERVER_MEDIA_STREAMS` | `16` | streamed downloads (`?stream=true`) at once on a replica, one tenant holding half of them at most (the next is `429`) |
 | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | `20`, `40` | requests a second per tenant and replica for writes (sends, read receipts, media, profile) |
@@ -1920,6 +1920,57 @@ number's `messaging_limit_tier` (`TIER_250`, `TIER_1K`, `TIER_10K`,
   `connection_status` (the service owns the number's events), calling
   settings (roadmap M5e), bot details and the coexistence data sync. No
   call of these routes was run against Meta live.
+
+## Marketing Messages API, max price and welcome message sequences
+
+Scope `marketing` (roadmap M5h; a key made before it has none, and `send`
+and `templates` do not grant it). Everything is on your tenant's own
+number or WABA: another's is `404`, nothing asked of Meta. A template or a
+sequence an id names must be the WABA's own, else `404` with only the
+lookup sent.
+
+| Route | Does |
+| --- | --- |
+| `POST /v1/numbers/{pn}/marketing-messages` | sends a marketing template through Meta's Marketing Messages API: `{to, template, product_policy?, message_activity_sharing?, bid_spec?}` (`product_policy` is `CLOUD_API_FALLBACK` or `STRICT`; `bid_spec.per_message_bid_multiplier` scales the template's max price for this message); `202` as a message send; takes an `Idempotency-Key`, is never replayed after a timeout |
+| `GET /v1/wabas/{waba_id}/marketing/onboarding` | the WABA's onboarding status and its owner business's terms state (`terms_status`: `TERM_OF_SERVICE_SIGNED`, `REQUEST_SENT`, `NOT_STARTED`) |
+| `GET`, `PUT /v1/wabas/{waba_id}/marketing/cloud-api-marketing` | whether marketing templates are blocked on Cloud API `/messages` (`{disabled}`); audited |
+| `POST /v1/wabas/{waba_id}/marketing/template-duplicates` | an approved marketing template of the WABA duplicated at another max price: `{source_template_id, name, optimization_spec: {bid_amount, bid_strategy?, bid_country_multiplier_overrides?}}`; `201`; takes an `Idempotency-Key`; audited |
+| `GET /v1/wabas/{waba_id}/marketing/reach-estimates` | `?countries=IN,US&date_interval=L7D` (`L1D`, `L7D`, `L14D`, `L28D`): estimated deliveries and costs at several max prices |
+| `GET`, `PUT`, `DELETE /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price` | a template's max price read, set (the same `optimization_spec`; it applies within an hour) or returned to rate-card pricing; audited |
+| `POST`, `GET /v1/wabas/{waba_id}/welcome-sequences`, `GET`, `PATCH`, `DELETE …/{sequence_id}` | Click-to-WhatsApp welcome message sequences: `{name, welcome_message_sequence: {text?, autofill_message?: {content}, ice_breakers?: [{title}]}}`; the creation takes an `Idempotency-Key`; changes are audited; Meta refuses to change or delete one an active ad uses |
+
+- `bid_amount` is per 1,000 deliveries, in the smallest unit of the WABA's
+  currency (a price of 0.87 per delivery is `87000`), from 1 to
+  2147483647; multipliers are keyed by country (two capital letters),
+  above 0 and at most 10, at most 240 of them.
+- **The max price agreement is a legal act, and an operator's.** Max price
+  needs Meta's beta agreement, signed once per business portfolio. No
+  tenant route signs it, and neither does a duplicate, a price change or a
+  send: when the agreement is missing you get Meta's refusal as it is.
+  The operator signs it with an admin key:
+  `POST /v1/admin/businesses/{business_id}/max-price-agreement` with
+  `{signer_name, signer_email, token}` (the token: a system token or a
+  business token of an admin of the business's Business Suite; used for
+  this call, stored nowhere). Unless the deployment sets
+  `WA_SERVER_LEGAL_ACTS=on` it answers `403 feature_not_available` with
+  nothing asked of Meta; on, it makes one request, never replayed, and one
+  audit event (`max_price_agreement_signed`, with the admin key's public id
+  and the business, never the signer). Meta emails the signer an
+  acceptance link, and a second call within five minutes is Meta's `429`.
+  The signer's name and email are in no log, error or answer. Accepting
+  the Marketing Messages API's Terms of Service is not a call: a person
+  with full control of the portfolio does it in WhatsApp Manager.
+- **Bounds.** Meta's documented limits are checked before any request
+  (`422` on the field); where the pages state none the service's own apply:
+  240 countries a reach estimate, a sequence name of 128 characters, welcome
+  texts of 1,024, 20 quick replies, 100 sequences a listing.
+- **A GIF header** is created through the templates route (`format: GIF`
+  with its `example` handle); Meta's pages show no send-time parameter for
+  it, so none is checked: the send takes the template as Meta's object.
+- **Not offered**: the agreement's state read, the partner Intent API and
+  the client WABAs listing (roadmap M5h2). Automatic events arrive as
+  tenant events (`automatic_event_detected`), with no route. No call of
+  these routes was run against Meta live.
 
 ## Rate limits
 

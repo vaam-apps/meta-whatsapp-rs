@@ -320,6 +320,34 @@ pub enum Operation {
     BlockUsers,
     /// `unblock_users`: people unblocked on a number (roadmap M5g).
     UnblockUsers,
+    /// `send_marketing_message`: a marketing template sent through the Marketing Messages API, with its options (product policy, activity sharing, per-message bid multiplier) (roadmap M5h; pending the owner's confirmation before the first release).
+    SendMarketingMessage,
+    /// `get_marketing_onboarding`: a WABA's Marketing Messages API onboarding state and its owner business's terms state (roadmap M5h; pending the owner's confirmation before the first release).
+    GetMarketingOnboarding,
+    /// `get_cloud_api_marketing`: whether marketing templates are blocked on Cloud API for a WABA (roadmap M5h; pending the owner's confirmation before the first release).
+    GetCloudApiMarketing,
+    /// `set_cloud_api_marketing`: marketing templates blocked or allowed on Cloud API for a WABA (roadmap M5h; pending the owner's confirmation before the first release).
+    SetCloudApiMarketing,
+    /// `duplicate_marketing_template`: a template of the WABA duplicated at another max price (the max price agreement is never signed by it) (roadmap M5h; pending the owner's confirmation before the first release).
+    DuplicateMarketingTemplate,
+    /// `get_reach_estimate`: a WABA's reach estimates at several max prices (roadmap M5h; pending the owner's confirmation before the first release).
+    GetReachEstimate,
+    /// `get_template_max_price`: a template's max price (roadmap M5h; pending the owner's confirmation before the first release).
+    GetTemplateMaxPrice,
+    /// `set_template_max_price`: a template's max price set (the max price agreement is never signed by it) (roadmap M5h; pending the owner's confirmation before the first release).
+    SetTemplateMaxPrice,
+    /// `clear_template_max_price`: a template returned to rate-card pricing (roadmap M5h; pending the owner's confirmation before the first release).
+    ClearTemplateMaxPrice,
+    /// `create_welcome_sequence`: a Click-to-WhatsApp welcome message sequence created (roadmap M5h; pending the owner's confirmation before the first release).
+    CreateWelcomeSequence,
+    /// `list_welcome_sequences`: a WABA's welcome message sequences (roadmap M5h; pending the owner's confirmation before the first release).
+    ListWelcomeSequences,
+    /// `get_welcome_sequence`: one welcome message sequence of the WABA (roadmap M5h; pending the owner's confirmation before the first release).
+    GetWelcomeSequence,
+    /// `update_welcome_sequence`: a welcome message sequence's name or message changed (roadmap M5h; pending the owner's confirmation before the first release).
+    UpdateWelcomeSequence,
+    /// `delete_welcome_sequence`: a welcome message sequence deleted (roadmap M5h; pending the owner's confirmation before the first release).
+    DeleteWelcomeSequence,
     /// `get_routing_roles`: the routing roles a number's business holds (roadmap M5l).
     GetRoutingRoles,
     /// `pass_thread`: a user's thread passed to another responder (roadmap M5l).
@@ -332,7 +360,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 139] = [
+    pub const ALL: [Self; 153] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -468,6 +496,20 @@ impl Operation {
         Self::ListBlockedUsers,
         Self::BlockUsers,
         Self::UnblockUsers,
+        Self::SendMarketingMessage,
+        Self::GetMarketingOnboarding,
+        Self::GetCloudApiMarketing,
+        Self::SetCloudApiMarketing,
+        Self::DuplicateMarketingTemplate,
+        Self::GetReachEstimate,
+        Self::GetTemplateMaxPrice,
+        Self::SetTemplateMaxPrice,
+        Self::ClearTemplateMaxPrice,
+        Self::CreateWelcomeSequence,
+        Self::ListWelcomeSequences,
+        Self::GetWelcomeSequence,
+        Self::UpdateWelcomeSequence,
+        Self::DeleteWelcomeSequence,
         Self::GetRoutingRoles,
         Self::PassThread,
         Self::TakeThread,
@@ -613,6 +655,20 @@ impl Operation {
             Self::ListBlockedUsers => "list_blocked_users",
             Self::BlockUsers => "block_users",
             Self::UnblockUsers => "unblock_users",
+            Self::SendMarketingMessage => "send_marketing_message",
+            Self::GetMarketingOnboarding => "get_marketing_onboarding",
+            Self::GetCloudApiMarketing => "get_cloud_api_marketing",
+            Self::SetCloudApiMarketing => "set_cloud_api_marketing",
+            Self::DuplicateMarketingTemplate => "duplicate_marketing_template",
+            Self::GetReachEstimate => "get_reach_estimate",
+            Self::GetTemplateMaxPrice => "get_template_max_price",
+            Self::SetTemplateMaxPrice => "set_template_max_price",
+            Self::ClearTemplateMaxPrice => "clear_template_max_price",
+            Self::CreateWelcomeSequence => "create_welcome_sequence",
+            Self::ListWelcomeSequences => "list_welcome_sequences",
+            Self::GetWelcomeSequence => "get_welcome_sequence",
+            Self::UpdateWelcomeSequence => "update_welcome_sequence",
+            Self::DeleteWelcomeSequence => "delete_welcome_sequence",
             Self::GetRoutingRoles => "get_routing_roles",
             Self::PassThread => "pass_thread",
             Self::TakeThread => "take_thread",
@@ -750,6 +806,20 @@ impl Operation {
             | Self::ApproveGroupJoinRequests
             | Self::RejectGroupJoinRequests
             | Self::GetGroupAnalytics => Scope::Groups,
+            Self::SendMarketingMessage
+            | Self::GetMarketingOnboarding
+            | Self::GetCloudApiMarketing
+            | Self::SetCloudApiMarketing
+            | Self::DuplicateMarketingTemplate
+            | Self::GetReachEstimate
+            | Self::GetTemplateMaxPrice
+            | Self::SetTemplateMaxPrice
+            | Self::ClearTemplateMaxPrice
+            | Self::CreateWelcomeSequence
+            | Self::ListWelcomeSequences
+            | Self::GetWelcomeSequence
+            | Self::UpdateWelcomeSequence
+            | Self::DeleteWelcomeSequence => Scope::Marketing,
             Self::GetRoutingRoles | Self::PassThread | Self::TakeThread | Self::ReleaseThread => {
                 Scope::Routing
             }
@@ -766,6 +836,37 @@ impl Operation {
 }
 
 impl std::fmt::Display for Operation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id())
+    }
+}
+
+/// An operator's operation that is a legal act, by id (roadmap M5h): what
+/// an admin key does on a business, outside the tenants' operations
+/// ([`Operation`]), and what the deployment must enable
+/// ([`crate::number_settings::is_legal_admin_act`]). Its route is under
+/// `/v1/admin`, with no tenant, no rate class and no idempotency key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AdminOperation {
+    /// `sign_max_price_agreement`: Meta's max price beta agreement signed
+    /// for a business portfolio (a legal act; roadmap M5h; pending the
+    /// owner's confirmation before the first release).
+    SignMaxPriceAgreement,
+}
+
+impl AdminOperation {
+    /// Every admin operation that is a legal act.
+    pub const ALL: [Self; 1] = [Self::SignMaxPriceAgreement];
+
+    /// Its id: the `operationId` of its route in the OpenAPI document.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::SignMaxPriceAgreement => "sign_max_price_agreement",
+        }
+    }
+}
+
+impl std::fmt::Display for AdminOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.id())
     }

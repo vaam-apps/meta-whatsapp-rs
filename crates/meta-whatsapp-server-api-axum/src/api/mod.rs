@@ -30,6 +30,7 @@ pub mod flows;
 pub mod groups;
 pub mod inbox;
 mod listing;
+pub mod marketing;
 pub mod messages;
 pub mod number_settings;
 pub mod numbers;
@@ -112,6 +113,7 @@ impl Modify for Security {
         (name = "flows", description = "WhatsApp Flows (scope `flows`; roadmap M5d): creating, listing, reading, changing and deleting a WABA's Flows, uploading their Flow JSON (Meta's validation errors in the answer), previewing, publishing and deprecating them; a Flow id of another WABA is `404`, nothing acted on. The data endpoint Meta calls is not part of this API (the public listener's `POST /webhooks/flows/{waba_id}`)"),
         (name = "payments", description = "India's payment configurations, a payment's lookup and its refunds (scope `payments`); the payment messages are sends (scope `send`)"),
         (name = "commerce", description = "A number's commerce settings (the cart, the catalog's visibility) and the catalog its WABA connects, with its products (scope `commerce`)"),
+        (name = "marketing", description = "The Marketing Messages API, max price and Click-to-WhatsApp welcome message sequences, each template or sequence checked to be the WABA's own (scope `marketing`)"),
         (name = "qr_codes", description = "QR codes and short links that open a chat with a prefilled message, each checked to be the number's own (scope `qr_codes`)"),
         (name = "analytics", description = "A WABA's messaging, conversation, pricing and template analytics, their ranges bounded (scope `analytics`)"),
         (name = "contacts", description = "The block list: blocking and unblocking people on a number, audited by count (scope `contacts`)"),
@@ -149,6 +151,8 @@ fn admin_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(admin::get_waba))
         .routes(routes!(admin::unbind_waba))
         .routes(routes!(admin::rotate_vault))
+        // Roadmap M5h: a legal act, gated by `WA_SERVER_LEGAL_ACTS`.
+        .routes(routes!(marketing::sign_max_price_agreement))
         .routes(routes!(signup::reshare_credit_line))
         .routes(routes!(signup::complete_hosted_signup))
         .routes(routes!(
@@ -386,6 +390,34 @@ fn contacts_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(blocked_users::unblock_users))
 }
 
+/// Roadmap M5h: the Marketing Messages API, max price and welcome message
+/// sequences (scope `marketing`).
+fn marketing_routes() -> OpenApiRouter<Grant> {
+    OpenApiRouter::new()
+        .routes(routes!(marketing::send_marketing_message))
+        .routes(routes!(marketing::get_marketing_onboarding))
+        .routes(routes!(
+            marketing::get_cloud_api_marketing,
+            marketing::set_cloud_api_marketing
+        ))
+        .routes(routes!(marketing::duplicate_marketing_template))
+        .routes(routes!(marketing::get_reach_estimate))
+        .routes(routes!(
+            marketing::get_template_max_price,
+            marketing::set_template_max_price,
+            marketing::clear_template_max_price
+        ))
+        .routes(routes!(
+            marketing::create_welcome_sequence,
+            marketing::list_welcome_sequences
+        ))
+        .routes(routes!(
+            marketing::get_welcome_sequence,
+            marketing::update_welcome_sequence,
+            marketing::delete_welcome_sequence
+        ))
+}
+
 fn routing_routes() -> OpenApiRouter<Grant> {
     OpenApiRouter::new()
         .routes(routes!(routing::get_routing_roles))
@@ -476,6 +508,7 @@ fn api_routes(
         .merge(tenant(analytics_routes(), Scope::Analytics))
         .merge(tenant(contacts_routes(), Scope::Contacts))
         .merge(tenant(groups_routes(), Scope::Groups))
+        .merge(tenant(marketing_routes(), Scope::Marketing))
         .merge(tenant(routing_routes(), Scope::Routing))
         .merge(tenant(calls_routes(), Scope::Calls))
         .merge(tenant(events_routes(), Scope::Events))
@@ -643,6 +676,7 @@ mod tests {
             ("calls.rs", include_str!("calls.rs")),
             ("number_settings.rs", include_str!("number_settings.rs")),
             ("groups.rs", include_str!("groups.rs")),
+            ("marketing.rs", include_str!("marketing.rs")),
             ("inbox.rs", include_str!("inbox.rs")),
             ("messages.rs", include_str!("messages.rs")),
             ("payments.rs", include_str!("payments.rs")),

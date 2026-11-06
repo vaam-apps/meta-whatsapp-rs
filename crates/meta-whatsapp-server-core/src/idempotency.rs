@@ -84,6 +84,8 @@ use crate::uploads::NewUpload;
 /// | `request_display_name_change` ([`Self::request_display_name_change`]; roadmap M5c2) | the number's id; the JSON body, canonical as above |
 /// | `request_official_business_account` ([`Self::request_official_business_account`]; roadmap M5c3) | the number's id; the JSON body, canonical as above |
 /// | `create_qr_code`, `block_users`, `unblock_users` ([`Self::create_qr_code`], [`Self::block_users`], [`Self::unblock_users`]; roadmap M5g) | the number's id; the JSON body, canonical as above |
+/// | `send_marketing_message` ([`Self::send_marketing_message`]; roadmap M5h) | the number's id; the JSON body, canonical as above |
+/// | `duplicate_marketing_template`, `create_welcome_sequence` ([`Self::duplicate_marketing_template`], [`Self::create_welcome_sequence`]; roadmap M5h) | the WABA's id; the JSON body, canonical as above |
 /// | `pass_thread`, `take_thread`, `release_thread` ([`Self::pass_thread`], [`Self::take_thread`], [`Self::release_thread`]; roadmap M5l) | the number's id; the JSON body, canonical as above |
 /// | `create_flow` ([`Self::create_flow`]; roadmap M5d) | the WABA's id; the JSON body, canonical as above |
 ///
@@ -398,6 +400,36 @@ impl Fingerprint {
         Self::json(
             Operation::RequestOfficialBusinessAccount,
             &[("pn", number.as_str())],
+            body,
+        )
+    }
+
+    /// `send_marketing_message` on `number`, with the JSON body the request
+    /// carried (roadmap M5h; no legacy fingerprint).
+    pub fn send_marketing_message(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::SendMarketingMessage,
+            &[("pn", number.as_str())],
+            body,
+        )
+    }
+
+    /// `duplicate_marketing_template` in `waba`, with the JSON body the
+    /// request carried (roadmap M5h; no legacy fingerprint).
+    pub fn duplicate_marketing_template(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::DuplicateMarketingTemplate,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `create_welcome_sequence` in `waba`, with the JSON body the request
+    /// carried (roadmap M5h; no legacy fingerprint).
+    pub fn create_welcome_sequence(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreateWelcomeSequence,
+            &[("waba_id", waba.as_str())],
             body,
         )
     }
@@ -1687,6 +1719,52 @@ mod tests {
                 assert_ne!(one(&pn("1"), &body), other_op(&pn("1"), &body));
             }
         }
+    }
+
+    /// Roadmap M5h's three keyed creations are scoped to the number or the
+    /// WABA, the body and the operation: the same key and body on another
+    /// number or WABA, with another body, or as another operation (a
+    /// duplicate is never a sequence's creation) is another request.
+    /// Decisive: the parameter and the operation of each constructor, and
+    /// the body's canonical form.
+    #[test]
+    fn the_marketing_fingerprints_are_per_number_or_waba_body_and_operation() {
+        let body = serde_json::json!({"name": "x", "template": {"a": 1}});
+        let other = serde_json::json!({"name": "y", "template": {"a": 1}});
+        let reordered = serde_json::json!({"template": {"a": 1}, "name": "x"});
+        assert_eq!(
+            Fingerprint::send_marketing_message(&pn("1"), &body),
+            Fingerprint::send_marketing_message(&pn("1"), &reordered)
+        );
+        assert_ne!(
+            Fingerprint::send_marketing_message(&pn("1"), &body),
+            Fingerprint::send_marketing_message(&pn("2"), &body)
+        );
+        assert_ne!(
+            Fingerprint::send_marketing_message(&pn("1"), &body),
+            Fingerprint::send_marketing_message(&pn("1"), &other)
+        );
+        assert_ne!(
+            Fingerprint::send_marketing_message(&pn("1"), &body),
+            Fingerprint::send_message(&pn("1"), &body)
+        );
+        let wabas: [fn(&WabaId, &serde_json::Value) -> Fingerprint; 2] = [
+            Fingerprint::duplicate_marketing_template,
+            Fingerprint::create_welcome_sequence,
+        ];
+        for build in wabas {
+            assert_eq!(build(&waba("1"), &body), build(&waba("1"), &reordered));
+            assert_ne!(build(&waba("1"), &body), build(&waba("2"), &body));
+            assert_ne!(build(&waba("1"), &body), build(&waba("1"), &other));
+            assert_ne!(
+                build(&waba("1"), &body),
+                Fingerprint::create_flow(&waba("1"), &body)
+            );
+        }
+        assert_ne!(
+            Fingerprint::duplicate_marketing_template(&waba("1"), &body),
+            Fingerprint::create_welcome_sequence(&waba("1"), &body)
+        );
     }
 
     /// Roadmap M5f's keyed creation is scoped to the number, the body and
