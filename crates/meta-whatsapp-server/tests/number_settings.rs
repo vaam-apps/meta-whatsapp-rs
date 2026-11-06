@@ -1019,6 +1019,43 @@ async fn a_contact_book_entry_is_erased_only_by_a_key_with_the_scope() {
     assert_eq!(h.graph.remaining(), 0);
 }
 
+/// The settings read and the payload encryption calls withhold Meta's
+/// texts (the answer may carry key material), where the other settings
+/// routes keep Meta's `details`. Decisive: `failed(…, true)` in
+/// `NumberSettings::settings` and `disable_payload_encryption`.
+#[tokio::test]
+async fn the_key_routes_withhold_metas_details_and_the_others_keep_them() {
+    let (h, _, key) = connected(false).await;
+    let sentinel = "DETAILS-SENTINEL-4c1d";
+    let read = get("settings", &key);
+    let disable = Call::new(
+        Method::DELETE,
+        format!("/v1/numbers/{PN}/settings/payload-encryption"),
+    )
+    .key(&key);
+    for call in [read, disable] {
+        h.graph.push_json(400, graph_error(100, sentinel));
+        let reply = h.call(call).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            reply.text
+        );
+        assert!(!reply.text.contains(sentinel), "{}", reply.text);
+        assert!(reply.json()["error"]["graph"]["details"].is_null());
+    }
+    h.graph.push_json(400, graph_error(100, sentinel));
+    let kept = h.call(get("health-status", &key)).await;
+    assert_eq!(
+        kept.json()["error"]["graph"]["details"],
+        sentinel,
+        "{}",
+        kept.text
+    );
+    assert_eq!(h.graph.remaining(), 0);
+}
+
 // ─── Meta's texts, and the other tenant ──────────────────────────────────
 
 /// A sentinel in Meta's error on each legal act (which the document-wide
