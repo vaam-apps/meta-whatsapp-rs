@@ -20804,7 +20804,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/CallSip",
-                "description": "SIP signalling. With SIP on and webhook delivery off, the service\nreceives no call events and so holds no call to act on."
+                "description": "SIP signalling. A call signalled over SIP is not answered through\nthese routes; its events reach the service only with\n`webhook_delivery` enabled."
               },
               {
                 "type": "null"
@@ -21276,7 +21276,7 @@
           },
           "sdp_offer": {
             "type": "string",
-            "description": "Your SDP offer (RFC 8866), up to 64 KiB, passed to Meta unparsed."
+            "description": "Your SDP offer (RFC 8866), up to 32 KiB, passed to Meta unparsed."
           },
           "to": {
             "$ref": "#/components/schemas/CallParticipant",
@@ -25677,7 +25677,7 @@
         "properties": {
           "sdp_answer": {
             "type": "string",
-            "description": "Your SDP answer (RFC 8866), up to 64 KiB, passed to Meta unparsed."
+            "description": "Your SDP answer (RFC 8866), up to 32 KiB, passed to Meta unparsed."
           }
         },
         "additionalProperties": false

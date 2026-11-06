@@ -224,8 +224,9 @@ pub struct SettingsDoc {
     /// permission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub callback_permission_status: Option<String>,
-    /// SIP signalling. With SIP on and webhook delivery off, the service
-    /// receives no call events and so holds no call to act on.
+    /// SIP signalling. A call signalled over SIP is not answered through
+    /// these routes; its events reach the service only with
+    /// `webhook_delivery` enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sip: Option<SipDoc>,
     /// Audio.
