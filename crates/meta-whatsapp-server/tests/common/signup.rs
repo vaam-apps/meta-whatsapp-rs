@@ -221,3 +221,115 @@ pub fn removed() -> Vec<u8> {
         &json!({"waba_id": WABA, "owner_business_id": BUSINESS}),
     )
 }
+
+// ─── Roadmap M3f: hosted signup, several WABAs, pre-verified numbers ────
+
+/// A second WABA of the same business, and its number.
+pub const WABA_2: &str = "524126980791430";
+pub const PHONE_3: &str = "106540352242924";
+/// The deployment's system token for hosted signup, and the
+/// `appsecret_proof` of it under [`APP_SECRET`]
+/// (`echo -n "$TOKEN" | openssl dgst -sha256 -hmac "$APP_SECRET"`).
+pub const HOSTED_TOKEN: &str = "EAAG-hosted-system-token";
+pub const HOSTED_PROOF: &str = "833fa583e46636ee6558857d1aa7d776530aee85868134033cb5c0b45685e624";
+/// The deployment's own business portfolio (the pool's), its token, a
+/// pre-verified number's id and the code it received.
+pub const POOL_BUSINESS: &str = "506914307656634";
+pub const POOL_TOKEN: &str = "EAAG-pool-system-token";
+pub const PRE_VERIFIED: &str = "1972385232742999";
+pub const PRE_VERIFIED_CODE: &str = "471986";
+
+/// `PARTNER_ADDED` of `waba` and its owner `owner`
+/// (`webhooks/reference/account_update`).
+pub fn partner_added(waba: &str, owner: &str) -> Vec<u8> {
+    account_update(
+        "PARTNER_ADDED",
+        &json!({"waba_id": waba, "owner_business_id": owner}),
+    )
+}
+
+/// What the page posts after a flow that granted `waba_ids` (the first
+/// the claimed WABA).
+pub fn finished_with(state: &str, waba_ids: &[&str]) -> Value {
+    json!({
+        "state": state,
+        "code": CODE,
+        "event": {
+            "data": {"phone_number_id": PHONE, "waba_id": waba_ids[0], "business_id": BUSINESS,
+                     "waba_ids": waba_ids},
+            "type": "WA_EMBEDDED_SIGNUP",
+            "event": "FINISH"
+        },
+        "pin": PIN
+    })
+}
+
+/// The code exchange and a `debug_token` granting [`WABA`] and [`WABA_2`].
+pub fn script_two_grants(graph: &ScriptedTransport) {
+    graph.push_json(200, json!({"access_token": TOKEN, "token_type": "bearer"}));
+    graph.push_json(200, two_grants_debug());
+}
+
+/// `debug_token`'s answer granting [`WABA`] and [`WABA_2`].
+pub fn two_grants_debug() -> Value {
+    json!({"data": {
+      "app_id": APP_ID, "type": "SYSTEM_USER", "is_valid": true,
+      "expires_at": 0, "data_access_expires_at": 0,
+      "scopes": ["whatsapp_business_management", "whatsapp_business_messaging"],
+      "granular_scopes": [
+        {"scope": "whatsapp_business_management", "target_ids": [WABA, WABA_2]},
+        {"scope": "whatsapp_business_messaging", "target_ids": [WABA, WABA_2]}
+      ],
+      "user_id": "1"
+    }})
+}
+
+/// A WABA's owner and its numbers.
+pub fn script_waba(graph: &ScriptedTransport, waba: &str, numbers: &[&str]) {
+    graph.push_json(
+        200,
+        json!({"owner_business_info": {"name": "Wind & Wool", "id": BUSINESS}, "id": waba}),
+    );
+    let data: Vec<Value> = numbers.iter().map(|n| json!({"id": n})).collect();
+    graph.push_json(200, json!({ "data": data }));
+}
+
+/// `debug_token`'s answer granting [`WABA`] only.
+pub fn one_grant_debug() -> Value {
+    json!({"data": {
+      "app_id": APP_ID, "type": "SYSTEM_USER", "is_valid": true,
+      "expires_at": 0, "data_access_expires_at": 0,
+      "scopes": ["whatsapp_business_management", "whatsapp_business_messaging"],
+      "granular_scopes": [
+        {"scope": "whatsapp_business_management", "target_ids": [WABA]},
+        {"scope": "whatsapp_business_messaging", "target_ids": [WABA]}
+      ],
+      "user_id": "1"
+    }})
+}
+
+/// `debug_token`'s answer granting exactly `wabas`.
+pub fn debug_granting(wabas: &[&str]) -> Value {
+    json!({"data": {
+      "app_id": APP_ID, "type": "SYSTEM_USER", "is_valid": true,
+      "expires_at": 0, "data_access_expires_at": 0,
+      "scopes": ["whatsapp_business_management", "whatsapp_business_messaging"],
+      "granular_scopes": [
+        {"scope": "whatsapp_business_management", "target_ids": wabas},
+        {"scope": "whatsapp_business_messaging", "target_ids": wabas}
+      ],
+      "user_id": "1"
+    }})
+}
+
+/// A deployment with all of M3f on: every granted WABA bound, hosted
+/// signup, and the pool of pre-verified numbers.
+pub fn everything() -> SignupDeployment {
+    tech_provider()
+        .every_granted_waba(true)
+        .hosted_signup(AccessToken::new(HOSTED_TOKEN))
+        .pre_verified_pool(
+            meta_whatsapp_rs::core::ids::BusinessId::new(POOL_BUSINESS).unwrap(),
+            AccessToken::new(POOL_TOKEN),
+        )
+}

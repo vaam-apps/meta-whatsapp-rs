@@ -34,6 +34,7 @@ pub mod number_settings;
 pub mod numbers;
 pub mod otp;
 pub mod payments;
+pub mod pre_verified;
 pub mod qr_codes;
 pub mod registration;
 pub mod routing;
@@ -119,6 +120,7 @@ impl Modify for Security {
         (name = "webhooks", description = "Webhook endpoints: the tenant's events pushed to its URLs, signed the Standard Webhooks way, retried for 72 hours; their secrets, pings and deliveries (scope `webhooks`)"),
         (name = "otp", description = "One-time passcodes sent with the tenant's authentication template, and checked (scope `otp`)"),
         (name = "signup", description = "Embedded Signup: an attempt bound to the tenant, its completion (the business onboarded, the WABA and its numbers bound to the tenant), and the attempts to resume (scope `signup`)"),
+        (name = "pre_verified", description = "The deployment's pool of pre-verified numbers: adding, verifying, listing and deleting them, and reserving one for a tenant's signup (admin key; roadmap M3f)"),
         (name = "operations", description = "Health, metrics, this document, versions (no key)"),
     )
 )]
@@ -146,6 +148,21 @@ fn admin_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(admin::unbind_waba))
         .routes(routes!(admin::rotate_vault))
         .routes(routes!(signup::reshare_credit_line))
+        .routes(routes!(signup::complete_hosted_signup))
+        .routes(routes!(
+            pre_verified::add_pre_verified_number,
+            pre_verified::list_pre_verified_numbers
+        ))
+        .routes(routes!(
+            pre_verified::get_pre_verified_number,
+            pre_verified::delete_pre_verified_number
+        ))
+        .routes(routes!(pre_verified::request_pre_verified_code))
+        .routes(routes!(pre_verified::verify_pre_verified_code))
+        .routes(routes!(
+            pre_verified::reserve_pre_verified_number,
+            pre_verified::release_pre_verified_number
+        ))
 }
 
 fn numbers_routes() -> OpenApiRouter<Grant> {
@@ -624,6 +641,7 @@ mod tests {
             ("template_groups.rs", include_str!("template_groups.rs")),
             ("otp.rs", include_str!("otp.rs")),
             ("signup.rs", include_str!("signup.rs")),
+            ("pre_verified.rs", include_str!("pre_verified.rs")),
             ("webhook_endpoints.rs", include_str!("webhook_endpoints.rs")),
         ];
         let mut plain = Vec::new();

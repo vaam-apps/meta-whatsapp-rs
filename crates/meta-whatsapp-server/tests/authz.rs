@@ -1415,3 +1415,111 @@ async fn only_metas_refusal_of_the_object_is_not_found() {
         }
     }
 }
+
+/// Roadmap M3f: the hosted claim and the pool's routes are the operator's
+/// (decision D202), and M1.3's table (which walks the committed document)
+/// holds them: `every_keyed_operation_needs_a_key_of_its_kind_before_the_body`
+/// covers each of them by construction (step 1, the key's kind, before
+/// the body). Here, with the deployment's settings on: no tenant key
+/// claims a hosted arrival (the WABA and business ids are no secret, so a
+/// tenant naming both would take another tenant's merchant), whatever its
+/// scopes, a platform key included, and the arrival and Meta are left
+/// alone; the operator naming a tenant for a WABA another holds is `409`
+/// before the arrival is touched or Meta asked (D4), and never reads the
+/// vault; the pool's routes are the admin key's, a tenant's (platform
+/// keys included) `403`, Meta never asked.
+/// Decisive: the admin guard removed from the claim (the first
+/// assertion) or from a pool route (the last), D4 after the claim (the
+/// second).
+#[tokio::test]
+async fn the_hosted_and_pool_routes_follow_the_authorization_order() {
+    use common::signup::{BUSINESS, HOSTED_TOKEN, POOL_BUSINESS, POOL_TOKEN, partner_added};
+    use meta_whatsapp_rs::core::ids::BusinessId;
+    use meta_whatsapp_rs::core::secret::AccessToken;
+    let h = Harness::with_settings(common::signup::settings(
+        common::signup::tech_provider()
+            .hosted_signup(AccessToken::new(HOSTED_TOKEN))
+            .pre_verified_pool(
+                BusinessId::new(POOL_BUSINESS).unwrap(),
+                AccessToken::new(POOL_TOKEN),
+            ),
+    ));
+    h.tenant(A).await;
+    h.tenant(B).await;
+    h.connect(A, WABA_A, &[PN_A], "TOKEN-OF-A").await;
+    let hosted_body = json!({"tenant_id": B, "waba_id": WABA_A, "owner_business_id": BUSINESS});
+    h.webhook(&partner_added(WABA_A, BUSINESS)).await;
+    let reads = h.kv.vault_reads();
+
+    // Step 1: no tenant key claims, with the scope or without it.
+    let no_scope = h.tenant_key(B, &[Scope::Send]).await;
+    let signup = h.tenant_key(B, &[Scope::Signup]).await;
+    let platform = h.platform_key(AllowedTenants::All, &ALL_SCOPES).await;
+    for key in [&no_scope, &signup, &platform] {
+        let reply = h
+            .call(
+                Call::new(Method::POST, "/v1/admin/signup/hosted")
+                    .key(key)
+                    .tenant(B)
+                    .json(&hosted_body),
+            )
+            .await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::FORBIDDEN, "forbidden"),
+            "{}",
+            reply.text
+        );
+    }
+
+    // D4: the operator names B for A's WABA.
+    let admin = h.admin_key().await;
+    let reply = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/signup/hosted")
+                .key(&admin)
+                .json(&hosted_body),
+        )
+        .await;
+    assert_eq!(
+        (reply.status, reply.code().as_str()),
+        (StatusCode::CONFLICT, "waba_owned_by_another_tenant"),
+        "{}",
+        reply.text
+    );
+    assert_eq!(h.kv.vault_reads(), reads, "the vault was never read");
+    assert!(h.graph.requests().is_empty(), "Meta was never asked");
+
+    // The pool: the operator's only.
+    for key in [&signup, &platform] {
+        for (method, path, body) in [
+            (Method::GET, "/v1/admin/pre-verified-numbers", json!({})),
+            (
+                Method::POST,
+                "/v1/admin/pre-verified-numbers",
+                json!({"phone_number": "+15550783881"}),
+            ),
+            (
+                Method::PUT,
+                "/v1/admin/pre-verified-numbers/1972385232742999/reservation",
+                json!({"tenant_id": B}),
+            ),
+        ] {
+            let reply = h
+                .call(
+                    Call::new(method.clone(), path)
+                        .key(key)
+                        .tenant(B)
+                        .json(&body),
+                )
+                .await;
+            assert_eq!(
+                (reply.status, reply.code().as_str()),
+                (StatusCode::FORBIDDEN, "forbidden"),
+                "{method} {path}: {}",
+                reply.text
+            );
+        }
+    }
+    assert!(h.graph.requests().is_empty(), "Meta was never asked");
+}

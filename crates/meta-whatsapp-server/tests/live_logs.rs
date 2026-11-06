@@ -29,7 +29,7 @@ async fn live_postgres_logs_hold_no_secret_key_message_or_contact() {
     // Embedded Signup set up (roadmap M3a), so that its routes run through.
     let h = Harness::with_stores_and_settings(
         Stores::postgres(&pool),
-        common::capture::with_uploads(common::signup::settings(common::signup::tech_provider())),
+        common::capture::with_uploads(common::signup::settings(common::signup::everything())),
     );
     let captured = Captured::default();
     let _guard = tracing::subscriber::set_default(subscriber(&captured));
