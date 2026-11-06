@@ -1717,10 +1717,10 @@ mod tests {
                 state ^= state >> 7;
                 state ^= state << 17;
                 // Biased to markers and lengths, which are what it parses.
-                data.push(if state % 3 == 0 {
+                data.push(if state.is_multiple_of(3) {
                     0xFF
                 } else {
-                    (state >> 24) as u8
+                    u8::try_from((state >> 24) & 0xFF).unwrap_or(0)
                 });
             }
             let _ = Picture::new(Bytes::from(data));
