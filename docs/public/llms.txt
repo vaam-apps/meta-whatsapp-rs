@@ -77,6 +77,7 @@ One task each, installable with `npx skills add vaam-apps/meta-whatsapp-rs`.
 - [meta-whatsapp-rs-server-profile](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-profile/SKILL.md): a number's profile picture and display name through the service: the picture from a completed upload, the display name's review
 - [meta-whatsapp-rs-server-groups](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-groups/SKILL.md): a number's WhatsApp groups through the service: creation, invite links, participants, join requests, analytics
 - [meta-whatsapp-rs-server-calling](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-calling/SKILL.md): a number's WhatsApp Calling through the service: settings, call permissions, placing and answering calls, recording and transcription, call analytics
+- [meta-whatsapp-rs-server-routing](https://raw.githubusercontent.com/vaam-apps/meta-whatsapp-rs/main/skills/meta-whatsapp-rs-server-routing/SKILL.md): conversation routing through the service: routing roles, passing, taking and releasing a user's thread
 
 ## Optional
 

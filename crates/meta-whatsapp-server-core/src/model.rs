@@ -149,6 +149,12 @@ pub enum Scope {
     /// participants, join requests and analytics (roadmap M5f; a stored
     /// name, pending the owner's confirmation before the first release).
     Groups,
+    /// Conversation routing (roadmap M5l): the routing roles of a number
+    /// and the thread control actions (pass, take, release). A thread
+    /// action hands a customer's conversation to another responder, so a
+    /// scope of its own, which `send` and `inbox` do not grant (a stored
+    /// name, pending the owner's confirmation before the first release).
+    Routing,
     /// Calling (roadmap M5e): a number's calling settings, a user's call
     /// permission, the call a business places and the actions on a call
     /// (pre-accept, accept, reject, terminate). Calls carry SDP and may be
@@ -167,7 +173,7 @@ pub enum Scope {
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 19] = [
+    pub const ALL: [Scope; 20] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -185,6 +191,7 @@ impl Scope {
         Self::Analytics,
         Self::Contacts,
         Self::Groups,
+        Self::Routing,
         Self::Calls,
         Self::Partners,
     ];
@@ -209,6 +216,7 @@ impl Scope {
             Self::Analytics => "analytics",
             Self::Contacts => "contacts",
             Self::Groups => "groups",
+            Self::Routing => "routing",
             Self::Calls => "calls",
             Self::Partners => "partners",
         }
