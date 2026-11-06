@@ -13,6 +13,8 @@ cat /tmp/ci.exit   # 0 or it is not verified
 ```
 
 `ci` = `lint check test skills-check skills-ts doc features deny test-live`.
+CI runs these recipes as parallel jobs plus a final job named `just ci`
+that needs them all (`tests/ci_workflow.rs` pins the coverage).
 `skills-check` needs the git history (a shallow clone fails it);
 `skills-ts` needs Node of the major version in `tools/skills-ts/.nvmrc`
 (CI installs exactly that version) and the npm registry for `npm ci`.

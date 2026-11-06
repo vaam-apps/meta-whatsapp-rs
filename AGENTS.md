@@ -55,7 +55,7 @@ condition: every choice stays swappable. The rule:
 
 | Command | What it proves |
 | --- | --- |
-| `just ci` | **The gate.** CI runs exactly this. Nothing is "verified" until it exits 0 on the final head. |
+| `just ci` | **The gate.** CI runs `just ci`'s recipes across parallel jobs (a test pins that it runs every one of them), and a final job named `just ci` fails unless they all pass. Nothing is "verified" until it exits 0 on the final head. |
 | `just lint` | `cargo fmt --check` + clippy (pedantic, `-D warnings`) |
 | `just test` | unit + in-process tests; `live_*` tests *skip* here |
 | `just test-live` | adapter, facade (the inbox's `live_postgres_*` tests), bot (retention's `live_postgres_*` tests) and service (`meta-whatsapp-server`, the Postgres backend's `meta-whatsapp-server-store-postgres` and the MongoDB outbox spike's `meta-whatsapp-server-store-mongodb`) tests against real Postgres, Redis and MongoDB (a single-node replica set), with `META_WHATSAPP_RS_REQUIRE_LIVE=1` so a missing service **fails** |
