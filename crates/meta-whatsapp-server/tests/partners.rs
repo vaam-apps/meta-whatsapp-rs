@@ -265,6 +265,7 @@ async fn the_other_calls_reach_meta_with_the_setting_off() {
 /// customer's id and the rejection reasons as Meta sent them. Decisive:
 /// the pool's token and business in `Partners::open`, and the form.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // the form, then the list
 async fn a_submission_is_metas_form_with_the_partners_token_and_the_list_is_read() {
     let f = fixture(true).await;
     f.h.graph.push_json(
@@ -838,10 +839,7 @@ async fn a_solutions_state_changes_are_metas_edges_and_are_not_replayed() {
 fn the_solution_token_is_not_served() {
     for operation in common::spec_operations() {
         assert!(
-            !operation.template.contains("access_token")
-                && !operation.template.contains("access-token")
-                && !(operation.template.contains("/partners/")
-                    && operation.template.contains("token")),
+            !operation.template.contains("token"),
             "{}",
             operation.label()
         );
