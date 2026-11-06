@@ -69,7 +69,7 @@ use crate::display_names::is_invisible_or_bidi;
 use crate::error::{ErrorCode, ServiceError};
 use crate::numbers::{EMAIL_MAX_CHARS, profile_email, profile_website};
 use crate::observe::Observer;
-use crate::operation::Operation;
+use crate::operation::{AdminOperation, Operation};
 use crate::request::wire;
 
 /// Whether `operation` is a legal act: off until the deployment sets
@@ -78,6 +78,15 @@ use crate::request::wire;
 #[must_use]
 pub fn is_legal_act(operation: Operation) -> bool {
     matches!(operation, Operation::SetComplianceInfo)
+}
+
+/// [`is_legal_act`] for an operator's operations
+/// ([`AdminOperation`]; roadmap M5h, design D231): the max price beta
+/// agreement. The same setting gates it, and adding an admin act to the
+/// gate is one more arm here.
+#[must_use]
+pub fn is_legal_admin_act(operation: AdminOperation) -> bool {
+    matches!(operation, AdminOperation::SignMaxPriceAgreement)
 }
 
 /// The audit action of [`NumberSettings::change`]: a stored name in the

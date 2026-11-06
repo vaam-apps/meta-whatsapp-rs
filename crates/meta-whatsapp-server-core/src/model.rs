@@ -149,11 +149,20 @@ pub enum Scope {
     /// participants, join requests and analytics (roadmap M5f; a stored
     /// name, pending the owner's confirmation before the first release).
     Groups,
+    /// Marketing Messages API and Click-to-WhatsApp (roadmap M5h): a
+    /// number's marketing sends, a WABA's MM API onboarding state, the
+    /// Cloud API marketing switch, max price (duplicating a template at
+    /// another price, a template's max price, reach estimates) and
+    /// welcome message sequences. A scope of its own: marketing sends and
+    /// max price spend money, and a key that sends transactional messages
+    /// or edits templates does not hold it (a stored name, pending the
+    /// owner's confirmation before the first release).
+    Marketing,
 }
 
 impl Scope {
     /// Every scope.
-    pub const ALL: [Scope; 17] = [
+    pub const ALL: [Scope; 18] = [
         Self::Send,
         Self::Media,
         Self::Templates,
@@ -171,6 +180,7 @@ impl Scope {
         Self::Analytics,
         Self::Contacts,
         Self::Groups,
+        Self::Marketing,
     ];
 
     /// Stored and API name.
@@ -193,6 +203,7 @@ impl Scope {
             Self::Analytics => "analytics",
             Self::Contacts => "contacts",
             Self::Groups => "groups",
+            Self::Marketing => "marketing",
         }
     }
 

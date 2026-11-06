@@ -84,6 +84,8 @@ use crate::uploads::NewUpload;
 /// | `request_display_name_change` ([`Self::request_display_name_change`]; roadmap M5c2) | the number's id; the JSON body, canonical as above |
 /// | `request_official_business_account` ([`Self::request_official_business_account`]; roadmap M5c3) | the number's id; the JSON body, canonical as above |
 /// | `create_qr_code`, `block_users`, `unblock_users` ([`Self::create_qr_code`], [`Self::block_users`], [`Self::unblock_users`]; roadmap M5g) | the number's id; the JSON body, canonical as above |
+/// | `send_marketing_message` ([`Self::send_marketing_message`]; roadmap M5h) | the number's id; the JSON body, canonical as above |
+/// | `duplicate_marketing_template`, `create_welcome_sequence` ([`Self::duplicate_marketing_template`], [`Self::create_welcome_sequence`]; roadmap M5h) | the WABA's id; the JSON body, canonical as above |
 /// | `create_flow` ([`Self::create_flow`]; roadmap M5d) | the WABA's id; the JSON body, canonical as above |
 ///
 /// The same request always has the same fingerprint; another operation,
@@ -371,6 +373,36 @@ impl Fingerprint {
         Self::json(
             Operation::RequestOfficialBusinessAccount,
             &[("pn", number.as_str())],
+            body,
+        )
+    }
+
+    /// `send_marketing_message` on `number`, with the JSON body the request
+    /// carried (roadmap M5h; no legacy fingerprint).
+    pub fn send_marketing_message(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::SendMarketingMessage,
+            &[("pn", number.as_str())],
+            body,
+        )
+    }
+
+    /// `duplicate_marketing_template` in `waba`, with the JSON body the
+    /// request carried (roadmap M5h; no legacy fingerprint).
+    pub fn duplicate_marketing_template(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::DuplicateMarketingTemplate,
+            &[("waba_id", waba.as_str())],
+            body,
+        )
+    }
+
+    /// `create_welcome_sequence` in `waba`, with the JSON body the request
+    /// carried (roadmap M5h; no legacy fingerprint).
+    pub fn create_welcome_sequence(waba: &WabaId, body: &serde_json::Value) -> Self {
+        Self::json(
+            Operation::CreateWelcomeSequence,
+            &[("waba_id", waba.as_str())],
             body,
         )
     }

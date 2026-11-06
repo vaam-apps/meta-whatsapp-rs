@@ -498,6 +498,9 @@ pub enum ScopeName {
     /// A number's groups: settings, invite links, participants, join
     /// requests and analytics (roadmap M5f).
     Groups,
+    /// Marketing sends, max price and welcome message sequences (roadmap
+    /// M5h).
+    Marketing,
 }
 
 impl From<ScopeName> for Scope {
@@ -520,6 +523,7 @@ impl From<ScopeName> for Scope {
             ScopeName::Analytics => Scope::Analytics,
             ScopeName::Contacts => Scope::Contacts,
             ScopeName::Groups => Scope::Groups,
+            ScopeName::Marketing => Scope::Marketing,
         }
     }
 }
@@ -544,6 +548,7 @@ impl From<Scope> for ScopeName {
             Scope::Analytics => ScopeName::Analytics,
             Scope::Contacts => ScopeName::Contacts,
             Scope::Groups => ScopeName::Groups,
+            Scope::Marketing => ScopeName::Marketing,
         }
     }
 }
