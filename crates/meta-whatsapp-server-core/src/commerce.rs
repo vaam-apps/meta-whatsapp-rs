@@ -1053,6 +1053,12 @@ mod tests {
             "a".repeat(FILTER_MAX_VALUE_CHARS)
         );
         assert!(ProductFilter::parse(&one_text_at_its_edge).is_ok());
+        // Only the text's length is at fault: padded whitespace around a
+        // rule every other bound accepts, at and one past the bound.
+        let rule = r#"{"name":{"eq":1}}"#;
+        let padded = |len: usize| format!("{rule}{}", " ".repeat(len - rule.len()));
+        assert!(ProductFilter::parse(&padded(FILTER_MAX_BYTES)).is_ok());
+        let one_over = padded(FILTER_MAX_BYTES + 1);
         let long_text = format!(
             r#"{{"name": {{"eq": "{}"}}}}"#,
             "a".repeat(FILTER_MAX_BYTES)
@@ -1076,6 +1082,7 @@ mod tests {
             many_operators,
             many_values.as_str(),
             long_value.as_str(),
+            one_over.as_str(),
             long_text.as_str(),
         ] {
             let error = ProductFilter::parse(bad).unwrap_err();
