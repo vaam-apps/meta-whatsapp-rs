@@ -93,9 +93,9 @@ asked.
 
 Under `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` (on by default, the sends'
 setting) every action of a call (place, pre-accept, accept, reject,
-terminate) names the number's binding's WABA id as `messaging_account_id`,
+terminate) names the number's binding's WABA id as its messaging account,
 as Meta asks when a token reaches several Messaging Accounts. Do not send
-the field: `messaging_account_id` or `paid_messaging_account_id` in a body
+the field: a messaging account id (under either of Meta's names) in a body
 is `422 invalid_request`, nothing sent. If an operator moves the number to
 another WABA mid-call, the next action names the new one and Meta may
 refuse it.
