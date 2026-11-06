@@ -12,11 +12,49 @@ concurrency:
 permissions:
   contents: read
 
+# `just ci` is `lint check test skills-check skills-ts doc features deny
+# test-live`. The jobs below run those recipes in parallel, each as
+# `just <recipe>` and nothing reconstructed; the last job, named `just ci`,
+# is the one required check and fails unless every other job succeeded.
+# crates/meta-whatsapp-rs/tests/ci_workflow.rs fails when the `just <recipe>`
+# steps stop covering the justfile's `ci` list, or that job stops needing
+# every other job. Keep `needs:` on one line and each recipe step as a bare
+# `- run: just <recipe>`: the test reads them line by line.
+
 jobs:
-  ci:
-    name: just ci
+  lint-and-docs:
+    name: lint, doc, features, deny
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 40
+    env:
+      # The workspace's test builds outgrew the runner's disk with full debug
+      # info ("No space left on device" linking the server's tests). Line
+      # tables keep file:line in panics and backtraces at a fraction of it.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    steps:
+      # Room for the build: drop toolchains this job never uses (about
+      # 20 GB of the runner's preinstalled .NET, Android SDK, GHC, CodeQL).
+      - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/checkout@v5
+      # Same pin as rust-toolchain.toml; bump both together.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just@1.58.0,cargo-deny@0.20.2
+      - run: just lint
+      - run: just doc
+      - run: just features
+      - run: just deny
+
+  test:
+    name: check, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     env:
       # The media conversion tests (crates/meta-whatsapp-rs/tests/ffmpeg.rs)
       # fail instead of skipping without the ffmpeg the step below installs.
@@ -31,10 +69,6 @@ jobs:
       # 20 GB of the runner's preinstalled .NET, Android SDK, GHC, CodeQL).
       - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
       - uses: actions/checkout@v5
-        with:
-          # `just skills-check` resolves the commits the consumer skills are
-          # stamped with: it needs the history, not a shallow clone.
-          fetch-depth: 0
       # Same pin as rust-toolchain.toml; bump both together.
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -43,7 +77,29 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: just@1.58.0,cargo-deny@0.20.2
+          tool: just@1.58.0
+      # An ffmpeg with libopus for the media conversion tests (roadmap L19),
+      # on this runner only: no image or dev container carries one.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: just check
+      - run: just test
+
+  skills:
+    name: skills-check, skills-ts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Room for the build: drop toolchains this job never uses (about
+      # 20 GB of the runner's preinstalled .NET, Android SDK, GHC, CodeQL).
+      - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/checkout@v5
+        with:
+          # `just skills-check` resolves the commits the consumer skills are
+          # stamped with: it needs the history, not a shallow clone.
+          fetch-depth: 0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just@1.58.0
       # `just skills-ts` type-checks the server skills' TypeScript with the
       # Node pinned in tools/skills-ts/.nvmrc (engine-strict in its .npmrc).
       # v5: the action itself runs on Node 24, like checkout@v5 (v4's Node
@@ -53,9 +109,53 @@ jobs:
           node-version-file: tools/skills-ts/.nvmrc
           cache: npm
           cache-dependency-path: tools/skills-ts/package-lock.json
-      # An ffmpeg with libopus for the media conversion tests (roadmap L19),
-      # on this runner only: no image or dev container carries one.
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-      # The project's own gate, nothing reconstructed. test-live brings up
-      # compose.test.yaml (Docker is available on ubuntu-latest).
-      - run: just ci
+      - run: just skills-check
+      - run: just skills-ts
+
+  test-live:
+    name: test-live
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # The workspace's test builds outgrew the runner's disk with full debug
+      # info ("No space left on device" linking the server's tests). Line
+      # tables keep file:line in panics and backtraces at a fraction of it.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
+    steps:
+      # Room for the build: drop toolchains this job never uses (about
+      # 20 GB of the runner's preinstalled .NET, Android SDK, GHC, CodeQL).
+      - run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/checkout@v5
+      # Same pin as rust-toolchain.toml; bump both together.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just@1.58.0
+      # test-live brings up compose.test.yaml (Docker is available on ubuntu-latest).
+      - run: just test-live
+
+  # The required check: its name is what branch protection and the merge flow
+  # read as "just ci". `if: always()` so a failed or cancelled job fails it
+  # instead of leaving it skipped (a skipped required check passes).
+  ci:
+    name: just ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [lint-and-docs, test, skills, test-live]
+    if: always()
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for r in $RESULTS; do
+            if [ "$r" != success ]; then
+              echo "a job did not succeed: $r"
+              exit 1
+            fi
+          done
