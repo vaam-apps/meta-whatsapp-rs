@@ -2448,6 +2448,7 @@ const GROUP_PHONE: &str = "+16315557777";
 const GROUP_WA_ID: &str = "16315558888";
 const GROUP_BSUID: &str = "US.4021998877665544";
 const GROUP_USERNAME: &str = "@group-member-for-the-logs";
+const GROUP_PICTURE_MARKER: &str = "GroupPictureBytesForTheLogs-4Tq8";
 
 /// The group routes (roadmap M5f), each exercised on the tenant's
 /// attached number: a creation asked and reported (Meta's event makes the
@@ -2511,6 +2512,17 @@ async fn groups(h: &Harness, admin: &str) -> Vec<String> {
         .call(call(Method::PATCH, &one).json(&json!({"description": "Jim's purchase options."})))
         .await;
     assert_eq!(changed.status.as_u16(), 204, "{}", changed.text);
+    // The picture (roadmap M5f2): a marker rides in the image's bytes.
+    h.graph.push_json(200, json!({"success": true}));
+    let picture = super::jpeg(192, 192, GROUP_PICTURE_MARKER.as_bytes());
+    let pictured = h
+        .call(call(Method::PUT, &format!("{one}/picture")).multipart(&[(
+            "file",
+            Some("group.jpg"),
+            &picture,
+        )]))
+        .await;
+    assert_eq!(pictured.status.as_u16(), 204, "{}", pictured.text);
     // The invite link: read, reset, reset again with the call cut.
     h.graph.push_json(
         200,
@@ -2658,6 +2670,7 @@ async fn groups(h: &Harness, admin: &str) -> Vec<String> {
         GROUP_WA_ID.to_owned(),
         GROUP_BSUID.to_owned(),
         GROUP_USERNAME.to_owned(),
+        GROUP_PICTURE_MARKER.to_owned(),
     ]
 }
 
@@ -3905,6 +3918,7 @@ fn check_group_audit(changes: &[&serde_json::Value]) {
         [
             ("group_creation_requested", "answered", 0, 0, 0),
             ("group_settings_updated", "answered", 0, 0, 0),
+            ("group_picture_set", "answered", 0, 0, 0),
             ("group_invite_link_reset", "answered", 0, 0, 0),
             ("group_invite_link_reset", "unknown", 0, 0, 0),
             ("group_participants_removed", "answered", 3, 0, 0),

@@ -233,6 +233,7 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         (Method::GET, "/v1/numbers/{pn}/groups/{group_id}"),
         (Method::PATCH, "/v1/numbers/{pn}/groups/{group_id}"),
         (Method::DELETE, "/v1/numbers/{pn}/groups/{group_id}"),
+        (Method::PUT, "/v1/numbers/{pn}/groups/{group_id}/picture"),
         (
             Method::GET,
             "/v1/numbers/{pn}/groups/{group_id}/invite-link",

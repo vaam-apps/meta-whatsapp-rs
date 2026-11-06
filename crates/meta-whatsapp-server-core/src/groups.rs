@@ -14,11 +14,13 @@
 //! | [`Groups::remove_participants`] | `DELETE /{group_id}/participants` |
 //! | [`Groups::join_requests`], [`Groups::approve_join_requests`], [`Groups::reject_join_requests`] | `GET`, `POST`, `DELETE /{group_id}/join_requests` |
 //! | [`Groups::analytics`] | `GET /{waba_id}/group_analytics` for the one group |
+//! | [`Groups::set_picture`] | `POST /{group_id}` as `multipart/form-data` (roadmap M5f2) |
 //!
 //! Pages: `groups/reference`, `groups/webhooks`, `analytics` (group
 //! analytics). Meta documents no call that makes the business leave a group
 //! other than deleting it (which removes every participant), and the
-//! library's pin, picture and add-participant calls are not offered here.
+//! library's pin and add-participant calls are not offered here; its picture
+//! call is ([`Groups::set_picture`], roadmap M5f2).
 //!
 //! **A group is the number's, or it does not exist** (the design's M5.2),
 //! and that is decided **before the tenant's token is opened** (D150): a
@@ -62,13 +64,14 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use meta_whatsapp_rs::Error;
 use meta_whatsapp_rs::client::analytics::{GroupAnalytics, GroupAnalyticsQuery, GroupMetric};
 use meta_whatsapp_rs::client::groups::{
     ApprovedJoinRequests, CreateGroup, DESCRIPTION_MAX_CHARS, GroupField, GroupInfo,
     GroupParticipant, GroupSettingsUpdate, JoinApprovalMode, JoinRequest, LIST_LIMIT_MAX,
-    ListGroups, ListJoinRequests, MAX_PARTICIPANTS_PER_REQUEST, RejectedJoinRequests,
-    SUBJECT_MAX_CHARS,
+    ListGroups, ListJoinRequests, MAX_PARTICIPANTS_PER_REQUEST, PICTURE_MAX_BYTES,
+    RejectedJoinRequests, SUBJECT_MAX_CHARS,
 };
 use meta_whatsapp_rs::core::GraphApiError;
 use meta_whatsapp_rs::core::clock::Clock;
@@ -84,10 +87,11 @@ use time::{Duration, OffsetDateTime};
 
 use crate::audit::{GroupFacts, Outcome, Subject, groups_audit};
 use crate::authz::{Authorizer, Caller, OwnedNumber, object_refused};
-use crate::error::{ServiceError, kind_code};
+use crate::error::{ErrorCode, ServiceError, kind_code};
 use crate::messages::is_e164;
 use crate::model::TenantId;
 use crate::observe::Observer;
+use crate::ratelimit::{Slot, Slots};
 
 /// The target of this module's log lines.
 const LOG_TARGET: &str = "meta_whatsapp_server::api::groups";
@@ -105,6 +109,7 @@ const INVITE_LINK_RESET: &str = "group_invite_link_reset";
 const PARTICIPANTS_REMOVED: &str = "group_participants_removed";
 const JOIN_REQUESTS_APPROVED: &str = "group_join_requests_approved";
 const JOIN_REQUESTS_REJECTED: &str = "group_join_requests_rejected";
+const PICTURE_SET: &str = "group_picture_set";
 
 /// Most join requests one approval or rejection names: the service's own
 /// bound (D154), Meta documents none.
@@ -823,6 +828,109 @@ pub struct AnalyticsPage {
     pub next_after: Option<String>,
 }
 
+// ─── A group's picture ───────────────────────────────────────────────────
+
+/// Smallest side of a group's picture, in pixels (Meta: "Minimum size:
+/// 192 x 192").
+pub const PICTURE_MIN_SIDE: u32 = 192;
+
+/// Most bytes a group's picture may be: the library's bound (5 MiB; Meta's
+/// page says "5MB"), what the upload reader holds at most.
+pub const PICTURE_MAX: u64 = PICTURE_MAX_BYTES as u64;
+
+/// A group's picture, checked before any request: a JPEG (its first bytes,
+/// not a claimed type) of at most [`PICTURE_MAX`] bytes whose frame header
+/// says it is square and at least [`PICTURE_MIN_SIDE`] pixels a side. Only
+/// the header is read; the service decodes no image, so a file that is a
+/// JPEG at its start and corrupt after it is Meta's to refuse. Its `Debug`
+/// shows no byte.
+#[derive(Clone)]
+pub struct Picture {
+    data: Bytes,
+}
+
+impl fmt::Debug for Picture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Picture")
+            .field("len", &self.data.len())
+            .finish()
+    }
+}
+
+impl Picture {
+    /// Check `data`.
+    ///
+    /// # Errors
+    ///
+    /// `413 media_too_large` over [`PICTURE_MAX`] bytes; `422
+    /// invalid_request` on `file` when it is empty, does not start as a
+    /// JPEG, has no readable frame header, or is not square or smaller than
+    /// [`PICTURE_MIN_SIDE`] a side.
+    pub fn new(data: Bytes) -> Result<Self, ServiceError> {
+        if data.len() > PICTURE_MAX_BYTES {
+            return Err(ServiceError::new(ErrorCode::MEDIA_TOO_LARGE));
+        }
+        // The SOI marker and the first segment's marker prefix.
+        if !data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            return Err(ServiceError::invalid("file"));
+        }
+        match jpeg_dimensions(&data) {
+            Some((width, height)) if width == height && width >= PICTURE_MIN_SIDE => {
+                Ok(Self { data })
+            }
+            _ => Err(ServiceError::invalid("file")),
+        }
+    }
+
+    /// The file.
+    pub fn data(&self) -> &Bytes {
+        &self.data
+    }
+}
+
+/// The frame header's `(width, height)` of a JPEG: the first start-of-frame
+/// segment, before any scan. `None` when there is none, the segments do not
+/// add up, or a side is `0` (defined later by a DNL segment, which is not
+/// read).
+fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    let be16 = |at: usize| -> Option<u32> {
+        Some(u32::from(*data.get(at)?) << 8 | u32::from(*data.get(at + 1)?))
+    };
+    let mut at = 2; // past the SOI marker
+    loop {
+        // A marker: 0xFF, any fill 0xFF, then its code.
+        if *data.get(at)? != 0xFF {
+            return None;
+        }
+        while *data.get(at)? == 0xFF {
+            at += 1;
+        }
+        let marker = *data.get(at)?;
+        at += 1;
+        match marker {
+            // Without a length: TEM, RSTn, SOI.
+            0x01 | 0xD0..=0xD8 => continue,
+            // The end, or a scan, before any frame header; a stuffed 0xFF.
+            0xD9 | 0xDA | 0x00 => return None,
+            _ => {}
+        }
+        let length = usize::try_from(be16(at)?).ok()?;
+        if length < 2 {
+            return None;
+        }
+        // SOF0..SOF15, but DHT (C4), JPG (C8) and DAC (CC).
+        if matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+            // length, precision, height, width.
+            if length < 8 {
+                return None;
+            }
+            let (height, width) = (be16(at + 3)?, be16(at + 5)?);
+            return (width > 0 && height > 0).then_some((width, height));
+        }
+        at = at.checked_add(length)?;
+    }
+}
+
 // ─── The operations ──────────────────────────────────────────────────────
 
 /// The group operations on a number of the caller's tenant: an
@@ -1153,6 +1261,46 @@ impl<'a> Groups<'a> {
         }
     }
 
+    /// Replace the group's picture with `picture` (checked by
+    /// [`Picture::new`]): `POST /{group_id}` as `multipart/form-data`.
+    /// Meta tells the outcome in a `group_settings_update` event. The
+    /// caller's audit event `group_picture_set`, which holds no byte of the
+    /// picture.
+    ///
+    /// # Errors
+    ///
+    /// Meta's refusal or failure (a timeout `may_have_been_sent`). Meta
+    /// refusing the picture itself is its code and the service's kind for
+    /// it, not `not_found`.
+    pub async fn set_picture(
+        &self,
+        group: &OwnedGroup,
+        picture: &Picture,
+    ) -> Result<(), ServiceError> {
+        match self.group(group)?.set_picture(picture.data().clone()).await {
+            Ok(()) => {
+                self.audit(PICTURE_SET, GroupFacts::default(), Outcome::Answered);
+                Ok(())
+            }
+            Err(error) => Err(self.change_failed(PICTURE_SET, 0, &error, false).await),
+        }
+    }
+
+    /// A transfer slot of the number's tenant's share of `transfers` (the
+    /// adapter's `WA_SERVER_MEDIA_CONCURRENCY` pool, the media routes'),
+    /// to be taken **before the picture's body is read**: the body is held
+    /// in memory, at most [`PICTURE_MAX`] bytes.
+    ///
+    /// # Errors
+    ///
+    /// `429 too_many_requests` (`Retry-After: 1`): the tenant's share, or
+    /// the pool, is taken.
+    pub fn transfer_slot(&self, transfers: &Slots) -> Result<Slot, ServiceError> {
+        transfers
+            .try_acquire(self.number.tenant())
+            .ok_or_else(|| ServiceError::too_many_requests(1))
+    }
+
     /// Delete the group, every participant removed, the business included:
     /// `DELETE /{group_id}`. The record is dropped when Meta's
     /// `group_lifecycle_update` says the group is gone. The caller's audit
@@ -1403,6 +1551,77 @@ mod tests {
 
     fn field(error: &ServiceError) -> String {
         error.field().unwrap_or("?").to_owned()
+    }
+
+    /// A JPEG's headers: SOI, `before` (segments), a frame header of
+    /// `marker` for `width` by `height`, and the end.
+    fn jpeg(marker: u8, width: u16, height: u16, before: &[u8]) -> Bytes {
+        let mut out = vec![0xFF, 0xD8];
+        out.extend(before);
+        out.extend([0xFF, marker, 0, 11, 8]);
+        out.extend(height.to_be_bytes());
+        out.extend(width.to_be_bytes());
+        out.extend([1, 1, 0x11, 0, 0xFF, 0xD9]);
+        Bytes::from(out)
+    }
+
+    /// A group's picture is a JPEG by its bytes, of at most 5 MiB, square,
+    /// and at least 192 a side: the frame header's side, whichever frame
+    /// type (baseline, progressive, ...), past other segments, fill bytes
+    /// and a DHT (whose marker `C4` is not a frame). Decisive: each clause
+    /// and the marker table.
+    #[test]
+    fn a_picture_is_a_square_jpeg_of_at_least_192_pixels() {
+        let dht = [0xFF, 0xC4, 0, 4, 0, 0];
+        let app = [0xFF, 0xE1, 0, 5, 1, 2, 3];
+        for marker in [0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC9, 0xCA, 0xCF] {
+            assert!(
+                Picture::new(jpeg(marker, 192, 192, &[])).is_ok(),
+                "{marker:#x}"
+            );
+        }
+        let mut with_fill = vec![0xFF, 0xFF];
+        with_fill.extend(app);
+        with_fill.extend(dht);
+        assert!(Picture::new(jpeg(0xC0, 3000, 3000, &with_fill)).is_ok());
+        // A DHT, a JPG extension and a DAC are no frame header.
+        for marker in [0xC4, 0xC8, 0xCC] {
+            assert!(
+                Picture::new(jpeg(marker, 192, 192, &[])).is_err(),
+                "{marker:#x}"
+            );
+        }
+        for (width, height) in [(192, 193), (193, 192), (191, 191), (0, 0), (192, 0)] {
+            let error = Picture::new(jpeg(0xC0, width, height, &[])).unwrap_err();
+            assert_eq!(field(&error), "file", "{width}x{height}");
+        }
+        // Not a JPEG at its start, or cut.
+        for bad in [
+            Bytes::new(),
+            Bytes::from_static(b"\x89PNG\r\n\x1a\n"),
+            Bytes::from_static(&[0xFF, 0xD8]),
+            Bytes::from_static(&[0xFF, 0xD8, 0xFF]),
+            Bytes::from_static(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 16, 1]),
+            // A length that runs past the file, and one under its own size.
+            Bytes::from_static(&[0xFF, 0xD8, 0xFF, 0xE0, 0xFF, 0xFF, 1, 2]),
+            Bytes::from_static(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 1, 0xFF, 0xC0]),
+            // A scan, or the end, before a frame header.
+            Bytes::from_static(&[0xFF, 0xD8, 0xFF, 0xDA, 0, 2]),
+            Bytes::from_static(&[0xFF, 0xD8, 0xFF, 0xD9]),
+        ] {
+            assert!(Picture::new(bad.clone()).is_err(), "{bad:?}");
+        }
+        // The bound is 5 MiB, in bytes: the size is judged first.
+        let mut big = jpeg(0xC0, 192, 192, &[]).to_vec();
+        big.resize(PICTURE_MAX_BYTES, 0);
+        assert!(Picture::new(Bytes::from(big.clone())).is_ok());
+        big.push(0);
+        let error = Picture::new(Bytes::from(big)).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::MEDIA_TOO_LARGE.as_str());
+        assert_eq!(
+            format!("{:?}", Picture::new(jpeg(0xC0, 192, 192, &[])).unwrap()),
+            "Picture { len: 17 }"
+        );
     }
 
     /// A group's subject is 1 to 128 characters once trimmed, its
