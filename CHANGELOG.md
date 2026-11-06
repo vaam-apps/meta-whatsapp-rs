@@ -16,7 +16,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
 - The service's conversation routing (`meta_whatsapp_server_core::routing`,
   `meta_whatsapp_server_api_axum::api::routing`; design D220 to D225, the
-  implementer's proposals, not yet decided): a new scope, `routing`, and four
+  coordinator's decisions of 2026-11-06, swappable): a new scope, `routing`, and four
   routes under `/v1/numbers/{pn}` over the library's `client::thread_control`:
   `GET …/routing-roles` (the roles the business holds and its standby grant)
   and `POST …/thread-control/pass`, `…/take` and `…/release`. The user is

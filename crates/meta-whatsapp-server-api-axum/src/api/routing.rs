@@ -34,7 +34,7 @@ use crate::state::Grant;
 /// The user whose thread an action acts on: exactly one of a phone
 /// number, a `wa_id` and a business-scoped user id (BSUID, Meta's
 /// preferred identifier).
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(as = ThreadUser)]
 pub struct UserBody {
@@ -58,7 +58,7 @@ impl From<UserBody> for Person {
 }
 
 /// Pass the thread with a user to another responder.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(as = PassThreadRequest)]
 pub struct PassBody {
@@ -76,7 +76,7 @@ pub struct PassBody {
 }
 
 /// Take the thread with a user (the escalation partner only).
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(as = TakeThreadRequest)]
 pub struct TakeBody {
@@ -89,7 +89,7 @@ pub struct TakeBody {
 }
 
 /// Release the thread with a user to idle.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 #[schema(as = ReleaseThreadRequest)]
 pub struct ReleaseBody {
@@ -136,6 +136,19 @@ impl From<domain::Roles> for RolesView {
         }
     }
 }
+
+/// The bodies name a person and free text: their `Debug` shows neither
+/// (as `Person`'s does not).
+macro_rules! redacted_debug {
+    ($($body:ident),*) => {$(
+        impl std::fmt::Debug for $body {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct(stringify!($body)).finish_non_exhaustive()
+            }
+        }
+    )*};
+}
+redacted_debug!(UserBody, PassBody, TakeBody, ReleaseBody);
 
 fn routing<'a>(
     state: &'a Grant,
@@ -380,5 +393,16 @@ mod tests {
             assert_eq!(pass(body.clone()).unwrap_err().field(), Some(field));
         }
         assert!(parse::<ReleaseBody>(json!({"user": {"wa_id": "1"}, "metadata": "m"})).is_err());
+        let shown = format!(
+            "{:?}",
+            parse::<PassBody>(
+                json!({"user": {"phone": "+16505551234"}, "metadata": "SECRET-NOTE"})
+            )
+            .unwrap()
+        );
+        assert!(
+            !shown.contains("16505551234") && !shown.contains("SECRET-NOTE"),
+            "{shown}"
+        );
     }
 }

@@ -1080,8 +1080,8 @@ owner's confirmation before the first release**). A key minted before M5l
 does not carry it, and neither `send` nor `inbox` grants it: a pass, a take
 and a release hand a customer's conversation to another responder, so mint
 a key for these routes on purpose. Each route is one of the library's
-thread control calls, made with the WABA's token (design D220–D225 are the
-implementer's proposals, not yet decided).
+thread control calls, made with the WABA's token (design D220–D225, decided by the
+coordinator on 2026-11-06 under the owner's delegation, each swappable).
 
 | Route | Does |
 | --- | --- |
@@ -1103,8 +1103,8 @@ nothing:
 - **The user is named one way** (D222): `user` holds exactly one of
   `phone` (E.164 with its `+`), `wa_id` (digits) and `user_id` (a
   business-scoped user id, Meta's preferred identifier; a parent BSUID is
-  refused). Never key a person by phone number alone: use `user_id` when
-  you have it. A group is refused.
+  refused). Prefer `user_id`, first, and never key a person by phone number alone;
+  nothing is stored keyed by the user. A group is refused.
 - **A pass names a role, never an app.** `target_role` is one of `ai_agent`,
   `ctwa`, `customer_service`, `escalation`, `marketing`, `utility` (spelled
   so; anything else is `422 target_role`); without it the pass goes to the

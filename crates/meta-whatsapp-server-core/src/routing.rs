@@ -461,7 +461,26 @@ mod tests {
     #[test]
     fn a_pass_targets_one_of_the_six_roles_or_none() {
         assert_eq!(pass_of(None, None).unwrap(), Pass::to_escalation_partner());
-        for role in TARGET_ROLES {
+        // The list is pinned by value, not by itself: the page's six.
+        assert_eq!(
+            TARGET_ROLES,
+            [
+                "ai_agent",
+                "ctwa",
+                "customer_service",
+                "escalation",
+                "marketing",
+                "utility"
+            ]
+        );
+        for role in [
+            "ai_agent",
+            "ctwa",
+            "customer_service",
+            "escalation",
+            "marketing",
+            "utility",
+        ] {
             let pass = pass_of(Some(role.to_owned()), None).unwrap();
             assert_eq!(
                 pass.target_role.as_ref().map(TargetRole::as_str),

@@ -6883,14 +6883,14 @@ or WABA fails the family's own cross-tenant test).
     (`tests/authz.rs`), M1.5 (`tests/errors.rs`), M1.7's capture
     (`tests/common/capture.rs`, section `routing`). The OpenAPI document
     is additive only (4 operations, 6 schemas, the scope and the tag).
-  - **Decided:** nothing yet. The implementer's proposals, D220 to D225
-    in the design's section 10 (the scope, the audit events and Meta's
-    texts, a role and never an app, the keys, the record in the inbox,
-    the routes' shape), await the coordinator. Pending the owner's
-    confirmation before the first release: the scope `routing`, the four
-    operation ids (`get_routing_roles`, `pass_thread`, `take_thread`,
-    `release_thread`), the three audit actions, the paths and the schema
-    names; no new setting or error code; no legal act.
+  - **Decided** (coordinator, 2026-11-06, under the owner's delegation,
+    all swappable): D220 to D225 in the design's section 10 (the scope,
+    the audit events and Meta's texts, a role and never an app, the keys,
+    the record in the inbox left to M5l2, the routes' shape). Pending the
+    owner's confirmation before the first release: the scope `routing`,
+    the four operation ids (`get_routing_roles`, `pass_thread`,
+    `take_thread`, `release_thread`), the three audit actions, the paths
+    and the schema names; no new setting or error code; no legal act.
   - **Not done here:** the caller's own pass, take and release are not
     recorded in the inbox's thread owner state (M5l2, D224); no call
     reports who owns a thread (Meta offers none); no call of these routes

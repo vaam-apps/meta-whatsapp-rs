@@ -460,3 +460,73 @@ async fn another_tenants_number_is_not_found_before_the_vault() {
     assert_eq!(h.kv.vault_reads(), reads, "the vault was not read");
     assert_eq!(h.graph.requests().len(), 0);
 }
+
+/// A key is one request: the same key and the same body as another action
+/// (a pass, then a take) or on another number of the same tenant is
+/// `422 idempotency_key_reused` with nothing sent, never the first answer.
+/// Decisive: the `Fingerprint::*_thread` each handler picks, and the
+/// number it gives.
+#[tokio::test]
+async fn a_key_is_never_shared_between_actions_or_numbers() {
+    const PN2: &str = "106540352242923";
+    let h = Harness::new();
+    h.tenant(TENANT).await;
+    h.connect(TENANT, WABA, &[PN, PN2], TOKEN).await;
+    let key = h.tenant_key(TENANT, &[Scope::Routing]).await;
+    let body = json!({"user": {"user_id": BSUID}});
+    let on = |pn: &str, action: &str| {
+        Call::new(
+            Method::POST,
+            format!("/v1/numbers/{pn}/thread-control/{action}"),
+        )
+        .key(&key)
+        .header("idempotency-key", "shared")
+        .json(&body)
+    };
+    h.graph.push_json(200, accepted());
+    assert_eq!(h.call(on(PN, "take")).await.status, StatusCode::OK);
+    for (pn, action) in [(PN, "pass"), (PN, "release"), (PN2, "take")] {
+        let reply = h.call(on(pn, action)).await;
+        assert_eq!(
+            (reply.status, error(&reply)["code"].clone()),
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!("idempotency_key_reused")
+            ),
+            "{pn} {action}: {}",
+            reply.text
+        );
+    }
+    // Each handler's own fingerprint: the key is free again for each
+    // other action once it was used by that one alone.
+    for action in ["pass", "release"] {
+        let h = Harness::new();
+        h.tenant(TENANT).await;
+        h.connect(TENANT, WABA, &[PN], TOKEN).await;
+        let key = h.tenant_key(TENANT, &[Scope::Routing]).await;
+        h.graph.push_json(200, accepted());
+        let first = h
+            .call(
+                post(action, &key)
+                    .header("idempotency-key", "k")
+                    .json(&body),
+            )
+            .await;
+        assert_eq!(first.status, StatusCode::OK, "{}", first.text);
+        let take = h
+            .call(
+                post("take", &key)
+                    .header("idempotency-key", "k")
+                    .json(&body),
+            )
+            .await;
+        assert_eq!(
+            error(&take)["code"],
+            "idempotency_key_reused",
+            "{action}: {}",
+            take.text
+        );
+        assert_eq!(h.graph.requests().len(), 1);
+    }
+    assert_eq!(h.graph.requests().len(), 1);
+}
