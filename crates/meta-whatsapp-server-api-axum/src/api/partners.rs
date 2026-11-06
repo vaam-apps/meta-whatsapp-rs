@@ -71,12 +71,15 @@ pub(crate) struct LegalActsOn;
 impl FromRequestParts<Grant> for LegalActsOn {
     type Rejection = ApiError;
 
-    async fn from_request_parts(_: &mut Parts, state: &Grant) -> Result<Self, ApiError> {
-        if state.settings().legal_acts {
+    fn from_request_parts(
+        _: &mut Parts,
+        state: &Grant,
+    ) -> impl Future<Output = Result<Self, ApiError>> + Send {
+        std::future::ready(if state.settings().legal_acts {
             Ok(Self)
         } else {
             Err(ApiError::new(ErrorCode::FEATURE_NOT_AVAILABLE))
-        }
+        })
     }
 }
 
