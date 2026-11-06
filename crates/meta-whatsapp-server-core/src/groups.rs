@@ -1596,6 +1596,9 @@ mod tests {
             assert_eq!(field(&error), "file", "{width}x{height}");
         }
         // Not a JPEG at its start, or cut.
+        let mut unsigned = vec![0x42, 0x42];
+        unsigned.extend(&jpeg(0xC0, 512, 512, &[])[2..]);
+        assert!(Picture::new(Bytes::from(unsigned)).is_err(), "no signature");
         for bad in [
             Bytes::new(),
             Bytes::from_static(b"\x89PNG\r\n\x1a\n"),

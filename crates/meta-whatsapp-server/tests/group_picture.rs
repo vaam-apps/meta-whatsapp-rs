@@ -120,7 +120,11 @@ async fn a_file_that_is_not_a_square_jpeg_of_192_pixels_is_refused_with_no_reque
     no_frame.extend([0xFF, 0xD9]);
     let mut cut = jpeg(512, 512, b"");
     cut.truncate(24); // inside the frame header, before its sides
-    let refused: [(&str, Vec<u8>); 8] = [
+    // A frame header at the right place, behind no JPEG signature.
+    let mut unsigned = vec![0x42, 0x42];
+    unsigned.extend(&jpeg(512, 512, b"")[2..]);
+    let refused: [(&str, Vec<u8>); 9] = [
+        ("no signature", unsigned),
         ("a PNG", common::SAMPLE_PNG.to_vec()),
         ("empty", Vec::new()),
         ("wider than tall", jpeg(512, 256, b"")),
