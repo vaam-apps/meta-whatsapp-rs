@@ -48,9 +48,9 @@ The operator's, all with an admin key:
 
 | Route | Does |
 | --- | --- |
-| `POST /v1/admin/partners/business-verifications` | submit documents for a customer business; a legal act |
+| `POST /v1/admin/partners/business-verifications` | submit documents for a customer business; an `Idempotency-Key`; a legal act |
 | `GET /v1/admin/partners/business-verifications` | the submissions made |
-| `POST /v1/admin/partners/solutions` | create a solution |
+| `POST /v1/admin/partners/solutions` | create a solution; an `Idempotency-Key` |
 | `GET /v1/admin/partners/solutions/{id}` | read one with its owner, permissions and partners |
 | `POST /v1/admin/partners/solutions/{id}/accept` | accept it; a legal act that cannot be undone |
 | `POST /v1/admin/partners/solutions/{id}/reject` | decline it; a legal act, permanent |
@@ -110,11 +110,17 @@ when it is `ACCEPTED`. The read answers only an intent that names your WABA.
 
 A submission carries one to three documents (PDF, JPEG or PNG, 5 MiB each,
 base64 in the body), checked before any request; Meta counts three per
-customer, so it is **never repeated after a timeout** (list the submissions
-first). Meta's decision arrives as an account update event.
+customer, so the service never repeats one itself after a timeout. Send an
+`Idempotency-Key` (scoped to your admin key) per submission you mean to
+make: repeating the request with the same key and body gets the first answer,
+`504` included, and Meta is not asked again; the same key with other
+documents is `422 idempotency_key_reused`. Creating a solution takes one too.
+Without a key, list the submissions before submitting again. Meta's decision
+arrives as an account update event.
 
 ```ts
   const { data, error } = await admin.POST("/v1/admin/partners/business-verifications", {
+    params: { header: { "Idempotency-Key": reference } },
     body: { client_business_id: customerBusinessId, documents },
   });
 ```

@@ -421,7 +421,9 @@ async fn every_rate_limited_operation_declares_its_429() {
 /// Account application; since roadmap M5h a marketing send, a template
 /// duplicate and a welcome message sequence; since roadmap M5e the call a
 /// business places; since roadmap M5l a thread's pass, take and release;
-/// since roadmap M5j a solution migration intent and a billing migration),
+/// since roadmap M5j a solution migration intent and a billing migration;
+/// since roadmap M5j2 the operator's business verification submission and
+/// solution creation, scoped to the admin key),
 /// and the upload is a multipart form.
 #[test]
 fn idempotent_operations_declare_their_key() {
@@ -441,6 +443,8 @@ fn idempotent_operations_declare_their_key() {
     assert_eq!(
         declaring.into_iter().collect::<Vec<_>>(),
         [
+            "POST /v1/admin/partners/business-verifications",
+            "POST /v1/admin/partners/solutions",
             "POST /v1/numbers/{pn}/blocked-users",
             "POST /v1/numbers/{pn}/blocked-users/unblock",
             "POST /v1/numbers/{pn}/calls",

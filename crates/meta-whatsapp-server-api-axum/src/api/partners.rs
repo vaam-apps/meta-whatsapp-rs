@@ -8,8 +8,8 @@
 //!
 //! | Route | Graph call |
 //! | --- | --- |
-//! | `POST`, `GET /v1/admin/partners/business-verifications` | `POST /{business}/self_certify_whatsapp_business` (**legal act**), `GET /{business}/self_certified_whatsapp_business_submissions` |
-//! | `POST`, `GET /v1/admin/partners/solutions` | `POST /{app}/whatsapp_business_solution`, `GET /{app}/whatsapp_business_solutions` |
+//! | `POST`, `GET /v1/admin/partners/business-verifications` | `POST /{business}/self_certify_whatsapp_business` (**legal act**, takes an `Idempotency-Key` scoped to the admin key: roadmap M5j2), `GET /{business}/self_certified_whatsapp_business_submissions` |
+//! | `POST`, `GET /v1/admin/partners/solutions` | `POST /{app}/whatsapp_business_solution` (takes an `Idempotency-Key`, as above), `GET /{app}/whatsapp_business_solutions` |
 //! | `GET /v1/admin/partners/solutions/{id}`, `…/partners` | `GET /{solution}`, `GET /{solution}/partners` |
 //! | `GET /v1/admin/partners/client-businesses` | `GET /{app}/connected_client_businesses` |
 //! | `POST /v1/admin/partners/solutions/{id}/accept`, `…/reject` | `POST /{solution}/accept` (**legal act**), `…/reject` (**legal act**) |
@@ -41,8 +41,9 @@ use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::partners::{
     AssignedWabaView, BillingMigrationView, BusinessVerificationView, ClientBusinessView,
-    DocumentInput, MigrationIntentView, NewSolution, Paged, SolutionPartnerView, SolutionQuery,
-    SolutionView, SubmissionQuery, SubmissionView, VerificationReceipt, VerificationRequest,
+    DocumentInput, MigrationIntentView, NewSolution, Paged, Partners, SolutionPartnerView,
+    SolutionQuery, SolutionView, SubmissionQuery, SubmissionView, VerificationReceipt,
+    VerificationRequest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -50,7 +51,7 @@ use utoipa::ToSchema;
 
 use super::common::ApiJson;
 use super::templates::ApiQuery;
-use crate::auth::{AdminCaller, Caller, OwnedWaba};
+use crate::auth::{AdminCaller, Authorizer, Caller, OwnedWaba};
 use crate::error::{ApiError, ErrorBody, ErrorCode};
 use crate::idempotency::{Fingerprint, KeyHeader, Success};
 use crate::state::Grant;
@@ -521,54 +522,81 @@ pub struct CreateBillingMigrationBody {
 
 // ─── The operator's routes ───────────────────────────────────────────────
 
+/// The verification submission as the operation a key keeps: the receipt,
+/// never the request.
+async fn submit_verification(
+    service: &Partners<'_>,
+    authz: &Authorizer,
+    request: VerificationRequest,
+) -> Result<Success, ApiError> {
+    let receipt = service.submit_business_verification(authz, request).await?;
+    Success::json(StatusCode::CREATED, &ReceiptBody::from(receipt))
+}
+
 /// `POST /v1/admin/partners/business-verifications`: submit a customer
 /// business for partner-led verification, with its documents. **A legal
 /// act** (a statement of the business's legal identity): off until the
 /// deployment sets `WA_SERVER_LEGAL_ACTS=on`. Each submission counts
-/// towards the customer's three, so it is never replayed.
+/// towards the customer's three, so it is never replayed; it takes an
+/// `Idempotency-Key`, scoped to the admin key, so that a client's retry
+/// after a `504` is not a second submission.
 #[utoipa::path(
     post,
     path = "/v1/admin/partners/business-verifications",
     tag = "partners",
     security(("api_key" = [])),
+    params(
+        ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the admin key: the same key and body never submit twice. The answer is kept, never the documents"),
+    ),
     request_body = SubmitBody,
     responses(
         (status = 201, description = "Meta received it; audited `business_verification_submitted` (by count: never a document). The outcome comes by the `account_update` webhook", body = ReceiptBody),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta) or `forbidden` (not an admin key)", body = ErrorBody),
-        (status = 409, description = "`signup_not_configured`: no partner business (`WA_PARTNER_BUSINESS_ID`)", body = ErrorBody),
+        (status = 409, description = "`signup_not_configured`: no partner business (`WA_PARTNER_BUSINESS_ID`); `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
         (status = 413, description = "`payload_too_large`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `client_business_id`, `documents` (one to three, PDF, JPEG or PNG, 5 MiB each, content of the type its name says) or `body`: nothing was sent", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `client_business_id`, `documents` (one to three, PDF, JPEG or PNG, 5 MiB each, content of the type its name says), `body` or `Idempotency-Key`: nothing was sent; `idempotency_key_reused`", body = ErrorBody),
         (status = 502, description = "Meta refused or failed: see `may_have_been_sent`", body = ErrorBody),
-        (status = 504, description = "`timeout`: list the submissions before submitting again", body = ErrorBody),
+        (status = 504, description = "`timeout`: list the submissions before submitting again, or repeat the request with the same `Idempotency-Key` for this answer", body = ErrorBody),
     )
 )]
 pub(crate) async fn submit_business_verification(
     State(state): State<Grant>,
     admin: AdminCaller,
     _gate: LegalActsOn,
-    ApiJson(body): ApiJson<SubmitBody>,
-) -> Result<(StatusCode, Json<ReceiptBody>), ApiError> {
-    let receipt = state
+    KeyHeader(key): KeyHeader,
+    ApiJson(body): ApiJson<Value>,
+) -> Response {
+    let fingerprint = Fingerprint::submit_business_verification(&body);
+    let Ok(body) = serde_json::from_value::<SubmitBody>(body) else {
+        return ApiError::invalid("body").into_response();
+    };
+    let service = match state
         .signups()
-        .partners(state.authz(), &admin, state.settings().legal_acts)?
-        .observed_by(state.metrics())
-        .submit_business_verification(
-            state.authz(),
-            VerificationRequest {
-                client_business_id: body.client_business_id,
-                documents: body
-                    .documents
-                    .into_iter()
-                    .map(|document| DocumentInput {
-                        file_name: document.file_name,
-                        content_base64: document.content_base64,
-                    })
-                    .collect(),
-            },
+        .partners(state.authz(), &admin, state.settings().legal_acts)
+    {
+        Ok(service) => service.observed_by(state.metrics()),
+        Err(error) => return ApiError::from(error).into_response(),
+    };
+    let request = VerificationRequest {
+        client_business_id: body.client_business_id,
+        documents: body
+            .documents
+            .into_iter()
+            .map(|document| DocumentInput {
+                file_name: document.file_name,
+                content_base64: document.content_base64,
+            })
+            .collect(),
+    };
+    state
+        .idempotent_admin(
+            &admin,
+            key,
+            fingerprint,
+            submit_verification(&service, state.authz(), request),
         )
-        .await?;
-    Ok((StatusCode::CREATED, Json(receipt.into())))
+        .await
 }
 
 /// `GET /v1/admin/partners/business-verifications`: one page of the
@@ -609,48 +637,71 @@ pub(crate) async fn list_business_verifications(
     Ok(Json(SubmissionList { data, next_cursor }))
 }
 
+/// The solution creation as the operation a key keeps.
+async fn create_solution(
+    service: &Partners<'_>,
+    authz: &Authorizer,
+    solution: NewSolution,
+) -> Result<Success, ApiError> {
+    let solution_id = service.create_solution(authz, solution).await?;
+    Success::json(StatusCode::CREATED, &CreatedSolutionBody { solution_id })
+}
+
 /// `POST /v1/admin/partners/solutions`: create a Multi-Partner Solution
 /// owned by the deployment's app, inviting another. Not a legal act (it
-/// binds nobody until the partner accepts); audited, never replayed.
+/// binds nobody until the partner accepts); audited, never replayed; it
+/// takes an `Idempotency-Key`, scoped to the admin key, so that a retry
+/// does not invite the partner twice.
 #[utoipa::path(
     post,
     path = "/v1/admin/partners/solutions",
     tag = "partners",
     security(("api_key" = [])),
+    params(
+        ("Idempotency-Key" = Option<String>, Header, description = "1 to 255 visible ASCII characters, scoped to the admin key: the same key and body never create twice"),
+    ),
     request_body = CreateSolutionBody,
     responses(
         (status = 201, description = "Created `INITIATED`; audited `partner_solution_created`", body = CreatedSolutionBody),
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden`: not an admin key", body = ErrorBody),
-        (status = 409, description = "`signup_not_configured`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` on `name`, `partner_app_id`, `owner_permissions`, `partner_permissions` or `body`: nothing was sent", body = ErrorBody),
+        (status = 409, description = "`signup_not_configured`; `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
+        (status = 422, description = "`invalid_request` on `name`, `partner_app_id`, `owner_permissions`, `partner_permissions`, `body` or `Idempotency-Key`: nothing was sent; `idempotency_key_reused`", body = ErrorBody),
         (status = 502, description = "Meta refused or failed: see `may_have_been_sent`", body = ErrorBody),
-        (status = 504, description = "`timeout`: list the solutions before creating again", body = ErrorBody),
+        (status = 504, description = "`timeout`: list the solutions before creating again, or repeat the request with the same `Idempotency-Key` for this answer", body = ErrorBody),
     )
 )]
 pub(crate) async fn create_partner_solution(
     State(state): State<Grant>,
     admin: AdminCaller,
-    ApiJson(body): ApiJson<CreateSolutionBody>,
-) -> Result<(StatusCode, Json<CreatedSolutionBody>), ApiError> {
-    let solution_id = state
+    KeyHeader(key): KeyHeader,
+    ApiJson(body): ApiJson<Value>,
+) -> Response {
+    let fingerprint = Fingerprint::create_partner_solution(&body);
+    let Ok(body) = serde_json::from_value::<CreateSolutionBody>(body) else {
+        return ApiError::invalid("body").into_response();
+    };
+    let service = match state
         .signups()
-        .partners(state.authz(), &admin, state.settings().legal_acts)?
-        .observed_by(state.metrics())
-        .create_solution(
-            state.authz(),
-            NewSolution {
-                name: body.name,
-                partner_app_id: body.partner_app_id,
-                owner_permissions: body.owner_permissions,
-                partner_permissions: body.partner_permissions,
-            },
+        .partners(state.authz(), &admin, state.settings().legal_acts)
+    {
+        Ok(service) => service.observed_by(state.metrics()),
+        Err(error) => return ApiError::from(error).into_response(),
+    };
+    let solution = NewSolution {
+        name: body.name,
+        partner_app_id: body.partner_app_id,
+        owner_permissions: body.owner_permissions,
+        partner_permissions: body.partner_permissions,
+    };
+    state
+        .idempotent_admin(
+            &admin,
+            key,
+            fingerprint,
+            create_solution(&service, state.authz(), solution),
         )
-        .await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(CreatedSolutionBody { solution_id }),
-    ))
+        .await
 }
 
 /// `GET /v1/admin/partners/solutions`: one page of the deployment's

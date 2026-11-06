@@ -7139,13 +7139,28 @@ or WABA fails the family's own cross-tenant test).
     `number_settings::is_legal_admin_act`, with M5h's agreement. Not offered: the solution token (a
     credential: never in an answer), moving a number between partners
     (Meta: unsupported on the new account model), and a WABA's solutions.
-- [ ] **M5j2. Idempotency on the operator's creating POSTs** (design D255).
+- [x] **M5j2. Idempotency on the operator's creating POSTs** (design D255).
   - **After:** M5j.
   - **Decisive:** the same `Idempotency-Key` and body on a business
     verification submission, after a `504`, is one request to Meta (a
     submission is capped at three per customer, so a client's retry can
     burn one); a different body with the key is `idempotency_key_reused`.
     Starts with the verification submission and the solution creation.
+  - **Landed** (*PR number to be added when it lands*): both routes take an
+    optional `Idempotency-Key`, scoped to the admin key (records under
+    `admin/<key id>`, a name no tenant id can spell; the core's
+    `idempotency::run_admin`, `Grant::idempotent_admin` over HTTP), the
+    fingerprint the operation and the canonical body, the answer kept and
+    never the request (no document), the gate answered before the key
+    (D290 to D294, implementer's proposals). Postgres migration 10 drops
+    the records' foreign key to the tenants, which an admin key's scope
+    has no row for. Decisive: `a_submission_retried_after_a_504_is_one_request_to_meta`,
+    `a_solution_creation_retried_after_a_504_is_one_request_to_meta`,
+    `an_admin_keys_records_are_neither_a_tenants_nor_another_admin_keys`.
+    Not keyed, with the reasons in D292: accept and reject (a state Meta
+    refuses to change twice), the deactivation calls, the max-price
+    agreement (its body carries a token); the hosted claim and the pool's
+    `request-code` are left to a follow-up.
 - [ ] **M5k. The bot and broadcast APIs** (rows 17, 85–92), over B1–B4.
   - **After:** B1, B2, B2b (the replicas' shared budget), B3, B4.
   - **Decisive:** M5.1, M5.2; a broadcast over HTTP never exceeds its

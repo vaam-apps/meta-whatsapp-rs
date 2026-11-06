@@ -93,6 +93,12 @@ const MIGRATION_FILES: &[(i64, &str, &str)] = &[
         "webhooks out",
         include_str!("../migrations/0009_webhooks_out.sql"),
     ),
+    // Roadmap M5j2: an operator's idempotency keys.
+    (
+        10,
+        "admin idempotency",
+        include_str!("../migrations/0010_admin_idempotency.sql"),
+    ),
 ];
 
 /// The advisory lock a housekeeping round runs under: the key of the
@@ -504,7 +510,14 @@ impl RecordStore for PgStore {
         if has_wabas.is_some() {
             return Ok(DeleteTenantOutcome::HasWabas);
         }
-        // Keys, idempotency records and events go with it (ON DELETE
+        // Its idempotency records go with it, by hand: since migration 10
+        // they have no foreign key (an operator's records have no tenant).
+        sqlx::query("DELETE FROM wa_server_idempotency WHERE tenant_id = $1")
+            .bind(id.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(backend)?;
+        // Keys and events go with it (ON DELETE
         // CASCADE), and the tombstones of the WABAs it was unbound from
         // forget it (ON DELETE SET NULL: a tenant created again under its
         // id is another tenant to them, roadmap S2b); its event stream
@@ -1446,7 +1459,7 @@ mod tests {
     /// `(version, SHA-384 hex)` of every service migration, as sqlx records
     /// it. A new migration adds a line; an existing line never changes (an
     /// edited migration makes `migrate` refuse every database it ran on).
-    const PINNED_CHECKSUMS: [(i64, &str); 9] = [
+    const PINNED_CHECKSUMS: [(i64, &str); 10] = [
         (
             1,
             "4d1c5a2555461deec494d1d0f8a6be354e0f092115ee74abdc6e270670a441d3856222ca2ade7598a98e62dc80075a47",
@@ -1483,6 +1496,10 @@ mod tests {
             9,
             "0d605fa295b385137f0d6fab20501615e8621c011abadb6dfc8a16608938232351950318861db7ad5fa7ee9094650a89",
         ),
+        (
+            10,
+            "b155e8d925fa0d3f0099bb7a491945033cebbe0b402b977cac03975e3a4750762e984faf83ea1fcc3488e25f2a7ad9e3",
+        ),
     ];
 
     #[test]
@@ -1517,7 +1534,8 @@ mod tests {
                 "signup",
                 "received media",
                 "erasure",
-                "webhooks out"
+                "webhooks out",
+                "admin idempotency"
             ]
         );
         // `\x77` is `w`: spelled so that a search-and-replace of the table

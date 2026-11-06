@@ -39,6 +39,24 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   `number_settings::is_legal_admin_act`, the audit actions; the names are
   pending the owner's confirmation before the first release.
 
+### Added (roadmap M5j2)
+
+- **Idempotency on the operator's creating POSTs** (roadmap M5j2, design
+  D255 done, D290 to D294, implementer's proposals): the business
+  verification submission (`POST /v1/admin/partners/business-verifications`)
+  and the solution creation (`POST /v1/admin/partners/solutions`) take an
+  optional `Idempotency-Key`, scoped to the **admin key** (records under
+  `admin/<key id>`, a name no tenant can be given; never visible to a
+  tenant's key or to another admin key): the same key and body after a
+  `504` is one request to Meta, another body is `422
+  idempotency_key_reused`. The record keeps the answer, never the request
+  (no document), and the gate answers before the key. `idempotency::run_admin`
+  in the core, `Grant::idempotent_admin` over HTTP. Postgres migration 10
+  (`admin idempotency`) drops the records' foreign key to the tenants (the
+  backend deletes a tenant's records itself); the namespace and the
+  migration are pending the owner's confirmation before the first release.
+  The OpenAPI change is additive (the header parameter on two routes).
+
 ### Added (roadmap M5j)
 
 - **Partner APIs, in the service** (roadmap M5j, parity rows 143 to 147

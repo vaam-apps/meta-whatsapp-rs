@@ -8,7 +8,10 @@
 //!
 //! Sends, media uploads, template creation, inbox replies and marking a
 //! conversation read take an optional `Idempotency-Key` header (OTP issue
-//! will, with its route). The key is **scoped to the tenant**. A request carrying one
+//! will, with its route; since roadmap M5j2 the operator's business
+//! verification submission and solution creation too, [`Grant::idempotent_admin`],
+//! **scoped to the admin key** in a namespace no tenant can be given). The
+//! key is **scoped to the tenant**. A request carrying one
 //! claims it with the SHA-256 of its operation and its canonical input
 //! ([`Fingerprint`]: the number or WABA the path names, decoded, and the
 //! body; never the path's spelling, since roadmap S6), a lease of twice
@@ -29,11 +32,12 @@ use meta_whatsapp_rs::webhooks::axum::extract::FromRequestParts;
 use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
 use meta_whatsapp_rs::webhooks::axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
+use meta_whatsapp_server_core::error::ServiceError;
 pub use meta_whatsapp_server_core::idempotency::Fingerprint;
 use meta_whatsapp_server_core::idempotency::{self as engine, Answer, Keeper};
 use serde::Serialize;
 
-use crate::auth::Caller;
+use crate::auth::{AdminCaller, Caller};
 use crate::error::{ApiError, CODES, ErrorCodeTag, error_body_bytes};
 use crate::model::IdempotencyKey;
 use crate::state::{AppState, Grant};
@@ -191,21 +195,65 @@ pub(crate) async fn run(
     fingerprint: Fingerprint,
     operation: impl Future<Output = Result<Success, ApiError>>,
 ) -> Response {
+    let ran = engine::run(
+        &keeper(state),
+        state.authz(),
+        caller,
+        key,
+        &fingerprint,
+        answering(operation),
+    )
+    .await;
+    answered(ran)
+}
+
+/// [`run`] for an operator (roadmap M5j2): `operation` for the admin key
+/// `admin` under `key`, in the records of that key's own namespace (the
+/// core's [`engine::run_admin`]), which no tenant's can be. Crate-private
+/// like [`run`].
+pub(crate) async fn run_admin(
+    state: &AppState,
+    admin: &AdminCaller,
+    key: Option<IdempotencyKey>,
+    fingerprint: Fingerprint,
+    operation: impl Future<Output = Result<Success, ApiError>>,
+) -> Response {
+    let ran = engine::run_admin(
+        &keeper(state),
+        state.authz(),
+        admin,
+        key,
+        &fingerprint,
+        answering(operation),
+    )
+    .await;
+    answered(ran)
+}
+
+/// The state's own records, lease, expiry, error body and metrics.
+fn keeper(state: &AppState) -> Keeper<'_> {
     let settings = state.settings();
-    let keeper = Keeper::new(
+    Keeper::new(
         state.idempotency_records(),
         settings.idempotency_lease,
         settings.idempotency_ttl,
         error_body_bytes,
     )
-    .observed_by(state.metrics());
-    let ran = engine::run(&keeper, state.authz(), caller, key, &fingerprint, async {
-        operation
-            .await
-            .map(Success::into_answer)
-            .map_err(ApiError::into_service_error)
-    })
-    .await;
+    .observed_by(state.metrics())
+}
+
+/// The route's operation as the core's.
+async fn answering(
+    operation: impl Future<Output = Result<Success, ApiError>>,
+) -> Result<Answer, ServiceError> {
+    operation
+        .await
+        .map(Success::into_answer)
+        .map_err(ApiError::into_service_error)
+}
+
+/// What the engine answered, as a response.
+fn answered(ran: Result<Answer, ServiceError>) -> Response {
     match ran {
         Ok(answer) if answer.replayed() => {
             let status = answer.status();
@@ -234,6 +282,21 @@ impl Grant {
         operation: impl Future<Output = Result<Success, ApiError>>,
     ) -> Response {
         run(self.state(), caller, key, fingerprint, operation).await
+    }
+}
+
+impl Grant {
+    /// [`Self::idempotent`] for an operator (roadmap M5j2, design D290):
+    /// `operation` for the admin key `admin` under `key`, in the records
+    /// of that key's own namespace.
+    pub async fn idempotent_admin(
+        &self,
+        admin: &AdminCaller,
+        key: Option<IdempotencyKey>,
+        fingerprint: Fingerprint,
+        operation: impl Future<Output = Result<Success, ApiError>>,
+    ) -> Response {
+        run_admin(self.state(), admin, key, fingerprint, operation).await
     }
 }
 
