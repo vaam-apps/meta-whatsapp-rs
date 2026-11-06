@@ -364,6 +364,10 @@ pub async fn exercise(h: &Harness) -> Secrets {
     // Hosted signup, several WABAs and pre-verified numbers (roadmap M3f).
     secrets.section("signup_m3f");
     secrets.extend(signup_m3f(h, &admin).await);
+    // Partner APIs (roadmap M5j): a business's documents and name, the
+    // system token and Meta's texts are not logged.
+    secrets.section("partners");
+    secrets.extend(partners(h, &admin).await);
     // Failures log too: a refused key, and Meta refusing a token.
     let refused = h
         .call(Call::get("/v1/numbers").key(&format!("{tenant_key}x")))
@@ -3692,6 +3696,7 @@ fn check_audit(logs: &str) {
     check_call_audit(&changes);
     check_display_name_audit(&changes);
     check_settings_audit(&changes);
+    check_partner_audit(&events, &changes);
     let deletions: Vec<&serde_json::Value> = changes
         .into_iter()
         .filter(|fields| {
@@ -3708,6 +3713,9 @@ fn check_audit(logs: &str) {
                 && !fields["action"]
                     .as_str()
                     .is_some_and(|action| action.starts_with("call_"))
+                && !PARTNER_TENANT_ACTIONS
+                    .iter()
+                    .any(|action| fields["action"] == *action)
         })
         .collect();
     let actions: Vec<&str> = deletions
@@ -4411,4 +4419,283 @@ async fn signup_m3f(h: &Harness, admin: &str) -> Vec<String> {
         secrets.push(format!("pin\":{pin}"));
     }
     secrets
+}
+
+
+/// Roadmap M5j: every route of the partner APIs, with the legal acts on
+/// (the capture's settings): the business verification documents (their
+/// content and their names), the pool's system token and Meta's texts,
+/// which a failed call may quote, are in no log line.
+#[allow(clippy::too_many_lines)] // every route, once
+async fn partners(h: &Harness, admin: &str) -> Vec<String> {
+    use base64::Engine as _;
+
+    use super::signup::POOL_TOKEN;
+    const WABA: &str = "102290129340398";
+    const DOCUMENT: &str = "SENTINEL-DOCUMENT-CONTENT-of-a-business-9Q";
+    const DOCUMENT_NAME: &str = "SENTINEL-legal-name-statement";
+    const QUOTED: &str = "SENTINEL-META-TEXT-quoting-the-business";
+    const SOLUTION: &str = "795033096057724";
+    const MIGRATION: &str = "mig_01HZYK3SENTINEL0000000";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["partners"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let content = base64::engine::general_purpose::STANDARD
+        .encode(format!("%PDF-1.7\n{DOCUMENT}").as_bytes());
+    let body = json!({
+        "client_business_id": "2729063490586005",
+        "documents": [{"file_name": format!("{DOCUMENT_NAME}.pdf"), "content_base64": content}]
+    });
+    let admin_call = |method: Method, path: &str| Call::new(method, path).key(admin);
+    let ok = |reply: &super::Reply, status: u16| {
+        assert_eq!(reply.status.as_u16(), status, "{}", reply.text);
+    };
+    // A submission Meta refuses (its text quotes the business), then one
+    // it takes, then the list.
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#100) {QUOTED}"), "type": "OAuthException",
+                         "code": 100, "fbtrace_id": "A",
+                         "error_data": {"messaging_product": "whatsapp", "details": QUOTED}}}),
+    );
+    let refused = h
+        .call(admin_call(Method::POST, "/v1/admin/partners/business-verifications").json(&body))
+        .await;
+    assert_eq!(refused.status.as_u16(), 422, "{}", refused.text);
+    h.graph
+        .push_json(200, json!({"success": true, "verification_attempts": 1}));
+    ok(
+        &h.call(admin_call(Method::POST, "/v1/admin/partners/business-verifications").json(&body))
+            .await,
+        201,
+    );
+    h.graph.push_json(
+        200,
+        json!({"data": [{"id": "1066221828388475", "verification_status": "PENDING"}]}),
+    );
+    ok(
+        &h.call(admin_call(
+            Method::GET,
+            "/v1/admin/partners/business-verifications",
+        ))
+        .await,
+        200,
+    );
+    // Solutions.
+    h.graph.push_json(200, json!({"solution_id": SOLUTION}));
+    ok(
+        &h.call(
+            admin_call(Method::POST, "/v1/admin/partners/solutions").json(&json!({
+                "name": "Social OVD with Lucky Shrub", "partner_app_id": "21202248997039",
+                "owner_permissions": ["MESSAGING"], "partner_permissions": ["MESSAGING"]})),
+        )
+        .await,
+        201,
+    );
+    for (path, answer) in [
+        ("/v1/admin/partners/solutions", json!({"data": []})),
+        (
+            "/v1/admin/partners/solutions/795033096057724",
+            json!({"id": SOLUTION, "name": "Social OVD with Lucky Shrub"}),
+        ),
+        (
+            "/v1/admin/partners/solutions/795033096057724/partners",
+            json!({"data": []}),
+        ),
+        ("/v1/admin/partners/client-businesses", json!({"data": []})),
+        (
+            "/v1/admin/partners/users/1972555232742222/wabas",
+            json!({"data": []}),
+        ),
+    ] {
+        h.graph.push_json(200, answer);
+        ok(&h.call(admin_call(Method::GET, path)).await, 200);
+    }
+    for tail in [
+        "accept",
+        "reject",
+        "deactivation-request",
+        "deactivation-request/accept",
+        "deactivation-request/reject",
+    ] {
+        h.graph.push_json(200, json!({"success": true}));
+        ok(
+            &h.call(admin_call(
+                Method::POST,
+                &format!("/v1/admin/partners/solutions/{SOLUTION}/{tail}"),
+            ))
+            .await,
+            204,
+        );
+    }
+    // The tenant's WABA.
+    let tenant = |method: Method, path: String| Call::new(method, path).key(&key);
+    h.graph.push_json(
+        200,
+        json!({"id": WABA, "business_verification_status": "verified"}),
+    );
+    ok(
+        &h.call(tenant(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/business-verification"),
+        ))
+        .await,
+        200,
+    );
+    h.graph.push_json(200, json!({"id": "1972385232742999"}));
+    ok(
+        &h.call(
+            tenant(
+                Method::POST,
+                format!("/v1/wabas/{WABA}/solution-migration-intents"),
+            )
+            .json(&json!({"solution_id": "303610109049230"})),
+        )
+        .await,
+        201,
+    );
+    h.graph.push_json(
+        200,
+        json!({"status": "ACCEPTED", "id": "1972385232742999",
+               "destination_waba": {"id": WABA, "name": QUOTED}}),
+    );
+    ok(
+        &h.call(tenant(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/solution-migration-intents/1972385232742999"),
+        ))
+        .await,
+        200,
+    );
+    h.graph.push_json(
+        200,
+        json!({"migration_id": MIGRATION, "migration_status": "INITIATED"}),
+    );
+    ok(
+        &h.call(
+            tenant(Method::POST, format!("/v1/wabas/{WABA}/billing-migrations"))
+                .json(&json!({"currency": "INR"})),
+        )
+        .await,
+        201,
+    );
+    h.graph
+        .push_json(200, json!({"status": "READY_TO_COMPLETE", "id": MIGRATION}));
+    ok(
+        &h.call(tenant(
+            Method::GET,
+            format!("/v1/wabas/{WABA}/billing-migrations/{MIGRATION}"),
+        ))
+        .await,
+        200,
+    );
+    h.graph
+        .push_json(200, json!({"status": "COMPLETED", "id": MIGRATION}));
+    ok(
+        &h.call(tenant(
+            Method::POST,
+            format!("/v1/wabas/{WABA}/billing-migrations/{MIGRATION}/resume"),
+        ))
+        .await,
+        200,
+    );
+    vec![
+        DOCUMENT.to_owned(),
+        DOCUMENT_NAME.to_owned(),
+        content,
+        QUOTED.to_owned(),
+        POOL_TOKEN.to_owned(),
+        key,
+    ]
+}
+
+/// The tenant's partner acts (roadmap M5j), in the order `partners` made
+/// them.
+const PARTNER_TENANT_ACTIONS: [&str; 3] = [
+    "solution_migration_intent_created",
+    "billing_migration_started",
+    "billing_migration_resumed",
+];
+
+/// Roadmap M5j: each legal or irreversible partner act is audited once
+/// with ids only (the operator's: the admin key's id, the subject's id, a
+/// count; the tenant's: the tenant, the WABA, the key's id, the intent's
+/// or migration's id), never a document, a name or Meta's text. Decisive:
+/// `audit_admin` and `audit_tenant` in the core's `partners`.
+fn check_partner_audit(events: &[serde_json::Value], changes: &[&serde_json::Value]) {
+    let tenant: Vec<&&serde_json::Value> = changes
+        .iter()
+        .filter(|fields| {
+            PARTNER_TENANT_ACTIONS
+                .iter()
+                .any(|action| fields["action"] == *action)
+        })
+        .collect();
+    let seen: Vec<&str> = tenant
+        .iter()
+        .map(|fields| fields["action"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(seen, PARTNER_TENANT_ACTIONS, "the tenant's partner acts");
+    for fields in tenant {
+        assert_eq!(fields["tenant"], "merchant-42", "{fields}");
+        assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
+        assert!(fields["key_id"].is_string(), "{fields}");
+        assert_eq!(fields["outcome"], "answered", "{fields}");
+        for name in fields.as_object().unwrap().keys() {
+            assert!(
+                matches!(
+                    name.as_str(),
+                    "message" | "action" | "key_id" | "tenant" | "waba_id" | "subject_id"
+                        | "outcome"
+                ),
+                "{name} in {fields}"
+            );
+        }
+    }
+    let operator: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e["target"] == "audit" && e["fields"]["admin_key_id"].is_string())
+        .map(|e| &e["fields"])
+        .filter(|fields| {
+            fields["action"].as_str().is_some_and(|action| {
+                action.starts_with("partner_solution_") || action.starts_with("business_verification_")
+            })
+        })
+        .collect();
+    let seen: Vec<&str> = operator
+        .iter()
+        .map(|fields| fields["action"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            "business_verification_submitted",
+            "business_verification_submitted",
+            "partner_solution_created",
+            "partner_solution_accepted",
+            "partner_solution_rejected",
+            "partner_solution_deactivation_requested",
+            "partner_solution_deactivation_accepted",
+            "partner_solution_deactivation_rejected",
+        ],
+        "the operator's partner acts"
+    );
+    for fields in operator {
+        assert_eq!(fields["message"], "admin change", "{fields}");
+        for name in fields.as_object().unwrap().keys() {
+            assert!(
+                matches!(
+                    name.as_str(),
+                    "message" | "action" | "admin_key_id" | "subject_id" | "count" | "outcome"
+                ),
+                "{name} in {fields}"
+            );
+        }
+    }
 }

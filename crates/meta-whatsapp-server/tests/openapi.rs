@@ -419,7 +419,7 @@ async fn every_rate_limited_operation_declares_its_429() {
 /// roadmap M5g a QR code's creation, a block and an unblock; since roadmap
 /// M5c2 a display name's request; since roadmap M5c3 an Official Business
 /// Account application; since roadmap M5e the call a business places; since roadmap M5l a
-/// thread's pass, take and release), and the upload is a multipart form.
+/// thread's pass, take and release; since roadmap M5j a solution migration intent and a billing migration), and the upload is a multipart form.
 #[test]
 fn idempotent_operations_declare_their_key() {
     let spec: Value = serde_json::from_str(COMMITTED).unwrap();
@@ -458,9 +458,11 @@ fn idempotent_operations_declare_their_key() {
             "POST /v1/numbers/{pn}/thread-control/release",
             "POST /v1/numbers/{pn}/thread-control/take",
             "POST /v1/otp/issue",
+            "POST /v1/wabas/{waba_id}/billing-migrations",
             "POST /v1/wabas/{waba_id}/flows",
             "POST /v1/wabas/{waba_id}/payment-configurations",
             "POST /v1/wabas/{waba_id}/payment-configurations/{configuration_name}/oauth-link",
+            "POST /v1/wabas/{waba_id}/solution-migration-intents",
             "POST /v1/wabas/{waba_id}/template-groups",
             "POST /v1/wabas/{waba_id}/templates",
             "POST /v1/wabas/{waba_id}/templates/authentication",

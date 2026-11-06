@@ -467,6 +467,11 @@ const CALLS_META: &[&str] = &[
     "POST /v1/numbers/{pn}/thread-control/pass",
     "POST /v1/numbers/{pn}/thread-control/take",
     "POST /v1/numbers/{pn}/thread-control/release",
+    // Roadmap M5j: the reads of a tenant's WABA (the legal acts are off in
+    // this harness and the billing migration unknown, so the rest ask
+    // nothing; the operator's have no partner business here).
+    "GET /v1/wabas/{waba_id}/business-verification",
+    "GET /v1/wabas/{waba_id}/solution-migration-intents/{intent_id}",
 ];
 
 /// Operations whose call to Meta is best effort: whatever Meta answers,
@@ -562,6 +567,9 @@ const DETAILS_KEPT: &[&str] = &[
     // analytics do; the calling routes of a number do not (an SDP line
     // may be quoted by a refusal).
     "GET /v1/wabas/{waba_id}/analytics/calls",
+    // Roadmap M5j: opt in with `with_details`.
+    "GET /v1/wabas/{waba_id}/business-verification",
+    "GET /v1/wabas/{waba_id}/solution-migration-intents/{intent_id}",
 ];
 
 /// Operations on an object named by id (a media id, a template id): Meta
@@ -601,6 +609,8 @@ const OBJECT_BY_ID: &[&str] = &[
     "GET /v1/numbers/{pn}/groups/{group_id}/participants",
     "GET /v1/numbers/{pn}/groups/{group_id}/join-requests",
     "GET /v1/numbers/{pn}/groups/{group_id}/analytics",
+    // Roadmap M5j: an intent Meta refuses is not this WABA's.
+    "GET /v1/wabas/{waba_id}/solution-migration-intents/{intent_id}",
 ];
 
 /// Operations whose answer is success for any 2xx Meta sends (the library:

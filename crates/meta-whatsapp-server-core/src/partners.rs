@@ -67,7 +67,7 @@ use meta_whatsapp_rs::{Client, Error};
 use serde::{Deserialize, Serialize};
 
 use crate::audit::Outcome;
-use crate::authz::{AdminCaller, Authorizer, Caller, OwnedWaba};
+use crate::authz::{AdminCaller, Authorizer, Caller, OwnedWaba, object_failed};
 use crate::error::{ErrorCode, ServiceError};
 use crate::number_settings::is_legal_act;
 use crate::observe::Observer;
@@ -1241,7 +1241,15 @@ impl<'a> WabaPartners<'a> {
             .await
         {
             Ok(intent) => intent,
-            Err(error) => return Err(self.failed(&error).await),
+            Err(error) => {
+                // Meta refusing the id is an intent that is not this
+                // WABA's: `404`, as an object named by id.
+                let api = self.waba.failed(self.authz, &error).await;
+                if error.graph().is_some() {
+                    self.observer.graph_error(api.code());
+                }
+                return Err(object_failed(api, &error));
+            }
         };
         let ours = |waba: &Option<meta_whatsapp_rs::client::partners::migration::MigrationWaba>| {
             waba.as_ref().and_then(|w| w.id.as_ref()) == Some(self.waba_id())
