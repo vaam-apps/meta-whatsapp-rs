@@ -369,6 +369,23 @@ const CALLS_META: &[&str] = &[
     // Roadmap M5c2: the display name's request and status.
     "POST /v1/numbers/{pn}/display-name",
     "GET /v1/numbers/{pn}/display-name",
+    // Roadmap M5c3: the settings routes that are not legal acts (those,
+    // `POST …/official-business-account`, `PUT …/compliance-info` and
+    // `DELETE …/contact-book/{bsuid}`, are off in this harness and ask
+    // Meta nothing: tests/number_settings.rs runs them with the sentinel).
+    "GET /v1/numbers/{pn}/settings",
+    "PATCH /v1/numbers/{pn}/settings",
+    "PUT /v1/numbers/{pn}/settings/payload-encryption",
+    "DELETE /v1/numbers/{pn}/settings/payload-encryption",
+    "GET /v1/numbers/{pn}/username",
+    "PUT /v1/numbers/{pn}/username",
+    "DELETE /v1/numbers/{pn}/username",
+    "GET /v1/numbers/{pn}/username/suggestions",
+    "GET /v1/numbers/{pn}/official-business-account",
+    "GET /v1/numbers/{pn}/compliance-info",
+    "GET /v1/numbers/{pn}/health-status",
+    "GET /v1/numbers/{pn}/conversational-components",
+    "PUT /v1/numbers/{pn}/conversational-components",
     // Roadmap M5f: the group routes, on a group the number holds.
     "POST /v1/numbers/{pn}/groups",
     "GET /v1/numbers/{pn}/groups",
@@ -461,6 +478,19 @@ const DETAILS_KEPT: &[&str] = &[
     // Roadmap M5c2.
     "POST /v1/numbers/{pn}/display-name",
     "GET /v1/numbers/{pn}/display-name",
+    // Roadmap M5c3: not the payload encryption calls and the settings
+    // read, whose answers may carry key material (their Meta texts are
+    // withheld).
+    "PATCH /v1/numbers/{pn}/settings",
+    "GET /v1/numbers/{pn}/username",
+    "PUT /v1/numbers/{pn}/username",
+    "DELETE /v1/numbers/{pn}/username",
+    "GET /v1/numbers/{pn}/username/suggestions",
+    "GET /v1/numbers/{pn}/official-business-account",
+    "GET /v1/numbers/{pn}/compliance-info",
+    "GET /v1/numbers/{pn}/health-status",
+    "GET /v1/numbers/{pn}/conversational-components",
+    "PUT /v1/numbers/{pn}/conversational-components",
     // Roadmap M5b.
     "PATCH /v1/wabas/{waba_id}/templates/{id}",
     "POST /v1/wabas/{waba_id}/templates/{id}/unpause",

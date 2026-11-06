@@ -82,6 +82,7 @@ use crate::uploads::NewUpload;
 /// | `create_group` ([`Self::create_group`]; roadmap M5f) | the number's id; the JSON body, canonical as above |
 /// | `create_library_template`, `migrate_templates`, `create_template_group` ([`Self::create_library_template`], [`Self::migrate_templates`], [`Self::create_template_group`]; roadmap M5b) | the WABA's id; the JSON body, canonical as above |
 /// | `request_display_name_change` ([`Self::request_display_name_change`]; roadmap M5c2) | the number's id; the JSON body, canonical as above |
+/// | `request_official_business_account` ([`Self::request_official_business_account`]; roadmap M5c3) | the number's id; the JSON body, canonical as above |
 /// | `create_qr_code`, `block_users`, `unblock_users` ([`Self::create_qr_code`], [`Self::block_users`], [`Self::unblock_users`]; roadmap M5g) | the number's id; the JSON body, canonical as above |
 /// | `create_flow` ([`Self::create_flow`]; roadmap M5d) | the WABA's id; the JSON body, canonical as above |
 ///
@@ -356,6 +357,19 @@ impl Fingerprint {
     pub fn request_display_name_change(number: &PhoneNumberId, body: &serde_json::Value) -> Self {
         Self::json(
             Operation::RequestDisplayNameChange,
+            &[("pn", number.as_str())],
+            body,
+        )
+    }
+
+    /// `request_official_business_account` on `number`, with the JSON
+    /// body the request carried (roadmap M5c3; no legacy fingerprint).
+    pub fn request_official_business_account(
+        number: &PhoneNumberId,
+        body: &serde_json::Value,
+    ) -> Self {
+        Self::json(
+            Operation::RequestOfficialBusinessAccount,
             &[("pn", number.as_str())],
             body,
         )
@@ -1653,6 +1667,24 @@ mod tests {
         assert_ne!(
             build(&pn("1"), &body),
             Fingerprint::create_group(&pn("1"), &body)
+        );
+    }
+
+    /// Roadmap M5c3's keyed application is scoped to the number, the body
+    /// and the operation. Decisive: the `pn` parameter, the operation and
+    /// the body's canonical form.
+    #[test]
+    fn the_oba_application_fingerprint_is_per_number_body_and_operation() {
+        let body = serde_json::json!({"business_website_url": "https://a.example", "x": 1});
+        let other = serde_json::json!({"business_website_url": "https://b.example", "x": 1});
+        let reordered = serde_json::json!({"x": 1, "business_website_url": "https://a.example"});
+        let build = Fingerprint::request_official_business_account;
+        assert_eq!(build(&pn("1"), &body), build(&pn("1"), &reordered));
+        assert_ne!(build(&pn("1"), &body), build(&pn("2"), &body));
+        assert_ne!(build(&pn("1"), &body), build(&pn("1"), &other));
+        assert_ne!(
+            build(&pn("1"), &body),
+            Fingerprint::request_display_name_change(&pn("1"), &body)
         );
     }
 

@@ -137,6 +137,14 @@ pub struct Settings {
     /// /webhooks/flows/{waba_id}` is `404` (the default, for tests;
     /// `serve` sets it when the key file is). `Debug` shows no secret.
     pub flows: Option<FlowsDeployment>,
+    /// `WA_SERVER_LEGAL_ACTS` (roadmap M5c3, pending the owner's
+    /// confirmation before the first release): whether the legal acts a
+    /// tenant may ask for are taken: the application for Official Business
+    /// Account status, a compliance information declaration and the
+    /// erasure of a contact book entry. Off (the default), each is `403
+    /// feature_not_available` and nothing is asked of Meta. AGENTS.md,
+    /// Legal acts: never on by itself.
+    pub legal_acts: bool,
 }
 
 impl Default for Settings {
@@ -159,6 +167,7 @@ impl Default for Settings {
             erasure: None,
             webhooks_out: None,
             flows: None,
+            legal_acts: false,
         }
     }
 }
