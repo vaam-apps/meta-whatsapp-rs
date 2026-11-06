@@ -6954,7 +6954,7 @@ or WABA fails the family's own cross-tenant test).
     the namespace `wa.server.group`, the scope `groups`, the thirteen
     operation ids, the seven audit action names and the paths; no new
     setting or error code; no legal act.
-  - **Not done here:** the group's picture (M5f2); pinning and unpinning
+  - **Not done here:** the group's picture (M5f2, since done); pinning and unpinning
     (a send), adding participants (Meta: not manually), deleting the
     invite link and leaving (no call), which the library wraps or Meta
     does not offer (D156); a group created before the service is found
@@ -6980,7 +6980,7 @@ or WABA fails the family's own cross-tenant test).
     deletion and the erasure of a customer (M2f: customers, not groups)
     leave nothing a person is named by. A deployment that must not keep
     even that waits for M5f3.
-- [ ] **M5f2. Group pictures** (row 76): `PUT /v1/numbers/{pn}/groups/{group_id}/picture`
+- [x] **M5f2. Group pictures** (row 76): `PUT /v1/numbers/{pn}/groups/{group_id}/picture`
   over the library's `Group::set_picture` (a multipart upload of a
   square JPEG of at most 5 MiB; Meta checks the shape and the 192×192
   minimum), held to the media routes' transfer slots and body bound,
@@ -6988,6 +6988,43 @@ or WABA fails the family's own cross-tenant test).
   - **After:** M5f.
   - **Decisive:** M5.1, M5.2; a file that is not a JPEG of at most 5 MiB
     is refused with no request.
+  - **Done** (*PR number to be added when it lands*): one more
+    operation, `set_group_picture` (scope `groups`), over
+    `server_core::groups::Groups::set_picture` and
+    `server_api_axum::api::groups::set_group_picture`: a
+    `multipart/form-data` body of one field, `file`, answered `204`. The
+    group is found among the number's before anything else (M5.2: `404`
+    with zero vault reads, no slot taken, **the body never read**), then a
+    slot of the tenant's share of the media uploads' pool is taken
+    (`429`), then the form is read by `read_file_form` (the uploads'
+    framing budget and chunking in the HTTP crate's media routes) **no
+    further than 5 MiB** (`413 media_too_large`; a test pulls a 12 MiB
+    body and finds under 6 MiB read). The file is judged by its bytes
+    (`Picture::new`): the JPEG signature, and a frame header, read by a
+    short reader with no new dependency, that says width equals height and
+    at least 192; otherwise `422` on `file`, with Meta not asked. No
+    `Idempotency-Key`; audited as `group_picture_set` without a byte,
+    size or digest of the file. Tests: `tests/group_picture.rs` (Meta's
+    request; each refusal with no request; the bound; M5.2 with a body
+    that never ends; M5.1 and the scope; busy slots, and the slot of a
+    stuck upload leaving another tenant's; Meta's refusals by kind,
+    never `404`), `tests/authz.rs` (M5.1 and M5.2 over the document's
+    routes, this one included), M1.7's capture (a marker in a picture's
+    bytes, in no line; the audit event), the core's `Picture` tests. The
+    OpenAPI document is additive only (one operation, one schema).
+  - **Decided** (coordinator, 2026-11-06, under the owner's delegation;
+    design D260–D264, each swappable): the route and form (D260), the
+    service checking the shape itself from the JPEG's header (D261; swap:
+    leave it to Meta), the media uploads' slots and bound (D262), no
+    `Idempotency-Key` (D263), the audit event and errors (D264). The
+    library's 5 MiB bound stays against Meta's "5MB": Meta refuses the
+    rest. Pending the owner's confirmation before the first release: the
+    operation id `set_group_picture`, the path and the audit action
+    `group_picture_set`; no new setting or error code; no legal act.
+  - **Not done here:** whether Meta applies a picture is its
+    `group_settings_update` event, which the service records as any
+    event and does not wait for; no call of this route was run against
+    Meta live.
 - [ ] **M5f3. Purging the group records** (D150): the records of a
   number's groups (`wa.server.group`) go when the number's WABA is
   unbound, when its tenant is deleted (M3a), and when the operator asks
