@@ -747,4 +747,18 @@ mod tests {
         assert_eq!(Operation::from_id("create_tenant"), None, "an admin's");
         assert_eq!(Operation::from_id("Send_Message"), None);
     }
+
+    /// The four routing operations take the scope `routing` and no other
+    /// (D220). Decisive: `Operation::scope` giving one of them another.
+    #[test]
+    fn the_routing_operations_take_the_routing_scope() {
+        for operation in [
+            Operation::GetRoutingRoles,
+            Operation::PassThread,
+            Operation::TakeThread,
+            Operation::ReleaseThread,
+        ] {
+            assert_eq!(operation.scope(), Scope::Routing, "{operation}");
+        }
+    }
 }
