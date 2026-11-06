@@ -94,9 +94,9 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   idempotency_key_reused`. The record keeps the answer, never the request
   (no document), and the gate answers before the key. `idempotency::run_admin`
   in the core, `Grant::idempotent_admin` over HTTP. Postgres migration 10
-  (`admin idempotency`) drops the records' foreign key to the tenants (the
-  backend deletes a tenant's records itself); the namespace and the
-  migration are pending the owner's confirmation before the first release.
+  (`admin idempotency`) adds `wa_server_admin_idempotency`, a table of the
+  operator's records with no foreign key to the tenants; the namespace and
+  the table are pending the owner's confirmation before the first release.
   The OpenAPI change is additive (the header parameter on two routes).
 
 ### Added (roadmap M5j)

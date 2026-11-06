@@ -7226,9 +7226,9 @@ or WABA fails the family's own cross-tenant test).
     `idempotency::run_admin`, `Grant::idempotent_admin` over HTTP), the
     fingerprint the operation and the canonical body, the answer kept and
     never the request (no document), the gate answered before the key
-    (D290 to D294, implementer's proposals). Postgres migration 10 drops
-    the records' foreign key to the tenants, which an admin key's scope
-    has no row for. Decisive: `a_submission_retried_after_a_504_is_one_request_to_meta`,
+    (D290 to D294, implementer's proposals). Postgres migration 10 adds
+    `wa_server_admin_idempotency`, a table of the operator's records (an
+    admin key's scope has no tenant row for the tenants' table's foreign key). Decisive: `a_submission_retried_after_a_504_is_one_request_to_meta`,
     `a_solution_creation_retried_after_a_504_is_one_request_to_meta`,
     `an_admin_keys_records_are_neither_a_tenants_nor_another_admin_keys`.
     Not keyed, with the reasons in D292: accept and reject (a state Meta
