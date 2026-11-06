@@ -208,6 +208,13 @@ impl SignupDeployment {
         self.hosted.is_some()
     }
 
+    /// The deployment's partner credentials (the pool's portfolio and
+    /// system token), which the operator's partner services act with
+    /// (roadmap M5j, D251).
+    pub(crate) fn partner_pool(&self) -> Option<&PartnerPool> {
+        self.pool.as_ref()
+    }
+
     /// Whether the pool of pre-verified numbers is managed.
     pub fn manages_pre_verified_pool(&self) -> bool {
         self.pool.is_some()
@@ -260,6 +267,8 @@ pub struct Signups {
     deployment: Option<SignupDeployment>,
     hosted: JsonStore<hosted::PendingHosted>,
     reservations: JsonStore<pre_verified::Reservation>,
+    /// The billing migrations tenants started (roadmap M5j, D256).
+    pub(crate) billing_migrations: JsonStore<crate::partners::BillingMigration>,
 }
 
 impl std::fmt::Debug for Signups {
@@ -482,7 +491,8 @@ impl Signups {
             clock,
             deployment,
             hosted: JsonStore::new(Arc::clone(&kv), hosted::HOSTED_NAMESPACE),
-            reservations: JsonStore::new(kv, pre_verified::RESERVATION_NAMESPACE),
+            reservations: JsonStore::new(Arc::clone(&kv), pre_verified::RESERVATION_NAMESPACE),
+            billing_migrations: JsonStore::new(kv, crate::partners::BILLING_NAMESPACE),
         }
     }
 

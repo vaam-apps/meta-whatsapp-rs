@@ -61,6 +61,18 @@ impl std::fmt::Debug for PartnerPool {
     }
 }
 
+impl PartnerPool {
+    /// The deployment's own business portfolio.
+    pub(crate) fn business_id(&self) -> &BusinessId {
+        &self.business_id
+    }
+
+    /// The system user token that manages it.
+    pub(crate) fn token(&self) -> &AccessToken {
+        &self.token
+    }
+}
+
 /// The tenant a number is reserved for.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct Reservation {

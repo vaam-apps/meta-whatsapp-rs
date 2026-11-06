@@ -68,6 +68,18 @@ pub enum Operation {
     SetConversationalComponents,
     /// `delete_contact_book_entry`: one user's contact book entry erased at Meta (irreversible, an explicit erasure under the scope `erasure`, not gated by `WA_SERVER_LEGAL_ACTS`) (roadmap M5c3; pending the owner's confirmation before the first release).
     DeleteContactBookEntry,
+    /// `get_business_verification`: a WABA's business verification status (roadmap M5j; pending the owner's confirmation before the first release).
+    GetBusinessVerification,
+    /// `create_solution_migration_intent`: a WABA tagged for migration to a Multi-Partner Solution, which its client then accepts in Meta Business Suite (a legal act: off until the deployment enables `WA_SERVER_LEGAL_ACTS`) (roadmap M5j; pending the owner's confirmation before the first release).
+    CreateSolutionMigrationIntent,
+    /// `get_solution_migration_intent`: a migration intent of the WABA (roadmap M5j; pending the owner's confirmation before the first release).
+    GetSolutionMigrationIntent,
+    /// `create_billing_migration`: a billing currency or payment method migration started, which clones the WABA (a legal act: off until the deployment enables `WA_SERVER_LEGAL_ACTS`) (roadmap M5j; pending the owner's confirmation before the first release).
+    CreateBillingMigration,
+    /// `get_billing_migration`: where a billing migration of the WABA stands (roadmap M5j; pending the owner's confirmation before the first release).
+    GetBillingMigration,
+    /// `resume_billing_migration`: a billing migration completed, which switches the numbers' billing (a legal act: off until the deployment enables `WA_SERVER_LEGAL_ACTS`) (roadmap M5j; pending the owner's confirmation before the first release).
+    ResumeBillingMigration,
     /// `disconnect_waba`: a WABA disconnected (unsubscribed, its token
     /// and bindings deleted).
     DisconnectWaba,
@@ -360,7 +372,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 153] = [
+    pub const ALL: [Self; 159] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -384,6 +396,12 @@ impl Operation {
         Self::GetConversationalComponents,
         Self::SetConversationalComponents,
         Self::DeleteContactBookEntry,
+        Self::GetBusinessVerification,
+        Self::CreateSolutionMigrationIntent,
+        Self::GetSolutionMigrationIntent,
+        Self::CreateBillingMigration,
+        Self::GetBillingMigration,
+        Self::ResumeBillingMigration,
         Self::DisconnectWaba,
         Self::SendMessage,
         Self::MarkRead,
@@ -543,6 +561,12 @@ impl Operation {
             Self::GetConversationalComponents => "get_conversational_components",
             Self::SetConversationalComponents => "set_conversational_components",
             Self::DeleteContactBookEntry => "delete_contact_book_entry",
+            Self::GetBusinessVerification => "get_business_verification",
+            Self::CreateSolutionMigrationIntent => "create_solution_migration_intent",
+            Self::GetSolutionMigrationIntent => "get_solution_migration_intent",
+            Self::CreateBillingMigration => "create_billing_migration",
+            Self::GetBillingMigration => "get_billing_migration",
+            Self::ResumeBillingMigration => "resume_billing_migration",
             Self::DisconnectWaba => "disconnect_waba",
             Self::SendMessage => "send_message",
             Self::MarkRead => "mark_read",
@@ -806,6 +830,12 @@ impl Operation {
             | Self::ApproveGroupJoinRequests
             | Self::RejectGroupJoinRequests
             | Self::GetGroupAnalytics => Scope::Groups,
+            Self::GetBusinessVerification
+            | Self::CreateSolutionMigrationIntent
+            | Self::GetSolutionMigrationIntent
+            | Self::CreateBillingMigration
+            | Self::GetBillingMigration
+            | Self::ResumeBillingMigration => Scope::Partners,
             Self::SendMarketingMessage
             | Self::GetMarketingOnboarding
             | Self::GetCloudApiMarketing
@@ -852,16 +882,44 @@ pub enum AdminOperation {
     /// for a business portfolio (a legal act; roadmap M5h; pending the
     /// owner's confirmation before the first release).
     SignMaxPriceAgreement,
+    /// `submit_business_verification`: a customer business's documents
+    /// submitted for partner-led verification, a statement of its legal
+    /// identity (a legal act; roadmap M5j, design D250; pending the owner's
+    /// confirmation before the first release).
+    SubmitBusinessVerification,
+    /// `accept_partner_solution`: a Multi-Partner Solution accepted, which
+    /// cannot be undone (a legal act; roadmap M5j, design D250; pending the
+    /// owner's confirmation before the first release).
+    AcceptPartnerSolution,
+    /// `reject_partner_solution`: a Multi-Partner Solution declined for
+    /// good (a legal act; roadmap M5j, design D250; pending the owner's
+    /// confirmation before the first release).
+    RejectPartnerSolution,
+    /// `accept_partner_solution_deactivation`: a solution's deactivation
+    /// accepted, so that it onboards no client (a legal act; roadmap M5j,
+    /// design D250; pending the owner's confirmation before the first
+    /// release).
+    AcceptPartnerSolutionDeactivation,
 }
 
 impl AdminOperation {
     /// Every admin operation that is a legal act.
-    pub const ALL: [Self; 1] = [Self::SignMaxPriceAgreement];
+    pub const ALL: [Self; 5] = [
+        Self::SignMaxPriceAgreement,
+        Self::SubmitBusinessVerification,
+        Self::AcceptPartnerSolution,
+        Self::RejectPartnerSolution,
+        Self::AcceptPartnerSolutionDeactivation,
+    ];
 
     /// Its id: the `operationId` of its route in the OpenAPI document.
     pub fn id(self) -> &'static str {
         match self {
             Self::SignMaxPriceAgreement => "sign_max_price_agreement",
+            Self::SubmitBusinessVerification => "submit_business_verification",
+            Self::AcceptPartnerSolution => "accept_partner_solution",
+            Self::RejectPartnerSolution => "reject_partner_solution",
+            Self::AcceptPartnerSolutionDeactivation => "accept_partner_solution_deactivation",
         }
     }
 }

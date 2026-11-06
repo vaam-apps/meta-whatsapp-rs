@@ -123,6 +123,9 @@ impl RouteClass {
             | Operation::GetCallSettings
             | Operation::GetCallPermissions
             | Operation::GetCallAnalytics
+            | Operation::GetBusinessVerification
+            | Operation::GetSolutionMigrationIntent
+            | Operation::GetBillingMigration
             | Operation::GetNumberSettings
             | Operation::GetUsername
             | Operation::ListUsernameSuggestions
@@ -204,7 +207,10 @@ impl RouteClass {
             | Operation::PreAcceptCall
             | Operation::AcceptCall
             | Operation::RejectCall
-            | Operation::TerminateCall => Self::Send,
+            | Operation::TerminateCall
+            | Operation::CreateSolutionMigrationIntent
+            | Operation::CreateBillingMigration
+            | Operation::ResumeBillingMigration => Self::Send,
             Operation::ListTemplates
             | Operation::CreateTemplate
             | Operation::DeleteTemplates
@@ -658,6 +664,12 @@ mod tests {
             ("reject_call", RouteClass::Send),
             ("terminate_call", RouteClass::Send),
             ("get_call_analytics", RouteClass::Read),
+            ("get_business_verification", RouteClass::Read),
+            ("create_solution_migration_intent", RouteClass::Send),
+            ("get_solution_migration_intent", RouteClass::Read),
+            ("create_billing_migration", RouteClass::Send),
+            ("get_billing_migration", RouteClass::Read),
+            ("resume_billing_migration", RouteClass::Send),
             ("create_flow", RouteClass::Templates),
             ("list_flows", RouteClass::Templates),
             ("get_flow", RouteClass::Templates),
