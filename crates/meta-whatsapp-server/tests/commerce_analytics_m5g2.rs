@@ -1015,7 +1015,7 @@ async fn no_other_route_ever_confirms_template_insights() {
         asked
             .iter()
             .filter(|r| r.query("is_enabled_for_insights").is_some())
-            .map(|r| r.path())
+            .map(meta_whatsapp_rs::core::testing::RecordedRequest::path)
             .collect::<Vec<_>>()
     );
 }
