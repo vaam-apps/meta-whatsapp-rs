@@ -857,6 +857,28 @@ mod tests {
         assert_eq!(gated, [Operation::SetComplianceInfo]);
     }
 
+    /// D231: the max price agreement is the one admin legal act, and no
+    /// tenant operation of the marketing family is a legal act of either
+    /// kind. Decisive: the arm of `is_legal_admin_act`, and a marketing
+    /// operation added to `is_legal_act`.
+    #[test]
+    fn the_agreement_is_the_one_admin_legal_act_and_no_marketing_operation_is_one() {
+        let gated: Vec<_> = AdminOperation::ALL
+            .into_iter()
+            .filter(|operation| is_legal_admin_act(*operation))
+            .collect();
+        assert_eq!(gated, [AdminOperation::SignMaxPriceAgreement]);
+        assert_eq!(
+            AdminOperation::SignMaxPriceAgreement.id(),
+            "sign_max_price_agreement"
+        );
+        for operation in Operation::ALL {
+            if operation.scope() == crate::model::Scope::Marketing {
+                assert!(!is_legal_act(operation), "{operation}");
+            }
+        }
+    }
+
     fn invalid_field<T: fmt::Debug>(result: Result<T, ServiceError>) -> String {
         let error = result.unwrap_err();
         assert_eq!(error.code(), "invalid_request");

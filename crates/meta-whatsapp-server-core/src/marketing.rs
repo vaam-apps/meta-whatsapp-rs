@@ -71,12 +71,8 @@ use meta_whatsapp_rs::core::recipient::Recipient;
 use meta_whatsapp_rs::core::secret::AccessToken;
 use serde_json::Value;
 
-use crate::audit::{
-    MarketingFacts, Outcome, Subject, marketing_audit, max_price_agreement_audit,
-};
-use crate::authz::{
-    AdminCaller, Authorizer, Caller, OwnedNumber, OwnedWaba, object_failed,
-};
+use crate::audit::{MarketingFacts, Outcome, Subject, marketing_audit, max_price_agreement_audit};
+use crate::authz::{AdminCaller, Authorizer, Caller, OwnedNumber, OwnedWaba, object_failed};
 use crate::error::{ErrorCode, ServiceError};
 use crate::messages::{
     Accepted, KeysOnly, MessageType, RecipientObject, SendMessage, admit_named_object, message,
@@ -193,8 +189,9 @@ pub fn max_price(prefix: &str, request: &MaxPriceRequest) -> Result<MaxPrice, Se
         }
         for (country, multiplier) in overrides {
             let shaped = country.len() == 2 && country.bytes().all(|b| b.is_ascii_uppercase());
-            let ranged =
-                multiplier.is_finite() && *multiplier > 0.0 && *multiplier <= MAX_COUNTRY_MULTIPLIER;
+            let ranged = multiplier.is_finite()
+                && *multiplier > 0.0
+                && *multiplier <= MAX_COUNTRY_MULTIPLIER;
             if !(shaped && ranged) {
                 return Err(field(NAME));
             }
@@ -307,7 +304,9 @@ pub fn sequence_name(name: &str) -> Result<(), ServiceError> {
 pub fn welcome_message(value: &Value) -> Result<WelcomeMessage, ServiceError> {
     let message: WelcomeMessage = meta_object("welcome_message_sequence", value)?;
     let part = |name: &str| format!("welcome_message_sequence.{name}");
-    if message.text.is_none() && message.autofill_message.is_none() && message.ice_breakers.is_empty()
+    if message.text.is_none()
+        && message.autofill_message.is_none()
+        && message.ice_breakers.is_empty()
     {
         return Err(ServiceError::invalid("welcome_message_sequence"));
     }
@@ -782,7 +781,9 @@ impl<'a> Marketing<'a> {
             owner_business: owner.map(|owner| {
                 let terms = owner.marketing_messages_onboarding_status;
                 OwnerBusiness {
-                    id: owner.id.map(meta_whatsapp_rs::core::ids::BusinessId::into_inner),
+                    id: owner
+                        .id
+                        .map(meta_whatsapp_rs::core::ids::BusinessId::into_inner),
                     name: owner.name,
                     terms_status: terms.as_ref().and_then(|t| wire(Some(&t.status))),
                     terms_time: terms.and_then(|t| t.time),
@@ -816,7 +817,11 @@ impl<'a> Marketing<'a> {
             disabled: Some(disabled),
             ..MarketingFacts::default()
         };
-        match self.account().set_cloud_api_marketing_disabled(disabled).await {
+        match self
+            .account()
+            .set_cloud_api_marketing_disabled(disabled)
+            .await
+        {
             Ok(()) => {
                 self.changed(CLOUD_API_MARKETING_SET, &facts, None);
                 Ok(())
@@ -846,7 +851,9 @@ impl<'a> Marketing<'a> {
         &self,
         request: &DuplicateTemplate,
     ) -> Result<Duplicated, ServiceError> {
-        self.templates.require_owned(&request.source_template_id).await?;
+        self.templates
+            .require_owned(&request.source_template_id)
+            .await?;
         let source = request.source_template_id.as_str();
         let facts = MarketingFacts {
             template_id: Some(source),
@@ -868,9 +875,7 @@ impl<'a> Marketing<'a> {
                     id: duplicated.id.as_str().to_owned(),
                     status: wire(duplicated.status.as_ref()),
                     category: wire(duplicated.category.as_ref()),
-                    source_template_id: duplicated
-                        .source_template_id
-                        .map(TemplateId::into_inner),
+                    source_template_id: duplicated.source_template_id.map(TemplateId::into_inner),
                 })
             }
             Err(error) => {
@@ -925,7 +930,13 @@ impl<'a> Marketing<'a> {
         id: &TemplateId,
     ) -> Result<Option<TemplateMaxPrice>, ServiceError> {
         self.templates.require_owned(id).await?;
-        match self.waba.client().marketing_template(id.clone()).max_price().await {
+        match self
+            .waba
+            .client()
+            .marketing_template(id.clone())
+            .max_price()
+            .await
+        {
             Ok(spec) => Ok(spec.map(|spec| TemplateMaxPrice {
                 bid_amount: spec.bid_amount,
                 bid_strategy: wire(spec.bid_strategy.as_ref()),
@@ -1074,7 +1085,10 @@ impl<'a> Marketing<'a> {
     /// The sequence `id`, looked for through the WABA's own edge
     /// (`sequence_id` filter); `None` when it answers none, or answers
     /// another sequence.
-    async fn owned_sequence(&self, id: &WelcomeSequenceId) -> Result<Option<Sequence>, ServiceError> {
+    async fn owned_sequence(
+        &self,
+        id: &WelcomeSequenceId,
+    ) -> Result<Option<Sequence>, ServiceError> {
         match self.sequences_api().get(id).await {
             Ok(found) => Ok(found
                 .filter(|sequence| sequence.sequence_id == *id)
@@ -1256,8 +1270,8 @@ impl<'a> MaxPriceAgreements<'a> {
             return Err(ServiceError::new(ErrorCode::FEATURE_NOT_AVAILABLE));
         }
         graph_id("business_id", business_id)?;
-        let business = BusinessId::new(business_id)
-            .map_err(|_| ServiceError::invalid("business_id"))?;
+        let business =
+            BusinessId::new(business_id).map_err(|_| ServiceError::invalid("business_id"))?;
         short_text("signer_name", &signer.name, SIGNER_NAME_MAX_CHARS)?;
         if signer.name.contains('\n') {
             return Err(ServiceError::invalid("signer_name"));
@@ -1389,7 +1403,10 @@ mod tests {
         let one = vec!["IN".to_owned()];
         assert!(reach_query(&one, "L7D").is_ok());
         assert_eq!(field(&reach_query(&[], "L7D").unwrap_err()), "countries");
-        assert_eq!(field(&reach_query(&one, "L30D").unwrap_err()), "date_interval");
+        assert_eq!(
+            field(&reach_query(&one, "L30D").unwrap_err()),
+            "date_interval"
+        );
         assert!(reach_query(&["in".to_owned()], "L1D").is_err());
         let many = vec!["IN".to_owned(); MAX_REACH_COUNTRIES + 1];
         assert!(reach_query(&many, "L1D").is_err());
@@ -1459,7 +1476,10 @@ mod tests {
             email: "jane.doe@example.com".to_owned(),
         };
         let shown = format!("{signer:?}");
-        assert!(!shown.contains("Jane") && !shown.contains("example.com"), "{shown}");
+        assert!(
+            !shown.contains("Jane") && !shown.contains("example.com"),
+            "{shown}"
+        );
         let send = MarketingSend {
             to: RecipientObject {
                 phone: Some("+16505551234".to_owned()),

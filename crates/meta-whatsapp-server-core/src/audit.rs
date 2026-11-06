@@ -335,7 +335,7 @@ pub struct MarketingFacts<'a> {
 }
 
 /// The operator's signing of Meta's max price beta agreement (roadmap
-/// M5h; docs/design/server.md, D231; OPEN_QUESTIONS #45): a legal act,
+/// M5h; docs/design/server.md, D231; `OPEN_QUESTIONS.md` #45): a legal act,
 /// logged like [`audit`] (target `audit`, message `admin change`) with the
 /// admin key's public id, the business portfolio's id and `outcome`. The
 /// signer's name and email are personal data and in no event.

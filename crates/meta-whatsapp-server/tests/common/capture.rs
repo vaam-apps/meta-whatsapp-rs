@@ -3139,7 +3139,7 @@ async fn marketing(h: &Harness, admin: &str) -> Vec<String> {
     };
     // A send, answered; then refused, Meta's text quoting the recipient and
     // the parameter.
-    let send = json!({
+    let promo = json!({
         "to": {"phone": MARKETING_PHONE},
         "template": {"name": "seasonal_sale_promo", "language": {"code": "en_US"},
             "components": [{"type": "body", "parameters": [{"type": "text", "text": MARKETING_PARAMETER}]}]},
@@ -3154,7 +3154,7 @@ async fn marketing(h: &Harness, admin: &str) -> Vec<String> {
                "messages": [{"id": "wamid.HBgLMTYzMTU1NTkwOTAVAgARGBI5QTNDQTVCM0Q0Q0Q2RTY3RTcA"}]}),
     );
     let sent = h
-        .call(call(Method::POST, format!("/v1/numbers/{PN}/marketing-messages")).json(&send))
+        .call(call(Method::POST, format!("/v1/numbers/{PN}/marketing-messages")).json(&promo))
         .await;
     ok(&sent, 202);
     h.graph.push_json(
@@ -3166,7 +3166,7 @@ async fn marketing(h: &Harness, admin: &str) -> Vec<String> {
                          "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
     );
     let refused = h
-        .call(call(Method::POST, format!("/v1/numbers/{PN}/marketing-messages")).json(&send))
+        .call(call(Method::POST, format!("/v1/numbers/{PN}/marketing-messages")).json(&promo))
         .await;
     assert!(refused.status.is_client_error(), "{}", refused.text);
     // Onboarding and the Cloud API switch.
@@ -3224,8 +3224,10 @@ async fn marketing(h: &Harness, admin: &str) -> Vec<String> {
                 Method::POST,
                 format!("/v1/wabas/{WABA}/marketing/template-duplicates"),
             )
-            .json(&json!({"source_template_id": TEMPLATE, "name": "seasonal_sale_promo_cheaper",
-                          "optimization_spec": {"bid_amount": 5000}})),
+            .json(
+                &json!({"source_template_id": TEMPLATE, "name": "seasonal_sale_promo_cheaper",
+                          "optimization_spec": {"bid_amount": 5000}}),
+            ),
         )
         .await,
         201,
@@ -3289,10 +3291,8 @@ async fn marketing(h: &Harness, admin: &str) -> Vec<String> {
             "ice_breakers": [{"title": "Quick reply 1"}]}});
     h.graph.push_json(200, json!({"sequence_id": SEQUENCE}));
     ok(
-        &h.call(
-            call(Method::POST, format!("/v1/wabas/{WABA}/welcome-sequences")).json(&welcome),
-        )
-        .await,
+        &h.call(call(Method::POST, format!("/v1/wabas/{WABA}/welcome-sequences")).json(&welcome))
+            .await,
         201,
     );
     h.graph.push_json(
@@ -3372,7 +3372,8 @@ async fn marketing(h: &Harness, admin: &str) -> Vec<String> {
     );
     let refused = h.call(sign(BUSINESS_TOKEN)).await;
     assert!(refused.status.is_client_error(), "{}", refused.text);
-    h.graph.push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
     ok(&h.call(sign(BUSINESS_TOKEN)).await, 504);
     vec![
         key.clone(),
@@ -3406,7 +3407,10 @@ fn check_marketing_audit(events: &[serde_json::Value], changes: &[&serde_json::V
         .iter()
         .map(|fields| fields["action"].as_str().unwrap_or_default())
         .collect();
-    assert_eq!(seen, MARKETING_ACTIONS, "the marketing changes' audit events");
+    assert_eq!(
+        seen, MARKETING_ACTIONS,
+        "the marketing changes' audit events"
+    );
     for fields in &ours {
         assert_eq!(fields["outcome"], "answered", "{fields}");
         assert!(fields["key_id"].is_string(), "{fields}");
@@ -3433,7 +3437,11 @@ fn check_marketing_audit(events: &[serde_json::Value], changes: &[&serde_json::V
         }
     }
     assert_eq!(ours[0]["disabled"], true, "{}", ours[0]);
-    assert_eq!(ours[1]["new_template_id"], "1733678867511493", "{}", ours[1]);
+    assert_eq!(
+        ours[1]["new_template_id"], "1733678867511493",
+        "{}",
+        ours[1]
+    );
     assert_eq!(ours[1]["bid_amount"], 5000, "{}", ours[1]);
     let agreements: Vec<&serde_json::Value> = events
         .iter()

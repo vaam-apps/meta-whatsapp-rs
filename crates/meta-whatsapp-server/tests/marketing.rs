@@ -154,7 +154,10 @@ async fn a_wrong_send_is_refused_first_and_a_timeout_is_never_replayed() {
     let path = format!("/v1/numbers/{PN}/marketing-messages");
     let template = json!({"name": "seasonal_sale_promo", "language": {"code": "en_US"}});
     for (body, field) in [
-        (json!({"to": {"phone": "16505551234"}, "template": template}), "to.phone"),
+        (
+            json!({"to": {"phone": "16505551234"}, "template": template}),
+            "to.phone",
+        ),
         (json!({"to": {}, "template": template}), "to"),
         (
             json!({"to": {"phone": "+16505551234"}, "template": {"name": "x", "language": {"code": "en"}, "extra": 1}}),
@@ -169,10 +172,20 @@ async fn a_wrong_send_is_refused_first_and_a_timeout_is_never_replayed() {
             json!({"to": {"phone": "+16505551234"}, "template": template, "product_policy": "NEVER"}),
             "body",
         ),
-        (json!({"to": {"phone": "+16505551234"}, "template": template, "ttl": 5}), "body"),
+        (
+            json!({"to": {"phone": "+16505551234"}, "template": template, "ttl": 5}),
+            "body",
+        ),
     ] {
-        let reply = h.call(call(Method::POST, path.clone(), &key).json(&body)).await;
-        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", reply.text);
+        let reply = h
+            .call(call(Method::POST, path.clone(), &key).json(&body))
+            .await;
+        assert_eq!(
+            reply.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            reply.text
+        );
         assert_eq!(reply.json()["error"]["field"], field, "{body}");
     }
     assert!(h.graph.requests().is_empty());
@@ -213,7 +226,10 @@ async fn a_catalog_of_another_waba_in_a_marketing_send_is_not_found_and_nothing_
         )
         .await;
     assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.text);
-    assert_eq!(sent_paths(&h), [format!("GET /v25.0/{WABA}/product_catalogs")]);
+    assert_eq!(
+        sent_paths(&h),
+        [format!("GET /v25.0/{WABA}/product_catalogs")]
+    );
     assert_eq!(h.graph.remaining(), 0);
 }
 
@@ -250,10 +266,10 @@ async fn onboarding_and_the_cloud_api_switch_are_read_and_set_as_the_pages_write
     );
     let requests = h.graph.requests();
     assert_eq!(requests.len(), 2);
-    for (request, fields) in requests
-        .iter()
-        .zip(["marketing_messages_onboarding_status", "owner_business_info"])
-    {
+    for (request, fields) in requests.iter().zip([
+        "marketing_messages_onboarding_status",
+        "owner_business_info",
+    ]) {
         assert_eq!(request.method, Method::GET);
         assert_eq!(request.path(), format!("/v25.0/{WABA}"));
         assert_eq!(request.query("fields").as_deref(), Some(fields));
@@ -340,8 +356,10 @@ async fn a_template_is_duplicated_at_another_price_only_when_the_wabas_own() {
     assert_eq!(post.bearer(), Some(TOKEN));
     assert_eq!(
         post.json(),
-        Some(json!({"source_template_id": TEMPLATE, "name": "seasonal_sale_promo_high_intent",
-                    "optimization_spec": {"bid_amount": 87000, "bid_strategy": "LOWEST_COST_WITH_BID_CAP"}}))
+        Some(
+            json!({"source_template_id": TEMPLATE, "name": "seasonal_sale_promo_high_intent",
+                    "optimization_spec": {"bid_amount": 87000, "bid_strategy": "LOWEST_COST_WITH_BID_CAP"}})
+        )
     );
     let again = h
         .call(duplicate("seasonal_sale_promo_high_intent").header("idempotency-key", "dup-1"))
@@ -355,9 +373,18 @@ async fn a_template_is_duplicated_at_another_price_only_when_the_wabas_own() {
     assert_eq!(h.graph.requests().len(), 5, "no duplication");
     // Refused first.
     for (body, field) in [
-        (json!({"source_template_id": "0123", "name": "n", "optimization_spec": {"bid_amount": 1}}), "source_template_id"),
-        (json!({"source_template_id": TEMPLATE, "name": "Not Valid", "optimization_spec": {"bid_amount": 1}}), "name"),
-        (json!({"source_template_id": TEMPLATE, "name": "n", "optimization_spec": {"bid_amount": 0}}), "optimization_spec.bid_amount"),
+        (
+            json!({"source_template_id": "0123", "name": "n", "optimization_spec": {"bid_amount": 1}}),
+            "source_template_id",
+        ),
+        (
+            json!({"source_template_id": TEMPLATE, "name": "Not Valid", "optimization_spec": {"bid_amount": 1}}),
+            "name",
+        ),
+        (
+            json!({"source_template_id": TEMPLATE, "name": "n", "optimization_spec": {"bid_amount": 0}}),
+            "optimization_spec.bid_amount",
+        ),
         (
             json!({"source_template_id": TEMPLATE, "name": "n",
                    "optimization_spec": {"bid_amount": 1, "bid_strategy": "MANUAL"}}),
@@ -409,10 +436,8 @@ async fn a_templates_max_price_is_read_set_and_cleared_only_for_the_wabas_own() 
     script_template(&h, TEMPLATE, true);
     h.graph.push_json(200, json!({"success": true}));
     let set = h
-        .call(
-            call(Method::PUT, path.clone(), &key).json(&json!({
-                "bid_amount": 87000, "bid_country_multiplier_overrides": {"IN": 1.2}})),
-        )
+        .call(call(Method::PUT, path.clone(), &key).json(&json!({
+                "bid_amount": 87000, "bid_country_multiplier_overrides": {"IN": 1.2}})))
         .await;
     assert_eq!(set.status, StatusCode::NO_CONTENT, "{}", set.text);
     let post = h.graph.last_request().unwrap();
@@ -446,17 +471,30 @@ async fn a_templates_max_price_is_read_set_and_cleared_only_for_the_wabas_own() 
             c = c.json(body);
         }
         let reply = h.call(c).await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{method}: {}", reply.text);
+        assert_eq!(
+            reply.status,
+            StatusCode::NOT_FOUND,
+            "{method}: {}",
+            reply.text
+        );
     }
     assert_eq!(h.graph.requests().len(), before + 6, "lookups only");
     // Refused first.
     let before = h.graph.requests().len();
     for (body, field) in [
         (json!({"bid_amount": 0}), "bid_amount"),
-        (json!({"bid_amount": 5, "bid_country_multiplier_overrides": {"IN": 11.0}}), "bid_country_multiplier_overrides"),
-        (json!({"bid_amount": 5, "bid_country_multiplier_overrides": {"in": 1.0}}), "bid_country_multiplier_overrides"),
+        (
+            json!({"bid_amount": 5, "bid_country_multiplier_overrides": {"IN": 11.0}}),
+            "bid_country_multiplier_overrides",
+        ),
+        (
+            json!({"bid_amount": 5, "bid_country_multiplier_overrides": {"in": 1.0}}),
+            "bid_country_multiplier_overrides",
+        ),
     ] {
-        let reply = h.call(call(Method::PUT, path.clone(), &key).json(&body)).await;
+        let reply = h
+            .call(call(Method::PUT, path.clone(), &key).json(&body))
+            .await;
         assert_eq!(reply.json()["error"]["field"], field, "{body}");
     }
     assert_eq!(h.graph.requests().len(), before);
@@ -522,9 +560,13 @@ async fn a_reach_estimate_asks_with_the_countries_and_the_interval() {
 async fn welcome_message_sequences_are_created_read_changed_and_deleted() {
     let (h, key) = connected(false).await;
     let create = || {
-        call(Method::POST, format!("/v1/wabas/{WABA}/welcome-sequences"), &key)
-            .header("idempotency-key", "seq-1")
-            .json(&json!({"name": "Driver sign-up",
+        call(
+            Method::POST,
+            format!("/v1/wabas/{WABA}/welcome-sequences"),
+            &key,
+        )
+        .header("idempotency-key", "seq-1")
+        .json(&json!({"name": "Driver sign-up",
                 "welcome_message_sequence": {
                     "text": "This is a welcome message authored in a 3P tool",
                     "autofill_message": {"content": "Hello! Can I get more info on this!"},
@@ -536,7 +578,10 @@ async fn welcome_message_sequences_are_created_read_changed_and_deleted() {
     assert_eq!(created.json(), json!({"sequence_id": SEQUENCE}));
     let post = h.graph.last_request().unwrap();
     assert_eq!(post.method, Method::POST);
-    assert_eq!(post.path(), format!("/v25.0/{WABA}/welcome_message_sequences"));
+    assert_eq!(
+        post.path(),
+        format!("/v25.0/{WABA}/welcome_message_sequences")
+    );
     assert_eq!(post.bearer(), Some(TOKEN));
     let RecordedBody::Multipart(_) = &post.body else {
         panic!("a form: {:?}", post.body)
@@ -579,7 +624,11 @@ async fn welcome_message_sequences_are_created_read_changed_and_deleted() {
     assert_eq!(read.status, StatusCode::OK, "{}", read.text);
     assert_eq!(read.json()["name"], "Driver Sign up");
     assert_eq!(
-        h.graph.last_request().unwrap().query("sequence_id").as_deref(),
+        h.graph
+            .last_request()
+            .unwrap()
+            .query("sequence_id")
+            .as_deref(),
         Some(SEQUENCE)
     );
 
@@ -604,7 +653,10 @@ async fn welcome_message_sequences_are_created_read_changed_and_deleted() {
     assert_eq!(deleted.status, StatusCode::NO_CONTENT, "{}", deleted.text);
     let delete = h.graph.last_request().unwrap();
     assert_eq!(delete.method, Method::DELETE);
-    assert_eq!(delete.path(), format!("/v25.0/{WABA}/welcome_message_sequences"));
+    assert_eq!(
+        delete.path(),
+        format!("/v25.0/{WABA}/welcome_message_sequences")
+    );
     assert_eq!(delete.query("sequence_id").as_deref(), Some(SEQUENCE));
     assert_eq!(h.graph.remaining(), 0);
 }
@@ -630,16 +682,40 @@ async fn a_sequence_the_waba_does_not_hold_is_not_found_and_nothing_is_changed()
                 c = c.json(body);
             }
             let reply = h.call(c).await;
-            assert_eq!(reply.status, StatusCode::NOT_FOUND, "{method}: {}", reply.text);
-            assert_eq!(h.graph.requests().len(), before + 1, "{method}: the lookup only");
+            assert_eq!(
+                reply.status,
+                StatusCode::NOT_FOUND,
+                "{method}: {}",
+                reply.text
+            );
+            assert_eq!(
+                h.graph.requests().len(),
+                before + 1,
+                "{method}: the lookup only"
+            );
         }
     }
     let before = h.graph.requests().len();
     for (method, path, body, field) in [
-        (Method::GET, format!("/v1/wabas/{WABA}/welcome-sequences/12a"), None, "sequence_id"),
+        (
+            Method::GET,
+            format!("/v1/wabas/{WABA}/welcome-sequences/12a"),
+            None,
+            "sequence_id",
+        ),
         (Method::PATCH, one.clone(), Some(json!({})), "update"),
-        (Method::PATCH, one.clone(), Some(json!({"welcome_message_sequence": {}})), "welcome_message_sequence"),
-        (Method::PATCH, one.clone(), Some(json!({"name": ""})), "name"),
+        (
+            Method::PATCH,
+            one.clone(),
+            Some(json!({"welcome_message_sequence": {}})),
+            "welcome_message_sequence",
+        ),
+        (
+            Method::PATCH,
+            one.clone(),
+            Some(json!({"name": ""})),
+            "name",
+        ),
         (
             Method::POST,
             format!("/v1/wabas/{WABA}/welcome-sequences"),
@@ -652,7 +728,12 @@ async fn a_sequence_the_waba_does_not_hold_is_not_found_and_nothing_is_changed()
             Some(json!({"name": "n"})),
             "body",
         ),
-        (Method::GET, format!("/v1/wabas/{WABA}/welcome-sequences?limit=101"), None, "limit"),
+        (
+            Method::GET,
+            format!("/v1/wabas/{WABA}/welcome-sequences?limit=101"),
+            None,
+            "limit",
+        ),
     ] {
         let mut c = call(method, path.clone(), &key);
         if let Some(body) = &body {
@@ -686,9 +767,7 @@ async fn a_gif_header_passes_through_template_creation() {
         ]
     });
     let reply = h
-        .call(
-            call(Method::POST, format!("/v1/wabas/{WABA}/templates"), &key).json(&definition),
-        )
+        .call(call(Method::POST, format!("/v1/wabas/{WABA}/templates"), &key).json(&definition))
         .await;
     assert_eq!(reply.status, StatusCode::CREATED, "{}", reply.text);
     let request = h.graph.last_request().unwrap();
@@ -709,8 +788,10 @@ fn sign(business: &str, admin: &str) -> Call {
         format!("/v1/admin/businesses/{business}/max-price-agreement"),
         admin,
     )
-    .json(&json!({"signer_name": "Jane Doe", "signer_email": "jane.doe@example.com",
-                  "token": BUSINESS_TOKEN}))
+    .json(
+        &json!({"signer_name": "Jane Doe", "signer_email": "jane.doe@example.com",
+                  "token": BUSINESS_TOKEN}),
+    )
 }
 
 /// With the legal acts off (the default) the agreement is `403
@@ -751,6 +832,7 @@ async fn with_the_legal_acts_off_the_agreement_is_refused_without_a_request_to_m
 /// signer answers its code and the service's kind, never its text; a
 /// refusal or a timeout is never replayed. The inputs are checked first.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one scenario: signed, refused, limited, cut, then the checks
 async fn with_the_legal_acts_on_the_agreement_is_one_request_and_never_replayed() {
     let (h, _) = connected(true).await;
     let admin = h.admin_key().await;
@@ -785,7 +867,12 @@ async fn with_the_legal_acts_on_the_agreement_is_one_request_and_never_replayed(
                          "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
     );
     let refused = h.call(sign(BUSINESS, &admin)).await;
-    assert_eq!(refused.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", refused.text);
+    assert_eq!(
+        refused.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        refused.text
+    );
     assert!(
         !refused.text.contains("Jane") && !refused.text.contains("example.com"),
         "{}",
@@ -800,19 +887,48 @@ async fn with_the_legal_acts_on_the_agreement_is_one_request_and_never_replayed(
                          "code": 4, "fbtrace_id": "x"}}),
     );
     let limited = h.call(sign(BUSINESS, &admin)).await;
-    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS, "{}", limited.text);
+    assert_eq!(
+        limited.status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "{}",
+        limited.text
+    );
     assert!(!limited.text.contains("Jane"));
     h.graph.push_error(|| TransportError::Timeout);
     let cut = h.call(sign(BUSINESS, &admin)).await;
     assert_eq!(cut.status, StatusCode::GATEWAY_TIMEOUT, "{}", cut.text);
-    assert_eq!(h.graph.requests().len(), 4, "one request per call, none replayed");
+    assert_eq!(
+        h.graph.requests().len(),
+        4,
+        "one request per call, none replayed"
+    );
     // Checked first.
     for (path, body, field) in [
-        ("not-an-id".to_owned(), json!({"signer_name": "J", "signer_email": "j@e.x", "token": "t"}), "business_id"),
-        (BUSINESS.to_owned(), json!({"signer_name": " ", "signer_email": "j@e.x", "token": "t"}), "signer_name"),
-        (BUSINESS.to_owned(), json!({"signer_name": "J", "signer_email": "no-at", "token": "t"}), "signer_email"),
-        (BUSINESS.to_owned(), json!({"signer_name": "J", "signer_email": "j@e.x", "token": " "}), "token"),
-        (BUSINESS.to_owned(), json!({"signer_name": "J", "signer_email": "j@e.x"}), "body"),
+        (
+            "not-an-id".to_owned(),
+            json!({"signer_name": "J", "signer_email": "j@e.x", "token": "t"}),
+            "business_id",
+        ),
+        (
+            BUSINESS.to_owned(),
+            json!({"signer_name": " ", "signer_email": "j@e.x", "token": "t"}),
+            "signer_name",
+        ),
+        (
+            BUSINESS.to_owned(),
+            json!({"signer_name": "J", "signer_email": "no-at", "token": "t"}),
+            "signer_email",
+        ),
+        (
+            BUSINESS.to_owned(),
+            json!({"signer_name": "J", "signer_email": "j@e.x", "token": " "}),
+            "token",
+        ),
+        (
+            BUSINESS.to_owned(),
+            json!({"signer_name": "J", "signer_email": "j@e.x"}),
+            "body",
+        ),
     ] {
         let reply = h
             .call(
@@ -851,7 +967,8 @@ async fn no_other_route_ever_sends_the_agreement() {
     };
     let mut walked = 0;
     for operation in common::spec_operations() {
-        let numbered = operation.template.contains("{pn}") || operation.template.contains("{waba_id}");
+        let numbered =
+            operation.template.contains("{pn}") || operation.template.contains("{waba_id}");
         if operation.admin() || !numbered || operation.template.contains("stream") {
             continue;
         }
@@ -869,7 +986,10 @@ async fn no_other_route_ever_sends_the_agreement() {
     assert!(
         asked.iter().all(|p| !p.contains("max_price_agreements")),
         "{:?}",
-        asked.iter().filter(|p| p.contains("max_price")).collect::<Vec<_>>()
+        asked
+            .iter()
+            .filter(|p| p.contains("max_price"))
+            .collect::<Vec<_>>()
     );
     // Meta refusing for want of the agreement is returned, not answered by
     // signing (on a harness whose script the walk left empty).
@@ -894,7 +1014,10 @@ async fn no_other_route_ever_sends_the_agreement() {
         .await;
     assert!(!refused.status.is_success(), "{}", refused.text);
     let after: Vec<String> = sent_paths(&h)[before..].to_vec();
-    assert!(after.iter().all(|p| !p.contains("max_price_agreements")), "{after:?}");
+    assert!(
+        after.iter().all(|p| !p.contains("max_price_agreements")),
+        "{after:?}"
+    );
 }
 
 /// The agreement's call is named by one module of the service and nowhere
@@ -903,7 +1026,9 @@ async fn no_other_route_ever_sends_the_agreement() {
 /// is the only handler that reaches it. Decisive: a second caller.
 #[test]
 fn only_the_marketing_core_names_the_agreement() {
-    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
     let mut found = Vec::new();
     let mut stack = vec![crates.to_path_buf()];
     while let Some(dir) = stack.pop() {

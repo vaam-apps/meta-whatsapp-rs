@@ -261,8 +261,14 @@ async fn another_tenants_number_or_waba_is_not_found_and_the_vault_is_never_read
         // welcome message sequences.
         (Method::POST, "/v1/numbers/{pn}/marketing-messages"),
         (Method::GET, "/v1/wabas/{waba_id}/marketing/onboarding"),
-        (Method::GET, "/v1/wabas/{waba_id}/marketing/cloud-api-marketing"),
-        (Method::PUT, "/v1/wabas/{waba_id}/marketing/cloud-api-marketing"),
+        (
+            Method::GET,
+            "/v1/wabas/{waba_id}/marketing/cloud-api-marketing",
+        ),
+        (
+            Method::PUT,
+            "/v1/wabas/{waba_id}/marketing/cloud-api-marketing",
+        ),
         (
             Method::POST,
             "/v1/wabas/{waba_id}/marketing/template-duplicates",

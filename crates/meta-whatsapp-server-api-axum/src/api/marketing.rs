@@ -33,8 +33,8 @@ use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::marketing::{
-    self as domain, DuplicationRequest, Marketing, MarketingSend, MarketingSends, MaxPriceAgreements,
-    MaxPriceRequest, Signer,
+    self as domain, DuplicationRequest, Marketing, MarketingSend, MarketingSends,
+    MaxPriceAgreements, MaxPriceRequest, Signer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -186,9 +186,8 @@ pub(crate) async fn send_marketing_message(
         Ok(message) => message,
         Err(error) => return error.into_response(),
     };
-    state
-        .idempotent(&caller, key, fingerprint, send(&state, &owned, &message))
-        .await
+    // Boxed: the send's future is large (clippy::large_futures).
+    Box::pin(state.idempotent(&caller, key, fingerprint, send(&state, &owned, &message))).await
 }
 
 // ─── Onboarding and the Cloud API switch ─────────────────────────────────
@@ -507,9 +506,7 @@ pub(crate) async fn duplicate_marketing_template(
         Ok(service) => service,
         Err(error) => return error.into_response(),
     };
-    state
-        .idempotent(&caller, key, fingerprint, duplicate(&service, &request))
-        .await
+    Box::pin(state.idempotent(&caller, key, fingerprint, duplicate(&service, &request))).await
 }
 
 /// `?countries=` and `?date_interval=`, as the OpenAPI document declares
@@ -1105,7 +1102,9 @@ pub(crate) async fn delete_welcome_sequence(
     Path((_, sequence_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
     let id = domain::sequence_id("sequence_id", &sequence_id)?;
-    marketing(&state, &caller, &owned)?.delete_sequence(&id).await?;
+    marketing(&state, &caller, &owned)?
+        .delete_sequence(&id)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1220,7 +1219,12 @@ mod tests {
         let sequence = domain::Sequence {
             sequence_id: "0139138".to_owned(),
             name: Some("Driver Sign up".to_owned()),
-            welcome_message: Some(WelcomeMessage::new().text("Hi").autofill("Hello").ice_breaker("One")),
+            welcome_message: Some(
+                WelcomeMessage::new()
+                    .text("Hi")
+                    .autofill("Hello")
+                    .ice_breaker("One"),
+            ),
             is_used_in_ad: Some(false),
         };
         assert_eq!(
