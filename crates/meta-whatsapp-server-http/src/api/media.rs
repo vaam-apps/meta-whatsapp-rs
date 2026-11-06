@@ -451,6 +451,67 @@ async fn read_upload(
     )?))
 }
 
+/// Read a form of one field, `file` (roadmap M5f2: a group's picture),
+/// held to the media uploads' reading: the same framing budget and merged
+/// chunks, the file read **no further than `max_bytes`** (and the form's
+/// framing, [`FORM_OVERHEAD`]) whatever the client sends, so a body larger
+/// than the bound is not buffered past it: `413 media_too_large`. Any
+/// other field, a second `file`, or a body that is not a form is `422` on
+/// `body`; no `file` is `422` on `file`. The part's own content type and
+/// name are ignored: the caller checks the bytes.
+///
+/// # Errors
+///
+/// As above, before anything is asked of Meta.
+pub async fn read_file_form(max_bytes: u64, request: Request) -> Result<Bytes, ApiError> {
+    let boundary = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| multer::parse_boundary(v).ok())
+        .ok_or_else(|| ApiError::invalid("body"))?;
+    let framing = std::sync::Arc::new(Framing::default());
+    let body = FormBody {
+        inner: request.into_body().into_data_stream(),
+        paused: false,
+        ended: false,
+        framing: framing.clone(),
+    };
+    let constraints = multer::Constraints::new()
+        .allowed_fields(vec!["file"])
+        .size_limit(
+            multer::SizeLimit::new()
+                .whole_stream(max_bytes.saturating_add(FORM_OVERHEAD))
+                .for_field("file", max_bytes),
+        );
+    let mut form = multer::Multipart::with_constraints(body, boundary, constraints);
+    let mut file: Option<Vec<u8>> = None;
+    loop {
+        framing.arm();
+        let next = form.next_field().await;
+        framing.disarm();
+        let Some(mut field) = next.map_err(|e| form_error(&e))? else {
+            break;
+        };
+        match field.name() {
+            Some("file") if file.is_none() => {
+                let mut data = Vec::new();
+                while let Some(chunk) = field.chunk().await.map_err(|e| form_error(&e))? {
+                    if u64::try_from(data.len() + chunk.len()).unwrap_or(u64::MAX) > max_bytes {
+                        return Err(ApiError::new(ErrorCode::MEDIA_TOO_LARGE));
+                    }
+                    data.extend_from_slice(&chunk);
+                }
+                file = Some(data);
+            }
+            Some("file") => return Err(ApiError::invalid("file")),
+            _ => return Err(ApiError::invalid("body")),
+        }
+    }
+    file.map(Bytes::from)
+        .ok_or_else(|| ApiError::invalid("file"))
+}
+
 /// The core's media operations on `owned`, with `state`'s slots, reading
 /// the media ids the state's outbox recorded as received (roadmap M2e),
 /// counted in its metrics (`owned` is the state's own: the extractor made

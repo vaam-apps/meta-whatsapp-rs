@@ -244,6 +244,8 @@ pub enum Operation {
     GetGroup,
     /// `update_group`: a group's subject and description changed (roadmap M5f; pending the owner's confirmation before the first release).
     UpdateGroup,
+    /// `set_group_picture`: a group's picture replaced (roadmap M5f2; pending the owner's confirmation before the first release).
+    SetGroupPicture,
     /// `delete_group`: a group deleted, its participants removed (roadmap M5f; pending the owner's confirmation before the first release).
     DeleteGroup,
     /// `get_group_invite_link`: a group's invite link (roadmap M5f; pending the owner's confirmation before the first release).
@@ -372,7 +374,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-    pub const ALL: [Self; 159] = [
+    pub const ALL: [Self; 160] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,
@@ -470,6 +472,7 @@ impl Operation {
         Self::ListGroups,
         Self::GetGroup,
         Self::UpdateGroup,
+        Self::SetGroupPicture,
         Self::DeleteGroup,
         Self::GetGroupInviteLink,
         Self::ResetGroupInviteLink,
@@ -635,6 +638,7 @@ impl Operation {
             Self::ListGroups => "list_groups",
             Self::GetGroup => "get_group",
             Self::UpdateGroup => "update_group",
+            Self::SetGroupPicture => "set_group_picture",
             Self::DeleteGroup => "delete_group",
             Self::GetGroupInviteLink => "get_group_invite_link",
             Self::ResetGroupInviteLink => "reset_group_invite_link",
@@ -821,6 +825,7 @@ impl Operation {
             | Self::ListGroups
             | Self::GetGroup
             | Self::UpdateGroup
+            | Self::SetGroupPicture
             | Self::DeleteGroup
             | Self::GetGroupInviteLink
             | Self::ResetGroupInviteLink
