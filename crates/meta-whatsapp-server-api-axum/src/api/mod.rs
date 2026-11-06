@@ -30,6 +30,7 @@ pub mod groups;
 pub mod inbox;
 mod listing;
 pub mod messages;
+pub mod number_settings;
 pub mod numbers;
 pub mod otp;
 pub mod payments;
@@ -157,6 +158,34 @@ fn numbers_routes() -> OpenApiRouter<Grant> {
             display_name::get_display_name,
             display_name::request_display_name_change
         ))
+        // Roadmap M5c3.
+        .routes(routes!(
+            number_settings::get_number_settings,
+            number_settings::update_number_settings
+        ))
+        .routes(routes!(
+            number_settings::enable_payload_encryption,
+            number_settings::disable_payload_encryption
+        ))
+        .routes(routes!(
+            number_settings::get_username,
+            number_settings::set_username,
+            number_settings::delete_username
+        ))
+        .routes(routes!(number_settings::list_username_suggestions))
+        .routes(routes!(
+            number_settings::get_official_business_account,
+            number_settings::request_official_business_account
+        ))
+        .routes(routes!(
+            number_settings::get_compliance_info,
+            number_settings::set_compliance_info
+        ))
+        .routes(routes!(number_settings::get_health_status))
+        .routes(routes!(
+            number_settings::get_conversational_components,
+            number_settings::set_conversational_components
+        ))
         .routes(routes!(numbers::disconnect_waba))
 }
 
@@ -217,7 +246,10 @@ fn groups_routes() -> OpenApiRouter<Grant> {
 }
 
 fn erasure_routes() -> OpenApiRouter<Grant> {
-    OpenApiRouter::new().routes(routes!(erasure::erase_customer))
+    OpenApiRouter::new()
+        .routes(routes!(erasure::erase_customer))
+        // Roadmap M5c3: a data-subject erasure, so scope `erasure`.
+        .routes(routes!(number_settings::delete_contact_book_entry))
 }
 
 fn payments_routes() -> OpenApiRouter<Grant> {
@@ -573,6 +605,7 @@ mod tests {
             ("registration.rs", include_str!("registration.rs")),
             ("events.rs", include_str!("events.rs")),
             ("display_name.rs", include_str!("display_name.rs")),
+            ("number_settings.rs", include_str!("number_settings.rs")),
             ("groups.rs", include_str!("groups.rs")),
             ("inbox.rs", include_str!("inbox.rs")),
             ("messages.rs", include_str!("messages.rs")),

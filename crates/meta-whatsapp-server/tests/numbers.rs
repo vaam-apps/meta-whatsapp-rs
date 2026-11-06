@@ -90,7 +90,8 @@ async fn a_numbers_details_come_from_meta_with_the_tenants_token() {
             "verified_name": "John's Cake Shop",
             "quality_rating": "GREEN",
             "name_status": "APPROVED",
-            "throughput": {"level": "STANDARD"}
+            "throughput": {"level": "STANDARD"},
+            "messaging_limit_tier": "TIER_1K"
         }),
     );
     let reply = h
@@ -107,7 +108,8 @@ async fn a_numbers_details_come_from_meta_with_the_tenants_token() {
             "verified_name": "John's Cake Shop",
             "quality_rating": "GREEN",
             "name_status": "APPROVED",
-            "throughput": {"level": "STANDARD"}
+            "throughput": {"level": "STANDARD"},
+            "messaging_limit_tier": "TIER_1K"
         })
     );
     let request = h.graph.last_request().unwrap();
@@ -115,7 +117,12 @@ async fn a_numbers_details_come_from_meta_with_the_tenants_token() {
     assert_eq!(request.path(), format!("/v25.0/{PN}"));
     assert_eq!(
         request.query("fields").as_deref(),
-        Some("display_phone_number,verified_name,quality_rating,name_status,throughput")
+        // Roadmap M5c3: the messaging limit tier is asked for (dropping
+        // it from `NUMBER_FIELDS` fails here), and answered.
+        Some(
+            "display_phone_number,verified_name,quality_rating,name_status,throughput,\
+             messaging_limit_tier"
+        )
     );
     assert_eq!(request.bearer(), Some(TOKEN));
     assert_eq!(h.graph.remaining(), 0);

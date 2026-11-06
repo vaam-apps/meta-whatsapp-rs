@@ -328,6 +328,10 @@ pub async fn exercise(h: &Harness) -> Secrets {
     // The profile picture's upload and the display name (roadmap M5c2).
     secrets.section("profile");
     secrets.extend(picture_and_display_name(h, &admin).await);
+    // A number's settings (roadmap M5c3): keys, the username, the
+    // declarations and the contact book's id are secrets.
+    secrets.section("number_settings");
+    secrets.extend(number_settings(h, &admin).await);
     // Payments (roadmap P2): the OAuth links are credentials.
     secrets.section("payments");
     secrets.extend(payments(h, &admin).await);
@@ -876,6 +880,9 @@ pub fn with_uploads(
     meta_whatsapp_server::state::Settings {
         app_id: Some(meta_whatsapp_rs::core::ids::AppId::new("634974688087057").unwrap()),
         media_converter: Some(Arc::new(StubConverter)),
+        // Roadmap M5c3: the legal acts are taken, so that their routes
+        // run through (they are off by default).
+        legal_acts: true,
         ..settings
     }
 }
@@ -2840,6 +2847,329 @@ async fn picture_and_display_name(h: &Harness, admin: &str) -> Vec<String> {
     ]
 }
 
+/// The business's public key of the payload encryption scenario: base64 of
+/// a `SubjectPublicKeyInfo` header and a distinctive tail.
+const PAYLOAD_KEY: &str = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AUEFZTE9BRC1LRVktTE9HLVNFQ1JFVC03WEs=";
+const CLOUD_KEY: &str = "CLOUD-ENCRYPTION-KEY-LOG-SECRET-7XK";
+const KEY_FINGERPRINT: &str = "FINGERPRINT-LOG-SECRET-7XK";
+const SETTINGS_USERNAME: &str = "log_secret_shrub_7xk";
+const OBA_SITE: &str = "https://oba-log-secret-7xk.example";
+const OBA_LINK: &str = "https://oba-link-log-secret-7xk.example/";
+const OBA_INFO: &str = "OBA-ADDITIONAL-INFO-LOG-SECRET-7XK";
+const ENTITY_NAME: &str = "Compliance Entity Log Secret 7XK";
+const OFFICER_NAME: &str = "Grievance Officer Log Secret 7XK";
+const OFFICER_EMAIL: &str = "grievance-log-secret-7xk@luckyshrub.example";
+const CARE_EMAIL: &str = "care-log-secret-7xk@luckyshrub.example";
+const CARE_MOBILE: &str = "+91 98712 34567";
+const CONTACT_BSUID: &str = "US.13491208655302749999";
+const PROMPT: &str = "PROMPT-LOG-SECRET-7XK";
+const COMMAND: &str = "cmdlogsecret7xk";
+const COMMAND_HINT: &str = "COMMAND-HINT-LOG-SECRET-7XK";
+
+/// The audit actions of a number's settings (roadmap M5c3), in the order
+/// the scenario `number_settings` takes them.
+const SETTINGS_ACTIONS: [&str; 10] = [
+    "number_setting_changed",
+    "payload_encryption_changed",
+    "payload_encryption_changed",
+    "username_set",
+    "username_deleted",
+    "official_business_account_requested",
+    "compliance_info_set",
+    "conversational_components_set",
+    "contact_book_entry_deleted",
+    "payload_encryption_changed",
+];
+
+/// A number's settings (roadmap M5c3), each exercised with the legal acts
+/// on: a setting changed, payload encryption turned on (its key, Meta's
+/// cloud key and the fingerprint planted), off, and on with the call cut,
+/// the username, the application, the declaration, the components and the
+/// contact book entry erased. Returns what must not be logged.
+#[allow(clippy::too_many_lines)] // one scenario, read top to bottom
+async fn number_settings(h: &Harness, admin: &str) -> Vec<String> {
+    const PN: &str = "1972385232742141";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["numbers", "erasure"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let url = |path: &str| format!("/v1/numbers/{PN}/{path}");
+    let ok = |reply: &super::Reply, status: u16| {
+        assert_eq!(reply.status.as_u16(), status, "{}", reply.text);
+    };
+
+    // The settings read: Meta's cloud key and the fingerprint are in the
+    // answer's source and in no log (the first, in no answer either).
+    h.graph.push_json(
+        200,
+        json!({
+            "storage_configuration": {"status": "IN_COUNTRY_STORAGE_DISABLED"},
+            "payload_encryption": {
+                "status": "enabled",
+                "client_encryption_key_fingerprint": KEY_FINGERPRINT,
+                "cloud_encryption_key": CLOUD_KEY
+            }
+        }),
+    );
+    ok(&h.call(Call::get(url("settings")).key(&key)).await, 200);
+    h.graph.push_json(200, json!({"success": true}));
+    ok(
+        &h.call(
+            Call::new(Method::PATCH, url("settings"))
+                .key(&key)
+                .json(&json!({"search_visibility": "HIDDEN"})),
+        )
+        .await,
+        200,
+    );
+    // Payload encryption on, off, and on with the call cut.
+    let on = || {
+        Call::new(Method::PUT, url("settings/payload-encryption"))
+            .key(&key)
+            .json(&json!({"client_encryption_key": PAYLOAD_KEY}))
+    };
+    h.graph.push_json(200, json!({"success": true}));
+    ok(&h.call(on()).await, 204);
+    h.graph.push_json(200, json!({"success": true}));
+    ok(
+        &h.call(Call::new(Method::DELETE, url("settings/payload-encryption")).key(&key))
+            .await,
+        204,
+    );
+    // A key refused before any request, and Meta's refusal quoting it.
+    let refused = h
+        .call(
+            Call::new(Method::PUT, url("settings/payload-encryption"))
+                .key(&key)
+                .json(&json!({"client_encryption_key": format!("{PAYLOAD_KEY}!!")})),
+        )
+        .await;
+    ok(&refused, 422);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("bad key {PAYLOAD_KEY}"), "type": "OAuthException",
+                "code": 100, "error_data": {"details": format!("bad key {PAYLOAD_KEY}")},
+                "fbtrace_id": "A1b2C3"}}),
+    );
+    ok(&h.call(on()).await, 422);
+
+    // The username.
+    h.graph.push_json(200, json!({"status": "approved"}));
+    ok(
+        &h.call(
+            Call::new(Method::PUT, url("username"))
+                .key(&key)
+                .json(&json!({"username": SETTINGS_USERNAME})),
+        )
+        .await,
+        200,
+    );
+    h.graph.push_json(
+        200,
+        json!({"username": SETTINGS_USERNAME, "status": "approved"}),
+    );
+    ok(&h.call(Call::get(url("username")).key(&key)).await, 200);
+    h.graph.push_json(
+        200,
+        json!({"data": [{"username_suggestions": [SETTINGS_USERNAME]}]}),
+    );
+    ok(
+        &h.call(Call::get(url("username/suggestions")).key(&key))
+            .await,
+        200,
+    );
+    h.graph.push_json(200, json!({"success": true}));
+    ok(
+        &h.call(Call::new(Method::DELETE, url("username")).key(&key))
+            .await,
+        204,
+    );
+
+    // The application, the declaration, the components, the contact book.
+    h.graph.push_json(
+        200,
+        json!({"success": true, "message": "Application submitted", "tracking_id": "T-1"}),
+    );
+    ok(
+        &h.call(
+            Call::new(Method::POST, url("official-business-account"))
+                .key(&key)
+                .header("idempotency-key", "oba-log-1")
+                .json(&json!({
+                    "business_website_url": OBA_SITE,
+                    "primary_country_of_operation": "US",
+                    "supporting_links": [OBA_LINK, "https://b.example", "https://c.example",
+                                         "https://d.example", "https://e.example"],
+                    "additional_supporting_information": OBA_INFO
+                })),
+        )
+        .await,
+        202,
+    );
+    h.graph.push_json(200, json!({"success": true}));
+    ok(
+        &h.call(
+            Call::new(Method::PUT, url("compliance-info"))
+                .key(&key)
+                .json(&json!({
+                    "entity_name": ENTITY_NAME,
+                    "entity_type": "PRIVATE_COMPANY",
+                    "grievance_officer_details": {"name": OFFICER_NAME, "email": OFFICER_EMAIL},
+                    "customer_care_details": {"email": CARE_EMAIL, "mobile_number": CARE_MOBILE}
+                })),
+        )
+        .await,
+        204,
+    );
+    h.graph.push_json(
+        200,
+        json!({"data": [{"entity_name": ENTITY_NAME,
+                "grievance_officer_details": {"name": OFFICER_NAME, "email": OFFICER_EMAIL}}]}),
+    );
+    ok(
+        &h.call(Call::get(url("compliance-info")).key(&key)).await,
+        200,
+    );
+    h.graph.push_json(200, json!({"success": true}));
+    ok(
+        &h.call(
+            Call::new(Method::PUT, url("conversational-components"))
+                .key(&key)
+                .json(&json!({"prompts": [PROMPT],
+                    "commands": [{"command_name": COMMAND, "command_description": COMMAND_HINT}]})),
+        )
+        .await,
+        204,
+    );
+    // The reads: the application's status, the health, the components.
+    h.graph.push_json(
+        200,
+        json!({"official_business_account": {"oba_status": "PENDING"}, "id": PN}),
+    );
+    ok(
+        &h.call(Call::get(url("official-business-account")).key(&key))
+            .await,
+        200,
+    );
+    h.graph.push_json(
+        200,
+        json!({"health_status": {"can_send_message": "AVAILABLE", "entities": []}, "id": PN}),
+    );
+    ok(
+        &h.call(Call::get(url("health-status")).key(&key)).await,
+        200,
+    );
+    h.graph.push_json(
+        200,
+        json!({"conversational_automation": {"prompts": [PROMPT],
+                "commands": [{"command_name": COMMAND, "command_description": COMMAND_HINT}]}, "id": PN}),
+    );
+    ok(
+        &h.call(Call::get(url("conversational-components")).key(&key))
+            .await,
+        200,
+    );
+    h.graph.push_json(
+        200,
+        json!({"messaging_product": "whatsapp", "success": true, "deleted": true}),
+    );
+    ok(
+        &h.call(
+            Call::new(
+                Method::DELETE,
+                url(&format!("contact-book/{CONTACT_BSUID}")),
+            )
+            .key(&key),
+        )
+        .await,
+        200,
+    );
+    // Payload encryption on again, with the call cut.
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    ok(&h.call(on()).await, 504);
+    vec![
+        PAYLOAD_KEY.to_owned(),
+        CLOUD_KEY.to_owned(),
+        KEY_FINGERPRINT.to_owned(),
+        SETTINGS_USERNAME.to_owned(),
+        OBA_SITE.to_owned(),
+        OBA_LINK.to_owned(),
+        OBA_INFO.to_owned(),
+        ENTITY_NAME.to_owned(),
+        OFFICER_NAME.to_owned(),
+        OFFICER_EMAIL.to_owned(),
+        CARE_EMAIL.to_owned(),
+        CARE_MOBILE.to_owned(),
+        CONTACT_BSUID.to_owned(),
+        PROMPT.to_owned(),
+        COMMAND.to_owned(),
+        COMMAND_HINT.to_owned(),
+    ]
+}
+
+/// The settings' audit events (roadmap M5c3; design D192) of the scenario
+/// `number_settings`: in order, each with its outcome, the tenant, the
+/// WABA, the number by id and the key, and `setting` where the action
+/// covers several; never a value.
+fn check_settings_audit(changes: &[&serde_json::Value]) {
+    let events: Vec<&serde_json::Value> = changes
+        .iter()
+        .copied()
+        .filter(|fields| {
+            fields["action"]
+                .as_str()
+                .is_some_and(|action| SETTINGS_ACTIONS.contains(&action))
+        })
+        .collect();
+    let seen: Vec<(&str, &str, Option<&str>)> = events
+        .iter()
+        .map(|fields| {
+            (
+                fields["action"].as_str().unwrap_or_default(),
+                fields["outcome"].as_str().unwrap_or_default(),
+                fields["setting"].as_str(),
+            )
+        })
+        .collect();
+    let mut expected: Vec<(&str, &str, Option<&str>)> = SETTINGS_ACTIONS
+        .iter()
+        .map(|action| (*action, "answered", None))
+        .collect();
+    expected[0].2 = Some("search_visibility");
+    expected[1].2 = Some("enable");
+    expected[2].2 = Some("disable");
+    expected[9] = ("payload_encryption_changed", "unknown", Some("enable"));
+    assert_eq!(seen, expected, "the settings' audit events");
+    for fields in events {
+        assert!(fields["key_id"].is_string(), "{fields}");
+        assert_eq!(fields["tenant"], "merchant-42", "{fields}");
+        assert_eq!(fields["waba_id"], "102290129340398", "{fields}");
+        assert_eq!(fields["phone_number_id"], "1972385232742141", "{fields}");
+        for name in fields.as_object().unwrap().keys() {
+            assert!(
+                matches!(
+                    name.as_str(),
+                    "message"
+                        | "action"
+                        | "key_id"
+                        | "tenant"
+                        | "waba_id"
+                        | "phone_number_id"
+                        | "setting"
+                        | "outcome"
+                ),
+                "an unexpected field `{name}`: {fields}"
+            );
+        }
+    }
+}
+
 /// An OTP recipient: in no log line.
 pub const OTP_PHONE: &str = "+16315554444";
 
@@ -3112,12 +3442,16 @@ fn check_audit(logs: &str) {
     check_erasure_audit(&events, &changes);
     check_group_audit(&changes);
     check_display_name_audit(&changes);
+    check_settings_audit(&changes);
     let deletions: Vec<&serde_json::Value> = changes
         .into_iter()
         .filter(|fields| {
             fields["action"] != "signup_resumed"
                 && fields["action"] != "customer_erased"
                 && fields["action"] != "display_name_change_requested"
+                && !fields["action"]
+                    .as_str()
+                    .is_some_and(|action| SETTINGS_ACTIONS.contains(&action))
                 && !fields["action"]
                     .as_str()
                     .is_some_and(|action| action.starts_with("group_"))

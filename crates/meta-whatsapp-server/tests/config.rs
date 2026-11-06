@@ -1025,3 +1025,29 @@ fn the_media_converter_is_none_unless_the_deployment_sets_ffmpeg() {
         ));
     }
 }
+
+/// Roadmap M5c3: `WA_SERVER_LEGAL_ACTS` is off unless the deployment says
+/// `on`; anything else is refused, naming the variable. Decisive: each arm
+/// of `legal_acts`.
+#[test]
+fn the_legal_acts_are_off_unless_the_deployment_turns_them_on() {
+    for off in [None, Some("off"), Some(" ")] {
+        let vars = off.map_or_else(production, |v| production().set("WA_SERVER_LEGAL_ACTS", v));
+        assert!(
+            !Config::from_env(&vars).unwrap().settings.legal_acts,
+            "{off:?}"
+        );
+    }
+    assert!(
+        Config::from_env(&production().set("WA_SERVER_LEGAL_ACTS", "on"))
+            .unwrap()
+            .settings
+            .legal_acts
+    );
+    for bad in ["true", "1", "ON", "yes"] {
+        match refused(&production().set("WA_SERVER_LEGAL_ACTS", bad)) {
+            ConfigError::Invalid { name, .. } => assert_eq!(name, "WA_SERVER_LEGAL_ACTS"),
+            other => panic!("{bad}: {other:?}"),
+        }
+    }
+}
