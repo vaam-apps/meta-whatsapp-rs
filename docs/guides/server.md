@@ -145,6 +145,7 @@ read yet: set, it stops the start.
 | `WA_SERVER_IDEMPOTENCY_TTL` | `24h` | how long an `Idempotency-Key`'s answer is kept (more than the key's one-minute lease) |
 | `WA_SERVER_MEDIA_MAX_BYTES` | `104857600` (100 MiB) | the largest upload, and the largest streamed download |
 | `WA_SERVER_MEDIA_CONCURRENCY` | `4` | uploads and whole downloads held in memory at once on a replica, one tenant holding half of them at most (the next is `429`) |
+| `WA_SERVER_SEND_MESSAGING_ACCOUNT_ID` | `on` | `on`: a send from a number (a message, an inbox reply, an OTP code) names its binding's WABA id as `messaging_account_id`, so Meta bills the binding's Messaging Account whichever ones the token reaches ([Send messages](#send-messages)); `off`: a send names none and Meta resolves the account from the token |
 | `WA_SERVER_LEGAL_ACTS` | `off` | `on` lets tenants take the legal act their keys allow ([Number settings](#number-settings)): the India compliance information declaration, and the operator's signing of the max price agreement ([Marketing](#marketing-messages-api-max-price-and-welcome-message-sequences)). Off, each answers `403 feature_not_available` and asks Meta nothing; the Official Business Account application and the contact book erasure are not gated by it |
 | `WA_SERVER_MEDIA_CONVERTER`, `WA_SERVER_MEDIA_CONVERTER_PROGRAM` | `none`; `ffmpeg` from `PATH` | `ffmpeg` turns on conversion on upload (see [Media](#media)): a build with the `ffmpeg` feature (the image has none) and an `ffmpeg` you install; the program is only read with it |
 | `WA_SERVER_MEDIA_STREAMS` | `16` | streamed downloads (`?stream=true`) at once on a replica, one tenant holding half of them at most (the next is `429`) |
@@ -472,6 +473,34 @@ concluding the message never went out.
   `authentication` message, which Meta sends as a template; a call
   permission request, a call button, a Flow or a catalog outside the
   window goes as a template with that button instead.
+- **The Messaging Account billed** (roadmap M5c5, design D37): since
+  Meta's account model evolution a number can belong to several
+  Messaging Accounts, and a send whose access token reaches more than
+  one names the one billed as `messaging_account_id` (Meta requires it
+  then from its phase 2, H1 2027). The service names the number's
+  binding's WABA id (a WABA id is its Messaging Account's) on every send
+  from the number: this route and an [inbox](#the-inbox) reply, whatever
+  the type (`WA_SERVER_SEND_MESSAGING_ACCOUNT_ID`, on; `off` sends
+  none and Meta resolves the account from the token). Your body cannot
+  choose it: `messaging_account_id` (or Meta's deprecated alias
+  `paid_messaging_account_id`) in a send or a reply is `422
+  invalid_request` on `body`, nothing sent. The OTP issue (`POST /v1/otp/issue`)
+  names it too, the sending number's binding's. Not yet named: the
+  calling actions (the library's calls do not carry it; roadmap L29) and
+  the marketing send (Meta documents the field on `/messages` only).
+- **A number shared by several Messaging Accounts** is held by one
+  binding. Attaching a WABA that lists a number your tenant already
+  holds under another WABA moves the number to the new binding, so
+  the latest same-tenant attach is the account billed from then on (and
+  the token its sends use); another tenant's attach of the number is
+  `409 waba_owned_by_another_tenant`, and changes nothing. Templates
+  belong to the Messaging Account they were created in: after the move
+  the number's template sends find only the new account's templates, so
+  create them there or migrate them
+  (`POST /v1/wabas/{waba_id}/templates/migrations`; Meta resets a
+  migrated template's quality rating). Two bindings for one number (each
+  Messaging Account kept, keyed by WABA and number) is the owner's
+  decision (`OPEN_QUESTIONS.md` #46), not offered.
 - `POST /v1/numbers/{pn}/messages/{message_id}/read` shows the blue ticks
   on a received message; `{"typing_indicator": true}` shows "typing…" too,
   only when you are about to reply.
