@@ -213,10 +213,19 @@ async fn a_legal_act_is_refused_before_any_request_while_the_setting_is_off() {
 async fn the_gate_is_answered_before_the_body_is_read() {
     use meta_whatsapp_rs::webhooks::axum::body::Body;
 
-    let bad_bodies = ["empty", "not json", "a missing field", "an unknown field", "a null"];
+    let bad_bodies = [
+        "empty",
+        "not json",
+        "a missing field",
+        "an unknown field",
+        "a null",
+    ];
     let paths = [
         (true, "/v1/admin/partners/business-verifications".to_owned()),
-        (false, format!("/v1/wabas/{WABA}/solution-migration-intents")),
+        (
+            false,
+            format!("/v1/wabas/{WABA}/solution-migration-intents"),
+        ),
         (false, format!("/v1/wabas/{WABA}/billing-migrations")),
     ];
     for legal in [false, true] {
@@ -249,7 +258,11 @@ async fn the_gate_is_answered_before_the_body_is_read() {
                     "{path} with {what}, legal acts {legal}: {}",
                     reply.text
                 );
-                assert!(!reply.text.contains("EAAG-secret"), "{what}: {}", reply.text);
+                assert!(
+                    !reply.text.contains("EAAG-secret"),
+                    "{what}: {}",
+                    reply.text
+                );
                 assert!(f.h.graph.requests().is_empty(), "{path}: Meta was asked");
             }
         }
@@ -262,9 +275,8 @@ async fn the_gate_is_answered_before_the_body_is_read() {
 #[tokio::test]
 async fn authorization_is_answered_before_the_gate() {
     let f = fixture(false).await;
-    let other = f
-        .h
-        .call(
+    let other =
+        f.h.call(
             tenant_call(
                 Method::POST,
                 &format!("/v1/wabas/{OTHER_WABA}/billing-migrations"),
@@ -274,18 +286,20 @@ async fn authorization_is_answered_before_the_gate() {
         )
         .await;
     assert_eq!(other.status, StatusCode::NOT_FOUND, "{}", other.text);
-    let tenant_on_admin = f
-        .h
-        .call(
-            tenant_call(Method::POST, "/v1/admin/partners/business-verifications", &f)
-                .json(&submission_body()),
+    let tenant_on_admin =
+        f.h.call(
+            tenant_call(
+                Method::POST,
+                "/v1/admin/partners/business-verifications",
+                &f,
+            )
+            .json(&submission_body()),
         )
         .await;
     assert_ne!(tenant_on_admin.code(), "feature_not_available");
     assert!(tenant_on_admin.status.is_client_error());
-    let anonymous = f
-        .h
-        .call(
+    let anonymous =
+        f.h.call(
             Call::new(Method::POST, "/v1/admin/partners/business-verifications")
                 .json(&submission_body()),
         )
@@ -311,9 +325,8 @@ async fn a_submission_body_is_bounded_before_it_is_buffered() {
     };
     let path = "/v1/admin/partners/business-verifications";
     let f = fixture(true).await;
-    let over = f
-        .h
-        .call(
+    let over =
+        f.h.call(
             admin_call(Method::POST, path, &f)
                 .header("content-type", "application/json")
                 .body(meta_whatsapp_rs::webhooks::axum::body::Body::from(padded(
@@ -327,9 +340,8 @@ async fn a_submission_body_is_bounded_before_it_is_buffered() {
         "{}",
         over.text
     );
-    let under = f
-        .h
-        .call(
+    let under =
+        f.h.call(
             admin_call(Method::POST, path, &f)
                 .header("content-type", "application/json")
                 .body(meta_whatsapp_rs::webhooks::axum::body::Body::from(padded(
@@ -337,7 +349,12 @@ async fn a_submission_body_is_bounded_before_it_is_buffered() {
                 ))),
         )
         .await;
-    assert_eq!(under.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", under.text);
+    assert_eq!(
+        under.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        under.text
+    );
     assert!(f.h.graph.requests().is_empty(), "Meta was asked");
     let off = fixture(false).await;
     let refused = off
@@ -1390,6 +1407,52 @@ async fn a_billing_migration_is_the_wabas_own_to_read_and_to_resume() {
         (
             "not an id",
             tenant_call(Method::GET, &format!("{path}/..%2Fx"), &f),
+        ),
+    ] {
+        let reply = f.h.call(call).await;
+        assert_eq!(
+            (reply.status, reply.code().as_str()),
+            (StatusCode::NOT_FOUND, "not_found"),
+            "{what}: {}",
+            reply.text
+        );
+    }
+    assert_eq!(f.h.graph.requests().len(), before, "Meta was never asked");
+}
+
+/// A migration belongs to the tenant that started it as well as to the
+/// WABA: when the operator unbinds the WABA and another tenant connects it
+/// (design D4), that tenant reads and resumes nothing of the first one's
+/// (`404`, Meta not asked). Decisive: the tenant half of the record's check
+/// in `own_migration`.
+#[tokio::test]
+async fn a_migration_does_not_follow_its_waba_to_another_tenant() {
+    let f = fixture(true).await;
+    let path = format!("/v1/wabas/{WABA}/billing-migrations");
+    f.h.graph.push_json(
+        200,
+        json!({"migration_id": MIGRATION, "migration_status": "INITIATED"}),
+    );
+    let started =
+        f.h.call(tenant_call(Method::POST, &path, &f).json(&json!({"currency": "INR"})))
+            .await;
+    assert_eq!(started.status, StatusCode::CREATED, "{}", started.text);
+    let unbound =
+        f.h.call(admin_call(
+            Method::DELETE,
+            &format!("/v1/admin/wabas/{WABA}/binding"),
+            &f,
+        ))
+        .await;
+    assert!(unbound.status.is_success(), "{}", unbound.text);
+    f.h.connect(OTHER_TENANT, WABA, &[PN], OTHER_TOKEN).await;
+    let other = f.h.tenant_key(OTHER_TENANT, &[Scope::Partners]).await;
+    let before = f.h.graph.requests().len();
+    for (what, call) in [
+        ("read", Call::get(format!("{path}/{MIGRATION}")).key(&other)),
+        (
+            "resumed",
+            Call::new(Method::POST, format!("{path}/{MIGRATION}/resume")).key(&other),
         ),
     ] {
         let reply = f.h.call(call).await;
