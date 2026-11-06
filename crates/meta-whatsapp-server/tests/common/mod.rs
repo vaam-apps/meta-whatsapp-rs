@@ -910,7 +910,7 @@ pub fn signed(body: &[u8]) -> Call {
 }
 
 /// Every scope.
-pub const ALL_SCOPES: [Scope; 17] = Scope::ALL;
+pub const ALL_SCOPES: [Scope; 18] = Scope::ALL;
 
 // ─── The committed document, as a table of calls ─────────────────────────
 
@@ -1242,6 +1242,14 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
             | "/v1/numbers/{pn}/blocked-users/unblock"
             | "/v1/numbers/{pn}/groups/{group_id}/participants/remove",
         ) => serde_json::json!({"users": [{"phone": SAMPLE_TO}]}),
+        // Roadmap M5l: a thread action on a user
+        // (`conversation-routing/thread-control`).
+        (
+            "POST",
+            "/v1/numbers/{pn}/thread-control/pass"
+            | "/v1/numbers/{pn}/thread-control/take"
+            | "/v1/numbers/{pn}/thread-control/release",
+        ) => serde_json::json!({"user": {"phone": SAMPLE_TO}}),
         // Roadmap M5f: a group's creation, a change and the participants
         // and join requests of one (`groups/reference`).
         ("POST", "/v1/numbers/{pn}/groups") => {

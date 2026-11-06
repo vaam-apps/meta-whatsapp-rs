@@ -106,6 +106,7 @@ those names any more. Remove them (`npx skills list` shows them;
 | [`meta-whatsapp-rs-server-registration`](meta-whatsapp-rs-server-registration/) | registering a number through the service: the verification code, the two-step PIN typed per attempt and stored nowhere, deregistration, the per-number attempt budgets |
 | [`meta-whatsapp-rs-server-profile`](meta-whatsapp-rs-server-profile/) | a number's profile picture (set from a completed upload's id, never Meta's handle) and display name through the service: the review, why the name changes only after approval and a new registration, Meta's 10 changes per 30 days, the audit event |
 | [`meta-whatsapp-rs-server-groups`](meta-whatsapp-rs-server-groups/) | a number's WhatsApp groups through the service: asking for one (an event brings its id), reading, changing and deleting it, invite links, participants, join requests, analytics, and why a group the number does not hold is `not_found` before anything reaches Meta |
+| [`meta-whatsapp-rs-server-routing`](meta-whatsapp-rs-server-routing/) | conversation routing through the service: a number's routing roles, and passing, taking and releasing a user's thread (by BSUID, phone or `wa_id`; a pass names a role, never an app), keyed and never replayed, and what the logs never hold |
 
 ## Versioning: a skill is true of one meta-whatsapp-rs commit
 

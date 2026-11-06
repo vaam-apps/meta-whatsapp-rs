@@ -12,6 +12,25 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added (roadmap M5l)
+
+- The service's conversation routing (`meta_whatsapp_server_core::routing`,
+  `meta_whatsapp_server_api_axum::api::routing`; design D220 to D225, the
+  implementer's proposals, not yet decided): a new scope, `routing`, and four
+  routes under `/v1/numbers/{pn}` over the library's `client::thread_control`:
+  `GET …/routing-roles` (the roles the business holds and its standby grant)
+  and `POST …/thread-control/pass`, `…/take` and `…/release`. The user is
+  named by exactly one of `phone`, `wa_id` and `user_id` (a BSUID); a pass
+  names one of Meta's six roles, never an app (no request field of the API
+  names one); each action takes an `Idempotency-Key`, is never replayed after
+  a timeout, and is an audit event (`thread_passed`, `thread_taken`,
+  `thread_released`) holding neither the user nor the `metadata`, with Meta's
+  texts withheld from its answer and logs. No call accepts terms. The caller's
+  own actions are not yet recorded in the inbox's thread owner state (M5l2).
+  OpenAPI is additive (four operations, six schemas, the scope, the tag); a
+  server skill, `meta-whatsapp-rs-server-routing`. Names pending the owner's
+  confirmation before the first release.
+
 ### Added (roadmap M3e)
 
 - The service's token-expiry event and metric (`meta_whatsapp_server_core::token_expiry`;

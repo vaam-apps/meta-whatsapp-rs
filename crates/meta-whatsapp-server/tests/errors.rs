@@ -433,6 +433,12 @@ const CALLS_META: &[&str] = &[
     "GET /v1/numbers/{pn}/blocked-users",
     "POST /v1/numbers/{pn}/blocked-users",
     "POST /v1/numbers/{pn}/blocked-users/unblock",
+    // Roadmap M5l: the three actions are not in `DETAILS_KEPT` (Meta's
+    // texts may quote the user, D221).
+    "GET /v1/numbers/{pn}/routing-roles",
+    "POST /v1/numbers/{pn}/thread-control/pass",
+    "POST /v1/numbers/{pn}/thread-control/take",
+    "POST /v1/numbers/{pn}/thread-control/release",
 ];
 
 /// Operations whose call to Meta is best effort: whatever Meta answers,
@@ -507,6 +513,8 @@ const DETAILS_KEPT: &[&str] = &[
     "GET /v1/wabas/{waba_id}/analytics/conversations",
     "GET /v1/wabas/{waba_id}/analytics/pricing",
     "GET /v1/wabas/{waba_id}/analytics/templates",
+    // Roadmap M5l: the roles read names no user.
+    "GET /v1/numbers/{pn}/routing-roles",
 ];
 
 /// Operations on an object named by id (a media id, a template id): Meta

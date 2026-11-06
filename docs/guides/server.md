@@ -260,10 +260,10 @@ immutable. Three kinds of API key, all `wak_<key id>_<secret>`, sent as
 
 Tenant and platform keys carry scopes (`numbers`, `send`, `media`,
 `templates`, `flows`, `inbox`, `events`, `otp`, `signup`, `payments`,
-`erasure`, `groups`, `commerce`, `qr_codes`, `analytics` and `contacts` today;
-`webhooks` for the routes to come). `payments` (roadmap P2), `erasure`
-(roadmap M2f), `flows` (roadmap M5d), `groups` (roadmap M5f) and the four
-of roadmap M5g are new: a key minted before them does not carry them, so
+`erasure`, `groups`, `commerce`, `qr_codes`, `analytics`, `contacts` and
+`routing` today; `webhooks` for the routes to come). `payments` (roadmap
+P2), `erasure` (roadmap M2f), `flows` (roadmap M5d), `groups` (roadmap
+M5f), the four of roadmap M5g and `routing` (roadmap M5l) are new: a key minted before them does not carry them, so
 mint one that does for those routes. `templates` does not grant `flows`: a
 key that edits templates does not manage Flows. `inbox` does not grant
 `erasure`: give the key that erases to the part of your backend that
@@ -1071,6 +1071,76 @@ id, the products edge's `filter`, template group analytics, and the two
 analytics switches (template insights, button click tracking). Call
 analytics wait for the calling routes (M5e); a group's analytics are the
 groups' (above).
+
+## Conversation routing
+
+One scope, `routing` (roadmap M5l, design D220; the name is **pending the
+owner's confirmation before the first release**). A key minted before M5l
+does not carry it, and neither `send` nor `inbox` grants it: a pass, a take
+and a release hand a customer's conversation to another responder, so mint
+a key for these routes on purpose. Each route is one of the library's
+thread control calls, made with the WABA's token (design D220–D225 are the
+implementer's proposals, not yet decided).
+
+| Route | Does |
+| --- | --- |
+| `GET /v1/numbers/{pn}/routing-roles` | the roles the number's business holds, `{"roles": ["customer_service", "escalation"], "is_standby": false}`; Meta's order, which means nothing; empty is a success |
+| `POST /v1/numbers/{pn}/thread-control/pass` | pass the thread with a user: `{"user": {…}, "target_role": "ai_agent", "metadata": "…"}` (`target_role` and `metadata` optional) |
+| `POST /v1/numbers/{pn}/thread-control/take` | take it, the escalation partner only: `{"user": {…}, "metadata": "…"}` |
+| `POST /v1/numbers/{pn}/thread-control/release` | release it to idle: `{"user": {…}}` |
+
+The three actions answer `200 {"request_id": "…"}` (Meta's, for its
+support) and take an `Idempotency-Key`. Nothing is sent back to the caller
+about the new owner: the new owner hears of a pass on its `control_passed`
+event and the previous owner of a take on `control_taken` (both are tenant
+events, `thread_control_changed`), and a release has no event. **No call
+reports who owns a thread**, here or at Meta.
+
+What the service checks before Meta is asked, each refusal sending
+nothing:
+
+- **The user is named one way** (D222): `user` holds exactly one of
+  `phone` (E.164 with its `+`), `wa_id` (digits) and `user_id` (a
+  business-scoped user id, Meta's preferred identifier; a parent BSUID is
+  refused). Never key a person by phone number alone: use `user_id` when
+  you have it. A group is refused.
+- **A pass names a role, never an app.** `target_role` is one of `ai_agent`,
+  `ctwa`, `customer_service`, `escalation`, `marketing`, `utility` (spelled
+  so; anything else is `422 target_role`); without it the pass goes to the
+  escalation partner, which therefore cannot make one. The business that
+  owns the number configures who holds a role, so a pass cannot reach
+  another tenant's app. `ai_agent` needs Meta Business Agent on the
+  account, and Meta judges that.
+- `metadata` is at most 2,000 characters. It is free text for the new (or
+  previous) owner; the service logs and audits none of it.
+- Another tenant's number is `404`, before the token is read.
+
+Meta decides the rest, and answers with its code: a pass needs the caller
+to own an active thread (not an idle one, not another responder's); a take
+by a caller that is not the escalation partner is Meta's `2494191`
+(`502 unknown`, the code in `error.graph.code`); a release of an idle
+thread succeeds; `100` says the account is not enrolled for thread control
+or routing, or the user is not one the number has talked to. **Meta's
+texts are not in the answer or the logs of an action** (they may quote
+the user); the roles read keeps them. The business must have accepted
+Meta's Business Agents and Platform Terms of Service in Meta Business
+Suite for thread control to work; **no call of the service does it**, and
+nothing here is a legal act.
+
+None of the three is retried: a timeout is `504 timeout` with
+`may_have_been_sent`, and the thread may have changed hands. With an
+`Idempotency-Key`, repeating the request answers the first answer and
+sends nothing (D223). Each action is an audit event (`thread_passed`,
+`thread_taken`, `thread_released`: the key, the tenant, the WABA, the
+number and, for a pass, the role), with an outcome `answered` or
+`unknown`, **never the user or the `metadata`**.
+
+Not done (D224, roadmap M5l2): the service does not record your own
+pass, take or release in the inbox's thread owner state, so after a pass
+the inbox may still believe the thread is this app's until the next
+event or message; a free-form reply it lets through is then refused by
+Meta (`409 thread_owned_elsewhere`). Standby copies and handovers reach
+you as events either way.
 
 ## The inbox
 

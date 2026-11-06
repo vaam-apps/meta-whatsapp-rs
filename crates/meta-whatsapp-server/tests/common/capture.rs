@@ -343,6 +343,10 @@ pub async fn exercise(h: &Harness) -> Secrets {
     // people blocked, a code's message and a number filter are not logged.
     secrets.section("commerce");
     secrets.extend(commerce_qr_analytics(h, &admin).await);
+    // Conversation routing (roadmap M5l): the user whose thread it is and
+    // the note forwarded to the new owner are not logged.
+    secrets.section("routing");
+    secrets.extend(routing(h, &admin).await);
     secrets.section("webhook_endpoints");
     secrets.extend(webhook_endpoints(h, &admin).await);
     // Embedded Signup (roadmap M3a): neither the merchant's token, nor the
@@ -2313,6 +2317,108 @@ async fn commerce_qr_analytics(h: &Harness, admin: &str) -> Vec<String> {
     ]
 }
 
+/// The user of a thread action (a phone number, its digits, a BSUID) and
+/// the `metadata` forwarded to the new owner (roadmap M5l): in no log line.
+pub const ROUTING_PHONE: &str = "+16505557321";
+pub const ROUTING_DIGITS: &str = "16505557321";
+pub const ROUTING_BSUID: &str = "US.55443322110099887766";
+pub const ROUTING_NOTE: &str = "CAPTURE-ROUTING-NOTE-Aloe-wants-a-human";
+
+/// Roadmap M5l's routes on merchant-42's first number, each once with
+/// Meta's documented answer: the roles, a pass (targeted and not), a take,
+/// a release, a pass cut by a timeout and a take Meta refuses with a text
+/// quoting the user; returns what the logs must not hold. The audit
+/// events are `check_audit`'s.
+async fn routing(h: &Harness, admin: &str) -> Vec<String> {
+    const PN: &str = "1972385232742141";
+    let minted = h
+        .call(
+            Call::new(Method::POST, "/v1/admin/tenants/merchant-42/keys")
+                .key(admin)
+                .json(&json!({"scopes": ["routing"]})),
+        )
+        .await
+        .json();
+    let key = minted["key"].as_str().unwrap().to_owned();
+    let ok = |reply: &super::Reply, status: u16| {
+        assert_eq!(reply.status.as_u16(), status, "{}", reply.text);
+    };
+    let act = |action: &str, body: serde_json::Value| {
+        Call::new(
+            Method::POST,
+            format!("/v1/numbers/{PN}/thread-control/{action}"),
+        )
+        .key(&key)
+        .json(&body)
+    };
+    h.graph
+        .push_json(200, json!({"roles": ["escalation"], "is_standby": false}));
+    let roles = h
+        .call(Call::get(format!("/v1/numbers/{PN}/routing-roles")).key(&key))
+        .await;
+    ok(&roles, 200);
+    let accepted = || json!({"messaging_product": "whatsapp", "request_id": "REQ-LOG"});
+    h.graph.push_json(200, accepted());
+    let passed = h
+        .call(act(
+            "pass",
+            json!({"user": {"user_id": ROUTING_BSUID}, "target_role": "ai_agent",
+                   "metadata": ROUTING_NOTE}),
+        ))
+        .await;
+    ok(&passed, 200);
+    h.graph.push_json(200, accepted());
+    let untargeted = h
+        .call(act("pass", json!({"user": {"phone": ROUTING_PHONE}})))
+        .await;
+    ok(&untargeted, 200);
+    h.graph.push_json(200, accepted());
+    let taken = h
+        .call(act(
+            "take",
+            json!({"user": {"wa_id": ROUTING_DIGITS}, "metadata": ROUTING_NOTE}),
+        ))
+        .await;
+    ok(&taken, 200);
+    h.graph.push_json(200, accepted());
+    let released = h
+        .call(act("release", json!({"user": {"phone": ROUTING_PHONE}})))
+        .await;
+    ok(&released, 200);
+    h.graph
+        .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
+    let cut = h
+        .call(act(
+            "pass",
+            json!({"user": {"phone": ROUTING_PHONE}, "target_role": "ctwa",
+                   "metadata": ROUTING_NOTE}),
+        ))
+        .await;
+    ok(&cut, 504);
+    h.graph.push_json(
+        400,
+        json!({"error": {"message": format!("(#100) recipient is invalid {ROUTING_BSUID} {ROUTING_PHONE}"),
+                         "type": "OAuthException", "code": 100,
+                         "error_data": {"details": format!("{ROUTING_DIGITS} {ROUTING_NOTE}")},
+                         "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+    );
+    let refused = h
+        .call(act(
+            "take",
+            json!({"user": {"user_id": ROUTING_BSUID}, "metadata": ROUTING_NOTE}),
+        ))
+        .await;
+    assert!(refused.status.is_client_error(), "{}", refused.text);
+    vec![
+        key.clone(),
+        key.rsplit('_').next().unwrap().to_owned(),
+        ROUTING_PHONE.to_owned(),
+        ROUTING_DIGITS.to_owned(),
+        ROUTING_BSUID.to_owned(),
+        ROUTING_NOTE.to_owned(),
+    ]
+}
+
 /// A group's id (`groups/webhooks`: it embeds the business number) is in no
 /// line of the service's own, and in the library's `graph request` debug
 /// line only (it names the path it calls: [`check`] says so); a group's
@@ -3052,7 +3158,14 @@ fn check_audit(logs: &str) {
             "qr_code_deleted",
             "users_blocked",
             "users_unblocked",
-            "users_blocked"
+            "users_blocked",
+            // Roadmap M5l: the passes (one cut by a timeout), the take, the
+            // release; the refused take changed nothing.
+            "thread_passed",
+            "thread_passed",
+            "thread_taken",
+            "thread_released",
+            "thread_passed"
         ],
         "the template changes', the PIN change's, the deregistration's, the payment changes', the QR code deletion's and the block list changes' audit events"
     );
