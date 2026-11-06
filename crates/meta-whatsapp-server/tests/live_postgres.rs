@@ -2030,3 +2030,65 @@ async fn live_postgres_a_numbers_budget_holds_across_racing_replicas() {
         .unwrap();
     assert_eq!(usize::try_from(count).unwrap(), passed);
 }
+
+/// An operator's idempotency record on Postgres (roadmap M5j2, D290): the
+/// solution creation under a key, repeated after a `504`, is one request
+/// to Meta and the repeat is the kept answer; the record is in
+/// `wa_server_admin_idempotency` under `admin/<key id>`, none in the
+/// tenants' table; another admin key does not see it.
+#[tokio::test]
+async fn live_postgres_an_admin_keys_idempotency_record_is_in_its_own_table() {
+    use meta_whatsapp_rs::core::error::TransportError;
+
+    let Some(db) = TestDb::new().await else {
+        return;
+    };
+    let pool = db.pool(10).await;
+    migrate(&pool).await.unwrap();
+    let signup = common::signup::tech_provider().pre_verified_pool(
+        meta_whatsapp_rs::core::ids::BusinessId::new(common::signup::POOL_BUSINESS).unwrap(),
+        meta_whatsapp_rs::core::secret::AccessToken::new(common::signup::POOL_TOKEN),
+    );
+    let h = Harness::with_stores_and_settings(
+        Stores::postgres(&pool),
+        meta_whatsapp_server::state::Settings {
+            signup: Some(signup),
+            ..common::test_settings()
+        },
+    );
+    let admin = h.admin_key().await;
+    let other = h.admin_key().await;
+    let body = json!({"name": "Social OVD with Lucky Shrub", "partner_app_id": "21202248997039",
+                      "partner_permissions": ["MESSAGING"]});
+    let call = |key: &str| {
+        Call::new(Method::POST, "/v1/admin/partners/solutions")
+            .key(key)
+            .header("idempotency-key", "live-1")
+            .json(&body)
+    };
+    h.graph.push_error(|| TransportError::Timeout);
+    let first = h.call(call(&admin)).await;
+    assert_eq!(first.status, StatusCode::GATEWAY_TIMEOUT, "{}", first.text);
+    let again = h.call(call(&admin)).await;
+    assert_eq!(again.text, first.text);
+    assert_eq!(again.headers["idempotent-replayed"], "true");
+    assert_eq!(h.graph.requests().len(), 1);
+
+    let in_admin: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM wa_server_admin_idempotency WHERE tenant_id LIKE 'admin/%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let in_tenants: i64 = sqlx::query_scalar("SELECT count(*) FROM wa_server_idempotency")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!((in_admin, in_tenants), (1, 0));
+
+    h.graph
+        .push_json(200, json!({"solution_id": "795033096057724"}));
+    let second = h.call(call(&other)).await;
+    assert_eq!(second.status, StatusCode::CREATED, "{}", second.text);
+    assert_eq!(h.graph.requests().len(), 2);
+}
