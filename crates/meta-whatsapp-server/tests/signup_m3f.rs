@@ -496,7 +496,10 @@ async fn a_claim_needs_an_arrival_and_respects_ownership() {
         )
         .await;
     assert!(
-        matches!(gone.status, StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED),
+        matches!(
+            gone.status,
+            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+        ),
         "{}",
         gone.text
     );
@@ -551,6 +554,136 @@ async fn a_held_waba_is_not_remembered_and_a_failed_claim_is_put_back() {
     script_hosted(&h);
     let done = h.call(claim(&admin, &hosted_body(A, Some(PIN)))).await;
     assert_eq!(done.status, StatusCode::OK, "{}", done.text);
+}
+
+/// The arrival's raw record, as the key/value store holds it.
+async fn arrival(h: &Harness, waba: &str) -> Option<meta_whatsapp_rs::core::store::Versioned> {
+    use meta_whatsapp_rs::core::store::{KvStore, StoreKey};
+    h.kv.get(&StoreKey::new("\x77a.es.hosted", waba))
+        .await
+        .unwrap()
+}
+
+/// A `PARTNER_ADDED` without a signature, or signed with another secret,
+/// is refused and remembered nowhere: anyone who could post one would
+/// otherwise queue arrivals for the operator to claim. Decisive: the
+/// pipeline's signature check removed.
+#[tokio::test]
+async fn an_unsigned_or_forged_partner_added_is_never_remembered() {
+    use meta_whatsapp_rs::core::secret::AppSecret;
+    let h = hosted();
+    let body = partner_added(WABA, BUSINESS);
+    let unsigned = common::send(
+        &h.public,
+        Call::new(Method::POST, "/webhooks/meta")
+            .header("content-type", "application/json")
+            .body(meta_whatsapp_rs::webhooks::axum::body::Body::from(
+                body.clone(),
+            ))
+            .build(),
+    )
+    .await;
+    assert_eq!(unsigned.status, StatusCode::UNAUTHORIZED);
+    let forged_signature =
+        meta_whatsapp_rs::webhooks::sign(&AppSecret::new("not-the-apps-secret"), &body);
+    let forged = common::send(
+        &h.public,
+        Call::new(Method::POST, "/webhooks/meta")
+            .header("content-type", "application/json")
+            .header("x-hub-signature-256", &forged_signature)
+            .body(meta_whatsapp_rs::webhooks::axum::body::Body::from(
+                body.clone(),
+            ))
+            .build(),
+    )
+    .await;
+    assert_eq!(forged.status, StatusCode::UNAUTHORIZED);
+    assert!(arrival(&h, WABA).await.is_none(), "nothing remembered");
+    // The same body, signed, is remembered.
+    assert_eq!(h.webhook(&body).await.status, StatusCode::OK);
+    assert!(arrival(&h, WABA).await.is_some());
+}
+
+/// An arrival is remembered for 7 days (a claim after Meta's own retry
+/// window and a merchant's delay), and only with hosted signup on.
+/// Decisive: the expiry changed or dropped; the setting not consulted.
+#[tokio::test]
+async fn an_arrival_is_remembered_for_seven_days_and_only_when_hosted_signup_is_on() {
+    let h = hosted();
+    h.webhook(&partner_added(WABA, BUSINESS)).await;
+    let kept = arrival(&h, WABA).await.expect("remembered");
+    let expires = kept.expires_at.expect("an arrival expires");
+    let wanted = time::OffsetDateTime::now_utc() + time::Duration::days(7);
+    assert!(
+        (expires - wanted).abs() < time::Duration::minutes(5),
+        "expires {expires}, wanted about {wanted}"
+    );
+    let off = harness(tech_provider());
+    off.webhook(&partner_added(WABA, BUSINESS)).await;
+    assert!(arrival(&off, WABA).await.is_none(), "off: not remembered");
+    assert!(
+        off.kv
+            .written()
+            .iter()
+            .all(|key| key.namespace() != "\x77a.es.hosted"),
+        "off: nothing written to the arrivals' namespace"
+    );
+}
+
+/// Two claims of one arrival: the loser of the compare and swap is `404`
+/// and asks Meta nothing, whoever read the arrival first. Decisive: the
+/// swap's result ignored (both onboard).
+#[tokio::test]
+async fn of_two_claims_of_one_arrival_one_wins() {
+    let h = hosted();
+    let _ = tenants(&h).await;
+    let admin = h.admin_key().await;
+    h.webhook(&partner_added(WABA, BUSINESS)).await;
+    // The other claimant's swap lands between this claim's read and swap.
+    h.kv.lose_next_read_in("\x77a.es.hosted");
+    let lost = h.call(claim(&admin, &hosted_body(A, Some(PIN)))).await;
+    assert_eq!(lost.code(), "not_found", "{}", lost.text);
+    assert!(
+        h.graph.requests().is_empty(),
+        "the loser asked Meta nothing"
+    );
+    assert_eq!(holder(&h, WABA).await, None);
+}
+
+/// A claim that stopped after the token was stored is not put back: the
+/// tenant resumes it (`resumable`), and a second claim finds nothing.
+/// Decisive: the put-back also after the store.
+#[tokio::test]
+async fn a_claim_that_stopped_after_the_store_is_resumed_not_claimed_again() {
+    let h = hosted();
+    let (a, _) = tenants(&h).await;
+    let admin = h.admin_key().await;
+    h.webhook(&partner_added(WABA, BUSINESS)).await;
+    h.graph.push_json(200, json!({"access_token": TOKEN}));
+    h.graph.push_json(200, common::signup::one_grant_debug());
+    script_waba(&h.graph, WABA, &[PHONE, PHONE_2]);
+    h.graph.push_json(
+        500,
+        json!({"error": {"message": "Unknown error", "type": "OAuthException", "code": 1, "fbtrace_id": "T"}}),
+    );
+    let failed = h.call(claim(&admin, &hosted_body(A, Some(PIN)))).await;
+    assert_eq!(failed.status, StatusCode::BAD_GATEWAY, "{}", failed.text);
+    assert_eq!(failed.json()["error"]["resumable"], true, "{}", failed.text);
+    assert!(stored(&h, WABA).await);
+    let before = h.graph.requests().len();
+    let again = h.call(claim(&admin, &hosted_body(A, Some(PIN)))).await;
+    assert_eq!(again.code(), "not_found", "{}", again.text);
+    assert_eq!(h.graph.requests().len(), before);
+    // The tenant finishes it.
+    h.graph.push_json(200, success()); // subscribed_apps
+    h.graph.push_json(200, success()); // register
+    let resumed = h
+        .call(common::signup::resume(
+            &a,
+            &json!({"waba_id": WABA, "pin": PIN}),
+        ))
+        .await;
+    assert_eq!(resumed.status, StatusCode::OK, "{}", resumed.text);
 }
 
 // ─── Pre-verified numbers ────────────────────────────────────────────────

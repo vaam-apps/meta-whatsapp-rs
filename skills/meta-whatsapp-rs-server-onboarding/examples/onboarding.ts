@@ -151,21 +151,24 @@ export async function fundAgain(admin: WhatsApp, wabaId: string): Promise<Connec
 
 // Hosted Embedded Signup (WA_HOSTED_SIGNUP=on): the merchant used Meta's own
 // page, which returned nothing; Meta's account_update PARTNER_ADDED named
-// their WABA and business to your backend. Claim it for the merchant, with
-// the PIN you chose for their number (never stored by the service). A 404
-// `not_found` means no such arrival is waiting; 409
-// `waba_owned_by_another_tenant` that another merchant holds the WABA.
+// their WABA and business to the service. Your operator (admin key) claims
+// it for the tenant that merchant is, with the PIN chosen for their number
+// (never stored by the service): the ids are no secrets, so no tenant key
+// claims. A 404 `not_found` means no such arrival is waiting (or no such
+// tenant); 409 `waba_owned_by_another_tenant` that another merchant holds
+// the WABA.
 export async function claimHostedSignup(
-  api: WhatsApp,
+  admin: WhatsApp,
+  tenantId: string,
   wabaId: string,
   ownerBusinessId: string,
   pin?: string,
 ): Promise<Connection> {
-  const { data, error } = await api.POST("/v1/signup/hosted", {
+  const { data, error } = await admin.POST("/v1/admin/signup/hosted", {
     body:
       pin === undefined
-        ? { waba_id: wabaId, owner_business_id: ownerBusinessId }
-        : { waba_id: wabaId, owner_business_id: ownerBusinessId, pin },
+        ? { tenant_id: tenantId, waba_id: wabaId, owner_business_id: ownerBusinessId }
+        : { tenant_id: tenantId, waba_id: wabaId, owner_business_id: ownerBusinessId, pin },
   });
   if (error) {
     return failed(error.error);

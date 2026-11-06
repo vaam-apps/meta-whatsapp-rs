@@ -130,7 +130,7 @@ read yet: set, it stops the start.
 | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number and template (decision D8's default). Unset, a tenant without settings answers `409 otp_not_configured` |
 | `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` also needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` (AUD, EUR, GBP, IDR, INR or USD): your credit line funds every merchant onboarded ([Solution Partner mode](#solution-partner-mode)) |
 | `WA_SIGNUP_EVERY_GRANTED_WABA` | `off` | `on`: a signup that grants several WABAs binds every one to its tenant ([Several WABAs](#several-wabas-in-one-signup)); pending the owner's confirmation before the first release |
-| `WA_HOSTED_SIGNUP` | `off` | `on`: `PARTNER_ADDED` webhooks are remembered and a tenant claims one ([Hosted signup](#hosted-signup)); needs `WA_SYSTEM_TOKEN` or Solution Partner mode; pending the owner's confirmation before the first release |
+| `WA_HOSTED_SIGNUP` | `off` | `on`: `PARTNER_ADDED` webhooks are remembered and the operator claims one for a tenant ([Hosted signup](#hosted-signup)); needs `WA_SYSTEM_TOKEN` or Solution Partner mode; pending the owner's confirmation before the first release |
 | `WA_SYSTEM_TOKEN` | the partner's `WA_PARTNER_SYSTEM_TOKEN` | your system user token, with `business_management`: it fetches a hosted signup's business token and manages the pool of pre-verified numbers; pending the owner's confirmation before the first release |
 | `WA_PARTNER_BUSINESS_ID` | unset: the pool's routes off | your own business portfolio, whose pre-verified pool `/v1/admin/pre-verified-numbers` manages ([Pre-verified numbers](#pre-verified-numbers)); pending the owner's confirmation before the first release |
 | `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` | `graph` | whether an `account_update` webhook that offboards a merchant or revokes their credit line is confirmed with Graph first (`graph`: `debug_token` on the WABA's stored token, which must no longer be valid or granted the WABA) or acted on by its signature alone (`signature`) ([Offboarding](#offboarding)) |
@@ -1363,7 +1363,6 @@ POST /connect/callback ► POST /v1/signup/complete ─────► redeemed 
 | --- | --- |
 | `POST /v1/signup/sessions` | `{coexistence?, pre_verified_phone_ids?}`: an attempt bound to your tenant for 15 minutes, and what the page needs: `{state, expires_at, app_id, config_id, graph_api_version, launch_options}` (`launch_options` is `FB.login`'s options, as they are). Asks Meta nothing |
 | `POST /v1/signup/complete` | `{state, code, event, pin?}`, as the page collected them: the attempt redeemed for your tenant, then the onboarding. `200` with `{"status": "connected", "waba_id", "phone_number_ids", "steps_completed", "needs_coexistence_sync", "credit_allocation_id"?}`, or `{"status": "cancelled", "current_step"}` for a `CANCEL` event (nothing redeemed: the attempt may still complete) |
-| `POST /v1/signup/hosted` | `{waba_id, owner_business_id, pin?}`: claim a remembered `PARTNER_ADDED` and onboard it ([Hosted signup](#hosted-signup)); answers as a completion |
 | `GET /v1/signup/attempts` | your attempts that stopped after their token was stored: `{data: [{waba_id, failed_step, updated_at, created_at}], next_cursor}` |
 | `POST /v1/signup/resume` | `{waba_id, pin?}`: an attempt's steps after the stored token, again (a corrected PIN): answers as a completion, `steps_completed` starting with `load_token` |
 
@@ -1458,34 +1457,43 @@ It returns nothing to you and names no tenant; Meta sends an
 or Solution Partner mode, whose system token is used) the service
 remembers each signed `PARTNER_ADDED` for 7 days (asking Meta nothing; a
 WABA a tenant or the vault already holds is skipped, as the code flow's
-onboardings send one too), and your backend maps it to a merchant:
+onboardings send one too; an unsigned or forged delivery is `401` and
+remembered nowhere). **The operator claims it**, with an admin key, naming
+the tenant the merchant belongs to:
 
 ```bash
-curl -sS -X POST "$WA_SERVER/v1/signup/hosted" -H "Authorization: Bearer $KEY" \
-  -H "WA-Tenant: merchant-42" -H "Content-Type: application/json" \
-  -d '{"waba_id": "524126980791429", "owner_business_id": "2729063490586005", "pin": "581063"}'
+curl -sS -X POST "$WA_SERVER/v1/admin/signup/hosted" -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"tenant_id": "merchant-42", "waba_id": "524126980791429", "owner_business_id": "2729063490586005", "pin": "581063"}'
 ```
 
 It answers as a completion does (`steps_completed` starting with
 `fetch_token`): the business token fetched from
 `system_user_access_tokens` with your system token and its
-`appsecret_proof`, then verified, bound to the tenant, stored, subscribed,
-funded in Solution Partner mode, and registered with the tenant's `pin`
+`appsecret_proof`, then verified, bound to the named tenant, stored,
+subscribed, funded in Solution Partner mode, and registered with `pin`
 (the hosted page asks for none; choose one per number, never stored).
 
 - **No arrival, or another business: `404 not_found`**, the answer for a
-  WABA that does not exist. Another tenant's WABA is `409
-  waba_owned_by_another_tenant`, before anything is claimed.
-- **Who may claim** (decision D202): Meta's page carries no state, so the
-  claimant proves nothing but knowing the WABA and its business id, which
-  are not secrets. Claim as soon as your backend learns of the merchant,
-  and only for the merchant you mapped; an arrival is claimed once.
+  WABA that does not exist; so is a `tenant_id` that names no tenant (a
+  suspended one is `403 tenant_suspended`). Another tenant's WABA is `409
+  waba_owned_by_another_tenant`, before anything is claimed. A tenant's
+  key, a platform key included, is `403 forbidden`.
+- **Who may claim** (decision D202, changed in review): the claim is the
+  operator's because Meta's page carries no state and the WABA and
+  business ids are no secrets. A route open to tenants would let one
+  tenant take an arrival meant for another's merchant and have that
+  merchant's business token stored under its own key. Your backend tells
+  the operator (or your operator tooling calls this route) which tenant a
+  merchant belongs to; an arrival is claimed once.
 - A claim that stops before the token is stored is `502
   onboarding_failed` with `resumable: false` and the arrival is put back;
-  one that stops after is kept as an attempt (`POST /v1/signup/resume`).
-  Off, the route is `409 signup_not_configured` and nothing is remembered.
+  one that stops after is kept as an attempt for the tenant
+  (`POST /v1/signup/resume`). Off, the route is `409 signup_not_configured`
+  and nothing is remembered.
 - Audited: `hosted_signup_arrived` (the webhook, `origin: webhook`) and
-  `hosted_signup_completed` (the tenant). Neither holds a token.
+  `hosted_signup_completed` (the operator's change: the admin key's id, the
+  tenant, the WABA). Neither holds a token.
 
 ### Pre-verified numbers
 

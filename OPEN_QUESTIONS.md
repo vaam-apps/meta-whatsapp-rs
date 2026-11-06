@@ -95,7 +95,17 @@ of its own, after an HTML comment; keep that when you add one.
    own. Hosted signup stays one WABA per
    `PARTNER_ADDED` webhook. Nothing new is stored. Swappable by the
    option (off: one WABA, as `onboard`) and by calling `onboard` instead.
-   Roadmap L11b (landed); the service's side, M3f (landed; D200 proposed in design §10, pending the coordinator).
+   Roadmap L11b (landed); the service's side, M3f (landed).
+
+   **Decided 2026-11-06 (coordinator, owner's delegation) for the
+   service, D200:** a deployment setting, `WA_SIGNUP_EVERY_GRANTED_WABA`,
+   off by default; on, every WABA a signup grants is bound to its tenant
+   (D4 checked on each the event names before the attempt is redeemed, and
+   again in each approval), off, the primary WABA only, the answer listing
+   the rest (`not_bound_waba_ids`). The setting's name is pending the
+   owner's confirmation before the first release. Swappable by the
+   setting (`SignupDeployment::every_granted_waba`). Roadmap M3f
+   (landed).
 
 6. **One WABA shared by several tenants.** The vault is keyed by WABA and
    knows no tenants; the last onboarding wins. `onboard_with_approval`
@@ -280,7 +290,21 @@ of its own, after an HTML comment; keep that when you add one.
     stored. Swappable by `HostedSignup::token_request` (the request) and
     by not calling `onboard_hosted` (the code flow is unchanged); the
     held-WABA refusal by deleting the record first. Roadmap L11a
-    (landed); the service's side, M3f (landed; D201 and D202 proposed in design §10, pending the coordinator).
+    (landed); the service's side, M3f (landed).
+
+    **Decided 2026-11-06 (coordinator, owner's delegation) for the
+    service, D201 and D202:** the service remembers a signed
+    `PARTNER_ADDED` for 7 days (`wa.es.hosted`) when `WA_HOSTED_SIGNUP` is
+    on (off by default), and the operator claims it:
+    `POST /v1/admin/signup/hosted` (admin key) names the tenant, the WABA
+    and its business. Not a tenant route: the ids are no secrets, so a
+    tenant naming both could take an arrival meant for another tenant's
+    merchant and have that merchant's business token stored under its own
+    key. D4, the arrival claimed once and the put-back stay. The setting,
+    the stored name, the route and the audit action are pending the
+    owner's confirmation before the first release. Swappable by a tenant
+    route over the same core call (`Signups::complete_hosted`), or an
+    operator-assigned reservation like D203's. Roadmap M3f (landed).
 
 12. **Launch option shape.** `pre-filled-data` shows
     `whatsAppBusinessAccount` both as `{ids: …}` and `{id: [...]}`; the code

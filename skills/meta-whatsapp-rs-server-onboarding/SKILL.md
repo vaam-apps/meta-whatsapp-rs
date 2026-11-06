@@ -1,6 +1,6 @@
 ---
 name: meta-whatsapp-rs-server-onboarding
-description: "Connecting a merchant's WhatsApp number (Embedded Signup) through meta-whatsapp-server over HTTP from a CMS not written in Rust - POST /v1/signup/sessions for the page's FB.login options, relaying the page's post to POST /v1/signup/complete (state, code, event, the merchant's own PIN), stale_attempt, waba_owned_by_another_tenant, onboarding_failed with step and resumable, GET /v1/signup/attempts and POST /v1/signup/resume, coexistence numbers, Tech Provider and Solution Partner modes (the credit line, its revocation, the operator's re-funding), hosted signup (POST /v1/signup/hosted after Meta's PARTNER_ADDED), several WABAs in one signup (wabas, not_bound_waba_ids), the operator's pool of pre-verified numbers, and disconnecting. Load when a non-Rust backend lets its merchants connect WhatsApp through the service."
+description: "Connecting a merchant's WhatsApp number (Embedded Signup) through meta-whatsapp-server over HTTP from a CMS not written in Rust - POST /v1/signup/sessions for the page's FB.login options, relaying the page's post to POST /v1/signup/complete (state, code, event, the merchant's own PIN), stale_attempt, waba_owned_by_another_tenant, onboarding_failed with step and resumable, GET /v1/signup/attempts and POST /v1/signup/resume, coexistence numbers, Tech Provider and Solution Partner modes (the credit line, its revocation, the operator's re-funding), hosted signup (the operator's POST /v1/admin/signup/hosted after Meta's PARTNER_ADDED), several WABAs in one signup (wabas, not_bound_waba_ids), the operator's pool of pre-verified numbers, and disconnecting. Load when a non-Rust backend lets its merchants connect WhatsApp through the service."
 ---
 
 # meta-whatsapp-rs-server-onboarding
@@ -22,7 +22,7 @@ the merchant's token in its vault: you never see it.
 | `POST /v1/signup/complete` | the page's post: the merchant onboarded, the WABA and all its numbers theirs |
 | `GET /v1/signup/attempts` | the merchant's attempts that stopped after the token was stored |
 | `POST /v1/signup/resume` | one of them again, with a corrected PIN |
-| `POST /v1/signup/hosted` | hosted signup, several WABAs per signup, the operator's `/v1/admin/pre-verified-numbers`: [references/hosted-and-pools.md](references/hosted-and-pools.md) |
+| `POST /v1/admin/signup/hosted` | the operator's hosted signup claim (admin key), several WABAs per signup, the operator's `/v1/admin/pre-verified-numbers`: [references/hosted-and-pools.md](references/hosted-and-pools.md) |
 | `DELETE /v1/wabas/{waba_id}` | disconnect (scope `numbers`) |
 | `POST /v1/admin/wabas/{waba_id}/credit-line/reshare` | the operator funds a revoked business again (admin key) |
 

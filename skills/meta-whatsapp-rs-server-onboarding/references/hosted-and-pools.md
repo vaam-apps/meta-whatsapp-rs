@@ -1,6 +1,6 @@
 # Hosted signup, several WABAs per signup and pre-verified numbers
 
-> **Verified against meta-whatsapp-rs 88244b1af6e8f49335d5209f073882542d3d316f (2026-11-06).** Also checked against Meta's `embedded-signup/hosted-es` and `embedded-signup/pre-verified-numbers` pages as fetched on 2026-11-06.
+> **Verified against meta-whatsapp-rs 93691cb49b9867a76f02c9ed44bf5d2d424c946f (2026-11-06).** Also checked against Meta's `embedded-signup/hosted-es` and `embedded-signup/pre-verified-numbers` pages as fetched on 2026-11-06.
 
 The code is in [examples/onboarding.ts](../examples/onboarding.ts) (the
 functions below, plus one that adds a number to the pool), type-checked
@@ -41,12 +41,15 @@ With `WA_HOSTED_SIGNUP=on`, send the merchant to Meta's own onboarding
 page (App Dashboard, WhatsApp, Quickstart): no code on your page, and
 nothing comes back to your backend. Meta's account_update webhook
 (PARTNER_ADDED) names the merchant's WABA and business; the service
-remembers it for 7 days and your backend, which knows which merchant it
-sent, claims it with both ids and the PIN you choose for their number:
+remembers it for 7 days (a delivery that is unsigned or wrongly signed is
+refused and remembered nowhere), and your operator (admin key), who knows
+which merchant sent whom, claims it for that merchant's tenant with both
+ids and the PIN you choose for their number:
 
 ```ts
 export async function claimHostedSignup(
-  api: WhatsApp,
+  admin: WhatsApp,
+  tenantId: string,
   wabaId: string,
   ownerBusinessId: string,
   pin?: string,
@@ -54,12 +57,14 @@ export async function claimHostedSignup(
 ```
 
 `not_found` (404): no such arrival is waiting (not yet delivered, claimed
-already, lapsed, or another business). `waba_owned_by_another_tenant`
-(409): another merchant holds the WABA. `onboarding_failed` is as for a
-completion: `resumable: false` puts the arrival back to claim again. The
-ids are not secrets, so claim as soon as you hear of the merchant and
-only for the merchant you mapped. Off, the route answers
-`signup_not_configured` (409).
+already, lapsed, or another business), or no such tenant.
+`waba_owned_by_another_tenant` (409): another merchant holds the WABA.
+`onboarding_failed` is as for a completion: `resumable: false` puts the
+arrival back to claim again, `true` leaves an attempt the merchant's
+tenant resumes. The claim is the operator's, never a tenant's, because the
+ids are no secrets: a route open to merchants would let one take
+another's arrival. A tenant key gets `forbidden` (403). Off, the route
+answers `signup_not_configured` (409).
 
 ## Pre-verified numbers
 

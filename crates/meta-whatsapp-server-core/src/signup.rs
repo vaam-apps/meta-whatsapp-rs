@@ -177,8 +177,9 @@ impl SignupDeployment {
     }
 
     /// Handle hosted Embedded Signup (`WA_HOSTED_SIGNUP`, roadmap M3f,
-    /// decision D201): `PARTNER_ADDED` webhooks are remembered and a
-    /// tenant claims one (`POST /v1/signup/hosted`), the business token
+    /// decision D201): `PARTNER_ADDED` webhooks are remembered and the
+    /// operator claims one for a tenant (`POST /v1/admin/signup/hosted`,
+    /// decision D202; [`Signups::complete_hosted`]), the business token
     /// fetched with `system_token`, the deployment's system user token.
     #[must_use]
     pub fn hosted_signup(mut self, system_token: AccessToken) -> Self {

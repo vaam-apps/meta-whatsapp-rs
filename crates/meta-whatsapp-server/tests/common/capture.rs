@@ -3496,10 +3496,12 @@ async fn signup_m3f(h: &Harness, admin: &str) -> Vec<String> {
     let arrived = h.webhook(&partner_added(WABA_2, BUSINESS)).await;
     assert_eq!(arrived.status.as_u16(), 200, "{}", arrived.text);
     let claim = |pin: &str| {
-        Call::new(Method::POST, "/v1/admin/signup/hosted").key(admin).json(&json!({
-            "tenant_id": "merchant-78", "waba_id": WABA_2,
-            "owner_business_id": BUSINESS, "pin": pin
-        }))
+        Call::new(Method::POST, "/v1/admin/signup/hosted")
+            .key(admin)
+            .json(&json!({
+                "tenant_id": "merchant-78", "waba_id": WABA_2,
+                "owner_business_id": BUSINESS, "pin": pin
+            }))
     };
     h.graph.push_json(
         400,

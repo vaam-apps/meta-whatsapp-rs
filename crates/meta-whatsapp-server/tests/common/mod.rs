@@ -73,6 +73,9 @@ pub struct CountingKv {
     inner: Arc<dyn KvStore>,
     vault_reads: AtomicUsize,
     writes: Mutex<Vec<(StoreKey, Option<Vec<u8>>)>>,
+    /// Namespace whose next present read is followed by the record's
+    /// deletion (see [`Self::lose_next_read_in`]).
+    lose_next: Mutex<Option<&'static str>>,
 }
 
 impl CountingKv {
@@ -82,7 +85,15 @@ impl CountingKv {
             inner,
             vault_reads: AtomicUsize::new(0),
             writes: Mutex::new(Vec::new()),
+            lose_next: Mutex::new(None),
         }
+    }
+
+    /// The next read of a present record in `namespace` returns it and
+    /// then deletes it, as a concurrent claimant's winning compare and
+    /// swap would between the read and the reader's own compare and swap.
+    pub fn lose_next_read_in(&self, namespace: &'static str) {
+        *self.lose_next.lock().unwrap() = Some(namespace);
     }
 
     /// Every key and value written so far (put, put if absent, compare and
@@ -126,7 +137,21 @@ impl KvStore for CountingKv {
         if key.namespace() == TOKEN_NAMESPACE {
             self.vault_reads.fetch_add(1, Ordering::SeqCst);
         }
-        self.inner.get(key).await
+        let read = self.inner.get(key).await?;
+        if read.is_some() {
+            let lost = {
+                let mut lose = self.lose_next.lock().unwrap();
+                let lost = *lose == Some(key.namespace());
+                if lost {
+                    *lose = None;
+                }
+                lost
+            };
+            if lost {
+                self.inner.delete(key).await?;
+            }
+        }
+        Ok(read)
     }
     async fn put(
         &self,
