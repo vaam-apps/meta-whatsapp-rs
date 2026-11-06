@@ -659,6 +659,11 @@ pub fn test_settings() -> Settings {
         // The Flows data endpoint (roadmap M5d), answered by an app that
         // sends the KAT's summary screen.
         flows: Some(flows::deployment(flows::Stub::summary())),
+        // Roadmap M5c5: the tests that assert a page's example exactly
+        // read the body the service builds, not the account it names
+        // (on by default; `messaging_account.rs` and its live twin turn
+        // it on and walk every route).
+        send_messaging_account_id: false,
         ..Settings::default()
     }
 }

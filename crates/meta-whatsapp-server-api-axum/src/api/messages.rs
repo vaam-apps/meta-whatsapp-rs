@@ -1484,7 +1484,7 @@ pub(crate) async fn send(
     owned: &OwnedNumber,
     message: &OutboundMessage,
 ) -> Result<Success, ApiError> {
-    let accepted = messages(state, owned)?.send(message).await?;
+    let accepted = Box::pin(messages(state, owned)?.send(message)).await?;
     Success::json(StatusCode::ACCEPTED, &MessageAccepted::from(accepted))
 }
 

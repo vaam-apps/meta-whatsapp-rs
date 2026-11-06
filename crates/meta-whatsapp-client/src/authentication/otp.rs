@@ -852,7 +852,9 @@ impl OtpService {
     /// the response (it names the recipient).
     async fn send(&self, phone: &Phone, template: TemplateMessage) -> Result<MessageId> {
         let mut message = OutboundMessage::template(Recipient::Phone(phone.e164()), template);
-        message.messaging_account_id.clone_from(&self.messaging_account_id);
+        message
+            .messaging_account_id
+            .clone_from(&self.messaging_account_id);
         let sent = self
             .client
             .messages(self.phone_number_id.clone())

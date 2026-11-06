@@ -328,7 +328,10 @@ async fn the_messaging_account_is_named_in_the_codes_message_when_set() {
     let body = f.transport.last_request().unwrap().json().unwrap();
     assert_eq!(body["messaging_account_id"], "102290129340398");
     assert_eq!(body["to"], PHONE);
-    assert_eq!(body["template"]["components"][0]["parameters"][0]["text"], code);
+    assert_eq!(
+        body["template"]["components"][0]["parameters"][0]["text"],
+        code
+    );
     assert_eq!(body.get("paid_messaging_account_id"), None);
     assert_eq!(f.transport.remaining(), 0);
 
@@ -338,7 +341,10 @@ async fn the_messaging_account_is_named_in_the_codes_message_when_set() {
     assert_eq!(body.get("messaging_account_id"), None);
 
     let mut bad = fixture(OtpConfig::new(TENANT));
-    bad.otp = bad.otp.clone().messaging_account_id(WabaId::new_unchecked("+49"));
+    bad.otp = bad
+        .otp
+        .clone()
+        .messaging_account_id(WabaId::new_unchecked("+49"));
     accept(&bad.transport);
     let err = bad.otp.issue(&user(), "login").await.unwrap_err();
     assert!(matches!(&err, Error::Validation(v) if v.field == "messaging_account_id"));

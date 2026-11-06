@@ -104,7 +104,10 @@ fn sent(h: &Harness) -> Vec<Value> {
     h.graph
         .requests()
         .into_iter()
-        .filter(|r| r.method == Method::POST && (r.path().ends_with("/messages") || r.path().ends_with("/marketing_messages")))
+        .filter(|r| {
+            r.method == Method::POST
+                && (r.path().ends_with("/messages") || r.path().ends_with("/marketing_messages"))
+        })
         .map(|r| r.json().expect("a JSON body"))
         // A read receipt (`status: read`) posts to the same edge and is
         // not a message.
