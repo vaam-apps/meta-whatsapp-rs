@@ -119,8 +119,8 @@ impl MarketingBusiness {
     /// updates never sign, even when Meta refuses them for want of the
     /// agreement. Call it only when the business has decided to sign.
     ///
-    /// Signed once per business portfolio, by an admin of it, with a token
-    /// holding `business_management` (a system user or business token).
+    /// Signed once per business portfolio, by an admin of the Business Suite,
+    /// with a system token or a business token.
     /// Meta emails `signer.signer_email` an acceptance link and answers
     /// [`AgreementStatus::Pending`]; once the business accepts, its own
     /// WABAs are allowlisted, and a Solution Partner's agreement covers the

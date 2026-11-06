@@ -1121,9 +1121,8 @@ pub struct SignMaxPriceAgreementBody {
     pub signer_name: String,
     /// Where Meta emails the acceptance link.
     pub signer_email: String,
-    /// A system user or business token with `business_management`, an
-    /// admin of the business portfolio's. Used for this call only; never
-    /// stored.
+    /// A system token or a business token of an admin of the business's
+    /// Business Suite. Used for this call only; never stored.
     pub token: String,
 }
 
@@ -1152,7 +1151,7 @@ pub struct AgreementSignedView {
     responses(
         (status = 200, description = "Meta emailed the signer: the agreement is `pending`; audited `max_price_agreement_signed`", body = AgreementSignedView),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), not an admin key, or Meta's refusal (the token lacks `business_management`, or its holder is no admin of the portfolio)", body = ErrorBody),
+        (status = 403, description = "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), not an admin key, or Meta's refusal (the token's holder is no admin of the business's Business Suite)", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `business_id`, `signer_name`, `signer_email`, `token` or `body`; Meta's `invalid_parameter`", body = ErrorBody),
         (status = 429, description = "`too_many_requests`: Meta answers `429` within 5 minutes of the last email (`retry_after`)", body = ErrorBody),
         (status = 502, description = "Meta failed: see `may_have_been_sent` (the agreement is never sent again by the service: read its state with Meta, or wait)", body = ErrorBody),

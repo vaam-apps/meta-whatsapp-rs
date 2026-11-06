@@ -166,7 +166,7 @@
             }
           },
           "403": {
-            "description": "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), not an admin key, or Meta's refusal (the token lacks `business_management`, or its holder is no admin of the portfolio)",
+            "description": "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), not an admin key, or Meta's refusal (the token's holder is no admin of the business's Business Suite)",
             "content": {
               "application/json": {
                 "schema": {
@@ -34052,7 +34052,7 @@
           },
           "token": {
             "type": "string",
-            "description": "A system user or business token with `business_management`, an\nadmin of the business portfolio's. Used for this call only; never\nstored."
+            "description": "A system token or a business token of an admin of the business's\nBusiness Suite. Used for this call only; never stored."
           }
         },
         "additionalProperties": false

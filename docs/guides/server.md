@@ -1948,9 +1948,9 @@ lookup sent.
   send: when the agreement is missing you get Meta's refusal as it is.
   The operator signs it with an admin key:
   `POST /v1/admin/businesses/{business_id}/max-price-agreement` with
-  `{signer_name, signer_email, token}` (the token: a system user or
-  business token with `business_management`, an admin of the portfolio's;
-  used for this call, stored nowhere). Unless the deployment sets
+  `{signer_name, signer_email, token}` (the token: a system token or a
+  business token of an admin of the business's Business Suite; used for
+  this call, stored nowhere). Unless the deployment sets
   `WA_SERVER_LEGAL_ACTS=on` it answers `403 feature_not_available` with
   nothing asked of Meta; on, it makes one request, never replayed, and one
   audit event (`max_price_agreement_signed`, with the admin key's public id

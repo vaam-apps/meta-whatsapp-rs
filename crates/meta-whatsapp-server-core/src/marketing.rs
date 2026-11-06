@@ -1259,9 +1259,8 @@ impl<'a> MaxPriceAgreements<'a> {
     }
 
     /// Sign Meta's max price beta agreement for the business portfolio
-    /// `business_id`, with `token` (a system user or business token with
-    /// `business_management`, an admin of the portfolio's: used for this
-    /// call only, never stored), naming `signer`. Meta emails the signer
+    /// `business_id`, with `token` (a system token or a business token of an admin of the
+    /// business's Business Suite: used for this call only, never stored), naming `signer`. Meta emails the signer
     /// an acceptance link and answers `pending`; the business accepts it
     /// there. Exactly one request, never replayed (not after a timeout, a
     /// `429` within 5 minutes of the last email, or any failure).
