@@ -148,3 +148,73 @@ export async function fundAgain(admin: WhatsApp, wabaId: string): Promise<Connec
   }
   return connection(data);
 }
+
+// Hosted Embedded Signup (WA_HOSTED_SIGNUP=on): the merchant used Meta's own
+// page, which returned nothing; Meta's account_update PARTNER_ADDED named
+// their WABA and business to your backend. Claim it for the merchant, with
+// the PIN you chose for their number (never stored by the service). A 404
+// `not_found` means no such arrival is waiting; 409
+// `waba_owned_by_another_tenant` that another merchant holds the WABA.
+export async function claimHostedSignup(
+  api: WhatsApp,
+  wabaId: string,
+  ownerBusinessId: string,
+  pin?: string,
+): Promise<Connection> {
+  const { data, error } = await api.POST("/v1/signup/hosted", {
+    body:
+      pin === undefined
+        ? { waba_id: wabaId, owner_business_id: ownerBusinessId }
+        : { waba_id: wabaId, owner_business_id: ownerBusinessId, pin },
+  });
+  if (error) {
+    return failed(error.error);
+  }
+  return connection(data);
+}
+
+export type SignupWaba = components["schemas"]["SignupWaba"];
+
+// A completion on a deployment that binds every granted WABA
+// (WA_SIGNUP_EVERY_GRANTED_WABA=on) lists each WABA and what became of it;
+// one that failed after its token was stored is resumed with its own id.
+export function wabasToResume(data: SignupResult): string[] {
+  return (data.wabas ?? []).filter((waba) => waba.status === "failed" && waba.resumable).map((waba) => waba.waba_id);
+}
+
+// With the option off, the primary WABA (`waba_id`) is the only one bound;
+// the others the page's event named are listed here, for a signup of their own.
+export function notBound(data: SignupResult): string[] {
+  return data.not_bound_waba_ids ?? [];
+}
+
+// The operator's pool of pre-verified numbers (admin key): add a number,
+// have Meta send its code, check the code, then reserve it for a merchant,
+// whose launch may then offer it (`pre_verified_phone_ids`).
+export async function addPreVerified(admin: WhatsApp, phoneNumber: string): Promise<string> {
+  const { data, error } = await admin.POST("/v1/admin/pre-verified-numbers", {
+    body: { phone_number: phoneNumber },
+  });
+  if (error) {
+    throw new Error(`number not added: ${error.error.code}`);
+  }
+  return data.id;
+}
+
+export async function reservePreVerified(admin: WhatsApp, id: string, tenantId: string): Promise<boolean> {
+  const { error } = await admin.PUT("/v1/admin/pre-verified-numbers/{id}/reservation", {
+    params: { path: { id } },
+    body: { tenant_id: tenantId },
+  });
+  return error === undefined;
+}
+
+export async function startWithPreVerified(api: WhatsApp, ids: string[]): Promise<SignupSession> {
+  const { data, error } = await api.POST("/v1/signup/sessions", {
+    body: { pre_verified_phone_ids: ids },
+  });
+  if (error) {
+    throw new Error(`signup not started: ${error.error.code}`);
+  }
+  return data;
+}

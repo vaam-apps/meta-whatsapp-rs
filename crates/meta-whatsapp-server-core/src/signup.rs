@@ -1751,6 +1751,18 @@ mod tests {
         assert!(!after_store(&Error::Storage(StorageError::Busy)));
     }
 
+    /// The stored names of roadmap M3f (pending the owner's confirmation
+    /// before the first release): the arrivals' and the reservations'
+    /// namespaces, spelled with `\x77` so a search-and-replace of the
+    /// project's name cannot change them with the code. Decisive: a
+    /// renamed namespace strands every arrival and reservation stored.
+    #[test]
+    fn the_namespaces_of_m3f_are_pinned() {
+        assert_eq!(hosted::HOSTED_NAMESPACE, "\x77a.es.hosted");
+        assert_eq!(pre_verified::RESERVATION_NAMESPACE, "\x77a.es.preverified");
+        assert_eq!(hosted::PENDING_TTL.as_secs(), 7 * 24 * 3600);
+    }
+
     /// A deployment's `Debug` shows neither the app secret nor the
     /// partner's system token.
     #[test]
@@ -1761,8 +1773,16 @@ mod tests {
             "1972555232742222".to_owned(),
             "1972385232742146".to_owned(),
         );
-        let deployment = SignupDeployment::new(app, "<CONFIGURATION_ID>").solution_partner(partner);
+        let deployment = SignupDeployment::new(app, "<CONFIGURATION_ID>")
+            .solution_partner(partner)
+            .hosted_signup(AccessToken::new("HOSTED-TOKEN-SENTINEL"))
+            .pre_verified_pool(
+                BusinessId::new("506914307656634").unwrap(),
+                AccessToken::new("POOL-TOKEN-SENTINEL"),
+            );
         let shown = format!("{deployment:?}");
+        assert!(!shown.contains("HOSTED-TOKEN-SENTINEL"), "{shown}");
+        assert!(!shown.contains("POOL-TOKEN-SENTINEL"), "{shown}");
         assert!(!shown.contains("s3cr3t-app-secret"), "{shown}");
         assert!(!shown.contains("SYSTEM-TOKEN-SENTINEL"), "{shown}");
         assert!(shown.contains("solution_partner: true"), "{shown}");

@@ -771,3 +771,124 @@ async fn live_postgres_m3f_several_wabas_the_refusal_and_a_hosted_claim() {
         Harness::with_stores_and_settings(Stores::postgres(&pool), settings(hosted_deployment()));
     a_partner_added_is_claimed_by_a_tenant_and_onboarded_on(h).await;
 }
+
+// ─── Configuration ───────────────────────────────────────────────────────
+
+#[derive(Default, Clone)]
+struct Vars(std::collections::HashMap<String, String>);
+
+impl meta_whatsapp_server::config::Env for Vars {
+    fn var(&self, name: &str) -> Result<Option<String>, meta_whatsapp_server::config::NotUnicode> {
+        Ok(self.0.get(name).cloned())
+    }
+    fn read_file(&self, _: &str) -> std::io::Result<String> {
+        Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+    }
+}
+
+impl Vars {
+    fn set(mut self, name: &str, value: &str) -> Self {
+        self.0.insert(name.to_owned(), value.to_owned());
+        self
+    }
+}
+
+/// The M3f settings: all off by default; `on` and `off` only; hosted
+/// signup and the pool need a system token (`WA_SYSTEM_TOKEN`, or a
+/// Solution Partner's own); the deployment they build has them; no token
+/// reaches a `Debug`. Decisive: a switch parsed loosely, a setting that
+/// turns on without its token.
+#[test]
+fn the_m3f_settings_are_off_by_default_and_need_their_token() {
+    use meta_whatsapp_server::config::{Config, ConfigError};
+    let base = Vars::default()
+        .set("DATABASE_URL", "postgres://wa:secret@127.0.0.1:5432/wa")
+        .set("WA_APP_SECRET", common::APP_SECRET)
+        .set("WA_VERIFY_TOKEN", "verify-token")
+        .set(
+            "WA_VAULT_KEY",
+            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        )
+        .set("WA_OTP_PEPPER", "a-pepper-of-at-least-thirty-two-bytes")
+        .set("WA_APP_ID", common::signup::APP_ID)
+        .set("WA_ES_CONFIG_ID", common::signup::CONFIG_ID);
+    let plain = Config::from_env(&base).unwrap();
+    assert!(!plain.signup_options.every_granted_waba);
+    assert!(plain.signup_options.hosted_system_token.is_none());
+    assert!(plain.signup_options.pre_verified_pool.is_none());
+
+    for (name, value) in [
+        ("WA_SIGNUP_EVERY_GRANTED_WABA", "yes"),
+        ("WA_HOSTED_SIGNUP", "true"),
+        ("WA_PARTNER_BUSINESS_ID", "not-digits"),
+    ] {
+        let refused = Config::from_env(&base.clone().set(name, value)).err();
+        assert!(
+            matches!(&refused, Some(ConfigError::Invalid { name: n, .. }) if *n == name),
+            "{name}={value}: {refused:?}"
+        );
+    }
+    // Hosted signup and the pool need a token.
+    for name in ["WA_HOSTED_SIGNUP"] {
+        let refused = Config::from_env(&base.clone().set(name, "on")).err();
+        assert!(
+            matches!(&refused, Some(ConfigError::Invalid { name: n, .. }) if *n == name),
+            "{refused:?}"
+        );
+    }
+    let refused =
+        Config::from_env(&base.clone().set("WA_PARTNER_BUSINESS_ID", POOL_BUSINESS)).err();
+    assert!(
+        matches!(refused, Some(ConfigError::Invalid { .. })),
+        "{refused:?}"
+    );
+
+    let on = base
+        .clone()
+        .set("WA_SIGNUP_EVERY_GRANTED_WABA", "on")
+        .set("WA_HOSTED_SIGNUP", "on")
+        .set("WA_SYSTEM_TOKEN", HOSTED_TOKEN)
+        .set("WA_PARTNER_BUSINESS_ID", POOL_BUSINESS);
+    let config = Config::from_env(&on).unwrap();
+    assert!(config.signup_options.every_granted_waba);
+    assert!(config.signup_options.hosted_system_token.is_some());
+    let deployment = meta_whatsapp_server::serve::signup_deployment_with(
+        config.app_id.clone(),
+        config.app_secrets.first(),
+        config.es_config_id.clone(),
+        config.onboarding.clone(),
+        config.account_update_confirmation,
+        &config.signup_options,
+    )
+    .unwrap();
+    assert!(deployment.binds_every_granted_waba());
+    assert!(deployment.handles_hosted_signup());
+    assert!(deployment.manages_pre_verified_pool());
+    for shown in [
+        format!("{deployment:?}"),
+        format!("{:?}", config.signup_options),
+    ] {
+        assert!(!shown.contains(HOSTED_TOKEN), "{shown}");
+    }
+    // A Solution Partner's system token serves when WA_SYSTEM_TOKEN is unset.
+    let partner = base
+        .set("WA_ONBOARDING_MODE", "solution_partner")
+        .set("WA_PARTNER_SYSTEM_TOKEN", SYSTEM_TOKEN)
+        .set("WA_PARTNER_SYSTEM_USER_ID", common::signup::SYSTEM_USER)
+        .set("WA_CREDIT_LINE_ID", common::signup::LINE)
+        .set("WA_WABA_CURRENCY", "EUR")
+        .set("WA_HOSTED_SIGNUP", "on")
+        .set("WA_PARTNER_BUSINESS_ID", POOL_BUSINESS);
+    let config = Config::from_env(&partner).unwrap();
+    let (business, token) = config.signup_options.pre_verified_pool.unwrap();
+    assert_eq!(business.as_str(), POOL_BUSINESS);
+    assert_eq!(token.expose_secret(), SYSTEM_TOKEN);
+    assert_eq!(
+        config
+            .signup_options
+            .hosted_system_token
+            .unwrap()
+            .expose_secret(),
+        SYSTEM_TOKEN
+    );
+}

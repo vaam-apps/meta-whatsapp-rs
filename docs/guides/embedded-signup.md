@@ -829,7 +829,9 @@ if let WebhookEvent::AccountUpdated { update, .. } = &event
   (`onboard_hosted` again is refused: the vault holds the WABA).
 - **No tenant.** The webhook names none of your merchants: bind the WABA
   to one in `onboard_hosted_with_approval` (required for a Solution
-  Partner, as `onboard_with_approval` is), reserving it atomically.
+  Partner, as `onboard_with_approval` is), reserving it atomically. The
+  HTTP service does this for you: it remembers the webhook and a tenant
+  claims it (`POST /v1/signup/hosted`, [server guide](server.md#hosted-signup)).
 - **The PIN is yours.** The hosted page asks for none: choose one per
   number (the onboarding guides' `<DESIRED_PIN>`) and keep it in your
   secret store, never one for every merchant.
