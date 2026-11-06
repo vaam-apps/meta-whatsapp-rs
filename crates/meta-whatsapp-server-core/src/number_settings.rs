@@ -888,14 +888,18 @@ mod tests {
     /// kind. Decisive: the arm of `is_legal_admin_act`, and a marketing
     /// operation added to `is_legal_act`.
     #[test]
-    fn the_admin_legal_acts_are_the_agreement_and_the_partner_acts_and_no_marketing_operation_is_one() {
+    fn the_admin_legal_acts_are_the_agreement_and_the_partner_acts_and_no_marketing_operation_is_one()
+     {
         let gated: Vec<_> = AdminOperation::ALL
             .into_iter()
             .filter(|operation| is_legal_admin_act(*operation))
             .collect();
         assert_eq!(gated, AdminOperation::ALL);
         assert_eq!(
-            gated.iter().map(|operation| operation.id()).collect::<Vec<_>>(),
+            gated
+                .iter()
+                .map(|operation| operation.id())
+                .collect::<Vec<_>>(),
             [
                 "sign_max_price_agreement",
                 "submit_business_verification",
