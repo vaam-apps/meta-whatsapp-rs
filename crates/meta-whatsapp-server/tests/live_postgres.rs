@@ -2102,7 +2102,12 @@ async fn live_postgres_an_admin_keys_idempotency_record_is_in_its_own_table() {
     .execute(&pool)
     .await
     .unwrap();
-    let purged = h.backend.idempotency().purge_idempotency_keys().await.unwrap();
+    let purged = h
+        .backend
+        .idempotency()
+        .purge_idempotency_keys()
+        .await
+        .unwrap();
     assert_eq!(purged, 1);
     let left: i64 = sqlx::query_scalar("SELECT count(*) FROM wa_server_admin_idempotency")
         .fetch_one(&pool)
@@ -2114,16 +2119,24 @@ async fn live_postgres_an_admin_keys_idempotency_record_is_in_its_own_table() {
     // (with its foreign key), not the operator's. Decisive: the table the
     // backend picks for a tenant's scope.
     h.tenant("merchant-42").await;
-    h.connect("merchant-42", "102290129340398", &["106540352242922"], "EAAG-t")
-        .await;
+    h.connect(
+        "merchant-42",
+        "102290129340398",
+        &["106540352242922"],
+        "EAAG-t",
+    )
+    .await;
     let tenant_key = h.tenant_key("merchant-42", &[Scope::Partners]).await;
     h.graph.push_json(200, json!({"id": "1972385232742999"}));
     let intent = h
         .call(
-            Call::new(Method::POST, "/v1/wabas/102290129340398/solution-migration-intents")
-                .key(&tenant_key)
-                .header("idempotency-key", "live-1")
-                .json(&json!({"solution_id": "303610109049230"})),
+            Call::new(
+                Method::POST,
+                "/v1/wabas/102290129340398/solution-migration-intents",
+            )
+            .key(&tenant_key)
+            .header("idempotency-key", "live-1")
+            .json(&json!({"solution_id": "303610109049230"})),
         )
         .await;
     assert_eq!(intent.status, StatusCode::CREATED, "{}", intent.text);

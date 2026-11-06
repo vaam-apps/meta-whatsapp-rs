@@ -14,11 +14,12 @@
 
 mod common;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine as _;
 use common::signup::{POOL_BUSINESS, POOL_TOKEN, tech_provider};
-use common::{Call, Harness};
+use common::{Call, Harness, Stores};
 use meta_whatsapp_rs::core::error::TransportError;
 use meta_whatsapp_rs::core::ids::BusinessId;
 use meta_whatsapp_rs::core::secret::AccessToken;
@@ -26,6 +27,7 @@ use meta_whatsapp_rs::webhooks::axum::http::{Method, StatusCode};
 use meta_whatsapp_server::idempotency::Fingerprint;
 use meta_whatsapp_server::model::{IdempotencyClaim, IdempotencyKey, Scope, TenantId};
 use meta_whatsapp_server::state::Settings;
+use meta_whatsapp_server::store::LocalNotifier;
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 
@@ -478,8 +480,65 @@ async fn a_refused_submission_echoes_no_document() {
     let reply =
         f.h.call(keyed(VERIFICATIONS, &f.admin, "verify-leak", &body))
             .await;
-    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", reply.text);
+    assert_eq!(
+        reply.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        reply.text
+    );
     assert!(!reply.text.contains(&b64(PNG)));
     assert!(!reply.text.contains("secret-statement-name"));
     assert!(!reply.text.contains(CUSTOMER));
+}
+
+/// With the legal acts off a keyed submission claims nothing: the same
+/// stores served by a replica with the setting on (the operator turned it
+/// on and retried) send the request to Meta instead of replaying a refusal
+/// or finding the key busy. Decisive: the gate before the key is claimed
+/// (moved after, the first `403` is kept or the key stays in progress).
+#[tokio::test]
+async fn a_gated_submission_claims_no_key() {
+    let off = fixture(false).await;
+    let body = submission(&[("statement.pdf", PDF)]);
+    let gated = off
+        .h
+        .call(keyed(VERIFICATIONS, &off.admin, "gated-then-on", &body))
+        .await;
+    assert_eq!(
+        (gated.status, gated.code().as_str()),
+        (StatusCode::FORBIDDEN, "feature_not_available"),
+        "{}",
+        gated.text
+    );
+    assert!(off.h.graph.requests().is_empty());
+
+    // The same stores (so the same records and the same admin key), the
+    // setting on.
+    let stores = Stores {
+        store: off.h.store.clone(),
+        kv: off.h.kv.clone(),
+        conversations: off.h.conversations.clone(),
+        events: off.h.outbox.clone(),
+        notifier: Arc::new(LocalNotifier::new()),
+        webhooks: off.h.backend.webhooks(),
+    };
+    let on = Harness::with_stores_and_settings(
+        stores,
+        Settings {
+            signup: Some(tech_provider().pre_verified_pool(
+                BusinessId::new(POOL_BUSINESS).unwrap(),
+                AccessToken::new(POOL_TOKEN),
+            )),
+            legal_acts: true,
+            ..common::test_settings()
+        },
+    );
+    on.graph.push_json(200, received());
+    let retried = on
+        .call(keyed(VERIFICATIONS, &off.admin, "gated-then-on", &body))
+        .await;
+    assert_eq!(retried.status, StatusCode::CREATED, "{}", retried.text);
+    assert!(!retried.headers.contains_key("idempotent-replayed"));
+    assert_eq!(on.graph.requests().len(), 1, "the retry reached Meta");
+    assert_eq!(on.graph.remaining(), 0);
 }
