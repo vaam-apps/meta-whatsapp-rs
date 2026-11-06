@@ -41,14 +41,14 @@ broadcast) replays a non-idempotent request. The Business Use Case limits
 | `ClassificationLimitReached` | 131064 | no | no | Template classification violations; fix categories |
 | `AccountRestricted` | 368, 131031 | no | no | Policy restriction on the account |
 | `CountryRestricted` | 130497 | no | no | Cannot message users in that country |
-| `InvalidParameter` | 33, 100, 131008, 131009, 131021, 135000, 2494166–2494168, 2494176, 2494177, 2494179 | no | no | Fix the request; `GraphApiError::code` tells In-App Signup errors apart |
+| `InvalidParameter` | 33, 100, 131008, 131009, 131021, 135000, 2494166–2494168, 2494176, 2494177, 2494179, and the Groups API's 131202, 131209, 131210 | no | no | Fix the request; `GraphApiError::code` tells In-App Signup and group errors apart |
 | `UnsupportedMessageType` | 131051 | no | no | — |
 | `CustomerServiceWindowClosed` | 131047; also the inbox's local refusal (nothing sent) | no | no | >24 h since the user's last message: send a template |
 | `ThreadOwnedElsewhere` | 131070 (a service message without owning the thread, also an idle one); the inbox's local refusal (nothing sent) | no | no | Another app owns the thread under Conversation Routing: send a template, or wait for the thread (`meta-whatsapp-rs-cms-inbox`) |
 | `EcosystemEngagementLimit` | 131049 | **no** | no | Per-user marketing limit; do not retry for at least 24 h |
 | `MarketingOptedOut` | 131050 | no | no | User stopped marketing: record the opt-out, never retry |
 | `MarketingNotAllowed` | 131055, 131063, 134100 | no | no | Not a marketing template on the MM API, or marketing disabled on this API |
-| `Undeliverable` | 131026 | no | no | Not on WhatsApp, old client, ToS pending… |
+| `Undeliverable` | 131020, 131026 | no | no | Not on WhatsApp, old client, ToS pending…; 131020 a message to a group of one member |
 | `BlockedByBusiness` | 130403 | no | no | You blocked this user; unblock first |
 | `ExperimentHoldout` | 130472 | no | no | Held back by a Meta experiment |
 | `RecipientNotSupported` | 131062 | no | no | This message cannot go to a BSUID; address by phone number |
@@ -70,8 +70,17 @@ broadcast) replays a non-idempotent request. The Business Use Case limits
 | `TwoStepVerification` | 133005, 133008, 133009 | no | no | Wrong PIN, or too many guesses |
 | `SyncNotAllowed` | 2593107–2593109 | no | no | Coexistence sync already done, too late, or declined |
 | `DuplicateOnboarding` | 1752041 | no | no | A partner already requested onboarding |
-| `NotFound` | 2494164 | no | no | e.g. unknown In-App Signup |
-| `FeatureNotAvailable` | 2494165 | no | no | e.g. In-App Signup not enabled on the WABA |
+| `NotFound` | 131041, 2494164 | no | no | e.g. unknown In-App Signup; 131041 a group that does not exist, or the number is not in it |
+| `FeatureNotAvailable` | 131215, 2494165 | no | no | e.g. In-App Signup not enabled on the WABA; 131215 the number is not eligible for the Groups API |
+| `InvalidCursor` | 131059 | no | no | A groups cursor expired or is corrupted: paginate from the start |
+| `GroupPartiallyApplied` | 131201 | no | no | Not every participant was processed (Meta's `206` is a success with `partial`); read the group, never replay blindly |
+| `RecipientTermsNotAccepted` | 131203 | no | no | The person has not accepted WhatsApp's new terms; they must first |
+| `GroupLimitReached` | 131204, 131211 | no | no | The group's participant limit, or the number's limit on groups it may create |
+| `GroupSuspended` | 131207 | no | no | The group violates platform policies |
+| `GroupRateLimited` | 131208 | no | no | Too many group operations from the number; never resent automatically, and not retryable (wait, then decide) |
+| `GroupParticipantNotFound` | 131212 | no | no | A participant the request names is not in the group |
+| `JoinRequestNotFound` | 131213 | no | no | A join request the request names does not exist |
+| `GroupCreationDisabled` | 131214 | no | no | Group creation temporarily disabled after excessive marketing messages |
 | `Payment` | 131042, 134011 | no | no | Payment method / payments ToS |
 | `ServiceUnavailable` | 1, 2, 131000, 131016, 131057, 133004, 2494100 | yes | **no**, but 131057 on a 4xx | Meta-side; a send that got this may have gone out, except 131057 (the account in maintenance during a throughput upgrade: every request refused) |
 | `Unknown` | anything else | no¹ | no | Read `err.graph()` |

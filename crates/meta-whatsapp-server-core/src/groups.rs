@@ -904,6 +904,15 @@ impl<'a> Groups<'a> {
 
     /// [`Self::failed`] for a call on the group an id names: Meta refusing
     /// the group is `404 not_found` (the record outlived the group, say).
+    ///
+    /// Meta's documented refusal is `131041` (`ErrorKind::NotFound`), but
+    /// the rule is wider on purpose (D172): [`object_refused`] also takes
+    /// an invalid parameter, a permission error and a 4xx `Unknown` as
+    /// Meta refusing the object, because the page is not all of Meta's
+    /// behaviour. It no longer reaches the codes the groups page documents
+    /// with a kind of their own (`131059` `invalid_cursor`, `131207`
+    /// `group_suspended`, `131215` `feature_not_available`, `131208`
+    /// `group_rate_limited`...): those are answered as that kind (D170).
     async fn failed_on_group(&self, error: &Error) -> ServiceError {
         let api = self.failed(error).await;
         // An answer that does not decode is not Meta refusing the group (the
