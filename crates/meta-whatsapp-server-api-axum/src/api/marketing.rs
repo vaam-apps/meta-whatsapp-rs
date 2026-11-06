@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use meta_whatsapp_rs::client::marketing::{WelcomeMessage, WelcomeSequenceUpdate};
 use meta_whatsapp_rs::core::secret::AccessToken;
 use meta_whatsapp_rs::webhooks::axum::Json;
-use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
+use meta_whatsapp_rs::webhooks::axum::extract::{FromRequest, Path, Request, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::marketing::{
@@ -1163,16 +1163,20 @@ pub(crate) async fn sign_max_price_agreement(
     State(state): State<Grant>,
     admin: AdminCaller,
     Path(business_id): Path<String>,
-    ApiJson(body): ApiJson<SignMaxPriceAgreementBody>,
+    request: Request,
 ) -> Result<Json<AgreementSignedView>, ApiError> {
-    let SignMaxPriceAgreementBody {
+    let agreements = MaxPriceAgreements::new(state.authz(), &admin)?
+        .observed_by(state.metrics())
+        .with_legal_acts(state.settings().legal_acts);
+    // The gate answers before the body is read: a refused act neither
+    // parses nor rejects the signer's data.
+    agreements.ensure_enabled()?;
+    let ApiJson(SignMaxPriceAgreementBody {
         signer_name,
         signer_email,
         token,
-    } = body;
-    let signed = MaxPriceAgreements::new(state.authz(), &admin)?
-        .observed_by(state.metrics())
-        .with_legal_acts(state.settings().legal_acts)
+    }) = ApiJson::<SignMaxPriceAgreementBody>::from_request(request, &()).await?;
+    let signed = agreements
         .sign(
             &business_id,
             &Signer {

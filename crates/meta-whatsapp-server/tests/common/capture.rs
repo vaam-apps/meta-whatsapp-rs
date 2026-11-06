@@ -3592,6 +3592,28 @@ async fn marketing(h: &Harness, admin: &str) -> Vec<String> {
     h.graph
         .push_error(|| meta_whatsapp_rs::core::error::TransportError::Timeout);
     ok(&h.call(sign(BUSINESS_TOKEN)).await, 504);
+    // Bodies that are not the documented one, each carrying the token and
+    // the signer: refused as `422 body` or on the input, never logged.
+    for body in [
+        json!({"signer_name": SIGNER_NAME, "token": BUSINESS_TOKEN}),
+        json!({"signer_name": SIGNER_NAME, "signer_email": SIGNER_EMAIL,
+               "token": BUSINESS_TOKEN, "extra": SIGNER_EMAIL}),
+        json!({"signer_name": SIGNER_NAME, "signer_email": SIGNER_EMAIL.replace('@', "-"),
+               "token": BUSINESS_TOKEN}),
+        json!({"signer_name": SIGNER_NAME, "signer_email": SIGNER_EMAIL, "token": 5}),
+    ] {
+        let reply = h
+            .call(
+                Call::new(
+                    Method::POST,
+                    format!("/v1/admin/businesses/{BUSINESS}/max-price-agreement"),
+                )
+                .key(admin)
+                .json(&body),
+            )
+            .await;
+        ok(&reply, 422);
+    }
     vec![
         key.clone(),
         key.rsplit('_').next().unwrap().to_owned(),

@@ -1243,6 +1243,21 @@ impl<'a> MaxPriceAgreements<'a> {
         self
     }
 
+    /// The gate alone: `403 feature_not_available` unless the deployment
+    /// enabled the legal acts. An adapter calls it before it reads the
+    /// request's body, so that a refused act never parses (or rejects)
+    /// the signer's data; [`Self::sign`] checks it again.
+    ///
+    /// # Errors
+    ///
+    /// `403 feature_not_available` with the legal acts off.
+    pub fn ensure_enabled(&self) -> Result<(), ServiceError> {
+        if !self.legal_acts && is_legal_admin_act(AdminOperation::SignMaxPriceAgreement) {
+            return Err(ServiceError::new(ErrorCode::FEATURE_NOT_AVAILABLE));
+        }
+        Ok(())
+    }
+
     /// Sign Meta's max price beta agreement for the business portfolio
     /// `business_id`, with `token` (a system user or business token with
     /// `business_management`, an admin of the portfolio's: used for this
@@ -1266,9 +1281,7 @@ impl<'a> MaxPriceAgreements<'a> {
         signer: &Signer,
         token: AccessToken,
     ) -> Result<AgreementSigned, ServiceError> {
-        if !self.legal_acts && is_legal_admin_act(AdminOperation::SignMaxPriceAgreement) {
-            return Err(ServiceError::new(ErrorCode::FEATURE_NOT_AVAILABLE));
-        }
+        self.ensure_enabled()?;
         graph_id("business_id", business_id)?;
         let business =
             BusinessId::new(business_id).map_err(|_| ServiceError::invalid("business_id"))?;

@@ -811,6 +811,35 @@ async fn with_the_legal_acts_off_the_agreement_is_refused_without_a_request_to_m
             &admin,
         )
         .json(&json!({"signer_name": "", "signer_email": "", "token": ""})),
+        // Malformed bodies: the gate answers before the body is read, so
+        // none of them is a `422 body`.
+        call(
+            Method::POST,
+            format!("/v1/admin/businesses/{BUSINESS}/max-price-agreement"),
+            &admin,
+        )
+        .json(&json!({"signer_name": "Jane Doe", "token": BUSINESS_TOKEN})),
+        call(
+            Method::POST,
+            format!("/v1/admin/businesses/{BUSINESS}/max-price-agreement"),
+            &admin,
+        )
+        .json(&json!({"signer_name": "Jane Doe", "signer_email": "j@e.x",
+                      "token": BUSINESS_TOKEN, "extra": 1})),
+        call(
+            Method::POST,
+            format!("/v1/admin/businesses/{BUSINESS}/max-price-agreement"),
+            &admin,
+        )
+        .header("content-type", "application/json")
+        .body(meta_whatsapp_rs::webhooks::axum::body::Body::from(
+            "{not json",
+        )),
+        call(
+            Method::POST,
+            format!("/v1/admin/businesses/{BUSINESS}/max-price-agreement"),
+            &admin,
+        ),
     ] {
         let reply = h.call(call).await;
         assert_eq!(reply.status, StatusCode::FORBIDDEN, "{}", reply.text);
@@ -897,9 +926,19 @@ async fn with_the_legal_acts_on_the_agreement_is_one_request_and_never_replayed(
     h.graph.push_error(|| TransportError::Timeout);
     let cut = h.call(sign(BUSINESS, &admin)).await;
     assert_eq!(cut.status, StatusCode::GATEWAY_TIMEOUT, "{}", cut.text);
+    // A 5xx is one request too: the email may have been sent.
+    h.graph.push_json(
+        500,
+        json!({"error": {"message": "boom Jane Doe", "type": "OAuthException",
+                         "code": 2, "fbtrace_id": "x"}}),
+    );
+    let failed = h.call(sign(BUSINESS, &admin)).await;
+    assert!(!failed.status.is_success(), "{}", failed.text);
+    assert!(!failed.text.contains("Jane"), "{}", failed.text);
+    assert_eq!(failed.json()["error"]["may_have_been_sent"], true);
     assert_eq!(
         h.graph.requests().len(),
-        4,
+        5,
         "one request per call, none replayed"
     );
     // Checked first.
@@ -943,7 +982,7 @@ async fn with_the_legal_acts_on_the_agreement_is_one_request_and_never_replayed(
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
         assert_eq!(reply.json()["error"]["field"], field, "{body}");
     }
-    assert_eq!(h.graph.requests().len(), 4);
+    assert_eq!(h.graph.requests().len(), 5);
     assert_eq!(h.graph.remaining(), 0);
 }
 
