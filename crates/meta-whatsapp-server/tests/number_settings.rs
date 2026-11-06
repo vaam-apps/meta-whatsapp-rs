@@ -498,14 +498,13 @@ async fn the_official_business_account_status_is_read() {
     );
 }
 
-/// Roadmap M5c3, the legal act: the application is `403
-/// feature_not_available` with nothing asked of Meta until the deployment
-/// enables the legal acts, however valid the body; enabled, it is the
-/// library's one `POST`, `202`, once per `Idempotency-Key`, and never
-/// replayed after a timeout. Decisive: `NumberSettings::legal_act` before
-/// the request.
+/// Roadmap M5c3 (design D192): the application is not a legal act. With
+/// the deployment's legal acts off it still reaches Meta: the library's
+/// one `POST`, `202`, once per `Idempotency-Key`, and never replayed after
+/// a timeout. Decisive: `is_legal_act` (the application is not in it) and
+/// the idempotency class of `RequestOfficialBusinessAccount`.
 #[tokio::test]
-async fn the_application_is_a_legal_act_off_until_the_deployment_enables_it() {
+async fn the_application_is_not_a_legal_act_and_reaches_meta_with_them_off() {
     let post_as = |key: &str, reference: &str| {
         Call::new(
             Method::POST,
@@ -515,17 +514,7 @@ async fn the_application_is_a_legal_act_off_until_the_deployment_enables_it() {
         .header("idempotency-key", reference)
         .json(&common::sample_oba_application())
     };
-    let (off, _, key) = connected(false).await;
-    let refused = off.call(post_as(&key, "oba-1")).await;
-    assert_eq!(
-        (refused.status, refused.code().as_str()),
-        (StatusCode::FORBIDDEN, "feature_not_available"),
-        "{}",
-        refused.text
-    );
-    assert!(off.graph.requests().is_empty());
-
-    let (h, _, key) = connected(true).await;
+    let (h, _, key) = connected(false).await;
     h.graph.push_json(
         200,
         json!({
@@ -570,7 +559,7 @@ async fn the_application_is_a_legal_act_off_until_the_deployment_enables_it() {
 /// fields and 5 to 10 links; the service's: links `http` or `https`).
 #[tokio::test]
 async fn an_application_is_bounded_before_any_request() {
-    let (h, _, key) = connected(true).await;
+    let (h, _, key) = connected(false).await;
     let with = |field: &str, value: Value| {
         let mut body = common::sample_oba_application();
         body[field] = value;
@@ -953,12 +942,13 @@ async fn conversational_components_are_read_set_and_bounded() {
 // ─── Contact book ────────────────────────────────────────────────────────
 
 /// `business-scoped-user-ids`, § Contact book: an irreversible erasure at
-/// Meta. Scope `erasure`, a legal act off until enabled, a BSUID only, and
-/// the request is the library's `DELETE` with the BSUID as a query
-/// parameter. Decisive: the scope of `delete_contact_book_entry`, the
-/// legal act before the request, the BSUID check.
+/// Meta. Scope `erasure`, not gated by the legal acts setting (a
+/// data-subject erasure the tenant performs explicitly, design D192), a
+/// BSUID only, and the request is the library's `DELETE` with the BSUID as
+/// a query parameter. Decisive: the scope of `delete_contact_book_entry`,
+/// the BSUID check, `is_legal_act` (the erasure is not in it).
 #[tokio::test]
-async fn a_contact_book_entry_is_erased_only_by_a_key_with_the_scope_when_enabled() {
+async fn a_contact_book_entry_is_erased_only_by_a_key_with_the_scope() {
     let delete = |key: &str, id: &str| {
         Call::new(
             Method::DELETE,
@@ -966,18 +956,9 @@ async fn a_contact_book_entry_is_erased_only_by_a_key_with_the_scope_when_enable
         )
         .key(key)
     };
-    let (off, both, _) = connected(false).await;
-    let disabled = off.call(delete(&both, BSUID)).await;
-    assert_eq!(
-        (disabled.status, disabled.code().as_str()),
-        (StatusCode::FORBIDDEN, "feature_not_available"),
-        "{}",
-        disabled.text
-    );
-    assert!(off.graph.requests().is_empty());
-
-    let (h, both, numbers) = connected(true).await;
-    // A key without the scope `erasure`: forbidden, however enabled.
+    // The legal acts are off: the erasure is not one of them.
+    let (h, both, numbers) = connected(false).await;
+    // A key without the scope `erasure`: forbidden.
     let no_scope = h.call(delete(&numbers, BSUID)).await;
     assert_eq!(
         (no_scope.status, no_scope.code().as_str()),

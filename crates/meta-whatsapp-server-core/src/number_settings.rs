@@ -28,14 +28,19 @@
 //! `cloud_encryption_key` and answers the status and the key's
 //! fingerprint only.
 //!
-//! **Legal acts** (AGENTS.md, Legal acts). Three operations are taken only
-//! when the deployment enables them (`WA_SERVER_LEGAL_ACTS`, off by
-//! default; [`NumberSettings::with_legal_acts`]): the application for
-//! Official Business Account status, a compliance information update (the
-//! business's statutory declaration of its legal entity and grievance
-//! officer, India) and the erasure of a contact book entry (irreversible
-//! at Meta). Off, each is `403 feature_not_available` with nothing asked
-//! of Meta; on, each is audited. Nothing here takes one automatically.
+//! **Legal acts** (AGENTS.md, Legal acts; design D192). One operation is a
+//! legal act, taken only when the deployment enables it
+//! (`WA_SERVER_LEGAL_ACTS`, off by default;
+//! [`NumberSettings::with_legal_acts`]): the compliance information
+//! update (the business's statutory declaration of its legal entity and
+//! grievance officer, India). Off, it is `403 feature_not_available` with
+//! nothing asked of Meta; on, it is audited. Nothing here takes one
+//! automatically. The set is [`is_legal_act`], the one place to add an
+//! operation to it. The Official Business Account application is not in
+//! it (the library classifies it as an application for review, not a
+//! legal act) and nor is the contact book erasure (a data-subject erasure
+//! the tenant performs explicitly under the scope `erasure`, audited,
+//! never automatic): both are audited and reach Meta with the setting off.
 //!
 //! **Bounds.** Meta's documented limits are the library's (a username of 3
 //! to 35 characters, 5 to 10 supporting links, 2 to 128 characters of
@@ -64,7 +69,16 @@ use crate::display_names::is_invisible_or_bidi;
 use crate::error::{ErrorCode, ServiceError};
 use crate::numbers::{EMAIL_MAX_CHARS, profile_email, profile_website};
 use crate::observe::Observer;
+use crate::operation::Operation;
 use crate::request::wire;
+
+/// Whether `operation` is a legal act: off until the deployment sets
+/// `WA_SERVER_LEGAL_ACTS=on` (design D192). The one predicate; adding an
+/// operation to the gate is one more arm here.
+#[must_use]
+pub fn is_legal_act(operation: Operation) -> bool {
+    matches!(operation, Operation::SetComplianceInfo)
+}
 
 /// The audit action of [`NumberSettings::change`]: a stored name in the
 /// logs, pending the owner's confirmation before the first release.
@@ -437,8 +451,10 @@ impl<'a> NumberSettings<'a> {
             .phone_number(self.number.phone_number_id().clone())
     }
 
-    fn legal_act(&self) -> Result<(), ServiceError> {
-        if self.legal_acts {
+    /// `403 feature_not_available` when `operation` is a legal act
+    /// ([`is_legal_act`]) and the deployment has not enabled them.
+    fn gate(&self, operation: Operation) -> Result<(), ServiceError> {
+        if self.legal_acts || !is_legal_act(operation) {
             Ok(())
         } else {
             Err(ServiceError::new(ErrorCode::FEATURE_NOT_AVAILABLE))
@@ -677,20 +693,19 @@ impl<'a> NumberSettings<'a> {
         })
     }
 
-    /// Apply for Official Business Account status. A legal act: off
-    /// unless [`Self::with_legal_acts`]. Audited as [`OBA_REQUESTED`]. Not
+    /// Apply for Official Business Account status. Not a legal act (an
+    /// application for Meta's review): audited as [`OBA_REQUESTED`], not
     /// replayed after a timeout: read [`Self::official_business_account`].
     ///
     /// # Errors
     ///
-    /// `403 feature_not_available` with the legal acts off, before any
-    /// request; `422 invalid_request` on the field ([`check_application`]);
+    /// `422 invalid_request` on the field ([`check_application`]);
     /// Meta's refusal or failure.
     pub async fn request_official_business_account(
         &self,
         application: &ObaApplication,
     ) -> Result<ObaRequested, ServiceError> {
-        self.legal_act()?;
+        self.gate(Operation::RequestOfficialBusinessAccount)?;
         check_application(application)?;
         let result = self
             .phone()
@@ -739,7 +754,7 @@ impl<'a> NumberSettings<'a> {
         &self,
         update: &ComplianceInfoUpdate,
     ) -> Result<(), ServiceError> {
-        self.legal_act()?;
+        self.gate(Operation::SetComplianceInfo)?;
         check_compliance(update)?;
         let result = self.phone().set_business_compliance_info(update).await;
         self.changed(COMPLIANCE_INFO_SET, None, false, result).await
@@ -759,18 +774,18 @@ impl<'a> NumberSettings<'a> {
     // ─── Contact book ────────────────────────────────────────────────────
 
     /// Erase one user's entry from the portfolio's contact book, at Meta:
-    /// **irreversible**. A legal act: off unless [`Self::with_legal_acts`].
-    /// Audited as [`CONTACT_BOOK_ENTRY_DELETED`], never the BSUID. `true`
+    /// **irreversible**. Not gated by the legal acts setting: a
+    /// data-subject erasure the tenant performs explicitly (scope
+    /// `erasure`). Audited as [`CONTACT_BOOK_ENTRY_DELETED`], never the BSUID. `true`
     /// when an entry existed.
     ///
     /// # Errors
     ///
-    /// `403 feature_not_available` with the legal acts off, before any
-    /// request; `422 invalid_request` on `bsuid` (not a BSUID: a phone
+    /// `422 invalid_request` on `bsuid` (not a BSUID: a phone
     /// number or a parent BSUID is refused), quoting nothing; Meta's
     /// refusal or failure.
     pub async fn delete_contact_book_entry(&self, bsuid: &str) -> Result<bool, ServiceError> {
-        self.legal_act()?;
+        self.gate(Operation::DeleteContactBookEntry)?;
         let id = UserId::new(bsuid);
         if !id.is_bsuid() {
             return Err(ServiceError::invalid("bsuid"));
@@ -821,6 +836,17 @@ mod tests {
     };
 
     use super::*;
+
+    /// D192: the compliance declaration is the one legal act among the
+    /// operations; the application and the erasure are not.
+    #[test]
+    fn only_the_compliance_declaration_is_a_legal_act() {
+        let gated: Vec<_> = Operation::ALL
+            .into_iter()
+            .filter(|operation| is_legal_act(*operation))
+            .collect();
+        assert_eq!(gated, [Operation::SetComplianceInfo]);
+    }
 
     fn invalid_field<T: fmt::Debug>(result: Result<T, ServiceError>) -> String {
         let error = result.unwrap_err();

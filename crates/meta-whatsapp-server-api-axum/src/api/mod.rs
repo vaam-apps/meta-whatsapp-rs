@@ -246,7 +246,7 @@ fn groups_routes() -> OpenApiRouter<Grant> {
 fn erasure_routes() -> OpenApiRouter<Grant> {
     OpenApiRouter::new()
         .routes(routes!(erasure::erase_customer))
-        // Roadmap M5c3: a legal act, so scope `erasure`.
+        // Roadmap M5c3: a data-subject erasure, so scope `erasure`.
         .routes(routes!(number_settings::delete_contact_book_entry))
 }
 

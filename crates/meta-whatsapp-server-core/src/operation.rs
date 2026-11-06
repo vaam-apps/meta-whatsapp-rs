@@ -54,7 +54,7 @@ pub enum Operation {
     ListUsernameSuggestions,
     /// `get_official_business_account`: a number's Official Business Account status (roadmap M5c3; pending the owner's confirmation before the first release).
     GetOfficialBusinessAccount,
-    /// `request_official_business_account`: an application for Official Business Account status (a legal act: off until the deployment enables `WA_SERVER_LEGAL_ACTS`) (roadmap M5c3; pending the owner's confirmation before the first release).
+    /// `request_official_business_account`: an application for Official Business Account status (not a legal act; audited) (roadmap M5c3; pending the owner's confirmation before the first release).
     RequestOfficialBusinessAccount,
     /// `get_compliance_info`: a number's business compliance information (India) (roadmap M5c3; pending the owner's confirmation before the first release).
     GetComplianceInfo,
@@ -66,7 +66,7 @@ pub enum Operation {
     GetConversationalComponents,
     /// `set_conversational_components`: a number's welcome message flag, ice breakers and commands set (roadmap M5c3; pending the owner's confirmation before the first release).
     SetConversationalComponents,
-    /// `delete_contact_book_entry`: one user's contact book entry erased at Meta (a legal act, irreversible: off until the deployment enables `WA_SERVER_LEGAL_ACTS`; scope `erasure`) (roadmap M5c3; pending the owner's confirmation before the first release).
+    /// `delete_contact_book_entry`: one user's contact book entry erased at Meta (irreversible, an explicit erasure under the scope `erasure`, not gated by `WA_SERVER_LEGAL_ACTS`) (roadmap M5c3; pending the owner's confirmation before the first release).
     DeleteContactBookEntry,
     /// `disconnect_waba`: a WABA disconnected (unsubscribed, its token
     /// and bindings deleted).

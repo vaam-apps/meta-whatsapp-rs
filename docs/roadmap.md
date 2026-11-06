@@ -6505,27 +6505,31 @@ or WABA fails the family's own cross-tenant test).
     (the application keyed by `Idempotency-Key`, `202`); `GET` and `PUT
     …/compliance-info`; `GET …/health-status`; `GET` and `PUT
     …/conversational-components`; `DELETE …/contact-book/{bsuid}`.
-    **Legal acts** (AGENTS.md § Legal acts): the application, the
-    compliance declaration and the contact book erasure are `403
-    feature_not_available` with nothing asked of Meta until the deployment
-    sets `WA_SERVER_LEGAL_ACTS=on` (default `off`; `Settings::legal_acts`),
-    and each is then audited (`official_business_account_requested`,
-    `compliance_info_set`, `contact_book_entry_deleted`: the tenant, the
-    WABA, the number, the key's id and the outcome; never a value or a
-    BSUID). Bounds: Meta's documented ones (the library's) and the
+    **Legal acts** (AGENTS.md § Legal acts; D192): one, the India
+    compliance declaration, is `403 feature_not_available` with nothing
+    asked of Meta until the deployment sets `WA_SERVER_LEGAL_ACTS=on`
+    (default `off`; `Settings::legal_acts`; the set is the predicate
+    `number_settings::is_legal_act`), and is then audited
+    (`compliance_info_set`). The application (the library says it is not a
+    legal act) and the contact book erasure (a data-subject erasure under
+    the scope `erasure`) are not gated; each is audited
+    (`official_business_account_requested`, `contact_book_entry_deleted`:
+    the tenant, the WABA, the number, the key's id and the outcome; never
+    a value or a BSUID). Bounds: Meta's documented ones (the library's) and the
     service's own where Meta states none (design D193). Tests:
     `tests/number_settings.rs` (every route's exact request, every bound
-    with zero requests, the legal acts off and on, the key and Meta's
+    with zero requests, the application and the erasure reaching Meta with the legal acts off, the declaration refused off and audited on, the key and Meta's
     texts withheld, the contact book's scope, another tenant's number),
     `tests/authz.rs` and `tests/errors.rs` (the routes in their lists; the
-    three legal acts, off in that harness, are run with a sentinel in
+    gated declaration, off in that harness, is run with a sentinel in
     `tests/number_settings.rs`), `tests/logs.rs` (M1.7: the keys, the
     username, the declarations, the BSUID and the prompts planted, the
     audit events checked), `tests/config.rs` (`WA_SERVER_LEGAL_ACTS`). The
     OpenAPI document is additive (sixteen operations, one field).
-  - **Proposed** (design D190–D193, by the implementer, **not decided**):
-    the routes' shape, payload encryption's keys, the legal acts and the
-    bounds. New names pending the owner's confirmation before the first
+  - **Decided** (design D190–D193, by the coordinator on 2026-11-06 under
+    the owner's delegation, swappable as the rows say): the routes'
+    shape, payload encryption's keys, the legal act (one, not three) and
+    the bounds. New names pending the owner's confirmation before the first
     release: the setting `WA_SERVER_LEGAL_ACTS`, the sixteen operation ids,
     the paths and the eight audit actions; no new scope, error code or
     stored name.

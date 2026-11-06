@@ -354,7 +354,7 @@ stored data, the owner's).
     operation ids, the path, the field and the audit action.
 - **Number settings, in the service** (roadmap M5c3, parity rows 66,
   109, 129–131 and 151 now done in the service, 128, 132, 133 and 156
-  partly; choices D190-D193, proposed, pending the coordinator's decision;
+  partly; choices D190-D193, decided by the coordinator on 2026-11-06 under the owner's delegation;
   from `settings-api`, `business-scoped-user-ids`,
   `official-business-accounts`, `business-compliance-information-api`,
   `support/health-status` and `conversational-components`).
@@ -366,9 +366,10 @@ stored data, the owner's).
     Business Account status and application, compliance information,
     health status, conversational components and `DELETE
     …/contact-book/{bsuid}`.
-  - The application, the compliance declaration and the contact book
-    erasure are legal acts: `403 feature_not_available` until the
-    deployment sets `WA_SERVER_LEGAL_ACTS=on`, then audited.
+  - The compliance declaration is the one legal act: `403
+    feature_not_available` until the deployment sets
+    `WA_SERVER_LEGAL_ACTS=on`, then audited; the application and the
+    contact book erasure are audited, not gated (D192).
   - The OpenAPI document is additive (sixteen operations, one field).
     New names, pending the owner's confirmation before the first release:
     the setting, the operation ids, the paths and the audit actions.

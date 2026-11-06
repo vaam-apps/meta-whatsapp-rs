@@ -128,9 +128,24 @@ export async function setComponents(api: WhatsApp, pn: string) {
   }
 }
 
-// A legal act: until the deployment sets WA_SERVER_LEGAL_ACTS=on, this is
-// `feature_not_available` and Meta is not asked. Keep the Idempotency-Key
-// per application you mean to make.
+// The legal act: until the deployment sets WA_SERVER_LEGAL_ACTS=on, this is
+// `feature_not_available` and Meta is not asked.
+export async function declareComplianceInfo(api: WhatsApp, pn: string, info: ComplianceInfoBody) {
+  const { error } = await api.PUT("/v1/numbers/{pn}/compliance-info", {
+    params: { path: { pn } },
+    body: info,
+  });
+  if (error) {
+    if ((error.error.code as KnownErrorCode) === "feature_not_available") {
+      return false;
+    }
+    throw new WhatsAppError(error.error);
+  }
+  return true;
+}
+
+// Not a legal act: it reaches Meta whatever the setting says. Keep the
+// Idempotency-Key per application you mean to make.
 export async function applyForOfficialBusinessAccount(
   api: WhatsApp,
   pn: string,
@@ -142,17 +157,14 @@ export async function applyForOfficialBusinessAccount(
     body: application,
   });
   if (error) {
-    if ((error.error.code as KnownErrorCode) === "feature_not_available") {
-      return null;
-    }
     throw new WhatsAppError(error.error);
   }
   return data.tracking_id;
 }
 
-// A legal act and irreversible: erase one user's contact book entry at
-// Meta. Needs the scope `erasure` and WA_SERVER_LEGAL_ACTS=on; the id must
-// be a BSUID (a phone number is `invalid_request`).
+// Irreversible: erase one user's contact book entry at Meta. Needs the
+// scope `erasure` (and no setting); the id must be a BSUID (a phone number
+// is `invalid_request`).
 export async function eraseContactBookEntry(api: WhatsApp, pn: string, bsuid: string) {
   const { data, error } = await api.DELETE("/v1/numbers/{pn}/contact-book/{bsuid}", {
     params: { path: { pn, bsuid } },

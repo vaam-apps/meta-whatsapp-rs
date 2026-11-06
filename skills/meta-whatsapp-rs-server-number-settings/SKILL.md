@@ -1,6 +1,6 @@
 ---
 name: meta-whatsapp-rs-server-number-settings
-description: "Managing a business number's settings through meta-whatsapp-server, the meta-whatsapp-rs HTTP service, from an app not written in Rust - the messaging limit tier on GET /v1/numbers/{pn}, the settings (local storage, identity key check, search visibility, security notifications, number-change notices; one setting per PATCH), payload encryption with the business's public key (never in a log, error or answer), the business username and its suggestions, the Official Business Account status and application, India's compliance information, the number's health status, conversational components (welcome message, ice breakers, commands), and the contact book erasure; why the application, the compliance declaration and the contact book erasure are legal acts that stay 403 feature_not_available until the deployment sets WA_SERVER_LEGAL_ACTS=on, and are audited. Load when a CMS or a Medusa store configures a merchant's WhatsApp number through the service."
+description: "Managing a business number's settings through meta-whatsapp-server, the meta-whatsapp-rs HTTP service, from an app not written in Rust - the messaging limit tier on GET /v1/numbers/{pn}, the settings (local storage, identity key check, search visibility, security notifications, number-change notices; one setting per PATCH), payload encryption with the business's public key (never in a log, error or answer), the business username and its suggestions, the Official Business Account status and application, India's compliance information, the number's health status, conversational components (welcome message, ice breakers, commands), and the contact book erasure; why the compliance declaration is the one legal act, 403 feature_not_available until the deployment sets WA_SERVER_LEGAL_ACTS=on, and why the application and the contact book erasure are audited but not gated. Load when a CMS or a Medusa store configures a merchant's WhatsApp number through the service."
 ---
 
 # meta-whatsapp-rs-server-number-settings
@@ -24,11 +24,11 @@ too. Another tenant's number is `404 not_found` on every route.
 | `GET`, `PATCH /v1/numbers/{pn}/settings` | local storage and payload encryption's status; **one** setting per change |
 | `PUT`, `DELETE /v1/numbers/{pn}/settings/payload-encryption` | payload encryption on (your public key) or off |
 | `GET`, `PUT`, `DELETE /v1/numbers/{pn}/username`, `GET …/username/suggestions` | the business username, and the ones WhatsApp reserved |
-| `GET`, `POST /v1/numbers/{pn}/official-business-account` | the status; the application (a legal act) |
-| `GET`, `PUT /v1/numbers/{pn}/compliance-info` | India's compliance information; the declaration (a legal act) |
+| `GET`, `POST /v1/numbers/{pn}/official-business-account` | the status; the application (audited) |
+| `GET`, `PUT /v1/numbers/{pn}/compliance-info` | India's compliance information; the declaration (the legal act) |
 | `GET /v1/numbers/{pn}/health-status` | whether messages can be sent, node by node |
 | `GET`, `PUT /v1/numbers/{pn}/conversational-components` | welcome message flag, ice breakers, commands |
-| `DELETE /v1/numbers/{pn}/contact-book/{bsuid}` | erase a contact book entry at Meta (a legal act; scope `erasure`) |
+| `DELETE /v1/numbers/{pn}/contact-book/{bsuid}` | erase a contact book entry at Meta (scope `erasure`, audited) |
 
 ## The limit tier, health and settings
 
@@ -100,31 +100,26 @@ Conversational components: at most 4 ice breakers of 80 characters and 30
 commands (names of 32 characters without a leading slash, unique; hints of
 256); `422` names the entry (`prompts[0]`, `commands[1].command_name`).
 
-## Legal acts stay off until the deployment turns them on
+## One legal act stays off until the deployment turns it on
 
-The **Official Business Account application**, the **compliance
-information declaration** and the **contact book erasure** (irreversible
-at Meta) are treated as legal acts. Until the deployment sets
-`WA_SERVER_LEGAL_ACTS=on`, each is `403 feature_not_available` and
-nothing is asked of Meta; a read is never gated.
+The **compliance information declaration** (India) is a legal act. Until
+the deployment sets `WA_SERVER_LEGAL_ACTS=on` it is `403
+feature_not_available` and nothing is asked of Meta; a read is never
+gated. The **application** (a request for Meta's review) and the
+**contact book erasure** (irreversible at Meta) are not gated.
 
 ```ts
-export async function applyForOfficialBusinessAccount(
-  api: WhatsApp,
-  pn: string,
-  application: ObaApplicationBody,
-  reference: string,
-) {
-  const { data, error } = await api.POST("/v1/numbers/{pn}/official-business-account", {
-    params: { path: { pn }, header: { "Idempotency-Key": reference } },
-    body: application,
+export async function declareComplianceInfo(api: WhatsApp, pn: string, info: ComplianceInfoBody) {
+  const { error } = await api.PUT("/v1/numbers/{pn}/compliance-info", {
+    params: { path: { pn } },
+    body: info,
   });
 ```
 
-- Turned on, each is taken only when your key asks and is **audited**
-  (actions official_business_account_requested, compliance_info_set and
-  contact_book_entry_deleted: tenant, WABA, number, your key's public id,
-  the outcome; never what a declaration says or whose entry it was).
+- Each is **audited** (official_business_account_requested,
+  compliance_info_set, contact_book_entry_deleted: tenant, WABA, number,
+  your key's public id, the outcome; never what a declaration says or
+  whose entry it was); the declaration only when the setting is on.
 - The application takes an `Idempotency-Key`, answers `202`, and on `504`
   is not replayed: read the status. Meta wants 5 to 10 supporting links.
 - The declaration follows the page's rules (entity type OTHER needs
@@ -132,7 +127,7 @@ export async function applyForOfficialBusinessAccount(
   emails under 128 characters) and the service's own: no control or
   invisible character, texts at most 128 characters.
 - The erasure takes a **BSUID** only (a phone number or a parent BSUID is
-  `422` on `bsuid`, never quoted) and the scope `erasure`.
+  `422` on `bsuid`, never quoted) and the scope `erasure`; no setting.
 
 ```ts
 export async function eraseContactBookEntry(api: WhatsApp, pn: string, bsuid: string) {

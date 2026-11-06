@@ -12,11 +12,11 @@
 //! | `GET`, `PUT`, `DELETE /v1/numbers/{pn}/username` | `GET`, `POST`, `DELETE /{pn}/username` | no |
 //! | `GET /v1/numbers/{pn}/username/suggestions` | `GET /{pn}/username_suggestions` | no |
 //! | `GET /v1/numbers/{pn}/official-business-account` | `GET /{pn}?fields=official_business_account` | no |
-//! | `POST /v1/numbers/{pn}/official-business-account` | `POST /{pn}/official_business_account` | yes; a legal act |
+//! | `POST /v1/numbers/{pn}/official-business-account` | `POST /{pn}/official_business_account` | yes; audited |
 //! | `GET`, `PUT /v1/numbers/{pn}/compliance-info` | `GET`, `POST /{pn}/business_compliance_info` | no; the `PUT` a legal act |
 //! | `GET /v1/numbers/{pn}/health-status` | `GET /{pn}?fields=health_status` | no |
 //! | `GET`, `PUT /v1/numbers/{pn}/conversational-components` | `GET /{pn}?fields=conversational_automation`, `POST /{pn}/conversational_automation` | no |
-//! | `DELETE /v1/numbers/{pn}/contact-book/{bsuid}` | `DELETE /{pn}/contact_book` | no; a legal act, scope `erasure` |
+//! | `DELETE /v1/numbers/{pn}/contact-book/{bsuid}` | `DELETE /{pn}/contact_book` | no; audited, scope `erasure` |
 //!
 //! The service's core ([`meta_whatsapp_server_core::number_settings`])
 //! says how each is bounded, gated and audited; this module keeps the
@@ -630,8 +630,8 @@ pub(crate) async fn get_official_business_account(
 }
 
 /// `POST /v1/numbers/{pn}/official-business-account`: apply for Official
-/// Business Account status. **A legal act**: off until the deployment sets
-/// `WA_SERVER_LEGAL_ACTS=on`; audited.
+/// Business Account status. Not a legal act (an application for Meta's
+/// review): audited, and it reaches Meta whatever `WA_SERVER_LEGAL_ACTS` says.
 #[utoipa::path(
     post,
     path = "/v1/numbers/{pn}/official-business-account",
@@ -646,7 +646,7 @@ pub(crate) async fn get_official_business_account(
     responses(
         (status = 202, description = "Meta accepted the application for review (`GET …/official-business-account` for where it stands). Meta refuses a new one within 30 days of a rejection", body = ObaApplicationAnswer),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), `forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden`, `tenant_suspended`, or Meta's refusal", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `business_website_url`, `primary_country_of_operation`, `primary_language`, `parent_business_or_brand`, `supporting_links` (5 to 10, `http` or `https`), `additional_supporting_information` or `body`, `idempotency_key_reused`, or Meta's `invalid_parameter`: nothing was asked", body = ErrorBody),
@@ -1159,8 +1159,9 @@ pub struct ContactBookErased {
 
 /// `DELETE /v1/numbers/{pn}/contact-book/{bsuid}`: **erase** one user's
 /// entry from the business portfolio's contact book, at Meta. Irreversible.
-/// **A legal act**: scope `erasure`, off until the deployment sets
-/// `WA_SERVER_LEGAL_ACTS=on`; audited, never the BSUID.
+/// A data-subject erasure the tenant performs explicitly, so scope
+/// `erasure`; audited, never the BSUID, and not gated by
+/// `WA_SERVER_LEGAL_ACTS`.
 #[utoipa::path(
     delete,
     path = "/v1/numbers/{pn}/contact-book/{bsuid}",
@@ -1174,7 +1175,7 @@ pub struct ContactBookErased {
     responses(
         (status = 200, description = "Meta answered; whether an entry existed", body = ContactBookErased),
         (status = 401, description = "No valid key", body = ErrorBody),
-        (status = 403, description = "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), `forbidden` (no scope `erasure`), `tenant_suspended`, or Meta's refusal", body = ErrorBody),
+        (status = 403, description = "`forbidden` (no scope `erasure`), `tenant_suspended`, or Meta's refusal", body = ErrorBody),
         (status = 404, description = "`not_found`: no such number for this tenant", body = ErrorBody),
         (status = 409, description = "`number_not_connected`, `reconnect_required`", body = ErrorBody),
         (status = 422, description = "`invalid_request` on `bsuid` (never quoted): nothing was asked", body = ErrorBody),
