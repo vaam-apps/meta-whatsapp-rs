@@ -139,6 +139,23 @@ fn duration_histogram() -> Histogram {
     Histogram::new(exponential_buckets(0.005, 2.0, 12))
 }
 
+/// The webhooks-out backlog's gauges (roadmap M2k), registered.
+fn backlog_gauges(registry: &mut Registry) -> (Gauge, Gauge) {
+    let pending = Gauge::default();
+    registry.register(
+        "webhooks_out_pending_deliveries",
+        "Webhook deliveries pending (webhooks out), all endpoints",
+        pending.clone(),
+    );
+    let oldest_due_age = Gauge::default();
+    registry.register(
+        "webhooks_out_oldest_due_age_seconds",
+        "Seconds since the oldest pending webhook delivery that is due fell due (0: none due)",
+        oldest_due_age.clone(),
+    );
+    (pending, oldest_due_age)
+}
+
 impl Default for Metrics {
     fn default() -> Self {
         Self::new()
@@ -227,18 +244,7 @@ impl Metrics {
             "Live event streams open on this replica",
             streams_open.clone(),
         );
-        let webhooks_out_pending = Gauge::default();
-        registry.register(
-            "webhooks_out_pending_deliveries",
-            "Webhook deliveries pending (webhooks out), all endpoints",
-            webhooks_out_pending.clone(),
-        );
-        let webhooks_out_oldest_due_age = Gauge::default();
-        registry.register(
-            "webhooks_out_oldest_due_age_seconds",
-            "Seconds since the oldest pending webhook delivery that is due fell due (0: none due)",
-            webhooks_out_oldest_due_age.clone(),
-        );
+        let (webhooks_out_pending, webhooks_out_oldest_due_age) = backlog_gauges(&mut registry);
         Self {
             registry: Arc::new(Mutex::new(registry)),
             requests,

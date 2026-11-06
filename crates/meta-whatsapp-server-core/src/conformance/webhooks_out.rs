@@ -1098,7 +1098,6 @@ pub async fn the_pending_backlog_is_counted(backend: &dyn Backend) {
     assert_eq!((gone.count, gone.oldest_due), (0, None));
 }
 
-
 /// Deleting an endpoint deletes its deliveries; deleting a tenant its
 /// endpoints and theirs; the purge takes settled deliveries before its
 /// cutoff only.
