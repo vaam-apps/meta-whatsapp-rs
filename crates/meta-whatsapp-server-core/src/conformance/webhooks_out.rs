@@ -1749,6 +1749,7 @@ pub async fn every_tenant_event_type_is_delivered(backend: &dyn Backend) {
         "number_connected",
         "number_disconnected",
         "number_reconnect_required",
+        "token_expiring",
     ] {
         assert!(
             rig.sender

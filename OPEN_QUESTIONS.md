@@ -214,6 +214,22 @@ of its own, after an HTML comment; keep that when you add one.
    caller can replace on `expires_at`. Roadmap L11e (landed); the
    service's event, M3e.
 
+   **Landed with roadmap M3e (2026-11-05), the service's side, its
+   choices the coordinator's under the owner's delegation, swappable, as
+   design D180 to D183:** a
+   `token_expiring` event for the WABA's tenant only, `{event, waba_id,
+   expires_at}` (D182), told only for an `ExpiresSoon` token, with one
+   setting, `WA_SERVER_TOKEN_EXPIRY_LEAD` (7 days, or the outbox
+   retention when that is shorter, `off`; an explicit lead past the
+   retention is refused at start) (D180); once per token and expiry by
+   the outbox's own key, no marker stored (D181); a task of its own under
+   a leader-lock turn every 10 minutes, and a counter by outcome,
+   `wa_server_token_expiry_events_total` (D183). A token found already
+   expired is not told. The event type, setting, metric, key label and
+   lock name stay the owner's to confirm before the first release
+   (`docs/architecture.md` § Stable identifiers). Swappable by the
+   setting and by `TokenExpiring::outbox_key`. Roadmap M3e (landed).
+
 9. **Vault key custody and rotation cadence.** The integrator supplies the
    AES-256 key(s); rotation is supported but not scheduled.
 

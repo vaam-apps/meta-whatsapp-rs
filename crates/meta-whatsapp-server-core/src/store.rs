@@ -410,6 +410,15 @@ pub const HOUSEKEEPING: &str = "housekeeping";
 /// longer may overlap the next replica's, which the purges tolerate.
 pub const HOUSEKEEPING_LEASE: Duration = Duration::from_secs(300);
 
+/// The name of the lock a token-expiry round runs under (roadmap M3e,
+/// [`crate::token_expiry`]): one replica at a time walks the bindings; the
+/// event is recorded once whatever the lock does (its outbox key).
+pub const TOKEN_EXPIRY: &str = "token_expiry";
+
+/// How long a token-expiry turn is leased for: below the interval between
+/// rounds ([`crate::token_expiry::TOKEN_EXPIRY_INTERVAL`]).
+pub const TOKEN_EXPIRY_LEASE: Duration = Duration::from_secs(300);
+
 /// Leader election for periodic work shared by the replicas of one
 /// deployment, as a **lease**: of the replicas asking for `name` at once,
 /// one gets the turn, and the others skip the work this round. The turn
