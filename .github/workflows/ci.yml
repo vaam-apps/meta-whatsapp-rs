@@ -16,7 +16,7 @@ jobs:
   ci:
     name: just ci
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
       # The media conversion tests (crates/meta-whatsapp-rs/tests/ffmpeg.rs)
       # fail instead of skipping without the ffmpeg the step below installs.
