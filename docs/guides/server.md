@@ -1083,9 +1083,10 @@ Meta).
 is in the request that carries it and in no log, error or audit event. A
 SIP server's password is **never read from Meta and never answered**
 (`include_sip_credentials` is never sent); read it in WhatsApp Manager. A
-failed call answers Meta's code and the service's kind (`502 unknown` for
-the 138xxx codes the library does not classify, with `error.graph.code`),
-never Meta's text. The changes' `audit` events (`call_settings_updated`,
+failed call answers Meta's code and the service's kind (`409` and
+`call_permission_missing` for `138006`, `429` and `call_limit_reached`,
+`502` and `call_connection_failed`, ... with `error.graph.code`; roadmap
+L28), never Meta's text. The changes' `audit` events (`call_settings_updated`,
 `call_connect_requested`, `call_pre_accepted`, `call_accepted`,
 `call_rejected`, `call_terminated`) hold the tenant, the WABA, the number's
 id, the key's id, the outcome (`unknown` when the call may have gone
