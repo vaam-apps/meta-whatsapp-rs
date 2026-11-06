@@ -15,6 +15,7 @@ pub mod registration;
 pub mod scenarios;
 pub mod signup;
 pub mod sse;
+pub mod token_expiry;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

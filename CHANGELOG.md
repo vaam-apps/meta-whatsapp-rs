@@ -12,6 +12,17 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added (roadmap M3e)
+
+- The service's token-expiry event and metric (`meta_whatsapp_server_core::token_expiry`;
+  OPEN_QUESTIONS #8, design D180 to D183, decided by the coordinator under the owner's delegation, swappable): a task of `serve` records
+  `token_expiring` (`{event, waba_id, expires_at}`) in the outbox for the tenant
+  holding a WABA whose stored token expires within `WA_SERVER_TOKEN_EXPIRY_LEAD`
+  (7 days by default, or the outbox retention when that is shorter; `off` to turn it off; an explicit lead past the retention is refused at start), once per
+  token and expiry, and counts it in `wa_server_token_expiry_events_total`. A new
+  entry in `KnownEventType` (additive). The service's vault now reads the one clock
+  the rest of the service reads.
+
 ### Renamed
 
 The project is now **meta-whatsapp-rs** (the owner's decision of

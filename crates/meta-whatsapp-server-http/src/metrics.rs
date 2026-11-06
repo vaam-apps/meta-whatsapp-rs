@@ -20,6 +20,7 @@
 //! | `wa_server_idempotency_total` | `outcome`: `replayed`, `reused`, `in_progress`, `outcome_unknown` (a repeat that met a key's record) |
 //! | `wa_server_rate_limited_total` | `class` (`send`, `read`, `templates`, `otp_issue`, `otp_verify`): requests refused `429` by the service's own limits |
 //! | `wa_server_otp_outcomes_total` | `operation` (`issue`, `verify`), `outcome` (an issue's `sent`, `cooling_down`, `rate_limited`, `failed`; a check's `verified`, `invalid`, `expired`, `too_many_attempts`, `not_found`, `failed`): the OTP outcomes (roadmap M3c), never a number or a code |
+//! | `wa_server_token_expiry_events_total` | `outcome`: `recorded` (a `token_expiring` event recorded: once per stored token and expiry; roadmap M3e), `failed` (a stored token's record could not be read, or its event not recorded; retried next round): never an id, a tenant or a token |
 //! | `wa_server_event_streams_open` | none: the live event streams open on the replica, read when scraped (a gauge; roadmap M2b) |
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -117,6 +118,7 @@ pub struct Metrics {
     idempotency: Family<OutcomeLabels, Counter>,
     rate_limited: Family<ClassLabels, Counter>,
     otp: Family<OtpLabels, Counter>,
+    token_expiry: Family<OutcomeLabels, Counter>,
     streams_open: Gauge,
 }
 
@@ -207,6 +209,12 @@ impl Metrics {
             "OTP issues and checks, by operation and outcome",
             otp.clone(),
         );
+        let token_expiry = Family::<OutcomeLabels, Counter>::default();
+        registry.register(
+            "token_expiry_events",
+            "Token-expiry events (a stored token nearing its expiry), by outcome",
+            token_expiry.clone(),
+        );
         let streams_open = Gauge::default();
         registry.register(
             "event_streams_open",
@@ -226,6 +234,7 @@ impl Metrics {
             idempotency,
             rate_limited,
             otp,
+            token_expiry,
             streams_open,
         }
     }
@@ -353,6 +362,17 @@ impl Metrics {
             .inc();
     }
 
+    /// Count a token-expiry round's outcome (roadmap M3e): `recorded` or
+    /// `failed`
+    /// (`meta_whatsapp_server_core::observe::Observer::token_expiry`).
+    pub fn token_expiry(&self, outcome: &'static str) {
+        self.token_expiry
+            .get_or_create(&OutcomeLabels {
+                outcome: outcome.to_owned(),
+            })
+            .inc();
+    }
+
     /// Set how many live event streams are open on this replica (what
     /// `/metrics` does before it renders).
     pub fn streams_open(&self, open: usize) {
@@ -400,5 +420,9 @@ impl meta_whatsapp_server_core::observe::Observer for Metrics {
 
     fn otp(&self, operation: &'static str, outcome: &'static str) {
         Metrics::otp(self, operation, outcome);
+    }
+
+    fn token_expiry(&self, outcome: &'static str) {
+        Metrics::token_expiry(self, outcome);
     }
 }

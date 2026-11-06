@@ -47,6 +47,7 @@ use meta_whatsapp_server_core::flows_endpoint::{DeploymentKey, FlowsDeployment, 
 use meta_whatsapp_server_core::housekeeping;
 use meta_whatsapp_server_core::otp::{OtpDeployment, OtpKeys};
 use meta_whatsapp_server_core::signup::{AccountUpdateConfirmation, SignupDeployment};
+use meta_whatsapp_server_core::token_expiry::TOKEN_EXPIRY_INTERVAL;
 use meta_whatsapp_server_core::webhooks_out::DELIVERY_TIMEOUT;
 use meta_whatsapp_server_core::webhooks_out::dispatch::{Dispatcher, WebhooksOut};
 use meta_whatsapp_server_http::api::public_router;
@@ -453,6 +454,7 @@ async fn run<S: Future<Output = ()>>(
         internal_bind,
         shutdown_grace,
         outbox_retention,
+        token_expiry_lead,
         mut settings,
         move_rules,
         otp_pepper,
@@ -515,6 +517,7 @@ async fn run<S: Future<Output = ()>>(
         HOUSEKEEPING_INTERVAL,
         stop_signal(stopped.clone()),
     ));
+    let token_expiry = spawn_token_expiry(&state, &backend, token_expiry_lead, stopped.clone());
     let public_task = tokio::spawn(listen::serve(
         public,
         public_router(&state),
@@ -537,6 +540,9 @@ async fn run<S: Future<Output = ()>>(
     )
     .await;
     housekeeping.abort();
+    if let Some(token_expiry) = token_expiry {
+        token_expiry.abort();
+    }
     end_dispatcher(dispatcher).await;
     backend.close().await;
     served
@@ -576,6 +582,24 @@ fn spawn_dispatcher(
     Some(tokio::spawn(
         Dispatcher::new(backend, state.clock(), out).run(stop_signal(stopped)),
     ))
+}
+
+/// The token-expiry event's task (roadmap M3e): a round every
+/// [`TOKEN_EXPIRY_INTERVAL`] telling `lead` ahead; `None` with `lead` unset
+/// (`WA_SERVER_TOKEN_EXPIRY_LEAD=off`).
+fn spawn_token_expiry(
+    state: &AppState,
+    backend: &Arc<dyn Backend>,
+    lead: Option<Duration>,
+    stopped: watch::Receiver<bool>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    let lead = lead?;
+    let (state, backend) = (state.clone(), backend.clone());
+    Some(tokio::spawn(async move {
+        state
+            .run_token_expiry(backend, lead, TOKEN_EXPIRY_INTERVAL, stop_signal(stopped))
+            .await;
+    }))
 }
 
 /// Wait for the dispatcher to end: its attempts in flight end within their

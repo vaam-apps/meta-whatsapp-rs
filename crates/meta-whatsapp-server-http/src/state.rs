@@ -250,9 +250,11 @@ impl AppState {
         settings: Settings,
     ) -> Result<(Self, Grant), Error> {
         let store = backend.records();
-        let vault = TokenVault::new(backend.kv(), vault_keys)?;
-        // One clock for the whole service: the webhook pipeline's.
+        // One clock for the whole service: the webhook pipeline's, the
+        // vault's too (its expiry check, which the token-expiry event
+        // reads: roadmap M3e, and the authorizer's own agree).
         let clock = inbound.clock();
+        let vault = TokenVault::new(backend.kv(), vault_keys)?.with_clock(clock.clone());
         // The service's number events (roadmap M2d) go to the outbox the
         // pipeline records Meta's events in, with its ids.
         let authz = Arc::new(
@@ -342,6 +344,30 @@ impl AppState {
     /// the vault and the tokenless client were before it.
     pub(crate) fn authz(&self) -> &Authorizer {
         &self.inner.authz
+    }
+
+    /// Tell tenants their stored tokens near their expiry (roadmap M3e,
+    /// `meta_whatsapp_server_core::token_expiry`): a round every `every`
+    /// (the first at once) on `backend` until `stop` completes, each token
+    /// within `lead` of its expiry told once to its tenant, and counted
+    /// (`wa_server_token_expiry_events_total`). One replica at a time runs
+    /// a round.
+    pub async fn run_token_expiry(
+        &self,
+        backend: Arc<dyn Backend>,
+        lead: Duration,
+        every: Duration,
+        stop: impl std::future::Future<Output = ()>,
+    ) {
+        meta_whatsapp_server_core::token_expiry::run(
+            self.inner.authz.clone(),
+            backend,
+            Arc::new(self.inner.metrics.clone()),
+            lead,
+            every,
+            stop,
+        )
+        .await;
     }
 
     /// The tokenless Graph client.

@@ -66,7 +66,7 @@ async fn epoch(records: &dyn RecordStore, waba: &str) -> BindingEpoch {
 }
 
 /// Every event `tenant` polls.
-async fn polled(backend: &dyn Backend, tenant_id: &str) -> Vec<StoredEvent> {
+pub(super) async fn polled(backend: &dyn Backend, tenant_id: &str) -> Vec<StoredEvent> {
     backend
         .outbox()
         .page(&EventQuery {

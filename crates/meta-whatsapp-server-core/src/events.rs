@@ -185,15 +185,16 @@ pub const MAX_PAGE_DATA_BYTES: usize = 8 * 1024 * 1024;
 /// The event types a tenant receives: the library's `WebhookEvent::kind`s
 /// the service has reviewed and pinned (the service's
 /// `tests/event_data.rs`), and the service's own number events
-/// ([`crate::number_events::NUMBER_EVENT_TYPES`], the last three), which
-/// no webhook carries. Every other type, today's `unknown`, `unparsed` and
+/// ([`crate::number_events::NUMBER_EVENT_TYPES`], the three before the
+/// last) and the token-expiry event ([`crate::token_expiry::TOKEN_EXPIRING`],
+/// the last), which no webhook carries. Every other type, today's `unknown`, `unparsed` and
 /// `partner_solution_updated`, and any a later library adds, is
 /// operator-only ([`OPERATOR_EVENT_TYPES`] lists today's). Roadmap M2d
 /// (design decision D25) added Conversation Routing's standby copies and
 /// handovers (`standby_observed`, `thread_control_changed`) and the
 /// Marketing Messages API's clicks (`user_action_reported`), operator-only
 /// before it, and the number events.
-pub const TENANT_EVENT_TYPES: [&str; 34] = [
+pub const TENANT_EVENT_TYPES: [&str; 35] = [
     "message_received",
     "status_updated",
     "error_reported",
@@ -231,6 +232,9 @@ pub const TENANT_EVENT_TYPES: [&str; 34] = [
     "number_connected",
     "number_disconnected",
     "number_reconnect_required",
+    // The service's own, about a stored token (`crate::token_expiry`,
+    // roadmap M3e).
+    "token_expiring",
 ];
 
 /// The library's event types that are operator-only whoever owns the
