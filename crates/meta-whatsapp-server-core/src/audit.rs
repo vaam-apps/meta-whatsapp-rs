@@ -234,6 +234,33 @@ pub struct GroupFacts {
     pub failed: u64,
 }
 
+/// A tenant's request to change a number's display name (roadmap M5c2;
+/// docs/design/server.md, D164), logged like [`tenant_audit`] (target
+/// `audit`, message `tenant change`) with `outcome` and the length of the
+/// name asked for. The change starts Meta's review and, once approved and
+/// the number registered again, shows to every customer: so who asked and
+/// for which number is kept. The name itself is not (it is the business's
+/// to read back from the status route).
+pub fn display_name_audit(
+    action: &'static str,
+    key_id: &str,
+    subject: &Subject<'_>,
+    name_chars: u64,
+    outcome: Outcome,
+) {
+    tracing::info!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
+        name_chars,
+        outcome = outcome.as_str(),
+        "tenant change"
+    );
+}
+
 /// What an [`audit`] event touched.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Subject<'a> {

@@ -22,6 +22,7 @@ pub mod admin;
 pub mod analytics;
 pub mod blocked_users;
 pub mod commerce;
+pub mod display_name;
 pub mod erasure;
 pub mod events;
 pub mod flows;
@@ -150,6 +151,10 @@ fn numbers_routes() -> OpenApiRouter<Grant> {
         .routes(routes!(numbers::list_numbers))
         .routes(routes!(numbers::get_number))
         .routes(routes!(numbers::get_profile, numbers::update_profile))
+        .routes(routes!(
+            display_name::get_display_name,
+            display_name::request_display_name_change
+        ))
         .routes(routes!(numbers::disconnect_waba))
 }
 
@@ -556,6 +561,7 @@ mod tests {
             ("numbers.rs", include_str!("numbers.rs")),
             ("registration.rs", include_str!("registration.rs")),
             ("events.rs", include_str!("events.rs")),
+            ("display_name.rs", include_str!("display_name.rs")),
             ("groups.rs", include_str!("groups.rs")),
             ("inbox.rs", include_str!("inbox.rs")),
             ("messages.rs", include_str!("messages.rs")),

@@ -69,6 +69,7 @@ fn lucky_shrub_profile() -> BusinessProfile {
         address: Some("1 Hacker Way, Menlo Park, CA 94025".to_owned()),
         description: Some("At Lucky Shrub, we specialize in providing a...".to_owned()),
         email: Some("lucky@luckyshrub.com".to_owned()),
+        profile_picture_url: Some("https://pps.whatsapp.net/v/t61.24...".to_owned()),
         websites: vec!["https://www.luckyshrub.com/".to_owned()],
         vertical: Some("RETAIL".to_owned()),
     }
@@ -243,7 +244,7 @@ pub async fn the_number_services_read_change_and_disconnect_as_meta_documents(
     let profile_path = format!("/v25.0/{PN}/whatsapp_business_profile");
     let profile_fields = pairs(&[(
         "fields",
-        "about,address,description,email,websites,vertical",
+        "about,address,description,email,profile_picture_url,websites,vertical",
     )]);
     script.push_json(200, lucky_shrub());
     assert_eq!(numbers.profile().await.unwrap(), lucky_shrub_profile());
@@ -266,6 +267,7 @@ pub async fn the_number_services_read_change_and_disconnect_as_meta_documents(
             email: Some("lucky@luckyshrub.com".to_owned()),
             websites: Some(vec!["https://www.luckyshrub.com/".to_owned()]),
             vertical: Some("RETAIL".to_owned()),
+            picture: None,
         })
         .await
         .unwrap();

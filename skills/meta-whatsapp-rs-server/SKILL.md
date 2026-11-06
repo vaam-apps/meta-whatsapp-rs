@@ -19,13 +19,13 @@ Rust code uses the library directly (`meta-whatsapp-rs`).
 
 Webhooks to your backend do not exist yet: write no code against them. The rest does, by skill: sends, media, templates, the inbox (`meta-whatsapp-rs-server-send`),
 Meta's webhooks, polling, one event by id and live events (`meta-whatsapp-rs-server-events`), login codes (`meta-whatsapp-rs-server-otp`),
-merchants connecting their number (`meta-whatsapp-rs-server-onboarding`), a number's registration (`meta-whatsapp-rs-server-registration`), a number's groups, scope `groups` (`meta-whatsapp-rs-server-groups`).
+merchants connecting their number (`meta-whatsapp-rs-server-onboarding`), a number's registration (`meta-whatsapp-rs-server-registration`), a number's profile picture and display name (`meta-whatsapp-rs-server-profile`), a number's groups, scope `groups` (`meta-whatsapp-rs-server-groups`).
 
 | Route | Needs | Does |
 | --- | --- | --- |
 | `GET /v1/wabas`, `GET /v1/numbers` | scope `numbers` | the tenant's WABAs; its numbers with their `status` |
 | `GET /v1/numbers/{pn}` | scope `numbers` | live details from Meta: `display_phone_number`, `verified_name`, `quality_rating`, `name_status`, `throughput` |
-| `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `websites`, `vertical`) |
+| `GET /v1/numbers/{pn}/profile`, `PATCH /v1/numbers/{pn}/profile` | scope `numbers` | the business profile (`about`, `address`, `description`, `email`, `profile_picture_url`, `websites`, `vertical`; the picture from a completed upload's id), and `/v1/numbers/{pn}/display-name` (`POST` asks Meta to review a new name, `GET` its status): `meta-whatsapp-rs-server-profile` |
 | `DELETE /v1/wabas/{waba_id}` | scope `numbers` | disconnect: the token and bindings go only once Meta unsubscribed the app |
 | `POST /v1/numbers/{pn}/messages`, `POST /v1/numbers/{pn}/media`, `GET /v1/wabas/{waba_id}/templates`, `GET /v1/numbers/{pn}/conversations`, `GET /v1/wabas/{waba_id}/payment-configurations`, … | scopes `send`, `media`, `templates`, `flows`, `inbox`, `payments`, and (none granted by `send`, none on a key minted before M5g) `commerce`, `qr_codes`, `analytics`, `contacts` | sends, media, templates, the inbox, payments; commerce settings and catalogs, QR codes, analytics, the block list: `meta-whatsapp-rs-server-send` |
 | `GET /v1/events`, `GET /v1/events/{id}`, `GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream` | scope `events` | Meta's webhook events for the tenant, after a cursor, by id or live (Server-Sent Events): `meta-whatsapp-rs-server-events` |
@@ -154,7 +154,7 @@ export function nextStep(error: ErrorObject): Next {
 ## Related skills
 
 `meta-whatsapp-rs-server-send`, `meta-whatsapp-rs-server-events`, `meta-whatsapp-rs-server-otp`,
-`meta-whatsapp-rs-server-onboarding`, `meta-whatsapp-rs-server-registration`, `meta-whatsapp-rs-server-groups` (the routes above),
+`meta-whatsapp-rs-server-onboarding`, `meta-whatsapp-rs-server-registration`, `meta-whatsapp-rs-server-profile`, `meta-whatsapp-rs-server-groups` (the routes above),
 `meta-whatsapp-rs` (the Rust library, when you write Rust),
 `meta-whatsapp-rs-errors` (the error kinds behind the Meta codes),
 `meta-whatsapp-rs-production` (what the service does for you: secrets, logs, several instances).

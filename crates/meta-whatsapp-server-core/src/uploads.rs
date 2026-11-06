@@ -25,6 +25,15 @@
 //! that [`Uploads::status`] answers it again after a lost answer. It
 //! reaches no log.
 //!
+//! **A profile picture names the session, never the handle** (roadmap
+//! M5c2, design D160): the records are keyed by the service's upload id and
+//! `KvStore` cannot be searched by value, so a raw handle could not be
+//! checked against the tenant and number that obtained it. The profile's
+//! change names the `upload_id` instead, and [`Uploads::profile_picture`]
+//! reads the handle from the number's own record: another tenant's, another
+//! number's, an expired and an unknown id are all `404 not_found`, with
+//! nothing asked of Meta.
+//!
 //! **A session is the number's, or it does not exist.** The service
 //! answers its own `upload_id` (a random 128-bit id, `up_` and 32 hex
 //! characters), never Meta's session id, which can carry a signature
@@ -335,6 +344,36 @@ impl OpenUpload {
     }
 }
 
+/// A profile picture's handle, read from the number's own completed
+/// upload by [`Uploads::profile_picture`]: what the profile's change sends
+/// as `profile_picture_handle`. `Debug` shows nothing of it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProfilePicture(UploadHandle);
+
+impl ProfilePicture {
+    /// The handle, for Meta.
+    pub fn handle(&self) -> &UploadHandle {
+        &self.0
+    }
+
+    /// The handle, taken.
+    pub fn into_handle(self) -> UploadHandle {
+        self.0
+    }
+}
+
+impl fmt::Debug for ProfilePicture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProfilePicture").finish_non_exhaustive()
+    }
+}
+
+/// The MIME types a profile picture may be uploaded as: the images of
+/// [`FILE_TYPES`]. Meta's profile pages state no picture format or size
+/// (they say to obtain a handle from the Resumable Upload API); a PDF or a
+/// video as a picture is refused here, as the service's own bound.
+pub const PICTURE_TYPES: [&str; 3] = ["image/jpeg", "image/jpg", "image/png"];
+
 // ─── The operations ──────────────────────────────────────────────────────
 
 /// The resumable upload operations on a number the caller's tenant owns.
@@ -510,6 +549,34 @@ impl<'a> Uploads<'a> {
             record,
             version,
         })
+    }
+
+    /// The handle of the completed upload `id`, if it is this number's, for
+    /// the number's profile picture (roadmap M5c2): read from the record,
+    /// with nothing asked of Meta.
+    ///
+    /// # Errors
+    ///
+    /// `422 invalid_request` on `profile_picture_upload_id` (not an id the
+    /// service issues; an upload that is not an image of
+    /// [`PICTURE_TYPES`]; one that is not complete yet, or whose handle the
+    /// service could not keep: [`Self::status`] says which); `404
+    /// not_found` (no such record, an expired one, or one of another tenant
+    /// or another number: the same answer for each); `503
+    /// storage_unavailable`.
+    pub async fn profile_picture(&self, id: &str) -> Result<ProfilePicture, ServiceError> {
+        const FIELD: &str = "profile_picture_upload_id";
+        if !is_upload_id(id) {
+            return Err(ServiceError::invalid(FIELD));
+        }
+        let open = self.open(id).await?;
+        if !PICTURE_TYPES.contains(&open.record.file_type.as_str()) {
+            return Err(ServiceError::invalid(FIELD));
+        }
+        match &open.record.handle {
+            Some(handle) => Ok(ProfilePicture(UploadHandle::new(handle.as_str()))),
+            None => Err(ServiceError::invalid(FIELD)),
+        }
     }
 
     /// Send `data` as the bytes of the file from `file_offset` on.
