@@ -5,7 +5,7 @@ description: "Conversation routing through meta-whatsapp-server, the meta-whatsa
 
 # meta-whatsapp-rs-server-routing
 
-> **Verified against meta-whatsapp-rs 0000000000000000000000000000000000000000 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 7f3bb9893f4ce5d112f00988f16bf17c6209b641 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/routing.ts](examples/routing.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#conversation-routing).
 
