@@ -23,9 +23,9 @@ its reasons and the owner's decisions, is
 > messages by id (M2g), OTP codes with per-tenant settings and
 > authentication templates (M3c), Embedded Signup in both partner
 > modes, its attempts and their resumption, and offboarding (M3a),
-> health, metrics and the OpenAPI document. **Not yet**: webhooks to
-> your backend (M2), hosted Embedded Signup, several WABAs in one
-> signup and pre-verified numbers (M3f), zero-tap templates and
+> hosted Embedded Signup, several WABAs in one signup and pre-verified
+> numbers (M3f), health, metrics and the OpenAPI document. **Not yet**: webhooks to
+> your backend (M2), zero-tap templates and
 > template previews (M3g), the Docker image and the TypeScript client
 > (M4).
 > [coverage.md](../coverage.md) tracks it.
@@ -129,6 +129,10 @@ read yet: set, it stops the start.
 | `WA_SERVER_FLOWS_PRIVATE_KEY` | unset: the Flows data endpoint off | the deployment's Flow private key (roadmap M5d): an unencrypted 2048-bit RSA key in PEM, from your secret manager (`_FILE` works too). Unset, `POST /webhooks/flows/{waba_id}` answers `404`. A password-protected PEM (what Meta's `openssl genrsa -des3` writes) or a key of another size refuses the start; [Flows](#flows) says how to remove the password |
 | `WA_SERVER_OTP_DEFAULT_TENANT` | unset | the tenant whose OTP settings a tenant without its own borrows: the platform's number and template (decision D8's default). Unset, a tenant without settings answers `409 otp_not_configured` |
 | `WA_ONBOARDING_MODE` | `tech_provider` | `solution_partner` also needs `WA_PARTNER_SYSTEM_TOKEN`, `WA_PARTNER_SYSTEM_USER_ID`, `WA_CREDIT_LINE_ID`, `WA_WABA_CURRENCY` (AUD, EUR, GBP, IDR, INR or USD): your credit line funds every merchant onboarded ([Solution Partner mode](#solution-partner-mode)) |
+| `WA_SIGNUP_EVERY_GRANTED_WABA` | `off` | `on`: a signup that grants several WABAs binds every one to its tenant ([Several WABAs](#several-wabas-in-one-signup)); pending the owner's confirmation before the first release |
+| `WA_HOSTED_SIGNUP` | `off` | `on`: `PARTNER_ADDED` webhooks are remembered and the operator claims one for a tenant ([Hosted signup](#hosted-signup)); needs `WA_SYSTEM_TOKEN` or Solution Partner mode; pending the owner's confirmation before the first release |
+| `WA_SYSTEM_TOKEN` | the partner's `WA_PARTNER_SYSTEM_TOKEN` | your system user token, with `business_management`: it fetches a hosted signup's business token and manages the pool of pre-verified numbers; pending the owner's confirmation before the first release |
+| `WA_PARTNER_BUSINESS_ID` | unset: the pool's routes off | your own business portfolio, whose pre-verified pool `/v1/admin/pre-verified-numbers` manages ([Pre-verified numbers](#pre-verified-numbers)); pending the owner's confirmation before the first release |
 | `WA_SERVER_ACCOUNT_UPDATE_CONFIRMATION` | `graph` | whether an `account_update` webhook that offboards a merchant or revokes their credit line is confirmed with Graph first (`graph`: `debug_token` on the WABA's stored token, which must no longer be valid or granted the WABA) or acted on by its signature alone (`signature`) ([Offboarding](#offboarding)) |
 | `WA_GRAPH_API_VERSION`, `WA_GRAPH_ENDPOINT` | `v25.0`, Graph | a proxy or a test stub: every token travels to it, so `https` outside development, and `serve` warns with its host |
 | `WA_SERVER_MIGRATE` | `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
@@ -1358,7 +1362,7 @@ POST /connect/callback ► POST /v1/signup/complete ─────► redeemed 
 
 | Route | Does |
 | --- | --- |
-| `POST /v1/signup/sessions` | `{coexistence?}`: an attempt bound to your tenant for 15 minutes, and what the page needs: `{state, expires_at, app_id, config_id, graph_api_version, launch_options}` (`launch_options` is `FB.login`'s options, as they are). Asks Meta nothing |
+| `POST /v1/signup/sessions` | `{coexistence?, pre_verified_phone_ids?}`: an attempt bound to your tenant for 15 minutes, and what the page needs: `{state, expires_at, app_id, config_id, graph_api_version, launch_options}` (`launch_options` is `FB.login`'s options, as they are). Asks Meta nothing |
 | `POST /v1/signup/complete` | `{state, code, event, pin?}`, as the page collected them: the attempt redeemed for your tenant, then the onboarding. `200` with `{"status": "connected", "waba_id", "phone_number_ids", "steps_completed", "needs_coexistence_sync", "credit_allocation_id"?}`, or `{"status": "cancelled", "current_step"}` for a `CANCEL` event (nothing redeemed: the attempt may still complete) |
 | `GET /v1/signup/attempts` | your attempts that stopped after their token was stored: `{data: [{waba_id, failed_step, updated_at, created_at}], next_cursor}` |
 | `POST /v1/signup/resume` | `{waba_id, pin?}`: an attempt's steps after the stored token, again (a corrected PIN): answers as a completion, `steps_completed` starting with `load_token` |
@@ -1408,6 +1412,118 @@ curl -sS -X POST "$WA_SERVER/v1/signup/complete" -H "Authorization: Bearer $KEY"
   merchant's token**, the PIN, the code or the state. A completion and a
   resumption are `audit` events (`signup_completed`, `signup_resumed`,
   with the tenant, the WABA and the key's id).
+
+### Several WABAs in one signup
+
+A merchant may grant the app several WABAs in one flow (the event's
+`waba_ids`). By default the service binds **one**: the **primary** WABA,
+the event's `waba_id`, else the first of `waba_ids`; the answer's `waba_id`
+is that WABA, and `not_bound_waba_ids` lists the others the event named,
+which are not bound (give each its own signup, or turn the option on).
+
+With `WA_SIGNUP_EVERY_GRANTED_WABA=on` the library's several-WABA
+onboarding runs and every WABA the token was granted is bound to the
+tenant, each with its own token record, subscription and, in Solution
+Partner mode, credit line. The primary WABA gets the PIN's registration
+and a coexistence sync; the others register nothing. The answer gains
+`wabas`, one entry per WABA, the primary first:
+`{waba_id, primary, status, phone_number_ids, failed_step?, resumable,
+code?}`, `status` being:
+
+| `status` | Meaning |
+| --- | --- |
+| `connected` | onboarded and bound to the tenant |
+| `held` | not the primary WABA, and the vault already held a token for it: left as it was |
+| `refused` | bound to another tenant (`code`: `waba_owned_by_another_tenant`): nothing stored for it, the other tenant's binding and token untouched |
+| `failed` | stopped at `failed_step`; `resumable: true` when its token was stored: `POST /v1/signup/resume` with its `waba_id` finishes it |
+
+- **Every WABA keeps the ownership rule** (decision D4). A WABA the event
+  names that another tenant holds refuses the whole signup, before the
+  attempt is redeemed or Meta asked: `409 waba_owned_by_another_tenant`,
+  nothing bound, and the attempt completes later without that WABA. A
+  grant the event did not name cannot be checked until the token says so:
+  it is `held` or `refused` in `wabas`, never taken, and the others are
+  still bound.
+- The call fails (as a single WABA's failure does) only when no WABA
+  connected; otherwise read `wabas`. Every other grant must be the
+  primary WABA's business's (the library checks Meta's owner for each).
+- Set per deployment, not per signup (decision D200).
+
+### Hosted signup
+
+Meta's hosted Embedded Signup is a link to Meta's page: no code on yours.
+It returns nothing to you and names no tenant; Meta sends an
+`account_update` `PARTNER_ADDED` with the merchant's `waba_id` and
+`owner_business_id`. With `WA_HOSTED_SIGNUP=on` (and `WA_SYSTEM_TOKEN`,
+or Solution Partner mode, whose system token is used) the service
+remembers each signed `PARTNER_ADDED` for 7 days (asking Meta nothing; a
+WABA a tenant or the vault already holds is skipped, as the code flow's
+onboardings send one too; an unsigned or forged delivery is `401` and
+remembered nowhere). **The operator claims it**, with an admin key, naming
+the tenant the merchant belongs to:
+
+```bash
+curl -sS -X POST "$WA_SERVER/v1/admin/signup/hosted" -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"tenant_id": "merchant-42", "waba_id": "524126980791429", "owner_business_id": "2729063490586005", "pin": "581063"}'
+```
+
+It answers as a completion does (`steps_completed` starting with
+`fetch_token`): the business token fetched from
+`system_user_access_tokens` with your system token and its
+`appsecret_proof`, then verified, bound to the named tenant, stored,
+subscribed, funded in Solution Partner mode, and registered with `pin`
+(the hosted page asks for none; choose one per number, never stored).
+
+- **No arrival, or another business: `404 not_found`**, the answer for a
+  WABA that does not exist; so is a `tenant_id` that names no tenant (a
+  suspended one is `403 tenant_suspended`). Another tenant's WABA is `409
+  waba_owned_by_another_tenant`, before anything is claimed. A tenant's
+  key, a platform key included, is `403 forbidden`.
+- **Who may claim** (decision D202, changed in review): the claim is the
+  operator's because Meta's page carries no state and the WABA and
+  business ids are no secrets. A route open to tenants would let one
+  tenant take an arrival meant for another's merchant and have that
+  merchant's business token stored under its own key. Your backend tells
+  the operator (or your operator tooling calls this route) which tenant a
+  merchant belongs to; an arrival is claimed once.
+- A claim that stops before the token is stored is `502
+  onboarding_failed` with `resumable: false` and the arrival is put back;
+  one that stops after is kept as an attempt for the tenant
+  (`POST /v1/signup/resume`). Off, the route is `409 signup_not_configured`
+  and nothing is remembered.
+- Audited: `hosted_signup_arrived` (the webhook, `origin: webhook`) and
+  `hosted_signup_completed` (the operator's change: the admin key's id, the
+  tenant, the WABA). Neither holds a token.
+
+### Pre-verified numbers
+
+Numbers you verify ahead of time, in a pool on your own business
+portfolio, that a merchant picks in Embedded Signup without typing a
+one-time code. The pool is yours, so its routes are the operator's (admin
+key), each Meta's call with your system token
+(`WA_PARTNER_BUSINESS_ID`, `WA_SYSTEM_TOKEN`; unset, `409
+signup_not_configured`):
+
+| Route | Does |
+| --- | --- |
+| `POST /v1/admin/pre-verified-numbers` | `{phone_number}`: add a number to the pool; `201 {id}` |
+| `GET /v1/admin/pre-verified-numbers` | one page of the pool (`?phone_number=`, `?status=VERIFIED\|NOT_VERIFIED\|EXPIRED`, `?limit=`, `?cursor=`): `{data, next_cursor}` |
+| `GET /v1/admin/pre-verified-numbers/{id}` | one number, its state and when its verification expires |
+| `POST /v1/admin/pre-verified-numbers/{id}/code` | `{method: SMS\|VOICE, language}`: have Meta send the one-time code |
+| `POST /v1/admin/pre-verified-numbers/{id}/verify` | `{code}`: check it; the number is then yours to offer for 90 days |
+| `DELETE /v1/admin/pre-verified-numbers/{id}` | remove it from the pool (audited `pre_verified_number_deleted`) |
+| `PUT`, `DELETE /v1/admin/pre-verified-numbers/{id}/reservation` | `{tenant_id}`: reserve the number for a tenant's launch, or release it; asks Meta nothing |
+
+A tenant's launch offers a number only when it is reserved for it:
+`POST /v1/signup/sessions` with `{"pre_verified_phone_ids": ["…"]}` (at
+most 20) puts them in `launch_options` as Meta's `preVerifiedPhone`; an
+unreserved id, another tenant's and a malformed one are the same `422`.
+Tracking who claimed which number stays yours, as Meta says; the limits
+(30 days to verify, 90 to be claimed or registered) are Meta's. Sharing a
+number with a partner and listing who has it are not routes yet (they
+concern Multi-Partner Solutions). The code is in no answer, log or audit
+event. No step accepts terms or signs anything.
 
 ### Solution Partner mode
 
@@ -2161,9 +2277,7 @@ SKIP token.wabas: the configuration is refused
 Re-sealing the webhook endpoints under a new data key (a previous key
 keeps opening them), and an endpoint for several tenants (M2c's gaps);
 disconnection by Meta's webhooks (and its
-`number_disconnected`); hosted Embedded
-Signup, several WABAs in one signup and pre-verified numbers (M3f),
-clearing a lost credit share and the coexistence routes (M3b); zero-tap
+`number_disconnected`); clearing a lost credit share and the coexistence routes (M3b); zero-tap
 authentication templates and template previews (M3g); the
 Docker image, a Compose file, the documents route and the TypeScript
 client (M4). The tenants' OTP settings have their own route

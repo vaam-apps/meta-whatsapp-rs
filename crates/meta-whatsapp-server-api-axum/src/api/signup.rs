@@ -8,6 +8,7 @@
 //! | `POST /v1/signup/complete` | the attempt redeemed for the calling tenant, then the library's onboarding: `GET oauth/access_token` (the code), `GET debug_token`, `GET /{waba_id}?fields=owner_business_info`, `GET /{waba_id}/phone_numbers`, the token stored, `POST /{waba_id}/subscribed_apps`, a Solution Partner's `POST /{waba_id}/assigned_users` and credit line (`GET …/owning_credit_allocation_configs`, `POST /{extended_credit_line_id}/whatsapp_credit_sharing_and_attach`, with the partner's system token), `POST /{pn}/register` (with the merchant's PIN), a coexistence number's `POST /{pn}/smb_app_data` twice |
 //! | `GET /v1/signup/attempts` | the tenant's attempts that stopped after their token was stored |
 //! | `POST /v1/signup/resume` | an attempt's steps after the stored token, again (a corrected PIN) |
+//! | `POST /v1/admin/signup/hosted` | the operator claims a hosted Embedded Signup the service saw arrive (`PARTNER_ADDED`) for the tenant it names (roadmap M3f, D202): the business token fetched with the system token, then the library's hosted onboarding for that tenant |
 //! | `POST /v1/admin/wabas/{waba_id}/credit-line/reshare` | the operator funds again a business whose credit line was revoked: the same steps, from the stored token, sharing the line again (`reshare_after_revocation`) |
 //!
 //! The rules are the core's ([`meta_whatsapp_server_core::signup`]): the
@@ -22,7 +23,9 @@
 
 use meta_whatsapp_rs::webhooks::axum::Json;
 use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
-use meta_whatsapp_server_core::signup::{Completed, Completion, Connected, Launch, Resumption};
+use meta_whatsapp_server_core::signup::{
+    Completed, Completion, Connected, HostedCompletion, Launch, Resumption, WabaResult, WabaStatus,
+};
 use serde::{Deserialize, Serialize};
 
 use serde_json::Value;
@@ -50,6 +53,13 @@ pub struct StartSignupBody {
     /// Default `false`: the Cloud API flow.
     #[serde(default)]
     pub coexistence: bool,
+    /// Offer these pre-verified numbers on the number screen, so that the
+    /// merchant types no one-time code (roadmap M3f): the ids the
+    /// operator reserved for this tenant
+    /// (`PUT /v1/admin/pre-verified-numbers/{id}/reservation`); any other
+    /// id is `422` on `pre_verified_phone_ids`. At most 20.
+    #[serde(default)]
+    pub pre_verified_phone_ids: Vec<String>,
 }
 
 /// `POST /v1/signup/complete`: what the page collected, relayed by the
@@ -72,6 +82,25 @@ pub struct CompleteSignupBody {
     /// merchant: it becomes a new number's PIN, or must match the one it
     /// has. Never stored. Without it, the number is left unregistered
     /// (a coexistence number is registered already: ignored).
+    pub pin: Option<String>,
+}
+
+/// `POST /v1/admin/signup/hosted`. No `Debug`: it holds the PIN.
+#[derive(Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+#[schema(as = CompleteHostedSignup)]
+pub struct CompleteHostedBody {
+    /// The tenant the WABA becomes: the operator names it, as only the
+    /// operator knows which tenant sent the merchant to Meta's page.
+    pub tenant_id: String,
+    /// The WABA Meta's `PARTNER_ADDED` named (`waba_info.waba_id`).
+    pub waba_id: String,
+    /// Its business portfolio, as the webhook named it
+    /// (`waba_info.owner_business_id`).
+    pub owner_business_id: String,
+    /// The number's two-step verification PIN, 6 digits, chosen for the
+    /// tenant (Meta's hosted page asks for none): it becomes the number's
+    /// PIN. Never stored. Without it, the number is left unregistered.
     pub pin: Option<String>,
 }
 
@@ -165,9 +194,85 @@ pub struct SignupResultView {
     /// WABA.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credit_allocation_id: Option<String>,
+    /// `connected`, when the deployment binds every granted WABA
+    /// (`WA_SIGNUP_EVERY_GRANTED_WABA`): each WABA of the signup and what
+    /// became of it, the primary one first. Absent with the option off:
+    /// `waba_id` is then the only WABA bound.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wabas: Option<Vec<SignupWabaView>>,
+    /// `connected` after a completion, with the option off: the other
+    /// WABAs the event named, which this completion did not bind (the
+    /// primary one, `waba_id`, is the only one).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_bound_waba_ids: Option<Vec<String>>,
     /// `cancelled`: the screen the merchant left, as Meta names it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_step: Option<String>,
+}
+
+/// How one WABA of a completion ended.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[schema(as = SignupWabaStatus)]
+pub enum SignupWabaStatusName {
+    /// Onboarded and bound to the tenant.
+    Connected,
+    /// Not the primary WABA, and a token for it was already stored: left
+    /// as it was.
+    Held,
+    /// Another tenant holds it (`409 waba_owned_by_another_tenant`'s
+    /// case): nothing was stored for it.
+    Refused,
+    /// Stopped at `failed_step`.
+    Failed,
+}
+
+/// One WABA of a completion (roadmap M3f).
+#[derive(Debug, Serialize, ToSchema)]
+#[schema(as = SignupWaba)]
+pub struct SignupWabaView {
+    /// The WABA.
+    pub waba_id: String,
+    /// Whether it is the signup's primary WABA: the one its event claims,
+    /// else the first it names.
+    pub primary: bool,
+    /// What became of it.
+    pub status: SignupWabaStatusName,
+    /// `connected`: its numbers, now the tenant's.
+    pub phone_number_ids: Vec<String>,
+    /// `failed`: the step it stopped at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_step: Option<String>,
+    /// `failed`: whether `POST /v1/signup/resume` with this `waba_id`
+    /// finishes it.
+    pub resumable: bool,
+    /// `refused`, `failed`: the error code, e.g.
+    /// `waba_owned_by_another_tenant`, `onboarding_failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+
+impl From<WabaResult> for SignupWabaView {
+    fn from(result: WabaResult) -> Self {
+        Self {
+            waba_id: result.waba_id.as_str().to_owned(),
+            primary: result.primary,
+            status: match result.status {
+                WabaStatus::Connected => SignupWabaStatusName::Connected,
+                WabaStatus::Held => SignupWabaStatusName::Held,
+                WabaStatus::Refused => SignupWabaStatusName::Refused,
+                WabaStatus::Failed => SignupWabaStatusName::Failed,
+            },
+            phone_number_ids: result
+                .phone_number_ids
+                .iter()
+                .map(|id| id.as_str().to_owned())
+                .collect(),
+            failed_step: result.failed_step,
+            resumable: result.resumable,
+            code: result.code,
+        }
+    }
 }
 
 impl From<Connected> for SignupResultView {
@@ -191,6 +296,15 @@ impl From<Connected> for SignupResultView {
             ),
             needs_coexistence_sync: Some(connected.needs_coexistence_sync),
             credit_allocation_id: connected.credit_allocation_id,
+            wabas: (!connected.wabas.is_empty())
+                .then(|| connected.wabas.into_iter().map(Into::into).collect()),
+            not_bound_waba_ids: (!connected.not_bound_waba_ids.is_empty()).then(|| {
+                connected
+                    .not_bound_waba_ids
+                    .iter()
+                    .map(|id| id.as_str().to_owned())
+                    .collect()
+            }),
             current_step: None,
         }
     }
@@ -207,6 +321,8 @@ impl From<Completed> for SignupResultView {
                 steps_completed: None,
                 needs_coexistence_sync: None,
                 credit_allocation_id: None,
+                wabas: None,
+                not_bound_waba_ids: None,
                 current_step,
             },
         }
@@ -269,7 +385,7 @@ pub struct SignupAttemptPageView {
         (status = 401, description = "No valid key", body = ErrorBody),
         (status = 403, description = "`forbidden`, `tenant_suspended`", body = ErrorBody),
         (status = 409, description = "`signup_not_configured`: no `WA_APP_ID` or `WA_ES_CONFIG_ID`", body = ErrorBody),
-        (status = 422, description = "`invalid_request` (`body`)", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (`body`, `pre_verified_phone_ids`: an id the operator did not reserve for this tenant, or more than 20)", body = ErrorBody),
         (status = 429, description = "`too_many_requests`: the tenant's `send` budget (`Retry-After`)", body = ErrorBody),
     )
 )]
@@ -282,7 +398,7 @@ pub(crate) async fn start_signup(
         .signups()
         .open(state.authz(), &caller)?
         .observed_by(state.metrics())
-        .start(body.coexistence)
+        .start_with(body.coexistence, &body.pre_verified_phone_ids)
         .await?;
     Ok(Json(launch.into()))
 }
@@ -335,6 +451,54 @@ pub(crate) async fn complete_signup(
                 pin,
             }),
     )
+    .await?;
+    Ok(Json(completed.into()))
+}
+
+/// `POST /v1/admin/signup/hosted`: claim a hosted Embedded Signup the
+/// service saw arrive (`PARTNER_ADDED`) and onboard it for the tenant the
+/// operator names. The operator's explicit, audited decision (D202): the
+/// webhook names no tenant and its ids are no secret, so no tenant key
+/// claims.
+#[utoipa::path(
+    post,
+    path = "/v1/admin/signup/hosted",
+    tag = "admin",
+    security(("api_key" = [])),
+    request_body = CompleteHostedBody,
+    responses(
+        (status = 200, description = "`connected`: the WABA and its numbers bound to the named tenant, the token fetched with the deployment's system token and stored in the vault, never answered; audited `hosted_signup_completed`", body = SignupResultView),
+        (status = 401, description = "No valid key", body = ErrorBody),
+        (status = 403, description = "Not an admin key; `tenant_suspended`", body = ErrorBody),
+        (status = 404, description = "`not_found`: no such tenant, or no `PARTNER_ADDED` for that WABA and business is waiting (none arrived, it lapsed after 7 days, another call claimed it, or the business differs)", body = ErrorBody),
+        (status = 409, description = "`waba_owned_by_another_tenant` (decision D4, before anything is claimed or read from Meta), `signup_not_configured` (hosted signup is off: `WA_HOSTED_SIGNUP`)", body = ErrorBody),
+        (status = 422, description = "`invalid_request` (`tenant_id`, `waba_id`, `owner_business_id`, `pin`: 6 digits, `body`), before the arrival is claimed", body = ErrorBody),
+        (status = 502, description = "`onboarding_failed`: stopped at `step`; `resumable: true` when the token was stored (the tenant resumes it: `POST /v1/signup/resume`), `false` when it was not (the arrival is put back: claim it again)", body = ErrorBody),
+        (status = 503, description = "`storage_unavailable` (the WABA moved while it was onboarded: its token taken back)", body = ErrorBody),
+    )
+)]
+pub(crate) async fn complete_hosted_signup(
+    State(state): State<Grant>,
+    admin: AdminCaller,
+    ApiJson(body): ApiJson<CompleteHostedBody>,
+) -> Result<Json<SignupResultView>, ApiError> {
+    let CompleteHostedBody {
+        tenant_id,
+        waba_id,
+        owner_business_id,
+        pin,
+    } = body;
+    let completed = Box::pin(state.signups().complete_hosted(
+        state.authz(),
+        &admin,
+        HostedCompletion {
+            tenant_id,
+            waba_id,
+            owner_business_id,
+            pin,
+        },
+        state.metrics(),
+    ))
     .await?;
     Ok(Json(completed.into()))
 }
@@ -468,6 +632,8 @@ mod tests {
             steps_completed: vec!["exchange_code", "store_token"],
             needs_coexistence_sync: false,
             credit_allocation_id: None,
+            wabas: Vec::new(),
+            not_bound_waba_ids: Vec::new(),
         }));
         assert_eq!(
             serde_json::to_value(&connected).unwrap(),
@@ -479,6 +645,34 @@ mod tests {
                 "needs_coexistence_sync": false
             })
         );
+        // M3f: the WABAs of a several-WABA completion, and the ones not bound.
+        let many = SignupResultView::from(Completed::Connected(Connected {
+            waba_id: WabaId::new("524126980791429").unwrap(),
+            phone_number_ids: Vec::new(),
+            steps_completed: Vec::new(),
+            needs_coexistence_sync: false,
+            credit_allocation_id: None,
+            wabas: vec![WabaResult {
+                waba_id: WabaId::new("524126980791430").unwrap(),
+                primary: false,
+                status: WabaStatus::Refused,
+                phone_number_ids: Vec::new(),
+                failed_step: None,
+                resumable: false,
+                code: Some("waba_owned_by_another_tenant".to_owned()),
+            }],
+            not_bound_waba_ids: vec![WabaId::new("524126980791431").unwrap()],
+        }));
+        let many = serde_json::to_value(&many).unwrap();
+        assert_eq!(
+            many["wabas"],
+            json!([{
+                "waba_id": "524126980791430", "primary": false, "status": "refused",
+                "phone_number_ids": [], "resumable": false,
+                "code": "waba_owned_by_another_tenant"
+            }])
+        );
+        assert_eq!(many["not_bound_waba_ids"], json!(["524126980791431"]));
         let cancelled = SignupResultView::from(Completed::Cancelled {
             current_step: Some("PHONE_NUMBER_SETUP".to_owned()),
         });

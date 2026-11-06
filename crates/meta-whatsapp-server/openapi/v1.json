@@ -340,6 +340,905 @@
         ]
       }
     },
+    "/v1/admin/pre-verified-numbers": {
+      "get": {
+        "tags": [
+          "pre_verified"
+        ],
+        "summary": "`GET /v1/admin/pre-verified-numbers`: one page of the pool.",
+        "operationId": "list_pre_verified_numbers",
+        "parameters": [
+          {
+            "name": "phone_number",
+            "in": "query",
+            "description": "Only the number written this way.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only the numbers in this state: `VERIFIED`, `NOT_VERIFIED` or\n`EXPIRED`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size, at least 1.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 1
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` of the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of the pool",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreVerifiedNumberPage"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`query`, `status`, `limit`, `cursor`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "pre_verified"
+        ],
+        "summary": "`POST /v1/admin/pre-verified-numbers`: add a number to the pool.",
+        "operationId": "add_pre_verified_number",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddPreVerifiedNumber"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The number is in the pool (not yet verified): request its code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedPreVerifiedNumber"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`: no pool (`WA_PARTNER_BUSINESS_ID`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`phone_number`, `body`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`graph_error` and its kin: Meta refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/pre-verified-numbers/{id}": {
+      "get": {
+        "tags": [
+          "pre_verified"
+        ],
+        "summary": "`GET /v1/admin/pre-verified-numbers/{id}`: one number.",
+        "operationId": "get_pre_verified_number",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The pre-verified number's id (digits)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The number, its state and when its verification expires",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreVerifiedNumber"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`id`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "pre_verified"
+        ],
+        "summary": "`DELETE /v1/admin/pre-verified-numbers/{id}`: remove the number from\nthe pool, and its reservation. An explicit operator action, audited.",
+        "operationId": "delete_pre_verified_number",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The pre-verified number's id (digits)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted; audited `pre_verified_number_deleted`"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`id`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/pre-verified-numbers/{id}/code": {
+      "post": {
+        "tags": [
+          "pre_verified"
+        ],
+        "summary": "`POST /v1/admin/pre-verified-numbers/{id}/code`: have Meta send the\none-time code (not replayed after a timeout: each request sends a\nmessage).",
+        "operationId": "request_pre_verified_code",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The pre-verified number's id (digits)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestPreVerifiedCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The code was requested"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`id`, `language`, `body`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/pre-verified-numbers/{id}/reservation": {
+      "put": {
+        "tags": [
+          "pre_verified"
+        ],
+        "summary": "`PUT /v1/admin/pre-verified-numbers/{id}/reservation`: reserve the\nnumber for a tenant: only that tenant's signup may offer it.",
+        "operationId": "reserve_pre_verified_number",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The pre-verified number's id (digits)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReservePreVerifiedNumber"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Reserved (replacing another tenant's); audited `pre_verified_number_reserved`. Asks Meta nothing"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`id`, `tenant_id`, `body`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "pre_verified"
+        ],
+        "summary": "`DELETE /v1/admin/pre-verified-numbers/{id}/reservation`: release it.",
+        "operationId": "release_pre_verified_number",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The pre-verified number's id (digits)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Released (also when there was none); audited `pre_verified_number_released`"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`id`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/pre-verified-numbers/{id}/verify": {
+      "post": {
+        "tags": [
+          "pre_verified"
+        ],
+        "summary": "`POST /v1/admin/pre-verified-numbers/{id}/verify`: check the code.",
+        "operationId": "verify_pre_verified_code",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The pre-verified number's id (digits)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyPreVerifiedCode"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The code matched: the number is verified, to be claimed within 90 days"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`signup_not_configured`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`id`, `code`, `body`; the code is never quoted)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta refused (a wrong code included)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/signup/hosted": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`POST /v1/admin/signup/hosted`: claim a hosted Embedded Signup the\nservice saw arrive (`PARTNER_ADDED`) and onboard it for the tenant the\noperator names. The operator's explicit, audited decision (D202): the\nwebhook names no tenant and its ids are no secret, so no tenant key\nclaims.",
+        "operationId": "complete_hosted_signup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteHostedSignup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "`connected`: the WABA and its numbers bound to the named tenant, the token fetched with the deployment's system token and stored in the vault, never answered; audited `hosted_signup_completed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not an admin key; `tenant_suspended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such tenant, or no `PARTNER_ADDED` for that WABA and business is waiting (none arrived, it lapsed after 7 days, another call claimed it, or the business differs)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`waba_owned_by_another_tenant` (decision D4, before anything is claimed or read from Meta), `signup_not_configured` (hosted signup is off: `WA_HOSTED_SIGNUP`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (`tenant_id`, `waba_id`, `owner_business_id`, `pin`: 6 digits, `body`), before the arrival is claimed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "`onboarding_failed`: stopped at `step`; `resumable: true` when the token was stored (the tenant resumes it: `POST /v1/signup/resume`), `false` when it was not (the arrival is put back: claim it again)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`storage_unavailable` (the WABA moved while it was onboarded: its token taken back)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/admin/tenants": {
       "get": {
         "tags": [
@@ -13072,7 +13971,7 @@
             }
           },
           "422": {
-            "description": "`invalid_request` (`body`)",
+            "description": "`invalid_request` (`body`, `pre_verified_phone_ids`: an id the operator did not reserve for this tenant, or more than 20)",
             "content": {
               "application/json": {
                 "schema": {
@@ -20539,6 +21438,20 @@
           }
         }
       },
+      "AddPreVerifiedNumber": {
+        "type": "object",
+        "description": "`POST /v1/admin/pre-verified-numbers`.",
+        "required": [
+          "phone_number"
+        ],
+        "properties": {
+          "phone_number": {
+            "type": "string",
+            "description": "The number to verify: E.164, or formatted with spaces, hyphens and\nparentheses (Meta normalizes it)."
+          }
+        },
+        "additionalProperties": false
+      },
       "AddressParameters": {
         "type": "object",
         "description": "An address message's `action.parameters` (`messages/address-messages`).\nSchema only: the request carries Meta's object.",
@@ -21387,6 +22300,37 @@
           }
         }
       },
+      "CompleteHostedSignup": {
+        "type": "object",
+        "description": "`POST /v1/admin/signup/hosted`. No `Debug`: it holds the PIN.",
+        "required": [
+          "tenant_id",
+          "waba_id",
+          "owner_business_id"
+        ],
+        "properties": {
+          "owner_business_id": {
+            "type": "string",
+            "description": "Its business portfolio, as the webhook named it\n(`waba_info.owner_business_id`)."
+          },
+          "pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The number's two-step verification PIN, 6 digits, chosen for the\ntenant (Meta's hosted page asks for none): it becomes the number's\nPIN. Never stored. Without it, the number is left unregistered."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the WABA becomes: the operator names it, as only the\noperator knows which tenant sent the merchant to Meta's page."
+          },
+          "waba_id": {
+            "type": "string",
+            "description": "The WABA Meta's `PARTNER_ADDED` named (`waba_info.waba_id`)."
+          }
+        },
+        "additionalProperties": false
+      },
       "CompleteSignup": {
         "type": "object",
         "description": "`POST /v1/signup/complete`: what the page collected, relayed by the\nintegrator's backend. No `Debug`: it holds the code and the PIN.",
@@ -22212,6 +23156,19 @@
           }
         },
         "additionalProperties": false
+      },
+      "CreatedPreVerifiedNumber": {
+        "type": "object",
+        "description": "A number just added to the pool.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Its id: request its code next."
+          }
+        }
       },
       "CtaUrlParameters": {
         "type": "object",
@@ -26383,6 +27340,80 @@
           "unpin"
         ]
       },
+      "PreVerifiedCodeMethod": {
+        "type": "string",
+        "description": "How the one-time code is delivered.",
+        "enum": [
+          "SMS",
+          "VOICE"
+        ]
+      },
+      "PreVerifiedNumber": {
+        "type": "object",
+        "description": "A number of the pool.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "code_verification_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`VERIFIED`, `NOT_VERIFIED` or `EXPIRED`, as Meta names it."
+          },
+          "code_verification_time": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When it was last verified, Unix seconds."
+          },
+          "id": {
+            "type": "string",
+            "description": "Its id: what `pre_verified_phone_ids` takes."
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The number, E.164."
+          },
+          "verification_expiry_time": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the verification expires, Unix seconds."
+          }
+        }
+      },
+      "PreVerifiedNumberPage": {
+        "type": "object",
+        "description": "A page of the pool.",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PreVerifiedNumber"
+            },
+            "description": "The numbers, in order of creation."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The next page's cursor, when there is one."
+          }
+        }
+      },
       "PricingAnalytics": {
         "type": "object",
         "description": "Pricing analytics.",
@@ -27254,6 +28285,39 @@
         },
         "additionalProperties": false
       },
+      "RequestPreVerifiedCode": {
+        "type": "object",
+        "description": "`POST /v1/admin/pre-verified-numbers/{id}/code`.",
+        "required": [
+          "method",
+          "language"
+        ],
+        "properties": {
+          "language": {
+            "type": "string",
+            "description": "The language of the message, e.g. `en_US`."
+          },
+          "method": {
+            "$ref": "#/components/schemas/PreVerifiedCodeMethod",
+            "description": "`SMS` or `VOICE`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReservePreVerifiedNumber": {
+        "type": "object",
+        "description": "`PUT /v1/admin/pre-verified-numbers/{id}/reservation`.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant whose signup may offer the number."
+          }
+        },
+        "additionalProperties": false
+      },
       "ResumeSignup": {
         "type": "object",
         "description": "`POST /v1/signup/resume`. No `Debug`: it holds the PIN.",
@@ -27657,6 +28721,16 @@
             ],
             "description": "`connected`: whether it was a coexistence onboarding (the contacts\nand history syncs ran as its last steps, once each)."
           },
+          "not_bound_waba_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "`connected` after a completion, with the option off: the other\nWABAs the event named, which this completion did not bind (the\nprimary one, `waba_id`, is the only one)."
+          },
           "phone_number_ids": {
             "type": [
               "array",
@@ -27687,6 +28761,16 @@
               "null"
             ],
             "description": "`connected`: the verified WABA, now the tenant's."
+          },
+          "wabas": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SignupWaba"
+            },
+            "description": "`connected`, when the deployment binds every granted WABA\n(`WA_SIGNUP_EVERY_GRANTED_WABA`): each WABA of the signup and what\nbecame of it, the primary one first. Absent with the option off:\n`waba_id` is then the only WABA bound."
           }
         }
       },
@@ -27741,6 +28825,66 @@
           "cancelled"
         ]
       },
+      "SignupWaba": {
+        "type": "object",
+        "description": "One WABA of a completion (roadmap M3f).",
+        "required": [
+          "waba_id",
+          "primary",
+          "status",
+          "phone_number_ids",
+          "resumable"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`refused`, `failed`: the error code, e.g.\n`waba_owned_by_another_tenant`, `onboarding_failed`."
+          },
+          "failed_step": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`failed`: the step it stopped at."
+          },
+          "phone_number_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`connected`: its numbers, now the tenant's."
+          },
+          "primary": {
+            "type": "boolean",
+            "description": "Whether it is the signup's primary WABA: the one its event claims,\nelse the first it names."
+          },
+          "resumable": {
+            "type": "boolean",
+            "description": "`failed`: whether `POST /v1/signup/resume` with this `waba_id`\nfinishes it."
+          },
+          "status": {
+            "$ref": "#/components/schemas/SignupWabaStatus",
+            "description": "What became of it."
+          },
+          "waba_id": {
+            "type": "string",
+            "description": "The WABA."
+          }
+        }
+      },
+      "SignupWabaStatus": {
+        "type": "string",
+        "description": "How one WABA of a completion ended.",
+        "enum": [
+          "connected",
+          "held",
+          "refused",
+          "failed"
+        ]
+      },
       "StartSignup": {
         "type": "object",
         "description": "`POST /v1/signup/sessions`.",
@@ -27748,6 +28892,13 @@
           "coexistence": {
             "type": "boolean",
             "description": "Launch the onboarding of a WhatsApp Business app number\n(coexistence: `featureType: whatsapp_business_app_onboarding`).\nDefault `false`: the Cloud API flow."
+          },
+          "pre_verified_phone_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Offer these pre-verified numbers on the number screen, so that the\nmerchant types no one-time code (roadmap M3f): the ids the\noperator reserved for this tenant\n(`PUT /v1/admin/pre-verified-numbers/{id}/reservation`); any other\nid is `422` on `pre_verified_phone_ids`. At most 20."
           }
         },
         "additionalProperties": false
@@ -28800,6 +29951,20 @@
         },
         "additionalProperties": false
       },
+      "VerifyPreVerifiedCode": {
+        "type": "object",
+        "description": "`POST /v1/admin/pre-verified-numbers/{id}/verify`. No `Debug`: it\nholds the code.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The code the number received (digits; hyphens are dropped)."
+          }
+        },
+        "additionalProperties": false
+      },
       "Version": {
         "type": "object",
         "description": "`GET /v1/version`.",
@@ -29299,6 +30464,10 @@
     {
       "name": "signup",
       "description": "Embedded Signup: an attempt bound to the tenant, its completion (the business onboarded, the WABA and its numbers bound to the tenant), and the attempts to resume (scope `signup`)"
+    },
+    {
+      "name": "pre_verified",
+      "description": "The deployment's pool of pre-verified numbers: adding, verifying, listing and deleting them, and reserving one for a tenant's signup (admin key; roadmap M3f)"
     },
     {
       "name": "operations",

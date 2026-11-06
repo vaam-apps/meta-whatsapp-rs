@@ -16,6 +16,8 @@
 //! GET  /v1/signup/attempts ─► Signup::attempts: the tenant's kept attempts
 //! POST /v1/signup/resume   ─► Signup::resume: the tenant's attempt, EmbeddedSignup::resume_with_approval
 //!                              (the binding checked again before any credit call), from the stored token
+//! POST /v1/admin/signup/hosted ─► Signups::complete_hosted: the operator claims a remembered
+//!                              PARTNER_ADDED for the tenant it names (roadmap M3f; see `hosted`)
 //! ```
 //!
 //! **The mode is the deployment's** ([`SignupDeployment`]): a Tech
@@ -62,17 +64,24 @@ use meta_whatsapp_rs::client::AppCredentials;
 use meta_whatsapp_rs::client::embedded_signup::{
     EmbeddedSignup, EmbeddedSignupEvent, FinishKind, LaunchOptions, Onboarded, OnboardingRequest,
     SessionInfo, SignupCode, SignupSessions, SignupState, SolutionPartner, StoredBusinessToken,
-    TokenVersion, VerifiedOnboarding, steps,
+    TokenVersion, VerifiedOnboarding, WabaOutcome, steps,
 };
 use meta_whatsapp_rs::client::phone_numbers::TwoStepPin;
 use meta_whatsapp_rs::core::clock::Clock;
 use meta_whatsapp_rs::core::config::ApiVersion;
 use meta_whatsapp_rs::core::error::{StorageError, ValidationError};
 use meta_whatsapp_rs::core::ids::{AppId, BusinessId, PhoneNumberId, WabaId};
-use meta_whatsapp_rs::core::store::KvStore;
+use meta_whatsapp_rs::core::secret::AccessToken;
+use meta_whatsapp_rs::core::store::{JsonStore, KvStore};
 use meta_whatsapp_rs::webhooks::WebhookEvent;
 use meta_whatsapp_rs::webhooks::fields::AccountUpdateEvent;
 use time::OffsetDateTime;
+
+mod hosted;
+mod pre_verified;
+
+pub use hosted::HostedCompletion;
+pub use pre_verified::{PartnerPool, PreVerifiedAdd, PreVerifiedCode, PreVerifiedList};
 
 use crate::audit::{Subject, audit, tenant_audit};
 use crate::authz::{AdminCaller, Authorizer, Caller, OwnedWaba};
@@ -125,6 +134,9 @@ pub struct SignupDeployment {
     config_id: String,
     partner: Option<SolutionPartner>,
     confirmation: AccountUpdateConfirmation,
+    every_granted_waba: bool,
+    hosted: Option<AccessToken>,
+    pool: Option<PartnerPool>,
 }
 
 impl std::fmt::Debug for SignupDeployment {
@@ -134,6 +146,9 @@ impl std::fmt::Debug for SignupDeployment {
             .field("config_id", &self.config_id)
             .field("solution_partner", &self.partner.is_some())
             .field("confirmation", &self.confirmation)
+            .field("every_granted_waba", &self.every_granted_waba)
+            .field("hosted_signup", &self.hosted.is_some())
+            .field("pre_verified_pool", &self.pool.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -147,7 +162,55 @@ impl SignupDeployment {
             config_id: config_id.into(),
             partner: None,
             confirmation: AccountUpdateConfirmation::default(),
+            every_granted_waba: false,
+            hosted: None,
+            pool: None,
         }
+    }
+
+    /// Bind every WABA a signup grants to its tenant, not only the primary
+    /// one (`WA_SIGNUP_EVERY_GRANTED_WABA`, roadmap M3f, decision D200).
+    /// Off by default: the signup's primary WABA (the one its event
+    /// claims, else the first it names) is the only one bound.
+    #[must_use]
+    pub fn every_granted_waba(mut self, enabled: bool) -> Self {
+        self.every_granted_waba = enabled;
+        self
+    }
+
+    /// Handle hosted Embedded Signup (`WA_HOSTED_SIGNUP`, roadmap M3f,
+    /// decision D201): `PARTNER_ADDED` webhooks are remembered and the
+    /// operator claims one for a tenant (`POST /v1/admin/signup/hosted`,
+    /// decision D202; [`Signups::complete_hosted`]), the business token
+    /// fetched with `system_token`, the deployment's system user token.
+    #[must_use]
+    pub fn hosted_signup(mut self, system_token: AccessToken) -> Self {
+        self.hosted = Some(system_token);
+        self
+    }
+
+    /// Manage the pool of pre-verified numbers of `business_id`, the
+    /// deployment's own business portfolio, with `token` (`business_management`;
+    /// roadmap M3f, decision D204).
+    #[must_use]
+    pub fn pre_verified_pool(mut self, business_id: BusinessId, token: AccessToken) -> Self {
+        self.pool = Some(PartnerPool { business_id, token });
+        self
+    }
+
+    /// Whether every granted WABA is bound.
+    pub fn binds_every_granted_waba(&self) -> bool {
+        self.every_granted_waba
+    }
+
+    /// Whether hosted Embedded Signup is handled.
+    pub fn handles_hosted_signup(&self) -> bool {
+        self.hosted.is_some()
+    }
+
+    /// Whether the pool of pre-verified numbers is managed.
+    pub fn manages_pre_verified_pool(&self) -> bool {
+        self.pool.is_some()
     }
 
     /// Onboard as a Solution Partner: `partner`'s credit line funds every
@@ -195,6 +258,8 @@ pub struct Signups {
     sessions: SignupSessions,
     clock: Arc<dyn Clock>,
     deployment: Option<SignupDeployment>,
+    hosted: JsonStore<hosted::PendingHosted>,
+    reservations: JsonStore<pre_verified::Reservation>,
 }
 
 impl std::fmt::Debug for Signups {
@@ -284,6 +349,50 @@ pub struct Connected {
     pub needs_coexistence_sync: bool,
     /// The partner's credit allocation funding the WABA (Solution Partner).
     pub credit_allocation_id: Option<String>,
+    /// With the option of decision D200 on, a completion's WABAs, the
+    /// primary one first, each with what became of it (roadmap M3f), one
+    /// per granted WABA. Empty with it off (the answer's `waba_id` is the
+    /// only WABA), and for a resumption or a reshare.
+    pub wabas: Vec<WabaResult>,
+    /// With the option off, the other WABAs the signup's event named and
+    /// this completion did not bind (decision D200): bind them with a
+    /// signup of their own, or turn the option on.
+    pub not_bound_waba_ids: Vec<WabaId>,
+}
+
+/// What became of one WABA of a completion (roadmap M3f).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WabaResult {
+    /// The WABA.
+    pub waba_id: WabaId,
+    /// Whether it is the signup's primary WABA: the one its event claims,
+    /// else the first it names (the newest grant).
+    pub primary: bool,
+    /// What became of it.
+    pub status: WabaStatus,
+    /// `connected`: its numbers, now the tenant's.
+    pub phone_number_ids: Vec<PhoneNumberId>,
+    /// `failed`: the step it stopped at.
+    pub failed_step: Option<String>,
+    /// `failed`: whether `POST /v1/signup/resume` can finish it.
+    pub resumable: bool,
+    /// `refused`, `failed`: the error code (`waba_owned_by_another_tenant`,
+    /// `onboarding_failed`, ...).
+    pub code: Option<String>,
+}
+
+/// The state of one WABA after a completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WabaStatus {
+    /// Onboarded and bound to the tenant.
+    Connected,
+    /// Not the primary WABA, and the vault already held a token for it:
+    /// left as it was.
+    Held,
+    /// Another tenant holds it (decision D4): nothing was stored for it.
+    Refused,
+    /// Stopped at a step; see [`WabaResult::failed_step`].
+    Failed,
 }
 
 impl From<Onboarded> for Connected {
@@ -297,6 +406,8 @@ impl From<Onboarded> for Connected {
             credit_allocation_id: onboarded
                 .allocation_config_id
                 .map(|id| id.as_str().to_owned()),
+            wabas: Vec::new(),
+            not_bound_waba_ids: Vec::new(),
         }
     }
 }
@@ -314,6 +425,49 @@ enum Approval {
     NoTenant,
 }
 
+/// A single-WABA completion's answer: as the option is off, the other WABAs
+/// its event named, and nothing bound for them (decision D200).
+fn single(completed: Completed, request: &OnboardingRequest, primary: &WabaId) -> Completed {
+    let Completed::Connected(mut connected) = completed else {
+        return completed;
+    };
+    connected.not_bound_waba_ids = request
+        .session
+        .waba_id
+        .iter()
+        .chain(request.session.waba_ids.iter())
+        .filter(|id| *id != primary)
+        .fold(Vec::new(), |mut seen: Vec<WabaId>, id| {
+            if !seen.contains(id) {
+                seen.push(id.clone());
+            }
+            seen
+        });
+    Completed::Connected(connected)
+}
+
+/// The approvals of a completion's WABAs, by WABA (several with the
+/// option of decision D200 on).
+#[derive(Default)]
+struct Approvals(std::sync::Mutex<std::collections::HashMap<WabaId, Approval>>);
+
+impl Approvals {
+    fn set(&self, waba_id: &WabaId, approval: Approval) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(waba_id.clone(), approval);
+    }
+
+    fn get(&self, waba_id: &WabaId) -> Option<Approval> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(waba_id)
+            .cloned()
+    }
+}
+
 impl Signups {
     /// The services on `kv` (the backend's: where the vault is), reading
     /// "now" from `clock` (the service's), for `deployment` (`None`: every
@@ -324,9 +478,11 @@ impl Signups {
         deployment: Option<SignupDeployment>,
     ) -> Self {
         Self {
-            sessions: SignupSessions::new(kv),
+            sessions: SignupSessions::new(Arc::clone(&kv)),
             clock,
             deployment,
+            hosted: JsonStore::new(Arc::clone(&kv), hosted::HOSTED_NAMESPACE),
+            reservations: JsonStore::new(kv, pre_verified::RESERVATION_NAMESPACE),
         }
     }
 
@@ -356,7 +512,9 @@ impl Signups {
             signups: self,
             deployment,
             authz,
-            caller,
+            tenant: caller.tenant(),
+            key_id: caller.key_id(),
+            by_admin: false,
             observer: &(),
         })
     }
@@ -366,7 +524,12 @@ impl Signups {
     /// `None` without a deployment (no merchant was onboarded through it).
     pub fn account_actions(&self, authz: Arc<Authorizer>) -> Option<Arc<dyn AccountActions>> {
         let deployment = self.deployment.clone()?;
-        Some(Arc::new(AccountUpdates { authz, deployment }))
+        Some(Arc::new(AccountUpdates {
+            authz,
+            deployment,
+            hosted: self.hosted.clone(),
+            clock: Arc::clone(&self.clock),
+        }))
     }
 
     /// Disconnect `owned` in Solution Partner mode (the tenant's `DELETE
@@ -527,14 +690,20 @@ pub struct Signup<'a> {
     signups: &'a Signups,
     deployment: &'a SignupDeployment,
     authz: &'a Authorizer,
-    caller: &'a Caller,
+    /// The tenant it acts for: its caller's, or the one an operator named.
+    tenant: &'a TenantId,
+    /// The public id of the key that asked.
+    key_id: &'a str,
+    /// Whether the key is an admin's (audited as an operator's change).
+    by_admin: bool,
     observer: &'a dyn Observer,
 }
 
 impl std::fmt::Debug for Signup<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Signup")
-            .field("caller", self.caller)
+            .field("tenant", &self.tenant)
+            .field("key_id", &self.key_id)
             .finish_non_exhaustive()
     }
 }
@@ -552,7 +721,7 @@ impl<'a> Signup<'a> {
     }
 
     fn tenant(&self) -> &'a TenantId {
-        self.caller.tenant()
+        self.tenant
     }
 
     /// Start an attempt for the caller's tenant: a single-use state bound
@@ -565,10 +734,28 @@ impl<'a> Signup<'a> {
     ///
     /// The store's failure.
     pub async fn start(&self, coexistence: bool) -> Result<Launch, ServiceError> {
+        self.start_with(coexistence, &[]).await
+    }
+
+    /// [`Self::start`], offering the pre-verified numbers `pre_verified`
+    /// on the number screen (roadmap M3f, decision D203): each must be
+    /// reserved for the caller's tenant by the operator, else `422
+    /// invalid_request` on `pre_verified_phone_ids` (the same answer for
+    /// an unreserved number and another tenant's).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::start`], and the ids above.
+    pub async fn start_with(
+        &self,
+        coexistence: bool,
+        pre_verified: &[String],
+    ) -> Result<Launch, ServiceError> {
         let mut options = LaunchOptions::new(self.deployment.config_id.as_str());
         if coexistence {
             options = options.coexistence();
         }
+        let options = self.offer_pre_verified(options, pre_verified).await?;
         let launch_options = options.to_json().map_err(|_| ServiceError::internal())?;
         let state = self
             .signups
@@ -651,15 +838,32 @@ impl<'a> Signup<'a> {
             request = request.register_with_pin(pin);
         }
         let tenant = self.tenant();
-        // D4 on the claimed id, before the attempt is redeemed.
-        if let Some(claimed) = request.session.primary_waba_id()
-            && self
+        let every = self.deployment.every_granted_waba;
+        if every {
+            request = request.every_granted_waba(true);
+        }
+        // D4 on the claimed id, and with the option on on every WABA the
+        // event names, before the attempt is redeemed: a WABA another
+        // tenant holds refuses the whole signup, with nothing bound.
+        let claimed: Vec<&WabaId> = if every {
+            request
+                .session
+                .waba_id
+                .iter()
+                .chain(request.session.waba_ids.iter())
+                .collect()
+        } else {
+            request.session.primary_waba_id().into_iter().collect()
+        };
+        for claimed in claimed {
+            if self
                 .records()
                 .waba(claimed)
                 .await?
                 .is_some_and(|binding| &binding.tenant_id != tenant)
-        {
-            return Err(ServiceError::new(ErrorCode::WABA_OWNED_BY_ANOTHER_TENANT));
+            {
+                return Err(ServiceError::new(ErrorCode::WABA_OWNED_BY_ANOTHER_TENANT));
+            }
         }
         let redeemed = self
             .signups
@@ -670,21 +874,130 @@ impl<'a> Signup<'a> {
         if !redeemed {
             return Err(ServiceError::new(ErrorCode::STALE_ATTEMPT));
         }
+        if every {
+            return Box::pin(self.complete_many(&request)).await;
+        }
         // The code is spent from here on: never retried.
         let approval = OnceLock::new();
         let partner = self.deployment.is_solution_partner();
         let records = self.records();
+        let set_approval = |a: Approval| {
+            let _ = approval.set(a);
+        };
         let approve = |verified: VerifiedOnboarding| {
-            approve_binding(records, tenant, verified, partner, &approval)
+            approve_binding(records, tenant, verified, partner, &set_approval)
         };
         let es = self.deployment.onboarding(self.authz.client());
         let onboarded = es
             .onboard_with_approval(&request, self.authz.vault_for_signup(), approve)
             .await;
         match onboarded {
-            Ok(onboarded) => self.connected(onboarded, "signup_completed").await,
+            Ok(onboarded) => {
+                let primary = onboarded.waba_id.clone();
+                let completed = self.connected(onboarded, "signup_completed").await?;
+                Ok(single(completed, &request, &primary))
+            }
             Err(error) => Err(self.stopped(&error, approval.get(), &request).await),
         }
+    }
+
+    /// A completion with every granted WABA bound (decision D200, the
+    /// deployment's option): the library's `onboard_wabas_with_approval`,
+    /// each WABA approved (bound, D4) on its own; one that fails does not
+    /// stop the next. The call fails when no WABA connected (as a single
+    /// WABA's failure does); otherwise each WABA's outcome is in the answer.
+    async fn complete_many(&self, request: &OnboardingRequest) -> Result<Completed, ServiceError> {
+        let tenant = self.tenant();
+        let partner = self.deployment.is_solution_partner();
+        let records = self.records();
+        let approvals = Approvals::default();
+        let approvals_ref = &approvals;
+        let approve = move |verified: VerifiedOnboarding| async move {
+            let waba_id = verified.waba_id.clone();
+            let set = |a: Approval| approvals_ref.set(&waba_id, a);
+            approve_binding(records, tenant, verified, partner, &set).await
+        };
+        let es = self.deployment.onboarding(self.authz.client());
+        let many = match es
+            .onboard_wabas_with_approval(request, self.authz.vault_for_signup(), approve)
+            .await
+        {
+            Ok(many) => many,
+            Err(error) => return Err(self.stopped(&error, None, request).await),
+        };
+        let mut results = Vec::with_capacity(many.wabas.len());
+        let mut first: Option<Connected> = None;
+        let mut primary_failure: Option<(Error, Option<Approval>)> = None;
+        for entry in many.wabas {
+            let waba_id = entry.waba_id.clone();
+            let mut result = WabaResult {
+                waba_id: waba_id.clone(),
+                primary: entry.primary,
+                status: WabaStatus::Failed,
+                phone_number_ids: Vec::new(),
+                failed_step: None,
+                resumable: false,
+                code: None,
+            };
+            match entry.outcome {
+                WabaOutcome::Onboarded(onboarded) => {
+                    match self.connected(*onboarded, "signup_completed").await {
+                        Ok(Completed::Connected(connected)) => {
+                            result.status = WabaStatus::Connected;
+                            result
+                                .phone_number_ids
+                                .clone_from(&connected.phone_number_ids);
+                            first.get_or_insert(connected);
+                        }
+                        Ok(Completed::Cancelled { .. }) => {}
+                        Err(error) => result.code = Some(error.code().to_owned()),
+                    }
+                }
+                WabaOutcome::Held => result.status = WabaStatus::Held,
+                WabaOutcome::Failed { error, .. } => {
+                    match approvals.get(&waba_id) {
+                        Some(Approval::Owned) => {
+                            result.status = WabaStatus::Refused;
+                            result.code =
+                                Some(ErrorCode::WABA_OWNED_BY_ANOTHER_TENANT.as_str().to_owned());
+                        }
+                        other => {
+                            let api = answered(&error, self.observer);
+                            result.failed_step = step_of(&error).map(str::to_owned);
+                            result.code = Some(api.code().to_owned());
+                            if after_store(&error)
+                                && let Some(Approval::Bound { epoch, .. }) = other
+                            {
+                                let mut session = SessionInfo::default();
+                                session.waba_id = Some(waba_id.clone());
+                                let mut own = OnboardingRequest::for_resume(session);
+                                own.finish_kind = None;
+                                result.resumable = self
+                                    .keep(&epoch.waba_id, &error, &own, "a signup attempt")
+                                    .await;
+                            }
+                        }
+                    }
+                    if entry.primary {
+                        // Kept for the call's answer, when nothing connected.
+                        primary_failure = Some((error, approvals.get(&waba_id)));
+                    }
+                }
+                // A variant a later library adds: reported as failed.
+                other => {
+                    tracing::warn!("a WABA outcome this service does not know: {other:?}");
+                }
+            }
+            results.push(result);
+        }
+        let Some(mut connected) = first else {
+            if let Some((error, approval)) = primary_failure {
+                return Err(self.stopped(&error, approval.as_ref(), request).await);
+            }
+            return Err(ServiceError::from(StorageError::Busy));
+        };
+        connected.wabas = results;
+        Ok(Completed::Connected(connected))
     }
 
     /// The caller's tenant's kept attempts, in byte order of their WABA
@@ -827,15 +1140,16 @@ impl<'a> Signup<'a> {
             .await?;
         records.delete_signup_attempt(tenant, &waba_id).await?;
         record_allocation(records, tenant, &connected).await?;
-        tenant_audit(
-            action,
-            self.caller.key_id(),
-            &Subject {
-                tenant: Some(tenant.as_str()),
-                waba_id: Some(waba_id.as_str()),
-                ..Subject::default()
-            },
-        );
+        let subject = Subject {
+            tenant: Some(tenant.as_str()),
+            waba_id: Some(waba_id.as_str()),
+            ..Subject::default()
+        };
+        if self.by_admin {
+            audit(action, self.key_id, &subject);
+        } else {
+            tenant_audit(action, self.key_id, &subject);
+        }
         Ok(Completed::Connected(connected))
     }
 
@@ -922,7 +1236,7 @@ async fn approve_binding(
     tenant: &TenantId,
     verified: VerifiedOnboarding,
     partner: bool,
-    approval: &OnceLock<Approval>,
+    set: &(dyn Fn(Approval) + Sync),
 ) -> Result<(), Error> {
     if partner {
         remember_ledger(records, &verified).await?;
@@ -934,11 +1248,11 @@ async fn approve_binding(
     {
         BindOutcome::Bound => {}
         BindOutcome::OwnedByAnotherTenant => {
-            let _ = approval.set(Approval::Owned);
+            set(Approval::Owned);
             return Err(ValidationError::new("waba_id", "bound to another tenant").into());
         }
         BindOutcome::NoSuchTenant => {
-            let _ = approval.set(Approval::NoTenant);
+            set(Approval::NoTenant);
             return Err(ValidationError::new("tenant", "no such tenant").into());
         }
     }
@@ -947,7 +1261,7 @@ async fn approve_binding(
         .await?
         .filter(|binding| &binding.tenant_id == tenant)
         .ok_or(StorageError::Busy)?;
-    let _ = approval.set(Approval::Bound {
+    set(Approval::Bound {
         epoch: binding.epoch(),
         fresh,
     });
@@ -1096,6 +1410,8 @@ fn finish_kind(stored: &str) -> Option<FinishKind> {
 pub struct AccountUpdates {
     authz: Arc<Authorizer>,
     deployment: SignupDeployment,
+    hosted: JsonStore<hosted::PendingHosted>,
+    clock: Arc<dyn Clock>,
 }
 
 impl std::fmt::Debug for AccountUpdates {
@@ -1129,6 +1445,12 @@ impl AccountActions for AccountUpdates {
                     _ => Ok(()),
                 }
             }
+            AccountUpdateEvent::PartnerAdded if self.deployment.hosted.is_some() => {
+                match (waba_id, owner) {
+                    (Some(waba_id), Some(owner)) => self.remember_arrival(waba_id, owner).await,
+                    _ => Ok(()),
+                }
+            }
             AccountUpdateEvent::AccountDeleted => match waba_id {
                 Some(waba_id) => {
                     self.offboard(waba_id, owner, DisconnectReason::AccountDeleted)
@@ -1159,6 +1481,42 @@ impl AccountActions for AccountUpdates {
 }
 
 impl AccountUpdates {
+    /// Remember a hosted signup's `PARTNER_ADDED` (decision D201) for a
+    /// tenant to claim: only a WABA no tenant holds and the vault does not
+    /// hold (Meta sends it for every WABA shared with the app, the code
+    /// flow's too). Nothing is fetched or bound here; a redelivery leaves
+    /// the first arrival as it is.
+    async fn remember_arrival(&self, waba_id: &WabaId, owner: &BusinessId) -> Result<(), Error> {
+        // A record the vault cannot read counts as held.
+        if self.authz.records().waba(waba_id).await?.is_some()
+            || !matches!(self.authz.vault_for_signup().get(waba_id).await, Ok(None))
+        {
+            return Ok(());
+        }
+        let pending = hosted::PendingHosted {
+            owner_business_id: owner.as_str().to_owned(),
+            received_at: self.clock.now().unix_timestamp(),
+        };
+        let stored = self
+            .hosted
+            .put_if_absent(
+                waba_id.as_str(),
+                &pending,
+                meta_whatsapp_rs::core::store::Expiry::After(hosted::PENDING_TTL),
+            )
+            .await?;
+        if stored.is_some() {
+            tracing::info!(
+                target: "audit",
+                action = "hosted_signup_arrived",
+                origin = "webhook",
+                waba_id = waba_id.as_str(),
+                "webhook change"
+            );
+        }
+        Ok(())
+    }
+
     /// Whether Graph confirms that `waba_id` left: its stored token
     /// (`stored`, as read) is no longer valid, or no longer granted it
     /// (`debug_token`). No token stored: nothing to confirm with, `true`.
@@ -1405,6 +1763,18 @@ mod tests {
         assert!(!after_store(&Error::Storage(StorageError::Busy)));
     }
 
+    /// The stored names of roadmap M3f (pending the owner's confirmation
+    /// before the first release): the arrivals' and the reservations'
+    /// namespaces, spelled with `\x77` so a search-and-replace of the
+    /// project's name cannot change them with the code. Decisive: a
+    /// renamed namespace strands every arrival and reservation stored.
+    #[test]
+    fn the_namespaces_of_m3f_are_pinned() {
+        assert_eq!(hosted::HOSTED_NAMESPACE, "\x77a.es.hosted");
+        assert_eq!(pre_verified::RESERVATION_NAMESPACE, "\x77a.es.preverified");
+        assert_eq!(hosted::PENDING_TTL.as_secs(), 7 * 24 * 3600);
+    }
+
     /// A deployment's `Debug` shows neither the app secret nor the
     /// partner's system token.
     #[test]
@@ -1415,8 +1785,16 @@ mod tests {
             "1972555232742222".to_owned(),
             "1972385232742146".to_owned(),
         );
-        let deployment = SignupDeployment::new(app, "<CONFIGURATION_ID>").solution_partner(partner);
+        let deployment = SignupDeployment::new(app, "<CONFIGURATION_ID>")
+            .solution_partner(partner)
+            .hosted_signup(AccessToken::new("HOSTED-TOKEN-SENTINEL"))
+            .pre_verified_pool(
+                BusinessId::new("506914307656634").unwrap(),
+                AccessToken::new("POOL-TOKEN-SENTINEL"),
+            );
         let shown = format!("{deployment:?}");
+        assert!(!shown.contains("HOSTED-TOKEN-SENTINEL"), "{shown}");
+        assert!(!shown.contains("POOL-TOKEN-SENTINEL"), "{shown}");
         assert!(!shown.contains("s3cr3t-app-secret"), "{shown}");
         assert!(!shown.contains("SYSTEM-TOKEN-SENTINEL"), "{shown}");
         assert!(shown.contains("solution_partner: true"), "{shown}");
