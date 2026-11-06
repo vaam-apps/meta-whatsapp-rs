@@ -95,7 +95,7 @@ of its own, after an HTML comment; keep that when you add one.
    own. Hosted signup stays one WABA per
    `PARTNER_ADDED` webhook. Nothing new is stored. Swappable by the
    option (off: one WABA, as `onboard`) and by calling `onboard` instead.
-   Roadmap L11b (landed); the service's side, M3f.
+   Roadmap L11b (landed); the service's side, M3f (landed; D200 proposed in design §10, pending the coordinator).
 
 6. **One WABA shared by several tenants.** The vault is keyed by WABA and
    knows no tenants; the last onboarding wins. `onboard_with_approval`
@@ -280,7 +280,7 @@ of its own, after an HTML comment; keep that when you add one.
     stored. Swappable by `HostedSignup::token_request` (the request) and
     by not calling `onboard_hosted` (the code flow is unchanged); the
     held-WABA refusal by deleting the record first. Roadmap L11a
-    (landed); the service's side, M3f.
+    (landed); the service's side, M3f (landed; D201 and D202 proposed in design §10, pending the coordinator).
 
 12. **Launch option shape.** `pre-filled-data` shows
     `whatsAppBusinessAccount` both as `{ids: …}` and `{id: [...]}`; the code
