@@ -210,7 +210,8 @@ pub async fn the_number_services_read_change_and_disconnect_as_meta_documents(
             "verified_name": "John's Cake Shop",
             "quality_rating": "GREEN",
             "name_status": "APPROVED",
-            "throughput": {"level": "STANDARD"}
+            "throughput": {"level": "STANDARD"},
+            "messaging_limit_tier": "TIER_1K"
         }),
     );
     let details = numbers.details().await.unwrap();
@@ -227,6 +228,7 @@ pub async fn the_number_services_read_change_and_disconnect_as_meta_documents(
             throughput: Some(Throughput {
                 level: Some("STANDARD".to_owned()),
             }),
+            messaging_limit_tier: Some("TIER_1K".to_owned()),
         }
     );
     let request = script.last_request().unwrap();

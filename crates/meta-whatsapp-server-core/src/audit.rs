@@ -261,6 +261,33 @@ pub fn display_name_audit(
     );
 }
 
+/// A tenant's change to a number's settings, username, compliance
+/// information or contact book, or an application for Official Business
+/// Account status (roadmap M5c3; docs/design/server.md, D192), logged like
+/// [`tenant_audit`] (target `audit`, message `tenant change`) with
+/// `outcome` and, when the action covers several settings, which one
+/// (`setting`, a name the service chose, never a value). Never a key, a
+/// username, a contact's id or what a declaration says.
+pub fn number_setting_audit(
+    action: &'static str,
+    key_id: &str,
+    subject: &Subject<'_>,
+    setting: Option<&'static str>,
+    outcome: Outcome,
+) {
+    tracing::info!(
+        target: "audit",
+        action,
+        key_id,
+        tenant = subject.tenant,
+        waba_id = subject.waba_id,
+        phone_number_id = subject.phone_number_id,
+        setting,
+        outcome = outcome.as_str(),
+        "tenant change"
+    );
+}
+
 /// What an [`audit`] event touched.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Subject<'a> {

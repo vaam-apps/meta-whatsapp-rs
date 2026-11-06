@@ -6546,7 +6546,7 @@ or WABA fails the family's own cross-tenant test).
     changes per 30 days; a display name change of an Official Business
     Account (Meta: through support); a picture in the same call as its
     upload; no call was run against Meta live.
-- [ ] **M5c3. Number settings** (rows 66, 109, 128, 129–133, 151, 156):
+- [x] **M5c3. Number settings** (rows 66, 109, 128, 129–133, 151, 156):
   the settings (payload encryption among them, after L26), the username, the messaging limit tier on
   `GET /v1/numbers/{pn}`, the Official Business Account, compliance
   information, health status, search visibility, notifications, the
@@ -6555,6 +6555,56 @@ or WABA fails the family's own cross-tenant test).
   - **Decisive:** M5.1, M5.2; `GET /v1/numbers/{pn}` reports the
     messaging limit tier (dropping it from the fields Meta is asked for
     fails the test).
+  - **Landed:** scope `numbers` (no new scope; the contact book's erasure
+    is scope `erasure`), each route the library's call through
+    `server_core::number_settings::NumberSettings`. `GET /v1/numbers/{pn}`
+    asks Meta for `messaging_limit_tier` too (`NUMBER_FIELDS`;
+    `tests/numbers.rs` pins the exact `fields`). `GET` and `PATCH
+    /v1/numbers/{pn}/settings` (local storage, identity key check, search
+    visibility, security notifications, number-change notices: exactly
+    one setting per call, as Meta sets one value per call; audited
+    `number_setting_changed` with the setting's name); `PUT` and `DELETE
+    …/settings/payload-encryption` (the business's key in the body only,
+    its `Debug` a length, Meta's texts withheld, never replayed after a
+    timeout, audited `payload_encryption_changed`; the settings read
+    answers the status and the key's fingerprint and **drops Meta's
+    `cloud_encryption_key`**); `GET`, `PUT`, `DELETE …/username` and `GET
+    …/username/suggestions`; `GET` and `POST …/official-business-account`
+    (the application keyed by `Idempotency-Key`, `202`); `GET` and `PUT
+    …/compliance-info`; `GET …/health-status`; `GET` and `PUT
+    …/conversational-components`; `DELETE …/contact-book/{bsuid}`.
+    **Legal acts** (AGENTS.md § Legal acts; D192): one, the India
+    compliance declaration, is `403 feature_not_available` with nothing
+    asked of Meta until the deployment sets `WA_SERVER_LEGAL_ACTS=on`
+    (default `off`; `Settings::legal_acts`; the set is the predicate
+    `number_settings::is_legal_act`), and is then audited
+    (`compliance_info_set`). The application (the library says it is not a
+    legal act) and the contact book erasure (a data-subject erasure under
+    the scope `erasure`) are not gated; each is audited
+    (`official_business_account_requested`, `contact_book_entry_deleted`:
+    the tenant, the WABA, the number, the key's id and the outcome; never
+    a value or a BSUID). Bounds: Meta's documented ones (the library's) and the
+    service's own where Meta states none (design D193). Tests:
+    `tests/number_settings.rs` (every route's exact request, every bound
+    with zero requests, the application and the erasure reaching Meta with the legal acts off, the declaration refused off and audited on, the key and Meta's
+    texts withheld, the contact book's scope, another tenant's number),
+    `tests/authz.rs` and `tests/errors.rs` (the routes in their lists; the
+    gated declaration, off in that harness, is run with a sentinel in
+    `tests/number_settings.rs`), `tests/logs.rs` (M1.7: the keys, the
+    username, the declarations, the BSUID and the prompts planted, the
+    audit events checked), `tests/config.rs` (`WA_SERVER_LEGAL_ACTS`). The
+    OpenAPI document is additive (sixteen operations, one field).
+  - **Decided** (design D190–D193, by the coordinator on 2026-11-06 under
+    the owner's delegation, swappable as the rows say): the routes'
+    shape, payload encryption's keys, the legal act (one, not three) and
+    the bounds. New names pending the owner's confirmation before the first
+    release: the setting `WA_SERVER_LEGAL_ACTS`, the sixteen operation ids,
+    the paths and the eight audit actions; no new scope, error code or
+    stored name.
+  - **Not done here:** see M5c6; no call of these routes was run
+    against Meta live; Meta's pages give no example for the settings,
+    compliance and `payload_encryption` calls, so their bodies follow the
+    schemas (the library's notes).
 - [ ] **M5c4. WABAs and accounts** (rows 126, 127, 140, 148, 152).
   Row 152's call goes to `api.facebook.com`, not Graph: the service's
   egress list ([design §6](design/server.md#6-security)) needs
@@ -6577,6 +6627,22 @@ or WABA fails the family's own cross-tenant test).
     holding the number, the sends name the second; another tenant's
     attach of it stays `409 waba_owned_by_another_tenant`; a send body
     naming `messaging_account_id` itself stays refused.
+- [ ] **M5c6. Number settings: what M5c3 left** (rows 128, 132, 133,
+  156): the per-number webhook override, the `connection_status` and
+  `webhook_url` setters, a WABA's health status and bot details.
+  - **After:** M5c3.
+  - **Scope:** each is a decision before it is a route. The webhook
+    override and the `webhook_url` setter would let a tenant divert or hide
+    a number's events from the service (design D190 left them out until
+    the override is checked as a webhook endpoint's destination is); the
+    `connection_status` setter has no documented effect beyond its values;
+    a WABA's health status is `Waba::health_status` on a WABA route (with
+    M5c4's); bot details by id wait for a page that says where a bot id
+    comes from. Also the answer of Meta's `cloud_encryption_key`, if the
+    owner decides an app must read it (D191).
+  - **Decisive:** M5.1, M5.2; the override's destination refused as a
+    webhook endpoint's is; a WABA of another tenant's health status is
+    `404`, nothing asked of Meta.
 - [x] **M5d. Flows** (rows 61, 62): management and the data endpoint.
   - **After:** S7.
   - **Decisive:** M5.1, M5.2; the data endpoint answers a request
