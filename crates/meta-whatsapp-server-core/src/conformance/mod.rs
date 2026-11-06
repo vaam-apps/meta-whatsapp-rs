@@ -42,6 +42,7 @@
 //! | [`signup`] | what Embedded Signup needs of a backend, and the core's signup services over its bundle, with no HTTP layer (roadmap M3a): a kept attempt is its tenant's (kept only while the WABA is that tenant's, read back whole by it alone, replaced with its start kept, listed per tenant in byte order) and goes with its binding (every unbind); the vault's records kept past a binding are kept for good, idempotent, in byte order of their keys; a credit allocation is recorded on the binding it was made for only; acceptance test M3.4's D4 case (a second tenant onboarding a WABA another holds is `409`, claimed or found by Meta's verification, nothing stored, subscribed or shared, the binding and the token unchanged); a key rotation reaching the credit ledger and the revocation marker an offboarded WABA left, so the old key can go once it reports no failure |
 //! | [`webhooks`] | the core's webhook pipeline over the bundle's records, key/value store, inbox and outbox, with no listener (roadmap S5e, M1.2): routing is an allow-list (an unowned number's event, a stale binding's, a replay's are operator-only, whatever the payload says of a tenant; an event dated before its binding, or seen past the replay window, too; a number moved while its event records gives it to neither tenant); the signature checked before any store is touched or a turn waited for; at most `MAX_DELIVERIES_RECORDING` deliveries recording, another waiting with no lease claimed (its `503 busy` after the wait is `webhooks::a_delivery_with_no_turn_is_busy_after_the_wait`, on a paused clock, not in `run`); each event once, under its dedup lease; the answer only once every event is recorded, a failed or busy outbox refused and redelivered once; `unknown` and `unparsed` acknowledged as operator-only rows; after a move, undated events (a history chunk, an error, an undated group update) reaching no tenant within the window, the new holder under `CurrentHolder` or past it, a first onboarding always, and an event of the binding's first second a first onboarding's only (roadmap S2b, design D36); an address book change reaches its tenant and the inbox keeps no synced contact (before roadmap M3b, design D38) |
 //! | [`webhooks_out`] | the bundle's [`WebhookStore`] and the core's webhooks-out services and dispatcher over it (roadmap M2c), with a recording sender and a stub resolver: an endpoint is its tenant's through every call, its limit counted at the insert, its deliveries gone with it and with its tenant; a fan-out moves its cursor once, two racing record each event once, two dispatchers send each once; a claim is exclusive until its lease ends, one per tenant a claim, never a busy, disabled or suspended one's; acceptance test M2.4 (Standard Webhooks signatures verified with the secret shown once, the retry schedule under a fake clock ending `failed` with the endpoint disabled, a destination refused at creation and, after a lookup turned private, at delivery with nothing sent, two signatures during a rotation, an event over 256 KiB delivered truncated and read whole by its tenant alone, each delivery its tenant's event only); a slow endpoint holding only its own bound of attempts |
+//! | [`token_expiry`] | the token-expiry event (roadmap M3e) over the bundle's records, vault key/value store, outbox and leader lock, on a fake clock the vault and the authorizer share: a token inside the lead time told to its tenant once and to no other, again only when stored anew with a new expiry (not on a new binding generation), never outside the lead, never expiring or already expired; one replica's turn at a time; no token in the event |
 //! | [`number_events`] | the service's own number events (roadmap M2d) through [`NumberEvents`] over the bundle's outbox and notifier: their number's tenant only (poll, streams, by id), a number not the binding's or a binding that moved (or was made again later under a tenant created again) giving the row to nobody, once per binding generation, after a move the new holder's own at once, and a previous binding's event writing no row about the new holder's numbers |
 //!
 //! Every case panics on a broken contract, with what broke: this is test
@@ -77,6 +78,7 @@ pub mod races;
 pub mod records;
 pub mod signup;
 pub mod templates;
+pub mod token_expiry;
 pub mod webhooks;
 pub mod webhooks_out;
 
@@ -142,6 +144,10 @@ where
 
     let backend = fresh().await;
     number_events::run(backend.as_ref()).await;
+    backend.close().await;
+
+    let backend = fresh().await;
+    token_expiry::run(backend.as_ref()).await;
     backend.close().await;
 
     let backend = fresh().await;

@@ -134,6 +134,7 @@ read yet: set, it stops the start.
 | `WA_SERVER_MIGRATE` | `auto` | `skip` when a job runs `meta-whatsapp-server migrate` |
 | `WA_SERVER_SHUTDOWN_GRACE` | `25s` | how long open requests get after `SIGTERM` |
 | `WA_SERVER_OUTBOX_RETENTION` | `7d` | how long the event outbox keeps an event (a positive duration, `30d`, `72h`); the outbox's own retention (design D10, decided on 2026-09-26 under the owner's delegation: retention is set per store) |
+| `WA_SERVER_TOKEN_EXPIRY_LEAD` | `7d`, or the retention when shorter | how long before a stored token's expiry its tenant is told (`token_expiring`, once per token and expiry): a positive duration no longer than `WA_SERVER_OUTBOX_RETENTION` (the start is refused otherwise), or `off`. One replica at a time runs the check, every 10 minutes (roadmap M3e; design D180) |
 | `WA_SERVER_INBOX_RETENTION` | `keep` | how long the inbox keeps a customer's messages, window events and thread ownership records: `keep` (everything, design D10's default) or a positive duration (`90d`); housekeeping purges what is older, on one replica at a time. The inbox store's own setting, built in with the backend: a backend of your own built without it is refused at start. Which one you set follows your privacy obligations |
 | `WA_SERVER_INBOX_REPLY_CHECKS` | every check on every number | the local checks an inbox reply makes, per number: `<phone_number_id>:<checks>`, comma-separated, `<checks>` being `all`, `none`, or the checks left on joined by `+` (`window`, `trust_handover`, `thread_owner`; `trust_handover` only with `window`). `106540352242922:window+trust_handover` turns the ownership check off on the number of the account's escalation partner; `…:window+thread_owner` turns the handover trust off on a number that receives standby copies. A check off only lets Meta decide |
 | `WA_SERVER_LOG_FORMAT`, `RUST_LOG` | `json`, `info` | `text` for humans |
@@ -1806,6 +1807,16 @@ Among them since roadmap M2d:
   retried attach can repeat `number_connected`; and
   `number_reconnect_required` is best effort. `GET /v1/numbers` is the
   state: read it when one comes (design D81).
+- `token_expiring`, the service's own about a stored token (roadmap M3e):
+  the token of one of your WABAs expires within the lead time
+  (`WA_SERVER_TOKEN_EXPIRY_LEAD`, 7 days by default; `off` turns it off), so
+  run Embedded Signup again before then, or your calls answer `409
+  reconnect_required`. `data` is `{event, waba_id, expires_at}` (RFC 3339,
+  UTC): ids and the time only. You get one per token and expiry (a token
+  stored anew has a new expiry, so it is told again), only for your own
+  WABAs, and none for a token that expired before the service saw it. The
+  counter `wa_server_token_expiry_events_total{outcome}` is the
+  operator's. The lead may not exceed `WA_SERVER_OUTBOX_RETENTION`.
 
 **4. One event by id.** `GET /v1/events/{id}` answers one of the
 tenant's events, whole, as polling does: what a webhook delivery that
@@ -2065,7 +2076,9 @@ SKIP token.wabas: the configuration is refused
   `in_flight`: a run of them means recording outlasts the 60 s lease,
   `failed`), recorded events by type and audience (`tenant`,
   `operator`), duplicates and recording failures by stage, OTP issues
-  and checks by outcome (`wa_server_otp_outcomes_total`), and the live
+  and checks by outcome (`wa_server_otp_outcomes_total`), token-expiry
+  events by outcome (`wa_server_token_expiry_events_total`: `recorded`,
+  `failed`), and the live
   event streams open on the replica (`wa_server_event_streams_open`);
   never an id, a number, a code or a key.
 - Expired idempotency records are purged every 10 minutes by one replica

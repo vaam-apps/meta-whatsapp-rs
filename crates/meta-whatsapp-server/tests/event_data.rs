@@ -19,6 +19,7 @@ use meta_whatsapp_server::events::{
     OPERATOR_EVENT_TYPES, TENANT_EVENT_TYPES, event_data, meta_time,
 };
 use meta_whatsapp_server_core::number_events::NUMBER_EVENT_TYPES;
+use meta_whatsapp_server_core::token_expiry::TOKEN_EXPIRING;
 use serde_json::Value;
 
 fn fixtures_dir() -> PathBuf {
@@ -152,10 +153,10 @@ fn every_library_event_type_is_classified() {
         .iter()
         .chain(OPERATOR_EVENT_TYPES.iter())
         .copied()
-        .filter(|kind| !NUMBER_EVENT_TYPES.contains(kind))
+        .filter(|kind| !NUMBER_EVENT_TYPES.contains(kind) && *kind != TOKEN_EXPIRING)
         .collect();
     assert_eq!(named, classified);
-    for kind in NUMBER_EVENT_TYPES {
+    for kind in NUMBER_EVENT_TYPES.into_iter().chain([TOKEN_EXPIRING]) {
         assert!(TENANT_EVENT_TYPES.contains(&kind), "{kind}");
         assert!(!named.contains(kind), "the library names {kind}");
     }
@@ -230,7 +231,8 @@ fn every_dated_event_type_has_its_meta_time() {
     // routing's date check applies to them before the audience does).
     for kind in TENANT_EVENT_TYPES.iter().chain(seen.iter()) {
         // The service's own number events are no webhook's.
-        if !UNDATED.contains(kind) && !NUMBER_EVENT_TYPES.contains(kind) {
+        if !UNDATED.contains(kind) && !NUMBER_EVENT_TYPES.contains(kind) && *kind != TOKEN_EXPIRING
+        {
             assert!(dated.contains(kind), "no dated example of {kind}");
         }
     }

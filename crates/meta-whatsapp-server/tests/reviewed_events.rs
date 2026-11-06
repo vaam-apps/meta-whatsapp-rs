@@ -207,6 +207,7 @@ fn the_reviewed_types_are_known_event_types_of_the_document() {
         "number_connected",
         "number_disconnected",
         "number_reconnect_required",
+        "token_expiring",
     ]) {
         assert!(known.contains(kind), "{kind}");
     }
