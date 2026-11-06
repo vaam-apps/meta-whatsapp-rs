@@ -214,9 +214,9 @@ of its own, after an HTML comment; keep that when you add one.
    caller can replace on `expires_at`. Roadmap L11e (landed); the
    service's event, M3e.
 
-   **Decided 2026-11-05 (coordinator, owner's delegation; roadmap M3e
-   landed), the service's side: Coordinator's decision 2026-11-05 under
-   the owner's delegation, swappable, as design D180 to D183:** a
+   **Landed with roadmap M3e (2026-11-05), the service's side, its
+   choices the coordinator's under the owner's delegation, swappable, as
+   design D180 to D183:** a
    `token_expiring` event for the WABA's tenant only, `{event, waba_id,
    expires_at}` (D182), told only for an `ExpiresSoon` token, with one
    setting, `WA_SERVER_TOKEN_EXPIRY_LEAD` (7 days, or the outbox
