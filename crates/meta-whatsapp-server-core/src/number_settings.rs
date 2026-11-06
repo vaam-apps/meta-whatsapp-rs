@@ -69,7 +69,7 @@ use crate::display_names::is_invisible_or_bidi;
 use crate::error::{ErrorCode, ServiceError};
 use crate::numbers::{EMAIL_MAX_CHARS, profile_email, profile_website};
 use crate::observe::Observer;
-use crate::operation::Operation;
+use crate::operation::{AdminOperation, Operation};
 use crate::request::wire;
 
 /// Whether `operation` is a legal act: off until the deployment sets
@@ -83,6 +83,24 @@ pub fn is_legal_act(operation: Operation) -> bool {
             | Operation::CreateSolutionMigrationIntent
             | Operation::CreateBillingMigration
             | Operation::ResumeBillingMigration
+    )
+}
+
+/// [`is_legal_act`] for an operator's operations
+/// ([`AdminOperation`]; roadmap M5h, design D231 and M5j, design D250): the
+/// max price beta agreement and the four partner acts of the operator (a
+/// business verification submission; accepting or rejecting a solution;
+/// accepting a deactivation). The same setting gates them, and adding an
+/// admin act to the gate is one more arm here.
+#[must_use]
+pub fn is_legal_admin_act(operation: AdminOperation) -> bool {
+    matches!(
+        operation,
+        AdminOperation::SignMaxPriceAgreement
+            | AdminOperation::SubmitBusinessVerification
+            | AdminOperation::AcceptPartnerSolution
+            | AdminOperation::RejectPartnerSolution
+            | AdminOperation::AcceptPartnerSolutionDeactivation
     )
 }
 
@@ -862,6 +880,39 @@ mod tests {
                 Operation::ResumeBillingMigration,
             ]
         );
+    }
+
+    /// D231 and D250: the max price agreement and the four partner acts of
+    /// the operator are the admin legal acts, and no
+    /// tenant operation of the marketing family is a legal act of either
+    /// kind. Decisive: the arm of `is_legal_admin_act`, and a marketing
+    /// operation added to `is_legal_act`.
+    #[test]
+    fn the_admin_legal_acts_are_the_agreement_and_the_partner_acts_and_no_marketing_operation_is_one() {
+        let gated: Vec<_> = AdminOperation::ALL
+            .into_iter()
+            .filter(|operation| is_legal_admin_act(*operation))
+            .collect();
+        assert_eq!(gated, AdminOperation::ALL);
+        assert_eq!(
+            gated.iter().map(|operation| operation.id()).collect::<Vec<_>>(),
+            [
+                "sign_max_price_agreement",
+                "submit_business_verification",
+                "accept_partner_solution",
+                "reject_partner_solution",
+                "accept_partner_solution_deactivation",
+            ]
+        );
+        assert_eq!(
+            AdminOperation::SignMaxPriceAgreement.id(),
+            "sign_max_price_agreement"
+        );
+        for operation in Operation::ALL {
+            if operation.scope() == crate::model::Scope::Marketing {
+                assert!(!is_legal_act(operation), "{operation}");
+            }
+        }
     }
 
     fn invalid_field<T: fmt::Debug>(result: Result<T, ServiceError>) -> String {

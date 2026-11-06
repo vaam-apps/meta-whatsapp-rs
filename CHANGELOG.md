@@ -12,6 +12,33 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
+### Added (roadmap M5h)
+
+- The service's Marketing Messages API, max price and Click-to-WhatsApp
+  welcome message sequences (`meta_whatsapp_server_core::marketing`; design
+  D230 to D235, decided by the coordinator on 2026-11-06 under the
+  owner's delegation, swappable): a new scope `marketing`, fourteen tenant operations on eight
+  paths (`POST /v1/numbers/{pn}/marketing-messages`;
+  `/v1/wabas/{waba_id}/marketing/onboarding`, `…/cloud-api-marketing`,
+  `…/template-duplicates`, `…/reach-estimates`,
+  `…/templates/{template_id}/max-price`; `/v1/wabas/{waba_id}/welcome-sequences`
+  and `…/{sequence_id}`), each template or sequence looked for in its
+  WABA's own first (`404` with only the lookup sent), the creations under
+  an `Idempotency-Key`, the changes audited (seven new actions), Meta's
+  texts withheld where they may quote a parameter or a welcome message.
+  **The max price beta agreement is a legal act**
+  (OPEN_QUESTIONS #45): its own admin route,
+  `POST /v1/admin/businesses/{business_id}/max-price-agreement`, off until
+  the deployment sets `WA_SERVER_LEGAL_ACTS=on` (`403
+  feature_not_available`, nothing asked of Meta), then one request with the
+  operator's own token and one audit event naming the admin key
+  (`max_price_agreement_signed`; never the signer's name or email); no
+  other route sends it. A GIF template header passes through template
+  creation. New: the scope `marketing` (additive in the OpenAPI document's
+  `Scope`), `Operation` ids, `AdminOperation` and
+  `number_settings::is_legal_admin_act`, the audit actions; the names are
+  pending the owner's confirmation before the first release.
+
 ### Added (roadmap M5j)
 
 - **Partner APIs, in the service** (roadmap M5j, parity rows 143 to 147

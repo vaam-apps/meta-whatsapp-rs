@@ -181,7 +181,7 @@ fn legal_acts(f: &Fixture) -> Vec<(&'static str, bool, Call)> {
 /// default), each of the seven acts is `403 feature_not_available` and
 /// **nothing is asked of Meta**: the four of the operator also read
 /// nothing of the vault, and none leaves an audit-worthy trace. Decisive:
-/// the arm of `is_legal_partner_act` or of `is_legal_act` for each, and
+/// the arm of `is_legal_admin_act` or of `is_legal_act` for each, and
 /// `gate_partner`/`gate_operation` before the first request.
 #[tokio::test]
 async fn a_legal_act_is_refused_before_any_request_while_the_setting_is_off() {
@@ -372,7 +372,7 @@ async fn a_submission_body_is_bounded_before_it_is_buffered() {
 
 /// The acts that are not legal acts reach Meta with the setting off: the
 /// reads, a solution's creation, asking for a deactivation and rejecting
-/// one. Decisive: an arm added to `is_legal_partner_act` by mistake.
+/// one. Decisive: an arm added to `is_legal_admin_act` by mistake.
 #[tokio::test]
 async fn the_other_calls_reach_meta_with_the_setting_off() {
     let f = fixture(false).await;

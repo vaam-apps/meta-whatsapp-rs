@@ -477,6 +477,19 @@ of its own, after an HTML comment; keep that when you add one.
     by not calling it: nothing signs unless a deployment calls it.
     Roadmap L13 (landed) and M5h.
 
+    **Landed with roadmap M5h (2026-11-06), the service's side, its
+    choices decided by the coordinator the same day under the owner's
+    delegation, swappable (design D231):** the agreement is the admin route
+    `POST /v1/admin/businesses/{business_id}/max-price-agreement`, the
+    operator's explicit act, off until `WA_SERVER_LEGAL_ACTS=on` (`403
+    feature_not_available`, nothing asked of Meta), then one request with
+    the operator's own token and one audit event naming the admin key,
+    never the signer's name or email; no other route signs it, and a
+    refusal for want of the agreement is Meta's, returned as it is. The
+    route, the audit action and the setting's second meaning are pending
+    the owner's confirmation before the first release. Swappable by the
+    setting (leave it off). Roadmap M5h (landed).
+
 ## API conventions
 
 Found by the conventions reviews of 8ee6fab (27–29; counts are from that

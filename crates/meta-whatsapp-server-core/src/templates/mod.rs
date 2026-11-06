@@ -745,6 +745,26 @@ impl<'a> Templates<'a> {
         Ok(Template::from(template))
     }
 
+    /// Drop the WABA's cached lists: its templates changed behind the
+    /// cache (a duplicate, a max price; roadmap M5h).
+    pub(crate) fn invalidate_cache(&self) {
+        self.cache.invalidate(self.waba.waba_id());
+    }
+
+    /// Whether the template `id` is the WABA's, by the lookup [`Self::get`]
+    /// makes (its name, then the WABA's own templates of that name), and
+    /// nothing of it kept: what the marketing services (roadmap M5h) ask
+    /// before a template is duplicated or its max price read or changed.
+    ///
+    /// # Errors
+    ///
+    /// `404 not_found`, without Meta's code or text: Meta refusing the id,
+    /// or a template not among the WABA's. Meta's failure otherwise, with
+    /// its `details`.
+    pub(crate) async fn require_owned(&self, id: &TemplateId) -> Result<(), ServiceError> {
+        self.owned_template(id, &["id"]).await.map(|_| ())
+    }
+
     /// The template `id`, with `fields`, if it is the WABA's: its name
     /// first (`GET /{id}?fields=name`, nothing else of it read before it is
     /// known to be the WABA's), then the WABA's own templates of that name,

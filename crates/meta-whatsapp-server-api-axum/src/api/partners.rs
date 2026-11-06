@@ -65,7 +65,7 @@ pub const MAX_VERIFICATION_BODY_BYTES: usize = 21 * 1024 * 1024;
 /// missing or unknown), never `422` from parsing a body the deployment
 /// will not act on (M5h's review found that order wrong). The services
 /// gate again, as the one place that says which acts are legal acts
-/// (`is_legal_partner_act`, `is_legal_act`).
+/// (`is_legal_admin_act`, `is_legal_act`).
 pub(crate) struct LegalActsOn;
 
 impl FromRequestParts<Grant> for LegalActsOn {

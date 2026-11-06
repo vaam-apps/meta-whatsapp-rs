@@ -116,6 +116,123 @@
         }
       }
     },
+    "/v1/admin/businesses/{business_id}/max-price-agreement": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`POST /v1/admin/businesses/{business_id}/max-price-agreement`: sign\nMeta's max price beta agreement for a business portfolio. **A legal\nact**: the operator's explicit decision, off until the deployment sets\n`WA_SERVER_LEGAL_ACTS=on`, audited under the admin key; no other route\nsigns it. Meta emails the signer an acceptance link; the business\naccepts there.",
+        "operationId": "sign_max_price_agreement",
+        "parameters": [
+          {
+            "name": "business_id",
+            "in": "path",
+            "description": "Business portfolio id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignMaxPriceAgreement"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Meta emailed the signer: the agreement is `pending`; audited `max_price_agreement_signed`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaxPriceAgreementSigned"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), not an admin key, or Meta's refusal (the token's holder is no admin of the business's Business Suite)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `business_id`, `signer_name`, `signer_email`, `token` or `body`; Meta's `invalid_parameter`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: Meta answers `429` within 5 minutes of the last email (`retry_after`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent` (the agreement is never sent again by the service: read its state with Meta, or wait)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the email may have been sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/admin/partners/business-verifications": {
       "get": {
         "tags": [
@@ -10919,6 +11036,167 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/marketing-messages": {
+      "post": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/marketing-messages`: send a marketing template\nthrough the Marketing Messages API.",
+        "operationId": "send_marketing_message",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never send twice (a repeat gets the kept answer, with `Idempotent-Replayed: true`)",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMarketingMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted by Meta; delivery arrives as status events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageAccepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`marketing_not_allowed`, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant, or a catalog the template names that is not the number's WABA's; nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`marketing_opted_out`, `number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, …",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` (with `field`: `to.phone` without `+`, `template.*`, `product_policy`, `bid_spec.per_message_bid_multiplier`, …), `idempotency_key_reused`: nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests` (the service's limits, `Retry-After`) or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the message may have been sent (`may_have_been_sent: true`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/media": {
       "post": {
         "tags": [
@@ -20844,6 +21122,1158 @@
         ]
       }
     },
+    "/v1/wabas/{waba_id}/marketing/cloud-api-marketing": {
+      "get": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/marketing/cloud-api-marketing`: whether\nmarketing templates are blocked on Cloud API.",
+        "operationId": "get_cloud_api_marketing",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The switch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudApiMarketingState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`PUT /v1/wabas/{waba_id}/marketing/cloud-api-marketing`: block or allow\nmarketing templates on Cloud API `/messages`. Audited.",
+        "operationId": "set_cloud_api_marketing",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudApiMarketing"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Set"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the switch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/marketing/onboarding": {
+      "get": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/marketing/onboarding`: the WABA's Marketing\nMessages API onboarding status and its owner business's Terms of\nService state (two reads of Meta).",
+        "operationId": "get_marketing_onboarding",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The onboarding state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketingOnboarding"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/marketing/reach-estimates": {
+      "get": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/marketing/reach-estimates`: estimated\ndeliveries and costs at several max prices.",
+        "operationId": "get_reach_estimate",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "countries",
+            "in": "query",
+            "description": "Destination countries, two capital letters each, comma-separated:\nat least one, at most 240.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "date_interval",
+            "in": "query",
+            "description": "The history the estimate is computed from: `L1D`, `L7D`, `L14D` or\n`L28D`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The estimates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReachEstimate"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `countries`, `date_interval` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/marketing/template-duplicates": {
+      "post": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/marketing/template-duplicates`: duplicate one\nof the WABA's approved `MARKETING` templates at another max price. Does\nnot sign the max price agreement: a WABA that has not accepted it gets\nMeta's refusal.",
+        "operationId": "duplicate_marketing_template",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never create twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DuplicateMarketingTemplate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicatedTemplate"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (the WABA is not enrolled in max price)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or a source template that is not this WABA's; nothing was created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `source_template_id`, `name`, `optimization_spec.*` or `body`; `invalid_parameter` (a name in use, a source not approved or at its duplicate cap), `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the duplicate may have been created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price": {
+      "get": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price`:\na template's max price (a rate-card template has none).",
+        "operationId": "get_template_max_price",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "description": "Template id: one of the WABA's",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The template's max price",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateMaxPrice"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such template in this WABA (another WABA's looks like a missing one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `template_id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`PUT /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price`:\nset a template's max price (it applies within an hour). Audited. Does\nnot sign the max price agreement.",
+        "operationId": "set_template_max_price",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "description": "Template id: one of the WABA's",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptimizationSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Set"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (the WABA is not enrolled in max price)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such template in this WABA; nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `template_id`, `bid_amount`, `bid_strategy`, `bid_country_multiplier_overrides` or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the template's max price",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`DELETE /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price`:\nreturn a template to rate-card pricing (its country multipliers go\ntoo). Audited.",
+        "operationId": "clear_template_max_price",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "template_id",
+            "in": "path",
+            "description": "Template id: one of the WABA's",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Cleared"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such template in this WABA; nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `template_id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the template's max price",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/wabas/{waba_id}/payment-configurations": {
       "get": {
         "tags": [
@@ -24566,6 +25996,752 @@
         ]
       }
     },
+    "/v1/wabas/{waba_id}/welcome-sequences": {
+      "get": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/welcome-sequences`: the WABA's welcome message\nsequences.",
+        "operationId": "list_welcome_sequences",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many sequences to fetch, 1 to 100 (Meta's default without).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sequences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SequenceList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `limit` or `query`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`POST /v1/wabas/{waba_id}/welcome-sequences`: create a Click-to-WhatsApp\nwelcome message sequence.",
+        "operationId": "create_welcome_sequence",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never create twice",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWelcomeSequence"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WelcomeSequenceCreated"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `name`, `welcome_message_sequence.*` or `body`; `idempotency_key_reused`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the sequence may have been created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/wabas/{waba_id}/welcome-sequences/{sequence_id}": {
+      "get": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`GET /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}`: one of the\nWABA's sequences.",
+        "operationId": "get_welcome_sequence",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sequence_id",
+            "in": "path",
+            "description": "Sequence id: one of the WABA's",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sequence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WelcomeSequence"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such sequence in this WABA (another WABA's looks like a missing one)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `sequence_id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`DELETE /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}`: delete a\nsequence (Meta refuses one an active ad uses). Audited.",
+        "operationId": "delete_welcome_sequence",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sequence_id",
+            "in": "path",
+            "description": "Sequence id: one of the WABA's",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such sequence in this WABA; nothing deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `sequence_id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the sequence may have been deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "marketing"
+        ],
+        "summary": "`PATCH /v1/wabas/{waba_id}/welcome-sequences/{sequence_id}`: change a\nsequence's name or message (Meta refuses one an active ad uses).\nAudited.",
+        "operationId": "update_welcome_sequence",
+        "parameters": [
+          {
+            "name": "waba_id",
+            "in": "path",
+            "description": "WhatsApp Business Account id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sequence_id",
+            "in": "path",
+            "description": "Sequence id: one of the WABA's",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWelcomeSequence"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Changed"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such WABA for this tenant, or no such sequence in this WABA; nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `sequence_id`, `update` (nothing to change), `name`, `welcome_message_sequence.*` or `body`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`, or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the sequence may have been changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/webhook-endpoints": {
       "get": {
         "tags": [
@@ -25981,6 +28157,34 @@
           }
         }
       },
+      "AutofillMessageView": {
+        "type": "object",
+        "description": "The message prefilled in the user's composer.",
+        "required": [
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "The prefilled text."
+          }
+        }
+      },
+      "BidSpec": {
+        "type": "object",
+        "description": "The per-message max price multiplier (max price beta).",
+        "required": [
+          "per_message_bid_multiplier"
+        ],
+        "properties": {
+          "per_message_bid_multiplier": {
+            "type": "number",
+            "format": "double",
+            "description": "Scales the template's max price for this message only: `1.5` is\n+50 %. Positive. Meta marks it subject to change during the beta."
+          }
+        },
+        "additionalProperties": false
+      },
       "BillingMigration": {
         "type": "object",
         "description": "A billing currency or payment method migration.",
@@ -27250,6 +29454,36 @@
           }
         }
       },
+      "CloudApiMarketing": {
+        "type": "object",
+        "description": "Whether marketing templates are blocked on Cloud API `/messages`.",
+        "required": [
+          "disabled"
+        ],
+        "properties": {
+          "disabled": {
+            "type": "boolean",
+            "description": "`true` blocks marketing templates on Cloud API `/messages` (Meta\nanswers them with `131063`, `marketing_not_allowed`); `false`\nallows them (Meta's default). Effective once the WABA is fully\nonboarded."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CloudApiMarketingState": {
+        "type": "object",
+        "description": "The switch as Meta answers it.",
+        "required": [
+          "disabled"
+        ],
+        "properties": {
+          "disabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The switch; `null` when Meta answers none (its default is `false`)."
+          }
+        }
+      },
       "CodeCheckBody": {
         "type": "object",
         "description": "`POST /v1/numbers/{pn}/verify-code`. No `Debug`: it holds the code.",
@@ -28426,6 +30660,29 @@
         },
         "additionalProperties": false
       },
+      "CreateWelcomeSequence": {
+        "type": "object",
+        "description": "A new welcome message sequence.",
+        "required": [
+          "name",
+          "welcome_message_sequence"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The sequence's name, 1 to 128 characters."
+          },
+          "welcome_message_sequence": {
+            "type": "object",
+            "description": "Meta's `welcome_message_sequence`: `text`, `autofill_message`\n(`{\"content\"}`) and `ice_breakers` (`[{\"title\"}]`), at least one;\nthe texts at most 1,024 characters, at most 20 ice breakers.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "CreatedPreVerifiedNumber": {
         "type": "object",
         "description": "A number just added to the pool.",
@@ -28650,6 +30907,67 @@
           }
         },
         "additionalProperties": false
+      },
+      "DuplicateMarketingTemplate": {
+        "type": "object",
+        "description": "A template to duplicate at another max price.",
+        "required": [
+          "source_template_id",
+          "name",
+          "optimization_spec"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The duplicate's name: unique in the WABA; lowercase letters, digits\nand `_`, at most 512 characters."
+          },
+          "optimization_spec": {
+            "$ref": "#/components/schemas/OptimizationSpec",
+            "description": "The duplicate's max price."
+          },
+          "source_template_id": {
+            "type": "string",
+            "description": "The approved `MARKETING` template to clone: one of the WABA's own."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DuplicatedTemplate": {
+        "type": "object",
+        "description": "The duplicate Meta made.",
+        "required": [
+          "id",
+          "status",
+          "category",
+          "source_template_id"
+        ],
+        "properties": {
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its category, cloned from the source."
+          },
+          "id": {
+            "type": "string",
+            "description": "The duplicate's template id."
+          },
+          "source_template_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The template it was cloned from."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its status (`APPROVED` at once for an approved source)."
+          }
+        }
       },
       "ErasureAnswer": {
         "type": "object",
@@ -30102,6 +32420,19 @@
           "ready"
         ]
       },
+      "IceBreakerView": {
+        "type": "object",
+        "description": "One quick reply of a welcome message.",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "The reply's title."
+          }
+        }
+      },
       "ImageContent": {
         "type": "object",
         "description": "`image` (`messages/image-messages`): an uploaded `id` or an `https://`\n`link`.",
@@ -31170,6 +33501,90 @@
         },
         "additionalProperties": false
       },
+      "MarketingOnboarding": {
+        "type": "object",
+        "description": "A WABA's Marketing Messages API onboarding.",
+        "required": [
+          "onboarding_status",
+          "owner_business"
+        ],
+        "properties": {
+          "onboarding_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The WABA's eligibility (`ELIGIBLE`, `ONBOARDED`, …), as Meta writes\nit; `null` when Meta answers none."
+          },
+          "owner_business": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MarketingOwnerBusiness",
+                "description": "The owning business and its Terms of Service state; `null` when\nMeta answers none. The terms are accepted in WhatsApp Manager, not\nthrough this service."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "MarketingOwnerBusiness": {
+        "type": "object",
+        "description": "The Terms of Service state of the business that owns the WABA.",
+        "required": [
+          "id",
+          "name",
+          "terms_status",
+          "terms_time"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The business portfolio's id."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          },
+          "terms_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`TERM_OF_SERVICE_SIGNED`, `REQUEST_SENT` or `NOT_STARTED`, as Meta\nwrites it."
+          },
+          "terms_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it was set, as Meta writes it."
+          }
+        }
+      },
+      "MaxPriceAgreementSigned": {
+        "type": "object",
+        "description": "What Meta answered, without the signer.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`pending` (Meta emailed the acceptance link), as Meta writes it."
+          }
+        }
+      },
       "MediaBytes": {
         "type": "string",
         "format": "binary",
@@ -31853,6 +34268,43 @@
             "description": "Meta's explanation of the status."
           }
         }
+      },
+      "OptimizationSpec": {
+        "type": "object",
+        "description": "A max price (Meta's `optimization_spec`).",
+        "required": [
+          "bid_amount"
+        ],
+        "properties": {
+          "bid_amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The most Meta charges per 1,000 deliveries, in the smallest unit of\nthe WABA's currency: 1 to 2147483647. A price of ₹0.87 per delivery\nis `87000`.",
+            "minimum": 0
+          },
+          "bid_country_multiplier_overrides": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Destination country (two capital letters) to the multiplier applied\nto `bid_amount` for sends there: 0 (exclusive) to 10, at most 240\nentries. Absent keeps the template's map on an update; an empty map\nremoves every override; a non-empty one replaces the map whole.",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "bid_strategy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`LOWEST_COST_WITH_BID_CAP`, the only strategy Meta supports (the\ndefault)."
+          }
+        },
+        "additionalProperties": false
       },
       "OrderParameters": {
         "type": "object",
@@ -33009,6 +35461,14 @@
           }
         }
       },
+      "ProductPolicy": {
+        "type": "string",
+        "description": "What happens when the business has not finished Marketing Messages API\nonboarding.",
+        "enum": [
+          "CLOUD_API_FALLBACK",
+          "STRICT"
+        ]
+      },
       "ProductSection": {
         "type": "object",
         "description": "A `product_list` section (`catalogs/multi-product-messages`).",
@@ -33248,6 +35708,96 @@
           }
         },
         "additionalProperties": false
+      },
+      "ReachEstimate": {
+        "type": "object",
+        "description": "Estimated deliveries and costs at several max prices: for planning\nonly, a guarantee of nothing.",
+        "required": [
+          "waba_currency",
+          "estimates"
+        ],
+        "properties": {
+          "estimates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReachEstimatePoint"
+            },
+            "description": "One entry per max price."
+          },
+          "waba_currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The WABA's currency: the unit of every amount is its smallest unit."
+          }
+        }
+      },
+      "ReachEstimatePoint": {
+        "type": "object",
+        "description": "One max price of a reach estimate.",
+        "required": [
+          "bid_amount",
+          "users",
+          "deliveries_lower_bound",
+          "deliveries_upper_bound",
+          "cost_lower_bound",
+          "cost_upper_bound"
+        ],
+        "properties": {
+          "bid_amount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Max price per 1,000 deliveries, in the currency's smallest unit.",
+            "minimum": 0
+          },
+          "cost_lower_bound": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Lower bound of the estimated average cost per 1,000 deliveries."
+          },
+          "cost_upper_bound": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Upper bound of the estimated average cost per 1,000 deliveries."
+          },
+          "deliveries_lower_bound": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Lower bound of the estimated deliveries.",
+            "minimum": 0
+          },
+          "deliveries_upper_bound": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Upper bound of the estimated deliveries.",
+            "minimum": 0
+          },
+          "users": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Targeted users (fixed at 1,000 during the beta).",
+            "minimum": 0
+          }
+        }
       },
       "ReactionContent": {
         "type": "object",
@@ -33764,10 +36314,63 @@
           "analytics",
           "contacts",
           "groups",
+          "marketing",
           "routing",
           "calls",
           "partners"
         ]
+      },
+      "SendMarketingMessage": {
+        "type": "object",
+        "description": "A marketing template to send through the Marketing Messages API.",
+        "required": [
+          "to",
+          "template"
+        ],
+        "properties": {
+          "bid_spec": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/BidSpec",
+                "description": "The max price multiplier for this message (max price beta)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message_activity_sharing": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Share this message's activity (reads, clicks) with Meta for\noptimization; absent is the WABA's setting."
+          },
+          "product_policy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ProductPolicy",
+                "description": "`CLOUD_API_FALLBACK` (Meta's default) or `STRICT`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "template": {
+            "type": "object",
+            "description": "Meta's template object (`name`, `language`, `components`), as the\nsend-template pages write it: an approved `MARKETING` template.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "to": {
+            "$ref": "#/components/schemas/MessageRecipient",
+            "description": "Who receives it."
+          }
+        },
+        "additionalProperties": false
       },
       "SendMessage": {
         "type": "object",
@@ -33964,6 +36567,22 @@
         },
         "additionalProperties": false
       },
+      "SequenceList": {
+        "type": "object",
+        "description": "The WABA's sequences.",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WelcomeSequence"
+            },
+            "description": "The sequences (Meta documents no cursor)."
+          }
+        }
+      },
       "SettingChanged": {
         "type": "object",
         "description": "Which setting was changed.",
@@ -34019,6 +36638,30 @@
               "null"
             ],
             "description": "Whether security notifications are shown."
+          }
+        },
+        "additionalProperties": false
+      },
+      "SignMaxPriceAgreement": {
+        "type": "object",
+        "description": "Who signs Meta's max price beta agreement, and the token to sign with.",
+        "required": [
+          "signer_name",
+          "signer_email",
+          "token"
+        ],
+        "properties": {
+          "signer_email": {
+            "type": "string",
+            "description": "Where Meta emails the acceptance link."
+          },
+          "signer_name": {
+            "type": "string",
+            "description": "The person signing, printed on the agreement."
+          },
+          "token": {
+            "type": "string",
+            "description": "A system token or a business token of an admin of the business's\nBusiness Suite. Used for this call only; never stored."
           }
         },
         "additionalProperties": false
@@ -35136,6 +37779,44 @@
           }
         }
       },
+      "TemplateMaxPrice": {
+        "type": "object",
+        "description": "A template's max price, as Meta describes it.",
+        "required": [
+          "bid_amount",
+          "bid_strategy",
+          "bid_country_multiplier_overrides"
+        ],
+        "properties": {
+          "bid_amount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Max price per 1,000 deliveries; `null` on a rate-card template.",
+            "minimum": 0
+          },
+          "bid_country_multiplier_overrides": {
+            "type": "object",
+            "description": "Country to multiplier.",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "bid_strategy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`LOWEST_COST_WITH_BID_CAP`; `null` on a rate-card template."
+          }
+        }
+      },
       "TemplateMigration": {
         "type": "object",
         "description": "A migration into the path's WABA (`templates/template-migration`):\nMeta recreates the source's `APPROVED` templates of `GREEN` or\n`UNKNOWN` quality; both WABAs must be the same business's, and the\nsource the same tenant's.",
@@ -35531,6 +38212,31 @@
               "null"
             ],
             "description": "A new URL, checked as on a creation."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateWelcomeSequence": {
+        "type": "object",
+        "description": "What to change in a sequence: at least one.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new name, 1 to 128 characters."
+          },
+          "welcome_message_sequence": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "A new welcome message, as at creation.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
@@ -36066,6 +38772,96 @@
             "description": "The new signing secret (`whsec_…`): deliveries carry its signature\nfirst from now on."
           }
         }
+      },
+      "WelcomeMessage": {
+        "type": "object",
+        "description": "A welcome message, as the service reads Meta's.",
+        "required": [
+          "text",
+          "autofill_message",
+          "ice_breakers"
+        ],
+        "properties": {
+          "autofill_message": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AutofillMessageView",
+                "description": "The message prefilled for the user to send."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ice_breakers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IceBreakerView"
+            },
+            "description": "Quick replies offered to the user."
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The welcome text."
+          }
+        }
+      },
+      "WelcomeSequence": {
+        "type": "object",
+        "description": "A welcome message sequence.",
+        "required": [
+          "sequence_id",
+          "name",
+          "welcome_message_sequence",
+          "is_used_in_ad"
+        ],
+        "properties": {
+          "is_used_in_ad": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether an ad uses it (then Meta refuses to change or delete it\nwhile the ad is active)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its name."
+          },
+          "sequence_id": {
+            "type": "string",
+            "description": "Its id."
+          },
+          "welcome_message_sequence": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WelcomeMessage",
+                "description": "Its welcome message; `null` when Meta's is in a shape the service\ndoes not read."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "WelcomeSequenceCreated": {
+        "type": "object",
+        "description": "A created sequence.",
+        "required": [
+          "sequence_id"
+        ],
+        "properties": {
+          "sequence_id": {
+            "type": "string",
+            "description": "Its id: for the ad's creative and the calls on it."
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -36121,6 +38917,10 @@
     {
       "name": "commerce",
       "description": "A number's commerce settings (the cart, the catalog's visibility) and the catalog its WABA connects, with its products (scope `commerce`)"
+    },
+    {
+      "name": "marketing",
+      "description": "The Marketing Messages API, max price and Click-to-WhatsApp welcome message sequences, each template or sequence checked to be the WABA's own (scope `marketing`)"
     },
     {
       "name": "qr_codes",

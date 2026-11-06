@@ -29,8 +29,8 @@
 //! ([`Operation::CreateSolutionMigrationIntent`],
 //! [`Operation::CreateBillingMigration`],
 //! [`Operation::ResumeBillingMigration`]); the four of the operator,
-//! which are no tenant operation, are [`is_legal_partner_act`]'s
-//! ([`PartnerAction`]).
+//! which are no tenant operation, are arms of
+//! [`is_legal_admin_act`] ([`AdminOperation`]).
 //!
 //! **Never offered:** the solution token (`GET /{solution}/access_token`).
 //! It is a bearer credential for a client's assets; no answer, log or
@@ -67,9 +67,9 @@ use serde::{Deserialize, Serialize};
 use crate::audit::Outcome;
 use crate::authz::{AdminCaller, Authorizer, Caller, OwnedWaba, object_failed};
 use crate::error::{ErrorCode, ServiceError};
-use crate::number_settings::is_legal_act;
+use crate::number_settings::{is_legal_act, is_legal_admin_act};
 use crate::observe::Observer;
-use crate::operation::Operation;
+use crate::operation::{AdminOperation, Operation};
 use crate::signup::Signups;
 
 /// The key/value namespace of the billing migrations a tenant started
@@ -106,7 +106,7 @@ pub const MAX_CURSOR_CHARS: usize = 512;
 pub const SOLUTION_NAME_MAX_CHARS: usize = 75;
 
 /// An action of the operator's partner routes: what [`Partners`] does, by
-/// name, so that [`is_legal_partner_act`] is the one place that says which
+/// name, so that [`is_legal_admin_act`] is the one place that says which
 /// are legal acts (the operator's routes are no [`Operation`]s).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PartnerAction {
@@ -159,23 +159,33 @@ impl PartnerAction {
     ];
 }
 
-/// Whether `action` is a legal act: off until the deployment sets
-/// `WA_SERVER_LEGAL_ACTS=on` (design D192 and D250). The operator's side
-/// of [`crate::number_settings::is_legal_act`]; adding an action to the
-/// gate is one more arm here.
-#[must_use]
-pub fn is_legal_partner_act(action: PartnerAction) -> bool {
-    matches!(
-        action,
-        PartnerAction::SubmitBusinessVerification
-            | PartnerAction::AcceptSolution
-            | PartnerAction::RejectSolution
-            | PartnerAction::AcceptSolutionDeactivation
-    )
+/// The admin operation `action` is, when it is a legal act (design D250):
+/// the four of the operator, whose gate is
+/// [`crate::number_settings::is_legal_admin_act`], the one admin predicate.
+fn admin_act(action: PartnerAction) -> Option<AdminOperation> {
+    match action {
+        PartnerAction::SubmitBusinessVerification => {
+            Some(AdminOperation::SubmitBusinessVerification)
+        }
+        PartnerAction::AcceptSolution => Some(AdminOperation::AcceptPartnerSolution),
+        PartnerAction::RejectSolution => Some(AdminOperation::RejectPartnerSolution),
+        PartnerAction::AcceptSolutionDeactivation => {
+            Some(AdminOperation::AcceptPartnerSolutionDeactivation)
+        }
+        PartnerAction::ListBusinessVerifications
+        | PartnerAction::CreateSolution
+        | PartnerAction::ListSolutions
+        | PartnerAction::GetSolution
+        | PartnerAction::ListSolutionPartners
+        | PartnerAction::ListClientBusinesses
+        | PartnerAction::RequestSolutionDeactivation
+        | PartnerAction::RejectSolutionDeactivation
+        | PartnerAction::ListAssignedWabas => None,
+    }
 }
 
 fn gate_partner(action: PartnerAction, enabled: bool) -> Result<(), ServiceError> {
-    if enabled || !is_legal_partner_act(action) {
+    if enabled || !admin_act(action).is_some_and(is_legal_admin_act) {
         Ok(())
     } else {
         Err(ServiceError::new(ErrorCode::FEATURE_NOT_AVAILABLE))
@@ -1472,13 +1482,13 @@ mod tests {
 
     /// D250: four of the operator's thirteen actions are legal acts; the
     /// reads, the creation of a solution and the two "soft" deactivation
-    /// calls are not. Decisive: an arm of [`is_legal_partner_act`] removed
+    /// calls are not. Decisive: an arm of [`is_legal_admin_act`] removed
     /// or added.
     #[test]
     fn four_of_the_operators_actions_are_legal_acts() {
         let gated: Vec<_> = PartnerAction::ALL
             .into_iter()
-            .filter(|action| is_legal_partner_act(*action))
+            .filter(|action| admin_act(*action).is_some_and(is_legal_admin_act))
             .collect();
         assert_eq!(
             gated,
