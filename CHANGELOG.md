@@ -15,8 +15,8 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 ### Added (roadmap M5f2)
 
 - **Group pictures, in the service** (roadmap M5f2, parity row 76 now done
-  in the service; choices D260-D264, proposed by the implementer, not
-  decided, swappable; from Meta's `groups/reference` page ("Update group
+  in the service; choices D260-D264, decided by the coordinator on 2026-11-06
+  under the owner's delegation, swappable; from Meta's `groups/reference` page ("Update group
   settings"), read on 2026-11-06). `PUT
   /v1/numbers/{pn}/groups/{group_id}/picture` (operation
   `set_group_picture`, scope `groups`; the name pending the owner's

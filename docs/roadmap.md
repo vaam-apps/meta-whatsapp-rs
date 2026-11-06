@@ -6975,14 +6975,15 @@ or WABA fails the family's own cross-tenant test).
     routes, this one included), M1.7's capture (a marker in a picture's
     bytes, in no line; the audit event), the core's `Picture` tests. The
     OpenAPI document is additive only (one operation, one schema).
-  - **Decided:** nothing yet. Implementer's proposals, for the
-    coordinator (design D260–D264, each swappable): the route and form
-    (D260), the service checking the shape itself from the JPEG's header
-    (D261), the media uploads' slots and bound (D262), no
-    `Idempotency-Key` (D263), the audit event and errors (D264). Pending
-    the owner's confirmation before the first release: the operation id
-    `set_group_picture`, the path and the audit action `group_picture_set`;
-    no new setting or error code; no legal act.
+  - **Decided** (coordinator, 2026-11-06, under the owner's delegation;
+    design D260–D264, each swappable): the route and form (D260), the
+    service checking the shape itself from the JPEG's header (D261; swap:
+    leave it to Meta), the media uploads' slots and bound (D262), no
+    `Idempotency-Key` (D263), the audit event and errors (D264). The
+    library's 5 MiB bound stays against Meta's "5MB": Meta refuses the
+    rest. Pending the owner's confirmation before the first release: the
+    operation id `set_group_picture`, the path and the audit action
+    `group_picture_set`; no new setting or error code; no legal act.
   - **Not done here:** whether Meta applies a picture is its
     `group_settings_update` event, which the service records as any
     event and does not wait for; no call of this route was run against

@@ -1014,6 +1014,9 @@ same state. `204` means Meta was asked and accepted the request; whether it
 applied the picture arrives in a `group_settings_update` event. A file that
 passes the service's checks can still be refused by Meta (a corrupt image,
 say): that is Meta's code and the service's kind for it, never Meta's text.
+The 5 MiB bound is the library's; Meta's page says "5MB", so a file
+between 5,000,000 and 5 MiB bytes is Meta's to refuse (its code, the
+service's kind), not the service's.
 
 What the service does not do, each a route away: pin and unpin a message,
 add participants (Meta: they join through the invite link), delete the
