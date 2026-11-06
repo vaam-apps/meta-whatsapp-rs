@@ -2053,6 +2053,7 @@ async fn live_postgres_an_admin_keys_idempotency_record_is_in_its_own_table() {
         Stores::postgres(&pool),
         meta_whatsapp_server::state::Settings {
             signup: Some(signup),
+            legal_acts: true,
             ..common::test_settings()
         },
     );
@@ -2091,4 +2092,50 @@ async fn live_postgres_an_admin_keys_idempotency_record_is_in_its_own_table() {
     let second = h.call(call(&other)).await;
     assert_eq!(second.status, StatusCode::CREATED, "{}", second.text);
     assert_eq!(h.graph.requests().len(), 2);
+
+    // The janitor's purge covers the operator's table: an expired record
+    // goes, a live one stays. Decisive: the second table in the purge.
+    sqlx::query(
+        "UPDATE wa_server_admin_idempotency SET expires_at = now() - interval '1 second' \
+         WHERE tenant_id LIKE 'admin/%' AND created_at = (SELECT min(created_at) FROM wa_server_admin_idempotency)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let purged = h.backend.idempotency().purge_idempotency_keys().await.unwrap();
+    assert_eq!(purged, 1);
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM wa_server_admin_idempotency")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(left, 1);
+
+    // And a tenant's record goes the other way: into the tenants' table
+    // (with its foreign key), not the operator's. Decisive: the table the
+    // backend picks for a tenant's scope.
+    h.tenant("merchant-42").await;
+    h.connect("merchant-42", "102290129340398", &["106540352242922"], "EAAG-t")
+        .await;
+    let tenant_key = h.tenant_key("merchant-42", &[Scope::Partners]).await;
+    h.graph.push_json(200, json!({"id": "1972385232742999"}));
+    let intent = h
+        .call(
+            Call::new(Method::POST, "/v1/wabas/102290129340398/solution-migration-intents")
+                .key(&tenant_key)
+                .header("idempotency-key", "live-1")
+                .json(&json!({"solution_id": "303610109049230"})),
+        )
+        .await;
+    assert_eq!(intent.status, StatusCode::CREATED, "{}", intent.text);
+    let in_tenants: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM wa_server_idempotency WHERE tenant_id = 'merchant-42'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let in_admin: i64 = sqlx::query_scalar("SELECT count(*) FROM wa_server_admin_idempotency")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!((in_tenants, in_admin), (1, 1));
 }

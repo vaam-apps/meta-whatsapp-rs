@@ -426,3 +426,60 @@ async fn the_gate_and_the_authorization_answer_before_the_key_is_read() {
     );
     assert!(on.h.graph.requests().is_empty());
 }
+
+/// Two submissions racing under one key are one request to Meta: the second
+/// finds the record, so it is the kept answer or `409 idempotency_in_progress`
+/// (never a second submission, which would burn another of the customer's
+/// three). Decisive: the claim (ignored, both reach Meta).
+#[tokio::test]
+async fn two_racing_submissions_with_one_key_are_one_request_to_meta() {
+    for (path, body) in [
+        (VERIFICATIONS, submission(&[("statement.pdf", PDF)])),
+        (SOLUTIONS, solution_body("Social OVD with Lucky Shrub")),
+    ] {
+        let f = fixture(true).await;
+        f.h.graph.push_json(
+            200,
+            if path == SOLUTIONS {
+                json!({"solution_id": SOLUTION})
+            } else {
+                received()
+            },
+        );
+        let (a, b) = tokio::join!(
+            f.h.call(keyed(path, &f.admin, "race-1", &body)),
+            f.h.call(keyed(path, &f.admin, "race-1", &body)),
+        );
+        assert_eq!(f.h.graph.requests().len(), 1, "{path}: one request to Meta");
+        let mut statuses = [a.status, b.status];
+        statuses.sort();
+        assert!(
+            statuses == [StatusCode::CREATED, StatusCode::CREATED]
+                || statuses == [StatusCode::CREATED, StatusCode::CONFLICT],
+            "{path}: {statuses:?}: {} / {}",
+            a.text,
+            b.text
+        );
+        for reply in [&a, &b] {
+            if reply.status == StatusCode::CONFLICT {
+                assert_eq!(reply.code(), "idempotency_in_progress", "{}", reply.text);
+            }
+        }
+        assert_eq!(f.h.graph.remaining(), 0);
+    }
+}
+
+/// A refusal answers with the field it names, never a document's content, name
+/// or the customer's id.
+#[tokio::test]
+async fn a_refused_submission_echoes_no_document() {
+    let f = fixture(true).await;
+    let body = submission(&[("secret-statement-name.pdf", PNG)]);
+    let reply =
+        f.h.call(keyed(VERIFICATIONS, &f.admin, "verify-leak", &body))
+            .await;
+    assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", reply.text);
+    assert!(!reply.text.contains(&b64(PNG)));
+    assert!(!reply.text.contains("secret-statement-name"));
+    assert!(!reply.text.contains(CUSTOMER));
+}
