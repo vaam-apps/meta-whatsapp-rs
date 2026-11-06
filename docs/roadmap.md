@@ -6975,7 +6975,7 @@ or WABA fails the family's own cross-tenant test).
   an invitation to accept the terms), the client WABAs listing by
   onboarding status (`client_wabas_with_status`), and a GIF header's
   send-time parameter once a page of Meta's shows it (typed in the
-  library first, L13b). The click tracking opt-out is M5g2's.
+  library first). The click tracking opt-out is M5g2's.
   - **After:** M5h.
   - **Decisive:** every route that takes a business id or a token in its
     body is an admin route whose body and answer hold no signer (a test

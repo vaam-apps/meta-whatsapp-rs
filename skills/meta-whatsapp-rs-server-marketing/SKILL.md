@@ -5,7 +5,7 @@ description: "Sending marketing messages and managing max price and Click-to-Wha
 
 # meta-whatsapp-rs-server-marketing
 
-> **Verified against meta-whatsapp-rs SHA_PLACEHOLDER (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
+> **Verified against meta-whatsapp-rs 1474437216b078be1fc45ae3e1ce391420f75a60 (2026-11-06).** On another revision, trust the service's `/v1/openapi.json` over this page.
 
 Reference code: [examples/marketing.ts](examples/marketing.ts), type-checked against the service's OpenAPI document. Operators' guide: [docs/guides/server.md](https://github.com/vaam-apps/meta-whatsapp-rs/blob/main/docs/guides/server.md#marketing-messages-api-max-price-and-welcome-message-sequences).
 
@@ -14,23 +14,13 @@ Reference code: [examples/marketing.ts](examples/marketing.ts), type-checked aga
 A store sends promotions to opted-in customers, tunes what Meta charges
 for them, or prepares the welcome a Click-to-WhatsApp ad opens. Deploy the
 service first (`meta-whatsapp-rs-server`). The key needs the scope
-`marketing`, which `send` and `templates` do not grant and a key made
-before it does not have. Another tenant's number or WABA is `404
-not_found` on every route, and so is a template or a sequence that is not
-your WABA's.
+`marketing`, which `send` and `templates` do not grant (a key made before
+it has none). Another tenant's number or WABA is `404 not_found` on every
+route, and so is a template or a sequence that is not your WABA's.
 
 ## The routes
 
-| Route | Does |
-| --- | --- |
-| `POST /v1/numbers/{pn}/marketing-messages` | a marketing template through the Marketing Messages API |
-| `GET /v1/wabas/{waba_id}/marketing/onboarding` | the WABA's eligibility and its owner business's terms state |
-| `GET`, `PUT /v1/wabas/{waba_id}/marketing/cloud-api-marketing` | whether marketing templates are blocked on Cloud API |
-| `POST /v1/wabas/{waba_id}/marketing/template-duplicates` | a template of the WABA duplicated at another max price |
-| `GET /v1/wabas/{waba_id}/marketing/reach-estimates` | estimated deliveries and costs at several max prices |
-| `GET`, `PUT`, `DELETE /v1/wabas/{waba_id}/marketing/templates/{template_id}/max-price` | a template's max price read, set, or returned to rate-card pricing |
-| `POST`, `GET /v1/wabas/{waba_id}/welcome-sequences`, `GET`, `PATCH`, `DELETE …/{sequence_id}` | welcome message sequences |
-| `POST /v1/admin/businesses/{business_id}/max-price-agreement` | the operator's signing of the max price agreement (admin key) |
+See [references/routes.md](references/routes.md): the send, onboarding, the Cloud API switch, template duplicates, a template's max price, reach estimates, welcome message sequences, and the operator's agreement.
 
 ## Send a marketing template
 
@@ -47,18 +37,16 @@ export async function sendMarketing(
   });
 ```
 
-The body is `{to, template, product_policy, message_activity_sharing,
-bid_spec}`: `to` and `template` as for a message send (E.164 with its
-`+`, Meta's template object), `product_policy` `CLOUD_API_FALLBACK`
-(Meta's default) or `STRICT`, `message_activity_sharing` a flag, and
-`bid_spec.per_message_bid_multiplier` a positive number that scales the
-template's max price for this message. The answer is `202` as for any send,
-with the message id whose status events arrive later.
+The body is `to` and `template` as for a message send (E.164 with its
+`+`, Meta's template object), plus `product_policy` (`CLOUD_API_FALLBACK`,
+Meta's default, or `STRICT`), `message_activity_sharing`, and
+`bid_spec.per_message_bid_multiplier`, a positive number scaling the
+template's max price for this message. The answer is `202` as for any send.
 
-- Only approved `MARKETING` templates are accepted (`marketing_not_allowed`
-  otherwise); a template new or unused for a week needs about ten minutes
-  of ad sync first. A catalog the template names must be your WABA's.
-- A send cut by a timeout is `504` with `may_have_been_sent`: it is not
+- Only approved marketing templates are accepted (`marketing_not_allowed`
+  otherwise); a new or long-unused template needs about ten minutes of ad
+  sync. A catalog the template names must be your WABA's.
+- A send cut by a timeout is `504` with `may_have_been_sent`: it is never
   replayed, and a retry under the same `Idempotency-Key` is not a second
   send. Meta's texts are not answered: read `error.code` and `error.graph.code`.
 
@@ -71,12 +59,12 @@ export async function onboarding(api: WhatsApp, wabaId: string) {
   });
 ```
 
-`owner_business.terms_status` is `TERM_OF_SERVICE_SIGNED`,
-`REQUEST_SENT` or `NOT_STARTED`. The service cannot accept the terms for
-you: someone with full control of the business portfolio does it in
-WhatsApp Manager. `PUT …/cloud-api-marketing` with `{disabled: true}`
-makes Cloud API refuse marketing templates, so they go through the
-Marketing Messages API only; it is audited.
+`owner_business.terms_status` is Meta's word for the Terms of Service
+state (signed, request sent, not started). The service cannot accept the
+terms for you: someone with full control of the business portfolio does it
+in WhatsApp Manager. `PUT …/cloud-api-marketing` with `disabled: true` makes
+Cloud API refuse marketing templates, so they go through the Marketing
+Messages API only; it is audited.
 
 ## Max price
 
@@ -96,8 +84,8 @@ currency (0.87 per delivery is `87000`), from 1 to 2147483647;
 `bid_country_multiplier_overrides` maps countries (two capital letters) to a
 multiplier above 0 and at most 10, 240 at most, and on a change replaces the
 whole map. The duplicate is approved at once and counts toward your
-template limit. Setting a price applies within an hour; deleting the price
-returns the template to rate-card pricing.
+template limit. A price applies within an hour; deleting it returns the
+template to rate-card pricing.
 
 ```ts
 export async function reachEstimate(api: WhatsApp, wabaId: string, countries: string[]) {
@@ -109,15 +97,13 @@ export async function reachEstimate(api: WhatsApp, wabaId: string, countries: st
   });
 ```
 
-Estimates are for planning, a guarantee of nothing.
-
 ## The agreement is a legal act, and the operator's
 
 Max price needs Meta's beta agreement, signed once per business
 portfolio. **Nothing you call as a tenant signs it**: not a duplicate, a
-price change or a send. When it is missing you get Meta's refusal as it is
-(a duplicate's `403`, a `100` naming the agreement). The operator signs it,
-with an admin key, only when the deployment sets `WA_SERVER_LEGAL_ACTS=on`:
+price change or a send. When it is missing you get Meta's refusal as it is.
+The operator signs it, with an admin key, only when the deployment sets
+`WA_SERVER_LEGAL_ACTS=on`:
 
 ```ts
 export async function signMaxPriceAgreement(
@@ -133,11 +119,11 @@ export async function signMaxPriceAgreement(
   read, and nothing is asked of Meta. A tenant's key is `403 forbidden`.
 - On, it is one request, never replayed (not after a timeout, not on Meta's
   `429` within five minutes of the last email), with the `token` of the
-  body: a system user or business token with `business_management`, an
+  body: a system user or business token allowed to manage the business, an
   admin of the portfolio's, used once and stored nowhere. Meta emails the
-  signer an acceptance link and the answer is `pending`.
+  signer an acceptance link and the answer is pending.
 - It is **audited** with the admin key's id and the business
-  (`max_price_agreement_signed`). The signer's name and email are in no log,
+  (max_price_agreement_signed). The signer's name and email are in no log,
   error, audit event or answer; neither is Meta's text, which quotes them.
 
 ## Welcome message sequences
@@ -151,22 +137,21 @@ export async function createSequence(
 ) {
 ```
 
-The body is `{name, welcome_message_sequence: {text, autofill_message:
-{content}, ice_breakers: [{title}]}}`, at least one part; the service
-bounds a name at 128 characters, texts at 1,024 and quick replies at 20,
-where Meta's guide states none. The answer is the `sequence_id` for the
-ad's creative. A change or a deletion is `404` for a sequence that is not
-your WABA's and, for one an active ad uses, Meta's refusal (`graph.code`
-`4027012`). The welcome text is in no log.
+The body is `name` and `welcome_message_sequence` (`text`,
+`autofill_message` with `content`, `ice_breakers` with `title`), at least
+one part; the service bounds a name at 128 characters, texts at 1,024 and
+quick replies at 20, where Meta's guide states none. The answer is the
+`sequence_id` for the ad's creative. A change or a deletion is `404` for a
+sequence that is not your WABA's and, for one an active ad uses, Meta's
+refusal. The welcome text is in no log.
 
 ## What meta-whatsapp-rs does not do
 
-Not offered: the agreement's state read, the partner Intent API (it emails a
-business's admins an invitation to accept the terms), the client WABAs
+Not offered: the agreement's state read, the partner Intent API (it emails
+a business's admins an invitation to accept the terms), the client WABAs
 listing, and a GIF header's send-time parameter (no page of Meta's shows
-it; create the template with `format: GIF`, send it as Meta's object). Naming a
-sequence in an ad is Meta's Marketing API. No call of these routes was run
-against Meta live.
+it; create the template with a `GIF` header format, send it as Meta's
+object). No call of these routes was run against Meta live.
 
 ## Related skills
 
