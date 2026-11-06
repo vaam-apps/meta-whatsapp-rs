@@ -515,7 +515,6 @@ async fn token_expiry(h: &Harness) -> Vec<String> {
     use meta_whatsapp_rs::core::ids::{PhoneNumberId, WabaId};
     use meta_whatsapp_rs::core::secret::AccessToken;
     use meta_whatsapp_rs::core::store::{Expiry, KvStore as _, StoreKey};
-    use meta_whatsapp_server_core::backend::Backend as _;
 
     const TOKEN: &str = "EAAG-token-near-its-expiry-SENTINEL-for-the-log-test";
     const OTHER: &str = "EAAG-token-of-the-unreadable-record-SENTINEL-for-the-log-test";
