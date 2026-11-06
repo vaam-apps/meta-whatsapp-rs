@@ -35,8 +35,9 @@
 //! event (the core's [`meta_whatsapp_server_core::partners`]).
 
 use meta_whatsapp_rs::webhooks::axum::Json;
-use meta_whatsapp_rs::webhooks::axum::extract::{Path, State};
+use meta_whatsapp_rs::webhooks::axum::extract::{FromRequestParts, Path, State};
 use meta_whatsapp_rs::webhooks::axum::http::StatusCode;
+use meta_whatsapp_rs::webhooks::axum::http::request::Parts;
 use meta_whatsapp_rs::webhooks::axum::response::{IntoResponse, Response};
 use meta_whatsapp_server_core::partners::{
     AssignedWabaView, BillingMigrationView, BusinessVerificationView, ClientBusinessView,
@@ -50,13 +51,34 @@ use utoipa::ToSchema;
 use super::common::ApiJson;
 use super::templates::ApiQuery;
 use crate::auth::{AdminCaller, Caller, OwnedWaba};
-use crate::error::{ApiError, ErrorBody};
+use crate::error::{ApiError, ErrorBody, ErrorCode};
 use crate::idempotency::{Fingerprint, KeyHeader, Success};
 use crate::state::Grant;
 
 /// The largest body of a business verification submission: three documents
 /// of 5 MiB, in base64, with their names.
 pub const MAX_VERIFICATION_BODY_BYTES: usize = 21 * 1024 * 1024;
+
+/// The legal-act gate as an extractor, placed **before** the body's: with
+/// `WA_SERVER_LEGAL_ACTS` off, an act that carries a body is `403
+/// feature_not_available` whatever the body is (empty, not JSON, a field
+/// missing or unknown), never `422` from parsing a body the deployment
+/// will not act on (M5h's review found that order wrong). The services
+/// gate again, as the one place that says which acts are legal acts
+/// (`is_legal_partner_act`, `is_legal_act`).
+pub(crate) struct LegalActsOn;
+
+impl FromRequestParts<Grant> for LegalActsOn {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(_: &mut Parts, state: &Grant) -> Result<Self, ApiError> {
+        if state.settings().legal_acts {
+            Ok(Self)
+        } else {
+            Err(ApiError::new(ErrorCode::FEATURE_NOT_AVAILABLE))
+        }
+    }
+}
 
 // ─── The views ───────────────────────────────────────────────────────────
 
@@ -521,6 +543,7 @@ pub struct CreateBillingMigrationBody {
 pub(crate) async fn submit_business_verification(
     State(state): State<Grant>,
     admin: AdminCaller,
+    _gate: LegalActsOn,
     ApiJson(body): ApiJson<SubmitBody>,
 ) -> Result<(StatusCode, Json<ReceiptBody>), ApiError> {
     let receipt = state
@@ -1064,6 +1087,7 @@ pub(crate) async fn create_solution_migration_intent(
     State(state): State<Grant>,
     caller: Caller,
     owned: OwnedWaba,
+    _gate: LegalActsOn,
     KeyHeader(key): KeyHeader,
     ApiJson(body): ApiJson<Value>,
 ) -> Response {
@@ -1162,6 +1186,7 @@ pub(crate) async fn create_billing_migration(
     State(state): State<Grant>,
     caller: Caller,
     owned: OwnedWaba,
+    _gate: LegalActsOn,
     KeyHeader(key): KeyHeader,
     ApiJson(body): ApiJson<Value>,
 ) -> Response {

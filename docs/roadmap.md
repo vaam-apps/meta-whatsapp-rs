@@ -7059,6 +7059,13 @@ or WABA fails the family's own cross-tenant test).
     `partners::is_legal_partner_act`. Not offered: the solution token (a
     credential: never in an answer), moving a number between partners
     (Meta: unsupported on the new account model), and a WABA's solutions.
+- [ ] **M5j2. Idempotency on the operator's creating POSTs** (design D255).
+  - **After:** M5j.
+  - **Decisive:** the same `Idempotency-Key` and body on a business
+    verification submission, after a `504`, is one request to Meta (a
+    submission is capped at three per customer, so a client's retry can
+    burn one); a different body with the key is `idempotency_key_reused`.
+    Starts with the verification submission and the solution creation.
 - [ ] **M5k. The bot and broadcast APIs** (rows 17, 85–92), over B1–B4.
   - **After:** B1, B2, B2b (the replicas' shared budget), B3, B4.
   - **Decisive:** M5.1, M5.2; a broadcast over HTTP never exceeds its

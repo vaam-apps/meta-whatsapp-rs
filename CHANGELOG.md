@@ -15,8 +15,8 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 ### Added (roadmap M5j)
 
 - **Partner APIs, in the service** (roadmap M5j, parity rows 143 to 147
-  now done in the service; choices D250-D257, proposed by the implementer,
-  not decided, swappable; from Meta's `solution-providers/partner-led-business-verification`,
+  now done in the service; choices D250-D257, decided by the coordinator on
+  2026-11-06 under the owner's delegation, swappable; from Meta's `solution-providers/partner-led-business-verification`,
   `solution-providers/multi-partner-solutions`, `solution-providers/support/adding-waba-to-mps`,
   `reference/user/assigned-whatsapp-business-accounts-api` and
   `pricing/change-billing-currency`, read on 2026-11-06). The operator's
@@ -24,7 +24,8 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   system token): business verification submissions and their list,
   Multi-Partner Solutions (create, list, read, partners, accept, reject,
   deactivation request, accept, reject), the app's client businesses and a
-  system user's assigned WABAs. A tenant's, in a new scope, `partners`
+  system user's assigned WABAs (a submission's body is bounded at 21 MiB; the
+  gate is answered before the body is read). A tenant's, in a new scope, `partners`
   (a stored name, pending the owner's confirmation before the first
   release): a WABA's business verification status, solution migration
   intents (create with an `Idempotency-Key`, read back only when they name

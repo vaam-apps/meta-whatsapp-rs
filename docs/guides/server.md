@@ -1167,7 +1167,10 @@ business, cannot be taken back or move a business's assets. Each is taken
 only when the deployment sets `WA_SERVER_LEGAL_ACTS=on` (off by default):
 off, it is `403 feature_not_available` and nothing is asked of Meta; on, it
 is audited, and nothing in the service takes one by itself or as part of
-another route. The evidence, page by page, is D250.
+another route. The gate is answered before the body is read, so with the
+setting off a malformed body is still `403`, never `422`. The evidence, page
+by page, is D250 (D250 to D257: the coordinator's decisions of 2026-11-06
+under the owner's delegation, each swappable).
 
 | Act | Why | Who |
 | --- | --- | --- |
@@ -1201,7 +1204,9 @@ client's assets, so no route, answer, log or audit event carries it
 (hosted Embedded Signup, above, is where the service uses a client's
 business token through a solution, and it stores it in the vault). The
 operator's changes are admin routes: no `Idempotency-Key`, and a retry
-after a `504` should read first (the library never replays them).
+after a `504` should read first (the library never replays them: a
+submission counts towards the customer's three). An `Idempotency-Key` on
+these is roadmap M5j2.
 
 ### A tenant's WABA
 

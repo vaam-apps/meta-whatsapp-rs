@@ -203,6 +203,156 @@ async fn a_legal_act_is_refused_before_any_request_while_the_setting_is_off() {
     assert_eq!(f.h.graph.remaining(), 0);
 }
 
+/// The gate comes before the body: with the setting off, the three legal
+/// acts that carry a body are `403 feature_not_available` whatever the
+/// body is (empty, not JSON, a field missing, a field unknown, a document
+/// that cannot pass), never `422` from parsing it, and with the setting on
+/// each of those bodies is the `422` it was. Decisive: `LegalActsOn`
+/// before `ApiJson` in the handlers.
+#[tokio::test]
+async fn the_gate_is_answered_before_the_body_is_read() {
+    use meta_whatsapp_rs::webhooks::axum::body::Body;
+
+    let bad_bodies = ["empty", "not json", "a missing field", "an unknown field", "a null"];
+    let paths = [
+        (true, "/v1/admin/partners/business-verifications".to_owned()),
+        (false, format!("/v1/wabas/{WABA}/solution-migration-intents")),
+        (false, format!("/v1/wabas/{WABA}/billing-migrations")),
+    ];
+    for legal in [false, true] {
+        for (admin_act, path) in &paths {
+            for what in bad_bodies {
+                // `Body` is not `Clone`: build it afresh for each call.
+                let body = match what {
+                    "empty" => Body::empty(),
+                    "not json" => Body::from("<xml>EAAG-secret</xml>"),
+                    "a missing field" => Body::from("{}"),
+                    "a null" => Body::from("null"),
+                    _ => Body::from(
+                        r#"{"client_business_id":"1","documents":[],"extra":1,"currency":"INR","solution_id":"1"}"#,
+                    ),
+                };
+                let f = fixture(legal).await;
+                let call = Call::new(Method::POST, path)
+                    .key(if *admin_act { &f.admin } else { &f.key })
+                    .header("content-type", "application/json")
+                    .body(body);
+                let reply = f.h.call(call).await;
+                let expected = if legal {
+                    (StatusCode::UNPROCESSABLE_ENTITY, "invalid_request")
+                } else {
+                    (StatusCode::FORBIDDEN, "feature_not_available")
+                };
+                assert_eq!(
+                    (reply.status, reply.code().as_str()),
+                    expected,
+                    "{path} with {what}, legal acts {legal}: {}",
+                    reply.text
+                );
+                assert!(!reply.text.contains("EAAG-secret"), "{what}: {}", reply.text);
+                assert!(f.h.graph.requests().is_empty(), "{path}: Meta was asked");
+            }
+        }
+    }
+}
+
+/// A tenant that does not own the WABA, and a key that is not the
+/// operator's, are answered before the gate: `404` and `403 forbidden`, not
+/// `feature_not_available`. Decisive: the order of the extractors.
+#[tokio::test]
+async fn authorization_is_answered_before_the_gate() {
+    let f = fixture(false).await;
+    let other = f
+        .h
+        .call(
+            tenant_call(
+                Method::POST,
+                &format!("/v1/wabas/{OTHER_WABA}/billing-migrations"),
+                &f,
+            )
+            .json(&json!({"currency": "INR"})),
+        )
+        .await;
+    assert_eq!(other.status, StatusCode::NOT_FOUND, "{}", other.text);
+    let tenant_on_admin = f
+        .h
+        .call(
+            tenant_call(Method::POST, "/v1/admin/partners/business-verifications", &f)
+                .json(&submission_body()),
+        )
+        .await;
+    assert_ne!(tenant_on_admin.code(), "feature_not_available");
+    assert!(tenant_on_admin.status.is_client_error());
+    let anonymous = f
+        .h
+        .call(
+            Call::new(Method::POST, "/v1/admin/partners/business-verifications")
+                .json(&submission_body()),
+        )
+        .await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    assert!(f.h.graph.requests().is_empty());
+}
+
+/// A submission's body is bounded at 21 MiB (three documents of 5 MiB in
+/// base64, with their names): a body over it is `413 payload_too_large`
+/// and nothing is asked of Meta; one under it is read (here, a document
+/// over 5 MiB, `422`). With the setting off the gate answers first, before
+/// a byte of the body is read. Decisive: `MAX_VERIFICATION_BODY_BYTES` on
+/// the operator's partner routes.
+#[tokio::test]
+async fn a_submission_body_is_bounded_before_it_is_buffered() {
+    let limit = 21 * 1024 * 1024;
+    let padded = |size: usize| {
+        let mut body = br#"{"client_business_id":"2729063490586005","documents":[{"file_name":"a.pdf","content_base64":""#.to_vec();
+        body.resize(size.saturating_sub(4), b'A');
+        body.extend_from_slice(br#""}]}"#);
+        body
+    };
+    let path = "/v1/admin/partners/business-verifications";
+    let f = fixture(true).await;
+    let over = f
+        .h
+        .call(
+            admin_call(Method::POST, path, &f)
+                .header("content-type", "application/json")
+                .body(meta_whatsapp_rs::webhooks::axum::body::Body::from(padded(
+                    limit + 1,
+                ))),
+        )
+        .await;
+    assert_eq!(
+        (over.status, over.code().as_str()),
+        (StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"),
+        "{}",
+        over.text
+    );
+    let under = f
+        .h
+        .call(
+            admin_call(Method::POST, path, &f)
+                .header("content-type", "application/json")
+                .body(meta_whatsapp_rs::webhooks::axum::body::Body::from(padded(
+                    limit - 1024,
+                ))),
+        )
+        .await;
+    assert_eq!(under.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", under.text);
+    assert!(f.h.graph.requests().is_empty(), "Meta was asked");
+    let off = fixture(false).await;
+    let refused = off
+        .h
+        .call(
+            admin_call(Method::POST, path, &off)
+                .header("content-type", "application/json")
+                .body(meta_whatsapp_rs::webhooks::axum::body::Body::from(padded(
+                    limit + 1,
+                ))),
+        )
+        .await;
+    assert_eq!(refused.code(), "feature_not_available", "{}", refused.text);
+}
+
 /// The acts that are not legal acts reach Meta with the setting off: the
 /// reads, a solution's creation, asking for a deactivation and rejecting
 /// one. Decisive: an arm added to `is_legal_partner_act` by mistake.
