@@ -12,7 +12,6 @@ matrix, [docs/parity.md](docs/parity.md) and
 [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) for the decisions (all but one
 decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
 
-<<<<<<< HEAD
 ### Added (roadmap M5f2)
 
 - **Group pictures, in the service** (roadmap M5f2, parity row 76 now done
@@ -32,7 +31,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   as `group_picture_set` without any trait of the file. The OpenAPI
   document is additive only.
 
-=======
+
 ### Added (roadmap M5h)
 
 - The service's Marketing Messages API, max price and Click-to-WhatsApp
@@ -59,7 +58,7 @@ decided on 2026-09-26; #46, added on 2026-10-26, is left open too).
   `Scope`), `Operation` ids, `AdminOperation` and
   `number_settings::is_legal_admin_act`, the audit actions; the names are
   pending the owner's confirmation before the first release.
->>>>>>> origin/main
+
 ### Added (roadmap M5e)
 
 - **Calling, in the service** (roadmap M5e, parity rows 74, 75, 134 and 135

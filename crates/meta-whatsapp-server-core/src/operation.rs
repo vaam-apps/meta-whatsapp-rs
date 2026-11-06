@@ -362,11 +362,7 @@ pub enum Operation {
 
 impl Operation {
     /// Every tenant operation.
-<<<<<<< HEAD
-    pub const ALL: [Self; 140] = [
-=======
-    pub const ALL: [Self; 153] = [
->>>>>>> origin/main
+    pub const ALL: [Self; 154] = [
         Self::ListWabas,
         Self::ListNumbers,
         Self::GetNumber,

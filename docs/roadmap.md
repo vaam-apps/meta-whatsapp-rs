@@ -6951,7 +6951,7 @@ or WABA fails the family's own cross-tenant test).
   - **After:** M5f.
   - **Decisive:** M5.1, M5.2; a file that is not a JPEG of at most 5 MiB
     is refused with no request.
-  - **Done** (*PR number to be added when it lands*): the 140th
+  - **Done** (*PR number to be added when it lands*): one more
     operation, `set_group_picture` (scope `groups`), over
     `server_core::groups::Groups::set_picture` and
     `server_api_axum::api::groups::set_group_picture`: a
