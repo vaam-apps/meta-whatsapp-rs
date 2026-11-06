@@ -899,7 +899,8 @@ async fn a_call_action_that_timed_out_is_not_repeated_and_metas_text_is_not_answ
             &json!({"to": {"phone": "+14085551234"}, "sdp_offer": SAMPLE_SDP}),
         ))
         .await;
-    assert!(reply.status.is_client_error() || reply.status.is_server_error());
+    assert_eq!(reply.code(), "call_permission_missing", "{}", reply.text);
+    assert_eq!(reply.status, StatusCode::CONFLICT, "{}", reply.text);
     assert_eq!(
         reply.json()["error"]["graph"]["code"],
         138_006,
@@ -908,6 +909,77 @@ async fn a_call_action_that_timed_out_is_not_repeated_and_metas_text_is_not_answ
     );
     assert!(!reply.text.contains("SECRET-SDP-LINE"), "{}", reply.text);
     assert!(reply.json()["error"]["graph"]["details"].is_null());
+    assert_eq!(h.graph.remaining(), 0);
+}
+
+/// L28: each code of `calling/troubleshooting` a placed call or a call
+/// action meets answers the kind's status and code, Meta's code in `graph`
+/// and none of Meta's texts (they may quote an SDP line), and exactly one
+/// request goes out: a call is never repeated, a `500` included.
+/// Decisive: the `from_code` arm of any row (drop `138006` and the first
+/// row answers `502 unknown`).
+#[tokio::test]
+async fn meta_calling_error_codes_answer_their_kinds_code_and_none_of_its_text() {
+    const SENTINEL: &str = "SENTINEL-SDP-7f3a91";
+    let (h, key) = connected().await;
+    hold(&h, PN, CALL).await;
+    let connect = json!({"to": {"phone": "+14085551234"}, "sdp_offer": SAMPLE_SDP});
+    // (Meta's HTTP status, Meta's code, the status and code answered)
+    let cases: [(u16, i64, u16, &str); 14] = [
+        (401, 138_006, 409, "call_permission_missing"),
+        (401, 138_000, 409, "calling_not_enabled"),
+        (400, 138_018, 409, "calling_not_enabled"),
+        (400, 138_017, 409, "call_permission_already_granted"),
+        (400, 138_003, 409, "call_already_ongoing"),
+        (400, 138_014, 403, "calling_temporarily_disabled"),
+        (400, 138_013, 403, "feature_not_available"),
+        (400, 138_001, 422, "undeliverable"),
+        (429, 138_002, 429, "call_limit_reached"),
+        (400, 138_012, 429, "call_limit_reached"),
+        (500, 138_004, 502, "call_connection_failed"),
+        (500, 138_007, 502, "call_connection_failed"),
+        (400, 138_021, 502, "call_media_timeout"),
+        (400, 138_008, 502, "unknown"),
+    ];
+    for (i, (meta_status, code, status, expected)) in cases.into_iter().enumerate() {
+        let before = h.graph.requests().len();
+        h.graph.push_json(
+            meta_status,
+            json!({"error": {
+                "message": format!("(#{code}) {SENTINEL} message"),
+                "title": format!("{SENTINEL} title"),
+                "type": "OAuthException", "code": code,
+                "error_user_title": format!("{SENTINEL} user title"),
+                "error_user_msg": format!("{SENTINEL} user message"),
+                "error_data": {"messaging_product": "whatsapp", "details": format!("{SENTINEL} details")},
+                "fbtrace_id": "AXsgnV2Cm3ZMGF3dF_cfYIn"}}),
+        );
+        // A placed call on even rows, an action on the others.
+        let reply = if i % 2 == 0 {
+            h.call(connect_call(&key, &format!("denied-{i}"), &connect))
+                .await
+        } else {
+            h.call(on(
+                Method::POST,
+                &format!("/v1/numbers/{PN}/calls/{CALL}/terminate"),
+                &key,
+            ))
+            .await
+        };
+        let what = format!("{code}: {}", reply.text);
+        assert_eq!(
+            (reply.status.as_u16(), reply.code().as_str()),
+            (status, expected),
+            "{what}"
+        );
+        assert_eq!(reply.json()["error"]["graph"]["code"], code, "{what}");
+        assert!(
+            reply.json()["error"]["graph"]["details"].is_null(),
+            "{what}"
+        );
+        assert!(!reply.text.contains("SENTINEL"), "{what}");
+        assert_eq!(h.graph.requests().len(), before + 1, "{what}");
+    }
     assert_eq!(h.graph.remaining(), 0);
 }
 

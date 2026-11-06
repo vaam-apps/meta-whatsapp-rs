@@ -5200,7 +5200,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5220,7 +5220,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5240,7 +5240,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5250,7 +5250,7 @@
             }
           },
           "502": {
-            "description": "Meta failed",
+            "description": "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5339,7 +5339,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5359,7 +5359,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5369,7 +5369,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5379,7 +5379,7 @@
             }
           },
           "502": {
-            "description": "Meta failed",
+            "description": "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5469,7 +5469,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5489,7 +5489,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5509,7 +5509,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5519,7 +5519,7 @@
             }
           },
           "502": {
-            "description": "Meta failed",
+            "description": "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5630,7 +5630,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5650,7 +5650,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, or Meta's refusal",
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5670,7 +5670,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5680,7 +5680,7 @@
             }
           },
           "502": {
-            "description": "Meta failed (code 138006 is a missing call permission: read it with the permissions route)",
+            "description": "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5781,7 +5781,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5801,7 +5801,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5821,7 +5821,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5831,7 +5831,7 @@
             }
           },
           "502": {
-            "description": "Meta failed",
+            "description": "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5932,7 +5932,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5952,7 +5952,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5972,7 +5972,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5982,7 +5982,7 @@
             }
           },
           "502": {
-            "description": "Meta failed",
+            "description": "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6073,7 +6073,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6093,7 +6093,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6103,7 +6103,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6113,7 +6113,7 @@
             }
           },
           "502": {
-            "description": "Meta failed",
+            "description": "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6204,7 +6204,7 @@
             }
           },
           "403": {
-            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal (`calling_temporarily_disabled`, `feature_not_available`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6224,7 +6224,7 @@
             }
           },
           "409": {
-            "description": "`number_not_connected`, `reconnect_required`",
+            "description": "`number_not_connected`, `reconnect_required`, or Meta's refusal (`calling_not_enabled`, `call_permission_missing`, `call_permission_already_granted`, `call_already_ongoing`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6234,7 +6234,7 @@
             }
           },
           "429": {
-            "description": "`too_many_requests`, or Meta's throttling",
+            "description": "`too_many_requests`, or Meta's throttling (`rate_limited`, `call_limit_reached`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -6244,7 +6244,7 @@
             }
           },
           "502": {
-            "description": "Meta failed",
+            "description": "Meta failed (`call_connection_failed`, `call_media_timeout`, `unknown`)",
             "content": {
               "application/json": {
                 "schema": {
@@ -30637,6 +30637,10 @@
           "group_limit_reached",
           "group_creation_disabled",
           "group_partially_applied",
+          "calling_not_enabled",
+          "call_permission_missing",
+          "call_permission_already_granted",
+          "call_already_ongoing",
           "recipient_terms_not_accepted",
           "registration",
           "two_step_verification",
@@ -30660,6 +30664,7 @@
           "country_restricted",
           "payment",
           "feature_not_available",
+          "calling_temporarily_disabled",
           "group_suspended",
           "marketing_not_allowed",
           "forbidden",
@@ -30671,6 +30676,7 @@
           "ecosystem_engagement_limit",
           "classification_limit_reached",
           "group_rate_limited",
+          "call_limit_reached",
           "too_many_requests",
           "too_many_streams",
           "idempotency_key_required",
@@ -30683,6 +30689,8 @@
           "unknown",
           "upstream",
           "integrity",
+          "call_connection_failed",
+          "call_media_timeout",
           "media_download_failed",
           "media_upload_failed",
           "onboarding_failed",

@@ -2835,7 +2835,8 @@ async fn calling(h: &Harness, admin: &str) -> Vec<String> {
     let refused = h
         .call(call(Method::POST, &format!("{one}/accept")).json(&json!({"sdp_answer": answer})))
         .await;
-    assert_eq!(refused.status.as_u16(), 502, "{}", refused.text);
+    // 138000 is `calling_not_enabled` since roadmap L28 (it was `502 unknown`).
+    assert_eq!(refused.status.as_u16(), 409, "{}", refused.text);
     assert!(!refused.text.contains(CALL_META_TEXT), "{}", refused.text);
     // The call analytics.
     let now = time::OffsetDateTime::now_utc();

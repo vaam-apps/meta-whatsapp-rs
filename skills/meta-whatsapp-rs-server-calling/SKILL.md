@@ -34,8 +34,9 @@ other scope grants (`send` does not); call analytics are the scope
 
 The user must have granted the number a call permission (the guide's
 permission request is a message: `meta-whatsapp-rs-server-send`); without
-it Meta refuses with its code 138006, answered as `502 unknown` with the
-code in `graph`. Read the permission first.
+it Meta refuses with its code 138006, answered as `409` with the code
+`call_permission_missing` and Meta's code in `graph`. Read the permission
+first.
 
 ```ts
 export async function mayCall(api: WhatsApp, pn: string, user: CallParticipant): Promise<boolean> {
@@ -124,7 +125,10 @@ answered**: take it from WhatsApp Manager. A failed call answers Meta's
 The WebRTC media, the SIP password, uploading a voicemail announcement
 (Meta wants a use case the media routes do not send), sending the call
 permission request, call buttons and deep links. Meta's calling codes
-(138xxx) answer `502 unknown`: read the code, not the text.
+(138xxx) answer their own kind (`calling_not_enabled`,
+`call_permission_missing`, `call_limit_reached`, `call_connection_failed`,
+...; `unknown` only for a code Meta's page does not list): branch on the
+`error.code`, not the text.
 
 ## Related skills
 
