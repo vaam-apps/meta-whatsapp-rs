@@ -46,6 +46,7 @@
 //! | `WA_SERVER_VERIFICATION_ATTEMPTS`, `WA_SERVER_VERIFICATION_WINDOW` | 10, `1h` | a number's verification codes requested and checked, the same way |
 //! | `WA_SERVER_FLOWS_PRIVATE_KEY` (secret) | unset: the Flows data endpoint off | the deployment's Flow private key, an unencrypted 2048-bit RSA key in PEM (roadmap M5d; design D133); unset, `POST /webhooks/flows/{waba_id}` is `404`. Its public half is what each number's business public key is set to |
 //! | `WA_SERVER_INBOX_REPLY_CHECKS` | none listed: every check on every number | the local checks an inbox reply makes, per number: `<phone_number_id>:<checks>` entries, comma-separated, `<checks>` being `all`, `none` or the checks left on joined by `+` (`window`, `trust_handover`, `thread_owner`; `trust_handover` only with `window`): `106540352242922:window+trust_handover` turns the ownership check off on that number (the core's `inbox::ReplyChecksByNumber`; roadmap M2a) |
+//! | `WA_SERVER_TOKEN_EXPIRY_LEAD` | `7d`, or `WA_SERVER_OUTBOX_RETENTION` when that is shorter | how long before a stored token's expiry the tenant is told (`token_expiring`, once per token and expiry; roadmap M3e): a positive duration no longer than `WA_SERVER_OUTBOX_RETENTION` (set past it, the start is refused), or `off` |
 //!
 //! And the inbox's retention, the store's own setting, which housekeeping
 //! applies: `WA_SERVER_INBOX_RETENTION`, `keep` (the default: the inbox
@@ -324,6 +325,12 @@ pub struct Config {
     /// event (default [`crate::events::DEFAULT_OUTBOX_RETENTION`], 7 days,
     /// until the owner decides retention, the design's decision D10).
     pub outbox_retention: Duration,
+    /// `WA_SERVER_TOKEN_EXPIRY_LEAD`: how long before a stored token's
+    /// expiry its tenant is told (`token_expiring`; roadmap M3e; default
+    /// [`meta_whatsapp_server_core::token_expiry::DEFAULT_LEAD`], 7 days, or
+    /// [`Self::outbox_retention`] when that is shorter); `None` (`off`): never.
+    /// At most [`Self::outbox_retention`].
+    pub token_expiry_lead: Option<Duration>,
     /// `WA_SERVER_INBOX_RETENTION`: how long the inbox keeps a customer's
     /// messages, the store's own setting (`with_retention`), which
     /// housekeeping applies ([`Retention::Keep`] unset, the default of
@@ -385,6 +392,7 @@ impl fmt::Debug for Config {
             .field("graph_endpoint", &self.graph_endpoint)
             .field("migrate", &self.migrate)
             .field("outbox_retention", &self.outbox_retention)
+            .field("token_expiry_lead", &self.token_expiry_lead)
             .field("inbox_retention", &self.inbox_retention)
             .field("settings", &self.settings)
             .field("move_rules", &self.move_rules)
@@ -600,6 +608,7 @@ impl Config {
             migrate: runtime.migrate,
             shutdown_grace: runtime.shutdown_grace,
             outbox_retention: runtime.outbox_retention,
+            token_expiry_lead: runtime.token_expiry_lead,
             inbox_retention: runtime.inbox_retention,
             log_format: runtime.log_format,
             log_filter: runtime.log_filter,
@@ -1141,6 +1150,7 @@ struct Runtime {
     migrate: MigrateMode,
     shutdown_grace: Duration,
     outbox_retention: Duration,
+    token_expiry_lead: Option<Duration>,
     inbox_retention: Retention,
     log_format: LogFormat,
     log_filter: String,
@@ -1178,6 +1188,34 @@ fn runtime(r: &Reader<'_>) -> Result<Runtime, ConfigError> {
             retention => retention,
         },
     };
+    // `off`, or a positive duration no longer than the outbox's retention:
+    // the event's outbox key must outlive the token's lapse, or a purge
+    // would tell a token still due again (roadmap M3e). Unset, the default
+    // lead yields to a shorter retention rather than refuse the start: a
+    // deployment that set `WA_SERVER_OUTBOX_RETENTION` below a week before
+    // this setting existed must keep starting; one that sets the lead
+    // itself is held to the bound.
+    let token_expiry_lead = match r.plain("WA_SERVER_TOKEN_EXPIRY_LEAD")?.as_deref() {
+        None => Some(meta_whatsapp_server_core::token_expiry::DEFAULT_LEAD.min(outbox_retention)),
+        Some("off") => None,
+        Some(value) => match duration("WA_SERVER_TOKEN_EXPIRY_LEAD", value) {
+            Ok(lead) if !lead.is_zero() => Some(lead),
+            _ => {
+                return Err(ConfigError::Invalid {
+                    name: "WA_SERVER_TOKEN_EXPIRY_LEAD",
+                    reason: "expected off, or a positive duration such as 7d",
+                });
+            }
+        },
+    };
+    if let Some(lead) = token_expiry_lead
+        && !meta_whatsapp_server_core::token_expiry::lead_fits_retention(lead, outbox_retention)
+    {
+        return Err(ConfigError::Invalid {
+            name: "WA_SERVER_TOKEN_EXPIRY_LEAD",
+            reason: "expected at most WA_SERVER_OUTBOX_RETENTION (or off)",
+        });
+    }
     // `keep` (the default), or a positive duration: zero would purge the
     // whole inbox at the next housekeeping.
     let inbox_retention = match r.plain("WA_SERVER_INBOX_RETENTION")?.as_deref() {
@@ -1206,6 +1244,7 @@ fn runtime(r: &Reader<'_>) -> Result<Runtime, ConfigError> {
         migrate: migrate_mode(r)?,
         shutdown_grace,
         outbox_retention,
+        token_expiry_lead,
         inbox_retention,
         log_format,
         log_filter: r.plain("RUST_LOG")?.unwrap_or_else(|| "info".to_owned()),

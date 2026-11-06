@@ -141,7 +141,8 @@ message), and the service's own: `number_connected`, `number_disconnected` (why 
 `number_reconnect_required` (calls on the number answer `reconnect_required` until it is attached again), whose
 `data` names the number and its WABA only. They say when to look, not the state: one can repeat (a retried attach),
 stay after a change that failed (a `503`), or be missing (`number_reconnect_required` is best effort), so read
-`GET /v1/numbers` when one comes.
+`GET /v1/numbers` when one comes. `token_expiring` (`data`: `waba_id`, `expires_at`; never a token) says a WABA's stored
+token expires within the lead time (7 days by default): run Embedded Signup again; one per token and expiry.
 
 `GET /v1/events/{id}` answers one of your events, whole; another tenant's id, one past retention or no event's id
 is `not_found`, alike (the example's eventById).

@@ -149,6 +149,8 @@ export async function handle(event: Event): Promise<void> {
     case "number_connected":
     case "number_reconnect_required":
       return; // mark the number usable, or ask its merchant to reconnect
+    case "token_expiring":
+      return; // data.waba_id, data.expires_at: ask the merchant to run Embedded Signup again
     default:
       return; // a type you do not handle, or one added later
   }
