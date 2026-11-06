@@ -33,6 +33,7 @@
 //! | `WA_SERVER_MEDIA_STREAMS` | 16 | streamed downloads at once, per replica (half of them at most for one tenant) |
 //! | `WA_SERVER_MEDIA_CONVERTER` | `none` | the converter an upload may ask for (`convert`; roadmap M5c1): `none`, or `ffmpeg` (the library's `FfmpegConverter`, in a build with the `ffmpeg` feature, over an `ffmpeg` the deployment installs); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_MEDIA_CONVERTER_PROGRAM` | `ffmpeg` from `PATH` | with `ffmpeg` only: the program to run (an absolute path is safest); pending the owner's confirmation before the first release |
+//! | `WA_SERVER_LEGAL_ACTS` | `off` | `on` lets tenants take the legal act their keys allow: the India compliance information declaration (`PUT /v1/numbers/{pn}/compliance-info`; roadmap M5c3, design D192); off, it is `403 feature_not_available` with nothing asked of Meta (the Official Business Account application and the contact book erasure are not gated by it); pending the owner's confirmation before the first release |
 //! | `WA_SERVER_STREAMS_PER_TENANT` | 20 | live event streams (`GET /v1/events/stream`, `GET /v1/numbers/{pn}/events/stream`) one tenant holds open at once, per replica (the next is `429 too_many_streams`) |
 //! | `WA_SERVER_STREAMS_PER_REPLICA` | 1000 | live event streams open at once on a replica, every tenant's |
 //! | `WA_SERVER_RATE_SEND`, `WA_SERVER_RATE_SEND_BURST` | 20, 40 | per tenant and replica, a second ([`crate::ratelimit`]) |
@@ -999,6 +1000,7 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
         media_concurrency,
         media_streams,
         media_converter: media_converter(r)?,
+        legal_acts: legal_acts(r)?,
         live,
         registration_attempts: attempt_limits(r)?,
         inbox_reply_checks: match r.plain("WA_SERVER_INBOX_REPLY_CHECKS")? {
@@ -1014,6 +1016,21 @@ fn settings(r: &Reader<'_>) -> Result<Settings, ConfigError> {
         },
         ..defaults
     })
+}
+
+/// `WA_SERVER_LEGAL_ACTS` (roadmap M5c3): `off` (the default) or `on`.
+/// The legal act a tenant may ask for (the compliance information
+/// declaration; `meta_whatsapp_server_core::number_settings::is_legal_act`)
+/// is taken only when the deployment turns it on.
+fn legal_acts(r: &Reader<'_>) -> Result<bool, ConfigError> {
+    match r.plain("WA_SERVER_LEGAL_ACTS")?.as_deref().map(str::trim) {
+        None | Some("" | "off") => Ok(false),
+        Some("on") => Ok(true),
+        Some(_) => Err(ConfigError::Invalid {
+            name: "WA_SERVER_LEGAL_ACTS",
+            reason: "expected `off` or `on`",
+        }),
+    }
 }
 
 /// How long the `ffmpeg` converter may run: under the request deadline

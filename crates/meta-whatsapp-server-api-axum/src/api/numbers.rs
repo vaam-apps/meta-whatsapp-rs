@@ -4,7 +4,7 @@
 //! | Route | Graph calls, with the tenant's WABA token |
 //! | --- | --- |
 //! | `GET /v1/wabas`, `GET /v1/numbers` | none: the service's bindings |
-//! | `GET /v1/numbers/{pn}` | `GET /{pn}?fields=display_phone_number,verified_name,quality_rating,name_status,throughput` |
+//! | `GET /v1/numbers/{pn}` | `GET /{pn}?fields=display_phone_number,verified_name,quality_rating,name_status,throughput,messaging_limit_tier` |
 //! | `GET /v1/numbers/{pn}/profile` | `GET /{pn}/whatsapp_business_profile?fields=about,address,description,email,profile_picture_url,websites,vertical` |
 //! | `PATCH /v1/numbers/{pn}/profile` | `POST /{pn}/whatsapp_business_profile` (a picture's `profile_picture_handle` read from the number's own completed upload, roadmap M5c2), then the `GET` above |
 //! | `DELETE /v1/wabas/{waba_id}` | `DELETE /{waba_id}/subscribed_apps`; in Solution Partner mode, the credit line revoked (the library's `EmbeddedSignup::offboard`, with the partner's system token); then the token and bindings are deleted |
@@ -155,6 +155,11 @@ pub struct NumberDetails {
     /// Throughput.
     #[schema(required = true)]
     pub throughput: Option<ThroughputView>,
+    /// Messaging limit tier, as Meta reports it (`TIER_250`, `TIER_1K`,
+    /// `TIER_10K`, `TIER_100K`, `TIER_UNLIMITED`, …; roadmap M5c3): how
+    /// many people the number may start conversations with in 24 hours.
+    #[schema(required = true)]
+    pub messaging_limit_tier: Option<String>,
 }
 
 /// A business profile.
@@ -223,6 +228,7 @@ impl From<domain::NumberDetails> for NumberDetails {
             quality_rating,
             name_status,
             throughput,
+            messaging_limit_tier,
         } = details;
         Self {
             phone_number_id: phone_number_id.into_inner(),
@@ -233,6 +239,7 @@ impl From<domain::NumberDetails> for NumberDetails {
             quality_rating,
             name_status,
             throughput: throughput.map(|domain::Throughput { level }| ThroughputView { level }),
+            messaging_limit_tier,
         }
     }
 }
@@ -535,6 +542,7 @@ mod tests {
             throughput: Some(domain::Throughput {
                 level: Some("STANDARD".to_owned()),
             }),
+            messaging_limit_tier: Some("TIER_1K".to_owned()),
         };
         assert_eq!(
             serde_json::to_value(NumberDetails::from(details)).unwrap(),
@@ -546,7 +554,8 @@ mod tests {
                 "verified_name": "John's Cake Shop",
                 "quality_rating": "GREEN",
                 "name_status": "APPROVED",
-                "throughput": {"level": "STANDARD"}
+                "throughput": {"level": "STANDARD"},
+                "messaging_limit_tier": "TIER_1K"
             })
         );
         let profile = domain::BusinessProfile {

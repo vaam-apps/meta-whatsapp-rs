@@ -4279,6 +4279,692 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/compliance-info": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/compliance-info`: the number's business\ncompliance information (India).",
+        "operationId": "get_compliance_info",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What Meta holds (every field `null` when it holds none)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComplianceInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`PUT /v1/numbers/{pn}/compliance-info`: declare the number's business\ncompliance information (India), replacing what Meta holds. **A legal\nact**: off until the deployment sets `WA_SERVER_LEGAL_ACTS=on`;\naudited, never what it says.",
+        "operationId": "set_compliance_info",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComplianceInfoBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Meta holds the declaration"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`feature_not_available` (the deployment has not enabled the legal acts: nothing was asked of Meta), `forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on the field (`entity_name`, `entity_type`, `entity_type_custom`, `is_registered`, `grievance_officer_details.*`, `customer_care_details.*`) or `body`: nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the information",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/contact-book/{bsuid}": {
+      "delete": {
+        "tags": [
+          "erasure"
+        ],
+        "summary": "`DELETE /v1/numbers/{pn}/contact-book/{bsuid}`: **erase** one user's\nentry from the business portfolio's contact book, at Meta. Irreversible.\nA data-subject erasure the tenant performs explicitly, so scope\n`erasure`; audited, never the BSUID, and not gated by\n`WA_SERVER_LEGAL_ACTS`.",
+        "operationId": "delete_contact_book_entry",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bsuid",
+            "in": "path",
+            "description": "The user's business-scoped user id, such as `US.13491208655302741918` (a phone number or a parent BSUID is refused)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Meta answered; whether an entry existed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactBookErased"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (no scope `erasure`), `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `bsuid` (never quoted): nothing was asked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the entry may have been erased",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/conversational-components": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/conversational-components`: the welcome message\nflag, ice breakers and commands.",
+        "operationId": "get_conversational_components",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The components (empty when none are configured)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationalComponents"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`PUT /v1/numbers/{pn}/conversational-components`: set the welcome\nmessage flag, ice breakers and/or commands.",
+        "operationId": "set_conversational_components",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComponentsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The components were set"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `prompts`, `commands` (a field names the entry: `prompts[0]`, `commands[1].command_name`) or `body`: nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the components",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/conversations": {
       "get": {
         "tags": [
@@ -7833,6 +8519,135 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/health-status": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/health-status`: whether messages can be sent\nthrough the number.",
+        "operationId": "get_health_status",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The health status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NumberHealthStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/media": {
       "post": {
         "tags": [
@@ -9272,6 +10087,294 @@
           },
           "504": {
             "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/official-business-account": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/official-business-account`: the number's\nOfficial Business Account status.",
+        "operationId": "get_official_business_account",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OfficialBusinessAccount"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`POST /v1/numbers/{pn}/official-business-account`: apply for Official\nBusiness Account status. Not a legal act (an application for Meta's\nreview): audited, and it reaches Meta whatever `WA_SERVER_LEGAL_ACTS` says.",
+        "operationId": "request_official_business_account",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "1 to 255 visible ASCII characters, scoped to the tenant: the same key and body never apply twice (a repeat gets the kept answer, with `Idempotent-Replayed: true`)",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObaApplicationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Meta accepted the application for review (`GET …/official-business-account` for where it stands). Meta refuses a new one within 30 days of a rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObaApplicationAnswer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`, `idempotency_in_progress`, `outcome_unknown`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `business_website_url`, `primary_country_of_operation`, `primary_language`, `parent_business_or_brand`, `supporting_links` (5 to 10, `http` or `https`), `additional_supporting_information` or `body`, `idempotency_key_reused`, or Meta's `invalid_parameter`: nothing was asked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the application may have reached Meta (`GET …/official-business-account` says; not replayed)",
             "content": {
               "application/json": {
                 "schema": {
@@ -11001,6 +12104,544 @@
         ]
       }
     },
+    "/v1/numbers/{pn}/settings": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/settings`: the number's settings, without key\nmaterial.",
+        "operationId": "get_number_settings",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The settings (local storage, payload encryption's status and fingerprint; never a key)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NumberSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`PATCH /v1/numbers/{pn}/settings`: change one setting.",
+        "operationId": "update_number_settings",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The setting was applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingChanged"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `body` (not exactly one setting), `local_storage` or `search_visibility`, or Meta's `invalid_parameter`: nothing was changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the setting may have been applied (`GET …/settings`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/settings/payload-encryption": {
+      "put": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`PUT /v1/numbers/{pn}/settings/payload-encryption`: turn payload\nencryption on with the business's public key.",
+        "operationId": "enable_payload_encryption",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayloadEncryptionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Payload encryption is on (`GET …/settings` for its status and the key's fingerprint)"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `client_encryption_key` (not base64, or a private key; the value is never quoted) or `body`: nothing was sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`; Meta's texts are withheld",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the settings before asking again (not replayed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`DELETE /v1/numbers/{pn}/settings/payload-encryption`: turn payload\nencryption off.",
+        "operationId": "disable_payload_encryption",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Payload encryption is off"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`; Meta's texts are withheld",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the settings (not replayed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
     "/v1/numbers/{pn}/two-step-pin": {
       "post": {
         "tags": [
@@ -11104,6 +12745,531 @@
           },
           "429": {
             "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/username": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/username`: the number's business username.",
+        "operationId": "get_username",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The username and its status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessUsername"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`PUT /v1/numbers/{pn}/username`: adopt a business username, or change\nthe current one.",
+        "operationId": "set_username",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsernameBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The username was set; its status (`approved` or `reserved`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusinessUsername"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request` on `username` or `body`, or Meta's `invalid_parameter` (`147005`: in use on another number): nothing was set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed: see `may_have_been_sent`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: the username may have been set (`GET …/username`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`DELETE /v1/numbers/{pn}/username`: remove the number's business\nusername.",
+        "operationId": "delete_username",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The username was removed"
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `send` budget (`Retry-After`), or Meta's throttling",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Meta failed (also when the number had no username to delete)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "`timeout`: read the username",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Any other error: branch on `error.code`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api_key": []
+          }
+        ]
+      }
+    },
+    "/v1/numbers/{pn}/username/suggestions": {
+      "get": {
+        "tags": [
+          "numbers"
+        ],
+        "summary": "`GET /v1/numbers/{pn}/username/suggestions`: the usernames WhatsApp\nreserved for the business portfolio.",
+        "operationId": "list_username_suggestions",
+        "parameters": [
+          {
+            "name": "pn",
+            "in": "path",
+            "description": "Phone number id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "WA-Tenant",
+            "in": "header",
+            "description": "The tenant a platform key acts as",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The suggestions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsernameSuggestions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`, `tenant_suspended`, or Meta's refusal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such number for this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`number_not_connected`, `reconnect_required`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: the tenant's `read` budget (`Retry-After`), or Meta's throttling",
             "content": {
               "application/json": {
                 "schema": {
@@ -20226,6 +22392,30 @@
           }
         }
       },
+      "BusinessUsername": {
+        "type": "object",
+        "description": "A number's business username.",
+        "required": [
+          "username",
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`approved` or `reserved`."
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The username; `null` when the number has none."
+          }
+        }
+      },
       "CallAnalytics": {
         "type": "object",
         "description": "Call analytics.",
@@ -21072,6 +23262,25 @@
         },
         "additionalProperties": false
       },
+      "CommandBody": {
+        "type": "object",
+        "description": "A slash command.",
+        "required": [
+          "command_name",
+          "command_description"
+        ],
+        "properties": {
+          "command_description": {
+            "type": "string",
+            "description": "The hint shown next to it, at most 256 characters."
+          },
+          "command_name": {
+            "type": "string",
+            "description": "The name, 1 to 32 characters, without the leading `/`; unique."
+          }
+        },
+        "additionalProperties": false
+      },
       "CommerceSettings": {
         "type": "object",
         "description": "A number's commerce settings.",
@@ -21248,6 +23457,147 @@
         },
         "additionalProperties": false
       },
+      "ComplianceInfo": {
+        "type": "object",
+        "description": "A number's business compliance information (India), as Meta holds it.",
+        "required": [
+          "entity_name",
+          "entity_type",
+          "entity_type_custom",
+          "is_registered",
+          "grievance_officer_details",
+          "customer_care_details"
+        ],
+        "properties": {
+          "customer_care_details": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CustomerCareBody",
+                "description": "Customer care."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entity_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The legal name of the business."
+          },
+          "entity_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The legal form, as Meta returns it."
+          },
+          "entity_type_custom": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The legal form in words, when it is none of the listed ones."
+          },
+          "grievance_officer_details": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GrievanceOfficerBody",
+                "description": "The grievance officer."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "is_registered": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the business is registered with the authorities."
+          }
+        }
+      },
+      "ComplianceInfoBody": {
+        "type": "object",
+        "description": "A business compliance information declaration.",
+        "required": [
+          "entity_name",
+          "entity_type",
+          "grievance_officer_details",
+          "customer_care_details"
+        ],
+        "properties": {
+          "customer_care_details": {
+            "$ref": "#/components/schemas/CustomerCareBody",
+            "description": "Customer care (`email` required)."
+          },
+          "entity_name": {
+            "type": "string",
+            "description": "The legal name of the business, 2 to 128 characters."
+          },
+          "entity_type": {
+            "type": "string",
+            "description": "The legal form: `LIMITED_LIABILITY_PARTNERSHIP`,\n`SOLE_PROPRIETORSHIP`, `PARTNERSHIP`, `PUBLIC_COMPANY`,\n`PRIVATE_COMPANY` or `OTHER`."
+          },
+          "entity_type_custom": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The legal form in words: required with `OTHER`, refused with any\nother."
+          },
+          "grievance_officer_details": {
+            "$ref": "#/components/schemas/GrievanceOfficerBody",
+            "description": "The grievance officer (`name` and `email` required)."
+          },
+          "is_registered": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the business is registered: only with `OTHER` or\n`PARTNERSHIP`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ComponentsBody": {
+        "type": "object",
+        "description": "Conversational components to set; an absent field stays as it is.",
+        "properties": {
+          "commands": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CommandBody"
+            },
+            "description": "Slash commands: at most 30."
+          },
+          "enable_welcome_message": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Turn the welcome message on or off."
+          },
+          "prompts": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Ice breakers: at most 4, of 1 to 80 characters (Meta's page\n`conversational-components`)."
+          }
+        },
+        "additionalProperties": false
+      },
       "ConnectCallRequest": {
         "type": "object",
         "description": "A call to place. No `Debug`: it holds the SDP offer.",
@@ -21351,6 +23701,19 @@
           }
         },
         "additionalProperties": false
+      },
+      "ContactBookErased": {
+        "type": "object",
+        "description": "Whether an entry existed.",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "boolean",
+            "description": "`true` if Meta held an entry for the BSUID and deleted it; `false`\nif it held none (deleting again is harmless)."
+          }
+        }
       },
       "ContactCard": {
         "type": "object",
@@ -21748,6 +24111,38 @@
           }
         }
       },
+      "ConversationalComponents": {
+        "type": "object",
+        "description": "A number's conversational components.",
+        "required": [
+          "enable_welcome_message",
+          "prompts",
+          "commands"
+        ],
+        "properties": {
+          "commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommandBody"
+            },
+            "description": "Slash commands."
+          },
+          "enable_welcome_message": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the welcome message is on (`null` when Meta does not say)."
+          },
+          "prompts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Ice breakers."
+          }
+        }
+      },
       "Coordinate": {
         "oneOf": [
           {
@@ -21916,6 +24311,34 @@
           "url": {
             "type": "string",
             "description": "The URL the button opens."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CustomerCareBody": {
+        "type": "object",
+        "description": "Customer care contact details.",
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email (required on a `PUT`, under 128 characters)."
+          },
+          "landline_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "International landline number."
+          },
+          "mobile_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "International mobile number."
           }
         },
         "additionalProperties": false
@@ -22794,6 +25217,41 @@
           }
         }
       },
+      "GrievanceOfficerBody": {
+        "type": "object",
+        "description": "The grievance officer's contact details.",
+        "properties": {
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email (required on a `PUT`, under 128 characters)."
+          },
+          "landline_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "International landline number."
+          },
+          "mobile_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "International mobile number."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full name (required on a `PUT`)."
+          }
+        },
+        "additionalProperties": false
+      },
       "Group": {
         "type": "object",
         "description": "A group, as Meta describes it.",
@@ -23381,6 +25839,89 @@
           "status": {
             "$ref": "#/components/schemas/HealthStatus",
             "description": "`ok` (alive) or `ready`."
+          }
+        }
+      },
+      "HealthEntityView": {
+        "type": "object",
+        "description": "One node of a health status.",
+        "required": [
+          "entity_type",
+          "id",
+          "can_send_message",
+          "can_receive_call_sip",
+          "additional_info",
+          "errors"
+        ],
+        "properties": {
+          "additional_info": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Why a node is `LIMITED`."
+          },
+          "can_receive_call_sip": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The same, for receiving a call over SIP."
+          },
+          "can_send_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`AVAILABLE`, `LIMITED` or `BLOCKED`."
+          },
+          "entity_type": {
+            "type": "string",
+            "description": "`PHONE_NUMBER`, `MESSAGE_TEMPLATE`, `WABA`, `BUSINESS` or `APP`."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HealthErrorView"
+            },
+            "description": "Why a node is `BLOCKED`, with a possible solution."
+          },
+          "id": {
+            "type": "string",
+            "description": "The node's id."
+          }
+        }
+      },
+      "HealthErrorView": {
+        "type": "object",
+        "description": "A question to one node of the health status, answered.",
+        "required": [
+          "error_code",
+          "error_description",
+          "possible_solution"
+        ],
+        "properties": {
+          "error_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Meta's error code."
+          },
+          "error_description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What is wrong."
+          },
+          "possible_solution": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to do about it."
           }
         }
       },
@@ -24352,6 +26893,51 @@
         },
         "additionalProperties": false
       },
+      "LocalStorageBody": {
+        "type": "object",
+        "description": "Local storage on or off.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "data_localization_region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The region, two uppercase letters: required with `enabled: true`,\nrefused with `false`."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "`true` turns local storage on (the number must not be registered:\nMeta's page `local-storage`), `false` off."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LocalStorageView": {
+        "type": "object",
+        "description": "A number's local storage.",
+        "required": [
+          "status",
+          "data_localization_region"
+        ],
+        "properties": {
+          "data_localization_region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The region, when enabled."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Meta's status (`IN_COUNTRY_STORAGE_ENABLED`, `IN_COUNTRY_STORAGE_DISABLED`, …)."
+          }
+        }
+      },
       "LocationContent": {
         "type": "object",
         "description": "`location` (`messages/location-messages`).",
@@ -24810,7 +27396,8 @@
           "verified_name",
           "quality_rating",
           "name_status",
-          "throughput"
+          "throughput",
+          "messaging_limit_tier"
         ],
         "properties": {
           "display_phone_number": {
@@ -24819,6 +27406,13 @@
               "null"
             ],
             "description": "The number as WhatsApp displays it."
+          },
+          "messaging_limit_tier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Messaging limit tier, as Meta reports it (`TIER_250`, `TIER_1K`,\n`TIER_10K`, `TIER_100K`, `TIER_UNLIMITED`, …; roadmap M5c3): how\nmany people the number may start conversations with in 24 hours."
           },
           "name_status": {
             "type": [
@@ -24866,6 +27460,30 @@
           }
         }
       },
+      "NumberHealthStatus": {
+        "type": "object",
+        "description": "A number's health status: whether messages can be sent through it,\nwith the status of the number, its WABA, its business portfolio and\nthe app (Meta's page `support/health-status`).",
+        "required": [
+          "can_send_message",
+          "entities"
+        ],
+        "properties": {
+          "can_send_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The overall status: `BLOCKED` if any node is blocked, else\n`LIMITED` if any is limited, else `AVAILABLE`."
+          },
+          "entities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HealthEntityView"
+            },
+            "description": "One entry per node involved."
+          }
+        }
+      },
       "NumberInboxMessage": {
         "type": "object",
         "description": "A message of the number's inbox, found by id, with its conversation.",
@@ -24908,6 +27526,38 @@
           }
         }
       },
+      "NumberSettings": {
+        "type": "object",
+        "description": "A number's settings, as Meta answers them, **without key material**:\nMeta's `cloud_encryption_key` is not answered (the service's own\nchoice: payload encryption keys are secrets).",
+        "required": [
+          "local_storage",
+          "payload_encryption"
+        ],
+        "properties": {
+          "local_storage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LocalStorageView",
+                "description": "Local storage; `null` when Meta answers none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload_encryption": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PayloadEncryptionView",
+                "description": "Payload encryption; `null` when Meta answers none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "NumberStatus": {
         "type": "string",
         "description": "A number's connection status.",
@@ -24916,6 +27566,116 @@
           "reconnect_required",
           "disconnected"
         ]
+      },
+      "ObaApplicationAnswer": {
+        "type": "object",
+        "description": "What Meta answered an application.",
+        "required": [
+          "message",
+          "updated_status",
+          "tracking_id"
+        ],
+        "properties": {
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Meta's description of the result."
+          },
+          "tracking_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An id to follow the application with."
+          },
+          "updated_status": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OfficialBusinessAccount",
+                "description": "The status after the request."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ObaApplicationBody": {
+        "type": "object",
+        "description": "An application for Official Business Account status.",
+        "required": [
+          "business_website_url",
+          "primary_country_of_operation"
+        ],
+        "properties": {
+          "additional_supporting_information": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Anything else in support of the application."
+          },
+          "business_website_url": {
+            "type": "string",
+            "description": "The business's official website (`http` or `https`, no credentials)."
+          },
+          "parent_business_or_brand": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The parent business or brand."
+          },
+          "primary_country_of_operation": {
+            "type": "string",
+            "description": "The country the business mainly operates in."
+          },
+          "primary_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The business's main language."
+          },
+          "supporting_links": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Links showing the business is notable: 5 to 10 of them (Meta's\npage), each `http` or `https`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OfficialBusinessAccount": {
+        "type": "object",
+        "description": "A number's Official Business Account status.",
+        "required": [
+          "oba_status",
+          "status_message"
+        ],
+        "properties": {
+          "oba_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the application stands (`NOT_STARTED`, `PENDING`,\n`UNDER_REVIEW`, `APPROVED`, `REJECTED`, `EXPIRED`, `CANCELLED`, …)."
+          },
+          "status_message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Meta's explanation of the status."
+          }
+        }
       },
       "OrderParameters": {
         "type": "object",
@@ -25170,6 +27930,44 @@
           "too_many_attempts",
           "not_found"
         ]
+      },
+      "PayloadEncryptionBody": {
+        "type": "object",
+        "description": "The business's public key for payload encryption. Handled as a secret:\nits `Debug` shows a length, and it is in no log and no answer.",
+        "required": [
+          "client_encryption_key"
+        ],
+        "properties": {
+          "client_encryption_key": {
+            "type": "string",
+            "description": "The business's public key, base64 (the standard alphabet; padding\noptional). A private key is refused (`422 invalid_request` on this\nfield, which never quotes it)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PayloadEncryptionView": {
+        "type": "object",
+        "description": "A number's payload encryption: never a key.",
+        "required": [
+          "status",
+          "client_encryption_key_fingerprint"
+        ],
+        "properties": {
+          "client_encryption_key_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The fingerprint of the business's key, as Meta computes it."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`enabled` or `disabled`."
+          }
+        }
       },
       "Payment": {
         "type": "object",
@@ -26817,6 +29615,65 @@
         },
         "additionalProperties": false
       },
+      "SettingChanged": {
+        "type": "object",
+        "description": "Which setting was changed.",
+        "required": [
+          "setting"
+        ],
+        "properties": {
+          "setting": {
+            "type": "string",
+            "description": "The field of the request that was applied."
+          }
+        }
+      },
+      "SettingsPatch": {
+        "type": "object",
+        "description": "One setting to change: exactly one of the fields (Meta sets one value\nper call, so a change either went through or did not).",
+        "properties": {
+          "identity_key_check": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "The identity change check: when on, webhooks carry the user's\n`identity_key_hash`."
+          },
+          "local_storage": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LocalStorageBody",
+                "description": "Local storage."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notify_user_change_number": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether users are told when the business changes its number."
+          },
+          "search_visibility": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`VISIBLE` or `HIDDEN` in WhatsApp's business search."
+          },
+          "security_notifications": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether security notifications are shown."
+          }
+        },
+        "additionalProperties": false
+      },
       "SignupAttempt": {
         "type": "object",
         "description": "An attempt that stopped after its token was stored.",
@@ -27935,6 +30792,43 @@
           }
         },
         "additionalProperties": false
+      },
+      "UsernameBody": {
+        "type": "object",
+        "description": "A username to adopt or change to.",
+        "required": [
+          "username"
+        ],
+        "properties": {
+          "force_transfer": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "When the username is in use on another number of the same business\nportfolio: `true` moves it here, `false` (the default) fails with\nMeta's `147005`."
+          },
+          "username": {
+            "type": "string",
+            "description": "3 to 35 characters; English letters, digits, `.` and `_`; at least\none letter; no `.` first, last or doubled; not starting with `www`\n(Meta's page `business-scoped-user-ids`)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UsernameSuggestions": {
+        "type": "object",
+        "description": "The usernames WhatsApp reserved for the business portfolio.",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The suggestions, in Meta's order."
+          }
+        }
       },
       "VaultRotation": {
         "type": "object",

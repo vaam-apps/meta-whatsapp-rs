@@ -980,7 +980,7 @@ impl Sample {
                 "id" => &self.tenant,
                 "key_id" => &self.key_id,
                 "message_id" => SAMPLE_MESSAGE_ID,
-                "contact" => SAMPLE_CONTACT,
+                "contact" | "bsuid" => SAMPLE_CONTACT,
                 "media_id" => SAMPLE_MEDIA_ID,
                 "configuration_name" => SAMPLE_PAYMENT_CONFIGURATION,
                 "reference_id" => SAMPLE_REFERENCE_ID,
@@ -1017,6 +1017,40 @@ pub const SAMPLE_TEMPLATE_GROUP_ID: &str = "9020555671393375";
 pub const SAMPLE_FLOW_ID: &str = "1234567890123456";
 /// A catalog's id (Meta's Catalog API).
 pub const SAMPLE_CATALOG_ID: &str = "194836987003835";
+
+/// A base64 public key of the shape `settings-api` asks for (an RSA
+/// `SubjectPublicKeyInfo` header): not a private key.
+pub const SAMPLE_CLIENT_KEY: &str = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A";
+
+/// An Official Business Account application with every field
+/// (`official-business-accounts`; roadmap M5c3).
+pub fn sample_oba_application() -> Value {
+    serde_json::json!({
+        "business_website_url": "https://www.luckyshrub.example",
+        "primary_country_of_operation": "US",
+        "primary_language": "en",
+        "parent_business_or_brand": "Lucky Shrub Group",
+        "supporting_links": [
+            "https://news.example/1", "https://news.example/2", "https://news.example/3",
+            "https://news.example/4", "https://news.example/5"
+        ],
+        "additional_supporting_information": "Founded in 1999."
+    })
+}
+
+/// A compliance information declaration
+/// (`business-compliance-information-api`; roadmap M5c3).
+pub fn sample_compliance_info() -> Value {
+    serde_json::json!({
+        "entity_name": "Lucky Shrub Pvt Ltd",
+        "entity_type": "PRIVATE_COMPANY",
+        "grievance_officer_details": {
+            "name": "A. Rao", "email": "grievance@luckyshrub.example",
+            "mobile_number": "+919876543210"
+        },
+        "customer_care_details": {"email": "care@luckyshrub.example"}
+    })
+}
 
 /// A QR code's id (`qr-codes`, "Create QR code").
 pub const SAMPLE_QR_CODE: &str = "4O4YGZEG3RIVE1";
@@ -1237,6 +1271,20 @@ pub fn sample_body(method: &Method, template: &str) -> Option<Value> {
         ("PATCH", "/v1/wabas/{waba_id}/template-groups/{group_id}") => serde_json::json!({
             "add_templates": [844_006_344_365_270_u64, 1_188_657_612_184_382_u64],
             "remove_templates": [1_035_843_174_854_974_u64]
+        }),
+        // Roadmap M5c3: bodies each route accepts.
+        ("PATCH", "/v1/numbers/{pn}/settings") => {
+            serde_json::json!({"search_visibility": "HIDDEN"})
+        }
+        ("PUT", "/v1/numbers/{pn}/settings/payload-encryption") => {
+            serde_json::json!({"client_encryption_key": SAMPLE_CLIENT_KEY})
+        }
+        ("PUT", "/v1/numbers/{pn}/username") => serde_json::json!({"username": "lucky_shrub"}),
+        ("POST", "/v1/numbers/{pn}/official-business-account") => sample_oba_application(),
+        ("PUT", "/v1/numbers/{pn}/compliance-info") => sample_compliance_info(),
+        ("PUT", "/v1/numbers/{pn}/conversational-components") => serde_json::json!({
+            "enable_welcome_message": true, "prompts": ["Book a table"],
+            "commands": [{"command_name": "book", "command_description": "Book a table"}]
         }),
         // Roadmap M5g: the examples of the pages (`catalogs/set-commerce-settings`,
         // `qr-codes`, `block-users`).
