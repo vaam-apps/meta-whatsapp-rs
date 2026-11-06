@@ -3025,16 +3025,15 @@ fn check_audit(logs: &str) {
         operator[0]
     );
     assert!(operator[0]["admin_key_id"].is_string(), "{}", operator[0]);
-    for (action, tenant, waba) in [("signup_completed", "merchant-79", "524126980791431")] {
-        let found: Vec<&&serde_json::Value> = changes
-            .iter()
-            .filter(|fields| fields["action"] == action)
-            .collect();
-        assert_eq!(found.len(), 1, "{action}'s audit event");
-        assert_eq!(found[0]["tenant"], tenant, "{}", found[0]);
-        assert_eq!(found[0]["waba_id"], waba, "{}", found[0]);
-        assert!(found[0]["key_id"].is_string(), "{}", found[0]);
-    }
+    let (action, tenant, waba) = ("signup_completed", "merchant-79", "524126980791431");
+    let found: Vec<&&serde_json::Value> = changes
+        .iter()
+        .filter(|fields| fields["action"] == action)
+        .collect();
+    assert_eq!(found.len(), 1, "{action}'s audit event");
+    assert_eq!(found[0]["tenant"], tenant, "{}", found[0]);
+    assert_eq!(found[0]["waba_id"], waba, "{}", found[0]);
+    assert!(found[0]["key_id"].is_string(), "{}", found[0]);
     check_erasure_audit(&events, &changes);
     check_group_audit(&changes);
     check_display_name_audit(&changes);

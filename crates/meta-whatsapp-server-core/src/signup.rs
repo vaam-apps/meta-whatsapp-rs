@@ -16,6 +16,8 @@
 //! GET  /v1/signup/attempts ─► Signup::attempts: the tenant's kept attempts
 //! POST /v1/signup/resume   ─► Signup::resume: the tenant's attempt, EmbeddedSignup::resume_with_approval
 //!                              (the binding checked again before any credit call), from the stored token
+//! POST /v1/admin/signup/hosted ─► Signups::complete_hosted: the operator claims a remembered
+//!                              PARTNER_ADDED for the tenant it names (roadmap M3f; see `hosted`)
 //! ```
 //!
 //! **The mode is the deployment's** ([`SignupDeployment`]): a Tech

@@ -140,12 +140,12 @@ impl KvStore for CountingKv {
         let read = self.inner.get(key).await?;
         if read.is_some() {
             let lost = {
-                let mut lose = self.lose_next.lock().unwrap();
-                let lost = *lose == Some(key.namespace());
-                if lost {
-                    *lose = None;
+                let mut armed = self.lose_next.lock().unwrap();
+                let hit = *armed == Some(key.namespace());
+                if hit {
+                    *armed = None;
                 }
-                lost
+                hit
             };
             if lost {
                 self.inner.delete(key).await?;
