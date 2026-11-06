@@ -1597,6 +1597,8 @@ mod tests {
         let mut metrics = request(at(5), at(0), &["1"]);
         metrics.metric_types = vec!["sent".to_owned(), "COST".to_owned()];
         assert_eq!(fault(&metrics), "metric_types[1]");
+        metrics.metric_types = vec!["read".to_owned(), "impressions".to_owned()];
+        assert_eq!(fault(&metrics), "metric_types[1]");
         metrics.metric_types = vec!["cost".to_owned(), "clicked".to_owned()];
         assert!(template_group_query(NOW, &metrics).is_ok());
         let mut tz = request(at(5), at(0), &["1"]);
